@@ -885,7 +885,13 @@ class SchedulerService:
                 self._inflight_scripts_by_session.pop(target_id, None)
 
     async def _fire_script_schedule(self, schedule: "Schedule", now: float, trigger: str = "cron"):
-        """Fire a script schedule: auto-start session, run command, route outcome."""
+        """Fire a script schedule: auto-start session, run command, route outcome.
+
+        **Security:** For Docker sessions, vault secrets are passed as proxy placeholders
+        (CC_SECRET_*) so the sidecar substitutes them on outbound HTTP. For host sessions
+        (docker_enabled=False), the proxy is unavailable; vault secrets are resolved to
+        plaintext and visible via process listing. Use Docker sessions for sensitive scripts.
+        """
         target_id = schedule.minion_id or schedule.ephemeral_agent_id
         started_clock = time.monotonic()
 
@@ -943,19 +949,35 @@ class SchedulerService:
                         f"Container did not appear after session start for {target_id}"
                     )
 
-                # Build env dict: extra_env first, then vault secrets (secrets win on conflict)
+                # Build env dict: extra_env first, then vault secrets as placeholders (secrets win)
                 script_env: dict[str, str] = {}
                 if effective_config.extra_env:
                     script_env.update(effective_config.extra_env)
+                # Issue #1425: invert placeholder→name map to get name→placeholder.
+                placeholders_by_name = {
+                    name: ph for ph, name in (session_info.secret_placeholders or {}).items()
+                }
                 if effective_config.assigned_secrets:
                     resolved = await sc.credential_vault.resolve_secrets_for_assignment(
                         effective_config.assigned_secrets
                     )
+                    missing: list[str] = []
                     for secret in resolved:
                         inject_env = secret.get("inject_env")
-                        value = secret.get("value")
-                        if inject_env and value is not None:
-                            script_env[inject_env] = value
+                        name = secret.get("name")
+                        if not inject_env:
+                            continue
+                        placeholder = placeholders_by_name.get(name)
+                        if placeholder is None:
+                            missing.append(name)
+                            continue
+                        script_env[inject_env] = placeholder
+                    if missing:
+                        raise RuntimeError(
+                            f"Scheduled script for session {target_id}: secrets {missing} "
+                            "are assigned but no proxy placeholder exists. Restart the session "
+                            "to regenerate placeholders, or remove the assignment."
+                        )
                     legion_logger.debug(
                         f"Script env for {target_id}: {len(script_env)} vars "
                         f"(keys: {sorted(script_env)})"

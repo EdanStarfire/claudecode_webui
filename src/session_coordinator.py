@@ -396,59 +396,68 @@ class SessionCoordinator:
         import time as _time
 
         config = mcp_cfg.to_sdk_config()
+        # Issue #1425: detect ${secret:...} placeholder in Authorization header before OAuth injection.
+        orig_headers = config.get("headers") or {}
+        orig_auth = orig_headers.get("Authorization", "")
+        auth_has_placeholder = bool(_SECRET_REF_RE.search(orig_auth))
         if mcp_cfg.oauth_enabled and mcp_cfg.type in (McpServerType.SSE, McpServerType.HTTP):
-            try:
-                token = await self.oauth_manager.get_stored_token(mcp_cfg.id)
-                if token:
-                    store = self.oauth_manager.get_token_store(mcp_cfg.id)
-                    expiry = await store.get_token_expiry()
-                    now = _time.time()
-
-                    # Issue #976: Attempt refresh if token is expired or expiring soon
-                    if expiry is not None and expiry < (now + OAuthRefreshManager.REFRESH_BUFFER_SECONDS):
-                        seconds_until_expiry = expiry - now
-                        if seconds_until_expiry < 0:
-                            logger.warning(
-                                "OAuth token for MCP server %s expired %.0f s ago — attempting refresh.",
-                                mcp_cfg.id,
-                                -seconds_until_expiry,
-                            )
-                        else:
-                            logger.info(
-                                "OAuth token for MCP server %s expires in %.0f s — refreshing proactively.",
-                                mcp_cfg.id,
-                                seconds_until_expiry,
-                            )
-                        new_token = await self.oauth_refresh_manager.refresh_token(mcp_cfg.id)
-                        if new_token:
-                            token = new_token
-                        else:
-                            logger.warning(
-                                "OAuth token refresh failed for MCP server %s. "
-                                "Injecting best available token — re-authenticate via the UI if calls fail.",
-                                mcp_cfg.id,
-                            )
-
-                    headers = dict(config.get("headers") or {})
-                    headers["Authorization"] = f"Bearer {token.access_token}"
-                    config["headers"] = headers
-                    coord_logger.debug(
-                        "[MCP config] server=%s oauth=True token=%s expiry=%s config=%s",
-                        mcp_cfg.id,
-                        token.access_token,
-                        expiry,
-                        config,
-                    )
-                else:
-                    coord_logger.debug(
-                        "[MCP config] server=%s oauth=True token=None (not authenticated) config=%s",
-                        mcp_cfg.id,
-                        config,
-                    )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to inject OAuth token for MCP server %s: %s", mcp_cfg.id, exc
+            if auth_has_placeholder:
+                coord_logger.info(
+                    "[MCP config] server=%s oauth_enabled=True but Authorization header "
+                    "contains ${secret:...} — preserving placeholder, proxy will inject from vault.",
+                    mcp_cfg.id,
                 )
+            else:
+                try:
+                    token = await self.oauth_manager.get_stored_token(mcp_cfg.id)
+                    if token:
+                        store = self.oauth_manager.get_token_store(mcp_cfg.id)
+                        expiry = await store.get_token_expiry()
+                        now = _time.time()
+
+                        # Issue #976: Attempt refresh if token is expired or expiring soon
+                        if expiry is not None and expiry < (now + OAuthRefreshManager.REFRESH_BUFFER_SECONDS):
+                            seconds_until_expiry = expiry - now
+                            if seconds_until_expiry < 0:
+                                logger.warning(
+                                    "OAuth token for MCP server %s expired %.0f s ago — attempting refresh.",
+                                    mcp_cfg.id,
+                                    -seconds_until_expiry,
+                                )
+                            else:
+                                logger.info(
+                                    "OAuth token for MCP server %s expires in %.0f s — refreshing proactively.",
+                                    mcp_cfg.id,
+                                    seconds_until_expiry,
+                                )
+                            new_token = await self.oauth_refresh_manager.refresh_token(mcp_cfg.id)
+                            if new_token:
+                                token = new_token
+                            else:
+                                logger.warning(
+                                    "OAuth token refresh failed for MCP server %s. "
+                                    "Injecting best available token — re-authenticate via the UI if calls fail.",
+                                    mcp_cfg.id,
+                                )
+
+                        headers = dict(config.get("headers") or {})
+                        headers["Authorization"] = f"Bearer {token.access_token}"
+                        config["headers"] = headers
+                        coord_logger.debug(
+                            "[MCP config] server=%s oauth=True token_present=True expiry=%s",
+                            mcp_cfg.id,
+                            int(expiry) if expiry is not None else None,
+                        )
+                    else:
+                        coord_logger.debug(
+                            "[MCP config] server=%s oauth=True token=None (not authenticated) config=%s",
+                            mcp_cfg.id,
+                            config,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to inject OAuth token for MCP server %s: %s", mcp_cfg.id, exc
+                    )
         else:
             coord_logger.debug(
                 "[MCP config] server=%s oauth=False config=%s", mcp_cfg.id, config
