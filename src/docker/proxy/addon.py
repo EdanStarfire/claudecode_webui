@@ -191,6 +191,13 @@ def _is_binary_response(flow: http.HTTPFlow) -> bool:
     return any(ct.startswith(bt) for bt in _BINARY_CONTENT_TYPES)
 
 
+def _is_sse_response(flow: http.HTTPFlow) -> bool:
+    if not flow.response:
+        return False
+    ct = flow.response.headers.get("content-type", "")
+    return ct.startswith("text/event-stream")
+
+
 def _scrub_response_headers(flow: http.HTTPFlow, value: str, placeholder: str) -> bool:
     if not flow.response:
         return False
@@ -319,6 +326,30 @@ def _make_chunk_filter(pairs: list[tuple[bytes, bytes]]):
             return buf[:split_at]
         carry[:] = buf
         return b""
+
+    return _filter_chunk
+
+
+def _make_unbuffered_chunk_filter(pairs: list[tuple[bytes, bytes]]):
+    """Per-chunk replacement with NO carry buffer — for SSE/streamed responses.
+
+    Cross-chunk-boundary needle detection is sacrificed for liveness;
+    per-chunk single-shot scrubbing still applies as a defense-in-depth.
+    Accepted residual risk: a secret that straddles two SSE chunk boundaries
+    will not be redacted. SSE chunks are typically full text lines, so this
+    boundary is bounded by the mitmproxy emit size, not arbitrary splits.
+    """
+    if not pairs:
+        raise ValueError("pairs must be non-empty")
+    pairs = sorted(pairs, key=lambda p: len(p[0]), reverse=True)
+
+    def _filter_chunk(chunk: bytes) -> bytes:
+        if chunk == b"":
+            return b""
+        buf = chunk
+        for needle, replacement in pairs:
+            buf = buf.replace(needle, replacement)
+        return buf
 
     return _filter_chunk
 
@@ -592,7 +623,11 @@ class ProxyAddon:
         )
         if not response_pairs:
             return
-        flow.response.stream = _make_chunk_filter(response_pairs)
+        # Issue #1425: SSE responses must not buffer carry bytes — use unbuffered filter.
+        if _is_sse_response(flow):
+            flow.response.stream = _make_unbuffered_chunk_filter(response_pairs)
+        else:
+            flow.response.stream = _make_chunk_filter(response_pairs)
 
     async def response(self, flow: http.HTTPFlow) -> None:
         if flow.metadata.get("denied"):
