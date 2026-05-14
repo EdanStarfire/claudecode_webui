@@ -801,7 +801,12 @@ class TestIssue1375SecretRefs:
 
     @pytest.mark.asyncio
     async def test_issue_1375_oauth_and_secret_ref_interaction(self, temp_coordinator):
-        """OAuth-enabled server: Authorization set by OAuth; other headers get refs substituted."""
+        """oauth_enabled=True with ${secret:...} Authorization: placeholder wins (fix #1425 A1).
+
+        After fix #1425 Problem A, the ${secret:...} placeholder in the Authorization header
+        takes precedence — OAuth bearer injection is skipped and _substitute_secret_refs
+        resolves the placeholder to CC_SECRET_* so the proxy sidecar can substitute at runtime.
+        """
         from ..mcp_config_manager import McpServerType
 
         coordinator = temp_coordinator
@@ -832,8 +837,11 @@ class TestIssue1375SecretRefs:
         }
         result = await coordinator._get_mcp_sdk_config(mock_cfg, name_to_placeholder)
 
-        assert result["headers"]["Authorization"] == "Bearer oauth-bearer-token"
+        # Placeholder wins: OAuth bearer is NOT injected; ${secret:foo} is resolved to CC_SECRET_*.
+        assert result["headers"]["Authorization"] == "CC_SECRET_foo_11111111"
         assert result["headers"]["X-Custom"] == "CC_SECRET_bar_22222222"
+        # OAuth token must NOT be present anywhere in the config.
+        assert "oauth-bearer-token" not in str(result)
 
     @pytest.mark.asyncio
     async def test_issue_671_delete_session_no_legion_system(self, temp_coordinator, sample_session_config):
@@ -1299,6 +1307,173 @@ class TestIssue1115SessionConfigStorage:
             )
 
             await coordinator.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Issue #1425 — Problem A: OAuth MCP credential bypass (5 scenarios)
+# ---------------------------------------------------------------------------
+
+
+class TestIssue1425OAuthPlaceholder:
+    """Tests for fix #1425 Problem A: ${secret:...} placeholder preservation for oauth_enabled servers."""
+
+    @pytest.mark.asyncio
+    async def test_issue_1425_a1_placeholder_wins_over_oauth_bearer(self, temp_coordinator):
+        """A1: oauth_enabled=True + Authorization=Bearer ${secret:GH_PAT} → placeholder resolved,
+        no real token in resulting config."""
+        from ..mcp_config_manager import McpServerType
+
+        coordinator = temp_coordinator
+        mock_cfg = MagicMock()
+        mock_cfg.id = "mcp-gh-id"
+        mock_cfg.name = "gh-mcp"
+        mock_cfg.type = McpServerType.SSE
+        mock_cfg.oauth_enabled = True
+        mock_cfg.to_sdk_config.return_value = {
+            "type": "sse",
+            "url": "https://mcp.github.com/sse",
+            "headers": {"Authorization": "Bearer ${secret:GH_PAT}"},
+        }
+
+        mock_token = MagicMock()
+        mock_token.access_token = "real-github-token-abc123"
+        coordinator.oauth_manager.get_stored_token = AsyncMock(return_value=mock_token)
+        mock_store = MagicMock()
+        mock_store.get_token_expiry = AsyncMock(return_value=None)
+        coordinator.oauth_manager.get_token_store = MagicMock(return_value=mock_store)
+
+        result = await coordinator._get_mcp_sdk_config(
+            mock_cfg, {"GH_PAT": "CC_SECRET_GH_PAT_deadbeef"}
+        )
+
+        assert result["headers"]["Authorization"] == "Bearer CC_SECRET_GH_PAT_deadbeef"
+        assert "real-github-token-abc123" not in str(result)
+
+    @pytest.mark.asyncio
+    async def test_issue_1425_a2_oauth_injection_when_no_auth_header(self, temp_coordinator):
+        """A2: oauth_enabled=True + Authorization absent → OAuth bearer injected (original behaviour)."""
+        from ..mcp_config_manager import McpServerType
+
+        coordinator = temp_coordinator
+        mock_cfg = MagicMock()
+        mock_cfg.id = "mcp-no-auth-id"
+        mock_cfg.name = "no-auth-mcp"
+        mock_cfg.type = McpServerType.HTTP
+        mock_cfg.oauth_enabled = True
+        mock_cfg.to_sdk_config.return_value = {
+            "type": "http",
+            "url": "https://example.com/mcp",
+            "headers": {},
+        }
+
+        mock_token = MagicMock()
+        mock_token.access_token = "injected-oauth-token"
+        coordinator.oauth_manager.get_stored_token = AsyncMock(return_value=mock_token)
+        mock_store = MagicMock()
+        mock_store.get_token_expiry = AsyncMock(return_value=None)
+        coordinator.oauth_manager.get_token_store = MagicMock(return_value=mock_store)
+
+        result = await coordinator._get_mcp_sdk_config(mock_cfg, {})
+
+        assert result["headers"]["Authorization"] == "Bearer injected-oauth-token"
+
+    @pytest.mark.asyncio
+    async def test_issue_1425_a3_hardcoded_auth_gets_oauth_overwrite(self, temp_coordinator):
+        """A3: oauth_enabled=True + Authorization=Bearer hardcoded-token (no ${secret:...}) →
+        OAuth injection overwrites the hardcoded value (original behaviour preserved)."""
+        from ..mcp_config_manager import McpServerType
+
+        coordinator = temp_coordinator
+        mock_cfg = MagicMock()
+        mock_cfg.id = "mcp-hardcoded-id"
+        mock_cfg.name = "hardcoded-mcp"
+        mock_cfg.type = McpServerType.HTTP
+        mock_cfg.oauth_enabled = True
+        mock_cfg.to_sdk_config.return_value = {
+            "type": "http",
+            "url": "https://example.com/mcp",
+            "headers": {"Authorization": "Bearer hardcoded-static-token"},
+        }
+
+        mock_token = MagicMock()
+        mock_token.access_token = "fresh-oauth-token"
+        coordinator.oauth_manager.get_stored_token = AsyncMock(return_value=mock_token)
+        mock_store = MagicMock()
+        mock_store.get_token_expiry = AsyncMock(return_value=None)
+        coordinator.oauth_manager.get_token_store = MagicMock(return_value=mock_store)
+
+        result = await coordinator._get_mcp_sdk_config(mock_cfg, {})
+
+        assert result["headers"]["Authorization"] == "Bearer fresh-oauth-token"
+
+    @pytest.mark.asyncio
+    async def test_issue_1425_a4_placeholder_sub_unchanged_when_oauth_disabled(self, temp_coordinator):
+        """A4: oauth_enabled=False + Authorization=Bearer ${secret:X} → placeholder substituted
+        by _substitute_secret_refs, OAuth path not entered (regression guard)."""
+        from ..mcp_config_manager import McpServerType
+
+        coordinator = temp_coordinator
+        mock_cfg = MagicMock()
+        mock_cfg.id = "mcp-no-oauth-id"
+        mock_cfg.name = "no-oauth-mcp"
+        mock_cfg.type = McpServerType.HTTP
+        mock_cfg.oauth_enabled = False
+        mock_cfg.to_sdk_config.return_value = {
+            "type": "http",
+            "url": "https://example.com/mcp",
+            "headers": {"Authorization": "Bearer ${secret:MY_KEY}"},
+        }
+
+        # Patch get_stored_token so we can assert it was never called.
+        mock_get_token = AsyncMock()
+        coordinator.oauth_manager.get_stored_token = mock_get_token
+
+        result = await coordinator._get_mcp_sdk_config(
+            mock_cfg, {"MY_KEY": "CC_SECRET_MY_KEY_cafebabe"}
+        )
+
+        assert result["headers"]["Authorization"] == "Bearer CC_SECRET_MY_KEY_cafebabe"
+        # OAuth injection must not have been called when oauth_enabled=False.
+        mock_get_token.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_issue_1425_a5_token_field_never_in_debug_log(self, temp_coordinator, caplog):
+        """A5: 'token=' field is never present in [MCP config] log lines (no raw token leaks)."""
+        import logging
+
+        from ..mcp_config_manager import McpServerType
+
+        coordinator = temp_coordinator
+        mock_cfg = MagicMock()
+        mock_cfg.id = "mcp-log-id"
+        mock_cfg.name = "log-mcp"
+        mock_cfg.type = McpServerType.HTTP
+        mock_cfg.oauth_enabled = True
+        mock_cfg.to_sdk_config.return_value = {
+            "type": "http",
+            "url": "https://example.com/mcp",
+            "headers": {},
+        }
+
+        mock_token = MagicMock()
+        mock_token.access_token = "SECRET_SHOULD_NOT_APPEAR_IN_LOG"
+        coordinator.oauth_manager.get_stored_token = AsyncMock(return_value=mock_token)
+        mock_store = MagicMock()
+        mock_store.get_token_expiry = AsyncMock(return_value=12345678)
+        coordinator.oauth_manager.get_token_store = MagicMock(return_value=mock_store)
+
+        with caplog.at_level(logging.DEBUG):
+            await coordinator._get_mcp_sdk_config(mock_cfg, {})
+
+        for record in caplog.records:
+            msg = record.getMessage()
+            if "[MCP config]" in msg:
+                assert "token=" not in msg, (
+                    f"Raw token field found in MCP config log: {msg!r}"
+                )
+                assert "SECRET_SHOULD_NOT_APPEAR_IN_LOG" not in msg, (
+                    f"Raw token value found in MCP config log: {msg!r}"
+                )
 
 
 class TestIssue1396GhMountRemoved:
