@@ -53,6 +53,11 @@ def _default_rates() -> "dict[str, ModelRates]":
     }
 
 
+def default_pricing_rates() -> "dict[str, ModelRates]":
+    """Public alias for _default_rates(). Returns built-in pricing defaults."""
+    return _default_rates()
+
+
 @dataclass
 class ModelRates:
     """USD per 1 M tokens for a single model."""

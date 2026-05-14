@@ -19,7 +19,7 @@
       <slot name="actions" />
       <template v-if="showSaveCancel">
         <button class="btn-cancel" @click="$emit('cancel')" :disabled="saving">Cancel</button>
-        <button class="btn-save" @click="$emit('save')" :disabled="saving">
+        <button class="btn-save" @click="$emit('save')" :disabled="saving || saveDisabled">
           <span v-if="saving" class="save-spinner" aria-hidden="true">⟳</span>
           <span>{{ saving ? 'Saving…' : 'Save' }}</span>
         </button>
@@ -36,6 +36,7 @@ defineProps({
   chips:         { type: Array,   default: () => [] },
   showSaveCancel:{ type: Boolean, default: false },
   saving:        { type: Boolean, default: false },
+  saveDisabled:  { type: Boolean, default: false },
 })
 
 defineEmits(['save', 'cancel'])

@@ -12,12 +12,17 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("get config")
     async def get_config():
         """Return full application config."""
-        from ..config_manager import load_config
+        from ..config_manager import default_pricing_rates, load_config
         config = load_config(webui.config_file) if webui.config_file else load_config()
-        return {"config": config.to_dict()}
+        result = config.to_dict()
+        result["pricing_defaults"] = {
+            model_id: rates.to_dict()
+            for model_id, rates in default_pricing_rates().items()
+        }
+        return {"config": result}
 
     @router.put("/api/config")
-    @handle_exceptions("update config")
+    @handle_exceptions("update config", value_error_status=400)
     async def update_config(request: Request):
         """Update application config with side effects."""
         from ..config_manager import load_config, save_config
@@ -74,6 +79,16 @@ def build_router(webui) -> APIRouter:
                                 f"pricing.rates.{model_id}.{key} must be a non-negative number"
                             )
                     config.pricing.rates[model_id] = ModelRates.from_dict(rate_data)
+            if "removed_models" in pricing_body:
+                removed = pricing_body["removed_models"]
+                if not isinstance(removed, list) or not all(isinstance(m, str) for m in removed):
+                    raise ValueError("pricing.removed_models must be a list of strings")
+                for model_id in removed:
+                    if model_id == config.pricing.default_model:
+                        raise ValueError(
+                            f"Cannot remove '{model_id}' because it is the default_model"
+                        )
+                    config.pricing.rates.pop(model_id, None)
 
         if webui.config_file:
             save_config(config, webui.config_file)
@@ -87,6 +102,12 @@ def build_router(webui) -> APIRouter:
         elif not old_sync and new_sync:
             await webui.skill_manager.sync()
 
-        return {"config": config.to_dict()}
+        from ..config_manager import default_pricing_rates
+        result = config.to_dict()
+        result["pricing_defaults"] = {
+            model_id: rates.to_dict()
+            for model_id, rates in default_pricing_rates().items()
+        }
+        return {"config": result}
 
     return router

@@ -51,6 +51,7 @@ import SettingsSidebar from './SettingsSidebar.vue'
 import SettingsBreadcrumb from './SettingsBreadcrumb.vue'
 import DirtyGuardModal from './DirtyGuardModal.vue'
 import ApplicationFeaturesSection from './sections/ApplicationFeaturesSection.vue'
+import ApplicationPricingSection from './sections/ApplicationPricingSection.vue'
 import ApplicationNotifsSection from './sections/ApplicationNotifsSection.vue'
 import ApplicationReadAloudSection from './sections/ApplicationReadAloudSection.vue'
 import ApplicationMcpSection from './sections/ApplicationMcpSection.vue'
@@ -101,6 +102,7 @@ const sectionComponent = computed(() => {
   }
   switch (p) {
     case '/settings/features':      return ApplicationFeaturesSection
+    case '/settings/pricing':       return ApplicationPricingSection
     case '/settings/notifications': return ApplicationNotifsSection
     case '/settings/read-aloud':    return ApplicationReadAloudSection
     case '/settings/mcp-servers':   return ApplicationMcpSection
