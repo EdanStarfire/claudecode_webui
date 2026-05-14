@@ -116,6 +116,11 @@ const routes = [
     name: 'settings-mcp-servers',
     component: SettingsLayout
   },
+  {
+    path: '/settings/pricing',
+    name: 'settings-pricing',
+    component: SettingsLayout
+  },
 ]
 
 const router = createRouter({

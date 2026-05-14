@@ -46,6 +46,11 @@ export const useUsageStore = defineStore('usage', () => {
     usageBySession.value = new Map(usageBySession.value)
   }
 
+  function refreshAll() {
+    const ids = [...usageBySession.value.keys()]
+    ids.forEach((sessionId) => loadUsage(sessionId))
+  }
+
   // ========== RETURN ==========
   return {
     usageBySession,
@@ -53,5 +58,6 @@ export const useUsageStore = defineStore('usage', () => {
     loadUsage,
     handleUsageUpdated,
     clearUsage,
+    refreshAll,
   }
 })

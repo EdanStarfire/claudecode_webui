@@ -96,8 +96,8 @@
           class="alert alert-warning py-1 px-2 mt-2 mb-0 small"
           role="alert"
         >
-          Unknown model — pricing rates not available. Update
-          <code>~/.config/cc_webui/config.json</code> to add rates.
+          Unknown model — pricing rates not available.
+          <RouterLink to="/settings/pricing" @click="popoverOpen = false">Add rates in Token Pricing settings.</RouterLink>
         </div>
 
         <!-- Rates used -->
@@ -117,6 +117,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { RouterLink } from 'vue-router'
 import { useUsageStore } from '@/stores/usage'
 
 const props = defineProps({

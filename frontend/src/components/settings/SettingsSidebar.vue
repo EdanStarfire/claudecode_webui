@@ -333,10 +333,11 @@ const scheduleErrorBadge = computed(() =>
 // ── Static sidebar groups ─────────────────────────────────────────────────
 
 const APP_ITEMS = [
-  { to: '/settings/features',      icon: '✳️', label: 'Features',      sectionKey: 'features' },
-  { to: '/settings/notifications', icon: '🎵', label: 'Notifications',  sectionKey: 'notifications' },
-  { to: '/settings/read-aloud',    icon: '👄', label: 'Read Aloud',     sectionKey: 'read-aloud' },
-  { to: '/settings/mcp-servers',   icon: '🌐', label: 'MCP Servers',    sectionKey: 'mcp-servers' },
+  { to: '/settings/features',      icon: '✳️', label: 'Features',       sectionKey: 'features' },
+  { to: '/settings/notifications', icon: '🎵', label: 'Notifications',   sectionKey: 'notifications' },
+  { to: '/settings/read-aloud',    icon: '👄', label: 'Read Aloud',      sectionKey: 'read-aloud' },
+  { to: '/settings/mcp-servers',   icon: '🌐', label: 'MCP Servers',     sectionKey: 'mcp-servers' },
+  { to: '/settings/pricing',       icon: '💰', label: 'Token Pricing',   sectionKey: 'pricing' },
 ]
 
 const libraryItems = [
