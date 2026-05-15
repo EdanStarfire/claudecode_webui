@@ -169,6 +169,13 @@ PH = "CC_SECRET_mytoken_abcd1234"
 VALUE = "sk-ant-real-token-xyz"
 
 
+def _b(result) -> bytes:
+    """Normalize a filter return value to bytes (handles both bytes and list returns)."""
+    if isinstance(result, bytes):
+        return result
+    return b"".join(result)
+
+
 # ---------------------------------------------------------------------------
 # Unit tests — _make_chunk_filter
 # ---------------------------------------------------------------------------
@@ -202,7 +209,7 @@ class TestMakeChunkFilter:
         out1 = f(b"SEC")
         out2 = f(b"RET")
         flush = f(b"")
-        combined = out1 + out2 + flush
+        combined = _b(out1) + _b(out2) + _b(flush)
         assert b"SECRET" not in combined
         assert b"REPLACED" in combined
 
@@ -211,7 +218,7 @@ class TestMakeChunkFilter:
         f = self._filter([(needle, b"X")])
         # Feed 3-byte chunks
         parts = [f(b"LON"), f(b"GTO"), f(b"KEN"), f(b"")]
-        combined = b"".join(parts)
+        combined = b"".join(_b(p) for p in parts)
         assert b"LONGTOKEN" not in combined
         assert b"X" in combined
 
@@ -245,7 +252,7 @@ class TestMakeChunkFilter:
         f = self._filter([(b"AB", b"X"), (b"ABC", b"Y")])
         out = f(b"ABC")
         flush = f(b"")
-        combined = out + flush
+        combined = _b(out) + _b(flush)
         # "ABC" should become "Y", not "XC"
         assert b"Y" in combined
         assert b"XC" not in combined
@@ -262,7 +269,7 @@ class TestMakeChunkFilter:
         f = self._filter([(b"AAAA", b"a")])
         out = f(b"AAAA")
         flush = f(b"")
-        combined = out + flush
+        combined = _b(out) + _b(flush)
         assert b"AAAA" not in combined
         assert b"a" in combined
 
@@ -279,8 +286,8 @@ class TestMakeChunkFilter:
         data = b"ABCDEABCDEABCDE"
         total_out = b""
         for i in range(0, len(data), 3):
-            total_out += f(data[i:i+3])
-        total_out += f(b"")
+            total_out += _b(f(data[i:i+3]))
+        total_out += _b(f(b""))
 
         # Correctness: no needle in output
         assert needle not in total_out
@@ -494,7 +501,7 @@ class TestRequestStreamEndToEnd:
         mid = len(PH) // 2
         chunk1 = f'prefix {PH[:mid]}'.encode()
         chunk2 = f'{PH[mid:]} suffix'.encode()
-        out = filt(chunk1) + filt(chunk2) + filt(b"")
+        out = _b(filt(chunk1)) + _b(filt(chunk2)) + _b(filt(b""))
         assert PH.encode() not in out
         assert VALUE.encode() in out
 
@@ -514,7 +521,7 @@ class TestResponseStreamEndToEnd:
         mid = len(VALUE) // 2
         chunk1 = f'data: {VALUE[:mid]}'.encode()
         chunk2 = f'{VALUE[mid:]} end'.encode()
-        out = filt(chunk1) + filt(chunk2) + filt(b"")
+        out = _b(filt(chunk1)) + _b(filt(chunk2)) + _b(filt(b""))
         assert VALUE.encode() not in out
         assert PH.encode() in out
 

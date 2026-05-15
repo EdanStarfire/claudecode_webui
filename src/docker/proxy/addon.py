@@ -198,6 +198,18 @@ def _is_sse_response(flow: http.HTTPFlow) -> bool:
     return ct.startswith("text/event-stream")
 
 
+def _is_encoded_response(flow: http.HTTPFlow) -> bool:
+    if not flow.response:
+        return False
+    ce = flow.response.headers.get("content-encoding", "").strip().lower()
+    return bool(ce) and ce != "identity"
+
+
+def _is_encoded_request(flow: http.HTTPFlow) -> bool:
+    ce = flow.request.headers.get("content-encoding", "").strip().lower()
+    return bool(ce) and ce != "identity"
+
+
 def _scrub_response_headers(flow: http.HTTPFlow, value: str, placeholder: str) -> bool:
     if not flow.response:
         return False
@@ -307,7 +319,7 @@ def _make_chunk_filter(pairs: list[tuple[bytes, bytes]]):
     overlap = max(0, max_needle_len - 1)
     carry = bytearray()
 
-    def _filter_chunk(chunk: bytes) -> bytes:
+    def _filter_chunk(chunk: bytes):
         if chunk == b"":
             # End-of-stream: flush whatever remains in the carry buffer.
             result = bytes(carry)
@@ -325,7 +337,7 @@ def _make_chunk_filter(pairs: list[tuple[bytes, bytes]]):
             carry[:] = buf[split_at:]
             return buf[:split_at]
         carry[:] = buf
-        return b""
+        return []
 
     return _filter_chunk
 
@@ -589,7 +601,7 @@ class ProxyAddon:
         # bodies that mitmproxy streams (flow.request.content will be None in
         # request() under stream_large_bodies).
         request_pairs = _build_request_pairs(self._records, host)
-        if request_pairs:
+        if request_pairs and not _is_encoded_request(flow):
             flow.request.stream = _make_chunk_filter(request_pairs)
 
     async def request(self, flow: http.HTTPFlow) -> None:
@@ -617,6 +629,8 @@ class ProxyAddon:
         if flow.metadata.get("denied"):
             return
         if _is_binary_response(flow):
+            return
+        if _is_encoded_response(flow):
             return
         response_pairs = _build_response_pairs(
             self._records, flow.request.pretty_host
