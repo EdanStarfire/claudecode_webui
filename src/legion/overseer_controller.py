@@ -8,6 +8,7 @@ Responsibilities:
 - Manage minion state transitions
 """
 
+import asyncio
 import uuid
 from typing import TYPE_CHECKING
 
@@ -30,6 +31,7 @@ class OverseerController:
             system: LegionSystem instance for accessing other components
         """
         self.system = system
+        self._reparent_lock = asyncio.Lock()
 
     async def create_minion_for_user(
         self,
@@ -447,6 +449,243 @@ class OverseerController:
             "disposed_minion_name": child_minion_name,
             "descendants_count": descendants_disposed,
             "deleted": deleted
+        }
+
+    async def _get_descendant_ids(self, session_id: str) -> set[str]:
+        """Return the set of all descendant session IDs (BFS, excludes session_id itself)."""
+        result: set[str] = set()
+        session = await self.system.session_coordinator.session_manager.get_session_info(session_id)
+        if not session or not session.child_minion_ids:
+            return result
+        queue = list(session.child_minion_ids)
+        visited: set[str] = set()
+        while queue:
+            child_id = queue.pop()
+            if child_id in visited:
+                continue
+            visited.add(child_id)
+            result.add(child_id)
+            child_session = await self.system.session_coordinator.session_manager.get_session_info(child_id)
+            if child_session and child_session.child_minion_ids:
+                queue.extend(child_session.child_minion_ids)
+        return result
+
+    async def _recompute_levels(self, session_id: str, level: int) -> None:
+        """Set overseer_level for session_id and all descendants (DFS)."""
+        await self.system.session_coordinator.session_manager.update_session(
+            session_id, overseer_level=level
+        )
+        session = await self.system.session_coordinator.session_manager.get_session_info(session_id)
+        if session and session.child_minion_ids:
+            for child_id in session.child_minion_ids:
+                await self._recompute_levels(child_id, level + 1)
+
+    async def reparent_minion(
+        self,
+        subject_id: str,
+        new_parent_id: str | None,
+        caller_id: str | None = None,
+    ) -> dict:
+        """
+        Move a minion to a new parent within the same legion.
+
+        Args:
+            subject_id: Session ID of the minion to move
+            new_parent_id: Session ID of the new parent, or None to promote to root
+            caller_id: If set (MCP-initiated), full authority checks are applied;
+                       None means user-initiated (skips MCP authority check)
+
+        Returns:
+            dict with success, subject_id, old_parent_id, new_parent_id, descendants_moved
+
+        Raises:
+            ValueError: On self-reparent, cross-legion, cycle, or MCP authority violation
+        """
+        from src.logging_config import get_logger
+        from src.models.legion_models import Comm, CommType, InterruptPriority
+
+        coord_logger = get_logger('legion', category='OVERSEER')
+
+        # 1. Self-reparent check
+        if subject_id == new_parent_id:
+            raise ValueError("Cannot reparent a minion to itself")
+
+        # 2. Fetch and validate subject
+        subject = await self.system.session_coordinator.session_manager.get_session_info(subject_id)
+        if not subject:
+            raise ValueError(f"Subject minion {subject_id} not found")
+
+        legion_id = subject.project_id
+        old_parent_id = subject.parent_overseer_id
+
+        # 3. No-op: already at the desired parent
+        if new_parent_id == old_parent_id:
+            return {
+                "success": True,
+                "subject_id": subject_id,
+                "old_parent_id": old_parent_id,
+                "new_parent_id": new_parent_id,
+                "descendants_moved": 0,
+            }
+
+        # 4. Validate new_parent exists and is in same legion
+        if new_parent_id is not None:
+            new_parent = await self.system.session_coordinator.session_manager.get_session_info(new_parent_id)
+            if not new_parent:
+                raise ValueError(f"New parent minion {new_parent_id} not found")
+            if new_parent.project_id != legion_id:
+                raise ValueError("Cannot reparent to a minion in a different legion")
+
+        # 5. Cycle check: new_parent must not be in subject's descendant closure
+        subject_descendant_ids = await self._get_descendant_ids(subject_id)
+        if new_parent_id is not None and new_parent_id in subject_descendant_ids:
+            raise ValueError(
+                "Cannot reparent: the new parent is a descendant of the subject (would create a cycle)"
+            )
+
+        # 6. MCP authority check (only when caller_id provided)
+        if caller_id is not None:
+            caller = await self.system.session_coordinator.session_manager.get_session_info(caller_id)
+            if not caller:
+                raise ValueError(f"Caller {caller_id} not found")
+
+            caller_descendant_ids = await self._get_descendant_ids(caller_id)
+
+            # Subject must be in caller's descendant closure
+            if subject_id not in caller_descendant_ids:
+                raise ValueError(
+                    f"Authority violation: you can only reparent your own descendants. "
+                    f"'{subject.name}' is not in your subtree."
+                )
+
+            # MCP cannot promote to root (user-only operation)
+            if new_parent_id is None:
+                raise ValueError(
+                    "Only a user can promote a minion to root level. "
+                    "Specify a valid minion name as new_parent_name."
+                )
+
+            # New parent must be caller itself or one of caller's descendants
+            if new_parent_id != caller_id and new_parent_id not in caller_descendant_ids:
+                np = await self.system.session_coordinator.session_manager.get_session_info(new_parent_id)
+                np_name = np.name if np else new_parent_id
+                raise ValueError(
+                    f"Authority violation: the new parent must be yourself or one of your descendants. "
+                    f"'{np_name}' is not in your subtree."
+                )
+
+        descendants_moved = len(subject_descendant_ids)
+
+        # 7. Mutations under lock to prevent interleaved reparents
+        async with self._reparent_lock:
+            # 7a. Remove subject from old parent's child_minion_ids
+            if old_parent_id:
+                old_parent = await self.system.session_coordinator.session_manager.get_session_info(old_parent_id)
+                if old_parent:
+                    old_parent_children = list(old_parent.child_minion_ids or [])
+                    if subject_id in old_parent_children:
+                        old_parent_children.remove(subject_id)
+                        await self.system.session_coordinator.session_manager.update_session(
+                            old_parent_id, child_minion_ids=old_parent_children
+                        )
+                    if not old_parent_children:
+                        await self.system.session_coordinator.session_manager.update_session(
+                            old_parent_id, is_overseer=False
+                        )
+
+            # 7b. Add subject to new parent's child_minion_ids
+            if new_parent_id:
+                fresh_new_parent = await self.system.session_coordinator.session_manager.get_session_info(new_parent_id)
+                if fresh_new_parent:
+                    new_parent_children = list(fresh_new_parent.child_minion_ids or [])
+                    if subject_id not in new_parent_children:
+                        new_parent_children.append(subject_id)
+                        await self.system.session_coordinator.session_manager.update_session(
+                            new_parent_id, child_minion_ids=new_parent_children
+                        )
+                    if not fresh_new_parent.is_overseer:
+                        await self.system.session_coordinator.session_manager.update_session(
+                            new_parent_id, is_overseer=True
+                        )
+
+            # 7c. Update subject's parent pointer
+            await self.system.session_coordinator.session_manager.update_session(
+                subject_id, parent_overseer_id=new_parent_id
+            )
+
+            # 7d. Recompute overseer_level for subject and entire moved subtree
+            if new_parent_id:
+                np_session = await self.system.session_coordinator.session_manager.get_session_info(new_parent_id)
+                new_level = (np_session.overseer_level if np_session else 0) + 1
+            else:
+                new_level = 0
+            await self._recompute_levels(subject_id, new_level)
+
+        # 8. Gather names for timeline comm (post-lock — reads only)
+        caller_name = "user"
+        from_minion_id = None
+        from_user = True
+        if caller_id is not None:
+            caller_session = await self.system.session_coordinator.session_manager.get_session_info(caller_id)
+            if caller_session:
+                caller_name = caller_session.name
+            from_minion_id = caller_id
+            from_user = False
+
+        old_parent_name = "root"
+        if old_parent_id:
+            op_session = await self.system.session_coordinator.session_manager.get_session_info(old_parent_id)
+            if op_session:
+                old_parent_name = op_session.name
+
+        new_parent_label = "root"
+        if new_parent_id:
+            np_session = await self.system.session_coordinator.session_manager.get_session_info(new_parent_id)
+            if np_session:
+                new_parent_label = np_session.name
+
+        extra = ""
+        if descendants_moved:
+            extra += f"\n\n{descendants_moved} descendant(s) moved with the subject."
+        if getattr(subject, 'is_processing', False):
+            extra += "\n\nNote: subject was actively processing at time of reparent."
+
+        reparent_comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_user=from_user,
+            from_minion_id=from_minion_id,
+            from_minion_name=caller_name if from_minion_id else None,
+            to_user=True,
+            summary=f"Reparented {subject.name} → {new_parent_label}",
+            content=(
+                f"**{caller_name}** moved **{subject.name}** "
+                f"from **{old_parent_name}** to **{new_parent_label}**{extra}"
+            ),
+            comm_type=CommType.REPARENT,
+            interrupt_priority=InterruptPriority.NONE,
+            visible_to_user=True,
+        )
+        await self.system.comm_router.route_comm(reparent_comm)
+
+        # 9. Broadcast project update
+        project = await self.system.session_coordinator.project_manager.get_project(legion_id)
+        if project:
+            self.system.broadcast_ui_event({
+                "type": "project_updated",
+                "data": {"project": project.to_dict()}
+            })
+
+        coord_logger.info(
+            f"Reparented {subject.name} ({subject_id}) from {old_parent_id} to {new_parent_id} "
+            f"(caller={caller_name}, descendants_moved={descendants_moved})"
+        )
+
+        return {
+            "success": True,
+            "subject_id": subject_id,
+            "old_parent_id": old_parent_id,
+            "new_parent_id": new_parent_id,
+            "descendants_moved": descendants_moved,
         }
 
     # TODO: Implement in Phase 5

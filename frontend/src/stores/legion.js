@@ -117,6 +117,21 @@ export const useLegionStore = defineStore('legion', () => {
   }
 
   /**
+   * Reparent a minion to a new parent within the same legion (user-initiated).
+   *
+   * @param {string} legionId - Project/legion ID
+   * @param {string} subjectId - Session ID of the minion to move
+   * @param {string|null} newParentId - Session ID of the new parent, or null for root
+   */
+  async function reparentMinion(legionId, subjectId, newParentId) {
+    const response = await api.post(
+      `/api/legions/${legionId}/minions/${subjectId}/reparent`,
+      { new_parent_id: newParentId }
+    )
+    return response
+  }
+
+  /**
    * Clear all legion data
    */
   function clearLegionData(legionId) {
@@ -140,6 +155,7 @@ export const useLegionStore = defineStore('legion', () => {
     createMinion,
     haltAll,
     resumeAll,
+    reparentMinion,
     clearLegionData
   }
 })

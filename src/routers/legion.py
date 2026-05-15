@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..exception_handlers import handle_exceptions
 from ..timestamp_utils import normalize_timestamp
-from ._models import CommSendRequest, MinionCreateRequest
+from ._models import CommSendRequest, MinionCreateRequest, ReparentRequest
 
 
 def build_router(webui) -> APIRouter:
@@ -164,5 +164,19 @@ def build_router(webui) -> APIRouter:
             "minion_id": minion_id,
             "minion": minion_info,
         }
+
+    @router.post("/api/legions/{legion_id}/minions/{minion_id}/reparent")
+    @handle_exceptions("reparent minion", value_error_status=400)
+    async def reparent_minion(legion_id: str, minion_id: str, request: ReparentRequest):
+        """Move a minion to a new parent within the same legion (user-initiated)."""
+        if not await webui.service.validate_project_exists(legion_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        result = await webui.coordinator.legion_system.overseer_controller.reparent_minion(
+            subject_id=minion_id,
+            new_parent_id=request.new_parent_id,
+            caller_id=None,
+        )
+        return result
 
     return router
