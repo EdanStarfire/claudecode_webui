@@ -63,20 +63,19 @@ export const useAnalyticsStore = defineStore('analytics', () => {
 
     if (grouping === 'token_type') {
       const tokenTypes = [
-        { key: 'input_tokens',       label: 'Input',       color: readCssVar('--chart-color-input') },
-        { key: 'output_tokens',      label: 'Output',      color: readCssVar('--chart-color-output') },
-        { key: 'cache_write_tokens', label: 'Cache Write', color: readCssVar('--chart-color-cache-write') },
-        { key: 'cache_read_tokens',  label: 'Cache Read',  color: readCssVar('--chart-color-cache-read') },
+        { key: 'input_tokens',       costKey: 'input_cost_usd',       label: 'Input',       color: readCssVar('--chart-color-input') },
+        { key: 'output_tokens',      costKey: 'output_cost_usd',      label: 'Output',      color: readCssVar('--chart-color-output') },
+        { key: 'cache_write_tokens', costKey: 'cache_write_cost_usd', label: 'Cache Write', color: readCssVar('--chart-color-cache-write') },
+        { key: 'cache_read_tokens',  costKey: 'cache_read_cost_usd',  label: 'Cache Read',  color: readCssVar('--chart-color-cache-read') },
       ]
       if (metric === 'cost') {
         return {
-          datasets: [{
-            label: 'Estimated Cost (USD)',
-            data: bkts.map(b => ({ x: b._ts_ms, y: b.by_token_type.estimated_cost_usd || 0 })),
-            backgroundColor: readCssVar('--chart-color-cost'),
-            borderColor:     readCssVar('--chart-color-cost-border'),
+          datasets: tokenTypes.map(tt => ({
+            label: tt.label,
+            data: bkts.map(b => ({ x: b._ts_ms, y: b.by_token_type[tt.costKey] || 0 })),
+            backgroundColor: tt.color,
             borderWidth: 1,
-          }],
+          })),
         }
       }
       return {
