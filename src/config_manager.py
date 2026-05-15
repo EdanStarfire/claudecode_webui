@@ -148,6 +148,17 @@ def compute_cost(rates: ModelRates, counts: dict[str, Any]) -> float:
     )
 
 
+def compute_cost_breakdown(rates: ModelRates, counts: dict[str, Any]) -> dict[str, float]:
+    """Return per-type cost breakdown in USD given ModelRates and token counts dict."""
+    m = 1_000_000.0
+    return {
+        "input_cost_usd": rates.input * int(counts.get("input_tokens") or 0) / m,
+        "output_cost_usd": rates.output * int(counts.get("output_tokens") or 0) / m,
+        "cache_write_cost_usd": rates.cache_write * int(counts.get("cache_write_tokens") or 0) / m,
+        "cache_read_cost_usd": rates.cache_read * int(counts.get("cache_read_tokens") or 0) / m,
+    }
+
+
 @dataclass
 class NetworkingConfig:
     allow_network_binding: bool = False

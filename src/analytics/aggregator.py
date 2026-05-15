@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..config_manager import PricingConfig, compute_cost
+from ..config_manager import PricingConfig, compute_cost, compute_cost_breakdown
 from .database import AnalyticsDB
 
 _TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens")
@@ -146,13 +146,24 @@ async def aggregate_by_time(
         if label not in bucket_map:
             bucket_map[label] = {
                 "bucket_ts": row["bucket_ts"],
-                "by_token_type": {f: 0 for f in _TOKEN_FIELDS},
+                "by_token_type": {
+                    **{f: 0 for f in _TOKEN_FIELDS},
+                    "input_cost_usd": 0.0,
+                    "output_cost_usd": 0.0,
+                    "cache_write_cost_usd": 0.0,
+                    "cache_read_cost_usd": 0.0,
+                },
                 "by_model": [],
             }
         bucket = bucket_map[label]
         counts = {f: row.get(f) or 0 for f in _TOKEN_FIELDS}
         for f in _TOKEN_FIELDS:
             bucket["by_token_type"][f] += counts[f]
+        rates, _ = pricing.get_rates(row["model"])
+        if rates is not None:
+            breakdown = compute_cost_breakdown(rates, counts)
+            for k, v in breakdown.items():
+                bucket["by_token_type"][k] += v
         estimated_cost, _ = _cost_for_row(pricing, row["model"], counts)
         bucket["by_model"].append(
             {

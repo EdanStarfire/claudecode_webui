@@ -277,3 +277,95 @@ def test_bucket_totals_sums():
     assert totals["cache_write_tokens"] == 10
     assert totals["cache_read_tokens"] == 20
     assert abs(totals["estimated_cost_usd"] - 1.2) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# by_token_type per-type cost fields (issue #1424)
+# ---------------------------------------------------------------------------
+
+# Pricing with non-zero cache rates to exercise all four breakdown fields
+_PRICING_CACHE = PricingConfig(
+    rates={
+        _SONNET: ModelRates(input=2.0, output=10.0, cache_write=4.0, cache_read=1.0),
+        _HAIKU: ModelRates(input=1.0, output=5.0, cache_write=2.0, cache_read=0.5),
+    },
+    default_model=_SONNET,
+)
+
+
+async def test_by_token_type_per_type_cost_fields_present(db):
+    """Four *_cost_usd keys must be present in by_token_type."""
+    await _seed(db, [
+        {"session_id": "s1", "turn_seq": 1, "model": _SONNET, "input_tokens": 1000, "ts": _BASE_TS},
+    ])
+    buckets = await aggregate_by_time(db, _PRICING_CACHE, "hour", _BASE_TS - 1, _BASE_TS + _DAY)
+    assert len(buckets) == 1
+    tt = buckets[0]["by_token_type"]
+    for key in ("input_cost_usd", "output_cost_usd", "cache_write_cost_usd", "cache_read_cost_usd"):
+        assert key in tt, f"missing key: {key}"
+
+
+async def test_by_token_type_per_type_cost_sum_equals_aggregate(db):
+    """Sum of the four per-type costs must equal estimated_cost_usd (within float tolerance)."""
+    await _seed(db, [
+        {
+            "session_id": "s1", "turn_seq": 1, "model": _SONNET,
+            "input_tokens": 1000, "output_tokens": 500,
+            "cache_write_tokens": 200, "cache_read_tokens": 400,
+            "ts": _BASE_TS,
+        },
+        {
+            "session_id": "s2", "turn_seq": 1, "model": _HAIKU,
+            "input_tokens": 800, "output_tokens": 300,
+            "cache_write_tokens": 100, "cache_read_tokens": 150,
+            "ts": _BASE_TS + 60,
+        },
+    ])
+    buckets = await aggregate_by_time(db, _PRICING_CACHE, "hour", _BASE_TS - 1, _BASE_TS + _DAY)
+    assert len(buckets) == 1
+    tt = buckets[0]["by_token_type"]
+    breakdown_sum = (
+        tt["input_cost_usd"]
+        + tt["output_cost_usd"]
+        + tt["cache_write_cost_usd"]
+        + tt["cache_read_cost_usd"]
+    )
+    assert abs(breakdown_sum - tt["estimated_cost_usd"]) < 1e-9
+
+
+async def test_by_token_type_per_type_cost_values_correct(db):
+    """Verify numerical correctness of per-type costs for a single known-model bucket."""
+    # Sonnet: input=2.0, output=10.0, cache_write=4.0, cache_read=1.0 USD/M
+    await _seed(db, [
+        {
+            "session_id": "s1", "turn_seq": 1, "model": _SONNET,
+            "input_tokens": 1_000_000, "output_tokens": 500_000,
+            "cache_write_tokens": 250_000, "cache_read_tokens": 100_000,
+            "ts": _BASE_TS,
+        },
+    ])
+    buckets = await aggregate_by_time(db, _PRICING_CACHE, "hour", _BASE_TS - 1, _BASE_TS + _DAY)
+    tt = buckets[0]["by_token_type"]
+    assert abs(tt["input_cost_usd"] - 2.0) < 1e-9
+    assert abs(tt["output_cost_usd"] - 5.0) < 1e-9
+    assert abs(tt["cache_write_cost_usd"] - 1.0) < 1e-9
+    assert abs(tt["cache_read_cost_usd"] - 0.1) < 1e-9
+
+
+async def test_by_token_type_unknown_model_zero_contribution(db):
+    """Unknown-model rows contribute zero to per-type costs; known-model rows are unaffected."""
+    pricing_no_default = PricingConfig(
+        rates={_SONNET: ModelRates(input=2.0, output=10.0, cache_write=0.0, cache_read=0.0)},
+        default_model=_UNKNOWN,  # unknown default so _UNKNOWN model has no rates
+    )
+    await _seed(db, [
+        {"session_id": "s1", "turn_seq": 1, "model": _SONNET, "input_tokens": 1000, "ts": _BASE_TS},
+        {"session_id": "s2", "turn_seq": 1, "model": _UNKNOWN, "input_tokens": 9999, "ts": _BASE_TS + 30},
+    ])
+    buckets = await aggregate_by_time(db, pricing_no_default, "hour", _BASE_TS - 1, _BASE_TS + _DAY)
+    assert len(buckets) == 1
+    tt = buckets[0]["by_token_type"]
+    # Only the Sonnet row contributes: 1000 * 2.0 / 1_000_000 = 0.002
+    assert abs(tt["input_cost_usd"] - 0.002) < 1e-9
+    # The aggregate cost (estimated_cost_usd) is also only from Sonnet
+    assert abs(tt["estimated_cost_usd"] - 0.002) < 1e-9
