@@ -915,10 +915,10 @@ class LegionMCPTools:
 
             # Validate: named minion must be a descendant of the caller (or caller themselves)
             if named_minion.session_id != parent_overseer_id:
-                caller_descendants = await self.system.session_coordinator.get_descendants(
+                _desc_page = await self.system.session_coordinator.get_descendants(
                     parent_overseer_id
                 )
-                descendant_ids = {d["session_id"] for d in caller_descendants}
+                descendant_ids = {d["session_id"] for d in _desc_page["descendants"]}
 
                 if named_minion.session_id not in descendant_ids:
                     return {
@@ -1328,11 +1328,11 @@ class LegionMCPTools:
 
             if not is_direct_child:
                 # Search full descendant subtree for the target
-                descendants = await self.system.session_coordinator.get_descendants(
+                _desc_page = await self.system.session_coordinator.get_descendants(
                     parent_overseer_id
                 )
                 target_desc = None
-                for d in descendants:
+                for d in _desc_page["descendants"]:
                     d_slug = _slugify(d["name"])
                     if d_slug == target_slug:
                         target_desc = d
@@ -1465,9 +1465,9 @@ class LegionMCPTools:
             subject_slug = _slugify(subject_name)
             new_parent_slug = _slugify(new_parent_name)
 
-            # Resolve IDs from caller's descendant list
-            # (get_descendants mocked as list in tests; follows existing codebase pattern)
-            caller_descendants = await self.system.session_coordinator.get_descendants(caller_id)
+            # get_descendants returns a paginated dict; extract the list from ["descendants"]
+            _desc_page = await self.system.session_coordinator.get_descendants(caller_id)
+            caller_descendants = _desc_page["descendants"]
 
             subject_id = None
             new_parent_id = None
@@ -1718,8 +1718,15 @@ class LegionMCPTools:
                 capabilities = ", ".join(minion.capabilities) if minion.capabilities else "None"
                 cwd = minion.working_directory or "N/A"
 
+                if minion.parent_overseer_id is None:
+                    parent_display = "user"
+                else:
+                    parent_session = await session_manager.get_session_info(minion.parent_overseer_id)
+                    parent_display = parent_session.name if parent_session else "unknown"
+
                 minion_lines.append(
                     f"• **{name}** (slug: {slug}, ID: {minion.session_id})\n"
+                    f"  - Parent: {parent_display}\n"
                     f"  - Role: {role}\n"
                     f"  - State: {state}\n"
                     f"  - Working Directory: {cwd}\n"

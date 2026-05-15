@@ -1074,3 +1074,188 @@ async def test_issue_1419_update_schedule_handler_rejects_non_empty_prompt_on_sc
     assert result.get("is_error") is True
     assert "script-type" in result["content"][0]["text"].lower()
     svc.update_schedule.assert_not_called()
+
+
+# ── Regression tests for issue #1433 ──
+
+
+@pytest.mark.asyncio
+async def test_issue_1433_reparent_extracts_descendants_from_dict():
+    """
+    Issue #1433 regression: _handle_reparent_minion must extract ["descendants"]
+    from the paginated dict returned by get_descendants, not iterate the dict itself.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from src.session_manager import SessionState
+
+    caller_id = "caller-session-id"
+
+    caller_session = MagicMock()
+    caller_session.session_id = caller_id
+    caller_session.name = "CallerMinion"
+    caller_session.state = SessionState.ACTIVE
+
+    # Simulate the real paginated return shape from get_descendants
+    paginated_result = {
+        "descendants": [
+            {"name": "ChildA", "session_id": "child-a-id"},
+            {"name": "NewParent", "session_id": "new-parent-id"},
+        ],
+        "total": 2,
+        "limit": 50,
+        "offset": 0,
+        "has_more": False,
+    }
+
+    session_manager = MagicMock()
+    session_manager.get_session_info = AsyncMock(return_value=caller_session)
+
+    session_coordinator = MagicMock()
+    session_coordinator.session_manager = session_manager
+    session_coordinator.get_descendants = AsyncMock(return_value=paginated_result)
+
+    overseer_controller = MagicMock()
+    overseer_controller.reparent_minion = AsyncMock(
+        return_value={"descendants_moved": 0}
+    )
+
+    mock_system = MagicMock()
+    mock_system.session_coordinator = session_coordinator
+    mock_system.overseer_controller = overseer_controller
+
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_reparent_minion({
+        "_caller_id": caller_id,
+        "subject_name": "ChildA",
+        "new_parent_name": "NewParent",
+    })
+
+    assert result.get("is_error") is False, f"Expected success, got: {result}"
+    overseer_controller.reparent_minion.assert_awaited_once_with(
+        subject_id="child-a-id",
+        new_parent_id="new-parent-id",
+        caller_id=caller_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_issue_1433_list_minions_includes_parent_field():
+    """
+    Issue #1433: list_minions must include a Parent: line for each minion.
+    Root minions (parent_overseer_id=None) show "Parent: user";
+    children show the parent's name.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from src.session_manager import SessionState
+
+    root_session = MagicMock()
+    root_session.session_id = "root-id"
+    root_session.project_id = "legion-123"
+    root_session.name = "RootMinion"
+    root_session.slug = "rootminion"
+    root_session.role = "Root Role"
+    root_session.state = SessionState.ACTIVE
+    root_session.capabilities = []
+    root_session.working_directory = "/work"
+    root_session.parent_overseer_id = None
+
+    child_session = MagicMock()
+    child_session.session_id = "child-id"
+    child_session.project_id = "legion-123"
+    child_session.name = "ChildMinion"
+    child_session.slug = "childminion"
+    child_session.role = "Child Role"
+    child_session.state = SessionState.ACTIVE
+    child_session.capabilities = []
+    child_session.working_directory = "/work"
+    child_session.parent_overseer_id = "root-id"
+
+    async def mock_get_session_info(session_id):
+        return {"root-id": root_session, "child-id": child_session}.get(session_id)
+
+    session_manager = MagicMock()
+    session_manager.get_session_info = mock_get_session_info
+
+    session_coordinator = MagicMock()
+    session_coordinator.session_manager = session_manager
+
+    mock_legion = MagicMock()
+    legion_coordinator = MagicMock()
+    legion_coordinator.get_legion = AsyncMock(return_value=mock_legion)
+
+    comm_router = MagicMock()
+    comm_router.get_visible_minions = AsyncMock(return_value=["root-id", "child-id"])
+
+    mock_system = MagicMock()
+    mock_system.session_coordinator = session_coordinator
+    mock_system.legion_coordinator = legion_coordinator
+    mock_system.comm_router = comm_router
+
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_list_minions({"_from_minion_id": "child-id"})
+
+    assert result.get("is_error") is False, f"Got error: {result}"
+    text = result["content"][0]["text"]
+
+    assert "Parent: user" in text, f"Root minion should show 'Parent: user'; got:\n{text}"
+    assert "Parent: RootMinion" in text, f"Child should show 'Parent: RootMinion'; got:\n{text}"
+
+
+@pytest.mark.asyncio
+async def test_issue_1433_list_minions_parent_unknown_fallback():
+    """
+    Issue #1433: When parent_overseer_id points to a missing/disposed session,
+    list_minions must show "Parent: unknown" and not crash.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from src.session_manager import SessionState
+
+    orphan_session = MagicMock()
+    orphan_session.session_id = "orphan-id"
+    orphan_session.project_id = "legion-456"
+    orphan_session.name = "OrphanMinion"
+    orphan_session.slug = "orphanminion"
+    orphan_session.role = "Orphan Role"
+    orphan_session.state = SessionState.ACTIVE
+    orphan_session.capabilities = []
+    orphan_session.working_directory = "/work"
+    orphan_session.parent_overseer_id = "gone-parent-id"  # points to missing session
+
+    async def mock_get_session_info(session_id):
+        if session_id == "orphan-id":
+            return orphan_session
+        return None  # gone-parent-id returns None
+
+    session_manager = MagicMock()
+    session_manager.get_session_info = mock_get_session_info
+
+    session_coordinator = MagicMock()
+    session_coordinator.session_manager = session_manager
+
+    mock_legion = MagicMock()
+    legion_coordinator = MagicMock()
+    legion_coordinator.get_legion = AsyncMock(return_value=mock_legion)
+
+    comm_router = MagicMock()
+    comm_router.get_visible_minions = AsyncMock(return_value=["orphan-id"])
+
+    mock_system = MagicMock()
+    mock_system.session_coordinator = session_coordinator
+    mock_system.legion_coordinator = legion_coordinator
+    mock_system.comm_router = comm_router
+
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_list_minions({"_from_minion_id": "orphan-id"})
+
+    assert result.get("is_error") is False, f"Got error: {result}"
+    text = result["content"][0]["text"]
+    assert "Parent: unknown" in text, f"Should show 'Parent: unknown'; got:\n{text}"

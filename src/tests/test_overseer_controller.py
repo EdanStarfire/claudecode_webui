@@ -96,11 +96,14 @@ class TestSpawnWithParentName:
             return_value=parent
         )
 
-        # get_descendants returns Parent as descendant of Grandparent
-        mock_system.session_coordinator.get_descendants = AsyncMock(return_value=[
-            {"session_id": "parent-id", "name": "Parent", "role": "worker",
-             "state": "active", "parent_id": "gp-id"}
-        ])
+        # get_descendants returns paginated dict; extract ["descendants"] before iterating
+        mock_system.session_coordinator.get_descendants = AsyncMock(return_value={
+            "descendants": [
+                {"session_id": "parent-id", "name": "Parent", "role": "worker",
+                 "state": "active", "parent_id": "gp-id"}
+            ],
+            "total": 1, "limit": 50, "offset": 0, "has_more": False,
+        })
 
         # Mock spawn_minion to capture what parent_overseer_id is passed
         child_session = _make_session("child-id", "Child", parent_id="parent-id")
@@ -146,7 +149,9 @@ class TestSpawnWithParentName:
             return_value=unrelated
         )
         # Caller has no descendants
-        mock_system.session_coordinator.get_descendants = AsyncMock(return_value=[])
+        mock_system.session_coordinator.get_descendants = AsyncMock(return_value={
+            "descendants": [], "total": 0, "limit": 50, "offset": 0, "has_more": False,
+        })
 
         args = {
             "_parent_overseer_id": "caller-id",
@@ -290,13 +295,16 @@ class TestDisposeDescendant:
         sm = mock_system.session_coordinator.session_manager
         sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
 
-        # get_descendants returns full subtree under Grandparent
-        mock_system.session_coordinator.get_descendants = AsyncMock(return_value=[
-            {"session_id": "parent-id", "name": "Parent", "role": "worker",
-             "state": "active", "parent_id": "gp-id"},
-            {"session_id": "child-id", "name": "Child", "role": "worker",
-             "state": "active", "parent_id": "parent-id"},
-        ])
+        # get_descendants returns paginated dict; extract ["descendants"] before iterating
+        mock_system.session_coordinator.get_descendants = AsyncMock(return_value={
+            "descendants": [
+                {"session_id": "parent-id", "name": "Parent", "role": "worker",
+                 "state": "active", "parent_id": "gp-id"},
+                {"session_id": "child-id", "name": "Child", "role": "worker",
+                 "state": "active", "parent_id": "parent-id"},
+            ],
+            "total": 2, "limit": 50, "offset": 0, "has_more": False,
+        })
 
         mock_system.overseer_controller.dispose_minion = AsyncMock(
             return_value={
@@ -373,7 +381,9 @@ class TestDisposeDescendant:
         sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
 
         # No descendants
-        mock_system.session_coordinator.get_descendants = AsyncMock(return_value=[])
+        mock_system.session_coordinator.get_descendants = AsyncMock(return_value={
+            "descendants": [], "total": 0, "limit": 50, "offset": 0, "has_more": False,
+        })
 
         args = {
             "_parent_overseer_id": "caller-id",
