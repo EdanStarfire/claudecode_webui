@@ -443,6 +443,30 @@ class LegionMCPTools:
             args["_from_minion_id"] = session_id
             return await self._handle_queue_task(args)
 
+        @tool(
+            "reparent_minion",
+            "Move a minion to a different parent within your subtree. "
+            "Both the subject and the new parent must be within your descendant closure. "
+            "You cannot promote a minion to root level — only a user can do that."
+            "\n\n**Authority rules:**"
+            "\n- subject_name: must be one of your descendants (not yourself)"
+            "\n- new_parent_name: must be yourself or one of your descendants"
+            "\n- You cannot create cycles (moving an ancestor under a descendant)"
+            "\n\n**Examples:**"
+            "\n- reparent_minion(subject_name='Worker', new_parent_name='TeamLead')"
+            "\n  → Worker becomes a child of TeamLead (TeamLead must be in your subtree)"
+            "\n- reparent_minion(subject_name='Worker', new_parent_name='MyName')"
+            "\n  → Worker becomes your direct child",
+            {
+                "subject_name": str,     # Name of the minion to move
+                "new_parent_name": str,  # Name of the new parent (yourself or a descendant)
+            }
+        )
+        async def reparent_minion_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Reparent a descendant minion to a new parent within caller's subtree."""
+            args["_caller_id"] = session_id
+            return await self._handle_reparent_minion(args)
+
         # Create and return MCP server with all tools
         return create_sdk_mcp_server(
             name="legion",
@@ -465,6 +489,7 @@ class LegionMCPTools:
                 update_schedule_tool,
                 restart_session_tool,
                 queue_task_tool,
+                reparent_minion_tool,
             ]
         )
 
@@ -1388,6 +1413,130 @@ class LegionMCPTools:
                     "text": f"❌ Failed to dispose minion due to unexpected error: {str(e)}"
                 }],
                 "is_error": True
+            }
+
+    async def _handle_reparent_minion(self, args: dict[str, Any]) -> dict[str, Any]:
+        """
+        Handle reparent_minion tool call from a minion.
+
+        Args:
+            args: {
+                "_caller_id": str,       # Injected by tool wrapper (session_id)
+                "subject_name": str,     # Name of the minion to move
+                "new_parent_name": str,  # Name of the new parent (caller or descendant)
+            }
+
+        Returns:
+            Tool result with success/error
+        """
+        from src.slug_utils import slugify_name as _slugify
+
+        coord_logger = logger
+
+        caller_id = args.get("_caller_id")
+        if not caller_id:
+            return {
+                "content": [{"type": "text", "text": "Error: Unable to determine caller ID"}],
+                "is_error": True,
+            }
+
+        subject_name = args.get("subject_name", "").strip()
+        new_parent_name = args.get("new_parent_name", "").strip()
+
+        if not subject_name:
+            return {
+                "content": [{"type": "text", "text": "Error: 'subject_name' parameter is required"}],
+                "is_error": True,
+            }
+        if not new_parent_name:
+            return {
+                "content": [{"type": "text", "text": "Error: 'new_parent_name' parameter is required"}],
+                "is_error": True,
+            }
+
+        try:
+            caller_session = await self.system.session_coordinator.session_manager.get_session_info(caller_id)
+            if not caller_session:
+                return {
+                    "content": [{"type": "text", "text": "Error: Caller session not found"}],
+                    "is_error": True,
+                }
+
+            subject_slug = _slugify(subject_name)
+            new_parent_slug = _slugify(new_parent_name)
+
+            # Resolve IDs from caller's descendant list
+            # (get_descendants mocked as list in tests; follows existing codebase pattern)
+            caller_descendants = await self.system.session_coordinator.get_descendants(caller_id)
+
+            subject_id = None
+            new_parent_id = None
+
+            for d in caller_descendants:
+                slug = _slugify(d["name"])
+                if slug == subject_slug and subject_id is None:
+                    subject_id = d["session_id"]
+                if slug == new_parent_slug and new_parent_id is None:
+                    new_parent_id = d["session_id"]
+
+            if subject_id is None:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": (
+                            f"❌ Cannot reparent: '{subject_name}' is not in your descendant subtree. "
+                            "You can only reparent minions you control."
+                        ),
+                    }],
+                    "is_error": True,
+                }
+
+            # new_parent can also be the caller itself
+            if new_parent_id is None and _slugify(caller_session.name) == new_parent_slug:
+                new_parent_id = caller_id
+
+            if new_parent_id is None:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": (
+                            f"❌ Cannot reparent: new parent '{new_parent_name}' is not yourself "
+                            "or one of your descendants."
+                        ),
+                    }],
+                    "is_error": True,
+                }
+
+            result = await self.system.overseer_controller.reparent_minion(
+                subject_id=subject_id,
+                new_parent_id=new_parent_id,
+                caller_id=caller_id,
+            )
+
+            descendants_msg = (
+                f"\n{result['descendants_moved']} descendant(s) also moved."
+                if result["descendants_moved"] else ""
+            )
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        f"✅ Successfully moved '{subject_name}' under '{new_parent_name}'.{descendants_msg}"
+                    ),
+                }],
+                "is_error": False,
+            }
+
+        except ValueError as e:
+            return {
+                "content": [{"type": "text", "text": f"❌ Cannot reparent: {e}"}],
+                "is_error": True,
+            }
+        except Exception as e:
+            coord_logger.error(f"Unexpected error in reparent_minion: {e}", exc_info=True)
+            return {
+                "content": [{"type": "text", "text": f"❌ Failed to reparent minion: {e}"}],
+                "is_error": True,
             }
 
     async def _handle_search_capability(self, args: dict[str, Any]) -> dict[str, Any]:

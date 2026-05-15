@@ -25,6 +25,37 @@
           </div>
 
           <!-- Confirmation Views -->
+          <div v-else-if="confirmationView === 'reparent'">
+            <div v-if="isLoadingReparentTargets" class="text-center py-3">
+              <div class="spinner-border spinner-border-sm text-primary" role="status">
+                <span class="visually-hidden">Loading hierarchy...</span>
+              </div>
+              <span class="ms-2 text-muted small">Loading hierarchy...</span>
+            </div>
+            <div v-else-if="reparentError" class="alert alert-danger">
+              <strong>Error:</strong> {{ reparentError }}
+            </div>
+            <div v-else>
+              <p class="text-muted small mb-2">Select a new parent for <strong>{{ session?.name }}</strong>:</p>
+              <div class="reparent-target-list">
+                <div
+                  v-for="target in reparentTargets"
+                  :key="target.id === null ? '__root__' : target.id"
+                  class="reparent-target-item"
+                  :class="{ selected: selectedReparentTargetId === target.id }"
+                  :style="{ paddingLeft: `${target.depth * 16 + 8}px` }"
+                  @click="selectedReparentTargetId = target.id"
+                >
+                  <span class="target-type-icon">{{ target.id === null ? '⬆' : '•' }}</span>
+                  <span :class="target.id === null ? 'fw-semibold' : ''">{{ target.name }}</span>
+                </div>
+              </div>
+              <div v-if="reparentTargets.length === 0" class="text-muted small mt-2">
+                No valid targets available.
+              </div>
+            </div>
+          </div>
+
           <div v-else-if="confirmationView === 'reset'">
             <div class="alert alert-danger mb-3">
               <strong>⚠️ Warning: This action cannot be undone</strong>
@@ -101,6 +132,16 @@
                 <div class="small text-muted">Close agent and return to session list</div>
               </button>
 
+              <button
+                v-if="session?.project_id"
+                class="btn btn-outline-secondary text-start"
+                @click="showReparentView"
+                :disabled="isPerformingAction"
+              >
+                <strong>Move to new parent…</strong>
+                <div class="small text-muted">Reassign this minion within the hierarchy</div>
+              </button>
+
               <!-- Visual separator -->
               <hr class="my-2">
 
@@ -164,6 +205,16 @@
           <template v-if="confirmationView && !isPerformingAction">
             <button type="button" class="btn btn-secondary" @click="cancelConfirmation">Cancel</button>
             <button
+              v-if="confirmationView === 'reparent'"
+              type="button"
+              class="btn btn-primary"
+              :disabled="selectedReparentTargetId === '__unset__' || isLoadingReparentTargets"
+              @click="executeReparent"
+            >
+              Confirm Move
+            </button>
+            <button
+              v-else
               type="button"
               class="btn"
               :class="confirmationView === 'delete' ? 'btn-danger' : 'btn-warning'"
@@ -190,6 +241,7 @@ import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import { usePollingStore } from '@/stores/polling'
 import { useMessageStore } from '@/stores/message'
+import { useLegionStore } from '@/stores/legion'
 import { api } from '@/utils/api'
 
 const router = useRouter()
@@ -197,13 +249,14 @@ const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 const wsStore = usePollingStore()
 const messageStore = useMessageStore()
+const legionStore = useLegionStore()
 
 // State
 const session = ref(null)
 const isPerformingAction = ref(false)
 const loadingMessage = ref('')
 const errorMessage = ref('')
-const confirmationView = ref(null) // 'reset', 'delete', 'erase-history', 'erase-archives', or null
+const confirmationView = ref(null) // 'reset', 'delete', 'erase-history', 'erase-archives', 'reparent', or null
 const modalElement = ref(null)
 let modalInstance = null
 
@@ -215,12 +268,19 @@ const isLoadingDescendants = ref(false)
 const historyArchivesStatus = ref({ has_history: false, has_archives: false })
 const isLoadingStatus = ref(false)
 
+// Reparent state
+const reparentTargets = ref([])
+const isLoadingReparentTargets = ref(false)
+const reparentError = ref('')
+const selectedReparentTargetId = ref('__unset__') // '__unset__' means nothing selected yet
+
 // Computed
 const confirmationTitle = computed(() => {
   if (confirmationView.value === 'reset') return 'Reset Session'
   if (confirmationView.value === 'delete') return 'Delete Session'
   if (confirmationView.value === 'erase-history') return 'Delete History'
   if (confirmationView.value === 'erase-archives') return 'Delete Archives'
+  if (confirmationView.value === 'reparent') return 'Move to New Parent'
   return 'Manage Session'
 })
 
@@ -247,6 +307,83 @@ async function showDeleteConfirmation() {
     descendants.value = []
   } finally {
     isLoadingDescendants.value = false
+  }
+}
+
+// Show reparent view and load hierarchy targets
+async function showReparentView() {
+  confirmationView.value = 'reparent'
+  reparentTargets.value = []
+  reparentError.value = ''
+  selectedReparentTargetId.value = '__unset__'
+
+  if (!session.value?.project_id) return
+
+  isLoadingReparentTargets.value = true
+  try {
+    const hierarchy = await api.get(`/api/legions/${session.value.project_id}/hierarchy`)
+    const subjectId = session.value.session_id
+
+    // Compute excluded set: subject + all descendants of subject
+    const excluded = new Set([subjectId])
+    function markDescendants(node) {
+      for (const child of (node.children || [])) {
+        if (excluded.has(child.id)) {
+          addAll(child)
+        } else {
+          markDescendants(child)
+        }
+      }
+    }
+    function addAll(node) {
+      excluded.add(node.id)
+      for (const child of (node.children || [])) addAll(child)
+    }
+    markDescendants(hierarchy)
+
+    // Flatten hierarchy into selectable list
+    const targets = []
+    function flatten(node, depth) {
+      if (node.type === 'user') {
+        targets.push({ id: null, name: 'Root level (no parent)', depth: 0 })
+        for (const child of (node.children || [])) {
+          if (!excluded.has(child.id)) flatten(child, 1)
+        }
+      } else if (!excluded.has(node.id)) {
+        targets.push({ id: node.id, name: node.name, depth })
+        for (const child of (node.children || [])) {
+          if (!excluded.has(child.id)) flatten(child, depth + 1)
+        }
+      }
+    }
+    flatten(hierarchy, 0)
+    reparentTargets.value = targets
+  } catch (err) {
+    reparentError.value = err.data?.detail || err.message || 'Failed to load hierarchy'
+  } finally {
+    isLoadingReparentTargets.value = false
+  }
+}
+
+// Execute the reparent operation
+async function executeReparent() {
+  if (selectedReparentTargetId.value === '__unset__') return
+  if (!session.value?.project_id) return
+
+  isPerformingAction.value = true
+  loadingMessage.value = 'Moving minion...'
+  try {
+    await legionStore.reparentMinion(
+      session.value.project_id,
+      session.value.session_id,
+      selectedReparentTargetId.value  // null = root
+    )
+    if (modalInstance) modalInstance.hide()
+  } catch (err) {
+    reparentError.value = err.data?.detail || err.message || 'Failed to reparent minion'
+    confirmationView.value = 'reparent'
+  } finally {
+    isPerformingAction.value = false
   }
 }
 
@@ -486,6 +623,10 @@ function resetState() {
   isLoadingDescendants.value = false
   historyArchivesStatus.value = { has_history: false, has_archives: false }
   isLoadingStatus.value = false
+  reparentTargets.value = []
+  isLoadingReparentTargets.value = false
+  reparentError.value = ''
+  selectedReparentTargetId.value = '__unset__'
 }
 
 // Handle modal hidden event
@@ -552,5 +693,41 @@ onUnmounted(() => {
 
 .text-start {
   text-align: left !important;
+}
+
+.reparent-target-list {
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--bs-border-color);
+  border-radius: 0.375rem;
+}
+
+.reparent-target-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0.4rem 0.5rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  border-bottom: 1px solid var(--bs-border-color);
+}
+
+.reparent-target-item:last-child {
+  border-bottom: none;
+}
+
+.reparent-target-item:hover {
+  background-color: var(--bs-secondary-bg);
+}
+
+.reparent-target-item.selected {
+  background-color: var(--bs-primary-bg-subtle);
+  color: var(--bs-primary);
+}
+
+.target-type-icon {
+  font-size: 0.7rem;
+  opacity: 0.6;
+  flex-shrink: 0;
 }
 </style>

@@ -42,6 +42,7 @@ class CommType(Enum):
     THOUGHT = "thought"         # Minion self-talk
     SPAWN = "spawn"             # Minion created
     DISPOSE = "dispose"         # Minion terminated
+    REPARENT = "reparent"       # Minion moved to new parent
     SYSTEM = "system"           # System notification
 
 

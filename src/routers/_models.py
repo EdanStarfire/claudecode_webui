@@ -130,6 +130,11 @@ class CommSendRequest(BaseModel):
     comm_type: str = "task"
 
 
+class ReparentRequest(BaseModel):
+    """Request body for reparenting a minion to a new parent."""
+    new_parent_id: str | None = None
+
+
 class MinionCreateRequest(SessionConfig):
     name: str
     role: str | None = ""

@@ -31,7 +31,7 @@ class TestCommType:
         """Verify all expected CommType values are defined."""
         expected = {
             "TASK", "QUESTION", "REPORT", "INFO", "HALT",
-            "PIVOT", "THOUGHT", "SPAWN", "DISPOSE", "SYSTEM"
+            "PIVOT", "THOUGHT", "SPAWN", "DISPOSE", "REPARENT", "SYSTEM"
         }
         actual = {ct.name for ct in CommType}
         assert actual == expected
