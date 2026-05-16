@@ -506,11 +506,9 @@ class OverseerController:
 
         coord_logger = get_logger('legion', category='OVERSEER')
 
-        # 1. Self-reparent check
         if subject_id == new_parent_id:
             raise ValueError("Cannot reparent a minion to itself")
 
-        # 2. Fetch and validate subject
         subject = await self.system.session_coordinator.session_manager.get_session_info(subject_id)
         if not subject:
             raise ValueError(f"Subject minion {subject_id} not found")
@@ -518,7 +516,6 @@ class OverseerController:
         legion_id = subject.project_id
         old_parent_id = subject.parent_overseer_id
 
-        # 3. No-op: already at the desired parent
         if new_parent_id == old_parent_id:
             return {
                 "success": True,
@@ -528,7 +525,6 @@ class OverseerController:
                 "descendants_moved": 0,
             }
 
-        # 4. Validate new_parent exists and is in same legion
         if new_parent_id is not None:
             new_parent = await self.system.session_coordinator.session_manager.get_session_info(new_parent_id)
             if not new_parent:
@@ -536,14 +532,12 @@ class OverseerController:
             if new_parent.project_id != legion_id:
                 raise ValueError("Cannot reparent to a minion in a different legion")
 
-        # 5. Cycle check: new_parent must not be in subject's descendant closure
         subject_descendant_ids = await self._get_descendant_ids(subject_id)
         if new_parent_id is not None and new_parent_id in subject_descendant_ids:
             raise ValueError(
                 "Cannot reparent: the new parent is a descendant of the subject (would create a cycle)"
             )
 
-        # 6. MCP authority check (only when caller_id provided)
         if caller_id is not None:
             caller = await self.system.session_coordinator.session_manager.get_session_info(caller_id)
             if not caller:
@@ -576,9 +570,10 @@ class OverseerController:
 
         descendants_moved = len(subject_descendant_ids)
 
-        # 7. Mutations under lock to prevent interleaved reparents
+        # Serialize mutations: concurrent reparents on overlapping subtrees would corrupt
+        # child_minion_ids lists. Reads (cycle check, authority check) are done pre-lock
+        # so the lock window stays as narrow as possible.
         async with self._reparent_lock:
-            # 7a. Remove subject from old parent's child_minion_ids
             if old_parent_id:
                 old_parent = await self.system.session_coordinator.session_manager.get_session_info(old_parent_id)
                 if old_parent:
@@ -593,7 +588,6 @@ class OverseerController:
                             old_parent_id, is_overseer=False
                         )
 
-            # 7b. Add subject to new parent's child_minion_ids
             if new_parent_id:
                 fresh_new_parent = await self.system.session_coordinator.session_manager.get_session_info(new_parent_id)
                 if fresh_new_parent:
@@ -608,12 +602,10 @@ class OverseerController:
                             new_parent_id, is_overseer=True
                         )
 
-            # 7c. Update subject's parent pointer
             await self.system.session_coordinator.session_manager.update_session(
                 subject_id, parent_overseer_id=new_parent_id
             )
 
-            # 7d. Recompute overseer_level for subject and entire moved subtree
             if new_parent_id:
                 np_session = await self.system.session_coordinator.session_manager.get_session_info(new_parent_id)
                 new_level = (np_session.overseer_level if np_session else 0) + 1
@@ -621,7 +613,7 @@ class OverseerController:
                 new_level = 0
             await self._recompute_levels(subject_id, new_level)
 
-        # 8. Gather names for timeline comm (post-lock — reads only)
+        # Post-lock: reads only — safe outside the critical section.
         caller_name = "user"
         from_minion_id = None
         from_user = True
@@ -667,7 +659,6 @@ class OverseerController:
         )
         await self.system.comm_router.route_comm(reparent_comm)
 
-        # 9. Broadcast project update
         project = await self.system.session_coordinator.project_manager.get_project(legion_id)
         if project:
             self.system.broadcast_ui_event({
