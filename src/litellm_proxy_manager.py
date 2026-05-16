@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -180,27 +179,22 @@ class LiteLLMProxyManager:
         return model_list
 
     async def _launch_server(self, model_list: list[dict]) -> None:
-        """Configure LiteLLM and start the uvicorn task."""
+        """Configure LiteLLM globals and start the uvicorn task."""
         import litellm
-        from litellm.proxy.proxy_server import app, initialize
+        from litellm.proxy import proxy_server as _ps
 
-        litellm.model_list = model_list
+        # Set proxy module globals directly — initialize() in litellm>=1.50
+        # does not accept model_list or custom_auth kwargs.
+        # The auth module re-imports user_custom_auth per-request so setting
+        # the module attribute is sufficient.
+        router = litellm.Router(model_list=model_list)
+        _ps.llm_router = router
+        _ps.llm_model_list = model_list
+        _ps.user_custom_auth = self.auth_callback
         litellm.telemetry = False
-
-        # initialize() signature varies across LiteLLM versions; probe it
-        sig = inspect.signature(initialize)
-        init_kwargs: dict = {"model_list": model_list, "custom_auth": self.auth_callback}
-        # Older versions required positional-style keyword args
-        for param_name in ("model", "alias", "api_base", "api_version"):
-            if param_name in sig.parameters:
-                init_kwargs[param_name] = None
-
-        result = initialize(**init_kwargs)
-        if inspect.isawaitable(result):
-            await result
 
         import uvicorn
 
-        config = uvicorn.Config(app, host="0.0.0.0", port=self._port, log_level="warning")
+        config = uvicorn.Config(_ps.app, host="0.0.0.0", port=self._port, log_level="warning")
         server = uvicorn.Server(config)
         self._server_task = asyncio.create_task(server.serve())
