@@ -198,16 +198,18 @@ def _is_sse_response(flow: http.HTTPFlow) -> bool:
     return ct.startswith("text/event-stream")
 
 
+def _get_content_encoding(headers) -> str:
+    return headers.get("content-encoding", "").strip().lower()
+
+
 def _is_encoded_response(flow: http.HTTPFlow) -> bool:
     if not flow.response:
         return False
-    ce = flow.response.headers.get("content-encoding", "").strip().lower()
-    return bool(ce) and ce != "identity"
+    return _get_content_encoding(flow.response.headers) not in ("", "identity")
 
 
 def _is_encoded_request(flow: http.HTTPFlow) -> bool:
-    ce = flow.request.headers.get("content-encoding", "").strip().lower()
-    return bool(ce) and ce != "identity"
+    return _get_content_encoding(flow.request.headers) not in ("", "identity")
 
 
 def _scrub_response_headers(flow: http.HTTPFlow, value: str, placeholder: str) -> bool:
