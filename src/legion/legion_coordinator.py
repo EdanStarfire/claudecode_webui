@@ -12,6 +12,10 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Optional
 
+from src.logging_config import get_logger
+
+legion_logger = get_logger('legion', 'LEGION_COORDINATOR')
+
 if TYPE_CHECKING:
     from src.legion_system import LegionSystem
     from src.project_manager import ProjectInfo
@@ -456,8 +460,7 @@ class LegionCoordinator:
         total_capabilities = len(self.capability_registry)
         total_entries = sum(len(entries) for entries in self.capability_registry.values())
         if total_capabilities > 0:
-            import logging
-            logging.info(
+            legion_logger.info(
                 f"Rebuilt capability registry: {total_capabilities} capabilities, "
                 f"{total_entries} total entries from {len(minions_with_capabilities)} minions"
             )

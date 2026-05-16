@@ -17,17 +17,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from src.logging_config import get_logger
+
 if TYPE_CHECKING:
     from src.config_manager import HistoryRetentionConfig
     from src.legion_system import LegionSystem
 
-logger = logging.getLogger(__name__)
+legion_logger = get_logger('legion', 'HISTORY_ROTATOR')
 
 
 class HistoryRotator:
@@ -53,11 +54,11 @@ class HistoryRotator:
 
     async def start(self) -> None:
         if not self.config.enabled:
-            logger.info("HistoryRotator disabled by config — rotation skipped")
+            legion_logger.info("HistoryRotator disabled by config — rotation skipped")
             return
         self._running = True
         self._task = asyncio.create_task(self._loop())
-        logger.info("HistoryRotator started")
+        legion_logger.info("HistoryRotator started")
 
     async def stop(self) -> None:
         self._running = False
@@ -68,7 +69,7 @@ class HistoryRotator:
             except asyncio.CancelledError:
                 pass
         self._task = None
-        logger.info("HistoryRotator stopped")
+        legion_logger.info("HistoryRotator stopped")
 
     async def request_rotation(self, legion_id: str) -> None:
         """Queue a rotation for legion_id (no-op if already queued or disabled)."""
@@ -104,7 +105,7 @@ class HistoryRotator:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.exception("HistoryRotator loop error: %s", e)
+                legion_logger.exception("HistoryRotator loop error: %s", e)
 
     async def _periodic_rotation(self) -> None:
         data_dir = self.system.session_coordinator.data_dir
@@ -125,7 +126,7 @@ class HistoryRotator:
             pruned = await asyncio.to_thread(self._rotate_sync, legion_id)
             if pruned > 0:
                 elapsed_ms = int((time.monotonic() - started) * 1000)
-                logger.info(
+                legion_logger.info(
                     "HistoryRotator: legion=%s pruned=%d duration_ms=%d",
                     legion_id,
                     pruned,
@@ -157,11 +158,11 @@ class HistoryRotator:
                     try:
                         entries.append(ScheduleExecution.from_dict(json.loads(line)))
                     except Exception:
-                        logger.warning(
+                        legion_logger.warning(
                             "HistoryRotator: skipping malformed line in %s", history_file
                         )
         except Exception as e:
-            logger.error("HistoryRotator: failed to read %s: %s", history_file, e)
+            legion_logger.error("HistoryRotator: failed to read %s: %s", history_file, e)
             return 0
 
         before = len(entries)
@@ -189,7 +190,7 @@ class HistoryRotator:
                     fh.write(json.dumps(e.to_dict()) + "\n")
             os.replace(tmp_history, history_file)
         except Exception as e:
-            logger.error("HistoryRotator: failed to rewrite %s: %s", history_file, e)
+            legion_logger.error("HistoryRotator: failed to rewrite %s: %s", history_file, e)
             tmp_history.unlink(missing_ok=True)
             return 0
 
@@ -230,5 +231,5 @@ class HistoryRotator:
             tmp.write_text(json.dumps({sid: m.to_dict() for sid, m in cache.items()}, indent=2))
             os.replace(tmp, metrics_file)
         except Exception as e:
-            logger.error("HistoryRotator: failed to seed metrics for %s: %s", legion_id, e)
+            legion_logger.error("HistoryRotator: failed to seed metrics for %s: %s", legion_id, e)
             tmp.unlink(missing_ok=True)

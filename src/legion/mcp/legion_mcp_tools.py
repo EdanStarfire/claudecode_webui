@@ -14,7 +14,6 @@ Tools are exposed to minions with names like: mcp__legion__send_comm
 """
 
 import asyncio
-import logging
 import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -28,11 +27,12 @@ except ImportError:
 
 from src.config_resolution import resolve_template_config
 from src.docker_utils import translate_docker_tmp_path
+from src.logging_config import get_logger
 from src.session_config import DEFAULTS as _SESSION_DEFAULTS
 from src.session_config import SessionConfig
 from src.task_utils import task_done_log_exception
 
-logger = logging.getLogger(__name__)
+legion_logger = get_logger('legion', 'MCP_TOOLS')
 
 if TYPE_CHECKING:
     from src.legion_system import LegionSystem
@@ -758,10 +758,6 @@ class LegionMCPTools:
         Returns:
             Tool result with success/error
         """
-        from src.logging_config import get_logger
-
-        coord_logger = get_logger('legion', category='MCP_TOOLS')
-
         parent_overseer_id = args.get("_parent_overseer_id")
         if not parent_overseer_id:
             return self._err("Error: Unable to determine parent overseer ID")
@@ -813,7 +809,7 @@ class LegionMCPTools:
 
             actual_parent_id = named_minion.session_id
             parent_session = named_minion
-            coord_logger.info(
+            legion_logger.info(
                 f"parent_name '{parent_name_param}' resolved to {actual_parent_id} "
                 f"(caller: {parent_overseer_id})"
             )
@@ -931,7 +927,7 @@ class LegionMCPTools:
                 )
 
             except Exception as e:
-                coord_logger.error(f"Error applying template: {e}", exc_info=True)
+                legion_logger.error(f"Error applying template: {e}", exc_info=True)
                 return self._err(f"❌ Error applying template: {str(e)}")
         else:
             # No template - use safe default restricted permissions
@@ -1080,7 +1076,7 @@ class LegionMCPTools:
 
         except Exception as e:
             # Catch-all for unexpected errors
-            coord_logger.error(f"Unexpected error in spawn_minion: {e}", exc_info=True)
+            legion_logger.error(f"Unexpected error in spawn_minion: {e}", exc_info=True)
             return self._err(f"❌ Failed to spawn minion due to unexpected error: {str(e)}")
 
     async def _handle_dispose_minion(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -1097,10 +1093,6 @@ class LegionMCPTools:
         Returns:
             Tool result with success/error
         """
-        from src.logging_config import get_logger
-
-        coord_logger = get_logger('legion', category='MCP_TOOLS')
-
         parent_overseer_id = args.get("_parent_overseer_id")  # This is actually the CALLER's session_id
         if not parent_overseer_id:
             return self._err("Error: Unable to determine caller ID")
@@ -1197,7 +1189,7 @@ class LegionMCPTools:
 
         except Exception as e:
             # Catch-all for unexpected errors
-            coord_logger.error(f"Unexpected error in dispose_minion: {e}", exc_info=True)
+            legion_logger.error(f"Unexpected error in dispose_minion: {e}", exc_info=True)
             return self._err(f"❌ Failed to dispose minion due to unexpected error: {str(e)}")
 
     async def _handle_reparent_minion(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -1215,8 +1207,6 @@ class LegionMCPTools:
             Tool result with success/error
         """
         from src.slug_utils import slugify_name as _slugify
-
-        coord_logger = logger
 
         caller_id = args.get("_caller_id")
         if not caller_id:
@@ -1291,7 +1281,7 @@ class LegionMCPTools:
         except ValueError as e:
             return self._err(f"❌ Cannot reparent: {e}")
         except Exception as e:
-            coord_logger.error(f"Unexpected error in reparent_minion: {e}", exc_info=True)
+            legion_logger.error(f"Unexpected error in reparent_minion: {e}", exc_info=True)
             return self._err(f"❌ Failed to reparent minion: {e}")
 
     async def _handle_search_capability(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -2193,7 +2183,7 @@ class LegionMCPTools:
         restart_id = str(uuid.uuid4())
         self._pending_restarts.add(session_id)
 
-        logger.info(
+        legion_logger.info(
             f"Session {session_id} restart initiated (restart_id={restart_id}, reason={reason})"
         )
 
@@ -2225,7 +2215,7 @@ class LegionMCPTools:
 
                 session_info = await coordinator.session_manager.get_session_info(session_id)
                 if not session_info:
-                    logger.warning(f"Session {session_id} disappeared during restart monitor")
+                    legion_logger.warning(f"Session {session_id} disappeared during restart monitor")
                     return
 
                 if not session_info.is_processing:
@@ -2239,7 +2229,7 @@ class LegionMCPTools:
                     )
 
                     if success:
-                        logger.info(
+                        legion_logger.info(
                             f"Session {session_id} self-restarted successfully "
                             f"(restart_id={restart_id}, reason={reason})"
                         )
@@ -2269,14 +2259,14 @@ class LegionMCPTools:
                             reset_session=False,
                         )
                     else:
-                        logger.error(
+                        legion_logger.error(
                             f"Session {session_id} restart failed (restart_id={restart_id})"
                         )
 
                     return
 
             # Timeout — session still processing after 30 seconds
-            logger.warning(
+            legion_logger.warning(
                 f"Session {session_id} restart timed out (restart_id={restart_id})"
             )
             await coordinator.send_message(
@@ -2286,7 +2276,7 @@ class LegionMCPTools:
             )
 
         except Exception as e:
-            logger.error(
+            legion_logger.error(
                 f"Restart monitor unhandled error for session {session_id}: {e}", exc_info=True
             )
             self.system.broadcast_ui_event({
@@ -2334,5 +2324,5 @@ class LegionMCPTools:
         except ValueError as e:
             return self._err(f"Error: {e}")
         except Exception as e:
-            logger.exception(f"Unexpected error in queue_task for session {session_id}: {e}")
+            legion_logger.exception(f"Unexpected error in queue_task for session {session_id}: {e}")
             return self._err(f"Unexpected error queuing task: {e}")

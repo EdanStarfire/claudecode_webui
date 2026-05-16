@@ -12,9 +12,12 @@ import asyncio
 import uuid
 from typing import TYPE_CHECKING
 
+from src.logging_config import get_logger
 from src.models.permission_mode import PermissionMode
 from src.session_config import SessionConfig
 from src.slug_utils import slugify_name
+
+legion_logger = get_logger('legion', 'OVERSEER')
 
 if TYPE_CHECKING:
     from src.legion_system import LegionSystem
@@ -108,8 +111,7 @@ class OverseerController:
                     )
                 except ValueError as e:
                     # Log error but don't fail minion creation if capability format is invalid
-                    import logging
-                    logging.warning(f"Failed to register capability '{capability}' for minion {minion_id}: {e}")
+                    legion_logger.warning(f"Failed to register capability '{capability}' for minion {minion_id}: {e}")
 
         return minion_id
 
@@ -145,10 +147,7 @@ class OverseerController:
             ValueError: If parent doesn't exist, name duplicate, or legion at capacity
             PermissionError: If parent is not a valid overseer
         """
-        from src.logging_config import get_logger
         from src.models.legion_models import Comm, CommType, InterruptPriority
-
-        coord_logger = get_logger('legion', category='OVERSEER')
 
         # 1. Get parent minion session
         parent_session = await self.system.session_coordinator.session_manager.get_session_info(parent_overseer_id)
@@ -227,7 +226,7 @@ class OverseerController:
                     )
                 except ValueError as e:
                     # Log error but don't fail spawn if capability format is invalid
-                    coord_logger.warning(f"Failed to register capability '{capability}' for spawned minion {child_minion_id}: {e}")
+                    legion_logger.warning(f"Failed to register capability '{capability}' for spawned minion {child_minion_id}: {e}")
 
         # 10. Send SPAWN notification to user
         spawn_comm = Comm(
@@ -247,18 +246,18 @@ class OverseerController:
         # This ensures messages from the spawned minion broadcast to WebSocket clients
         if self.system.message_callback_registrar:
             self.system.message_callback_registrar(child_minion_id)
-            coord_logger.info(f"Registered WebSocket message callback for spawned minion {child_minion_id} ({name})")
+            legion_logger.info(f"Registered WebSocket message callback for spawned minion {child_minion_id} ({name})")
         else:
-            coord_logger.warning(f"No message callback registrar available for minion {child_minion_id} - WebSocket streaming will not work!")
+            legion_logger.warning(f"No message callback registrar available for minion {child_minion_id} - WebSocket streaming will not work!")
 
         # 13. Start child session with permission callback
         # Create permission callback using factory (same pattern as user-created minions)
         permission_callback = None
         if self.system.permission_callback_factory:
             permission_callback = self.system.permission_callback_factory(child_minion_id)
-            coord_logger.info(f"Created permission callback for spawned minion {child_minion_id} ({name})")
+            legion_logger.info(f"Created permission callback for spawned minion {child_minion_id} ({name})")
         else:
-            coord_logger.warning(f"No permission callback factory available for minion {child_minion_id} - permissions will not work!")
+            legion_logger.warning(f"No permission callback factory available for minion {child_minion_id} - permissions will not work!")
 
         await self.system.session_coordinator.start_session(
             child_minion_id,
@@ -272,9 +271,9 @@ class OverseerController:
                 "type": "project_updated",
                 "data": {"project": project.to_dict()}
             })
-            coord_logger.debug(f"Appended project_updated for legion {legion_id} after minion spawn")
+            legion_logger.debug(f"Appended project_updated for legion {legion_id} after minion spawn")
 
-        coord_logger.info(f"Minion {name} spawned by {parent_session.name} (parent={parent_overseer_id}, child={child_minion_id})")
+        legion_logger.info(f"Minion {name} spawned by {parent_session.name} (parent={parent_overseer_id}, child={child_minion_id})")
 
         return {
             "minion_id": child_minion_id
@@ -304,10 +303,7 @@ class OverseerController:
             ValueError: If child not found
             PermissionError: If caller is not parent of child
         """
-        from src.logging_config import get_logger
         from src.models.legion_models import Comm, CommType, InterruptPriority
-
-        coord_logger = get_logger('legion', category='OVERSEER')
 
         # 1. Get parent session
         parent_session = await self.system.session_coordinator.session_manager.get_session_info(parent_overseer_id)
@@ -362,9 +358,9 @@ class OverseerController:
         try:
             deleted = await self.system.scheduler_service.delete_schedules_for_minion(child_minion_id)
             if deleted:
-                coord_logger.info(f"Deleted {deleted} schedules for disposed minion {child_minion_id}")
+                legion_logger.info(f"Deleted {deleted} schedules for disposed minion {child_minion_id}")
         except Exception as e:
-            coord_logger.warning(f"Failed to delete schedules for minion {child_minion_id}: {e}")
+            legion_logger.warning(f"Failed to delete schedules for minion {child_minion_id}: {e}")
 
         # 6. Terminate SDK session
         await self.system.session_coordinator.terminate_session(child_minion_id)
@@ -402,9 +398,9 @@ class OverseerController:
                     child_minion_id, archive_reason="parent_initiated"
                 )
                 deleted = True
-                coord_logger.info(f"Deleted minion session {child_minion_name} ({child_minion_id})")
+                legion_logger.info(f"Deleted minion session {child_minion_name} ({child_minion_id})")
             except Exception as e:
-                coord_logger.warning(f"Failed to delete minion session {child_minion_id}: {e}")
+                legion_logger.warning(f"Failed to delete minion session {child_minion_id}: {e}")
         else:
             # Soft dispose: keep relationships intact, minion can be restarted.
             # Only deregister from capability registry (capabilities are session-specific).
@@ -438,7 +434,7 @@ class OverseerController:
                 "data": {"project": project.to_dict()}
             })
 
-        coord_logger.info(
+        legion_logger.info(
             f"Minion {child_minion_name} {action_word} by {parent_session.name} "
             f"(disposed_id={child_minion_id}, descendants={descendants_disposed}, deleted={deleted})"
         )
@@ -482,10 +478,7 @@ class OverseerController:
         Raises:
             ValueError: On self-reparent, cross-legion, cycle, or MCP authority violation
         """
-        from src.logging_config import get_logger
         from src.models.legion_models import Comm, CommType, InterruptPriority
-
-        coord_logger = get_logger('legion', category='OVERSEER')
 
         if subject_id == new_parent_id:
             raise ValueError("Cannot reparent a minion to itself")
@@ -649,7 +642,7 @@ class OverseerController:
                 "data": {"project": project.to_dict()}
             })
 
-        coord_logger.info(
+        legion_logger.info(
             f"Reparented {subject.name} ({subject_id}) from {old_parent_id} to {new_parent_id} "
             f"(caller={caller_name}, descendants_moved={descendants_moved})"
         )
