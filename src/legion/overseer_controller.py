@@ -470,15 +470,15 @@ class OverseerController:
                 queue.extend(child_session.child_minion_ids)
         return result
 
-    async def _recompute_levels(self, session_id: str, level: int) -> None:
+    async def _recompute_levels(self, session_id: str, level: int, children: list[str]) -> None:
         """Set overseer_level for session_id and all descendants (DFS)."""
         await self.system.session_coordinator.session_manager.update_session(
             session_id, overseer_level=level
         )
-        session = await self.system.session_coordinator.session_manager.get_session_info(session_id)
-        if session and session.child_minion_ids:
-            for child_id in session.child_minion_ids:
-                await self._recompute_levels(child_id, level + 1)
+        for child_id in children:
+            child = await self.system.session_coordinator.session_manager.get_session_info(child_id)
+            if child:
+                await self._recompute_levels(child_id, level + 1, child.child_minion_ids or [])
 
     async def reparent_minion(
         self,
@@ -611,7 +611,7 @@ class OverseerController:
                 new_level = (np_session.overseer_level if np_session else 0) + 1
             else:
                 new_level = 0
-            await self._recompute_levels(subject_id, new_level)
+            await self._recompute_levels(subject_id, new_level, list(subject.child_minion_ids or []))
 
         # Post-lock: reads only — safe outside the critical section.
         caller_name = "user"
