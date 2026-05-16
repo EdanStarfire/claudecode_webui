@@ -85,13 +85,13 @@ class ProviderCatalogManager:
         if not matches:
             return value
         # Fetch each unique secret name once, then substitute all occurrences.
-        unique_names = {m.group(1) for m in matches}
-        secrets: dict[str, str] = {}
+        # resolve_secrets_for_assignment returns full objects including value strings.
+        unique_names = list({m.group(1) for m in matches})
+        resolved = await vault.resolve_secrets_for_assignment(unique_names)
+        secrets: dict[str, str] = {r["name"]: r["value"] for r in resolved}
         for name in unique_names:
-            secret_value = await vault.get_secret(name)
-            if secret_value is None:
+            if name not in secrets:
                 raise ValueError(f"Secret '{name}' not found in vault")
-            secrets[name] = secret_value
         result = value
         for match in matches:
             result = result.replace(match.group(0), secrets[match.group(1)])

@@ -35,6 +35,7 @@ class LiteLLMProxyManager:
         self._key_registry: dict[str, str] = {}  # api_key -> session_id
         self._routing_registry: dict[str, dict] = {}  # session_id -> {virtual_key, base_url}
         self._server_task: asyncio.Task | None = None
+        self._server: object | None = None  # uvicorn.Server reference for graceful shutdown
         self._rebuild_lock = asyncio.Lock()
         self._running = False
         self._last_restart: datetime | None = None
@@ -68,11 +69,18 @@ class LiteLLMProxyManager:
     async def stop(self) -> None:
         """Gracefully stop the uvicorn task."""
         if self._server_task and not self._server_task.done():
-            self._server_task.cancel()
+            # Signal uvicorn to exit gracefully so it closes its socket cleanly.
+            if self._server is not None:
+                self._server.should_exit = True  # type: ignore[attr-defined]
             try:
-                await self._server_task
-            except asyncio.CancelledError:
-                pass
+                await asyncio.wait_for(self._server_task, timeout=5.0)
+            except (TimeoutError, asyncio.CancelledError, SystemExit):
+                self._server_task.cancel()
+                try:
+                    await self._server_task
+                except (asyncio.CancelledError, SystemExit):
+                    pass
+        self._server = None
         self._server_task = None
         self._running = False
         legion_logger.info("LiteLLM proxy stopped")
@@ -197,4 +205,24 @@ class LiteLLMProxyManager:
 
         config = uvicorn.Config(_ps.app, host="0.0.0.0", port=self._port, log_level="warning")
         server = uvicorn.Server(config)
+        self._server = server
         self._server_task = asyncio.create_task(server.serve())
+
+        # Wait until uvicorn has actually bound the port before returning.
+        deadline = asyncio.get_event_loop().time() + 10.0
+        while not server.started:
+            if self._server_task.done():
+                try:
+                    exc = self._server_task.exception()
+                except BaseException as e:
+                    exc = e
+                # uvicorn calls sys.exit(1) on bind failure — convert to RuntimeError
+                # so it doesn't propagate as SystemExit and kill the main process.
+                if isinstance(exc, SystemExit):
+                    raise RuntimeError(
+                        f"LiteLLM proxy failed to start (port {self._port} in use?)"
+                    ) from exc
+                raise exc or RuntimeError("LiteLLM proxy task exited during startup")
+            if asyncio.get_event_loop().time() > deadline:
+                raise RuntimeError("LiteLLM proxy failed to bind port within 10 seconds")
+            await asyncio.sleep(0.05)
