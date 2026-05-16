@@ -324,22 +324,16 @@ async function showReparentView() {
     const hierarchy = await api.get(`/api/legions/${session.value.project_id}/hierarchy`)
     const subjectId = session.value.session_id
 
-    // Compute excluded set: subject + all descendants of subject
-    const excluded = new Set([subjectId])
-    function markDescendants(node) {
-      for (const child of (node.children || [])) {
-        if (excluded.has(child.id)) {
-          addAll(child)
-        } else {
-          markDescendants(child)
-        }
-      }
-    }
+    const excluded = new Set()
     function addAll(node) {
       excluded.add(node.id)
       for (const child of (node.children || [])) addAll(child)
     }
-    markDescendants(hierarchy)
+    function findAndExclude(node) {
+      if (node.id === subjectId) { addAll(node); return }
+      for (const child of (node.children || [])) findAndExclude(child)
+    }
+    findAndExclude(hierarchy)
 
     // Flatten hierarchy into selectable list
     const targets = []
