@@ -52,7 +52,8 @@ class LiteLLMProxyManager:
         await self._launch_server(model_list)
         self._running = True
         legion_logger.info(
-            f"LiteLLM proxy started on port {self._port} with {len(model_list)} model(s)"
+            f"LiteLLM proxy started on port {self._port} with {len(model_list)} model(s), "
+            f"bound to 0.0.0.0:{self._port} (auth via virtual key)"
         )
 
     async def stop(self) -> None:
@@ -114,6 +115,14 @@ class LiteLLMProxyManager:
         """Return {virtual_key, base_url} for session_id, or None if not registered."""
         return self._routing_registry.get(session_id)
 
+    def build_hostname_rewrites(self) -> dict[str, str]:
+        """Return the static hostname-rewrite map for Docker sidecars.
+
+        Keys are source hostnames the CLI contacts; values are the rewrite
+        destination (cc-webui.internal:<port>) where LiteLLM is reachable.
+        """
+        return {"api.anthropic.com": f"cc-webui.internal:{self._port}"}
+
     # ── LiteLLM Custom Auth ────────────────────────────────────────────────
 
     async def auth_callback(self, request, api_key: str):
@@ -169,6 +178,6 @@ class LiteLLMProxyManager:
 
         import uvicorn
 
-        config = uvicorn.Config(app, host="127.0.0.1", port=self._port, log_level="warning")
+        config = uvicorn.Config(app, host="0.0.0.0", port=self._port, log_level="warning")
         server = uvicorn.Server(config)
         self._server_task = asyncio.create_task(server.serve())

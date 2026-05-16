@@ -28,6 +28,7 @@ from . import (
     queue,
     schedules,
     secrets,
+    session_routing,
     session_runtime,
     sessions,
     skills,
@@ -61,5 +62,6 @@ def register_all(app: FastAPI, webui) -> None:
     app.include_router(edit_history.build_router(webui))
     app.include_router(files.build_router(webui))
     app.include_router(projects.build_router(webui))
+    app.include_router(session_routing.build_router(webui))
     app.include_router(session_runtime.build_router(webui))
     app.include_router(sessions.build_router(webui))
