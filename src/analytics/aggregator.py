@@ -164,7 +164,9 @@ async def aggregate_by_time(
             breakdown = compute_cost_breakdown(rates, counts)
             for k, v in breakdown.items():
                 bucket["by_token_type"][k] += v
-        estimated_cost, _ = _cost_for_row(pricing, row["model"], counts)
+            estimated_cost = sum(breakdown.values())
+        else:
+            estimated_cost = None
         bucket["by_model"].append(
             {
                 "model": row["model"],
