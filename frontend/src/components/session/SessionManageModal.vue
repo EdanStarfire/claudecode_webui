@@ -208,7 +208,7 @@
               v-if="confirmationView === 'reparent'"
               type="button"
               class="btn btn-primary"
-              :disabled="selectedReparentTargetId === '__unset__' || isLoadingReparentTargets"
+              :disabled="selectedReparentTargetId === undefined || isLoadingReparentTargets"
               @click="executeReparent"
             >
               Confirm Move
@@ -272,7 +272,7 @@ const isLoadingStatus = ref(false)
 const reparentTargets = ref([])
 const isLoadingReparentTargets = ref(false)
 const reparentError = ref('')
-const selectedReparentTargetId = ref('__unset__') // '__unset__' means nothing selected yet
+const selectedReparentTargetId = ref(undefined)
 
 // Computed
 const confirmationTitle = computed(() => {
@@ -315,7 +315,7 @@ async function showReparentView() {
   confirmationView.value = 'reparent'
   reparentTargets.value = []
   reparentError.value = ''
-  selectedReparentTargetId.value = '__unset__'
+  selectedReparentTargetId.value = undefined
 
   if (!session.value?.project_id) return
 
@@ -361,7 +361,7 @@ async function showReparentView() {
 
 // Execute the reparent operation
 async function executeReparent() {
-  if (selectedReparentTargetId.value === '__unset__') return
+  if (selectedReparentTargetId.value === undefined) return
   if (!session.value?.project_id) return
 
   isPerformingAction.value = true
@@ -620,7 +620,7 @@ function resetState() {
   reparentTargets.value = []
   isLoadingReparentTargets.value = false
   reparentError.value = ''
-  selectedReparentTargetId.value = '__unset__'
+  selectedReparentTargetId.value = undefined
 }
 
 // Handle modal hidden event
