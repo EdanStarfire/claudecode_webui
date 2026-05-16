@@ -17,10 +17,9 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("list provider catalog entries")
     async def list_entries():
         entries = await webui.provider_catalog_manager.list_entries()
-        cfg = await webui.app_config_manager.get_config()
         return {
             "entries": entries,
-            "pending_changes": cfg.provider_catalog.pending_changes,
+            "pending_changes": webui.provider_catalog_manager.pending_changes,
         }
 
     @router.post("/api/provider-catalog", status_code=201)
@@ -61,8 +60,7 @@ def build_router(webui) -> APIRouter:
     @router.get("/api/provider-catalog/status")
     @handle_exceptions("get provider catalog status")
     async def get_status():
-        cfg = await webui.app_config_manager.get_config()
-        return _status_payload(pending_changes=cfg.provider_catalog.pending_changes)
+        return _status_payload(pending_changes=webui.provider_catalog_manager.pending_changes)
 
     def _status_payload(*, pending_changes: bool) -> dict:
         mgr = webui.litellm_proxy_manager

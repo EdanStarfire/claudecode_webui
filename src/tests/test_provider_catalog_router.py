@@ -66,13 +66,8 @@ def _make_catalog_mgr(
     mgr.update_entry.return_value = _ENTRY
     mgr.delete_entry.return_value = None
     mgr.clear_pending_changes.return_value = None
+    mgr.pending_changes = pending_changes
     return mgr
-
-
-def _make_config(pending_changes: bool = False) -> MagicMock:
-    cfg = MagicMock()
-    cfg.provider_catalog.pending_changes = pending_changes
-    return cfg
 
 
 def _make_webui(
@@ -82,9 +77,7 @@ def _make_webui(
 ) -> MagicMock:
     webui = MagicMock()
     webui.litellm_proxy_manager = proxy_mgr or _make_proxy_mgr()
-    webui.provider_catalog_manager = catalog_mgr or _make_catalog_mgr()
-    webui.app_config_manager = AsyncMock()
-    webui.app_config_manager.get_config.return_value = _make_config(pending_changes)
+    webui.provider_catalog_manager = catalog_mgr or _make_catalog_mgr(pending_changes=pending_changes)
     return webui
 
 
@@ -106,8 +99,8 @@ async def _client(webui) -> AsyncClient:
 @pytest.mark.asyncio
 async def test_list_entries_returns_entries_and_pending_flag():
     entries = [_ENTRY]
-    catalog = _make_catalog_mgr(entries=entries)
-    webui = _make_webui(catalog_mgr=catalog, pending_changes=True)
+    catalog = _make_catalog_mgr(entries=entries, pending_changes=True)
+    webui = _make_webui(catalog_mgr=catalog)
 
     async with await _client(webui) as client:
         resp = await client.get("/api/provider-catalog")

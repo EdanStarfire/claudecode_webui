@@ -32,6 +32,23 @@ from .task_utils import task_done_log_exception
 logger = logging.getLogger(__name__)
 
 
+def _read_litellm_port_sync(data_dir: Path, default: int = 4000) -> int:
+    """Read litellm_port from providers.json or legacy config.json without async I/O."""
+    import json as _json
+    try:
+        providers = data_dir / "providers.json"
+        if providers.exists():
+            return _json.loads(providers.read_text(encoding="utf-8")).get("litellm_port", default)
+        # Fall back to legacy config.json (pre-migration)
+        legacy = Path.home() / ".config" / "cc_webui" / "config.json"
+        if legacy.exists():
+            data = _json.loads(legacy.read_text(encoding="utf-8"))
+            return data.get("provider_catalog", {}).get("litellm_port", default)
+    except Exception:
+        pass
+    return default
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     """Authentication middleware for HTTP requests (issue #728).
 
@@ -175,8 +192,10 @@ class ClaudeWebUI:
         from .litellm_proxy_manager import LiteLLMProxyManager
         from .provider_catalog import ProviderCatalogManager
         self.app_config_manager = AppConfigManager(config_file=config_file) if config_file else AppConfigManager()
-        self.provider_catalog_manager = ProviderCatalogManager(self.app_config_manager)
-        _litellm_port = _cfg.provider_catalog.litellm_port
+        self.provider_catalog_manager = ProviderCatalogManager(self.coordinator.provider_catalog_store)
+        # Read litellm_port synchronously at init time — providers.json may not exist yet
+        # (store.load() runs in coordinator.initialize()); fall back to legacy config then default 4000.
+        _litellm_port = _read_litellm_port_sync(data_dir or Path("data"))
         self.litellm_proxy_manager = LiteLLMProxyManager(
             self.provider_catalog_manager,
             self.coordinator.credential_vault,
