@@ -39,3 +39,24 @@ def test_extra_env_in_defaults():
     """extra_env must appear in DEFAULTS with value None."""
     assert "extra_env" in DEFAULTS
     assert DEFAULTS["extra_env"] is None
+
+
+# ── Issue #1427 Phase 2: provider catalog routing fields ───────────────────────
+
+
+def test_provider_catalog_id_defaults_none():
+    assert SessionConfig().provider_catalog_id is None
+
+
+def test_provider_model_id_defaults_none():
+    assert SessionConfig().provider_model_id is None
+
+
+def test_provider_catalog_fields_in_config_fields():
+    assert "provider_catalog_id" in CONFIG_FIELDS
+    assert "provider_model_id" in CONFIG_FIELDS
+
+
+def test_provider_catalog_fields_in_defaults():
+    assert DEFAULTS.get("provider_catalog_id") is None
+    assert DEFAULTS.get("provider_model_id") is None

@@ -346,6 +346,8 @@ class TemplateManager:
         env_scrub_enabled: bool | None = None,
         # Non-secret direct env passthrough (issue #1396)
         extra_env: dict[str, str] | None = None,
+        provider_catalog_id: str | None = None,
+        provider_model_id: str | None = None,
         # Deprecated: template_overrides absorbed into config
         template_overrides: dict[str, Any] | None = None,
     ) -> MinionTemplate:
@@ -417,6 +419,8 @@ class TemplateManager:
             "bare_mode": bare_mode,
             "env_scrub_enabled": env_scrub_enabled,
             "extra_env": extra_env,
+            "provider_catalog_id": provider_catalog_id,
+            "provider_model_id": provider_model_id,
         }
         for field_name, value in local_vars.items():
             if value is not None and field_name in CONFIG_FIELDS:

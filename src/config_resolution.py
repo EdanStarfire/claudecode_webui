@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 PROFILE_AREAS: dict[str, set[str]] = {
     "model": {
         "model", "thinking_mode", "thinking_budget_tokens", "effort",
+        "provider_catalog_id", "provider_model_id",
     },
     "permissions": {
         "permission_mode", "allowed_tools", "disallowed_tools",

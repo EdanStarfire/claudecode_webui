@@ -118,3 +118,11 @@ class TestResolveEnvVars:
         with patch("src.config_manager.load_config", return_value=_suppression_off_config()):
             env = sdk._resolve_env_vars()
         assert env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] == "1"
+
+    def test_issue_1427_extra_env_reaches_non_docker_sdk(self):
+        """Regression: extra_env passed to ClaudeSDK constructor appears in _resolve_env_vars() output."""
+        sdk = _make_sdk(extra_env={"FOO": "bar", "ANOTHER": "val"})
+        with patch("src.config_manager.load_config", return_value=_suppression_off_config()):
+            env = sdk._resolve_env_vars()
+        assert env.get("FOO") == "bar"
+        assert env.get("ANOTHER") == "val"

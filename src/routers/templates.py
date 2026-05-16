@@ -95,6 +95,8 @@ def build_router(webui) -> APIRouter:
             env_scrub_enabled=request.env_scrub_enabled,
             # Non-secret direct env passthrough (issue #1396)
             extra_env=request.extra_env,
+            provider_catalog_id=request.provider_catalog_id,
+            provider_model_id=request.provider_model_id,
             profile_ids=request.profile_ids,
         )
 
