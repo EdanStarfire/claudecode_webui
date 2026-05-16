@@ -451,25 +451,6 @@ class OverseerController:
             "deleted": deleted
         }
 
-    async def _get_descendant_ids(self, session_id: str) -> set[str]:
-        """Return the set of all descendant session IDs (BFS, excludes session_id itself)."""
-        result: set[str] = set()
-        session = await self.system.session_coordinator.session_manager.get_session_info(session_id)
-        if not session or not session.child_minion_ids:
-            return result
-        queue = list(session.child_minion_ids)
-        visited: set[str] = set()
-        while queue:
-            child_id = queue.pop()
-            if child_id in visited:
-                continue
-            visited.add(child_id)
-            result.add(child_id)
-            child_session = await self.system.session_coordinator.session_manager.get_session_info(child_id)
-            if child_session and child_session.child_minion_ids:
-                queue.extend(child_session.child_minion_ids)
-        return result
-
     async def _recompute_levels(self, session_id: str, level: int, children: list[str]) -> None:
         """Set overseer_level for session_id and all descendants (DFS)."""
         await self.system.session_coordinator.session_manager.update_session(
@@ -532,7 +513,8 @@ class OverseerController:
             if new_parent.project_id != legion_id:
                 raise ValueError("Cannot reparent to a minion in a different legion")
 
-        subject_descendant_ids = await self._get_descendant_ids(subject_id)
+        _desc_page = await self.system.session_coordinator.get_descendants(subject_id)
+        subject_descendant_ids = {d["session_id"] for d in _desc_page["descendants"]}
         if new_parent_id is not None and new_parent_id in subject_descendant_ids:
             raise ValueError(
                 "Cannot reparent: the new parent is a descendant of the subject (would create a cycle)"
@@ -543,7 +525,8 @@ class OverseerController:
             if not caller:
                 raise ValueError(f"Caller {caller_id} not found")
 
-            caller_descendant_ids = await self._get_descendant_ids(caller_id)
+            _caller_desc_page = await self.system.session_coordinator.get_descendants(caller_id)
+            caller_descendant_ids = {d["session_id"] for d in _caller_desc_page["descendants"]}
 
             # Subject must be in caller's descendant closure
             if subject_id not in caller_descendant_ids:

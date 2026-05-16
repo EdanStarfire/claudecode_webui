@@ -139,13 +139,7 @@ class PricingConfig:
 
 def compute_cost(rates: ModelRates, counts: dict[str, Any]) -> float:
     """Compute estimated cost in USD given ModelRates and token counts dict."""
-    m = 1_000_000.0
-    return (
-        rates.input * int(counts.get("input_tokens") or 0) / m
-        + rates.output * int(counts.get("output_tokens") or 0) / m
-        + rates.cache_write * int(counts.get("cache_write_tokens") or 0) / m
-        + rates.cache_read * int(counts.get("cache_read_tokens") or 0) / m
-    )
+    return sum(compute_cost_breakdown(rates, counts).values())
 
 
 def compute_cost_breakdown(rates: ModelRates, counts: dict[str, Any]) -> dict[str, float]:
