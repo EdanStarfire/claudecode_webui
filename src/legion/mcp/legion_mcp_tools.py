@@ -1693,10 +1693,12 @@ class LegionMCPTools:
             session_manager = self.system.session_coordinator.session_manager
             visible_ids = await self.system.comm_router.get_visible_minions(from_minion_id)
             minions = []
+            session_name_cache: dict[str, str] = {}
             for vid in visible_ids:
                 session = await session_manager.get_session_info(vid)
                 if session:
                     minions.append(session)
+                    session_name_cache[session.session_id] = session.name
 
             # Format minion list
             minion_lines = []
@@ -1720,9 +1722,12 @@ class LegionMCPTools:
 
                 if minion.parent_overseer_id is None:
                     parent_display = "user"
+                elif minion.parent_overseer_id in session_name_cache:
+                    parent_display = session_name_cache[minion.parent_overseer_id]
                 else:
                     parent_session = await session_manager.get_session_info(minion.parent_overseer_id)
                     parent_display = parent_session.name if parent_session else "unknown"
+                    session_name_cache[minion.parent_overseer_id] = parent_display
 
                 minion_lines.append(
                     f"• **{name}** (slug: {slug}, ID: {minion.session_id})\n"
