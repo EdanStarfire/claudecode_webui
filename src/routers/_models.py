@@ -375,6 +375,17 @@ class PermissionResponseRequest(BaseModel):
     updated_input: dict | None = None
 
 
+class ProviderCatalogEntryRequest(BaseModel):
+    id: str
+    display_name: str
+    provider_type: str
+    litellm_params_template: dict[str, str] = Field(default_factory=dict)
+    models: list[dict] = Field(default_factory=list)
+
+    class Config:
+        extra = "allow"  # forward-compat for new provider-specific fields
+
+
 def _validate_additional_directories(dirs: list[str] | None, working_directory: str | None) -> list[str] | None:
     """Validate additional directories: absolute paths, no duplicates, not same as working_dir.
     Returns None (not []) when there are no valid entries so callers can distinguish
