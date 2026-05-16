@@ -37,6 +37,9 @@ def _make_manager():
         mgr._server_task = None
         mgr._rebuild_lock = asyncio.Lock()
         mgr._running = False
+        mgr._last_restart = None
+        mgr._last_error = None
+        mgr._model_count = 0
         return mgr, mock_types
 
 
@@ -167,3 +170,45 @@ def test_routing_registry_independent_of_key_registry(manager):
     manager.unregister_session_routing("sess-3")
     # Key registry should still be clean
     assert manager._key_registry == {}
+
+
+# ── Telemetry Attribute Tests (issue #1427 Phase 4) ───────────────────────────
+
+
+def test_telemetry_attributes_default_to_none(manager):
+    assert manager.last_restart is None
+    assert manager.last_error is None
+
+
+def test_model_count_zero_before_start(manager):
+    assert manager.model_count == 0
+
+
+@pytest.mark.asyncio
+async def test_build_model_list_updates_model_count(manager):
+    manager._catalog_manager.list_entries.return_value = [
+        {
+            "id": "prov-a",
+            "models": [
+                {"id": "m1", "litellm_model": "anthropic/claude-sonnet-4-6"},
+                {"id": "m2", "litellm_model": "anthropic/claude-haiku-4-5"},
+            ],
+            "litellm_params_template": {},
+        }
+    ]
+    manager._catalog_manager.resolve_params.return_value = {}
+
+    result = await manager._build_model_list()
+
+    assert len(result) == 2
+    assert manager.model_count == 2
+
+
+@pytest.mark.asyncio
+async def test_build_model_list_empty_catalog_sets_count_zero(manager):
+    manager._catalog_manager.list_entries.return_value = []
+
+    result = await manager._build_model_list()
+
+    assert result == []
+    assert manager.model_count == 0

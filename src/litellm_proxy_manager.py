@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import uuid
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from src.logging_config import get_logger
@@ -37,6 +38,9 @@ class LiteLLMProxyManager:
         self._server_task: asyncio.Task | None = None
         self._rebuild_lock = asyncio.Lock()
         self._running = False
+        self._last_restart: datetime | None = None
+        self._last_error: str | None = None
+        self._model_count: int = 0
         try:
             from litellm.proxy.proxy_server import app as _  # noqa: F401
         except ImportError as e:
@@ -48,13 +52,19 @@ class LiteLLMProxyManager:
 
     async def start(self) -> None:
         """Build model_list from catalog and start the uvicorn task."""
-        model_list = await self._build_model_list()
-        await self._launch_server(model_list)
-        self._running = True
-        legion_logger.info(
-            f"LiteLLM proxy started on port {self._port} with {len(model_list)} model(s), "
-            f"bound to 0.0.0.0:{self._port} (auth via virtual key)"
-        )
+        try:
+            model_list = await self._build_model_list()
+            await self._launch_server(model_list)
+            self._running = True
+            self._last_restart = datetime.now(UTC)
+            self._last_error = None
+            legion_logger.info(
+                f"LiteLLM proxy started on port {self._port} with {len(model_list)} model(s), "
+                f"bound to 0.0.0.0:{self._port} (auth via virtual key)"
+            )
+        except Exception as e:
+            self._last_error = f"{type(e).__name__}: {e}"
+            raise
 
     async def stop(self) -> None:
         """Gracefully stop the uvicorn task."""
@@ -82,6 +92,18 @@ class LiteLLMProxyManager:
     @property
     def port(self) -> int:
         return self._port
+
+    @property
+    def last_restart(self) -> datetime | None:
+        return self._last_restart
+
+    @property
+    def last_error(self) -> str | None:
+        return self._last_error
+
+    @property
+    def model_count(self) -> int:
+        return self._model_count
 
     # ── Virtual Key Registry ───────────────────────────────────────────────
 
@@ -154,6 +176,7 @@ class LiteLLMProxyManager:
                         **resolved_params,
                     },
                 })
+        self._model_count = len(model_list)
         return model_list
 
     async def _launch_server(self, model_list: list[dict]) -> None:
