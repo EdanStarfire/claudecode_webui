@@ -492,6 +492,7 @@ class ProxyAddon:
         self._session_id: str = ""
         self._records: dict[str, dict] = {}        # placeholder → full record dict
         self._refresh_locks: dict[str, asyncio.Lock] = {}
+        self._routing: dict = {"hostname_rewrites": {}, "virtual_key": None}
         self.allowed_domains: set[str] = set()
         self.logger = logging.getLogger("proxy.addon")
         self._log_file = None
@@ -516,7 +517,7 @@ class ProxyAddon:
         ctx.log.info(f"[proxy] Loaded {len(self.allowed_domains)} allowed domains")
 
     async def running(self) -> None:
-        """Fetch secrets after proxy is fully started (async-capable hook)."""
+        """Fetch secrets and routing config after proxy is fully started (async-capable hook)."""
         if not self._session_id:
             return  # load() didn't complete successfully
         try:
@@ -528,13 +529,44 @@ class ProxyAddon:
         except Exception as exc:
             ctx.log.error(f"[proxy] Failed to fetch secrets for session {self._session_id}: {exc}")
 
+        try:
+            self._routing = await self._fetch_routing()
+            if self._routing["hostname_rewrites"]:
+                ctx.log.info(
+                    f"[proxy] Routing enabled: {self._routing['hostname_rewrites']}"
+                )
+        except Exception as exc:
+            ctx.log.warn(
+                f"[proxy] Failed to fetch routing for session {self._session_id}: {exc}"
+            )
+            self._routing = {"hostname_rewrites": {}, "virtual_key": None}
+
     async def requestheaders(self, flow: http.HTTPFlow) -> None:
         """Fires after client headers arrive, before upstream forwarding.
 
-        Performs allowlist enforcement, OAuth2 refresh, and all header/query
-        injection. Body injection is deferred to request() where content is
-        available (or no-ops when streaming).
+        Performs LiteLLM hostname rewrite (Phase 3), allowlist enforcement,
+        OAuth2 refresh, and all header/query injection. Body injection is
+        deferred to request() where content is available (or no-ops when streaming).
         """
+        # ── LiteLLM hostname rewrite (Phase 3) ────────────────────────────────
+        # Applied before the allowlist check so the rewritten host
+        # (cc-webui.internal) is what gets allowlisted — it is already present
+        # in allowlist.json.
+        rewrites = self._routing["hostname_rewrites"]
+        vkey = self._routing.get("virtual_key")
+        src_host = flow.request.pretty_host
+        if src_host in rewrites and vkey:
+            target = rewrites[src_host]              # e.g. "cc-webui.internal:4000"
+            host_part, _, port_str = target.partition(":")
+            port = int(port_str) if port_str else 80
+            flow.request.host = host_part
+            flow.request.port = port
+            flow.request.scheme = "http"             # LiteLLM is plain HTTP on the host
+            flow.request.headers["x-api-key"] = vkey
+            flow.request.headers["Authorization"] = f"Bearer {vkey}"
+            flow.metadata["routed_via_litellm"] = True
+            ctx.log.info(f"[proxy] Routed {src_host} -> {target}")
+
         host = flow.request.pretty_host
         client_ip = (
             flow.client_conn.peername[0] if flow.client_conn.peername else "unknown"
@@ -555,6 +587,11 @@ class ProxyAddon:
         for ph, record in self._records.items():
             target_hosts = record.get("target_hosts") or []
             if not _host_matches_targets(host, target_hosts):
+                continue
+            # Sentinel guard: when the request was rewritten to LiteLLM, skip
+            # secret injection so Anthropic-targeted secrets don't overwrite the
+            # virtual key that was just installed by the rewrite block above.
+            if flow.metadata.get("routed_via_litellm"):
                 continue
             secret_type = record.get("type", "generic")
 
@@ -712,9 +749,9 @@ class ProxyAddon:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _fetch_resolve(self) -> dict[str, dict]:
-        """GET /api/sessions/{id}/secrets/resolve → {placeholder: record_dict}."""
-        url = f"{WEBUI_BASE_URL}/api/sessions/{self._session_id}/secrets/resolve"
+    async def _fetch_json(self, path: str) -> dict:
+        """GET {WEBUI_BASE_URL}{path} with session Bearer auth. Returns parsed JSON."""
+        url = f"{WEBUI_BASE_URL}{path}"
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 url,
@@ -722,12 +759,20 @@ class ProxyAddon:
                 timeout=10.0,
             )
             resp.raise_for_status()
-            data = resp.json()
+            return resp.json()
+
+    async def _fetch_resolve(self) -> dict[str, dict]:
+        """GET /api/sessions/{id}/secrets/resolve → {placeholder: record_dict}."""
+        data = await self._fetch_json(f"/api/sessions/{self._session_id}/secrets/resolve")
         return {
             secret["placeholder"]: secret
             for secret in data.get("secrets", [])
             if secret.get("placeholder")
         }
+
+    async def _fetch_routing(self) -> dict:
+        """GET /api/sessions/{id}/routing → {hostname_rewrites, virtual_key}."""
+        return await self._fetch_json(f"/api/sessions/{self._session_id}/routing")
 
     async def _get_partner_value(self, name: str) -> str:
         """Return the value of a sibling record (e.g. refresh_token) by name."""

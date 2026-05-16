@@ -43,7 +43,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     EXEMPT_PREFIXES = ('/assets/',)
     # Issue #827: The per-session secrets resolve endpoint uses its own Bearer token auth,
     # not the global operator token. Exempt it from global AuthMiddleware.
-    EXEMPT_SUFFIXES = ('/secrets/resolve',)
+    EXEMPT_SUFFIXES = ('/secrets/resolve', '/routing')
     # Issue #1134: Session-scoped proxy write-back endpoints (per-session Bearer token auth).
     # Matches /api/sessions/{uuid}/secrets/{name} (PATCH) and /api/sessions/{uuid}/events (POST).
     _PROXY_WRITE_BACK_PATTERN = re.compile(r'^/api/sessions/[^/]+/(secrets/[^/]+|events)$')
