@@ -33,6 +33,7 @@ def _make_manager():
         mgr._vault = vault
         mgr._port = 4000
         mgr._key_registry = {}
+        mgr._routing_registry = {}
         mgr._server_task = None
         mgr._rebuild_lock = asyncio.Lock()
         mgr._running = False
@@ -128,3 +129,41 @@ async def test_auth_callback_invalid_key_raises_401(manager):
 
 def test_is_running_false_before_start(manager):
     assert manager.is_running is False
+
+
+# ── Routing Registry Tests (issue #1427 Phase 2) ──────────────────────────────
+
+
+def test_register_session_routing_stores_entry(manager):
+    manager.register_session_routing("sess-1", "lc-abc", "http://127.0.0.1:4000/")
+    entry = manager.get_session_routing("sess-1")
+    assert entry == {"virtual_key": "lc-abc", "base_url": "http://127.0.0.1:4000/"}
+
+
+def test_get_session_routing_unknown_returns_none(manager):
+    assert manager.get_session_routing("never-registered") is None
+
+
+def test_unregister_session_routing_removes_entry(manager):
+    manager.register_session_routing("sess-2", "lc-xyz", "http://127.0.0.1:4000/")
+    manager.unregister_session_routing("sess-2")
+    assert manager.get_session_routing("sess-2") is None
+
+
+def test_unregister_session_routing_nonexistent_is_noop(manager):
+    manager.unregister_session_routing("does-not-exist")
+    assert manager._routing_registry == {}
+
+
+def test_routing_registry_independent_of_key_registry(manager):
+    """Key registry and routing registry are separate — operations on one don't affect the other."""
+    manager.register_session_key("sess-3")
+    manager.register_session_routing("sess-3", "lc-key", "http://127.0.0.1:4000/")
+
+    manager.unregister_session_key("sess-3")
+    # Routing entry should still be present
+    assert manager.get_session_routing("sess-3") is not None
+
+    manager.unregister_session_routing("sess-3")
+    # Key registry should still be clean
+    assert manager._key_registry == {}

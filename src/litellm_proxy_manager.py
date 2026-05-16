@@ -14,6 +14,9 @@ if TYPE_CHECKING:
 
 legion_logger = get_logger("legion", category="LITELLM_PROXY")
 
+# Separator between catalog_id and model_id in LiteLLM model_name aliases.
+MODEL_ALIAS_SEP = "--"
+
 
 class LiteLLMProxyManager:
     """
@@ -30,6 +33,7 @@ class LiteLLMProxyManager:
         self._vault = vault
         self._port = port
         self._key_registry: dict[str, str] = {}  # api_key -> session_id
+        self._routing_registry: dict[str, dict] = {}  # session_id -> {virtual_key, base_url}
         self._server_task: asyncio.Task | None = None
         self._rebuild_lock = asyncio.Lock()
         self._running = False
@@ -96,6 +100,20 @@ class LiteLLMProxyManager:
         """Return session_id for api_key, or None if not registered."""
         return self._key_registry.get(api_key)
 
+    # ── Routing Registry ──────────────────────────────────────────────────────
+
+    def register_session_routing(self, session_id: str, virtual_key: str, base_url: str) -> None:
+        """Store virtual key + base URL for a session (used by Docker delivery, Phase 3)."""
+        self._routing_registry[session_id] = {"virtual_key": virtual_key, "base_url": base_url}
+
+    def unregister_session_routing(self, session_id: str) -> None:
+        """Remove routing entry for session_id (no-op if absent)."""
+        self._routing_registry.pop(session_id, None)
+
+    def get_session_routing(self, session_id: str) -> dict | None:
+        """Return {virtual_key, base_url} for session_id, or None if not registered."""
+        return self._routing_registry.get(session_id)
+
     # ── LiteLLM Custom Auth ────────────────────────────────────────────────
 
     async def auth_callback(self, request, api_key: str):
@@ -119,7 +137,7 @@ class LiteLLMProxyManager:
         for entry in entries:
             resolved_params = await self._catalog_manager.resolve_params(entry, self._vault)
             for model in entry.get("models", []):
-                model_name = f"{entry['id']}--{model['id']}"
+                model_name = f"{entry['id']}{MODEL_ALIAS_SEP}{model['id']}"
                 model_list.append({
                     "model_name": model_name,
                     "litellm_params": {

@@ -5,6 +5,7 @@ Handles application config file creation, loading, and validation.
 Config file location: ~/.config/cc_webui/config.json
 """
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -514,6 +515,28 @@ def save_config(config: AppConfig, config_file: Path = CONFIG_FILE) -> None:
     """Save config to file."""
     config_file.parent.mkdir(parents=True, exist_ok=True)
     config_file.write_text(json.dumps(config.to_dict(), indent=2) + "\n")
+
+
+class AppConfigManager:
+    """Async wrapper around load_config/save_config with in-memory cache and write lock."""
+
+    def __init__(self, config_file: Path = CONFIG_FILE):
+        self._config_file = config_file
+        self._cache: AppConfig | None = None
+        self._lock = asyncio.Lock()
+
+    async def get_config(self) -> AppConfig:
+        if self._cache is not None:
+            return self._cache
+        async with self._lock:
+            if self._cache is None:
+                self._cache = load_config(self._config_file)
+            return self._cache
+
+    async def save_config(self, config: AppConfig) -> None:
+        async with self._lock:
+            save_config(config, self._config_file)
+            self._cache = config
 
 
 def check_network_binding(host: str, config: AppConfig, config_file: Path = CONFIG_FILE) -> bool:

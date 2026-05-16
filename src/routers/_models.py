@@ -248,6 +248,8 @@ class TemplateUpdateRequest(BaseModel):
     env_scrub_enabled: bool | None = None
     # Non-secret direct env passthrough (issue #1396)
     extra_env: dict[str, str] | None = None
+    provider_catalog_id: str | None = None
+    provider_model_id: str | None = None
     # Composable profiles (issue #1062)
     profile_ids: dict[str, str] | None = None
     # Issue #1230: full config dict (preferred over flat fields above)

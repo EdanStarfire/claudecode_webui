@@ -26,6 +26,7 @@ from .claude_sdk import ClaudeSDK
 from .config_resolution import resolve_effective_config
 from .data_storage import DataStorageManager
 from .hooks.pretooluse_handler import InternalPermissionHandler
+from .litellm_proxy_manager import MODEL_ALIAS_SEP
 from .logging_config import get_logger
 from .mcp_config_manager import McpServerType
 from .message_parser import MessageParser, MessageProcessor
@@ -222,7 +223,7 @@ class SessionCoordinator:
     - Real-time communication pipeline
     """
 
-    def __init__(self, data_dir: Path = None, experimental: bool = False):
+    def __init__(self, data_dir: Path = None, experimental: bool = False, litellm_proxy_manager=None):
         self.data_dir = data_dir or Path("data")
         self.experimental = experimental
         self.session_manager = SessionManager(self.data_dir)
@@ -271,6 +272,8 @@ class SessionCoordinator:
 
         # Track applied permission updates for state management
         self._permission_updates: dict[str, list[dict]] = {}  # session_id -> list of applied updates
+
+        self.litellm_proxy_manager = litellm_proxy_manager
 
         # Display projections per session (Issue #310)
         # Tracks tool lifecycle state and computes display metadata for frontend
@@ -1494,6 +1497,23 @@ class SessionCoordinator:
                     update={"auto_memory_directory": str(_session_memory_dir)}
                 )
 
+            litellm_env: dict[str, str] = {}
+            catalog_model_update: dict = {}
+            _proxy_mgr = self.litellm_proxy_manager
+            if (
+                effective_config.provider_catalog_id
+                and effective_config.provider_model_id
+                and _proxy_mgr is not None
+            ):
+                virtual_key = _proxy_mgr.register_session_key(session_id)
+                model_alias = f"{effective_config.provider_catalog_id}{MODEL_ALIAS_SEP}{effective_config.provider_model_id}"
+                base_url = f"http://127.0.0.1:{_proxy_mgr.port}/"
+                catalog_model_update["model"] = model_alias
+                if effective_config.docker_enabled:
+                    _proxy_mgr.register_session_routing(session_id, virtual_key, base_url)
+                else:
+                    litellm_env = {"ANTHROPIC_BASE_URL": base_url, "ANTHROPIC_API_KEY": virtual_key}
+
             # Override 3 fields computed earlier in this method:
             #   system_prompt — assembled above (includes legion guide, history ref, etc.)
             #   allowed_tools — merged MCP + session tools list built above
@@ -1502,6 +1522,7 @@ class SessionCoordinator:
                 "system_prompt": minion_system_prompt,
                 "allowed_tools": all_tools,
                 "cli_path": effective_cli_path,
+                **catalog_model_update,
             })
 
             # Issue #906: Custom auto-memory directory (claude mode + directory set) — create dir
@@ -1518,6 +1539,15 @@ class SessionCoordinator:
                 is_legion=("legion" in mcp_servers),
             )
 
+            # extra_env merge order: user-set < docker wrapper vars < litellm routing.
+            _merged_extra_env: dict[str, str] = {}
+            if effective_config.extra_env:
+                _merged_extra_env.update(effective_config.extra_env)
+            if docker_env_vars:
+                _merged_extra_env.update(docker_env_vars)
+            if litellm_env:
+                _merged_extra_env.update(litellm_env)
+
             sdk = self._sdk_factory(
                 session_id=session_id,
                 working_directory=session_info.working_directory,
@@ -1533,7 +1563,7 @@ class SessionCoordinator:
                 mcp_servers=mcp_servers if mcp_servers else None,
                 experimental=self.experimental,
                 stderr_callback=self._create_stderr_callback(session_id),
-                extra_env=docker_env_vars if docker_env_vars else None,
+                extra_env=_merged_extra_env,
                 permission_handler=permission_handler,
             )
             # Issue #707: Set auto-approval callback so can_use_tool can notify us
@@ -1653,6 +1683,10 @@ class SessionCoordinator:
             if sdk:
                 await sdk.terminate()
                 del self._active_sdks[session_id]
+
+            if self.litellm_proxy_manager is not None:
+                self.litellm_proxy_manager.unregister_session_key(session_id)
+                self.litellm_proxy_manager.unregister_session_routing(session_id)
 
             # Terminate session through manager
             success = await self.session_manager.terminate_session(session_id)

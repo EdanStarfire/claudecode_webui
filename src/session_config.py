@@ -82,6 +82,10 @@ class SessionConfig(BaseModel):
     # Template linkage (issue #1059)
     template_id: str | None = None
 
+    # Provider catalog routing (issue #1427)
+    provider_catalog_id: str | None = None
+    provider_model_id: str | None = None
+
 
 # Fields that exist on both MinionTemplate and SessionConfig (the mergeable set).
 # Excludes identity fields (template_id, name, role, description, capabilities,
@@ -100,6 +104,7 @@ CONFIG_FIELDS: set[str] = {
     "skill_creating_enabled",
     "mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config",
     "bare_mode", "env_scrub_enabled", "extra_env",
+    "provider_catalog_id", "provider_model_id",
 }
 
 # Default values for all CONFIG_FIELDS — derived from a fresh SessionConfig instance.

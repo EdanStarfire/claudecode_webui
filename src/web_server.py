@@ -171,6 +171,19 @@ class ClaudeWebUI:
         )
         self.coordinator._watchdog = self._watchdog
 
+        from .config_manager import AppConfigManager
+        from .litellm_proxy_manager import LiteLLMProxyManager
+        from .provider_catalog import ProviderCatalogManager
+        self.app_config_manager = AppConfigManager(config_file=config_file) if config_file else AppConfigManager()
+        self.provider_catalog_manager = ProviderCatalogManager(self.app_config_manager)
+        _litellm_port = _cfg.provider_catalog.litellm_port
+        self.litellm_proxy_manager = LiteLLMProxyManager(
+            self.provider_catalog_manager,
+            self.coordinator.credential_vault,
+            port=_litellm_port,
+        )
+        self.coordinator.litellm_proxy_manager = self.litellm_proxy_manager
+
         # Issue #1127: Audit subsystem — analytics DB + AuditWriter
         _analytics_db_path = (data_dir or Path("data")) / "analytics.db"
         self._analytics_db = AnalyticsDB(_analytics_db_path)
@@ -483,6 +496,14 @@ class ClaudeWebUI:
         """Initialize the WebUI application"""
         from .config_manager import load_config
         await self.coordinator.initialize()
+
+        try:
+            await self.litellm_proxy_manager.start()
+        except Exception:
+            logger.exception(
+                "LiteLLM proxy failed to start — catalog-selected sessions will be unavailable; "
+                "native sessions continue normally"
+            )
         config = load_config(self.config_file) if self.config_file else load_config()
         if config.features.skill_sync_enabled:
             await self.skill_manager.sync()
@@ -800,6 +821,10 @@ class ClaudeWebUI:
         # Issue #1130: Stop session watchdog service
         if hasattr(self, '_watchdog') and self._watchdog is not None:
             await self._watchdog.stop()
+        try:
+            await self.litellm_proxy_manager.stop()
+        except Exception:
+            logger.exception("Error stopping LiteLLM proxy during cleanup")
         await self.coordinator.cleanup()
         logger.info("WebUI cleanup completed")
 
