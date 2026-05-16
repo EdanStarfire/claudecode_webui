@@ -58,6 +58,10 @@ class LegionMCPTools:
         # Each minion session gets its own session-specific server
         # via create_mcp_server_for_session()
 
+    @staticmethod
+    def _err(text: str) -> dict:
+        return {"content": [{"type": "text", "text": text}], "is_error": True}
+
     def create_mcp_server_for_session(self, session_id: str):
         """
         Create session-specific MCP server with all Legion tools.
@@ -515,13 +519,7 @@ class LegionMCPTools:
         from_minion_id = args.get("_from_minion_id")  # Will be injected by SDK wrapper
 
         if not from_minion_id:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: Unable to determine sender minion ID"
-                }],
-                "is_error": True
-            }
+            return self._err("Error: Unable to determine sender minion ID")
 
         # Validate comm_type
         comm_type_str = args.get("comm_type", "task").lower()
@@ -536,13 +534,7 @@ class LegionMCPTools:
         }
 
         if comm_type_str not in valid_comm_types:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Error: Invalid comm_type '{comm_type_str}'. Valid values are: {', '.join(valid_comm_types)}"
-                }],
-                "is_error": True
-            }
+            return self._err(f"Error: Invalid comm_type '{comm_type_str}'. Valid values are: {', '.join(valid_comm_types)}")
 
         # Get the internal enum value
         internal_comm_type = comm_type_mapping[comm_type_str]
@@ -552,13 +544,7 @@ class LegionMCPTools:
         valid_priorities = ["none", "halt", "pivot"]
 
         if interrupt_priority_str not in valid_priorities:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Error: Invalid interrupt_priority '{interrupt_priority_str}'. Valid values are: {', '.join(valid_priorities)}"
-                }],
-                "is_error": True
-            }
+            return self._err(f"Error: Invalid interrupt_priority '{interrupt_priority_str}'. Valid values are: {', '.join(valid_priorities)}")
 
         # Map to InterruptPriority enum
         priority_mapping = {
@@ -578,13 +564,7 @@ class LegionMCPTools:
 
         # Prevent sending to system (system only sends, never receives)
         if to_minion_name and to_minion_name.lower() == SYSTEM_MINION_NAME:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Error: Cannot send comm to '{SYSTEM_MINION_NAME}'. System is a special identifier for system-generated messages only."
-                }],
-                "is_error": True
-            }
+            return self._err(f"Error: Cannot send comm to '{SYSTEM_MINION_NAME}'. System is a special identifier for system-generated messages only.")
 
         if sending_to_user:
             to_minion_id = None  # User doesn't have a minion_id, only use to_user flag
@@ -592,37 +572,19 @@ class LegionMCPTools:
             # Get sender's legion to scope lookup
             sender_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
             if not sender_session:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": "Error: Unable to find sender session"
-                    }],
-                    "is_error": True
-                }
+                return self._err("Error: Unable to find sender session")
 
             legion_id = sender_session.project_id
 
             # Legion-scoped lookup (only search within sender's legion)
             to_minion = await self.system.legion_coordinator.get_minion_by_name_in_legion(legion_id, to_minion_name)
             if not to_minion:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": f"Error: Minion '{to_minion_name}' not found in legion {legion_id}"
-                    }],
-                    "is_error": True
-                }
+                return self._err(f"Error: Minion '{to_minion_name}' not found in legion {legion_id}")
             to_minion_id = to_minion.session_id  # session_id IS the minion_id
 
         # Block self-comms (would cause LLM loop)
         if not sending_to_user and to_minion_id and to_minion_id == from_minion_id:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: Cannot send comm to yourself."
-                }],
-                "is_error": True
-            }
+            return self._err("Error: Cannot send comm to yourself.")
 
         # Validate comm target is within sender's immediate hierarchy group
         if not sending_to_user and to_minion_id:
@@ -639,17 +601,11 @@ class LegionMCPTools:
                     if vs:
                         visible_names.append(vs.name or vid[:8])
                 reachable = ", ".join(visible_names) if visible_names else "none"
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": (
+                return self._err(
                             f"Error: Minion '{to_minion_name}' is not in your immediate hierarchy group. "
                             f"You can reach: [{reachable}]. "
                             f"Ask your overseer to relay the message, or coordinate through your shared hierarchy."
                         )
-                    }],
-                    "is_error": True
-                }
 
         # Extract summary and content with fallback
         content = args.get("content", "")
@@ -696,13 +652,7 @@ class LegionMCPTools:
             elif isinstance(raw_attachments, list):
                 file_paths = raw_attachments
             else:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": "Error: 'attachments' must be a JSON array of file paths or a single file path string"
-                    }],
-                    "is_error": True
-                }
+                return self._err("Error: 'attachments' must be a JSON array of file paths or a single file path string")
 
             for fpath_str in file_paths:
                 # Issue #824: Translate /tmp/ paths for Docker sessions
@@ -712,49 +662,19 @@ class LegionMCPTools:
                 fpath = Path(fpath_str)
                 # Validate existence
                 if not fpath.exists():
-                    return {
-                        "content": [{
-                            "type": "text",
-                            "text": f"Error: Attachment file not found: {fpath_str}"
-                        }],
-                        "is_error": True
-                    }
+                    return self._err(f"Error: Attachment file not found: {fpath_str}")
                 if not fpath.is_file():
-                    return {
-                        "content": [{
-                            "type": "text",
-                            "text": f"Error: Attachment path is not a file: {fpath_str}"
-                        }],
-                        "is_error": True
-                    }
+                    return self._err(f"Error: Attachment path is not a file: {fpath_str}")
                 # Validate extension
                 ext = fpath.suffix.lower()
                 if ext not in SUPPORTED_EXTENSIONS:
-                    return {
-                        "content": [{
-                            "type": "text",
-                            "text": f"Error: Unsupported file extension '{ext}' for attachment: {fpath.name}"
-                        }],
-                        "is_error": True
-                    }
+                    return self._err(f"Error: Unsupported file extension '{ext}' for attachment: {fpath.name}")
                 # Validate size
                 file_size = fpath.stat().st_size
                 if file_size > MAX_RESOURCE_SIZE_BYTES:
-                    return {
-                        "content": [{
-                            "type": "text",
-                            "text": f"Error: Attachment too large ({file_size} bytes > {MAX_RESOURCE_SIZE_BYTES}): {fpath.name}"
-                        }],
-                        "is_error": True
-                    }
+                    return self._err(f"Error: Attachment too large ({file_size} bytes > {MAX_RESOURCE_SIZE_BYTES}): {fpath.name}")
                 if file_size == 0:
-                    return {
-                        "content": [{
-                            "type": "text",
-                            "text": f"Error: Attachment file is empty: {fpath.name}"
-                        }],
-                        "is_error": True
-                    }
+                    return self._err(f"Error: Attachment file is empty: {fpath.name}")
 
                 # Read file content
                 file_bytes = fpath.read_bytes()
@@ -812,21 +732,9 @@ class LegionMCPTools:
                     "is_error": False
                 }
             else:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": f"Failed to send message to {to_minion_name}"
-                    }],
-                    "is_error": True
-                }
+                return self._err(f"Failed to send message to {to_minion_name}")
         except Exception as e:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Error sending message: {str(e)}"
-                }],
-                "is_error": True
-            }
+            return self._err(f"Error sending message: {str(e)}")
 
     async def _handle_spawn_minion(self, args: dict[str, Any]) -> dict[str, Any]:
         """
@@ -856,13 +764,7 @@ class LegionMCPTools:
 
         parent_overseer_id = args.get("_parent_overseer_id")
         if not parent_overseer_id:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: Unable to determine parent overseer ID"
-                }],
-                "is_error": True
-            }
+            return self._err("Error: Unable to determine parent overseer ID")
 
         # Extract parameters
         name = args.get("name", "").strip()
@@ -877,23 +779,11 @@ class LegionMCPTools:
         # Get caller session to determine legion_id
         caller_session = await self.system.session_coordinator.session_manager.get_session_info(parent_overseer_id)
         if not caller_session:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Error: Parent overseer session {parent_overseer_id} not found"
-                }],
-                "is_error": True
-            }
+            return self._err(f"Error: Parent overseer session {parent_overseer_id} not found")
 
         legion_id = caller_session.project_id
         if not legion_id:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: Parent overseer is not part of a legion"
-                }],
-                "is_error": True
-            }
+            return self._err("Error: Parent overseer is not part of a legion")
 
         # Resolve parent_name: allow caller to designate a descendant as the new minion's parent
         actual_parent_id = parent_overseer_id  # default: caller is the parent
@@ -905,13 +795,7 @@ class LegionMCPTools:
                 legion_id, parent_name_param
             )
             if not named_minion:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": f"Error: parent_name '{parent_name_param}' not found in legion"
-                    }],
-                    "is_error": True
-                }
+                return self._err(f"Error: parent_name '{parent_name_param}' not found in legion")
 
             # Validate: named minion must be a descendant of the caller (or caller themselves)
             if named_minion.session_id != parent_overseer_id:
@@ -921,17 +805,11 @@ class LegionMCPTools:
                 descendant_ids = {d["session_id"] for d in _desc_page["descendants"]}
 
                 if named_minion.session_id not in descendant_ids:
-                    return {
-                        "content": [{
-                            "type": "text",
-                            "text": (
+                    return self._err(
                                 f"Error: parent_name '{parent_name_param}' must be a descendant "
                                 f"of the calling minion. You can only place children under minions "
                                 f"in your own subtree."
                             )
-                        }],
-                        "is_error": True
-                    }
 
             actual_parent_id = named_minion.session_id
             parent_session = named_minion
@@ -945,22 +823,10 @@ class LegionMCPTools:
 
         # Validate required fields
         if not name:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: 'name' parameter is required and cannot be empty"
-                }],
-                "is_error": True
-            }
+            return self._err("Error: 'name' parameter is required and cannot be empty")
 
         if not system_prompt:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: 'system_prompt' parameter is required and cannot be empty. Provide clear instructions for what this minion should do."
-                }],
-                "is_error": True
-            }
+            return self._err("Error: 'system_prompt' parameter is required and cannot be empty. Provide clear instructions for what this minion should do.")
 
         # SECURITY: Apply template permissions or use safe defaults
         # Minions cannot specify custom permissions directly
@@ -975,13 +841,7 @@ class LegionMCPTools:
                 template = await self.system.template_manager.get_template_by_name(template_name)
 
                 if not template:
-                    return {
-                        "content": [{
-                            "type": "text",
-                            "text": f"❌ Error: Template '{template_name}' not found. Use list_templates() to see available templates."
-                        }],
-                        "is_error": True
-                    }
+                    return self._err(f"❌ Error: Template '{template_name}' not found. Use list_templates() to see available templates.")
 
                 template_applied = template
 
@@ -1072,13 +932,7 @@ class LegionMCPTools:
 
             except Exception as e:
                 coord_logger.error(f"Error applying template: {e}", exc_info=True)
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": f"❌ Error applying template: {str(e)}"
-                    }],
-                    "is_error": True
-                }
+                return self._err(f"❌ Error applying template: {str(e)}")
         else:
             # No template - use safe default restricted permissions
             permission_mode = "default"  # Prompts for most actions
@@ -1107,13 +961,7 @@ class LegionMCPTools:
 
         # Validate role is set (from parameter or template)
         if not role:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: 'role' parameter is required (or use a template with a role)"
-                }],
-                "is_error": True
-            }
+            return self._err("Error: 'role' parameter is required (or use a template with a role)")
 
         # Validate and normalize working directory if provided
         working_directory = None
@@ -1128,13 +976,7 @@ class LegionMCPTools:
                     str(parent_session.working_directory)
                 ))
             except ValueError as e:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": f"❌ Invalid working_directory: {str(e)}"
-                    }],
-                    "is_error": True
-                }
+                return self._err(f"❌ Invalid working_directory: {str(e)}")
 
         # Attempt to spawn child minion
         try:
@@ -1230,34 +1072,16 @@ class LegionMCPTools:
 
         except ValueError as e:
             # Handle validation errors (duplicate name, capacity, etc.)
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Cannot spawn minion: {str(e)}"
-                }],
-                "is_error": True
-            }
+            return self._err(f"❌ Cannot spawn minion: {str(e)}")
 
         except PermissionError as e:
             # Handle permission errors
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Permission denied: {str(e)}"
-                }],
-                "is_error": True
-            }
+            return self._err(f"❌ Permission denied: {str(e)}")
 
         except Exception as e:
             # Catch-all for unexpected errors
             coord_logger.error(f"Unexpected error in spawn_minion: {e}", exc_info=True)
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Failed to spawn minion due to unexpected error: {str(e)}"
-                }],
-                "is_error": True
-            }
+            return self._err(f"❌ Failed to spawn minion due to unexpected error: {str(e)}")
 
     async def _handle_dispose_minion(self, args: dict[str, Any]) -> dict[str, Any]:
         """
@@ -1279,13 +1103,7 @@ class LegionMCPTools:
 
         parent_overseer_id = args.get("_parent_overseer_id")  # This is actually the CALLER's session_id
         if not parent_overseer_id:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: Unable to determine caller ID"
-                }],
-                "is_error": True
-            }
+            return self._err("Error: Unable to determine caller ID")
 
         # Extract parameters
         minion_name = args.get("minion_name", "").strip()
@@ -1293,13 +1111,7 @@ class LegionMCPTools:
 
         # Validate required field
         if not minion_name:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: 'minion_name' parameter is required and cannot be empty"
-                }],
-                "is_error": True
-            }
+            return self._err("Error: 'minion_name' parameter is required and cannot be empty")
 
         # Resolve the target minion — may be a direct child or a deeper descendant.
         # If not a direct child, find the target's actual parent so
@@ -1309,10 +1121,7 @@ class LegionMCPTools:
                 parent_overseer_id
             )
             if not caller_session:
-                return {
-                    "content": [{"type": "text", "text": "Error: Caller session not found"}],
-                    "is_error": True,
-                }
+                return self._err("Error: Caller session not found")
 
             # Check direct children first (fast path)
             from src.slug_utils import slugify_name as _slugify
@@ -1339,17 +1148,11 @@ class LegionMCPTools:
                         break
 
                 if not target_desc:
-                    return {
-                        "content": [{
-                            "type": "text",
-                            "text": (
+                    return self._err(
                                 f"❌ Cannot dispose minion: No minion with name '{minion_name}' "
                                 f"found in your subtree. You can only dispose minions you control "
                                 f"(direct children or deeper descendants)."
                             )
-                        }],
-                        "is_error": True,
-                    }
 
                 # Use the target's actual parent for disposal
                 effective_parent_id = target_desc["parent_id"]
@@ -1386,34 +1189,16 @@ class LegionMCPTools:
 
         except ValueError as e:
             # Handle not found or validation errors
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Cannot dispose minion: {str(e)}"
-                }],
-                "is_error": True
-            }
+            return self._err(f"❌ Cannot dispose minion: {str(e)}")
 
         except PermissionError as e:
             # Handle permission errors (not your child)
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Permission denied: {str(e)}"
-                }],
-                "is_error": True
-            }
+            return self._err(f"❌ Permission denied: {str(e)}")
 
         except Exception as e:
             # Catch-all for unexpected errors
             coord_logger.error(f"Unexpected error in dispose_minion: {e}", exc_info=True)
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Failed to dispose minion due to unexpected error: {str(e)}"
-                }],
-                "is_error": True
-            }
+            return self._err(f"❌ Failed to dispose minion due to unexpected error: {str(e)}")
 
     async def _handle_reparent_minion(self, args: dict[str, Any]) -> dict[str, Any]:
         """
@@ -1435,32 +1220,20 @@ class LegionMCPTools:
 
         caller_id = args.get("_caller_id")
         if not caller_id:
-            return {
-                "content": [{"type": "text", "text": "Error: Unable to determine caller ID"}],
-                "is_error": True,
-            }
+            return self._err("Error: Unable to determine caller ID")
 
         subject_name = args.get("subject_name", "").strip()
         new_parent_name = args.get("new_parent_name", "").strip()
 
         if not subject_name:
-            return {
-                "content": [{"type": "text", "text": "Error: 'subject_name' parameter is required"}],
-                "is_error": True,
-            }
+            return self._err("Error: 'subject_name' parameter is required")
         if not new_parent_name:
-            return {
-                "content": [{"type": "text", "text": "Error: 'new_parent_name' parameter is required"}],
-                "is_error": True,
-            }
+            return self._err("Error: 'new_parent_name' parameter is required")
 
         try:
             caller_session = await self.system.session_coordinator.session_manager.get_session_info(caller_id)
             if not caller_session:
-                return {
-                    "content": [{"type": "text", "text": "Error: Caller session not found"}],
-                    "is_error": True,
-                }
+                return self._err("Error: Caller session not found")
 
             subject_slug = _slugify(subject_name)
             new_parent_slug = _slugify(new_parent_name)
@@ -1480,32 +1253,20 @@ class LegionMCPTools:
                     new_parent_id = d["session_id"]
 
             if subject_id is None:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": (
+                return self._err(
                             f"❌ Cannot reparent: '{subject_name}' is not in your descendant subtree. "
                             "You can only reparent minions you control."
-                        ),
-                    }],
-                    "is_error": True,
-                }
+                        )
 
             # new_parent can also be the caller itself
             if new_parent_id is None and _slugify(caller_session.name) == new_parent_slug:
                 new_parent_id = caller_id
 
             if new_parent_id is None:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": (
+                return self._err(
                             f"❌ Cannot reparent: new parent '{new_parent_name}' is not yourself "
                             "or one of your descendants."
-                        ),
-                    }],
-                    "is_error": True,
-                }
+                        )
 
             result = await self.system.overseer_controller.reparent_minion(
                 subject_id=subject_id,
@@ -1528,16 +1289,10 @@ class LegionMCPTools:
             }
 
         except ValueError as e:
-            return {
-                "content": [{"type": "text", "text": f"❌ Cannot reparent: {e}"}],
-                "is_error": True,
-            }
+            return self._err(f"❌ Cannot reparent: {e}")
         except Exception as e:
             coord_logger.error(f"Unexpected error in reparent_minion: {e}", exc_info=True)
-            return {
-                "content": [{"type": "text", "text": f"❌ Failed to reparent minion: {e}"}],
-                "is_error": True,
-            }
+            return self._err(f"❌ Failed to reparent minion: {e}")
 
     async def _handle_search_capability(self, args: dict[str, Any]) -> dict[str, Any]:
         """
@@ -1557,13 +1312,7 @@ class LegionMCPTools:
             keyword = args.get("capability", "").strip()
 
             if not keyword:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": "❌ Error: capability parameter is required and cannot be empty"
-                    }],
-                    "is_error": True
-                }
+                return self._err("❌ Error: capability parameter is required and cannot be empty")
 
             # Search the capability registry
             try:
@@ -1571,13 +1320,7 @@ class LegionMCPTools:
                     keyword=keyword
                 )
             except ValueError as e:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": f"❌ Search error: {str(e)}"
-                    }],
-                    "is_error": True
-                }
+                return self._err(f"❌ Search error: {str(e)}")
 
             # Filter results to caller's immediate hierarchy group
             from_minion_id = args.get("_from_minion_id")
@@ -1634,13 +1377,7 @@ class LegionMCPTools:
 
         except Exception as e:
             # Catch-all for unexpected errors
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Failed to search capabilities due to unexpected error: {str(e)}"
-                }],
-                "is_error": True
-            }
+            return self._err(f"❌ Failed to search capabilities due to unexpected error: {str(e)}")
 
     async def _handle_list_minions(self, args: dict[str, Any]) -> dict[str, Any]:
         """
@@ -1658,36 +1395,18 @@ class LegionMCPTools:
             # Get caller's legion to scope listing
             from_minion_id = args.get("_from_minion_id")
             if not from_minion_id:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": "Error: Unable to determine caller minion ID"
-                    }],
-                    "is_error": True
-                }
+                return self._err("Error: Unable to determine caller minion ID")
 
             caller_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
             if not caller_session:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": "Error: Unable to find caller session"
-                    }],
-                    "is_error": True
-                }
+                return self._err("Error: Unable to find caller session")
 
             legion_id = caller_session.project_id
 
             # Get legion and its sessions
             legion = await self.system.legion_coordinator.get_legion(legion_id)
             if not legion:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": "Error: Caller is not part of a legion"
-                    }],
-                    "is_error": True
-                }
+                return self._err("Error: Caller is not part of a legion")
 
             # Scope to caller's immediate hierarchy group (issue #349: all sessions are minions)
             session_manager = self.system.session_coordinator.session_manager
@@ -1750,13 +1469,7 @@ class LegionMCPTools:
             }
 
         except Exception as e:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Error listing minions: {str(e)}"
-                }],
-                "is_error": True
-            }
+            return self._err(f"Error listing minions: {str(e)}")
 
     async def _handle_get_minion_info(self, args: dict[str, Any]) -> dict[str, Any]:
         """
@@ -1777,34 +1490,16 @@ class LegionMCPTools:
         minion_name = args.get("minion_name", "").strip() if isinstance(args.get("minion_name"), str) else ""
 
         if not minion_name:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "❌ Error: 'minion_name' parameter is required and cannot be empty"
-                }],
-                "is_error": True
-            }
+            return self._err("❌ Error: 'minion_name' parameter is required and cannot be empty")
 
         # 2. Get caller's legion to scope lookup
         from_minion_id = args.get("_from_minion_id")
         if not from_minion_id:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "❌ Error: Unable to determine caller minion ID"
-                }],
-                "is_error": True
-            }
+            return self._err("❌ Error: Unable to determine caller minion ID")
 
         caller_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
         if not caller_session:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "❌ Error: Unable to find caller session"
-                }],
-                "is_error": True
-            }
+            return self._err("❌ Error: Unable to find caller session")
 
         legion_id = caller_session.project_id
 
@@ -1812,13 +1507,7 @@ class LegionMCPTools:
         minion = await self.system.legion_coordinator.get_minion_by_name_in_legion(legion_id, minion_name)
 
         if not minion:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Error: Minion '{minion_name}' not found in legion {legion_id}"
-                }],
-                "is_error": True
-            }
+            return self._err(f"❌ Error: Minion '{minion_name}' not found in legion {legion_id}")
 
         # 3. Build formatted profile
         profile_lines = []
@@ -1976,13 +1665,7 @@ class LegionMCPTools:
             }
 
         except Exception as e:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Error listing templates: {str(e)}"
-                }],
-                "is_error": True
-            }
+            return self._err(f"Error listing templates: {str(e)}")
 
     async def _handle_update_expertise(self, args: dict[str, Any]) -> dict[str, Any]:
         """
@@ -2001,13 +1684,7 @@ class LegionMCPTools:
         from_minion_id = args.get("_from_minion_id")
 
         if not from_minion_id:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: Unable to determine minion ID"
-                }],
-                "is_error": True
-            }
+            return self._err("Error: Unable to determine minion ID")
 
         # Extract parameters
         capability = args.get("capability", "").strip()
@@ -2015,13 +1692,7 @@ class LegionMCPTools:
 
         # Validate capability
         if not capability:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: capability parameter is required and cannot be empty"
-                }],
-                "is_error": True
-            }
+            return self._err("Error: capability parameter is required and cannot be empty")
 
         # Validate and convert expertise_score if provided
         if expertise_score is not None:
@@ -2030,31 +1701,13 @@ class LegionMCPTools:
                 try:
                     expertise_score = float(expertise_score)
                 except ValueError:
-                    return {
-                        "content": [{
-                            "type": "text",
-                            "text": "Error: expertise_score must be a number between 0.0 and 1.0"
-                        }],
-                        "is_error": True
-                    }
+                    return self._err("Error: expertise_score must be a number between 0.0 and 1.0")
             elif not isinstance(expertise_score, (int, float)):
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": "Error: expertise_score must be a number between 0.0 and 1.0"
-                    }],
-                    "is_error": True
-                }
+                return self._err("Error: expertise_score must be a number between 0.0 and 1.0")
 
             # Validate range
             if expertise_score < 0.0 or expertise_score > 1.0:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": "Error: expertise_score must be between 0.0 and 1.0"
-                    }],
-                    "is_error": True
-                }
+                return self._err("Error: expertise_score must be between 0.0 and 1.0")
 
         # Call existing register_capability method
         try:
@@ -2084,21 +1737,9 @@ class LegionMCPTools:
 
         except ValueError as e:
             # Validation errors from register_capability
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Error: {str(e)}"
-                }],
-                "is_error": True
-            }
+            return self._err(f"❌ Error: {str(e)}")
         except Exception as e:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Unexpected error updating expertise: {str(e)}"
-                }],
-                "is_error": True
-            }
+            return self._err(f"❌ Unexpected error updating expertise: {str(e)}")
 
     async def _handle_whoami(self, args: dict[str, Any]) -> dict[str, Any]:
         """
@@ -2117,26 +1758,14 @@ class LegionMCPTools:
         from_minion_id = args.get("_from_minion_id")
 
         if not from_minion_id:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: Unable to determine minion ID"
-                }],
-                "is_error": True
-            }
+            return self._err("Error: Unable to determine minion ID")
 
         # Get session info for the calling minion
         session = await self.system.session_coordinator.session_manager.get_session_info(
             from_minion_id
         )
         if not session:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Error: Session {from_minion_id} not found"
-                }],
-                "is_error": True
-            }
+            return self._err(f"Error: Session {from_minion_id} not found")
 
         # Resolve parent name if exists
         parent_name = None
@@ -2208,10 +1837,7 @@ class LegionMCPTools:
         """Handle create_schedule tool call."""
         from_minion_id = args.get("_from_minion_id")
         if not from_minion_id:
-            return {
-                "content": [{"type": "text", "text": "Error: Unable to determine minion ID"}],
-                "is_error": True,
-            }
+            return self._err("Error: Unable to determine minion ID")
 
         name = args.get("name", "").strip()
         cron_expression = args.get("cron_expression", "").strip()
@@ -2219,21 +1845,12 @@ class LegionMCPTools:
         script = args.get("script", "").strip()
 
         if not name or not cron_expression:
-            return {
-                "content": [{"type": "text", "text": "Error: name and cron_expression are required"}],
-                "is_error": True,
-            }
+            return self._err("Error: name and cron_expression are required")
 
         if prompt and script:
-            return {
-                "content": [{"type": "text", "text": "Error: Provide exactly one of 'prompt' or 'script', not both"}],
-                "is_error": True,
-            }
+            return self._err("Error: Provide exactly one of 'prompt' or 'script', not both")
         if not prompt and not script:
-            return {
-                "content": [{"type": "text", "text": "Error: Either 'prompt' or 'script' is required"}],
-                "is_error": True,
-            }
+            return self._err("Error: Either 'prompt' or 'script' is required")
 
         if script:
             schedule_type = "script"
@@ -2252,17 +1869,11 @@ class LegionMCPTools:
         # Get minion info for legion_id and name
         session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
         if not session:
-            return {
-                "content": [{"type": "text", "text": "Error: Could not find your session"}],
-                "is_error": True,
-            }
+            return self._err("Error: Could not find your session")
 
         legion_id = session.project_id
         if not legion_id:
-            return {
-                "content": [{"type": "text", "text": "Error: You must be in a project/legion to create schedules"}],
-                "is_error": True,
-            }
+            return self._err("Error: You must be in a project/legion to create schedules")
 
         reset_session = args.get("reset_session", False)
         max_retries = args.get("max_retries", 3)
@@ -2330,31 +1941,19 @@ class LegionMCPTools:
                 "is_error": False,
             }
         except ValueError as e:
-            return {
-                "content": [{"type": "text", "text": f"Error: {e}"}],
-                "is_error": True,
-            }
+            return self._err(f"Error: {e}")
         except Exception as e:
-            return {
-                "content": [{"type": "text", "text": f"Unexpected error creating schedule: {e}"}],
-                "is_error": True,
-            }
+            return self._err(f"Unexpected error creating schedule: {e}")
 
     async def _handle_list_schedules(self, args: dict[str, Any]) -> dict[str, Any]:
         """Handle list_schedules tool call."""
         from_minion_id = args.get("_from_minion_id")
         if not from_minion_id:
-            return {
-                "content": [{"type": "text", "text": "Error: Unable to determine minion ID"}],
-                "is_error": True,
-            }
+            return self._err("Error: Unable to determine minion ID")
 
         session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
         if not session or not session.project_id:
-            return {
-                "content": [{"type": "text", "text": "Error: Could not find your session/legion"}],
-                "is_error": True,
-            }
+            return self._err("Error: Could not find your session/legion")
 
         status_filter = None
         status_str = args.get("status", "").strip()
@@ -2363,10 +1962,7 @@ class LegionMCPTools:
             try:
                 status_filter = ScheduleStatus(status_str)
             except ValueError:
-                return {
-                    "content": [{"type": "text", "text": f"Error: Invalid status '{status_str}'. Use 'active', 'paused', or 'cancelled'"}],
-                    "is_error": True,
-                }
+                return self._err(f"Error: Invalid status '{status_str}'. Use 'active', 'paused', or 'cancelled'")
 
         try:
             schedules = await self.system.scheduler_service.list_schedules(
@@ -2402,10 +1998,7 @@ class LegionMCPTools:
                 "is_error": False,
             }
         except Exception as e:
-            return {
-                "content": [{"type": "text", "text": f"Unexpected error listing schedules: {e}"}],
-                "is_error": True,
-            }
+            return self._err(f"Unexpected error listing schedules: {e}")
 
     async def _handle_pause_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
         """Handle pause_schedule tool call."""
@@ -2413,28 +2006,16 @@ class LegionMCPTools:
         schedule_id = args.get("schedule_id", "").strip()
 
         if not from_minion_id:
-            return {
-                "content": [{"type": "text", "text": "Error: Unable to determine minion ID"}],
-                "is_error": True,
-            }
+            return self._err("Error: Unable to determine minion ID")
         if not schedule_id:
-            return {
-                "content": [{"type": "text", "text": "Error: schedule_id is required"}],
-                "is_error": True,
-            }
+            return self._err("Error: schedule_id is required")
 
         # Validate ownership
         schedule = await self.system.scheduler_service.get_schedule(schedule_id)
         if not schedule:
-            return {
-                "content": [{"type": "text", "text": f"Error: Schedule {schedule_id} not found"}],
-                "is_error": True,
-            }
+            return self._err(f"Error: Schedule {schedule_id} not found")
         if schedule.minion_id != from_minion_id:
-            return {
-                "content": [{"type": "text", "text": "Error: You can only pause your own schedules"}],
-                "is_error": True,
-            }
+            return self._err("Error: You can only pause your own schedules")
 
         try:
             await self.system.scheduler_service.pause_schedule(schedule_id)
@@ -2443,15 +2024,9 @@ class LegionMCPTools:
                 "is_error": False,
             }
         except ValueError as e:
-            return {
-                "content": [{"type": "text", "text": f"Error: {e}"}],
-                "is_error": True,
-            }
+            return self._err(f"Error: {e}")
         except Exception as e:
-            return {
-                "content": [{"type": "text", "text": f"Unexpected error pausing schedule: {e}"}],
-                "is_error": True,
-            }
+            return self._err(f"Unexpected error pausing schedule: {e}")
 
     async def _handle_resume_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
         """Handle resume_schedule tool call."""
@@ -2459,27 +2034,15 @@ class LegionMCPTools:
         schedule_id = args.get("schedule_id", "").strip()
 
         if not from_minion_id:
-            return {
-                "content": [{"type": "text", "text": "Error: Unable to determine minion ID"}],
-                "is_error": True,
-            }
+            return self._err("Error: Unable to determine minion ID")
         if not schedule_id:
-            return {
-                "content": [{"type": "text", "text": "Error: schedule_id is required"}],
-                "is_error": True,
-            }
+            return self._err("Error: schedule_id is required")
 
         schedule = await self.system.scheduler_service.get_schedule(schedule_id)
         if not schedule:
-            return {
-                "content": [{"type": "text", "text": f"Error: Schedule {schedule_id} not found"}],
-                "is_error": True,
-            }
+            return self._err(f"Error: Schedule {schedule_id} not found")
         if schedule.minion_id != from_minion_id:
-            return {
-                "content": [{"type": "text", "text": "Error: You can only resume your own schedules"}],
-                "is_error": True,
-            }
+            return self._err("Error: You can only resume your own schedules")
 
         try:
             updated = await self.system.scheduler_service.resume_schedule(schedule_id)
@@ -2499,15 +2062,9 @@ class LegionMCPTools:
                 "is_error": False,
             }
         except ValueError as e:
-            return {
-                "content": [{"type": "text", "text": f"Error: {e}"}],
-                "is_error": True,
-            }
+            return self._err(f"Error: {e}")
         except Exception as e:
-            return {
-                "content": [{"type": "text", "text": f"Unexpected error resuming schedule: {e}"}],
-                "is_error": True,
-            }
+            return self._err(f"Unexpected error resuming schedule: {e}")
 
     async def _handle_delete_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
         """Handle delete_schedule tool call."""
@@ -2515,27 +2072,15 @@ class LegionMCPTools:
         schedule_id = args.get("schedule_id", "").strip()
 
         if not from_minion_id:
-            return {
-                "content": [{"type": "text", "text": "Error: Unable to determine minion ID"}],
-                "is_error": True,
-            }
+            return self._err("Error: Unable to determine minion ID")
         if not schedule_id:
-            return {
-                "content": [{"type": "text", "text": "Error: schedule_id is required"}],
-                "is_error": True,
-            }
+            return self._err("Error: schedule_id is required")
 
         schedule = await self.system.scheduler_service.get_schedule(schedule_id)
         if not schedule:
-            return {
-                "content": [{"type": "text", "text": f"Error: Schedule {schedule_id} not found"}],
-                "is_error": True,
-            }
+            return self._err(f"Error: Schedule {schedule_id} not found")
         if schedule.minion_id != from_minion_id:
-            return {
-                "content": [{"type": "text", "text": "Error: You can only delete your own schedules"}],
-                "is_error": True,
-            }
+            return self._err("Error: You can only delete your own schedules")
 
         try:
             await self.system.scheduler_service.delete_schedule(schedule_id)
@@ -2544,15 +2089,9 @@ class LegionMCPTools:
                 "is_error": False,
             }
         except ValueError as e:
-            return {
-                "content": [{"type": "text", "text": f"Error: {e}"}],
-                "is_error": True,
-            }
+            return self._err(f"Error: {e}")
         except Exception as e:
-            return {
-                "content": [{"type": "text", "text": f"Unexpected error deleting schedule: {e}"}],
-                "is_error": True,
-            }
+            return self._err(f"Unexpected error deleting schedule: {e}")
 
     async def _handle_update_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
         """Handle update_schedule tool call."""
@@ -2560,52 +2099,31 @@ class LegionMCPTools:
         schedule_id = args.get("schedule_id", "").strip()
 
         if not from_minion_id:
-            return {
-                "content": [{"type": "text", "text": "Error: Unable to determine minion ID"}],
-                "is_error": True,
-            }
+            return self._err("Error: Unable to determine minion ID")
         if not schedule_id:
-            return {
-                "content": [{"type": "text", "text": "Error: schedule_id is required"}],
-                "is_error": True,
-            }
+            return self._err("Error: schedule_id is required")
 
         schedule = await self.system.scheduler_service.get_schedule(schedule_id)
         if not schedule:
-            return {
-                "content": [{"type": "text", "text": f"Error: Schedule {schedule_id} not found"}],
-                "is_error": True,
-            }
+            return self._err(f"Error: Schedule {schedule_id} not found")
         if schedule.minion_id != from_minion_id:
-            return {
-                "content": [{"type": "text", "text": "Error: You can only update your own schedules"}],
-                "is_error": True,
-            }
+            return self._err("Error: You can only update your own schedules")
 
         name = args.get("name")
         prompt = args.get("prompt")
         cron_expression = args.get("cron_expression")
 
         if name is None and prompt is None and cron_expression is None:
-            return {
-                "content": [{"type": "text", "text": "Error: Must provide at least one of: name, prompt, cron_expression"}],
-                "is_error": True,
-            }
+            return self._err("Error: Must provide at least one of: name, prompt, cron_expression")
 
         if prompt is not None:
             if schedule.schedule_type == "script":
                 if prompt.strip():
-                    return {
-                        "content": [{"type": "text", "text": "Error: This schedule is script-type; prompt cannot be set"}],
-                        "is_error": True,
-                    }
+                    return self._err("Error: This schedule is script-type; prompt cannot be set")
                 else:
                     prompt = None  # empty/whitespace prompt is a no-op for script-type schedules
             elif not prompt.strip():
-                return {
-                    "content": [{"type": "text", "text": "Error: Prompt cannot be empty"}],
-                    "is_error": True,
-                }
+                return self._err("Error: Prompt cannot be empty")
 
         fields: dict = {}
         if name is not None:
@@ -2616,18 +2134,12 @@ class LegionMCPTools:
             fields["cron_expression"] = cron_expression
 
         if not fields:
-            return {
-                "content": [{"type": "text", "text": "Error: Must provide at least one of: name, prompt, cron_expression"}],
-                "is_error": True,
-            }
+            return self._err("Error: Must provide at least one of: name, prompt, cron_expression")
 
         try:
             updated = await self.system.scheduler_service.update_schedule(schedule_id, **fields)
         except ValueError as e:
-            return {
-                "content": [{"type": "text", "text": f"Error: {e}"}],
-                "is_error": True,
-            }
+            return self._err(f"Error: {e}")
 
         from datetime import datetime
         next_run_str = "N/A"
@@ -2663,35 +2175,20 @@ class LegionMCPTools:
         reason = args.get("reason", "").strip()
 
         if not session_id:
-            return {
-                "content": [{"type": "text", "text": "Error: Unable to determine session ID"}],
-                "is_error": True,
-            }
+            return self._err("Error: Unable to determine session ID")
 
         # Check session exists and is active
         session_info = await self.system.session_coordinator.session_manager.get_session_info(
             session_id
         )
         if not session_info:
-            return {
-                "content": [{"type": "text", "text": "Error: Session not found"}],
-                "is_error": True,
-            }
+            return self._err("Error: Session not found")
         if session_info.state != SessionState.ACTIVE:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Error: Session is not active (state: {session_info.state.value})"
-                }],
-                "is_error": True,
-            }
+            return self._err(f"Error: Session is not active (state: {session_info.state.value})")
 
         # Prevent duplicate restarts
         if session_id in self._pending_restarts:
-            return {
-                "content": [{"type": "text", "text": "Error: Restart already in progress"}],
-                "is_error": True,
-            }
+            return self._err("Error: Restart already in progress")
 
         restart_id = str(uuid.uuid4())
         self._pending_restarts.add(session_id)
@@ -2813,15 +2310,9 @@ class LegionMCPTools:
         reset_session = bool(args.get("reset_session", False))
 
         if not session_id:
-            return {
-                "content": [{"type": "text", "text": "Error: session_id is required"}],
-                "is_error": True,
-            }
+            return self._err("Error: session_id is required")
         if not content:
-            return {
-                "content": [{"type": "text", "text": "Error: content is required"}],
-                "is_error": True,
-            }
+            return self._err("Error: content is required")
 
         try:
             item = await self.system.session_coordinator.enqueue_message(
@@ -2841,13 +2332,7 @@ class LegionMCPTools:
                 "is_error": False,
             }
         except ValueError as e:
-            return {
-                "content": [{"type": "text", "text": f"Error: {e}"}],
-                "is_error": True,
-            }
+            return self._err(f"Error: {e}")
         except Exception as e:
             logger.exception(f"Unexpected error in queue_task for session {session_id}: {e}")
-            return {
-                "content": [{"type": "text", "text": f"Unexpected error queuing task: {e}"}],
-                "is_error": True,
-            }
+            return self._err(f"Unexpected error queuing task: {e}")
