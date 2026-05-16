@@ -243,6 +243,7 @@ import { usePollingStore } from '@/stores/polling'
 import { useMessageStore } from '@/stores/message'
 import { useLegionStore } from '@/stores/legion'
 import { api } from '@/utils/api'
+import { walkHierarchy, flattenHierarchy, findInHierarchy } from '@/utils/hierarchyUtils'
 
 const router = useRouter()
 const sessionStore = useSessionStore()
@@ -324,33 +325,22 @@ async function showReparentView() {
     const hierarchy = await api.get(`/api/legions/${session.value.project_id}/hierarchy`)
     const subjectId = session.value.session_id
 
+    // Build exclusion set: subject node + all its descendants
     const excluded = new Set()
-    function addAll(node) {
-      excluded.add(node.id)
-      for (const child of (node.children || [])) addAll(child)
+    const subject = findInHierarchy(hierarchy, n => n.id === subjectId)
+    if (subject) {
+      walkHierarchy(subject, (node) => { excluded.add(node.id) })
     }
-    function findAndExclude(node) {
-      if (node.id === subjectId) { addAll(node); return }
-      for (const child of (node.children || [])) findAndExclude(child)
-    }
-    findAndExclude(hierarchy)
 
-    // Flatten hierarchy into selectable list
+    // Flatten into selectable targets; map user-root to "no parent" sentinel
     const targets = []
-    function flatten(node, depth) {
+    for (const { node, depth } of flattenHierarchy(hierarchy, { exclude: excluded })) {
       if (node.type === 'user') {
         targets.push({ id: null, name: 'Root level (no parent)', depth: 0 })
-        for (const child of (node.children || [])) {
-          if (!excluded.has(child.id)) flatten(child, 1)
-        }
-      } else if (!excluded.has(node.id)) {
+      } else {
         targets.push({ id: node.id, name: node.name, depth })
-        for (const child of (node.children || [])) {
-          if (!excluded.has(child.id)) flatten(child, depth + 1)
-        }
       }
     }
-    flatten(hierarchy, 0)
     reparentTargets.value = targets
   } catch (err) {
     reparentError.value = err.data?.detail || err.message || 'Failed to load hierarchy'

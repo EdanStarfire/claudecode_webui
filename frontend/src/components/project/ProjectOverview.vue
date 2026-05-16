@@ -208,6 +208,7 @@ import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import { compareAgents } from '@/utils/agentSort'
 import { api } from '@/utils/api'
+import { findInHierarchy } from '@/utils/hierarchyUtils'
 import MinionTreeNode from '../legion/MinionTreeNode.vue'
 
 const props = defineProps({
@@ -308,20 +309,6 @@ const sortedRootMinions = computed(() => {
   }))
 })
 
-// Helper: Find minion node in hierarchy tree recursively
-function findMinionInTree(node, minionId) {
-  if (node && node.id === minionId) {
-    return node
-  }
-  if (node && node.children) {
-    for (const child of node.children) {
-      const found = findMinionInTree(child, minionId)
-      if (found) return found
-    }
-  }
-  return null
-}
-
 // Helper: Get comm recipient name
 function getCommRecipient(comm) {
   if (comm.to_user) {
@@ -375,7 +362,7 @@ onMounted(() => {
       // Update all minion states, is_processing, and latest_message in hierarchy
       for (const [sessionId, session] of sessions) {
         if (session.project_id === props.projectId) {
-          const minion = findMinionInTree(minionHierarchy.value, sessionId)
+          const minion = findInHierarchy(minionHierarchy.value, n => n.id === sessionId)
           if (minion && minion.type === 'minion') {
             // Update state if changed
             if (minion.state !== session.state) {
