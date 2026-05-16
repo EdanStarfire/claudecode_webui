@@ -121,6 +121,11 @@ const routes = [
     name: 'settings-pricing',
     component: SettingsLayout
   },
+  {
+    path: '/settings/providers',
+    name: 'settings-providers',
+    component: SettingsLayout
+  },
 ]
 
 const router = createRouter({

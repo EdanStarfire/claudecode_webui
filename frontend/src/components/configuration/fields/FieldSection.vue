@@ -14,6 +14,7 @@
         @update:included="$emit('update:included', field.key, $event)"
         @browse="$emit('browse', field.key)"
         @reset="$emit('reset', field.key)"
+        @update:linked="$emit('update:linked', $event)"
       />
     </template>
   </div>
@@ -33,7 +34,7 @@ const props = defineProps({
   included: { type: Object, default: () => ({}) },
 })
 
-defineEmits(['update:config', 'update:included', 'browse', 'reset'])
+defineEmits(['update:config', 'update:included', 'browse', 'reset', 'update:linked'])
 
 const visibleFields = computed(() => {
   return props.fields.filter((field) => {

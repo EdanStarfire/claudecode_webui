@@ -48,6 +48,22 @@ export const FIELD_SCHEMAS = {
       ],
       description: 'XHigh requires Opus 4.7.',
     },
+    {
+      key: 'provider_catalog_id',
+      label: 'Provider',
+      widget: 'provider-select',
+      defaultValue: null,
+      description: 'Optional. When set, the session routes through a LiteLLM provider ' +
+                   'catalog entry instead of the default Anthropic API. The Model setting ' +
+                   'above is ignored when a provider is selected.',
+    },
+    {
+      key: 'provider_model_id',
+      label: 'Provider Model',
+      widget: 'provider-model-select',
+      defaultValue: null,
+      showWhen: (config) => Boolean(config.provider_catalog_id),
+    },
   ],
 
   permissions: [
