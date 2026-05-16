@@ -29,6 +29,7 @@
         :show-include-toggle="false"
         @update:config="handleField"
         @reset="handleReset"
+        @update:linked="handleLinkedField"
       />
     </div>
   </div>
@@ -170,6 +171,10 @@ const toolbarChips = computed(() => {
 
 function handleField(key, value) {
   settingsStore.setField(areaKey.value, key, value)
+}
+
+function handleLinkedField(linked) {
+  settingsStore.setField(areaKey.value, linked.key, linked.value)
 }
 
 async function handleSave() {

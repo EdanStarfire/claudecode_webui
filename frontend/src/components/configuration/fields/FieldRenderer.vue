@@ -152,6 +152,22 @@
         @update:value="$emit('update:value', $event)"
       />
 
+      <ProviderSelectWidget
+        v-else-if="field.widget === 'provider-select'"
+        :value="value"
+        :disabled="isDisabled"
+        @update:value="$emit('update:value', $event)"
+        @update:linked="$emit('update:linked', $event)"
+      />
+
+      <ProviderModelSelectWidget
+        v-else-if="field.widget === 'provider-model-select'"
+        :value="value"
+        :provider-id="config.provider_catalog_id"
+        :disabled="isDisabled"
+        @update:value="$emit('update:value', $event)"
+      />
+
       <small v-if="field.description" class="field-description">
         <span v-html="field.description" />
       </small>
@@ -171,6 +187,8 @@ import DirListWidget from './DirListWidget.vue'
 import SandboxSubSectionWidget from './SandboxSubSectionWidget.vue'
 import TagListField from './TagListField.vue'
 import MultiSelectField from './MultiSelectField.vue'
+import ProviderSelectWidget from './ProviderSelectWidget.vue'
+import ProviderModelSelectWidget from './ProviderModelSelectWidget.vue'
 import SourceMarker from '../../settings/SourceMarker.vue'
 
 const props = defineProps({
@@ -185,7 +203,7 @@ const props = defineProps({
   config: { type: Object, default: () => ({}) },
 })
 
-defineEmits(['update:value', 'update:included', 'browse', 'reset'])
+defineEmits(['update:value', 'update:included', 'browse', 'reset', 'update:linked'])
 
 const isDisabled = computed(() => {
   if (props.disabled) return true

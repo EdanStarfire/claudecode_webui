@@ -27,6 +27,20 @@ export const settingsIndex = [
   { section: 'read-aloud', fieldKey: 'pitch',        label: 'Pitch' },
   { section: 'read-aloud', fieldKey: 'speech',       label: 'Speech Synthesis' },
 
+  // Providers section (ProvidersTab)
+  { section: 'providers', fieldKey: 'provider_entries',       label: 'Provider Catalog' },
+  { section: 'providers', fieldKey: 'provider_id',            label: 'Provider ID' },
+  { section: 'providers', fieldKey: 'provider_display_name',  label: 'Provider Display Name' },
+  { section: 'providers', fieldKey: 'provider_type',          label: 'Provider Type' },
+  { section: 'providers', fieldKey: 'provider_models',        label: 'Provider Models' },
+  { section: 'providers', fieldKey: 'provider_status',        label: 'Proxy Status' },
+  { section: 'providers', fieldKey: 'litellm_params',         label: 'LiteLLM Params' },
+  { section: 'providers', fieldKey: 'secret_reference',       label: 'Secret Reference' },
+
+  // Model Tuning provider fields
+  { section: 'edit-model-tuning', fieldKey: 'provider_catalog_id', label: 'Provider' },
+  { section: 'edit-model-tuning', fieldKey: 'provider_model_id',   label: 'Provider Model' },
+
   // MCP Servers section (McpConfigTab)
   { section: 'mcp-servers', fieldKey: 'mcp',         label: 'MCP Servers' },
   { section: 'mcp-servers', fieldKey: 'mcp_type',    label: 'Server Type' },

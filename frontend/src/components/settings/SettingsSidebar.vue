@@ -345,6 +345,7 @@ const libraryItems = [
   { to: '/settings/profiles',   icon: '📋', label: 'Profiles',   sectionKey: 'profiles' },
   { to: '/settings/secrets',    icon: '🔑', label: 'Secrets',    sectionKey: 'secrets' },
   { to: '/settings/schedules',  icon: '⏰', label: 'Schedules',  sectionKey: 'schedules' },
+  { to: '/settings/providers',  icon: '🛰',  label: 'Providers',  sectionKey: 'providers' },
 ]
 
 const filteredAppItems = computed(() => {

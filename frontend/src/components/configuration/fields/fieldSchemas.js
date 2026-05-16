@@ -1,6 +1,21 @@
 export const FIELD_SCHEMAS = {
   model: [
     {
+      key: 'provider_catalog_id',
+      label: 'Provider',
+      widget: 'provider-select',
+      defaultValue: null,
+      description: 'Optional. When set, the session routes through a LiteLLM provider ' +
+                   'catalog entry instead of the default Anthropic API.',
+    },
+    {
+      key: 'provider_model_id',
+      label: 'Provider Model',
+      widget: 'provider-model-select',
+      defaultValue: null,
+      showWhen: (config) => Boolean(config.provider_catalog_id),
+    },
+    {
       key: 'model',
       label: 'Model',
       widget: 'button-group',
@@ -11,6 +26,7 @@ export const FIELD_SCHEMAS = {
         { value: 'haiku', label: 'Haiku' },
         { value: 'opusplan', label: 'OpusPlan' },
       ],
+      showWhen: (config) => !config.provider_catalog_id,
     },
     {
       key: 'thinking_mode',
