@@ -71,6 +71,17 @@ def _build_system(session_map):
 
     sm.update_session = AsyncMock(side_effect=_update_session)
 
+    async def _get_descendants_mock(session_id, limit=50, offset=0):
+        result = []
+        queue = list(session_map[session_id].child_minion_ids) if session_map.get(session_id) else []
+        while queue:
+            sid = queue.pop(0)
+            s = session_map.get(sid)
+            if s:
+                result.append({"session_id": sid})
+                queue.extend(s.child_minion_ids or [])
+        return {"descendants": result, "total": len(result), "limit": limit, "offset": offset, "has_more": False}
+
     project = Mock()
     project.to_dict = Mock(return_value={"project_id": "legion-1"})
 
@@ -78,6 +89,7 @@ def _build_system(session_map):
     pm.get_project = AsyncMock(return_value=project)
 
     coord = Mock()
+    coord.get_descendants = AsyncMock(side_effect=_get_descendants_mock)
     coord.session_manager = sm
     coord.project_manager = pm
 
