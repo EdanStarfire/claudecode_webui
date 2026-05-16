@@ -52,15 +52,30 @@
         :key="`${entry.ts}-${entry.host}-${entry.path}`"
         class="proxy-entry http-entry"
       >
-        <span class="entry-status" :class="entry.allowed ? 'status-allowed' : 'status-blocked'">
-          {{ entry.allowed ? '✓' : '✗' }}
+        <span class="entry-icons">
+          <!-- Outcome icon: success / warning / blocked -->
+          <span
+            v-if="!entry.allowed"
+            :title="`${entry.method} ${entry.status} ${statusText(entry.status)}`"
+          >⛔</span>
+          <span
+            v-else-if="entry.status >= 400"
+            :title="`${entry.method} ${entry.status} ${statusText(entry.status)}`"
+          >⚠️</span>
+          <span
+            v-else
+            :title="`${entry.method} ${entry.status} ${statusText(entry.status)}`"
+          >✅</span>
+          <!-- Routing icon: LiteLLM vs direct -->
+          <span
+            :title="entry.routed_via_litellm ? 'Routed via LiteLLM' : 'Direct to upstream'"
+          >{{ entry.routed_via_litellm ? '🔀' : '🎯' }}</span>
+          <!-- Secrets icon: credential used vs none -->
+          <span
+            :title="entry.credential_used ? `Secret: ${entry.credential_used}` : 'No secrets used'"
+          >{{ entry.credential_used ? '🔑' : '📨' }}</span>
         </span>
-        <span class="entry-method">{{ entry.method }}</span>
-        <span
-          class="entry-http-status"
-          :class="httpStatusClass(entry.status)"
-        >{{ entry.status }}</span>
-        <span class="entry-host">{{ entry.host }}</span>
+        <span class="entry-host">{{ entry.routed_via_litellm ? entry.original_host : entry.host }}</span>
         <span class="entry-path" :title="entry.path">{{ entry.path }}</span>
       </div>
     </div>
@@ -183,6 +198,19 @@ function httpStatusClass(status) {
   return ''
 }
 
+const _STATUS_TEXTS = {
+  200: 'OK', 201: 'Created', 204: 'No Content',
+  301: 'Moved Permanently', 302: 'Found', 304: 'Not Modified',
+  400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
+  404: 'Not Found', 429: 'Too Many Requests',
+  500: 'Internal Server Error', 502: 'Bad Gateway',
+  503: 'Service Unavailable', 504: 'Gateway Timeout',
+}
+
+function statusText(code) {
+  return _STATUS_TEXTS[code] || ''
+}
+
 const REASON_LABELS = {
   not_allowlisted: 'blocked',
   ip_literal: 'ip-literal',
@@ -239,45 +267,12 @@ function abbreviateReason(reason) {
   background: #f8fafc;
 }
 
-.entry-status {
+.entry-icons {
+  display: inline-flex;
+  gap: 0.25rem;
   flex-shrink: 0;
-  font-weight: bold;
-  width: 14px;
-  text-align: center;
-}
-
-.status-allowed {
-  color: #16a34a;
-}
-
-.status-blocked {
-  color: #dc2626;
-}
-
-.entry-method {
-  flex-shrink: 0;
-  width: 36px;
-  color: #6366f1;
-  font-weight: 600;
-  font-size: 11px;
-}
-
-.entry-http-status {
-  flex-shrink: 0;
-  width: 28px;
-  font-size: 11px;
-}
-
-.http-2xx {
-  color: #16a34a;
-}
-
-.http-4xx {
-  color: #d97706;
-}
-
-.http-5xx {
-  color: #dc2626;
+  font-size: 13px;
+  cursor: default;
 }
 
 .entry-host {

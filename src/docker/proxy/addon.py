@@ -541,6 +541,8 @@ class ProxyAddon:
             )
             self._routing = {"hostname_rewrites": {}, "virtual_key": None}
 
+        self._write_startup_log()
+
     async def requestheaders(self, flow: http.HTTPFlow) -> None:
         """Fires after client headers arrive, before upstream forwarding.
 
@@ -548,6 +550,11 @@ class ProxyAddon:
         OAuth2 refresh, and all header/query injection. Body injection is
         deferred to request() where content is available (or no-ops when streaming).
         """
+        # Capture original destination before any rewrite so the access log can
+        # show the intended upstream host (e.g. api.anthropic.com) rather than
+        # the LiteLLM-rewritten host (e.g. cc-webui.internal:4000).
+        flow.metadata["original_host"] = flow.request.pretty_host
+
         # ── LiteLLM hostname rewrite (Phase 3) ────────────────────────────────
         # Applied before the allowlist check so the rewritten host
         # (cc-webui.internal) is what gets allowlisted — it is already present
@@ -859,6 +866,8 @@ class ProxyAddon:
             "bytes": len(flow.response.content) if flow.response and flow.response.content else 0,
             "allowed": allowed,
             "credential_used": credential_used,
+            "routed_via_litellm": flow.metadata.get("routed_via_litellm", False),
+            "original_host": flow.metadata.get("original_host", flow.request.pretty_host),
         }
         self._log_file.write(json.dumps(entry) + "\n")
 
@@ -882,6 +891,26 @@ class ProxyAddon:
         else:
             # Log to access log if socks5 log not available
             ctx.log.info(f"[proxy:socks5] {json.dumps(entry)}")
+
+    def _write_startup_log(self) -> None:
+        """Append one startup diagnostic line to startup.log (sibling of access.log)."""
+        if not Path(LOG_DIR).is_dir():
+            return
+        startup_path = Path(LOG_DIR) / "startup.log"
+        routing = self._routing or {}
+        entry = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "session_id": self._session_id,
+            "webui_base_url": WEBUI_BASE_URL,
+            "hostname_rewrites": routing.get("hostname_rewrites", {}),
+            "has_virtual_key": bool(routing.get("virtual_key")),
+            "secret_count": len(self._records),
+        }
+        try:
+            with open(startup_path, "a", buffering=1) as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception as exc:
+            ctx.log.warn(f"[proxy] Failed to write startup.log: {exc}")
 
 
 # Backward-compat alias kept for legacy test imports

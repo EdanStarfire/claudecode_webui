@@ -247,6 +247,10 @@ class SessionCoordinator:
         from src.mcp_config_manager import McpConfigManager
         self.mcp_config_manager = McpConfigManager(self.data_dir)
 
+        # Provider catalog store — data/providers.json (issue #1465)
+        from src.provider_catalog import ProviderCatalogStore
+        self.provider_catalog_store = ProviderCatalogStore(self.data_dir)
+
         # OAuth 2.1 flow manager for MCP servers (issue #813)
         from src.oauth_manager import OAuthFlowManager
         self.oauth_manager = OAuthFlowManager(self.data_dir)
@@ -547,6 +551,10 @@ class SessionCoordinator:
             # Load global MCP server configs (issue #676)
             await self.mcp_config_manager.load_configs()
             coord_logger.info("Loaded global MCP server configs")
+
+            # Load provider catalog from data/providers.json (issue #1465)
+            await self.provider_catalog_store.load()
+            coord_logger.info("Loaded provider catalog")
 
             # Rebuild capability registry from persisted session data (if LegionSystem is initialized)
             if hasattr(self, 'legion_system') and self.legion_system is not None:
@@ -935,6 +943,8 @@ class SessionCoordinator:
                         "scheme": raw.get("scheme"),
                         "port": raw.get("port"),
                         "bytes": raw.get("bytes"),
+                        "routed_via_litellm": raw.get("routed_via_litellm", False),
+                        "original_host": raw.get("original_host", raw.get("host")),
                     })
                 except (json.JSONDecodeError, ValueError):
                     self.logger.warning(f"Skipping malformed HTTP proxy log line in session {session_id}")

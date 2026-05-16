@@ -240,84 +240,6 @@ class HistoryRetentionConfig:
 
 
 @dataclass
-class CatalogModelEntry:
-    """A single model offered by a provider catalog entry."""
-
-    id: str
-    display_name: str
-    litellm_model: str  # e.g. "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "CatalogModelEntry":
-        return cls(
-            id=data["id"],
-            display_name=data["display_name"],
-            litellm_model=data["litellm_model"],
-        )
-
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "display_name": self.display_name,
-            "litellm_model": self.litellm_model,
-        }
-
-
-@dataclass
-class ProviderCatalogEntry:
-    """A provider (e.g. Bedrock, OpenAI) with its LiteLLM params and model list."""
-
-    id: str
-    display_name: str
-    provider_type: str  # "anthropic", "openai", "bedrock", "vertex", "lmstudio", etc.
-    litellm_params_template: dict[str, str]  # may contain "${secret:name}" placeholders
-    models: list[CatalogModelEntry]
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "ProviderCatalogEntry":
-        return cls(
-            id=data["id"],
-            display_name=data["display_name"],
-            provider_type=data["provider_type"],
-            litellm_params_template=data.get("litellm_params_template", {}),
-            models=[CatalogModelEntry.from_dict(m) for m in data.get("models", [])],
-        )
-
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "display_name": self.display_name,
-            "provider_type": self.provider_type,
-            "litellm_params_template": self.litellm_params_template,
-            "models": [m.to_dict() for m in self.models],
-        }
-
-
-@dataclass
-class ProviderCatalogConfig:
-    """Configuration for the LiteLLM provider catalog."""
-
-    entries: list[ProviderCatalogEntry] = field(default_factory=list)
-    litellm_port: int = 4000
-    pending_changes: bool = False
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "ProviderCatalogConfig":
-        return cls(
-            entries=[ProviderCatalogEntry.from_dict(e) for e in data.get("entries", [])],
-            litellm_port=data.get("litellm_port", 4000),
-            pending_changes=data.get("pending_changes", False),
-        )
-
-    def to_dict(self) -> dict:
-        return {
-            "entries": [e.to_dict() for e in self.entries],
-            "litellm_port": self.litellm_port,
-            "pending_changes": self.pending_changes,
-        }
-
-
-@dataclass
 class AppConfig:
     networking: NetworkingConfig = field(default_factory=NetworkingConfig)
     features: FeaturesConfig = field(default_factory=FeaturesConfig)
@@ -328,7 +250,6 @@ class AppConfig:
     secrets: SecretsConfig = field(default_factory=SecretsConfig)
     pricing: PricingConfig = field(default_factory=PricingConfig)
     history_retention: HistoryRetentionConfig = field(default_factory=HistoryRetentionConfig)
-    provider_catalog: ProviderCatalogConfig = field(default_factory=ProviderCatalogConfig)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppConfig":
@@ -395,8 +316,8 @@ class AppConfig:
             rotation_trigger_count=hr_data.get("rotation_trigger_count", 100),
             enabled=hr_data.get("enabled", True),
         )
-        pc_data = data.get("provider_catalog", {})
-        provider_catalog = ProviderCatalogConfig.from_dict(pc_data) if pc_data else ProviderCatalogConfig()
+        # Strip legacy key so next save cleans up old config files (migration handled by ProviderCatalogStore)
+        data.pop("provider_catalog", None)
         return cls(
             networking=networking,
             features=features,
@@ -407,7 +328,6 @@ class AppConfig:
             secrets=secrets,
             pricing=pricing,
             history_retention=history_retention,
-            provider_catalog=provider_catalog,
         )
 
     def to_dict(self) -> dict:
@@ -477,7 +397,6 @@ class AppConfig:
                 "rotation_trigger_count": self.history_retention.rotation_trigger_count,
                 "enabled": self.history_retention.enabled,
             },
-            "provider_catalog": self.provider_catalog.to_dict(),
         }
 
 
