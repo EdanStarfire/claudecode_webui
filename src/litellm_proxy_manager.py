@@ -221,6 +221,19 @@ class LiteLLMProxyManager:
         _ps.user_custom_auth = self.auth_callback
         litellm.telemetry = False
 
+        # Ensure the /v1/messages route is always registered. LiteLLM uses a
+        # lazy-loading middleware (LazyFeatureMiddleware) that imports and
+        # registers the anthropic_endpoints router on the first matching request.
+        # If that first import throws, the feature is marked permanently "loaded"
+        # with no route registered, giving 404 on every subsequent request until
+        # restart. Registering explicitly here makes startup deterministic.
+        # Guard against double-registration across rebuild() calls since _ps.app
+        # is a module-level singleton.
+        if not getattr(_ps.app.state, "_anthropic_endpoints_registered", False):
+            from litellm.proxy.anthropic_endpoints import endpoints as _anthropic_ep
+            _ps.app.include_router(_anthropic_ep.router)
+            _ps.app.state._anthropic_endpoints_registered = True
+
         import uvicorn
 
         config = uvicorn.Config(_ps.app, host="0.0.0.0", port=self._port, log_level="warning")

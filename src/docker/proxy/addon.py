@@ -506,11 +506,14 @@ class ProxyAddon:
         self.logger = logging.getLogger("proxy.addon")
         self._log_file = None
         self._socks5_log_file = None
+        self._diag_log_file = None
         if Path(LOG_DIR).is_dir():
             log_path = Path(LOG_DIR) / "access.log"
             self._log_file = open(log_path, "a", buffering=1)  # line-buffered  # noqa: SIM115
             socks5_path = Path(LOG_DIR) / SOCKS5_LOG_FILENAME
             self._socks5_log_file = open(socks5_path, "a", buffering=1)  # noqa: SIM115
+            diag_path = Path(LOG_DIR) / "diag.log"
+            self._diag_log_file = open(diag_path, "a", buffering=1)  # noqa: SIM115
 
     def load(self, loader) -> None:
         """Read session config files. Secret fetch happens in running()."""
@@ -674,6 +677,7 @@ class ProxyAddon:
 
         if flow.metadata.get("routed_via_litellm"):
             self._rewrite_model_in_body(flow)
+            self._maybe_drop_temperature(flow)
 
     def responseheaders(self, flow: http.HTTPFlow) -> None:
         """Install per-chunk scrub filter for streamed responses (#1400).
@@ -735,6 +739,38 @@ class ProxyAddon:
         flow.request.content = json.dumps(body).encode()
         flow.metadata["model_rewrite"] = (original, rewritten)
         ctx.log.info(f"[proxy] model rewrite: {original} -> {rewritten}")
+
+    def _maybe_drop_temperature(self, flow: http.HTTPFlow) -> None:
+        """Drop temperature from requests routed to OpenAI models.
+
+        gpt-5 family models reject temperature=0 (the default LiteLLM injects
+        during Anthropic→OpenAI translation). Dropping it lets the model use its
+        own default, which avoids the UnsupportedParamsError.
+        """
+        rewrite = flow.metadata.get("model_rewrite")
+        if not rewrite:
+            return
+        _original, rewritten = rewrite
+        catalog_id = rewritten.split("--", 1)[0] if "--" in rewritten else ""
+        if not catalog_id.startswith("openai"):
+            return
+        if flow.request.content is None or _is_encoded_request(flow):
+            return
+        try:
+            body = json.loads(flow.request.content)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return
+        if not isinstance(body, dict) or "temperature" not in body:
+            return
+        del body["temperature"]
+        flow.request.content = json.dumps(body).encode()
+        self._write_diag(f"temperature dropped for {rewritten}")
+
+    def _write_diag(self, message: str) -> None:
+        if not self._diag_log_file:
+            return
+        entry = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "msg": message}
+        self._diag_log_file.write(json.dumps(entry) + "\n")
 
     async def response(self, flow: http.HTTPFlow) -> None:
         if flow.metadata.get("denied"):
