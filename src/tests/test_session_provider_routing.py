@@ -303,3 +303,69 @@ async def test_docker_catalog_routes_via_registry_not_env(coordinator):
     call_kwargs = factory.call_args.kwargs
     extra_env = call_kwargs.get("extra_env") or {}
     assert "ANTHROPIC_BASE_URL" not in extra_env
+
+
+# ── Issue #1467: attribution header suppression ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_non_docker_catalog_suppresses_attribution_header(coordinator):
+    """Non-Docker catalog sessions receive CLAUDE_CODE_ATTRIBUTION_HEADER=0 in extra_env."""
+    proxy = _make_proxy_manager()
+    coordinator.litellm_proxy_manager = proxy
+
+    config = SessionConfig(
+        provider_catalog_id="bedrock",
+        provider_model_id="claude-3-5-sonnet",
+    )
+    session_id = await _create_session(coordinator, config)
+
+    factory, _ = _make_sdk_factory()
+    coordinator.set_sdk_factory(factory)
+
+    await coordinator.start_session(session_id)
+
+    extra_env = factory.call_args.kwargs.get("extra_env") or {}
+    assert extra_env.get("CLAUDE_CODE_ATTRIBUTION_HEADER") == "0"
+
+
+@pytest.mark.asyncio
+async def test_native_session_no_attribution_header(coordinator):
+    """Sessions without a catalog provider do NOT get the attribution header suppressed."""
+    config = SessionConfig()
+    session_id = await _create_session(coordinator, config)
+
+    factory, _ = _make_sdk_factory()
+    coordinator.set_sdk_factory(factory)
+
+    await coordinator.start_session(session_id)
+
+    extra_env = factory.call_args.kwargs.get("extra_env") or {}
+    assert "CLAUDE_CODE_ATTRIBUTION_HEADER" not in extra_env
+
+
+@pytest.mark.asyncio
+async def test_docker_catalog_attribution_header_in_extra_env_json(coordinator):
+    """Docker catalog sessions encode CLAUDE_CODE_ATTRIBUTION_HEADER=0 in CLAUDE_DOCKER_EXTRA_ENV."""
+    import json
+
+    proxy = _make_proxy_manager(port=4000)
+    coordinator.litellm_proxy_manager = proxy
+
+    config = SessionConfig(
+        provider_catalog_id="cat",
+        provider_model_id="mod",
+        docker_enabled=True,
+        cli_path="/usr/bin/claude",
+    )
+    session_id = await _create_session(coordinator, config)
+
+    factory, _ = _make_sdk_factory()
+    coordinator.set_sdk_factory(factory)
+
+    await coordinator.start_session(session_id)
+
+    extra_env = factory.call_args.kwargs.get("extra_env") or {}
+    raw = extra_env.get("CLAUDE_DOCKER_EXTRA_ENV", "{}")
+    container_env = json.loads(raw)
+    assert container_env.get("CLAUDE_CODE_ATTRIBUTION_HEADER") == "0"

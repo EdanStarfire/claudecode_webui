@@ -1521,8 +1521,19 @@ class SessionCoordinator:
                 catalog_model_update["model"] = model_alias
                 if effective_config.docker_enabled:
                     _proxy_mgr.register_session_routing(session_id, virtual_key, base_url)
+                    # Inject CLAUDE_CODE_ATTRIBUTION_HEADER=0 into the agent container so
+                    # the billing header doesn't cache-bust 3rd-party / local LLM APIs.
+                    # Must go through CLAUDE_DOCKER_EXTRA_ENV (not litellm_env) because
+                    # _merged_extra_env only reaches the wrapper process, not the container.
+                    _extra = json.loads(docker_env_vars.get("CLAUDE_DOCKER_EXTRA_ENV", "{}"))
+                    _extra["CLAUDE_CODE_ATTRIBUTION_HEADER"] = "0"
+                    docker_env_vars["CLAUDE_DOCKER_EXTRA_ENV"] = json.dumps(_extra)
                 else:
-                    litellm_env = {"ANTHROPIC_BASE_URL": base_url, "ANTHROPIC_API_KEY": virtual_key}
+                    litellm_env = {
+                        "ANTHROPIC_BASE_URL": base_url,
+                        "ANTHROPIC_API_KEY": virtual_key,
+                        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+                    }
 
             # Override 3 fields computed earlier in this method:
             #   system_prompt — assembled above (includes legion guide, history ref, etc.)
