@@ -1,5 +1,5 @@
 <template>
-  <div class="app-section">
+  <div class="lib-section">
     <SettingsToolbar title="MCP Servers" />
     <div class="section-body">
       <McpConfigTab />
@@ -13,7 +13,7 @@ import SettingsToolbar from '../SettingsToolbar.vue'
 </script>
 
 <style scoped>
-.app-section {
+.lib-section {
   display: flex;
   flex-direction: column;
   height: 100%;
