@@ -1,3 +1,9 @@
+function tierBreakoutActive(config) {
+  return Boolean(config.provider_catalog_id) &&
+    Boolean(config.docker_enabled) &&
+    Boolean(config.provider_tier_routing_enabled)
+}
+
 export const FIELD_SCHEMAS = {
   model: [
     {
@@ -13,7 +19,77 @@ export const FIELD_SCHEMAS = {
       label: 'Provider Model',
       widget: 'provider-model-select',
       defaultValue: null,
-      showWhen: (config) => Boolean(config.provider_catalog_id),
+      showWhen: (config) => Boolean(config.provider_catalog_id) && !tierBreakoutActive(config),
+    },
+    {
+      key: 'provider_tier_routing_enabled',
+      label: 'Per-tier model routing',
+      widget: 'toggle',
+      defaultValue: false,
+      showWhen: (config) => Boolean(config.provider_catalog_id) && Boolean(config.docker_enabled),
+      description: 'Route requests to different provider models by tier (haiku/sonnet/opus). ' +
+                   'Reads the actual model from the request body. Docker-only.',
+    },
+    {
+      key: 'provider_haiku_catalog_id',
+      label: 'Haiku Provider',
+      widget: 'provider-select',
+      linkedKey: 'provider_haiku_model_id',
+      defaultValue: null,
+      showWhen: tierBreakoutActive,
+    },
+    {
+      key: 'provider_haiku_model_id',
+      label: 'Haiku Model',
+      widget: 'provider-model-select',
+      providerIdFrom: 'provider_haiku_catalog_id',
+      defaultValue: null,
+      showWhen: tierBreakoutActive,
+    },
+    {
+      key: 'provider_sonnet_catalog_id',
+      label: 'Sonnet Provider',
+      widget: 'provider-select',
+      linkedKey: 'provider_sonnet_model_id',
+      defaultValue: null,
+      showWhen: tierBreakoutActive,
+    },
+    {
+      key: 'provider_sonnet_model_id',
+      label: 'Sonnet Model',
+      widget: 'provider-model-select',
+      providerIdFrom: 'provider_sonnet_catalog_id',
+      defaultValue: null,
+      showWhen: tierBreakoutActive,
+    },
+    {
+      key: 'provider_opus_catalog_id',
+      label: 'Opus Provider',
+      widget: 'provider-select',
+      linkedKey: 'provider_opus_model_id',
+      defaultValue: null,
+      showWhen: tierBreakoutActive,
+    },
+    {
+      key: 'provider_opus_model_id',
+      label: 'Opus Model',
+      widget: 'provider-model-select',
+      providerIdFrom: 'provider_opus_catalog_id',
+      defaultValue: null,
+      showWhen: tierBreakoutActive,
+    },
+    {
+      key: 'provider_default_tier',
+      label: 'Default Tier',
+      widget: 'button-group',
+      defaultValue: null,
+      options: [
+        { value: 'haiku', label: 'Haiku' },
+        { value: 'sonnet', label: 'Sonnet' },
+        { value: 'opus', label: 'Opus' },
+      ],
+      showWhen: tierBreakoutActive,
+      description: 'Tier used when the request model does not match any known tier.',
     },
     {
       key: 'model',

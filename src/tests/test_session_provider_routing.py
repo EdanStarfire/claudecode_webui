@@ -296,13 +296,164 @@ async def test_docker_catalog_routes_via_registry_not_env(coordinator):
     await coordinator.start_session(session_id)
 
     proxy.register_session_routing.assert_called_once_with(
-        session_id, "lc-test-virtual-key", "http://127.0.0.1:4000/"
+        session_id, "lc-test-virtual-key", "http://127.0.0.1:4000/",
+        model_map={}, default_model="cat--mod",
     )
 
     # ANTHROPIC_BASE_URL must NOT appear in extra_env for Docker sessions
     call_kwargs = factory.call_args.kwargs
     extra_env = call_kwargs.get("extra_env") or {}
     assert "ANTHROPIC_BASE_URL" not in extra_env
+
+
+# ── Issue #1469: Docker single-model — SDK model UNSET ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_issue_1469_docker_single_model_sdk_model_unset(coordinator):
+    """Docker single-provider: ClaudeAgentOptions.model must NOT be set to the alias.
+
+    R1 backward-compat risk: proxy rewrites the body; SDK model left unset.
+    """
+    proxy = _make_proxy_manager(port=4000)
+    coordinator.litellm_proxy_manager = proxy
+
+    config = SessionConfig(
+        provider_catalog_id="bedrock",
+        provider_model_id="claude-sonnet",
+        docker_enabled=True,
+        cli_path="/usr/bin/claude",
+    )
+    session_id = await _create_session(coordinator, config)
+
+    factory, _ = _make_sdk_factory()
+    coordinator.set_sdk_factory(factory)
+
+    await coordinator.start_session(session_id)
+
+    sdk_config = factory.call_args.kwargs["config"]
+    # model must NOT be set to the alias — proxy body rewrite handles it
+    assert sdk_config.model is None or sdk_config.model not in ("bedrock--claude-sonnet",)
+
+
+@pytest.mark.asyncio
+async def test_issue_1469_docker_single_model_register_routing_called_with_defaults(coordinator):
+    """Docker single-model calls register_session_routing with model_map={}, correct alias."""
+    proxy = _make_proxy_manager(port=4000)
+    coordinator.litellm_proxy_manager = proxy
+
+    config = SessionConfig(
+        provider_catalog_id="openai",
+        provider_model_id="gpt-4o",
+        docker_enabled=True,
+        cli_path="/usr/bin/claude",
+    )
+    session_id = await _create_session(coordinator, config)
+
+    factory, _ = _make_sdk_factory()
+    coordinator.set_sdk_factory(factory)
+
+    await coordinator.start_session(session_id)
+
+    proxy.register_session_routing.assert_called_once_with(
+        session_id, "lc-test-virtual-key", "http://127.0.0.1:4000/",
+        model_map={}, default_model="openai--gpt-4o",
+    )
+
+
+# ── Issue #1469: Docker tier breakout ────────────────────────────────────────
+
+
+def _tier_config(docker_enabled=True):
+    return SessionConfig(
+        provider_haiku_catalog_id="bedrock",
+        provider_haiku_model_id="haiku-fast",
+        provider_sonnet_catalog_id="bedrock",
+        provider_sonnet_model_id="sonnet-balanced",
+        provider_opus_catalog_id="bedrock",
+        provider_opus_model_id="opus-power",
+        provider_default_tier="sonnet",
+        docker_enabled=docker_enabled,
+        cli_path="/usr/bin/claude",
+    )
+
+
+@pytest.mark.asyncio
+async def test_issue_1469_docker_tier_sdk_model_is_short_alias(coordinator):
+    """Docker tier breakout: SDK model set to short alias for default tier."""
+    proxy = _make_proxy_manager(port=4000)
+    coordinator.litellm_proxy_manager = proxy
+
+    session_id = await _create_session(coordinator, _tier_config())
+
+    factory, _ = _make_sdk_factory()
+    coordinator.set_sdk_factory(factory)
+
+    await coordinator.start_session(session_id)
+
+    sdk_config = factory.call_args.kwargs["config"]
+    # SDK model = short alias for default tier ("sonnet")
+    assert sdk_config.model == "sonnet"
+
+
+@pytest.mark.asyncio
+async def test_issue_1469_docker_tier_register_routing_has_model_map(coordinator):
+    """Docker tier breakout: register_session_routing called with populated model_map."""
+    proxy = _make_proxy_manager(port=4000)
+    coordinator.litellm_proxy_manager = proxy
+
+    session_id = await _create_session(coordinator, _tier_config())
+
+    factory, _ = _make_sdk_factory()
+    coordinator.set_sdk_factory(factory)
+
+    await coordinator.start_session(session_id)
+
+    call_kwargs = proxy.register_session_routing.call_args.kwargs
+    model_map = call_kwargs["model_map"]
+    assert model_map["haiku"] == "bedrock--haiku-fast"
+    assert model_map["sonnet"] == "bedrock--sonnet-balanced"
+    assert model_map["opus"] == "bedrock--opus-power"
+    assert model_map["default"] == "bedrock--sonnet-balanced"
+    assert call_kwargs["default_model"] == "bedrock--sonnet-balanced"
+
+
+# ── Issue #1469: Non-Docker + tier breakout → warning + fallback ──────────────
+
+
+@pytest.mark.asyncio
+async def test_issue_1469_non_docker_tier_warns_and_falls_back(coordinator, caplog):
+    """Non-Docker + tier breakout: logs warning, falls back to default-tier single-model."""
+    import logging
+
+    proxy = _make_proxy_manager(port=4000)
+    coordinator.litellm_proxy_manager = proxy
+
+    # No docker_enabled, but tier fields set
+    config = SessionConfig(
+        provider_haiku_catalog_id="bedrock",
+        provider_haiku_model_id="haiku-fast",
+        provider_sonnet_catalog_id="bedrock",
+        provider_sonnet_model_id="sonnet-balanced",
+        provider_opus_catalog_id="bedrock",
+        provider_opus_model_id="opus-power",
+        provider_default_tier="sonnet",
+        docker_enabled=False,
+    )
+    session_id = await _create_session(coordinator, config)
+
+    factory, _ = _make_sdk_factory()
+    coordinator.set_sdk_factory(factory)
+
+    with caplog.at_level(logging.WARNING):
+        await coordinator.start_session(session_id)
+
+    # Warning logged
+    assert any("per-tier routing" in r.message for r in caplog.records)
+
+    # Falls back to default-tier alias, passed as SDK model
+    sdk_config = factory.call_args.kwargs["config"]
+    assert sdk_config.model == "bedrock--sonnet-balanced"
 
 
 # ── Issue #1467: attribution header suppression ───────────────────────────────

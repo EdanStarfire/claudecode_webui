@@ -140,7 +140,10 @@ def test_is_running_false_before_start(manager):
 def test_register_session_routing_stores_entry(manager):
     manager.register_session_routing("sess-1", "lc-abc", "http://127.0.0.1:4000/")
     entry = manager.get_session_routing("sess-1")
-    assert entry == {"virtual_key": "lc-abc", "base_url": "http://127.0.0.1:4000/"}
+    assert entry["virtual_key"] == "lc-abc"
+    assert entry["base_url"] == "http://127.0.0.1:4000/"
+    assert entry["model_map"] == {}
+    assert entry["default_model"] is None
 
 
 def test_get_session_routing_unknown_returns_none(manager):

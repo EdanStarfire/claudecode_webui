@@ -25,6 +25,10 @@ PROFILE_AREAS: dict[str, set[str]] = {
     "model": {
         "model", "thinking_mode", "thinking_budget_tokens", "effort",
         "provider_catalog_id", "provider_model_id",
+        "provider_haiku_catalog_id", "provider_haiku_model_id",
+        "provider_sonnet_catalog_id", "provider_sonnet_model_id",
+        "provider_opus_catalog_id", "provider_opus_model_id",
+        "provider_default_tier",
     },
     "permissions": {
         "permission_mode", "allowed_tools", "disallowed_tools",

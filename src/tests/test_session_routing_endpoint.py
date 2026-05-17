@@ -129,6 +129,8 @@ async def test_no_catalog_returns_empty_rewrites(session_id, valid_token):
     body = resp.json()
     assert body["hostname_rewrites"] == {}
     assert body["virtual_key"] is None
+    assert body["model_map"] == {}
+    assert body["default_model"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +141,12 @@ async def test_no_catalog_returns_empty_rewrites(session_id, valid_token):
 @pytest.mark.asyncio
 async def test_catalog_selected_returns_rewrites_and_vkey(session_id, valid_token):
     session = _make_session(token=valid_token)
-    routing = {"virtual_key": "lc-abc123", "base_url": "http://127.0.0.1:4000/"}
+    routing = {
+        "virtual_key": "lc-abc123",
+        "base_url": "http://127.0.0.1:4000/",
+        "model_map": {},
+        "default_model": "bedrock--claude-sonnet",
+    }
     proxy_mgr = _make_proxy_mgr(port=4000, routing=routing)
     webui = _make_webui(session=session, proxy_mgr=proxy_mgr)
 
@@ -154,13 +161,51 @@ async def test_catalog_selected_returns_rewrites_and_vkey(session_id, valid_toke
     assert body["virtual_key"] == "lc-abc123"
     assert "api.anthropic.com" in body["hostname_rewrites"]
     assert "cc-webui.internal:4000" in body["hostname_rewrites"]["api.anthropic.com"]
+    assert body["model_map"] == {}
+    assert body["default_model"] == "bedrock--claude-sonnet"
+
+
+@pytest.mark.asyncio
+async def test_tier_breakout_returns_model_map(session_id, valid_token):
+    """When tier breakout is active, response includes populated model_map."""
+    session = _make_session(token=valid_token)
+    tier_map = {
+        "haiku": "bedrock--haiku",
+        "sonnet": "bedrock--sonnet",
+        "opus": "bedrock--opus",
+        "default": "bedrock--sonnet",
+    }
+    routing = {
+        "virtual_key": "lc-tier-key",
+        "base_url": "http://127.0.0.1:4000/",
+        "model_map": tier_map,
+        "default_model": "bedrock--sonnet",
+    }
+    proxy_mgr = _make_proxy_mgr(port=4000, routing=routing)
+    webui = _make_webui(session=session, proxy_mgr=proxy_mgr)
+
+    async with await _client(webui) as client:
+        resp = await client.get(
+            f"/api/sessions/{session_id}/routing",
+            headers={"Authorization": f"Bearer {valid_token}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["model_map"] == tier_map
+    assert body["default_model"] == "bedrock--sonnet"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("port", [4000, 4001, 9000])
 async def test_rewrite_map_uses_proxy_port(session_id, valid_token, port):
     session = _make_session(token=valid_token)
-    routing = {"virtual_key": "lc-xyz", "base_url": f"http://127.0.0.1:{port}/"}
+    routing = {
+        "virtual_key": "lc-xyz",
+        "base_url": f"http://127.0.0.1:{port}/",
+        "model_map": {},
+        "default_model": None,
+    }
     proxy_mgr = _make_proxy_mgr(port=port, routing=routing)
     webui = _make_webui(session=session, proxy_mgr=proxy_mgr)
 

@@ -26,7 +26,7 @@ from .claude_sdk import ClaudeSDK
 from .config_resolution import resolve_effective_config
 from .data_storage import DataStorageManager
 from .hooks.pretooluse_handler import InternalPermissionHandler
-from .litellm_proxy_manager import MODEL_ALIAS_SEP
+from .litellm_proxy_manager import make_model_alias
 from .logging_config import get_logger
 from .mcp_config_manager import McpServerType
 from .message_parser import MessageParser, MessageProcessor
@@ -209,6 +209,26 @@ def _render_inject_file(placeholder: str, fmt: str, key_path: str | None) -> str
         return f'{last} = "{placeholder}"\n'
 
     return placeholder
+
+
+def _all_tier_fields_set(cfg) -> bool:
+    """Return True iff all 6 per-tier id fields and provider_default_tier are non-None."""
+    return all((
+        cfg.provider_haiku_catalog_id, cfg.provider_haiku_model_id,
+        cfg.provider_sonnet_catalog_id, cfg.provider_sonnet_model_id,
+        cfg.provider_opus_catalog_id, cfg.provider_opus_model_id,
+        cfg.provider_default_tier,
+    ))
+
+
+def _build_model_map(cfg) -> dict[str, str]:
+    """Build {tier: alias, default: alias} from per-tier config fields."""
+    haiku_alias  = make_model_alias(cfg.provider_haiku_catalog_id,  cfg.provider_haiku_model_id)
+    sonnet_alias = make_model_alias(cfg.provider_sonnet_catalog_id, cfg.provider_sonnet_model_id)
+    opus_alias   = make_model_alias(cfg.provider_opus_catalog_id,   cfg.provider_opus_model_id)
+    tier_map = {"haiku": haiku_alias, "sonnet": sonnet_alias, "opus": opus_alias}
+    tier_map["default"] = tier_map[cfg.provider_default_tier]
+    return tier_map
 
 
 class SessionCoordinator:
@@ -1510,17 +1530,37 @@ class SessionCoordinator:
             litellm_env: dict[str, str] = {}
             catalog_model_update: dict = {}
             _proxy_mgr = self.litellm_proxy_manager
-            if (
-                effective_config.provider_catalog_id
-                and effective_config.provider_model_id
-                and _proxy_mgr is not None
-            ):
+
+            tier_active = _all_tier_fields_set(effective_config)
+            single_active = bool(
+                effective_config.provider_catalog_id and effective_config.provider_model_id
+            )
+
+            if (tier_active or single_active) and _proxy_mgr is not None:
                 virtual_key = _proxy_mgr.register_session_key(session_id)
-                model_alias = f"{effective_config.provider_catalog_id}{MODEL_ALIAS_SEP}{effective_config.provider_model_id}"
                 base_url = f"http://127.0.0.1:{_proxy_mgr.port}/"
-                catalog_model_update["model"] = model_alias
+
                 if effective_config.docker_enabled:
-                    _proxy_mgr.register_session_routing(session_id, virtual_key, base_url)
+                    # Docker path: proxy addon rewrites body model field; never override SDK model
+                    if tier_active:
+                        model_map = _build_model_map(effective_config)
+                        default_alias = model_map["default"]
+                        # Short alias for CLI baseline so the SDK starts with the right tier
+                        catalog_model_update["model"] = effective_config.provider_default_tier
+                    else:
+                        single_alias = make_model_alias(
+                            effective_config.provider_catalog_id,
+                            effective_config.provider_model_id,
+                        )
+                        model_map = {}
+                        default_alias = single_alias
+                        # NOTE: catalog_model_update["model"] intentionally NOT set —
+                        # proxy rewrites the body; SDK model left unset (R1 behavior change)
+
+                    _proxy_mgr.register_session_routing(
+                        session_id, virtual_key, base_url,
+                        model_map=model_map, default_model=default_alias,
+                    )
                     # Inject CLAUDE_CODE_ATTRIBUTION_HEADER=0 into the agent container so
                     # the billing header doesn't cache-bust 3rd-party / local LLM APIs.
                     # Must go through CLAUDE_DOCKER_EXTRA_ENV (not litellm_env) because
@@ -1529,6 +1569,20 @@ class SessionCoordinator:
                     _extra["CLAUDE_CODE_ATTRIBUTION_HEADER"] = "0"
                     docker_env_vars["CLAUDE_DOCKER_EXTRA_ENV"] = json.dumps(_extra)
                 else:
+                    # Non-Docker: tier breakout not available; single-model alias override only
+                    if tier_active:
+                        coord_logger.warning(
+                            f"Session {session_id} has per-tier routing configured but "
+                            "docker_enabled=False; falling back to default-tier single-model."
+                        )
+                        tier = effective_config.provider_default_tier
+                        catalog_id = getattr(effective_config, f"provider_{tier}_catalog_id")
+                        model_id = getattr(effective_config, f"provider_{tier}_model_id")
+                    else:
+                        catalog_id = effective_config.provider_catalog_id
+                        model_id = effective_config.provider_model_id
+                    model_alias = make_model_alias(catalog_id, model_id)
+                    catalog_model_update["model"] = model_alias
                     litellm_env = {
                         "ANTHROPIC_BASE_URL": base_url,
                         "ANTHROPIC_API_KEY": virtual_key,

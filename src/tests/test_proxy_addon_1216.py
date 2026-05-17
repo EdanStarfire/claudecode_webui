@@ -99,6 +99,7 @@ def _make_addon(records: list[dict], allowed: set[str] | None = None):
     f._session_id = "test-1216"
     f._session_token = "test-token"
     f._log_file = None
+    f._routing = {"hostname_rewrites": {}, "virtual_key": None, "model_map": {}, "default_model": None}
     f.logger = MagicMock()
     return f
 
@@ -189,6 +190,7 @@ async def test_issue_1216_request_injects_when_target_hosts_missing():
     f._session_id = "test-1216"
     f._session_token = "test-token"
     f._log_file = None
+    f._routing = {"hostname_rewrites": {}, "virtual_key": None, "model_map": {}, "default_model": None}
     f.logger = MagicMock()
 
     flow = _flow("api.github.com", {"Authorization": f"Bearer {ph}"})
