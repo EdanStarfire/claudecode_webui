@@ -336,16 +336,16 @@ const APP_ITEMS = [
   { to: '/settings/features',      icon: '✳️', label: 'Features',       sectionKey: 'features' },
   { to: '/settings/notifications', icon: '🎵', label: 'Notifications',   sectionKey: 'notifications' },
   { to: '/settings/read-aloud',    icon: '👄', label: 'Read Aloud',      sectionKey: 'read-aloud' },
-  { to: '/settings/mcp-servers',   icon: '🌐', label: 'MCP Servers',     sectionKey: 'mcp-servers' },
   { to: '/settings/pricing',       icon: '💰', label: 'Token Pricing',   sectionKey: 'pricing' },
 ]
 
 const libraryItems = [
-  { to: '/settings/templates',  icon: '📄', label: 'Templates',  sectionKey: 'templates' },
-  { to: '/settings/profiles',   icon: '📋', label: 'Profiles',   sectionKey: 'profiles' },
-  { to: '/settings/secrets',    icon: '🔑', label: 'Secrets',    sectionKey: 'secrets' },
-  { to: '/settings/schedules',  icon: '⏰', label: 'Schedules',  sectionKey: 'schedules' },
-  { to: '/settings/providers',  icon: '🛰',  label: 'Providers',  sectionKey: 'providers' },
+  { to: '/settings/templates',   icon: '📄', label: 'Templates',   sectionKey: 'templates' },
+  { to: '/settings/profiles',    icon: '📋', label: 'Profiles',    sectionKey: 'profiles' },
+  { to: '/settings/secrets',     icon: '🔑', label: 'Secrets',     sectionKey: 'secrets' },
+  { to: '/settings/schedules',   icon: '⏰', label: 'Schedules',   sectionKey: 'schedules' },
+  { to: '/settings/providers',   icon: '🛰',  label: 'Providers',   sectionKey: 'providers' },
+  { to: '/settings/mcp-servers', icon: '🔌', label: 'MCP Servers', sectionKey: 'mcp-servers' },
 ]
 
 const filteredAppItems = computed(() => {

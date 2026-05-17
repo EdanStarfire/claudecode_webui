@@ -54,7 +54,7 @@ import ApplicationFeaturesSection from './sections/ApplicationFeaturesSection.vu
 import ApplicationPricingSection from './sections/ApplicationPricingSection.vue'
 import ApplicationNotifsSection from './sections/ApplicationNotifsSection.vue'
 import ApplicationReadAloudSection from './sections/ApplicationReadAloudSection.vue'
-import ApplicationMcpSection from './sections/ApplicationMcpSection.vue'
+import LibraryMcpServersSection from './sections/LibraryMcpServersSection.vue'
 import LibraryProvidersSection from './sections/LibraryProvidersSection.vue'
 import LibraryTemplatesSection from './sections/LibraryTemplatesSection.vue'
 import LibraryProfilesSection from './sections/LibraryProfilesSection.vue'
@@ -106,7 +106,7 @@ const sectionComponent = computed(() => {
     case '/settings/pricing':       return ApplicationPricingSection
     case '/settings/notifications': return ApplicationNotifsSection
     case '/settings/read-aloud':    return ApplicationReadAloudSection
-    case '/settings/mcp-servers':   return ApplicationMcpSection
+    case '/settings/mcp-servers':   return LibraryMcpServersSection
     case '/settings/providers':     return LibraryProvidersSection
     case '/settings/templates':     return LibraryTemplatesSection
     case '/settings/profiles':      return LibraryProfilesSection
