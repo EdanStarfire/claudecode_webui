@@ -250,6 +250,14 @@ class TemplateUpdateRequest(BaseModel):
     extra_env: dict[str, str] | None = None
     provider_catalog_id: str | None = None
     provider_model_id: str | None = None
+    # Per-tier model routing (issue #1469)
+    provider_haiku_catalog_id: str | None = None
+    provider_haiku_model_id: str | None = None
+    provider_sonnet_catalog_id: str | None = None
+    provider_sonnet_model_id: str | None = None
+    provider_opus_catalog_id: str | None = None
+    provider_opus_model_id: str | None = None
+    provider_default_tier: str | None = None
     # Composable profiles (issue #1062)
     profile_ids: dict[str, str] | None = None
     # Issue #1230: full config dict (preferred over flat fields above)

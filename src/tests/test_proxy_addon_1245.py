@@ -148,6 +148,7 @@ def _make_addon(records: list[dict], allowed: set[str] | None = None):
     f._session_id = "test-1245"
     f._session_token = "test-token"
     f._log_file = None
+    f._routing = {"hostname_rewrites": {}, "virtual_key": None, "model_map": {}, "default_model": None}
     f.logger = MagicMock()
     return f
 

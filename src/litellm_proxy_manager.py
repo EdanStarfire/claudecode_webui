@@ -18,6 +18,10 @@ legion_logger = get_logger("legion", category="LITELLM_PROXY")
 MODEL_ALIAS_SEP = "--"
 
 
+def make_model_alias(catalog_id: str, model_id: str) -> str:
+    return f"{catalog_id}{MODEL_ALIAS_SEP}{model_id}"
+
+
 class LiteLLMProxyManager:
     """
     Lifecycle manager for the embedded LiteLLM ASGI proxy.
@@ -132,9 +136,25 @@ class LiteLLMProxyManager:
 
     # ── Routing Registry ──────────────────────────────────────────────────────
 
-    def register_session_routing(self, session_id: str, virtual_key: str, base_url: str) -> None:
-        """Store virtual key + base URL for a session (used by Docker delivery, Phase 3)."""
-        self._routing_registry[session_id] = {"virtual_key": virtual_key, "base_url": base_url}
+    def register_session_routing(
+        self,
+        session_id: str,
+        virtual_key: str,
+        base_url: str,
+        model_map: dict[str, str] | None = None,
+        default_model: str | None = None,
+    ) -> None:
+        """Store virtual key + base URL for a session (used by Docker delivery, Phase 3).
+
+        model_map: optional tier→alias dict (issue #1469 per-tier routing).
+        default_model: optional LiteLLM alias to rewrite unmatched body model fields.
+        """
+        self._routing_registry[session_id] = {
+            "virtual_key": virtual_key,
+            "base_url": base_url,
+            "model_map": model_map or {},
+            "default_model": default_model,
+        }
 
     def unregister_session_routing(self, session_id: str) -> None:
         """Remove routing entry for session_id (no-op if absent)."""
@@ -175,7 +195,7 @@ class LiteLLMProxyManager:
         for entry in entries:
             resolved_params = await self._catalog_manager.resolve_params(entry, self._vault)
             for model in entry.get("models", []):
-                model_name = f"{entry['id']}{MODEL_ALIAS_SEP}{model['id']}"
+                model_name = make_model_alias(entry['id'], model['id'])
                 model_list.append({
                     "model_name": model_name,
                     "litellm_params": {

@@ -156,6 +156,7 @@
         v-else-if="field.widget === 'provider-select'"
         :value="value"
         :disabled="isDisabled"
+        :linked-key="field.linkedKey || 'provider_model_id'"
         @update:value="$emit('update:value', $event)"
         @update:linked="$emit('update:linked', $event)"
       />
@@ -163,7 +164,7 @@
       <ProviderModelSelectWidget
         v-else-if="field.widget === 'provider-model-select'"
         :value="value"
-        :provider-id="config.provider_catalog_id"
+        :provider-id="config[field.providerIdFrom || 'provider_catalog_id']"
         :disabled="isDisabled"
         @update:value="$emit('update:value', $event)"
       />

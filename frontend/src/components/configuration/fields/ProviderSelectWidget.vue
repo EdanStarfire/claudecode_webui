@@ -29,6 +29,7 @@ import { useProviderCatalogStore } from '@/stores/providerCatalog'
 const props = defineProps({
   value: { type: String, default: null },
   disabled: { type: Boolean, default: false },
+  linkedKey: { type: String, default: 'provider_model_id' },
 })
 
 const emit = defineEmits(['update:value', 'update:linked'])
@@ -41,7 +42,7 @@ function handleChange(event) {
   const newId = event.target.value || null
   emit('update:value', newId)
   if (newId !== props.value) {
-    emit('update:linked', { key: 'provider_model_id', value: null })
+    emit('update:linked', { key: props.linkedKey, value: null })
   }
 }
 

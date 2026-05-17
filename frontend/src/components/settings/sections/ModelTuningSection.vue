@@ -21,6 +21,9 @@
     </div>
 
     <div v-else class="section-body">
+      <div v-if="tierValidationError" class="alert alert-warning py-1 px-2 mb-2" style="font-size:12px;">
+        {{ tierValidationError }}
+      </div>
       <FieldSection
         :fields="FIELD_SCHEMAS.model"
         :config="mergedConfig"
@@ -123,12 +126,28 @@ const profileBase = computed(() => {
   return {}
 })
 
+const _TIER_FIELDS = [
+  'provider_haiku_catalog_id', 'provider_haiku_model_id',
+  'provider_sonnet_catalog_id', 'provider_sonnet_model_id',
+  'provider_opus_catalog_id', 'provider_opus_model_id',
+  'provider_default_tier',
+]
+
+function _allTierFieldsSet(cfg) {
+  return _TIER_FIELDS.every(f => Boolean(cfg[f]))
+}
+
 const mergedConfig = computed(() => {
   const draftEntries = Object.entries(draft.value || {})
   const resetKeys = new Set(draftEntries.filter(([, v]) => v === FIELD_RESET).map(([k]) => k))
   const cleanDraft = Object.fromEntries(draftEntries.filter(([, v]) => v !== FIELD_RESET))
   const cleanBase = Object.fromEntries(Object.entries(baseConfig.value || {}).filter(([k]) => !resetKeys.has(k)))
-  return { ...profileBase.value, ...templateBase.value, ...cleanBase, ...cleanDraft }
+  const merged = { ...profileBase.value, ...templateBase.value, ...cleanBase, ...cleanDraft }
+  // Derive pseudo-field from actual tier fields unless the draft has explicitly set it
+  if (!('provider_tier_routing_enabled' in cleanDraft)) {
+    merged.provider_tier_routing_enabled = _allTierFieldsSet(merged)
+  }
+  return merged
 })
 const isDirty = computed(() => settingsStore.dirtyAreas.has(areaKey.value))
 const saving  = ref(false)
@@ -177,13 +196,34 @@ function handleLinkedField(linked) {
   settingsStore.setField(areaKey.value, linked.key, linked.value)
 }
 
+const tierValidationError = ref(null)
+
 async function handleSave() {
   if (!entity.value || !isDirty.value) return
   saving.value = true
+  tierValidationError.value = null
   try {
     const d = { ...draft.value }
     const keysToDelete = Object.keys(d).filter(k => d[k] === FIELD_RESET)
     for (const k of keysToDelete) delete d[k]
+
+    // Handle provider_tier_routing_enabled pseudo-field (never persisted)
+    const tierEnabled = mergedConfig.value.provider_tier_routing_enabled
+    delete d.provider_tier_routing_enabled
+    if (tierEnabled) {
+      const current = { ...(entity.value?.config || entity.value?.session_config || {}), ...d }
+      if (_TIER_FIELDS.some(f => !current[f])) {
+        tierValidationError.value = 'All 3 tier rows must be configured and a default tier selected.'
+        return
+      }
+    } else {
+      // Tier toggle off: clear all 7 tier fields from saved config
+      for (const f of _TIER_FIELDS) {
+        d[f] = null
+        keysToDelete.push(f)
+      }
+    }
+
     if (isScheduleMode.value) {
       const newSessionConfig = { ...(entity.value?.session_config || {}), ...d }
       for (const k of keysToDelete) delete newSessionConfig[k]

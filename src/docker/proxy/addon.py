@@ -48,6 +48,10 @@ _BINARY_CONTENT_TYPES = frozenset({
     "application/gzip", "application/pdf",
 })
 
+# Matches haiku/sonnet/opus as whole words (case-insensitive). Word boundaries on hyphens
+# ensure "opusplan" does NOT match "opus" and "claude-opus-4-7" does match.
+_TIER_REGEX = re.compile(r"\b(haiku|sonnet|opus)\b", re.IGNORECASE)
+
 
 # ---------------------------------------------------------------------------
 # Injection helpers — one function per secret type
@@ -492,7 +496,12 @@ class ProxyAddon:
         self._session_id: str = ""
         self._records: dict[str, dict] = {}        # placeholder → full record dict
         self._refresh_locks: dict[str, asyncio.Lock] = {}
-        self._routing: dict = {"hostname_rewrites": {}, "virtual_key": None}
+        self._routing: dict = {
+            "hostname_rewrites": {},
+            "virtual_key": None,
+            "model_map": {},
+            "default_model": None,
+        }
         self.allowed_domains: set[str] = set()
         self.logger = logging.getLogger("proxy.addon")
         self._log_file = None
@@ -539,7 +548,7 @@ class ProxyAddon:
             ctx.log.warn(
                 f"[proxy] Failed to fetch routing for session {self._session_id}: {exc}"
             )
-            self._routing = {"hostname_rewrites": {}, "virtual_key": None}
+            self._routing = {"hostname_rewrites": {}, "virtual_key": None, "model_map": {}, "default_model": None}
 
         self._write_startup_log()
 
@@ -663,6 +672,9 @@ class ProxyAddon:
                 continue
             inject_fn(flow, record, ph)
 
+        if flow.metadata.get("routed_via_litellm"):
+            self._rewrite_model_in_body(flow)
+
     def responseheaders(self, flow: http.HTTPFlow) -> None:
         """Install per-chunk scrub filter for streamed responses (#1400).
 
@@ -688,6 +700,41 @@ class ProxyAddon:
             flow.response.stream = _make_unbuffered_chunk_filter(response_pairs)
         else:
             flow.response.stream = _make_chunk_filter(response_pairs)
+
+    def _rewrite_model_in_body(self, flow: http.HTTPFlow) -> None:
+        """Rewrite top-level `model` field in JSON body to LiteLLM alias.
+
+        Routes by tier when model_map is populated; rewrites to default_model otherwise.
+        No-op when body is None (streaming) or encoded (gzip) — same limitation as
+        credential injection.
+        """
+        default_model = self._routing.get("default_model")
+        if not default_model:
+            return
+        if flow.request.content is None:
+            return
+        if _is_encoded_request(flow):
+            return
+        try:
+            body = json.loads(flow.request.content)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return
+        if not isinstance(body, dict) or "model" not in body:
+            return
+        original = body["model"]
+        model_map = self._routing.get("model_map") or {}
+        if model_map:
+            match = _TIER_REGEX.search(str(original))
+            tier = match.group(1).lower() if match else None
+            rewritten = (model_map.get(tier) if tier else None) or model_map.get("default", default_model)
+        else:
+            rewritten = default_model
+        if not rewritten or rewritten == original:
+            return
+        body["model"] = rewritten
+        flow.request.content = json.dumps(body).encode()
+        flow.metadata["model_rewrite"] = (original, rewritten)
+        ctx.log.info(f"[proxy] model rewrite: {original} -> {rewritten}")
 
     async def response(self, flow: http.HTTPFlow) -> None:
         if flow.metadata.get("denied"):

@@ -86,6 +86,15 @@ class SessionConfig(BaseModel):
     provider_catalog_id: str | None = None
     provider_model_id: str | None = None
 
+    # Per-tier model routing (issue #1469) — all 6 id fields + default required together
+    provider_haiku_catalog_id: str | None = None
+    provider_haiku_model_id: str | None = None
+    provider_sonnet_catalog_id: str | None = None
+    provider_sonnet_model_id: str | None = None
+    provider_opus_catalog_id: str | None = None
+    provider_opus_model_id: str | None = None
+    provider_default_tier: str | None = None  # "haiku" | "sonnet" | "opus"
+
 
 # Fields that exist on both MinionTemplate and SessionConfig (the mergeable set).
 # Excludes identity fields (template_id, name, role, description, capabilities,
@@ -105,6 +114,10 @@ CONFIG_FIELDS: set[str] = {
     "mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config",
     "bare_mode", "env_scrub_enabled", "extra_env",
     "provider_catalog_id", "provider_model_id",
+    "provider_haiku_catalog_id", "provider_haiku_model_id",
+    "provider_sonnet_catalog_id", "provider_sonnet_model_id",
+    "provider_opus_catalog_id", "provider_opus_model_id",
+    "provider_default_tier",
 }
 
 # Default values for all CONFIG_FIELDS — derived from a fresh SessionConfig instance.

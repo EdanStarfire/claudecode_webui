@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends
 from ..exception_handlers import handle_exceptions
 from .secrets import _build_session_token_auth
 
-_EMPTY_ROUTING = {"hostname_rewrites": {}, "virtual_key": None}
+_EMPTY_ROUTING = {"hostname_rewrites": {}, "virtual_key": None, "model_map": {}, "default_model": None}
 
 
 def build_router(webui) -> APIRouter:
@@ -40,6 +40,8 @@ def build_router(webui) -> APIRouter:
         return {
             "hostname_rewrites": proxy_mgr.build_hostname_rewrites(),
             "virtual_key": routing["virtual_key"],
+            "model_map": routing.get("model_map", {}),
+            "default_model": routing.get("default_model"),
         }
 
     return router
