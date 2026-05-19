@@ -383,11 +383,20 @@ class PermissionResponseRequest(BaseModel):
     updated_input: dict | None = None
 
 
+class ProviderModelEntryRequest(BaseModel):
+    id: str
+    litellm_model: str
+    drop_params: bool = False
+
+    class Config:
+        extra = "allow"
+
+
 class ProviderCatalogEntryRequest(BaseModel):
     id: str
     provider_type: str
     litellm_params_template: dict[str, str] = Field(default_factory=dict)
-    models: list[dict] = Field(default_factory=list)
+    models: list[ProviderModelEntryRequest] = Field(default_factory=list)
 
     class Config:
         extra = "allow"  # forward-compat for new provider-specific fields

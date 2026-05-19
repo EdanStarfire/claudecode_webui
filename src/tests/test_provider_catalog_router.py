@@ -321,3 +321,70 @@ async def test_status_last_error_populated():
 
     assert resp.status_code == 200
     assert resp.json()["last_error"] == "ValueError: Secret 'x' not found"
+
+
+# ---------------------------------------------------------------------------
+# drop_params round-trip (issue #1476)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_entry_with_drop_params_true_passes_through():
+    """POST with drop_params=true on a model sends it to the catalog manager."""
+    catalog = _make_catalog_mgr()
+    webui = _make_webui(catalog_mgr=catalog)
+
+    body = {
+        "id": "prov-b",
+        "provider_type": "openai",
+        "litellm_params_template": {},
+        "models": [{"id": "gpt4", "litellm_model": "openai/gpt-4", "drop_params": True}],
+    }
+
+    async with await _client(webui) as client:
+        resp = await client.post("/api/provider-catalog", json=body)
+
+    assert resp.status_code == 201
+    call_data = catalog.create_entry.call_args[0][0]
+    assert call_data["models"][0]["drop_params"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_entries_drop_params_returned_in_response():
+    """GET returns drop_params=true when the manager includes it in an entry."""
+    entry_with_drop = {
+        "id": "prov-c",
+        "provider_type": "openai",
+        "litellm_params_template": {},
+        "models": [{"id": "m1", "litellm_model": "openai/gpt-4", "drop_params": True}],
+    }
+    catalog = _make_catalog_mgr(entries=[entry_with_drop])
+    webui = _make_webui(catalog_mgr=catalog)
+
+    async with await _client(webui) as client:
+        resp = await client.get("/api/provider-catalog")
+
+    assert resp.status_code == 200
+    model = resp.json()["entries"][0]["models"][0]
+    assert model["drop_params"] is True
+
+
+@pytest.mark.asyncio
+async def test_create_entry_model_without_drop_params_defaults_false():
+    """POST with a model missing drop_params → catalog manager receives drop_params=False."""
+    catalog = _make_catalog_mgr()
+    webui = _make_webui(catalog_mgr=catalog)
+
+    body = {
+        "id": "prov-d",
+        "provider_type": "anthropic",
+        "litellm_params_template": {},
+        "models": [{"id": "m1", "litellm_model": "anthropic/claude-3"}],
+    }
+
+    async with await _client(webui) as client:
+        resp = await client.post("/api/provider-catalog", json=body)
+
+    assert resp.status_code == 201
+    call_data = catalog.create_entry.call_args[0][0]
+    assert call_data["models"][0]["drop_params"] is False

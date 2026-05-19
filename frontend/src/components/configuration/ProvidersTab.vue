@@ -170,6 +170,10 @@
                 <div v-if="modelFormErrors.litellm_model" class="field-error">{{ modelFormErrors.litellm_model }}</div>
               </div>
             </div>
+            <div class="form-check mt-1">
+              <input type="checkbox" v-model="modelForm.drop_params" class="form-check-input" id="model-drop-params-check" />
+              <label class="form-check-label" for="model-drop-params-check">Drop Params</label>
+            </div>
             <div v-if="modelFormError" class="form-error-banner">{{ modelFormError }}</div>
             <div class="form-actions">
               <button class="btn-save" :disabled="savingModel" @click="saveEditModel(entry)">
@@ -197,6 +201,7 @@
           <div v-else class="model-row">
             <span class="model-name">{{ model.id }}</span>
             <span class="model-litellm font-monospace">{{ model.litellm_model }}</span>
+            <span v-if="model.drop_params" class="badge bg-secondary ms-1">drop_params</span>
             <div class="row-actions">
               <button
                 class="row-action-btn"
@@ -234,6 +239,12 @@
               />
               <div v-if="modelFormErrors.litellm_model" class="field-error">{{ modelFormErrors.litellm_model }}</div>
             </div>
+          </div>
+          <div class="form-field form-field--check">
+            <label class="check-label">
+              <input type="checkbox" v-model="modelForm.drop_params" class="field-checkbox" />
+              Drop Params
+            </label>
           </div>
           <div v-if="modelFormError" class="form-error-banner">{{ modelFormError }}</div>
           <div class="form-actions">
@@ -303,7 +314,7 @@ const editProviderFormErrors = reactive({ provider_type: '' })
 const editProviderFormError = ref(null)
 
 // ── Model form (shared add/edit) ──────────────────────────────────────────
-const modelForm = reactive({ id: '', litellm_model: '' })
+const modelForm = reactive({ id: '', litellm_model: '', drop_params: false })
 const modelFormErrors = reactive({ id: '', litellm_model: '' })
 const modelFormError = ref(null)
 
@@ -462,7 +473,7 @@ async function executeDeleteProvider(entryId) {
 // ── Add Model ─────────────────────────────────────────────────────────────
 function startAddModel(providerId) {
   closeAllForms()
-  Object.assign(modelForm, { id: '', litellm_model: '' })
+  Object.assign(modelForm, { id: '', litellm_model: '', drop_params: false })
   Object.assign(modelFormErrors, { id: '', litellm_model: '' })
   modelFormError.value = null
   addingModelForProvider.value = providerId
@@ -477,6 +488,7 @@ async function saveNewModel(entry) {
     const newModel = {
       id: modelForm.id.trim(),
       litellm_model: modelForm.litellm_model.trim(),
+      drop_params: modelForm.drop_params,
     }
     await store.updateEntry(entry.id, entryPayload(entry, { models: [...entry.models, newModel] }))
     addingModelForProvider.value = null
@@ -490,7 +502,7 @@ async function saveNewModel(entry) {
 // ── Edit Model ────────────────────────────────────────────────────────────
 function startEditModel(providerId, idx, model) {
   closeAllForms()
-  Object.assign(modelForm, { id: model.id, litellm_model: model.litellm_model })
+  Object.assign(modelForm, { id: model.id, litellm_model: model.litellm_model, drop_params: model.drop_params ?? false })
   Object.assign(modelFormErrors, { id: '', litellm_model: '' })
   modelFormError.value = null
   editingModelKey.value = { providerId, idx }
@@ -508,7 +520,7 @@ async function saveEditModel(entry) {
     const { idx } = editingModelKey.value
     const updatedModels = entry.models.map((m, i) =>
       i === idx
-        ? { ...m, litellm_model: modelForm.litellm_model.trim() }
+        ? { ...m, litellm_model: modelForm.litellm_model.trim(), drop_params: modelForm.drop_params }
         : m
     )
     await store.updateEntry(entry.id, entryPayload(entry, { models: updatedModels }))
