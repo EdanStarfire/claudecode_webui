@@ -7,13 +7,13 @@ Agent-oriented guide to the Claude WebUI frontend. For backend architecture, see
 | Metric | Value |
 |--------|-------|
 | Framework | Vue 3.4 + Composition API |
-| State | Pinia 2.1 (13 stores) |
+| State | Pinia 2.1 (23 stores) |
 | Build | Vite 7.1 |
 | Router | Vue Router 4 (hash history) |
 | CSS | Bootstrap 5.3 + scoped component styles |
-| Components | 99+ `.vue` files |
-| Composables | 9 |
-| Utils | 5 |
+| Components | 152 `.vue` files |
+| Composables | 17 |
+| Utils | 14 |
 
 ## Directory Structure
 
@@ -22,24 +22,29 @@ frontend/
 ├── src/
 │   ├── main.js                    # App entry: createApp, Pinia, Router
 │   ├── App.vue                    # Root component
-│   ├── router/index.js            # 5 routes (home, project, session, session/archive, archive/agent)
-│   ├── stores/                    # 13 Pinia stores
-│   ├── composables/               # 9 reusable composition functions
-│   ├── utils/                     # 5 utility modules
+│   ├── router/index.js            # 20 routes (5 main + 15 settings/* routes)
+│   ├── stores/                    # 23 Pinia stores
+│   ├── composables/               # 17 reusable composition functions
+│   ├── utils/                     # 14 utility modules
 │   ├── components/
+│   │   ├── analytics/     (6)     # AnalyticsView, filters, time-series chart, session table, summary cards
+│   │   ├── audit/         (8)     # AuditView, AuditStreamTab, AuditTurnsTab, row components
+│   │   ├── common/        (9)     # AlertBanner, AttachmentChip, AuthPrompt, CopyButton, DiffFullView, etc.
+│   │   ├── configuration/ (9)     # McpConfigTab, McpServerPanel, FeaturesTab, ProvidersTab, SecretsTab, etc.
+│   │   ├── configuration/fields/ (14)  # FieldRenderer, widget components (Toggle, Text, Range, etc.)
+│   │   ├── configuration/providers/ (3) # LiteLLMParamsEditor, ProviderPendingBanner, ProviderStatusCard
 │   │   ├── layout/        (13)    # Navigation: ProjectPillBar, AgentStrip, AgentChip, DeletedAgentsModal, etc.
-│   │   ├── configuration/ (12)    # ConfigurationModal, McpConfigTab, McpServerPanel, FeaturesTab, ReadAloudTab, etc.
-│   │   ├── project/       (4)     # ProjectOverview, ProjectCreateModal, etc.
-│   │   ├── session/       (7)     # SessionView, SessionInfoBar, McpServerDetail, modals, etc.
-│   │   ├── messages/      (12)    # MessageList, MessageItem, InputArea, SubagentTimeline, TruncationBanner, etc.
-│   │   ├── messages/tools/ (6)    # ActivityTimeline, PermissionPrompt, TimelineNode/Detail/Segment/Overflow
-│   │   ├── tools/         (22)    # Tool handlers: Read, Edit, Bash, Agent, SendComm, Task*, Skill, etc.
 │   │   ├── legion/        (2)     # MinionTreeNode, MinionViewModal
-│   │   ├── header/        (1)     # TimelineHeader
-│   │   ├── statusbar/     (3)     # SessionStatusBar, TimelineStatusBar, RateLimitBadge
-│   │   ├── schedules/     (2)     # SchedulePanel, ScheduleCreateModal
-│   │   ├── tasks/         (6)     # TaskListPanel, TaskItem, DiffPanel, ResourceGallery, QueueSection, etc.
-│   │   └── common/        (6)     # FolderBrowserModal, CommCard, DiffFullView, ResourceFullView, AttachmentChip, AuthPrompt
+│   │   ├── messages/      (13)    # MessageList, MessageItem, InputArea, SubagentTimeline, TruncationBanner, etc.
+│   │   ├── messages/tools/ (5)    # ActivityTimeline, PermissionPrompt, TimelineNode/Detail/Segment
+│   │   ├── project/       (3)     # ProjectOverview, ProjectCreateModal, ProjectEditModal
+│   │   ├── schedules/     (1)     # ScheduleCreateModal
+│   │   ├── session/       (7)     # SessionView, SessionCostBadge, McpServerDetail, modals, etc.
+│   │   ├── settings/      (10)    # SettingsLayout, SettingsSidebar, SettingsToolbar, SourceMarker, etc.
+│   │   ├── settings/sections/ (18) # Per-area settings sections (General, Model, MCP, Isolation, etc.)
+│   │   ├── statusbar/     (2)     # SessionStatusBar, RateLimitBadge
+│   │   ├── tasks/         (7)     # TaskListPanel, DiffPanel, EditHistoryPanel, ProxyPanel, ResourceGallery, etc.
+│   │   └── tools/         (22)    # Tool handlers: Read, Edit, Bash, Agent, SendComm, Task*, Skill, etc.
 │   └── assets/
 │       ├── styles.css             # Global styles
 │       └── tool-theme.css         # Tool handler CSS variables
@@ -60,7 +65,7 @@ Hash-based routing (`createWebHashHistory`):
 | `/session/:sessionId/archive/:archiveId` | `SessionView` | Archived session (read-only) |
 | `/archive/agent/:agentId/:archiveId` | `SessionView` | Deleted agent archive (read-only) |
 
-## Pinia Stores (13)
+## Pinia Stores (23)
 
 ### Core Stores (6)
 
@@ -93,7 +98,7 @@ Hash-based routing (`createWebHashHistory`):
 - **Persistence**: localStorage with `webui-sidebar-` prefix
 - **Key actions**: `toggleRightSidebar()`, `setBrowsingProject()`, `toggleStack()`, `showModal()`, `hideModal()`, `showRestartModal()`
 
-### Specialized Stores (8)
+### Queue, Schedule & Resource Stores (3)
 
 #### `queue.js` — Message queue per session
 - **State**: `queuesBySession` (Map), `pausedBySession` (Map)
@@ -107,6 +112,8 @@ Hash-based routing (`createWebHashHistory`):
 - **State**: `resourcesBySession` (Map), `fullViewOpen`, `currentResourceIndex`, `textContentCache` (Map)
 - **Key actions**: `loadResources()`, `addResource()`, `removeResource()`, `openFullView()`, `fetchTextContent()`
 - **Helpers**: `isImageResource()`, `isTextResource()`, `getResourceIcon()`, `getResourceUrl()`
+
+### Diff, Task & MCP Stores (4)
 
 #### `diff.js` — Git diff per session
 - **State**: `diffBySession` (Map), `currentMode` ('total'|'commits'), `fullViewOpen`, `fileDiffCache` (Map)
@@ -123,7 +130,45 @@ Hash-based routing (`createWebHashHistory`):
 #### `mcpConfig.js` — MCP server configuration CRUD
 - Persistent MCP server definitions (STDIO/SSE/HTTP, OAuth 2.1, enable/disable)
 
-## Composables (9)
+### Settings & Configuration Stores (4)
+
+#### `settings.js` — Per-area settings draft management
+- Per-area in-memory drafts, dirty area tracking, pending navigation state, and sidebar UI state for the settings editor
+
+#### `profile.js` — Configuration profile management
+- Manages configuration profiles (the base layer in the 3-tier Profile → Template → Session inheritance chain)
+
+#### `providerCatalog.js` — Provider model catalog
+- Provider model catalog entries and provider status including pending changes and restart tracking
+
+#### `secrets.js` — Host-level secrets vault
+- Secrets CRUD with backend status, OAuth2 token health tracking, and refresh event handlers
+
+### Analytics, Audit & Usage Stores (3)
+
+#### `analytics.js` — Analytics view state
+- Filters, time range presets, time series data, and bucket-size calculations for the analytics dashboard
+
+#### `audit.js` — Audit log events
+- Audit event storage with filtering by time, session, project, and event type; loads stream and turns data
+
+#### `usage.js` — API usage tracking
+- API usage aggregates per session and current session usage statistics
+
+### Miscellaneous Stores (3)
+
+#### `editHistory.js` — Edit history per session
+- Edit history tracking with per-field expanded states, terminal tool deduplication, and debounced loads
+
+#### `proxy.js` — Credential vault and proxy state
+- Credential vault, per-session proxy status, and proxy access logs (HTTP and DNS query tracking)
+
+#### `template.js` — Session configuration templates
+- Reusable session configuration templates with CRUD operations and template listing
+
+## Composables (17)
+
+### Tool Composables (2)
 
 #### `useToolResult.js` — Tool result extraction
 - **Input**: `toolCallRef` (reactive)
@@ -135,6 +180,8 @@ Hash-based routing (`createWebHashHistory`):
 - **Returns**: `effectiveStatus`, `isOrphaned`, `orphanedInfo`, `statusColor`, `hasError`
 - **Helpers**: `getEffectiveStatusForTool()`, `getColorForStatus()` (non-reactive versions)
 - **Used by**: TimelineNode, ToolCallCard, tool handlers
+
+### UI Composables (5)
 
 #### `useAgentColor.js` — Per-agent color assignment
 - Stable deterministic color per agent/session ID for visual differentiation
@@ -148,16 +195,46 @@ Hash-based routing (`createWebHashHistory`):
 #### `useMermaid.js` — Mermaid diagram rendering
 - Detects and renders Mermaid code blocks in agent messages
 
+#### `useSessionState.js` — Session state colors
+- Exports `STATE_COLOR_MAP` for session display states and shared colors for session status visualization
+
+### Notification & Media Composables (2)
+
 #### `useNotifications.js` — Sound/browser notifications
 - Plays audio cues (permission, completion, error) and fires browser notifications
-
-#### `useResourceImages.js` — Resource image helpers
-- Resolves resource URLs, handles image load errors, provides thumbnail logic
 
 #### `useTTSReadAloud.js` — Text-to-speech / read-aloud
 - Web Speech API integration with voice selection and queue management
 
-## Utils (5)
+### Resource Composable (1)
+
+#### `useResourceImages.js` — Resource image helpers
+- Resolves resource URLs, handles image load errors, provides thumbnail logic
+
+### Settings / Config Composables (7)
+
+#### `fieldResetSentinel.js` — Field reset sentinel
+- Exports `FIELD_RESET` sentinel object for marking fields to be reset to inherited/default values in drafts
+
+#### `useEditSectionFieldStates.js` — Per-field source states for edit sections
+- Computes per-field source states (S|T|P|EMPTY) for template/profile/session edit sections to drive SourceMarker badges
+
+#### `useEditSectionReset.js` — Reset field to inherited value
+- Stages "reset field to inherited/default" operations in drafts for template/profile edit sections
+
+#### `useFieldState.js` — Single-field resolution metadata
+- Per-field resolution metadata for the 3-tier config chain (session > template > profile > defaults)
+
+#### `useFieldStates.js` — Section-level source-marker computation
+- Computes source-marker state for every field in a settings section across session/template/profile layers
+
+#### `useProfileSelector.js` — Profile selector dropdown logic
+- Shared logic for profile selector dropdowns with area-scoped profile listing and updating
+
+#### `useScheduleSectionSave.js` — Schedule section save
+- Async save function that performs dual-PATCH for ephemeral schedule sections and bound agent session
+
+## Utils (14)
 
 #### `api.js` — HTTP client
 - **Functions**: `apiGet()`, `apiPost()`, `apiPut()`, `apiDelete()`, `apiPatch()`
@@ -180,9 +257,118 @@ Hash-based routing (`createWebHashHistory`):
 #### `templateVariables.js` — Template variable substitution
 - Resolves `{{variable}}` placeholders in session prompts and names
 
+#### `agentSort.js` — Agent sorting helpers
+- Agent comparison functions for alphabetical and creation-order sorting with numeric-aware locale comparison
+
+#### `analytics.js` — Analytics utility helpers
+- CSS variable reading, bucket-size selection, and time range preset handling for the analytics view
+
+#### `auditColors.js` — Audit event type colors
+- Audit event type definitions and helper functions for mapping event types to Bootstrap CSS classes
+
+#### `configFields.js` — Configuration field definitions
+- Mirrors backend `CONFIG_FIELDS` with field definitions and profile areas; single source of truth for frontend field resolution
+
+#### `diffRender.js` — Diff rendering
+- Builds parsed diff lines from old/new strings using the diff library; returns added/removed counts and structured line objects
+
+#### `hierarchyUtils.js` — Tree traversal utilities
+- Depth-first traversal utilities for walking and flattening hierarchical node structures
+
+#### `profileAreas.js` — Profile area key constants
+- Profile area key constants (model, permissions, system_prompt, mcp, isolation, features); mirrors backend `PROFILE_AREAS`
+
+#### `sourceCascade.js` — Config cascade resolution
+- Resolves the source of a field value in the S→T→P→EMPTY cascade (Session > Template > Profile > Empty)
+
+#### `toolConstants.js` — Tool-related constants
+- Constants for common tools, denied tools, and tool categorization
+
 ## Component Organization
 
+### Analytics (`analytics/`) — 6 components
+
+| Component | Purpose |
+|-----------|---------|
+| `AnalyticsView` | Top-level analytics page container |
+| `AnalyticsFilters` | Time range and filter controls |
+| `AnalyticsTimeSeriesChart` | Token/cost time-series chart |
+| `AnalyticsSummaryCards` | Aggregate metric cards |
+| `AnalyticsSessionTable` | Per-session usage breakdown table |
+| `AnalyticsEmptyState` | Empty state when no analytics data |
+
+### Audit (`audit/`) — 8 components
+
+| Component | Purpose |
+|-----------|---------|
+| `AuditView` | Top-level audit log page container |
+| `AuditFilterBar` | Filter controls (time, session, project, event type) |
+| `AuditStreamTab` | Raw event stream tab |
+| `AuditTurnsTab` | Conversation turns tab |
+| `TurnCard` | Individual conversation turn card |
+| `CommRow` | Communication event row |
+| `EventRow` | Generic audit event row |
+| `LifecycleRow` | Session lifecycle event row |
+
+### Common (`common/`) — 9 components
+
+| Component | Purpose |
+|-----------|---------|
+| `AlertBanner` | Dismissible alert/notification banner |
+| `AttachmentChip` | File attachment chip/badge |
+| `AuthPrompt` | Authentication token entry prompt |
+| `CopyButton` | Click-to-copy button with feedback |
+| `DiffFullView` | Full-screen diff viewer |
+| `ExportPdfButton` | PDF export trigger button |
+| `FolderBrowserModal` | Directory selection dialog |
+| `MermaidFullView` | Full-screen Mermaid diagram viewer |
+| `ResourceFullView` | Full-screen resource viewer |
+
+### Configuration (`configuration/`) — 9 components
+
+| Component | Purpose |
+|-----------|---------|
+| `FeaturesTab` | Feature flags and experimental options |
+| `McpConfigTab` | MCP server list and management |
+| `McpServerPanel` | Per-server configuration panel |
+| `McpServerRow` | Individual server row in list |
+| `NotificationsTab` | Sound/browser notification preferences |
+| `PricingTab` | Model pricing reference |
+| `ProvidersTab` | LiteLLM provider configuration |
+| `ReadAloudTab` | TTS voice selection and settings |
+| `SecretsTab` | Secrets vault management |
+
+### Configuration Fields (`configuration/fields/`) — 14 components
+
+Reusable field widgets consumed by `FieldRenderer` in settings sections:
+
+| Component | Purpose |
+|-----------|---------|
+| `FieldRenderer` | Dispatches field type to appropriate widget |
+| `FieldSection` | Grouped section container with heading |
+| `ButtonGroupWidget` | Segmented button group for enum fields |
+| `DirListWidget` | Editable directory path list |
+| `MultiSelectField` | Multi-value checkbox/tag selector |
+| `ProviderModelSelectWidget` | Provider + model cascaded selector |
+| `ProviderSelectWidget` | Provider-only selector |
+| `RangeSliderWidget` | Numeric range slider |
+| `SandboxSubSectionWidget` | Sandbox isolation sub-section |
+| `TagInputWidget` | Free-text tag input |
+| `TagListField` | Read-only tag list display |
+| `TextInputWidget` | Single-line text input |
+| `TextareaWidget` | Multi-line textarea |
+| `ToggleWidget` | Boolean toggle switch |
+
+### Configuration Providers (`configuration/providers/`) — 3 components
+
+| Component | Purpose |
+|-----------|---------|
+| `LiteLLMParamsEditor` | LiteLLM extra params key-value editor |
+| `ProviderPendingBanner` | Pending restart warning banner |
+| `ProviderStatusCard` | Provider health and status card |
+
 ### Layout (`layout/`) — 13 components
+
 Navigation architecture follows a horizontal strip pattern:
 
 ```
@@ -207,24 +393,14 @@ ProjectPillBar → AgentStrip → AgentChip / StackedChip
 | `RestartModal` | Server restart confirmation |
 | `DeletedAgentsModal` | Browse and restore archived deleted agents |
 
-### Configuration (`configuration/`) — 12 components
+### Legion (`legion/`) — 2 components
 
 | Component | Purpose |
 |-----------|---------|
-| `ConfigurationModal` | Main configuration dialog with tabs |
-| `GlobalConfigModal` | Global app configuration |
-| `QuickSettingsPanel` | Quick-access settings overlay |
-| `AdvancedSettingsPanel` | Advanced session options |
-| `FeaturesTab` | Feature flags and experimental options |
-| `McpConfigTab` | MCP server list and management |
-| `McpServerPanel` | Per-server configuration panel |
-| `McpServerPicker` | Server selection dropdown |
-| `McpServerRow` | Individual server row in list |
-| `NotificationsTab` | Sound/browser notification preferences |
-| `ReadAloudTab` | TTS voice selection and settings |
-| `PermissionPreviewModal` | Preview effective permissions from settings files |
+| `MinionTreeNode` | Hierarchical minion tree node |
+| `MinionViewModal` | Minion details dialog |
 
-### Messages (`messages/`) — 12 components
+### Messages (`messages/`) — 13 components
 
 | Component | Purpose |
 |-----------|---------|
@@ -237,11 +413,12 @@ ProjectPillBar → AgentStrip → AgentChip / StackedChip
 | `InputArea` | Message textarea with send/interrupt buttons |
 | `AttachmentList` | File attachment display |
 | `CompactionEventGroup` | Context compaction indicator |
+| `DeferredToolBanner` | Banner for deferred/pending tool calls |
 | `SlashCommandDropdown` | Slash command autocomplete |
 | `SubagentTimeline` | Nested subagent activity display |
 | `TruncationBanner` | Context truncation warning banner |
 
-### Activity Timeline (`messages/tools/`) — 6 components
+### Activity Timeline (`messages/tools/`) — 5 components
 
 Horizontal timeline showing tool calls within an assistant message:
 
@@ -252,7 +429,6 @@ Horizontal timeline showing tool calls within an assistant message:
 | `TimelineNode` | Circular dot per tool with status color and pulse animations |
 | `TimelineDetail` | Expanded detail panel with tool handler |
 | `TimelineSegment` | Gradient connecting line between nodes |
-| `TimelineOverflow` | "+N" pill for collapsed earlier tools |
 
 ### Tool Handlers (`tools/`) — 22 components
 
@@ -269,22 +445,18 @@ See [TOOL_HANDLERS.md](../TOOL_HANDLERS.md) for detailed documentation.
 **Other**: `ExitPlanModeToolHandler`, `NotebookEditToolHandler`
 **Shared**: `ToolSuccessMessage` (success banner), `BaseToolHandler` (fallback)
 
-### Right Sidebar Panels (`tasks/`) — 6 components
+### Project (`project/`) — 3 components
 
 | Component | Purpose |
 |-----------|---------|
-| `TaskListPanel` | SDK task list with status tracking |
-| `TaskItem` | Individual task with status icon |
-| `DiffPanel` | Git diff summary with file list |
-| `ResourceGallery` | Resource thumbnails and file icons |
-| `ImageGallery` | Legacy image gallery (deprecated) |
-| `QueueSection` | Message queue display |
+| `ProjectOverview` | Project details view |
+| `ProjectCreateModal` | New project dialog |
+| `ProjectEditModal` | Edit/delete project dialog |
 
-### Schedules (`schedules/`) — 2 components
+### Schedules (`schedules/`) — 1 component
 
 | Component | Purpose |
 |-----------|---------|
-| `SchedulePanel` | Schedule list for a legion |
 | `ScheduleCreateModal` | Create/edit cron schedule |
 
 ### Session (`session/`) — 7 components
@@ -292,47 +464,73 @@ See [TOOL_HANDLERS.md](../TOOL_HANDLERS.md) for detailed documentation.
 | Component | Purpose |
 |-----------|---------|
 | `SessionView` | Main chat interface container |
-| `SessionInfoBar` | Session metadata display |
+| `SessionCostBadge` | Session API cost display badge |
 | `SessionStateStatusLine` | Session state indicator |
 | `SessionInfoModal` | Session details dialog |
 | `SessionManageModal` | Restart/reset/delete actions |
 | `McpServerDetail` | Per-session MCP server detail view |
 | `NoSessionSelected` | Landing page placeholder |
 
-### Project (`project/`) — 4 components
+### Settings (`settings/`) — 10 components
+
+Top-level settings editor shell (SettingsLayout routes to per-area sections in `settings/sections/`):
 
 | Component | Purpose |
 |-----------|---------|
-| `ProjectOverview` | Project details view |
-| `ProjectStatusLine` | Project state summary |
-| `ProjectCreateModal` | New project dialog |
-| `ProjectEditModal` | Edit/delete project dialog |
+| `SettingsLayout` | Settings page container with sidebar and toolbar |
+| `SettingsBreadcrumb` | Breadcrumb navigation within settings |
+| `SettingsSidebar` | Left sidebar with area navigation |
+| `SettingsSidebarGroup` | Collapsible sidebar group |
+| `SettingsSidebarItem` | Individual sidebar navigation item |
+| `SettingsSidebarSearch` | Sidebar search filter |
+| `SettingsToolbar` | Top toolbar with save/cancel actions |
+| `SettingsToolbarChip` | Chip component in toolbar (profile/template selector) |
+| `DirtyGuardModal` | Unsaved changes confirmation dialog |
+| `SourceMarker` | Field source badge (S/T/P indicator) |
 
-### Legion (`legion/`) — 2 components
+### Settings Sections (`settings/sections/`) — 18 components
 
-| Component | Purpose |
-|-----------|---------|
-| `MinionTreeNode` | Hierarchical minion tree node |
-| `MinionViewModal` | Minion details dialog |
+Each component renders a specific configuration area within `SettingsLayout`:
 
-### Status Bar (`statusbar/`) — 3 components
+| Component | Area |
+|-----------|------|
+| `GeneralSection` | Session general settings (name, cwd, model) |
+| `ModelTuningSection` | Model parameters (temperature, thinking, drop_params) |
+| `SystemPromptSection` | System prompt configuration |
+| `ToolsPermissionsSection` | Allowed tools and permission mode |
+| `IsolationSection` | Sandbox isolation settings |
+| `FeaturesSection` | Session feature flags |
+| `McpServersSection` | Per-session MCP server list |
+| `ScheduleGeneralSection` | Schedule general settings |
+| `ApplicationFeaturesSection` | App-wide feature flags |
+| `ApplicationNotifsSection` | App-wide notification settings |
+| `ApplicationPricingSection` | App pricing configuration |
+| `ApplicationReadAloudSection` | App TTS settings |
+| `LibraryMcpServersSection` | Global MCP server library |
+| `LibraryProfilesSection` | Profile library management |
+| `LibraryProvidersSection` | Provider library management |
+| `LibrarySchedulesSection` | Schedule template library |
+| `LibrarySecretsSection` | Secrets library management |
+| `LibraryTemplatesSection` | Session template library |
+
+### Status Bar (`statusbar/`) — 2 components
 
 | Component | Purpose |
 |-----------|---------|
 | `SessionStatusBar` | Session state and processing indicator |
-| `TimelineStatusBar` | Legion timeline status |
 | `RateLimitBadge` | API rate limit indicator |
 
-### Common (`common/`) — 6 components
+### Right Sidebar Panels (`tasks/`) — 7 components
 
 | Component | Purpose |
 |-----------|---------|
-| `FolderBrowserModal` | Directory selection dialog |
-| `CommCard` | Formatted communication card |
-| `DiffFullView` | Full-screen diff viewer |
-| `ResourceFullView` | Full-screen resource viewer |
-| `AttachmentChip` | File attachment chip/badge |
-| `AuthPrompt` | Authentication token entry prompt |
+| `TaskListPanel` | SDK task list with status tracking |
+| `TaskItem` | Individual task with status icon |
+| `DiffPanel` | Git diff summary with file list |
+| `EditHistoryPanel` | Per-session edit history panel |
+| `ProxyPanel` | Proxy access log and credential vault panel |
+| `ResourceGallery` | Resource thumbnails and file icons |
+| `QueueSection` | Message queue display |
 
 ## Naming Conventions
 
