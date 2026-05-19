@@ -24,18 +24,16 @@ from httpx import ASGITransport, AsyncClient
 
 _ENTRY = {
     "id": "prov-a",
-    "display_name": "Provider A",
     "provider_type": "anthropic",
     "litellm_params_template": {"api_key": "${secret:key}"},
-    "models": [{"id": "m1", "display_name": "M1", "litellm_model": "anthropic/claude-sonnet-4-6"}],
+    "models": [{"id": "m1", "litellm_model": "anthropic/claude-sonnet-4-6"}],
 }
 
 _ENTRY_BODY = {
     "id": "prov-a",
-    "display_name": "Provider A",
     "provider_type": "anthropic",
     "litellm_params_template": {"api_key": "${secret:key}"},
-    "models": [{"id": "m1", "display_name": "M1", "litellm_model": "anthropic/claude-sonnet-4-6"}],
+    "models": [{"id": "m1", "litellm_model": "anthropic/claude-sonnet-4-6"}],
 }
 
 
@@ -160,7 +158,7 @@ async def test_create_entry_422_on_missing_required_field():
     async with await _client(webui) as client:
         resp = await client.post(
             "/api/provider-catalog",
-            json={"id": "x", "provider_type": "anthropic"},  # missing display_name
+            json={"id": "x"},  # missing provider_type
         )
 
     assert resp.status_code == 422

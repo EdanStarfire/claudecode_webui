@@ -13,7 +13,7 @@
       :key="model.id"
       :value="model.id"
     >
-      {{ model.display_name }}
+      {{ model.litellm_model }}
     </option>
   </select>
 </template>

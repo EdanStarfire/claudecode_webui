@@ -200,6 +200,7 @@ class LiteLLMProxyManager:
                     "model_name": model_name,
                     "litellm_params": {
                         "model": model["litellm_model"],
+                        "drop_params": model.get("drop_params", False),
                         **resolved_params,
                     },
                 })

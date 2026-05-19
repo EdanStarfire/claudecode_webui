@@ -4,8 +4,8 @@
       <thead>
         <tr>
           <th>ID</th>
-          <th>Display Name</th>
           <th>LiteLLM Model</th>
+          <th>Drop Params</th>
           <th></th>
         </tr>
       </thead>
@@ -22,21 +22,15 @@
           </td>
           <td>
             <input
-              v-model="row.display_name"
-              type="text"
-              class="form-control form-control-sm"
-              placeholder="Display Name"
-              @input="emitUpdate"
-            />
-          </td>
-          <td>
-            <input
               v-model="row.litellm_model"
               type="text"
               class="form-control form-control-sm font-monospace"
               placeholder="e.g. bedrock/claude-3-5-sonnet"
               @input="emitUpdate"
             />
+          </td>
+          <td class="text-center">
+            <input type="checkbox" v-model="row.drop_params" @change="emitUpdate" />
           </td>
           <td class="text-end">
             <button type="button" class="btn btn-outline-danger btn-sm" @click="removeRow(idx)">×</button>
@@ -69,7 +63,7 @@ function emitUpdate() {
 }
 
 function addRow() {
-  rows.value.push({ id: '', display_name: '', litellm_model: '' })
+  rows.value.push({ id: '', litellm_model: '', drop_params: false })
 }
 
 function removeRow(idx) {

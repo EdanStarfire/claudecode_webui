@@ -8,7 +8,7 @@
     >
       <option value="">— Use default (Anthropic) —</option>
       <option v-for="entry in store.entries" :key="entry.id" :value="entry.id">
-        {{ entry.display_name }} ({{ entry.id }})
+        {{ entry.id }}
       </option>
       <!-- Deleted entry: show disabled option for orphaned id -->
       <option

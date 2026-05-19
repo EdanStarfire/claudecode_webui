@@ -28,22 +28,22 @@ class CatalogModelEntry:
     """A single model offered by a provider catalog entry."""
 
     id: str
-    display_name: str
     litellm_model: str  # e.g. "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"
+    drop_params: bool = False
 
     @classmethod
     def from_dict(cls, data: dict) -> CatalogModelEntry:
         return cls(
             id=data["id"],
-            display_name=data["display_name"],
             litellm_model=data["litellm_model"],
+            drop_params=data.get("drop_params", False),
         )
 
     def to_dict(self) -> dict:
         return {
             "id": self.id,
-            "display_name": self.display_name,
             "litellm_model": self.litellm_model,
+            "drop_params": self.drop_params,
         }
 
 
@@ -52,7 +52,6 @@ class ProviderCatalogEntry:
     """A provider (e.g. Bedrock, OpenAI) with its LiteLLM params and model list."""
 
     id: str
-    display_name: str
     provider_type: str  # "anthropic", "openai", "bedrock", "vertex", "lmstudio", etc.
     litellm_params_template: dict[str, str]  # may contain "${secret:name}" placeholders
     models: list[CatalogModelEntry] = field(default_factory=list)
@@ -61,7 +60,6 @@ class ProviderCatalogEntry:
     def from_dict(cls, data: dict) -> ProviderCatalogEntry:
         return cls(
             id=data["id"],
-            display_name=data["display_name"],
             provider_type=data["provider_type"],
             litellm_params_template=data.get("litellm_params_template", {}),
             models=[CatalogModelEntry.from_dict(m) for m in data.get("models", [])],
@@ -70,7 +68,6 @@ class ProviderCatalogEntry:
     def to_dict(self) -> dict:
         return {
             "id": self.id,
-            "display_name": self.display_name,
             "provider_type": self.provider_type,
             "litellm_params_template": self.litellm_params_template,
             "models": [m.to_dict() for m in self.models],
@@ -243,7 +240,7 @@ class ProviderCatalogManager:
         return result
 
     def _validate_entry(self, entry_data: dict) -> None:
-        required = ["id", "display_name", "provider_type", "litellm_params_template", "models"]
+        required = ["id", "provider_type", "litellm_params_template", "models"]
         for f in required:
             if f not in entry_data:
                 raise ValueError(f"Missing required field: {f}")

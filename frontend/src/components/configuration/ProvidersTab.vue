@@ -37,16 +37,6 @@
             <div class="field-hint">Slug: lowercase letters, digits, hyphens, underscores.</div>
           </div>
           <div class="form-field">
-            <label class="field-label">Display Name</label>
-            <input
-              v-model="providerForm.display_name"
-              class="field-input"
-              placeholder="e.g. AWS Bedrock — Sonnet"
-              :class="{ 'is-invalid': providerFormErrors.display_name }"
-            />
-            <div v-if="providerFormErrors.display_name" class="field-error">{{ providerFormErrors.display_name }}</div>
-          </div>
-          <div class="form-field">
             <label class="field-label">Provider Type</label>
             <select v-model="providerTypeSelection" class="field-input" @change="onProviderTypeChange(providerForm, providerTypeSelection)">
               <option v-for="t in KNOWN_TYPES" :key="t" :value="t">{{ t }}</option>
@@ -88,7 +78,7 @@
           :class="{ 'is-confirm': pendingDeleteId === entry.id }"
         >
           <template v-if="pendingDeleteId === entry.id">
-            <span class="confirm-text">Delete "{{ entry.display_name }}"?</span>
+            <span class="confirm-text">Delete "{{ entry.id }}"?</span>
             <div class="confirm-btns">
               <button class="btn-confirm-delete" :disabled="deletingProvider" @click="executeDeleteProvider(entry.id)">
                 {{ deletingProvider ? '…' : 'Delete' }}
@@ -98,9 +88,8 @@
           </template>
           <template v-else>
             <div class="provider-heading">
-              <span class="category-label">{{ entry.display_name }}</span>
+              <span class="category-label">{{ entry.id }}</span>
               <span class="provider-type-tag">{{ entry.provider_type }}</span>
-              <span class="provider-id-tag font-monospace">{{ entry.id }}</span>
             </div>
             <div class="provider-actions">
               <button
@@ -125,15 +114,6 @@
         <div v-if="editingProviderId === entry.id" class="inline-form-card">
           <div class="inline-form-title">Edit Provider: {{ entry.id }}</div>
           <div class="form-grid">
-            <div class="form-field">
-              <label class="field-label">Display Name</label>
-              <input
-                v-model="editProviderForm.display_name"
-                class="field-input"
-                :class="{ 'is-invalid': editProviderFormErrors.display_name }"
-              />
-              <div v-if="editProviderFormErrors.display_name" class="field-error">{{ editProviderFormErrors.display_name }}</div>
-            </div>
             <div class="form-field">
               <label class="field-label">Provider Type</label>
               <select v-model="editProviderTypeSelection" class="field-input" @change="onProviderTypeChange(editProviderForm, editProviderTypeSelection)">
@@ -170,7 +150,7 @@
             v-if="editingModelKey && editingModelKey.providerId === entry.id && editingModelKey.idx === idx"
             class="inline-form-card model-form"
           >
-            <div class="form-grid form-grid--3col">
+            <div class="form-grid">
               <div class="form-field">
                 <label class="field-label">ID</label>
                 <input
@@ -178,15 +158,6 @@
                   class="field-input font-monospace"
                   disabled
                 />
-              </div>
-              <div class="form-field">
-                <label class="field-label">Display Name</label>
-                <input
-                  v-model="modelForm.display_name"
-                  class="field-input"
-                  :class="{ 'is-invalid': modelFormErrors.display_name }"
-                />
-                <div v-if="modelFormErrors.display_name" class="field-error">{{ modelFormErrors.display_name }}</div>
               </div>
               <div class="form-field">
                 <label class="field-label">LiteLLM Model</label>
@@ -213,7 +184,7 @@
             v-else-if="pendingDeleteModel && pendingDeleteModel.providerId === entry.id && pendingDeleteModel.idx === idx"
             class="model-row model-row--confirm"
           >
-            <span class="confirm-text">Delete model "{{ model.display_name }}"?</span>
+            <span class="confirm-text">Delete model "{{ model.id }}"?</span>
             <div class="confirm-btns">
               <button class="btn-confirm-delete" :disabled="deletingModel" @click="executeDeleteModel(entry)">
                 {{ deletingModel ? '…' : 'Delete' }}
@@ -224,7 +195,7 @@
 
           <!-- Normal model row -->
           <div v-else class="model-row">
-            <span class="model-name">{{ model.display_name }}</span>
+            <span class="model-name">{{ model.id }}</span>
             <span class="model-litellm font-monospace">{{ model.litellm_model }}</span>
             <div class="row-actions">
               <button
@@ -242,7 +213,7 @@
 
         <!-- Add Model inline form -->
         <div v-if="addingModelForProvider === entry.id" class="inline-form-card model-form">
-          <div class="form-grid form-grid--3col">
+          <div class="form-grid">
             <div class="form-field">
               <label class="field-label">ID</label>
               <input
@@ -252,16 +223,6 @@
                 :class="{ 'is-invalid': modelFormErrors.id }"
               />
               <div v-if="modelFormErrors.id" class="field-error">{{ modelFormErrors.id }}</div>
-            </div>
-            <div class="form-field">
-              <label class="field-label">Display Name</label>
-              <input
-                v-model="modelForm.display_name"
-                class="field-input"
-                placeholder="Display Name"
-                :class="{ 'is-invalid': modelFormErrors.display_name }"
-              />
-              <div v-if="modelFormErrors.display_name" class="field-error">{{ modelFormErrors.display_name }}</div>
             </div>
             <div class="form-field">
               <label class="field-label">LiteLLM Model</label>
@@ -326,26 +287,24 @@ const deletingModel   = ref(false)
 const providerTypeSelection = ref('anthropic')
 const providerForm = reactive({
   id: '',
-  display_name: '',
   provider_type: 'anthropic',
   litellm_params_template: {},
 })
-const providerFormErrors = reactive({ id: '', display_name: '', provider_type: '' })
+const providerFormErrors = reactive({ id: '', provider_type: '' })
 const providerFormError = ref(null)
 
 // ── Edit Provider form ────────────────────────────────────────────────────
 const editProviderTypeSelection = ref('anthropic')
 const editProviderForm = reactive({
-  display_name: '',
   provider_type: 'anthropic',
   litellm_params_template: {},
 })
-const editProviderFormErrors = reactive({ display_name: '', provider_type: '' })
+const editProviderFormErrors = reactive({ provider_type: '' })
 const editProviderFormError = ref(null)
 
 // ── Model form (shared add/edit) ──────────────────────────────────────────
-const modelForm = reactive({ id: '', display_name: '', litellm_model: '' })
-const modelFormErrors = reactive({ id: '', display_name: '', litellm_model: '' })
+const modelForm = reactive({ id: '', litellm_model: '' })
+const modelFormErrors = reactive({ id: '', litellm_model: '' })
 const modelFormError = ref(null)
 
 // ── Provider type helpers ─────────────────────────────────────────────────
@@ -361,7 +320,6 @@ function onProviderTypeChange(form, selectionRef) {
 function entryPayload(entry, overrides = {}) {
   return {
     id: entry.id,
-    display_name: entry.display_name,
     provider_type: entry.provider_type,
     litellm_params_template: entry.litellm_params_template,
     models: entry.models,
@@ -372,7 +330,6 @@ function entryPayload(entry, overrides = {}) {
 // ── Validation ────────────────────────────────────────────────────────────
 function validateProvider(form, selection, errors, isAdd) {
   let ok = true
-  errors.display_name = ''
   errors.provider_type = ''
 
   if (isAdd) {
@@ -389,11 +346,6 @@ function validateProvider(form, selection, errors, isAdd) {
     }
   }
 
-  if (!form.display_name.trim()) {
-    errors.display_name = 'Display Name is required.'
-    ok = false
-  }
-
   if (!effectiveProviderType(form, selection)) {
     errors.provider_type = 'Provider Type is required.'
     ok = false
@@ -405,7 +357,6 @@ function validateProvider(form, selection, errors, isAdd) {
 function validateModel(form, errors, existingIds, isAdd) {
   let ok = true
   errors.id = ''
-  errors.display_name = ''
   errors.litellm_model = ''
 
   if (isAdd) {
@@ -416,11 +367,6 @@ function validateModel(form, errors, existingIds, isAdd) {
       errors.id = 'A model with this ID already exists in this provider.'
       ok = false
     }
-  }
-
-  if (!form.display_name.trim()) {
-    errors.display_name = 'Display Name is required.'
-    ok = false
   }
 
   if (!form.litellm_model.trim()) {
@@ -434,8 +380,8 @@ function validateModel(form, errors, existingIds, isAdd) {
 // ── Add Provider ──────────────────────────────────────────────────────────
 function startAddProvider() {
   closeAllForms()
-  Object.assign(providerForm, { id: '', display_name: '', provider_type: 'anthropic', litellm_params_template: {} })
-  Object.assign(providerFormErrors, { id: '', display_name: '', provider_type: '' })
+  Object.assign(providerForm, { id: '', provider_type: 'anthropic', litellm_params_template: {} })
+  Object.assign(providerFormErrors, { id: '', provider_type: '' })
   providerTypeSelection.value = 'anthropic'
   providerFormError.value = null
   showAddProvider.value = true
@@ -452,7 +398,6 @@ async function saveNewProvider() {
   try {
     await store.createEntry({
       id: providerForm.id.trim(),
-      display_name: providerForm.display_name.trim(),
       provider_type: effectiveProviderType(providerForm, providerTypeSelection.value),
       litellm_params_template: providerForm.litellm_params_template,
       models: [],
@@ -469,14 +414,13 @@ async function saveNewProvider() {
 function startEditProvider(entry) {
   closeAllForms()
   Object.assign(editProviderForm, {
-    display_name: entry.display_name,
     provider_type: entry.provider_type,
     litellm_params_template: { ...(entry.litellm_params_template || {}) },
   })
   editProviderTypeSelection.value = KNOWN_TYPES.includes(entry.provider_type)
     ? entry.provider_type
     : CUSTOM_SENTINEL
-  Object.assign(editProviderFormErrors, { display_name: '', provider_type: '' })
+  Object.assign(editProviderFormErrors, { provider_type: '' })
   editProviderFormError.value = null
   editingProviderId.value = entry.id
 }
@@ -491,7 +435,6 @@ async function saveEditProvider(entry) {
   editProviderFormError.value = null
   try {
     await store.updateEntry(entry.id, entryPayload(entry, {
-      display_name: editProviderForm.display_name.trim(),
       provider_type: effectiveProviderType(editProviderForm, editProviderTypeSelection.value),
       litellm_params_template: editProviderForm.litellm_params_template,
     }))
@@ -519,8 +462,8 @@ async function executeDeleteProvider(entryId) {
 // ── Add Model ─────────────────────────────────────────────────────────────
 function startAddModel(providerId) {
   closeAllForms()
-  Object.assign(modelForm, { id: '', display_name: '', litellm_model: '' })
-  Object.assign(modelFormErrors, { id: '', display_name: '', litellm_model: '' })
+  Object.assign(modelForm, { id: '', litellm_model: '' })
+  Object.assign(modelFormErrors, { id: '', litellm_model: '' })
   modelFormError.value = null
   addingModelForProvider.value = providerId
 }
@@ -533,7 +476,6 @@ async function saveNewModel(entry) {
   try {
     const newModel = {
       id: modelForm.id.trim(),
-      display_name: modelForm.display_name.trim(),
       litellm_model: modelForm.litellm_model.trim(),
     }
     await store.updateEntry(entry.id, entryPayload(entry, { models: [...entry.models, newModel] }))
@@ -548,8 +490,8 @@ async function saveNewModel(entry) {
 // ── Edit Model ────────────────────────────────────────────────────────────
 function startEditModel(providerId, idx, model) {
   closeAllForms()
-  Object.assign(modelForm, { id: model.id, display_name: model.display_name, litellm_model: model.litellm_model })
-  Object.assign(modelFormErrors, { id: '', display_name: '', litellm_model: '' })
+  Object.assign(modelForm, { id: model.id, litellm_model: model.litellm_model })
+  Object.assign(modelFormErrors, { id: '', litellm_model: '' })
   modelFormError.value = null
   editingModelKey.value = { providerId, idx }
 }
@@ -566,7 +508,7 @@ async function saveEditModel(entry) {
     const { idx } = editingModelKey.value
     const updatedModels = entry.models.map((m, i) =>
       i === idx
-        ? { id: m.id, display_name: modelForm.display_name.trim(), litellm_model: modelForm.litellm_model.trim() }
+        ? { ...m, litellm_model: modelForm.litellm_model.trim() }
         : m
     )
     await store.updateEntry(entry.id, entryPayload(entry, { models: updatedModels }))
@@ -716,12 +658,6 @@ onMounted(() => store.fetchIfEmpty())
   background: var(--bs-secondary-bg);
   color: var(--bs-secondary-color);
   border: 1px solid var(--bs-border-color);
-  flex-shrink: 0;
-}
-
-.provider-id-tag {
-  font-size: 10px;
-  color: var(--bs-tertiary-color);
   flex-shrink: 0;
 }
 

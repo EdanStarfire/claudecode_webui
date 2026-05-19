@@ -215,3 +215,24 @@ async def test_build_model_list_empty_catalog_sets_count_zero(manager):
 
     assert result == []
     assert manager.model_count == 0
+
+
+@pytest.mark.asyncio
+async def test_build_model_list_includes_drop_params(manager):
+    """drop_params=True is forwarded into litellm_params; absent field defaults to False."""
+    manager._catalog_manager.list_entries.return_value = [
+        {
+            "id": "prov-a",
+            "models": [
+                {"id": "m1", "litellm_model": "anthropic/claude-sonnet-4-6", "drop_params": True},
+                {"id": "m2", "litellm_model": "anthropic/claude-haiku-4-5"},
+            ],
+            "litellm_params_template": {},
+        }
+    ]
+    manager._catalog_manager.resolve_params.return_value = {}
+
+    result = await manager._build_model_list()
+
+    assert result[0]["litellm_params"]["drop_params"] is True
+    assert result[1]["litellm_params"]["drop_params"] is False

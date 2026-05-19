@@ -111,3 +111,87 @@ async def test_migration_is_idempotent(tmp_path, monkeypatch):
     await store2.load()
     assert len(store2.entries) == 1
     assert store2.entries[0].id == "bedrock-prod"
+
+
+# ── display_name / drop_params compatibility ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_load_ignores_entry_display_name(tmp_path):
+    """display_name on a provider entry in providers.json is silently ignored on load."""
+    data = {
+        "entries": [
+            {
+                "id": "bedrock-1",
+                "display_name": "Legacy Display Name",
+                "provider_type": "bedrock",
+                "litellm_params_template": {},
+                "models": [],
+            }
+        ],
+        "litellm_port": 4000,
+        "pending_changes": False,
+    }
+    (tmp_path / "providers.json").write_text(json.dumps(data), encoding="utf-8")
+
+    store = ProviderCatalogStore(tmp_path)
+    await store.load()
+
+    assert len(store.entries) == 1
+    assert store.entries[0].id == "bedrock-1"
+    assert not hasattr(store.entries[0], "display_name")
+
+
+@pytest.mark.asyncio
+async def test_load_ignores_model_display_name(tmp_path):
+    """display_name on a model entry in providers.json is silently ignored on load."""
+    data = {
+        "entries": [
+            {
+                "id": "bedrock-1",
+                "provider_type": "bedrock",
+                "litellm_params_template": {},
+                "models": [
+                    {
+                        "id": "sonnet",
+                        "display_name": "Claude Sonnet (legacy)",
+                        "litellm_model": "bedrock/claude-3-5-sonnet",
+                    }
+                ],
+            }
+        ],
+        "litellm_port": 4000,
+        "pending_changes": False,
+    }
+    (tmp_path / "providers.json").write_text(json.dumps(data), encoding="utf-8")
+
+    store = ProviderCatalogStore(tmp_path)
+    await store.load()
+
+    model = store.entries[0].models[0]
+    assert model.id == "sonnet"
+    assert model.litellm_model == "bedrock/claude-3-5-sonnet"
+    assert not hasattr(model, "display_name")
+
+
+@pytest.mark.asyncio
+async def test_load_model_drop_params_defaults_false(tmp_path):
+    """Existing models without drop_params field default to False on load."""
+    data = {
+        "entries": [
+            {
+                "id": "bedrock-1",
+                "provider_type": "bedrock",
+                "litellm_params_template": {},
+                "models": [{"id": "sonnet", "litellm_model": "bedrock/claude-3-5-sonnet"}],
+            }
+        ],
+        "litellm_port": 4000,
+        "pending_changes": False,
+    }
+    (tmp_path / "providers.json").write_text(json.dumps(data), encoding="utf-8")
+
+    store = ProviderCatalogStore(tmp_path)
+    await store.load()
+
+    assert store.entries[0].models[0].drop_params is False
