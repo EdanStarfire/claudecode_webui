@@ -211,6 +211,9 @@ def _render_inject_file(placeholder: str, fmt: str, key_path: str | None) -> str
     return placeholder
 
 
+_VALID_TIERS: frozenset[str] = frozenset({"haiku", "sonnet", "opus"})
+
+
 def _all_tier_fields_set(cfg) -> bool:
     """Return True iff all 6 per-tier id fields and provider_default_tier are non-None."""
     return all((
@@ -229,6 +232,26 @@ def _build_model_map(cfg) -> dict[str, str]:
     tier_map = {"haiku": haiku_alias, "sonnet": sonnet_alias, "opus": opus_alias}
     tier_map["default"] = tier_map[cfg.provider_default_tier]
     return tier_map
+
+
+def _resolve_analytics_model_label(cfg) -> str | None:
+    """Return the model label to write to analytics.
+
+    Priority:
+      1. Single provider-catalog routing → catalog alias.
+      2. Per-tier provider-catalog routing → default-tier alias.
+      3. SDK model field (default for non-catalog sessions).
+    """
+    if cfg.provider_catalog_id and cfg.provider_model_id:
+        return make_model_alias(cfg.provider_catalog_id, cfg.provider_model_id)
+    if _all_tier_fields_set(cfg):
+        tier = cfg.provider_default_tier
+        if tier not in _VALID_TIERS:
+            return cfg.model
+        catalog_id = getattr(cfg, f"provider_{tier}_catalog_id")
+        model_id = getattr(cfg, f"provider_{tier}_model_id")
+        return make_model_alias(catalog_id, model_id)
+    return cfg.model
 
 
 class SessionCoordinator:
@@ -4233,7 +4256,7 @@ class SessionCoordinator:
                                 _eff = await resolve_effective_config(
                                     _sinfo, self.template_manager, self.profile_manager
                                 )
-                                _model = _eff.model
+                                _model = _resolve_analytics_model_label(_eff)
                             else:
                                 _model = None
                             # Lazily initialise turn_seq from DB on first use after restart
