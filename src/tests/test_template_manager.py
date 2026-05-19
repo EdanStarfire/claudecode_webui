@@ -808,8 +808,9 @@ class TestSignatureParity:
 
         # 'config' is the dict container for CONFIG_FIELDS — update_template accepts
         # it directly as a kwarg for full replacement, so it IS in update_params.
-        # Remove it from template_fields to avoid a false mismatch (the field is covered).
-        template_fields -= {"config"}
+        # 'is_default' is server-managed (set only by create_default_templates() at
+        # seed time) and is intentionally absent from update_template()'s signature.
+        template_fields -= {"config", "is_default"}
 
         # update needs template_id as positional, which we already removed
         update_params.discard("template_id")
