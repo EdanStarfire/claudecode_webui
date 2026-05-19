@@ -10,13 +10,11 @@ from src.provider_catalog import ProviderCatalogManager, ProviderCatalogStore
 def _sample_entry(entry_id: str = "bedrock-1") -> dict:
     return {
         "id": entry_id,
-        "display_name": "Bedrock (us-east-1)",
         "provider_type": "bedrock",
         "litellm_params_template": {"aws_region_name": "us-east-1"},
         "models": [
             {
                 "id": "sonnet",
-                "display_name": "Claude Sonnet",
                 "litellm_model": "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
             }
         ],
@@ -78,11 +76,11 @@ async def test_update_entry_replaces_and_sets_pending(catalog, catalog_store):
     await catalog_store.set_pending_changes(False)  # reset
 
     updated = _sample_entry()
-    updated["display_name"] = "Updated Name"
+    updated["provider_type"] = "openai"
     await catalog.update_entry("bedrock-1", updated)
 
     entries = await catalog.list_entries()
-    assert entries[0]["display_name"] == "Updated Name"
+    assert entries[0]["provider_type"] == "openai"
     assert catalog_store.pending_changes is True
 
 
@@ -181,8 +179,8 @@ async def test_validate_entry_missing_required_field_raises(catalog):
 async def test_validate_entry_duplicate_model_ids_raises(catalog):
     entry = _sample_entry()
     entry["models"] = [
-        {"id": "m1", "display_name": "Model A", "litellm_model": "provider/model-a"},
-        {"id": "m1", "display_name": "Model B", "litellm_model": "provider/model-b"},
+        {"id": "m1", "litellm_model": "provider/model-a"},
+        {"id": "m1", "litellm_model": "provider/model-b"},
     ]
     with pytest.raises(ValueError, match="Duplicate model ids"):
         await catalog.create_entry(entry)
@@ -220,3 +218,24 @@ async def test_store_persists_to_disk(tmp_path):
     assert len(store2.entries) == 1
     assert store2.entries[0].id == "bedrock-1"
     assert store2.pending_changes is True
+
+
+# ── drop_params ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_model_drop_params_defaults_false(catalog):
+    """Model without drop_params field defaults to False."""
+    await catalog.create_entry(_sample_entry())
+    retrieved = await catalog.get_entry("bedrock-1")
+    assert retrieved["models"][0]["drop_params"] is False
+
+
+@pytest.mark.asyncio
+async def test_model_drop_params_true_roundtrips(catalog):
+    """Model with drop_params=True is stored and retrieved correctly."""
+    entry = _sample_entry()
+    entry["models"][0]["drop_params"] = True
+    await catalog.create_entry(entry)
+    retrieved = await catalog.get_entry("bedrock-1")
+    assert retrieved["models"][0]["drop_params"] is True

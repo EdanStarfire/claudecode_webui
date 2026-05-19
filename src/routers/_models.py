@@ -385,7 +385,6 @@ class PermissionResponseRequest(BaseModel):
 
 class ProviderCatalogEntryRequest(BaseModel):
     id: str
-    display_name: str
     provider_type: str
     litellm_params_template: dict[str, str] = Field(default_factory=dict)
     models: list[dict] = Field(default_factory=list)
