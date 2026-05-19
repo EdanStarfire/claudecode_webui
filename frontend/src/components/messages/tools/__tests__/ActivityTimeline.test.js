@@ -27,7 +27,6 @@ describe('ActivityTimeline', () => {
         TimelineNode: { template: '<div data-testid="timeline-node" />', props: ['tool', 'isExpanded', 'compact'] },
         TimelineDetail: true,
         TimelineSegment: true,
-        TimelineOverflow: true,
         PermissionPrompt: true
       }
     })
