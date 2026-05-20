@@ -166,6 +166,11 @@ def main():
     else:
         print("Authentication disabled (localhost binding)")
 
+    # Advertise the server's internal URL so docker proxy sidecars can call back on the
+    # right port. The proxy addon reads WEBUI_BASE_URL; without this it defaults to :8000.
+    import os as _os
+    _os.environ.setdefault("WEBUI_BASE_URL", f"http://cc-webui.internal:{args.port}")
+
     # Create FastAPI app
     app = create_app(
         data_dir=data_dir_path,

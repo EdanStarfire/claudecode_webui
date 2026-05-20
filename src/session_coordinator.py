@@ -1548,6 +1548,10 @@ class SessionCoordinator:
                     docker_proxy_extra_mounts=proxy_extra_mounts or None,
                     # Issue #1356: label container for script schedule lookup
                     session_id=session_id,
+                    # Thread server port into proxy sidecar so it calls back on the right port.
+                    # main.py sets WEBUI_BASE_URL at startup; default is :8000 which breaks
+                    # non-default ports (e.g. test instances on 8001).
+                    proxy_webui_url=os.environ.get("WEBUI_BASE_URL") or None,
                 )
                 # Issue #1052: Tell claude-docker where the two SSH tmpdirs live.
                 # key_dir  → proxy-only mount at /run/ssh-private:ro

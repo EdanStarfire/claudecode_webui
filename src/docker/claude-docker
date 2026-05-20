@@ -258,6 +258,12 @@ if [ -n "$PROXY_IMAGE" ]; then
         done
     fi
 
+    # Pass the WebUI callback URL into the proxy so it reaches the correct port.
+    PROXY_WEBUI_URL_FLAG=""
+    if [ -n "${CLAUDE_DOCKER_PROXY_WEBUI_URL:-}" ]; then
+        PROXY_WEBUI_URL_FLAG="-e WEBUI_BASE_URL=${CLAUDE_DOCKER_PROXY_WEBUI_URL}"
+    fi
+
     # Issue #1264: Probe a plain Alpine container to discover the real host IP.
     # On Rancher Desktop (macOS/ARM64), --add-host=...:host-gateway resolves to the
     # Lima VM's docker0 bridge (172.17.0.1), not the macOS host. Docker Desktop and
@@ -289,6 +295,7 @@ if [ -n "$PROXY_IMAGE" ]; then
         $PROXY_ALLOWLIST_FLAGS \
         $SSH_PROXY_MOUNTS \
         $PROXY_EXTRA_MOUNT_FLAGS \
+        $PROXY_WEBUI_URL_FLAG \
         "$PROXY_IMAGE" >/dev/null
 
     # Wait up to 30s for the proxy to be fully ready.
