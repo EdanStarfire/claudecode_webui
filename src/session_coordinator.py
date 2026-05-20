@@ -305,6 +305,19 @@ class SessionCoordinator:
         # Issue #976/#989: OAuth token refresh lifecycle (extracted to OAuthRefreshManager)
         self.oauth_refresh_manager = OAuthRefreshManager(self.oauth_manager)
 
+        # Issue #1484: shared-connection MCP manager for opt-in passthrough configs.
+        # Receives credential_vault so ${secret:...} refs in shared configs are resolved
+        # to plaintext inline (no Docker proxy sidecar in the shared-connection egress path).
+        from src.mcp.shared_connection_manager import SharedMcpConnectionManager
+        self.shared_mcp_manager = SharedMcpConnectionManager(
+            self.oauth_manager, self.oauth_refresh_manager, self.credential_vault,
+        )
+
+        async def _cfg_lookup(server_id: str):
+            return await self.mcp_config_manager.get_config(server_id)
+
+        self.shared_mcp_manager.set_cfg_lookup(_cfg_lookup)
+
         # Issue #1387: Proactive vault OAuth2 secret refresh
         from .vault_refresh_manager import VaultRefreshManager
         self.vault_refresh_manager = VaultRefreshManager(self.credential_vault)
@@ -443,6 +456,12 @@ class SessionCoordinator:
         After OAuth injection, any ${secret:<name>} references in header values are
         replaced with the corresponding placeholder for HTTP/SSE servers.
         """
+        # Issue #1484: route shared-connection configs through the in-process proxy.
+        if getattr(mcp_cfg, "shared_connection", False):
+            await self.shared_mcp_manager.get_or_open(mcp_cfg)
+            from src.mcp.proxy_server_factory import build_proxy_server
+            return build_proxy_server(mcp_cfg, self.shared_mcp_manager)
+
         import time as _time
 
         config = mcp_cfg.to_sdk_config()
@@ -1261,10 +1280,14 @@ class SessionCoordinator:
                     effective_config.mcp_server_ids
                 )
                 # Issue #1375: Fail closed if ${secret:...} refs exist but proxy is disabled.
+                # Issue #1484: shared_connection configs resolve secrets in-process via
+                # SharedMcpConnectionManager — they never reach the session's MCP client,
+                # so they are exempt from this proxy requirement.
                 has_secret_refs = any(
                     _SECRET_REF_RE.search(v or "")
                     for cfg in selected_configs
                     if cfg.type in (McpServerType.SSE, McpServerType.HTTP)
+                    and not getattr(cfg, "shared_connection", False)
                     for v in (cfg.headers or {}).values()
                 )
                 if has_secret_refs and not effective_config.docker_proxy_enabled:
@@ -1525,6 +1548,10 @@ class SessionCoordinator:
                     docker_proxy_extra_mounts=proxy_extra_mounts or None,
                     # Issue #1356: label container for script schedule lookup
                     session_id=session_id,
+                    # Thread server port into proxy sidecar so it calls back on the right port.
+                    # main.py sets WEBUI_BASE_URL at startup; default is :8000 which breaks
+                    # non-default ports (e.g. test instances on 8001).
+                    proxy_webui_url=os.environ.get("WEBUI_BASE_URL") or None,
                 )
                 # Issue #1052: Tell claude-docker where the two SSH tmpdirs live.
                 # key_dir  → proxy-only mount at /run/ssh-private:ro
@@ -1763,6 +1790,9 @@ class SessionCoordinator:
                 for _cfg in _term_configs:
                     if _cfg.oauth_enabled:
                         self.oauth_refresh_manager.release_refresh(_cfg.id)
+                    # Issue #1484: release shared-connection refcount on termination
+                    if getattr(_cfg, "shared_connection", False):
+                        await self.shared_mcp_manager.release(_cfg.id)
 
             # Issue #500: Stop queue processor before termination
             self.queue_processor.stop(session_id)
@@ -2485,6 +2515,9 @@ class SessionCoordinator:
                 for _cfg in _reset_configs:
                     if _cfg.oauth_enabled:
                         self.oauth_refresh_manager.release_refresh(_cfg.id)
+                    # Issue #1484: release shared-connection refcount on reset
+                    if getattr(_cfg, "shared_connection", False):
+                        await self.shared_mcp_manager.release(_cfg.id)
 
             # Issue #500: Stop queue processor and mark any in-flight item as failed
             # Skip when called from the processor itself to avoid self-cancellation
@@ -4897,6 +4930,12 @@ class SessionCoordinator:
             session_ids = list(self._active_sdks.keys())
             for session_id in session_ids:
                 await self.terminate_session(session_id)
+
+            # Issue #1484: close shared MCP upstream connections
+            try:
+                await self.shared_mcp_manager.shutdown()
+            except Exception:
+                logger.exception("Error shutting down shared MCP manager")
 
             coord_logger.info("Session coordinator cleanup completed")
 

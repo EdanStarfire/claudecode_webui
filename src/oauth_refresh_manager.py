@@ -10,8 +10,9 @@ embedded in SessionCoordinator:
 """
 
 import asyncio
+import inspect
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from .logging_config import get_logger
 from .task_utils import task_done_log_exception
@@ -39,7 +40,7 @@ class OAuthRefreshManager:
         self._refresh_locks: dict[str, asyncio.Lock] = {}
         self._refresh_tasks: dict[str, asyncio.Task] = {}
         self._refresh_refcounts: dict[str, int] = {}
-        self._broadcast_callback: Callable[[str], None] | None = None
+        self._broadcast_subscribers: list[Callable[[str], None | Awaitable[None]]] = []
 
     # ------------------------------------------------------------------
     # Public API
@@ -49,9 +50,19 @@ class OAuthRefreshManager:
         """Set the callback for broadcasting mcp_oauth_refreshed events to the UI.
 
         Issue #976: Called by web_server after server init.
-        The callback receives server_id and appends an event to the UI poll queue.
+        Legacy single-subscriber API — clears existing subscribers and registers callback.
         """
-        self._broadcast_callback = callback
+        self._broadcast_subscribers = [callback]
+
+    def add_broadcast_subscriber(
+        self, callback: Callable[[str], None | Awaitable[None]]
+    ) -> None:
+        """Add a subscriber notified after each successful OAuth token refresh.
+
+        Issue #1484: Supports multiple subscribers (sync or async). SharedMcpConnectionManager
+        registers here to reconnect the upstream transport after token rotation.
+        """
+        self._broadcast_subscribers.append(callback)
 
     def ensure_refresh(self, server_id: str) -> None:
         """Increment the ref count for server_id and start a refresh task if needed.
@@ -131,12 +142,14 @@ class OAuthRefreshManager:
                     logger.info(
                         "Background OAuth refresh succeeded for MCP server %s", server_id
                     )
-                    if self._broadcast_callback:
+                    for sub in self._broadcast_subscribers:
                         try:
-                            self._broadcast_callback(server_id)
+                            result = sub(server_id)
+                            if inspect.isawaitable(result):
+                                await result
                         except Exception:
                             logger.exception(
-                                "Error broadcasting mcp_oauth_refreshed for %s", server_id
+                                "Error in OAuth refresh subscriber for %s", server_id
                             )
                 else:
                     logger.warning(

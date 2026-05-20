@@ -45,6 +45,7 @@ def build_router(webui) -> APIRouter:
             oauth_enabled=request.oauth_enabled,
             oauth_client_id=request.oauth_client_id,
             oauth_callback_port=request.oauth_callback_port,
+            shared_connection=request.shared_connection,
         )
 
     @router.post("/api/mcp-configs/export")
@@ -109,6 +110,7 @@ def build_router(webui) -> APIRouter:
             oauth_enabled=request.oauth_enabled,
             oauth_client_id=request.oauth_client_id,
             oauth_callback_port=request.oauth_callback_port,
+            shared_connection=request.shared_connection,
         )
 
     @router.delete("/api/mcp-configs/{config_id}")

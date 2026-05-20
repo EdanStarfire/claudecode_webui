@@ -92,6 +92,9 @@ def resolve_docker_cli_path(
     extra_env: dict[str, str] | None = None,
     # Issue #1053: Dynamic allowlist override
     proxy_allowlist_file: str | None = None,
+    # Proxy callback URL — passed as WEBUI_BASE_URL env var into the sidecar container so
+    # it calls back on the correct port (avoids the hardcoded :8000 default in addon.py).
+    proxy_webui_url: str | None = None,
     # Issue #1179: Proxy-sidecar-only mounts (session_token, session_id, etc.)
     docker_proxy_extra_mounts: list[str] | None = None,
     # Issue #1356: Session ID for container label lookup
@@ -151,6 +154,9 @@ def resolve_docker_cli_path(
 
     if proxy_image:
         env_vars["CLAUDE_DOCKER_PROXY_IMAGE"] = proxy_image
+
+    if proxy_webui_url:
+        env_vars["CLAUDE_DOCKER_PROXY_WEBUI_URL"] = proxy_webui_url
 
     if extra_env:
         env_vars["CLAUDE_DOCKER_EXTRA_ENV"] = _json.dumps(extra_env)

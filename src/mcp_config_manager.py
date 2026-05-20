@@ -19,6 +19,9 @@ from typing import Any
 from .logging_config import get_logger
 from .slug_utils import slugify as _slugify
 
+# Sentinel for "caller did not pass this kwarg" — distinct from None which means "clear the field".
+_UNSET: object = object()
+
 mcp_logger = get_logger('mcp_config', category='MCP_CONFIG')
 logger = logging.getLogger(__name__)
 
@@ -50,6 +53,8 @@ class McpServerConfig:
     # CLI-managed OAuth (issue #1109)
     oauth_client_id: str | None = None
     oauth_callback_port: int | None = None
+    # Issue #1484: route through a single shared upstream connection (opt-in)
+    shared_connection: bool = False
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -70,6 +75,7 @@ class McpServerConfig:
         data.setdefault('oauth_enabled', False)
         data.setdefault('oauth_client_id', None)
         data.setdefault('oauth_callback_port', None)
+        data.setdefault('shared_connection', False)
         if 'type' in data and isinstance(data['type'], str):
             data['type'] = McpServerType(data['type'])
         if isinstance(data.get('created_at'), str):
@@ -172,6 +178,7 @@ class McpConfigManager:
         oauth_enabled: bool = False,
         oauth_client_id: str | None = None,
         oauth_callback_port: int | None = None,
+        shared_connection: bool = False,
     ) -> McpServerConfig:
         """Create a new MCP server configuration."""
         if not name or not name.strip():
@@ -207,6 +214,7 @@ class McpConfigManager:
             oauth_enabled=oauth_enabled,
             oauth_client_id=oauth_client_id,
             oauth_callback_port=oauth_callback_port,
+            shared_connection=shared_connection,
         )
 
         await self._save_config(config)
@@ -234,8 +242,10 @@ class McpConfigManager:
         headers: dict[str, str] | None = None,
         enabled: bool | None = None,
         oauth_enabled: bool | None = None,
-        oauth_client_id: str | None = None,
-        oauth_callback_port: int | None = None,
+        oauth_client_id=_UNSET,
+        oauth_callback_port=_UNSET,
+        shared_connection: bool | None = None,
+        shared_mcp_manager=None,
     ) -> McpServerConfig:
         """Update existing MCP server configuration."""
         config = self.configs.get(config_id)
@@ -268,13 +278,18 @@ class McpConfigManager:
         if headers is not None:
             config.headers = headers
         if enabled is not None:
+            # Issue #1484: drain shared connection when disabling a config
+            if enabled is False and config.enabled is True and shared_mcp_manager is not None:
+                await shared_mcp_manager.mark_draining(config_id)
             config.enabled = enabled
         if oauth_enabled is not None:
             config.oauth_enabled = oauth_enabled
-        if oauth_client_id is not None:
-            config.oauth_client_id = oauth_client_id
-        if oauth_callback_port is not None:
+        if oauth_client_id is not _UNSET:
+            config.oauth_client_id = (oauth_client_id.strip() or None) if isinstance(oauth_client_id, str) else oauth_client_id
+        if oauth_callback_port is not _UNSET:
             config.oauth_callback_port = oauth_callback_port
+        if shared_connection is not None:
+            config.shared_connection = shared_connection
 
         config.updated_at = datetime.now(UTC)
 
@@ -286,12 +301,16 @@ class McpConfigManager:
         mcp_logger.info(f"Updated MCP config: {config.name} ({config.id})")
         return config
 
-    async def delete_config(self, config_id: str) -> bool:
+    async def delete_config(self, config_id: str, *, shared_mcp_manager=None) -> bool:
         """Delete MCP server configuration."""
         if config_id not in self.configs:
             return False
 
         config = self.configs[config_id]
+        # Issue #1484: start draining before deleting so sessions keep their connection
+        # until they release their refcount.
+        if shared_mcp_manager is not None:
+            await shared_mcp_manager.mark_draining(config_id)
         self._remove_file_by_slug(config.slug)
         del self.configs[config_id]
         mcp_logger.info(f"Deleted MCP config: {config.name} ({config_id})")

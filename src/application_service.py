@@ -283,6 +283,7 @@ class ApplicationService:
         oauth_enabled: bool = False,
         oauth_client_id: str | None = None,
         oauth_callback_port: int | None = None,
+        shared_connection: bool = False,
     ) -> dict:
         config = await self.coordinator.mcp_config_manager.create_config(
             name=name,
@@ -296,6 +297,7 @@ class ApplicationService:
             oauth_enabled=oauth_enabled,
             oauth_client_id=oauth_client_id,
             oauth_callback_port=oauth_callback_port,
+            shared_connection=shared_connection,
         )
         return config.to_dict()
 
@@ -413,11 +415,18 @@ class ApplicationService:
         return config.to_dict() if config else None
 
     async def update_mcp_config(self, config_id: str, **kwargs) -> dict | None:
-        config = await self.coordinator.mcp_config_manager.update_config(config_id, **kwargs)
+        config = await self.coordinator.mcp_config_manager.update_config(
+            config_id,
+            shared_mcp_manager=self.coordinator.shared_mcp_manager,
+            **kwargs,
+        )
         return config.to_dict() if config else None
 
     async def delete_mcp_config(self, config_id: str) -> bool:
-        return await self.coordinator.mcp_config_manager.delete_config(config_id)
+        return await self.coordinator.mcp_config_manager.delete_config(
+            config_id,
+            shared_mcp_manager=self.coordinator.shared_mcp_manager,
+        )
 
     # =========================================================================
     # OAuth
@@ -441,6 +450,7 @@ class ApplicationService:
             server_url=server_url,
             redirect_uri=redirect_uri,
             client_name=client_name,
+            pre_registered_client_id=config.oauth_client_id or None,
         )
 
     async def oauth_disconnect(self, config_id: str) -> bool:

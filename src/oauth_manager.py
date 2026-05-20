@@ -178,13 +178,18 @@ class OAuthFlowManager:
         server_url: str,
         redirect_uri: str,
         client_name: str = "Claude Code WebUI",
+        pre_registered_client_id: str | None = None,
     ) -> str:
         """Initiate an OAuth 2.1 authorization code flow.
+
+        If pre_registered_client_id is supplied (from McpServerConfig.oauth_client_id),
+        DCR is skipped entirely and the provided client_id is used directly. This is
+        required for servers like Slack that do not support Dynamic Client Registration.
 
         Steps performed:
           1. Protected resource metadata discovery (RFC 9728)
           2. Authorization server metadata discovery (RFC 8414)
-          3. Dynamic Client Registration (RFC 7591) — reuses stored client if present
+          3. Dynamic Client Registration (RFC 7591) — skipped when pre_registered_client_id set
           4. PKCE parameter generation
           5. Authorization URL construction
           6. Pending state storage (includes token_endpoint + client_id for complete_flow)
@@ -248,7 +253,18 @@ class OAuthFlowManager:
 
             # --- Step 3: Dynamic Client Registration ---
             store = self.get_token_store(server_id)
-            client_info = await store.get_client_info()
+
+            if pre_registered_client_id:
+                # Pre-registered app (e.g. Slack): skip DCR and use the configured client_id.
+                # Servers that don't support RFC 7591 DCR must be handled this way.
+                client_info = OAuthClientInformationFull(
+                    client_id=pre_registered_client_id,
+                    redirect_uris=[redirect_uri],  # type: ignore[arg-type]
+                    token_endpoint_auth_method="none",
+                )
+                logger.info("OAuth: using pre-registered client_id for MCP server %s", server_id)
+            else:
+                client_info = await store.get_client_info()
 
             if not client_info:
                 client_metadata = OAuthClientMetadata(
@@ -268,16 +284,15 @@ class OAuthFlowManager:
                     logger.info("DCR succeeded for MCP server %s", server_id)
                 except Exception as exc:
                     logger.warning(
-                        "DCR failed for MCP server %s (%s), using redirect_uri as client_id",
+                        "DCR failed for MCP server %s (%s); no pre-registered client_id available",
                         server_id,
                         exc,
                     )
-                    # Public client fallback: use redirect_uri as client_id
-                    client_info = OAuthClientInformationFull(
-                        client_id=redirect_uri,
-                        redirect_uris=[redirect_uri],  # type: ignore[arg-type]
-                        token_endpoint_auth_method="none",
-                    )
+                    raise RuntimeError(
+                        f"OAuth Dynamic Client Registration failed for MCP server {server_id!r} "
+                        f"and no oauth_client_id is configured. Set 'oauth_client_id' in the "
+                        f"MCP server config to use a pre-registered app."
+                    ) from exc
 
             client_id = client_info.client_id
 

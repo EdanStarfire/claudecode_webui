@@ -275,6 +275,14 @@
         <label class="form-check-label" for="mcp-enabled">Enabled</label>
       </div>
 
+      <div class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" id="mcp-shared-connection" v-model="form.shared_connection" />
+        <label class="form-check-label" for="mcp-shared-connection">
+          Shared connection
+          <span class="text-muted small ms-1">— WebUI keeps one upstream connection; all sessions share it</span>
+        </label>
+      </div>
+
       <div v-if="formError" class="alert alert-danger py-1 small mb-2">{{ formError }}</div>
 
       <div class="d-flex gap-2">
@@ -420,6 +428,7 @@ const form = reactive({
   url: '',
   headers: {},
   enabled: true,
+  shared_connection: false,
   oauth_enabled: false,
   oauth_scope: '',
   oauth_client_id: '',
@@ -651,6 +660,7 @@ function resetForm() {
   form.url = ''
   form.headers = {}
   form.enabled = true
+  form.shared_connection = false
   form.oauth_enabled = false
   form.oauth_scope = ''
   form.oauth_client_id = ''
@@ -679,6 +689,7 @@ function editConfig(config) {
   form.url = config.url || ''
   form.headers = { ...(config.headers || {}) }
   form.enabled = config.enabled
+  form.shared_connection = config.shared_connection || false
   form.oauth_enabled = config.oauth_enabled || false
   form.oauth_scope = config.oauth_scope || ''
   form.oauth_client_id = config.oauth_client_id || ''
@@ -724,6 +735,7 @@ async function saveForm() {
       name: form.name,
       type: form.type,
       enabled: form.enabled,
+      shared_connection: form.shared_connection,
     }
     if (form.type === 'stdio') {
       data.command = form.command
@@ -736,12 +748,8 @@ async function saveForm() {
       if (form.oauth_enabled && form.oauth_scope.trim()) {
         data.oauth_scope = form.oauth_scope.trim()
       }
-      if (form.oauth_client_id.trim()) {
-        data.oauth_client_id = form.oauth_client_id.trim()
-      }
-      if (form.oauth_callback_port) {
-        data.oauth_callback_port = parseInt(form.oauth_callback_port, 10)
-      }
+      data.oauth_client_id = form.oauth_client_id.trim() || null
+      data.oauth_callback_port = form.oauth_callback_port ? parseInt(form.oauth_callback_port, 10) : null
     }
 
     if (editingId.value) {
