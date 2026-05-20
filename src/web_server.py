@@ -56,7 +56,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     WebSocket auth is handled separately in each WS endpoint handler.
     """
 
-    EXEMPT_PATHS = {'/', '/health', '/api/auth/check', '/callback'}
+    EXEMPT_PATHS = {'/', '/health', '/api/auth/check', '/oauth/callback'}
     EXEMPT_PREFIXES = ('/assets/',)
     # Issue #827: The per-session secrets resolve endpoint uses its own Bearer token auth,
     # not the global operator token. Exempt it from global AuthMiddleware.
