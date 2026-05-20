@@ -748,12 +748,8 @@ async function saveForm() {
       if (form.oauth_enabled && form.oauth_scope.trim()) {
         data.oauth_scope = form.oauth_scope.trim()
       }
-      if (form.oauth_client_id.trim()) {
-        data.oauth_client_id = form.oauth_client_id.trim()
-      }
-      if (form.oauth_callback_port) {
-        data.oauth_callback_port = parseInt(form.oauth_callback_port, 10)
-      }
+      data.oauth_client_id = form.oauth_client_id.trim() || null
+      data.oauth_callback_port = form.oauth_callback_port ? parseInt(form.oauth_callback_port, 10) : null
     }
 
     if (editingId.value) {

@@ -19,6 +19,9 @@ from typing import Any
 from .logging_config import get_logger
 from .slug_utils import slugify as _slugify
 
+# Sentinel for "caller did not pass this kwarg" — distinct from None which means "clear the field".
+_UNSET: object = object()
+
 mcp_logger = get_logger('mcp_config', category='MCP_CONFIG')
 logger = logging.getLogger(__name__)
 
@@ -239,8 +242,8 @@ class McpConfigManager:
         headers: dict[str, str] | None = None,
         enabled: bool | None = None,
         oauth_enabled: bool | None = None,
-        oauth_client_id: str | None = None,
-        oauth_callback_port: int | None = None,
+        oauth_client_id=_UNSET,
+        oauth_callback_port=_UNSET,
         shared_connection: bool | None = None,
         shared_mcp_manager=None,
     ) -> McpServerConfig:
@@ -281,9 +284,9 @@ class McpConfigManager:
             config.enabled = enabled
         if oauth_enabled is not None:
             config.oauth_enabled = oauth_enabled
-        if oauth_client_id is not None:
-            config.oauth_client_id = oauth_client_id
-        if oauth_callback_port is not None:
+        if oauth_client_id is not _UNSET:
+            config.oauth_client_id = (oauth_client_id.strip() or None) if isinstance(oauth_client_id, str) else oauth_client_id
+        if oauth_callback_port is not _UNSET:
             config.oauth_callback_port = oauth_callback_port
         if shared_connection is not None:
             config.shared_connection = shared_connection
