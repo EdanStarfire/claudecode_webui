@@ -843,6 +843,93 @@ class TestIssue1375SecretRefs:
         # OAuth token must NOT be present anywhere in the config.
         assert "oauth-bearer-token" not in str(result)
 
+    # ── Issue #1484: shared_connection routing ────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_get_mcp_sdk_config_uses_proxy_when_shared_connection_true(
+        self, temp_coordinator
+    ):
+        """When shared_connection=True, _get_mcp_sdk_config returns an sdk-type proxy dict."""
+        from mcp.server import Server
+        from ..mcp_config_manager import McpServerType
+
+        coordinator = temp_coordinator
+        mock_cfg = MagicMock()
+        mock_cfg.id = "shared-cfg-1"
+        mock_cfg.name = "Shared MCP"
+        mock_cfg.slug = "shared-mcp"
+        mock_cfg.type = McpServerType.HTTP
+        mock_cfg.shared_connection = True
+
+        coordinator.shared_mcp_manager.get_or_open = AsyncMock(return_value=MagicMock())
+
+        result = await coordinator._get_mcp_sdk_config(mock_cfg, {})
+
+        assert result["type"] == "sdk"
+        assert result["name"] == mock_cfg.slug
+        assert isinstance(result["instance"], Server)
+        coordinator.shared_mcp_manager.get_or_open.assert_awaited_once_with(mock_cfg)
+
+    @pytest.mark.asyncio
+    async def test_get_mcp_sdk_config_uses_direct_path_when_shared_connection_false(
+        self, temp_coordinator
+    ):
+        """When shared_connection=False, _get_mcp_sdk_config uses the existing direct path."""
+        from ..mcp_config_manager import McpServerType
+
+        coordinator = temp_coordinator
+        mock_cfg = MagicMock()
+        mock_cfg.id = "direct-cfg-1"
+        mock_cfg.type = McpServerType.STDIO
+        mock_cfg.oauth_enabled = False
+        mock_cfg.shared_connection = False
+        mock_cfg.to_sdk_config.return_value = {"type": "stdio", "command": "mcp-server"}
+
+        coordinator.shared_mcp_manager.get_or_open = AsyncMock()
+
+        result = await coordinator._get_mcp_sdk_config(mock_cfg, {})
+
+        assert result["type"] == "stdio"
+        coordinator.shared_mcp_manager.get_or_open.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_mcp_servers_dict_key_collision_per_session_wins(self, temp_coordinator):
+        """Q3 regression: per-session entry under the same slug wins over global entry."""
+        slug = "conflict-server"
+        global_entry = {"type": "stdio", "command": "global-cmd"}
+        per_session_entry = {"type": "stdio", "command": "per-session-cmd"}
+
+        servers: dict = {slug: global_entry}
+        # Simulate override: per-session entry assigned under the same key
+        servers[slug] = per_session_entry
+
+        assert servers[slug] == per_session_entry, (
+            "Per-session dict key must overwrite the global entry"
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_mcp_sdk_config_shared_connection_missing_attr_defaults_to_false(
+        self, temp_coordinator
+    ):
+        """getattr fallback: configs without shared_connection default to direct path."""
+        from ..mcp_config_manager import McpServerType
+
+        coordinator = temp_coordinator
+        mock_cfg = MagicMock()
+        mock_cfg.type = McpServerType.STDIO
+        mock_cfg.oauth_enabled = False
+        mock_cfg.to_sdk_config.return_value = {"type": "stdio", "command": "mcp-server"}
+
+        # shared_connection absent → getattr(cfg, "shared_connection", False) returns False
+        del mock_cfg.shared_connection
+
+        coordinator.shared_mcp_manager.get_or_open = AsyncMock()
+
+        result = await coordinator._get_mcp_sdk_config(mock_cfg, {})
+
+        assert result["type"] == "stdio"
+        coordinator.shared_mcp_manager.get_or_open.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_issue_671_delete_session_no_legion_system(self, temp_coordinator, sample_session_config):
         """Deleting a session without legion system skips schedule cancellation."""

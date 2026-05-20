@@ -164,3 +164,50 @@ def test_issue_1109_from_dict_round_trip():
     restored = McpServerConfig.from_dict(original.to_dict())
     assert restored.oauth_client_id == "round-trip-id"
     assert restored.oauth_callback_port == 4000
+
+
+# ---------------------------------------------------------------------------
+# shared_connection — Issue #1484
+# ---------------------------------------------------------------------------
+
+
+def test_shared_connection_defaults_to_false():
+    """shared_connection field defaults to False for new configs."""
+    cfg = _http_config()
+    assert cfg.shared_connection is False
+
+
+def test_shared_connection_round_trips_to_dict_and_from_dict():
+    """shared_connection True/False survives to_dict() → from_dict()."""
+    for value in (True, False):
+        cfg = _http_config(shared_connection=value)
+        restored = McpServerConfig.from_dict(cfg.to_dict())
+        assert restored.shared_connection is value
+
+
+def test_shared_connection_backward_compat_missing_key():
+    """Loading a dict without shared_connection key defaults to False."""
+    data = {
+        "id": "abc",
+        "name": "legacy-server",
+        "slug": "legacy-server",
+        "type": "http",
+        "url": "https://example.com",
+    }
+    cfg = McpServerConfig.from_dict(data)
+    assert cfg.shared_connection is False
+
+
+def test_shared_connection_persists_to_disk(tmp_path):
+    """Write config JSON to disk and reload; shared_connection is preserved."""
+    import json
+
+    cfg = _http_config(shared_connection=True)
+    config_file = tmp_path / f"{cfg.slug}.json"
+    with open(config_file, "w") as f:
+        json.dump(cfg.to_dict(), f)
+
+    with open(config_file) as f:
+        data = json.load(f)
+    restored = McpServerConfig.from_dict(data)
+    assert restored.shared_connection is True
