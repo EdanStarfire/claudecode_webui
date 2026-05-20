@@ -768,6 +768,7 @@ class TestIssue1375SecretRefs:
         mock_cfg.type = McpServerType.HTTP
         mock_cfg.headers = {"Authorization": "${secret:foo}"}
         mock_cfg.oauth_enabled = False
+        mock_cfg.shared_connection = False  # non-shared: secret refs must go through proxy
         coordinator.mcp_config_manager.get_configs_by_ids = MagicMock(return_value=[mock_cfg])
 
         result = await coordinator.start_session(session_id)
@@ -851,6 +852,7 @@ class TestIssue1375SecretRefs:
     ):
         """When shared_connection=True, _get_mcp_sdk_config returns an sdk-type proxy dict."""
         from mcp.server import Server
+
         from ..mcp_config_manager import McpServerType
 
         coordinator = temp_coordinator

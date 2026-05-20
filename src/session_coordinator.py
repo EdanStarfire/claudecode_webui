@@ -1280,10 +1280,14 @@ class SessionCoordinator:
                     effective_config.mcp_server_ids
                 )
                 # Issue #1375: Fail closed if ${secret:...} refs exist but proxy is disabled.
+                # Issue #1484: shared_connection configs resolve secrets in-process via
+                # SharedMcpConnectionManager — they never reach the session's MCP client,
+                # so they are exempt from this proxy requirement.
                 has_secret_refs = any(
                     _SECRET_REF_RE.search(v or "")
                     for cfg in selected_configs
                     if cfg.type in (McpServerType.SSE, McpServerType.HTTP)
+                    and not getattr(cfg, "shared_connection", False)
                     for v in (cfg.headers or {}).values()
                 )
                 if has_secret_refs and not effective_config.docker_proxy_enabled:
