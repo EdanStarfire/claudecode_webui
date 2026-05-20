@@ -116,9 +116,9 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
   }
 
   async function initiateOAuth(configId) {
-    // redirect_uri uses current origin — Vite proxies /oauth to the backend in dev,
+    // redirect_uri uses current origin — Vite proxies /callback to the backend in dev,
     // and in production the backend serves everything directly
-    const redirectUri = `${window.location.origin}/oauth/callback`
+    const redirectUri = `${window.location.origin}/callback`
     return await api.post(`/api/mcp-configs/${configId}/oauth/initiate`, { redirect_uri: redirectUri })
   }
 

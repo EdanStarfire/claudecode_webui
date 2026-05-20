@@ -1,4 +1,4 @@
-"""MCP config and OAuth endpoints: /api/mcp-configs, /oauth/callback"""
+"""MCP config and OAuth endpoints: /api/mcp-configs, /callback"""
 
 import html
 import logging
@@ -124,7 +124,7 @@ def build_router(webui) -> APIRouter:
 
     # ========== MCP OAuth Endpoints (issue #813) ==========
 
-    @router.get("/oauth/callback", response_class=HTMLResponse)
+    @router.get("/callback", response_class=HTMLResponse)
     @handle_exceptions("handle oauth callback")
     async def oauth_callback(request: Request):
         """Handle OAuth 2.1 authorization code callback.
