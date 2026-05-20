@@ -450,6 +450,7 @@ class ApplicationService:
             server_url=server_url,
             redirect_uri=redirect_uri,
             client_name=client_name,
+            pre_registered_client_id=config.oauth_client_id or None,
         )
 
     async def oauth_disconnect(self, config_id: str) -> bool:
