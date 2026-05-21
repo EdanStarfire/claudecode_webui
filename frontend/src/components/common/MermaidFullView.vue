@@ -66,8 +66,17 @@
 
 <script setup>
 import { ref, watch, nextTick, onUnmounted } from 'vue'
-import { renderMermaidSVG } from 'beautiful-mermaid'
+import mermaid from 'mermaid'
 import { fullViewSource, fullViewDiagramId } from '@/composables/useMermaidFullView.js'
+
+let mermaidFullViewInitialized = false
+function ensureMermaidInit() {
+  if (!mermaidFullViewInitialized) {
+    mermaid.initialize({ startOnLoad: false })
+    mermaidFullViewInitialized = true
+  }
+}
+let fullViewRenderCounter = 0
 
 const isOpen = ref(false)
 const currentSource = ref('')
@@ -112,14 +121,16 @@ watch(isOpen, (open) => {
   }
 })
 
-function renderDiagram() {
+async function renderDiagram() {
   if (!diagramRef.value) return
+  ensureMermaidInit()
   rendering.value = true
   renderError.value = ''
   diagramRef.value.innerHTML = ''
 
   try {
-    const svg = renderMermaidSVG(currentSource.value)
+    const id = `mermaid-fv-${++fullViewRenderCounter}`
+    const { svg } = await mermaid.render(id, currentSource.value)
     if (diagramRef.value) {
       diagramRef.value.innerHTML = svg
       const svgEl = diagramRef.value.querySelector('svg')
