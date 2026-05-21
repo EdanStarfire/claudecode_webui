@@ -1,7 +1,7 @@
 <template>
   <Suspense>
     <div ref="wrapEl" v-bind="$attrs">
-      <Comark :markdown="content" :plugins="plugins" :components="components" />
+      <Comark :markdown="safeContent" :plugins="plugins" :components="components" />
     </div>
     <template #fallback>
       <div v-bind="$attrs" class="markdown-loading" />
@@ -10,15 +10,18 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { Comark } from '@comark/vue'
 import { useMarkdownPlugins, useMarkdownComponents } from '@/composables/useMarkdown'
+import { preprocessLeadingThematicBreak } from './markdownPreprocess'
 
 defineOptions({ inheritAttrs: false })
 
-defineProps({
+const props = defineProps({
   content: { type: String, default: '' },
 })
+
+const safeContent = computed(() => preprocessLeadingThematicBreak(props.content))
 
 const wrapEl = ref(null)
 const plugins = useMarkdownPlugins()
