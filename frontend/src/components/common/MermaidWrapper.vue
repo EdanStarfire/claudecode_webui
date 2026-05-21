@@ -34,6 +34,12 @@
   </div>
 </template>
 
+<script>
+// Module-level — shared across all MermaidWrapper instances so render IDs are globally unique
+let _mermaidCounter = 0
+let _mermaidInitialized = false
+</script>
+
 <script setup>
 import { ref, onMounted, watch } from 'vue'
 import mermaid from 'mermaid'
@@ -47,14 +53,13 @@ const svgContent = ref('')
 const error = ref('')
 const showCode = ref(false)
 
-let instanceCounter = 0
 let renderSeq = 0
+let lastRenderId = ''
 
-let initialized = false
 function ensureInit() {
-  if (!initialized) {
+  if (!_mermaidInitialized) {
     mermaid.initialize({ startOnLoad: false })
-    initialized = true
+    _mermaidInitialized = true
   }
 }
 
@@ -63,7 +68,8 @@ async function render() {
   const seq = ++renderSeq
   error.value = ''
   try {
-    const id = `mermaid-w-${++instanceCounter}`
+    const id = `mermaid-${++_mermaidCounter}`
+    lastRenderId = id
     const { svg } = await mermaid.render(id, props.content)
     if (seq === renderSeq) svgContent.value = svg
   } catch (err) {
@@ -76,7 +82,7 @@ watch(() => props.content, render)
 
 function openFullscreen() {
   if (!error.value) {
-    openFullView(props.content, `mermaid-wrapper-${instanceCounter}`)
+    openFullView(props.content, lastRenderId)
   }
 }
 </script>
