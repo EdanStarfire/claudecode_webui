@@ -20,6 +20,11 @@
           </span>
         </div>
 
+        <!-- Role subtitle for sidebar layout -->
+        <div v-if="roleSubtitle" class="node-role text-muted" :title="roleSubtitle">
+          {{ roleSubtitle }}
+        </div>
+
         <!-- Latest Activity below name - Issue #291, #340: use live data for real-time updates -->
         <div v-if="minionWithLiveData?.latest_message" class="latest-activity text-muted">
           <span v-if="messagePrefix" class="activity-prefix">{{ messagePrefix }} </span>
@@ -67,13 +72,17 @@
           <!-- Overseer Icon -->
           <span v-if="isOverseerWithChildren" class="me-2">👑</span>
 
-          <!-- Minion Name -->
-          <strong>{{ minionWithLiveData?.name || minionData.name }}</strong>
-
-          <!-- Children Count Badge -->
-          <span v-if="isOverseerWithChildren" class="badge bg-secondary ms-2">
-            {{ minionData.children.length }} {{ minionData.children.length === 1 ? 'child' : 'children' }}
-          </span>
+          <div class="node-text">
+            <div class="node-name-row">
+              <strong class="node-name">{{ minionWithLiveData?.name || minionData.name }}</strong>
+              <span v-if="isOverseerWithChildren" class="badge bg-secondary ms-2">
+                {{ minionData.children.length }} {{ minionData.children.length === 1 ? 'child' : 'children' }}
+              </span>
+            </div>
+            <div v-if="roleSubtitle" class="node-role text-muted" :title="roleSubtitle">
+              {{ roleSubtitle }}
+            </div>
+          </div>
         </div>
 
         <!-- Right Column: Latest Message or Last Comm (70%) -->
@@ -173,6 +182,8 @@ const liveSession = computed(() => {
   if (!props.minionData || !props.minionData.id) return null
   return sessionStore.getSession(props.minionData.id)
 })
+
+const roleSubtitle = computed(() => liveSession.value?.role || '')
 
 // Get latest message from message store (only for active session)
 // Filters are synchronized with MessageList.vue shouldDisplayMessage() for consistency
@@ -437,6 +448,7 @@ function showManageModal() {
 .minion-card {
   background-color: var(--bs-body-bg);
   border-color: var(--bs-border-color);
+  margin-bottom: 0.25rem;
 }
 
 .minion-tree-node {
@@ -485,16 +497,49 @@ function showManageModal() {
 .node-row {
   display: flex;
   gap: 1rem;
-  align-items: flex-start;
-  padding: 0.5rem 0.75rem;
+  align-items: center;
+  padding: 0.35rem 0.75rem;
+  min-height: 44px;
 }
 
 .node-left {
   flex: 0 0 30%;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.25rem;
+  min-width: 0;
+}
+
+.node-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  flex: 1;
+  line-height: 1.15;
+}
+
+.node-name-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.node-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.node-role {
+  font-size: 0.75rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 0;
 }
 
 .node-right {
@@ -508,14 +553,18 @@ function showManageModal() {
   flex: 0 0 auto;
   display: flex;
   gap: 0.25rem;
-  align-items: flex-start;
+  align-items: center;
   margin-left: 0.5rem;
 }
 
 /* Latest message preview (two-column layout) */
 .latest-message-preview {
-  font-size: 0.9rem;
-  line-height: 1.4;
+  font-size: 0.85rem;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
 }
 
 .message-prefix {
@@ -526,7 +575,10 @@ function showManageModal() {
 
 .message-content {
   color: var(--bs-body-color);
-  word-wrap: break-word;
+  word-wrap: normal;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-style: italic;
   cursor: help;
 }
@@ -539,8 +591,12 @@ function showManageModal() {
 
 /* Comm preview (two-column layout) */
 .last-comm-preview {
-  font-size: 0.9rem;
-  line-height: 1.4;
+  font-size: 0.85rem;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
 }
 
 .comm-direction {
@@ -550,7 +606,10 @@ function showManageModal() {
 
 .comm-content {
   color: var(--bs-body-color);
-  word-wrap: break-word;
+  word-wrap: normal;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: help;
 }
 
@@ -626,5 +685,11 @@ function showManageModal() {
 .minion-card-clickable.active .activity-content,
 .minion-card-clickable.active .message-content {
   color: white;
+}
+
+/* Sidebar layout: compact fixed height */
+.minion-card.minion-card-clickable.d-flex {
+  min-height: 44px;
+  padding: 0.35rem 0.5rem !important;
 }
 </style>

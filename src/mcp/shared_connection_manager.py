@@ -13,6 +13,7 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Any
 
+import anyio
 from mcp.client.sse import sse_client
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamablehttp_client
@@ -73,6 +74,8 @@ class SharedMcpConnectionManager:
             if conn is None:
                 conn = _SharedConn(cfg_id=cfg.id)
                 self._conns[cfg.id] = conn
+                await self._open_locked(cfg, conn)
+            elif conn.session is None:
                 await self._open_locked(cfg, conn)
             conn.refcount += 1
         _logger.info("shared MCP attach cfg=%s refcount=%d", cfg.id, conn.refcount)
@@ -162,9 +165,28 @@ class SharedMcpConnectionManager:
             session = conn.session
             if session is None:
                 return _disconnect_error_result_named(conn.cfg_id)
-            return await session.call_tool(name, arguments)
+            try:
+                return await session.call_tool(name, arguments)
+            except (anyio.ClosedResourceError, anyio.BrokenResourceError):
+                _logger.warning(
+                    "shared MCP upstream closed during call cfg=%s tool=%s — marking disconnected",
+                    conn.cfg_id,
+                    name,
+                )
+                await self._mark_disconnected_locked(conn)
+                return _disconnect_error_result_named(conn.cfg_id)
         finally:
             conn.reconnect_lock.release()
+
+    async def _mark_disconnected_locked(self, conn: _SharedConn) -> None:
+        """Tear down the dead session. Caller must hold conn.reconnect_lock."""
+        if conn.exit_stack is not None:
+            try:
+                await conn.exit_stack.aclose()
+            except Exception:
+                _logger.debug("Error closing exit_stack on disconnect cfg=%s", conn.cfg_id)
+        conn.session = None
+        conn.exit_stack = None
 
     async def _open_locked(self, cfg, conn: _SharedConn) -> None:
         """Open the transport, wrap in ClientSession, run initialize, cache tools."""
@@ -267,13 +289,7 @@ class SharedMcpConnectionManager:
                     "shared MCP refresh: cfg %s not found, leaving conn closed", server_id
                 )
                 return
-            if conn.exit_stack is not None:
-                try:
-                    await conn.exit_stack.aclose()
-                except Exception:
-                    _logger.exception("Error closing for refresh cfg=%s", server_id)
-            conn.session = None
-            conn.exit_stack = None
+            await self._mark_disconnected_locked(conn)
             try:
                 await self._open_locked(cfg, conn)
             except Exception:
