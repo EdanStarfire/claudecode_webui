@@ -4183,29 +4183,21 @@ class SessionCoordinator:
                     coord_logger.debug(f"DisplayProjection processing failed: {proj_error}")
                     # Non-fatal - continue without display metadata
 
-                # Track latest meaningful message (issue #291)
-                # Only track user, assistant, system messages (not tool_use, tool_result, permission, etc.)
-                if parsed_message.type.value in ['user', 'assistant', 'system']:
+                # Track latest meaningful message (issue #291, issue #1497)
+                # Only track user and assistant messages — system messages are SDK runtime
+                # events (e.g. "Claude Code Launched"), not conversation content.
+                if parsed_message.type.value in ['user', 'assistant']:
                     content = parsed_message.content or ""
 
                     # Skip messages that are just internal SDK placeholders or tool execution artifacts
                     has_tool_results = parsed_message.metadata.get('has_tool_results', False) if parsed_message.metadata else False
                     has_tool_uses = parsed_message.metadata.get('has_tool_uses', False) if parsed_message.metadata else False
 
-                    # Get subtype for system message filtering
-                    subtype = parsed_message.metadata.get('subtype') if parsed_message.metadata else None
-
                     skip_message = (
                         # User messages with only tool_results (no actual user text)
                         (parsed_message.type.value == 'user' and has_tool_results and content.startswith('Tool results:')) or
                         # Assistant messages with only tool_uses (no actual text response)
-                        (parsed_message.type.value == 'assistant' and has_tool_uses and content == 'Assistant response') or
-                        # System messages with generic placeholder content
-                        (parsed_message.type.value == 'system' and content == 'System message') or
-                        # System init messages (synced with frontend MessageList.vue filtering)
-                        (parsed_message.type.value == 'system' and subtype == 'init') or
-                        # System task_notification messages (synced with frontend MessageList.vue filtering)
-                        (parsed_message.type.value == 'system' and subtype == 'task_notification')
+                        (parsed_message.type.value == 'assistant' and has_tool_uses and content == 'Assistant response')
                     )
 
                     if not skip_message:
