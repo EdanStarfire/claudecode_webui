@@ -27,10 +27,9 @@
         v-if="childIds.length > 0"
         class="stack-count"
         role="button"
-        :aria-label="`${childIds.length} child agent${childIds.length !== 1 ? 's' : ''}, click to ${isExpanded ? 'collapse' : 'expand'}`"
-        :aria-expanded="isExpanded"
-        @click.stop="toggleExpand"
-        :title="`${childIds.length} child agent${childIds.length !== 1 ? 's' : ''}`"
+        :aria-label="`${childCountLabel}, click to open project overview`"
+        @click.stop="navigateToProject"
+        :title="childCountLabel"
       >
         {{ childIds.length }}
       </div>
@@ -63,6 +62,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import { compareAgents } from '@/utils/agentSort'
@@ -81,6 +81,7 @@ const props = defineProps({
 
 const emit = defineEmits(['select'])
 
+const router = useRouter()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 
@@ -98,6 +99,11 @@ const childIds = computed(() => {
       idOf: s => s.session_id
     })
   })
+})
+
+const childCountLabel = computed(() => {
+  const n = childIds.value.length
+  return `${n} child agent${n !== 1 ? 's' : ''}`
 })
 
 // Compute max depth of the subtree rooted at this session
@@ -188,6 +194,13 @@ function isDescendantActive(childId) {
 
 function toggleExpand() {
   uiStore.toggleStack(props.session.session_id)
+}
+
+function navigateToProject() {
+  const projectId = props.session.project_id
+  if (!projectId) return
+  uiStore.setBrowsingProject(projectId)
+  router.push(`/project/${projectId}`)
 }
 
 function handlePeekClick(childSessionId) {
