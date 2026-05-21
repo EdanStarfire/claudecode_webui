@@ -336,7 +336,7 @@ const statusTintClass = computed(() => {
     case 'running':
       return 'status-tint-success'
     case 'processing':
-      return 'status-tint-info'
+      return 'status-tint-purple'
     case 'pending-prompt':
       return 'status-tint-warning'
     case 'error':
@@ -655,8 +655,14 @@ function showManageModal() {
 }
 
 .status-dot-purple {
-  background-color: var(--bs-info-bg-subtle);
-  border-color: var(--bs-info);
+  background-color: #ede0ff;
+  border-color: #6f42c1;
+}
+
+[data-bs-theme="dark"] .status-dot-purple,
+[data-bs-theme="sensitive-dark"] .status-dot-purple {
+  background-color: #3a1f6b;
+  border-color: #9d6fe8;
 }
 
 .status-dot-red {
@@ -720,40 +726,40 @@ function showManageModal() {
    vars are not declared in the active theme (light/dark rely on Bootstrap's :root which
    this project's custom theme layer omits for most semantic tokens). */
 .minion-card.status-tint-success {
-  background-color: color-mix(in oklab, var(--bs-success, #198754) 8%, var(--bs-body-bg, #fff));
+  background-color: color-mix(in oklab, var(--bs-success, #198754) 12%, var(--bs-body-bg, #fff));
 }
-.minion-card.status-tint-info {
-  background-color: color-mix(in oklab, var(--bs-info, #0dcaf0) 8%, var(--bs-body-bg, #fff));
+.minion-card.status-tint-purple {
+  background-color: color-mix(in oklab, #6f42c1 12%, var(--bs-body-bg, #fff));
 }
 .minion-card.status-tint-warning {
-  background-color: color-mix(in oklab, var(--bs-warning, #ffc107) 8%, var(--bs-body-bg, #fff));
+  background-color: color-mix(in oklab, var(--bs-warning, #ffc107) 12%, var(--bs-body-bg, #fff));
 }
 .minion-card.status-tint-danger {
-  background-color: color-mix(in oklab, var(--bs-danger, #dc3545) 8%, var(--bs-body-bg, #fff));
+  background-color: color-mix(in oklab, var(--bs-danger, #dc3545) 12%, var(--bs-body-bg, #fff));
 }
 .minion-card.status-tint-secondary {
-  background-color: color-mix(in oklab, var(--bs-secondary, #6c757d) 6%, var(--bs-body-bg, #fff));
+  background-color: color-mix(in oklab, var(--bs-secondary, #6c757d) 9%, var(--bs-body-bg, #fff));
 }
 
 /* Dark themes need more pigment to be perceptible */
 [data-bs-theme="dark"] .minion-card.status-tint-success,
 [data-bs-theme="sensitive-dark"] .minion-card.status-tint-success {
-  background-color: color-mix(in oklab, var(--bs-success, #198754) 14%, var(--bs-body-bg, #131c2e));
+  background-color: color-mix(in oklab, var(--bs-success, #198754) 20%, var(--bs-body-bg, #131c2e));
 }
-[data-bs-theme="dark"] .minion-card.status-tint-info,
-[data-bs-theme="sensitive-dark"] .minion-card.status-tint-info {
-  background-color: color-mix(in oklab, var(--bs-info, #0dcaf0) 14%, var(--bs-body-bg, #131c2e));
+[data-bs-theme="dark"] .minion-card.status-tint-purple,
+[data-bs-theme="sensitive-dark"] .minion-card.status-tint-purple {
+  background-color: color-mix(in oklab, #6f42c1 20%, var(--bs-body-bg, #131c2e));
 }
 [data-bs-theme="dark"] .minion-card.status-tint-warning,
 [data-bs-theme="sensitive-dark"] .minion-card.status-tint-warning {
-  background-color: color-mix(in oklab, var(--bs-warning, #ffc107) 14%, var(--bs-body-bg, #131c2e));
+  background-color: color-mix(in oklab, var(--bs-warning, #ffc107) 20%, var(--bs-body-bg, #131c2e));
 }
 [data-bs-theme="dark"] .minion-card.status-tint-danger,
 [data-bs-theme="sensitive-dark"] .minion-card.status-tint-danger {
-  background-color: color-mix(in oklab, var(--bs-danger, #dc3545) 14%, var(--bs-body-bg, #131c2e));
+  background-color: color-mix(in oklab, var(--bs-danger, #dc3545) 20%, var(--bs-body-bg, #131c2e));
 }
 [data-bs-theme="dark"] .minion-card.status-tint-secondary,
 [data-bs-theme="sensitive-dark"] .minion-card.status-tint-secondary {
-  background-color: color-mix(in oklab, var(--bs-secondary, #6c757d) 10%, var(--bs-body-bg, #131c2e));
+  background-color: color-mix(in oklab, var(--bs-secondary, #6c757d) 16%, var(--bs-body-bg, #131c2e));
 }
 </style>
