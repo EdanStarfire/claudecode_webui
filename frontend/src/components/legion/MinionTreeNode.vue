@@ -1,7 +1,7 @@
 <template>
   <div v-if="minionData" class="minion-tree-node" :style="{ marginLeft: `${indent}px` }">
     <!-- Sidebar Layout (vertical, single column) -->
-    <div v-if="layout === 'sidebar'" class="minion-card minion-card-clickable border-start border-2 mb-2 d-flex align-items-center p-2" :class="{ active: isSelected }" @click="handleClick">
+    <div v-if="layout === 'sidebar'" class="minion-card minion-card-clickable border-start border-2 mb-2 d-flex align-items-center p-2" :class="[statusTintClass, { active: isSelected }]" @click="handleClick">
       <!-- Status Indicator Dot -->
       <div class="status-dot me-2" :class="statusDotClass"></div>
 
@@ -62,7 +62,7 @@
     </div>
 
     <!-- Two-Column Layout (for HierarchyView) -->
-    <div v-else class="minion-card minion-card-clickable border-start border-2 mb-2" :class="{ active: isSelected }" @click="handleClick">
+    <div v-else class="minion-card minion-card-clickable border-start border-2 mb-2" :class="[statusTintClass, { active: isSelected }]" @click="handleClick">
       <div class="node-row">
         <!-- Left Column: Status + Name (30%) -->
         <div class="node-left">
@@ -326,6 +326,28 @@ const isOverseerWithChildren = computed(() => {
 
 // Display state (matches SessionItem logic) - now uses live data
 const displayState = computed(() => getDisplayState(minionWithLiveData.value))
+
+// Per-status background tint class (issue #1501)
+const statusTintClass = computed(() => {
+  const state = displayState.value
+  switch (state) {
+    case 'starting':
+    case 'active':
+    case 'running':
+      return 'status-tint-success'
+    case 'processing':
+      return 'status-tint-info'
+    case 'pending-prompt':
+      return 'status-tint-warning'
+    case 'error':
+    case 'failed':
+      return 'status-tint-danger'
+    case 'paused':
+      return 'status-tint-secondary'
+    default:
+      return ''
+  }
+})
 
 // Status dot CSS classes (matches SessionItem)
 const statusDotClass = computed(() => {
@@ -666,11 +688,11 @@ function showManageModal() {
   transition: background-color 0.2s ease;
 }
 
-.minion-card-clickable:hover {
+.minion-card.minion-card-clickable:hover {
   background-color: rgba(var(--bs-link-color-rgb, 13, 110, 253), 0.1);
 }
 
-.minion-card-clickable.active {
+.minion-card.minion-card-clickable.active {
   background-color: var(--bs-link-color);
   color: white;
 }
@@ -691,5 +713,47 @@ function showManageModal() {
 .minion-card.minion-card-clickable.d-flex {
   min-height: 44px;
   padding: 0.35rem 0.5rem !important;
+}
+
+/* Per-status subtle background tint (issue #1501).
+   Fallback hex values ensure color-mix works even when Bootstrap's --bs-* semantic
+   vars are not declared in the active theme (light/dark rely on Bootstrap's :root which
+   this project's custom theme layer omits for most semantic tokens). */
+.minion-card.status-tint-success {
+  background-color: color-mix(in oklab, var(--bs-success, #198754) 8%, var(--bs-body-bg, #fff));
+}
+.minion-card.status-tint-info {
+  background-color: color-mix(in oklab, var(--bs-info, #0dcaf0) 8%, var(--bs-body-bg, #fff));
+}
+.minion-card.status-tint-warning {
+  background-color: color-mix(in oklab, var(--bs-warning, #ffc107) 8%, var(--bs-body-bg, #fff));
+}
+.minion-card.status-tint-danger {
+  background-color: color-mix(in oklab, var(--bs-danger, #dc3545) 8%, var(--bs-body-bg, #fff));
+}
+.minion-card.status-tint-secondary {
+  background-color: color-mix(in oklab, var(--bs-secondary, #6c757d) 6%, var(--bs-body-bg, #fff));
+}
+
+/* Dark themes need more pigment to be perceptible */
+[data-bs-theme="dark"] .minion-card.status-tint-success,
+[data-bs-theme="sensitive-dark"] .minion-card.status-tint-success {
+  background-color: color-mix(in oklab, var(--bs-success, #198754) 14%, var(--bs-body-bg, #131c2e));
+}
+[data-bs-theme="dark"] .minion-card.status-tint-info,
+[data-bs-theme="sensitive-dark"] .minion-card.status-tint-info {
+  background-color: color-mix(in oklab, var(--bs-info, #0dcaf0) 14%, var(--bs-body-bg, #131c2e));
+}
+[data-bs-theme="dark"] .minion-card.status-tint-warning,
+[data-bs-theme="sensitive-dark"] .minion-card.status-tint-warning {
+  background-color: color-mix(in oklab, var(--bs-warning, #ffc107) 14%, var(--bs-body-bg, #131c2e));
+}
+[data-bs-theme="dark"] .minion-card.status-tint-danger,
+[data-bs-theme="sensitive-dark"] .minion-card.status-tint-danger {
+  background-color: color-mix(in oklab, var(--bs-danger, #dc3545) 14%, var(--bs-body-bg, #131c2e));
+}
+[data-bs-theme="dark"] .minion-card.status-tint-secondary,
+[data-bs-theme="sensitive-dark"] .minion-card.status-tint-secondary {
+  background-color: color-mix(in oklab, var(--bs-secondary, #6c757d) 10%, var(--bs-body-bg, #131c2e));
 }
 </style>
