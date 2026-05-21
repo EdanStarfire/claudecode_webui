@@ -223,3 +223,68 @@ class TestQueueConfig:
         )
         assert resp.status_code == 200
         assert resp.json()["config"]["min_wait_seconds"] == 20
+
+
+class TestClearHistory:
+    async def test_clear_history_returns_count(self, api_integration_env):
+        client = api_integration_env["client"]
+        session = await _create_session(api_integration_env)
+        sid = session["session_id"]
+
+        # Enqueue 2 items and cancel them (terminal state)
+        for i in range(2):
+            enqueue_resp = await client.post(
+                f"/api/sessions/{sid}/queue-message",
+                json={"content": f"History item {i}"},
+            )
+            queue_id = enqueue_resp.json()["queue_id"]
+            await client.delete(f"/api/sessions/{sid}/queue/{queue_id}")
+
+        resp = await client.delete(f"/api/sessions/{sid}/queue/history")
+        assert resp.status_code == 200
+        assert resp.json()["cleared_count"] == 2
+
+    async def test_clear_history_preserves_pending(self, api_integration_env):
+        client = api_integration_env["client"]
+        session = await _create_session(api_integration_env)
+        sid = session["session_id"]
+
+        # Enqueue one item and cancel it, keep another pending
+        enqueue_resp = await client.post(
+            f"/api/sessions/{sid}/queue-message",
+            json={"content": "to cancel"},
+        )
+        queue_id = enqueue_resp.json()["queue_id"]
+        await client.delete(f"/api/sessions/{sid}/queue/{queue_id}")
+
+        await client.post(
+            f"/api/sessions/{sid}/queue-message",
+            json={"content": "keep me"},
+        )
+
+        resp = await client.delete(f"/api/sessions/{sid}/queue/history")
+        assert resp.status_code == 200
+        assert resp.json()["cleared_count"] == 1
+
+        queue_resp = await client.get(f"/api/sessions/{sid}/queue")
+        pending = [i for i in queue_resp.json()["items"] if i["status"] == "pending"]
+        assert len(pending) == 1
+        assert pending[0]["content"] == "keep me"
+
+    async def test_clear_history_emits_queue_update(self, api_integration_env):
+        client = api_integration_env["client"]
+        session = await _create_session(api_integration_env)
+        sid = session["session_id"]
+
+        # Enqueue and cancel an item so there is history to clear
+        enqueue_resp = await client.post(
+            f"/api/sessions/{sid}/queue-message",
+            json={"content": "terminal"},
+        )
+        queue_id = enqueue_resp.json()["queue_id"]
+        await client.delete(f"/api/sessions/{sid}/queue/{queue_id}")
+
+        resp = await client.delete(f"/api/sessions/{sid}/queue/history")
+        assert resp.status_code == 200
+        # Endpoint returns cleared_count (broadcast is fire-and-forget, not asserted here)
+        assert "cleared_count" in resp.json()

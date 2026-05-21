@@ -18,6 +18,8 @@ from .timestamp_utils import get_unix_timestamp
 queue_logger = get_logger('queue_manager', category='QUEUE')
 logger = logging.getLogger(__name__)
 
+_TERMINAL_STATUSES: frozenset[str] = frozenset({"sent", "failed", "cancelled"})
+
 
 @dataclass
 class QueueItem:
@@ -80,9 +82,11 @@ class QueueManager:
         Replay queue.jsonl to rebuild in-memory state for a session.
 
         Returns list of all items (including terminal states for history).
+        Terminal items whose created_at <= cleared_at_max (from history_cleared markers) are dropped.
         """
         queue_file = self._get_queue_file(session_dir)
         items_by_id: dict[str, QueueItem] = {}
+        cleared_at_max: float = 0.0
 
         if not queue_file.exists():
             self._queues[session_id] = []
@@ -103,7 +107,12 @@ class QueueManager:
                     entry_type = entry.get("type")
                     queue_id = entry.get("queue_id")
 
-                    if entry_type == "enqueue":
+                    if entry_type == "history_cleared":
+                        ts = entry.get("cleared_at", 0.0)
+                        if ts > cleared_at_max:
+                            cleared_at_max = ts
+
+                    elif entry_type == "enqueue":
                         item = QueueItem(
                             queue_id=queue_id,
                             session_id=session_id,
@@ -127,7 +136,10 @@ class QueueManager:
         except Exception as e:
             logger.error(f"Failed to load queue for session {session_id}: {e}")
 
-        all_items = list(items_by_id.values())
+        all_items = [
+            i for i in items_by_id.values()
+            if not (i.status in _TERMINAL_STATUSES and cleared_at_max > 0 and i.created_at <= cleared_at_max)
+        ]
         all_items.sort(key=lambda x: x.position)
         self._queues[session_id] = all_items
 
@@ -297,6 +309,30 @@ class QueueManager:
 
         if count:
             queue_logger.info(f"Cleared {count} pending items for session {session_id}")
+        return count
+
+    async def clear_history(self, session_id: str, session_dir: Path) -> int:
+        """
+        Remove terminal (sent/failed/cancelled) items from the queue.
+
+        Appends a history_cleared marker to queue.jsonl so that load_queue
+        will drop these items on replay. Does not affect pending items.
+        Returns count of removed items.
+        """
+        queue = self._queues.get(session_id, [])
+        terminal_items = [i for i in queue if i.status in _TERMINAL_STATUSES]
+        if not terminal_items:
+            return 0
+
+        cleared_at = max(i.created_at for i in terminal_items)
+        await self._append_entry(session_dir, {
+            "type": "history_cleared",
+            "cleared_at": cleared_at,
+        })
+
+        self._queues[session_id] = [i for i in queue if i.status not in _TERMINAL_STATUSES]
+        count = len(terminal_items)
+        queue_logger.info(f"Cleared history ({count} terminal items) for session {session_id}")
         return count
 
     # =========================================================================

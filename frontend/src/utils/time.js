@@ -80,6 +80,29 @@ export function formatDateSeparatorLabel(timestamp) {
 }
 
 /**
+ * Format a queue item timestamp as "YYYY-MM-DD h:mma" in local time.
+ * Hour has no leading zero; am/pm is lowercase.
+ *
+ * @param {number|string|null} timestamp - Timestamp from backend (Unix seconds or ISO)
+ * @returns {string} Formatted string, or empty string for missing timestamp
+ */
+export function formatQueueTimestamp(timestamp) {
+  if (!timestamp) return ''
+  const date = parseTimestamp(timestamp)
+  if (isNaN(date.getTime())) return ''
+
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours24 = date.getHours()
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const period = hours24 < 12 ? 'am' : 'pm'
+  const hours12 = hours24 % 12 || 12
+
+  return `${year}-${month}-${day} ${hours12}:${minutes}${period}`
+}
+
+/**
  * Get relative time (e.g., "2 minutes ago")
  *
  * @param {number|string} timestamp - Timestamp from backend

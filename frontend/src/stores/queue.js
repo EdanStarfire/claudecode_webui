@@ -125,6 +125,16 @@ export const useQueueStore = defineStore('queue', () => {
     }
   }
 
+  async function clearHistory(sessionId) {
+    try {
+      const data = await api.delete(`/api/sessions/${sessionId}/queue/history`)
+      return data.cleared_count
+    } catch (error) {
+      console.error('Failed to clear queue history:', error)
+      throw error
+    }
+  }
+
   async function pauseQueue(sessionId, paused) {
     try {
       const data = await api.put(`/api/sessions/${sessionId}/queue/pause`, { paused })
@@ -182,6 +192,7 @@ export const useQueueStore = defineStore('queue', () => {
     cancelItem,
     requeueItem,
     clearQueue,
+    clearHistory,
     pauseQueue,
     handleQueueUpdate,
     updatePauseState,
