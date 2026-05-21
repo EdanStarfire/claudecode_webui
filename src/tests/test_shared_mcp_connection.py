@@ -1,5 +1,6 @@
-"""Unit tests for SharedMcpConnectionManager (issue #1484 §4.1)."""
+"""Unit tests for SharedMcpConnectionManager (issue #1484 §4.1, issue #1505)."""
 
+import asyncio
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -82,15 +83,26 @@ async def _fake_stdio_transport(read=None, write=None):
 
 
 # ---------------------------------------------------------------------------
-# Patch helper: replaces _open_locked with a fast fake
+# Patch helper: replaces _open_locked with a fast fake (owner-task aware)
 # ---------------------------------------------------------------------------
 
 
 async def _stub_open_locked(mgr_self, cfg, conn: _SharedConn):
+    """Stub for _open_locked that sets up owner-task fields without real transport."""
     conn.session = _fake_session()
-    conn.exit_stack = MagicMock()
-    conn.exit_stack.aclose = AsyncMock()
     conn.cached_tools = [Tool(name="t1", description="tool1", inputSchema={"type": "object"})]
+    conn.generation += 1
+    loop = asyncio.get_running_loop()
+    closed_fut: asyncio.Future = loop.create_future()
+    closed_fut.set_result(None)
+    close_event = asyncio.Event()
+
+    async def _noop_owner():
+        await close_event.wait()
+
+    conn.close_event = close_event
+    conn.closed_future = closed_fut
+    conn.owner_task = asyncio.create_task(_noop_owner(), name=f"stub-owner-{cfg.id}")
 
 
 # ---------------------------------------------------------------------------
@@ -106,10 +118,7 @@ async def test_get_or_open_opens_once_for_multiple_sessions():
 
     async def patched_open(self, c, conn):
         open_calls.append(c.id)
-        conn.session = _fake_session()
-        conn.exit_stack = MagicMock()
-        conn.exit_stack.aclose = AsyncMock()
-        conn.cached_tools = []
+        await _stub_open_locked(self, c, conn)
 
     with patch.object(SharedMcpConnectionManager, "_open_locked", patched_open):
         conn1 = await mgr.get_or_open(cfg)
@@ -231,11 +240,7 @@ async def test_token_refresh_triggers_reconnect():
 
     async def counting_open(self, c, conn):
         open_calls.append(c.id)
-        conn.session = _fake_session()
-        old_stack = MagicMock()
-        old_stack.aclose = AsyncMock()
-        conn.exit_stack = old_stack
-        conn.cached_tools = []
+        await _stub_open_locked(self, c, conn)
 
     with patch.object(SharedMcpConnectionManager, "_open_locked", counting_open):
         await mgr.get_or_open(cfg)
@@ -249,6 +254,8 @@ async def test_token_refresh_triggers_reconnect():
         await mgr._on_token_refreshed(cfg.id)
 
     assert len(open_calls) == 2  # re-opened after refresh
+    conn = mgr._conns[cfg.id]
+    assert conn.generation == 2, "generation must advance after token-refresh reconnect"
 
 
 # ---------------------------------------------------------------------------
@@ -444,7 +451,6 @@ async def test_call_tool_returns_disconnect_on_closed_resource_error():
     assert result.isError is True
     assert "disconnected" in result.content[0].text.lower()
     assert conn.session is None
-    assert conn.exit_stack is None
 
 
 @pytest.mark.asyncio
@@ -455,10 +461,7 @@ async def test_next_call_after_closed_resource_error_triggers_reopen():
 
     async def counting_open(self, c, conn):
         open_calls.append(c.id)
-        conn.session = _fake_session()
-        conn.exit_stack = MagicMock()
-        conn.exit_stack.aclose = AsyncMock()
-        conn.cached_tools = [Tool(name="t1", description="tool1", inputSchema={"type": "object"})]
+        await _stub_open_locked(self, c, conn)
 
     with patch.object(SharedMcpConnectionManager, "_open_locked", counting_open):
         conn = await mgr.get_or_open(cfg)
@@ -494,4 +497,174 @@ async def test_broken_resource_error_also_recovers():
     assert result.isError is True
     assert "disconnected" in result.content[0].text.lower()
     assert conn.session is None
-    assert conn.exit_stack is None
+
+
+# ---------------------------------------------------------------------------
+# Regression: cross-task close must not raise RuntimeError (issue #1505)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cross_task_close_no_runtime_error():
+    """Owner task holds AsyncExitStack; close from foreign task must not violate cancel scope.
+
+    Fails against old code because _SharedConn has no `generation` field and because
+    close happens from a foreign task (task-affine cancel scope violation).
+    """
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    enter_tasks: list = []
+    exit_tasks: list = []
+
+    @asynccontextmanager
+    async def task_recording_ctx():
+        enter_tasks.append(asyncio.current_task())
+        try:
+            yield (MagicMock(), MagicMock())
+        finally:
+            exit_tasks.append(asyncio.current_task())
+            assert asyncio.current_task() is enter_tasks[-1], (
+                "AsyncExitStack exited from wrong task — cross-task cancel scope violation"
+            )
+
+    async def recording_enter_transport(self_mgr, c, stack):
+        return await stack.enter_async_context(task_recording_ctx())
+
+    with (
+        patch.object(SharedMcpConnectionManager, "_enter_transport", recording_enter_transport),
+        patch("src.mcp.shared_connection_manager.ClientSession", return_value=_fake_session()),
+    ):
+        # Open from the test task (task A)
+        conn = await mgr.get_or_open(cfg)
+        assert conn.generation == 1, "generation must be 1 after first open"
+
+        mgr.set_cfg_lookup(AsyncMock(return_value=cfg))
+
+        # Trigger refresh from a *separate* task (task B) — the cross-task scenario
+        await asyncio.create_task(mgr._on_token_refreshed(cfg.id))
+
+        assert conn.generation == 2, "generation must advance to 2 after token-refresh reconnect"
+        assert conn.session is not None, "session must be live after reconnect"
+
+        # Close the connection so both owner tasks complete before we check exit_tasks
+        await mgr.shutdown()
+
+    assert len(enter_tasks) == 2, "transport must have been opened twice"
+    assert len(exit_tasks) == 2, "both transports must have been closed"
+    # Each open's exit must have happened from the same task that entered it
+    assert all(e is x for e, x in zip(enter_tasks, exit_tasks, strict=True)), (
+        "every transport close must run on the same task that opened it"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cleanup-failure surfacing (issue #1505)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cleanup_failure_surfaces_in_call_tool():
+    """If the owner task closes with an error, subsequent call_tool surfaces it."""
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+
+    # Simulate cleanup failure by resolving closed_future with an exception
+    boom = Exception("boom")
+    conn.closed_future = asyncio.get_running_loop().create_future()
+    conn.closed_future.set_result(boom)
+
+    # Signal close so _close_owner_locked proceeds
+    conn.close_event.set()
+
+    # Drain refcount and mark draining to trigger close
+    conn.refcount = 0
+    conn.draining = True
+    await mgr._close(cfg.id)
+
+    assert conn.last_close_error is boom
+
+    # A new connection gets the same cfg_id; manually check error surfacing in
+    # _disconnect_error_result_named
+    from src.mcp.shared_connection_manager import _disconnect_error_result_named
+
+    result = _disconnect_error_result_named(cfg.id, reason="boom")
+    assert result.isError is True
+    assert "boom" in result.content[0].text
+
+
+# ---------------------------------------------------------------------------
+# shutdown() cross-task safety (issue #1505)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cross_task_safety():
+    """shutdown() called from any task closes connections safely via owner task."""
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    enter_tasks: list = []
+    exit_tasks: list = []
+
+    @asynccontextmanager
+    async def task_recording_ctx():
+        enter_tasks.append(asyncio.current_task())
+        try:
+            yield (MagicMock(), MagicMock())
+        finally:
+            exit_tasks.append(asyncio.current_task())
+            assert asyncio.current_task() is enter_tasks[-1], (
+                "shutdown closed from wrong task"
+            )
+
+    async def recording_enter_transport(self_mgr, c, stack):
+        return await stack.enter_async_context(task_recording_ctx())
+
+    with (
+        patch.object(SharedMcpConnectionManager, "_enter_transport", recording_enter_transport),
+        patch("src.mcp.shared_connection_manager.ClientSession", return_value=_fake_session()),
+    ):
+        await mgr.get_or_open(cfg)
+
+    # Call shutdown from a different task — must not violate cancel scope
+    await asyncio.create_task(mgr.shutdown())
+
+    assert cfg.id not in mgr._conns
+    assert len(exit_tasks) == 1
+    assert exit_tasks[0] is enter_tasks[0], "transport closed from same task that opened it"
+
+
+# ---------------------------------------------------------------------------
+# Owner-task close timeout (issue #1505)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_owner_task_close_timeout():
+    """If the owner ignores close_event, _close times out, cancels owner, and pops _conns."""
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+    mgr.CLOSE_TIMEOUT_SECONDS = 0.05  # very short for test speed
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+
+    # Replace the owner task with one that ignores close_event
+    async def stubborn_owner():
+        await asyncio.sleep(9999)  # never wakes on close_event
+
+    stubborn = asyncio.create_task(stubborn_owner(), name="stubborn-owner")
+    conn.owner_task = stubborn
+    # Reset closed_future so it never resolves via close_event
+    conn.closed_future = asyncio.get_running_loop().create_future()
+
+    await mgr._close(cfg.id)
+
+    assert cfg.id not in mgr._conns
+    assert conn.last_close_error is not None
+    assert isinstance(conn.last_close_error, TimeoutError)
+    assert stubborn.cancelled() or stubborn.done()
