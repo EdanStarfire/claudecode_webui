@@ -1,8 +1,8 @@
 <template>
   <div class="mermaid-container" :class="{ 'has-error': error }">
-    <!-- Diagram view (default) -->
+    <!-- Diagram view (default for supported types) -->
     <div
-      v-if="!showCode && !error"
+      v-if="!showCode && !error && !unsupported"
       class="mermaid-diagram"
       v-html="svgContent"
       @click="openFullscreen"
@@ -14,19 +14,25 @@
       <pre class="mermaid-code-view"><code class="language-mermaid">{{ content }}</code></pre>
     </template>
 
-    <!-- Code view toggle -->
-    <pre v-if="showCode && !error" class="mermaid-code-view"><code class="language-mermaid">{{ content }}</code></pre>
+    <!-- Unsupported type: code view with soft note -->
+    <template v-if="unsupported">
+      <div class="mermaid-unsupported">Diagram preview not available for this type</div>
+      <pre class="mermaid-code-view"><code class="language-mermaid">{{ content }}</code></pre>
+    </template>
 
-    <!-- Buttons -->
+    <!-- Code view toggle (supported types only) -->
+    <pre v-if="showCode && !error && !unsupported" class="mermaid-code-view"><code class="language-mermaid">{{ content }}</code></pre>
+
+    <!-- Buttons (supported, no error) -->
     <button
-      v-if="!error"
+      v-if="!error && !unsupported"
       class="mermaid-toggle"
       :title="showCode ? 'Show diagram' : 'Toggle code/diagram view'"
       @click.stop="showCode = !showCode"
     >{{ showCode ? '▶' : '</>' }}</button>
 
     <button
-      v-if="!error && !showCode"
+      v-if="!error && !unsupported && !showCode"
       class="mermaid-fullscreen-btn"
       title="View fullscreen"
       @click.stop="openFullscreen"
@@ -46,11 +52,33 @@ const props = defineProps({
 const svgContent = ref('')
 const error = ref('')
 const showCode = ref(false)
+const unsupported = ref(false)
 
 let diagramCounter = 0
 
+// Diagram types supported by beautiful-mermaid
+const SUPPORTED_RE = [
+  /^(graph|flowchart)\b/i,
+  /^sequencediagram\s*$/i,
+  /^classdiagram\b/i,
+  /^erdiagram\s*$/i,
+  /^statediagram(-v2)?\b/i,
+  /^xychart(-beta)?\b/i,
+]
+
+function isSupported(source) {
+  const firstLine = source.trim().split(/[\n;]/)[0]?.trim() ?? ''
+  return SUPPORTED_RE.some((re) => re.test(firstLine))
+}
+
 function render() {
   error.value = ''
+  unsupported.value = false
+  if (!isSupported(props.content)) {
+    unsupported.value = true
+    svgContent.value = ''
+    return
+  }
   try {
     svgContent.value = renderMermaidSVG(props.content)
   } catch (err) {
@@ -62,7 +90,7 @@ onMounted(render)
 watch(() => props.content, render)
 
 function openFullscreen() {
-  if (!error.value) {
+  if (!error.value && !unsupported.value) {
     openFullView(props.content, `mermaid-wrapper-${++diagramCounter}`)
   }
 }
@@ -107,6 +135,16 @@ function openFullscreen() {
   color: #9a3412;
   background: #fff7ed;
   border: 1px solid #fed7aa;
+  margin-bottom: 0.5rem;
+}
+
+.mermaid-unsupported {
+  padding: 0.4rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.8em;
+  color: #6b7280;
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.08);
   margin-bottom: 0.5rem;
 }
 
