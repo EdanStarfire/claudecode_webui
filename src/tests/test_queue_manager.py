@@ -289,3 +289,65 @@ class TestQueueManagerJSONLReplay:
         items = await mgr2.load_queue(sid, sdir)
         assert items[0].status == "failed"
         assert items[0].error == "test error"
+
+
+class TestClearHistory:
+    """Tests for QueueManager.clear_history and load_queue history_cleared handling."""
+
+    @pytest.mark.asyncio
+    async def test_clear_history_removes_terminal_items_only(self, queue_manager, temp_session):
+        sid, sdir = temp_session
+        pending_item = await queue_manager.enqueue(sid, sdir, "pending")
+        sent_item = await queue_manager.enqueue(sid, sdir, "sent")
+        failed_item = await queue_manager.enqueue(sid, sdir, "failed")
+        await queue_manager.mark_sent(sid, sdir, sent_item.queue_id)
+        await queue_manager.mark_failed(sid, sdir, failed_item.queue_id, "err")
+
+        count = await queue_manager.clear_history(sid, sdir)
+
+        assert count == 2
+        remaining = queue_manager.get_queue(sid)
+        assert len(remaining) == 1
+        assert remaining[0].queue_id == pending_item.queue_id
+        assert queue_manager.get_pending_count(sid) == 1
+
+    @pytest.mark.asyncio
+    async def test_clear_history_persists_across_reload(self, temp_session):
+        sid, sdir = temp_session
+        mgr1 = QueueManager()
+        pending_item = await mgr1.enqueue(sid, sdir, "pending")
+        sent_item = await mgr1.enqueue(sid, sdir, "sent")
+        await mgr1.mark_sent(sid, sdir, sent_item.queue_id)
+        await mgr1.clear_history(sid, sdir)
+
+        mgr2 = QueueManager()
+        items = await mgr2.load_queue(sid, sdir)
+        assert len(items) == 1
+        assert items[0].queue_id == pending_item.queue_id
+
+    @pytest.mark.asyncio
+    async def test_clear_history_empty_returns_zero(self, queue_manager, temp_session):
+        sid, sdir = temp_session
+        await queue_manager.enqueue(sid, sdir, "pending only")
+        count = await queue_manager.clear_history(sid, sdir)
+        assert count == 0
+
+    @pytest.mark.asyncio
+    async def test_clear_history_then_new_terminal_items_persist(self, temp_session):
+        """Items added after clear must not be dropped on reload (boundary guard)."""
+        sid, sdir = temp_session
+        mgr1 = QueueManager()
+        old_item = await mgr1.enqueue(sid, sdir, "old")
+        await mgr1.mark_sent(sid, sdir, old_item.queue_id)
+        await mgr1.clear_history(sid, sdir)
+
+        # Enqueue and send a new item after the clear
+        new_item = await mgr1.enqueue(sid, sdir, "new")
+        await mgr1.mark_sent(sid, sdir, new_item.queue_id)
+
+        # Reload — new sent item must survive
+        mgr2 = QueueManager()
+        items = await mgr2.load_queue(sid, sdir)
+        queue_ids = {i.queue_id for i in items}
+        assert new_item.queue_id in queue_ids
+        assert old_item.queue_id not in queue_ids

@@ -764,6 +764,13 @@ class SessionCoordinator:
             return 0
         return await self.queue_manager.clear_pending(session_id, session_dir)
 
+    async def clear_queue_history(self, session_id: str) -> int:
+        """Remove terminal (sent/failed/cancelled) queue items. Returns count removed."""
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return 0
+        return await self.queue_manager.clear_history(session_id, session_dir)
+
     async def get_queue(self, session_id: str, limit: int = 100, offset: int = 0) -> dict:
         """Get queue items for a session, paginated, most recent first."""
         all_items = [item.to_dict() for item in self.queue_manager.get_queue(session_id)]

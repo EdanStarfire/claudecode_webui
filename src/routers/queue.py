@@ -71,6 +71,16 @@ def build_router(webui) -> APIRouter:
         await webui._broadcast_queue_update(session_id, "cleared", {"count": count})
         return {"cancelled_count": count}
 
+    @router.delete("/api/sessions/{session_id}/queue/history")
+    @handle_exceptions("clear queue history")
+    async def clear_queue_history(session_id: str):
+        """Remove terminal (sent/failed/cancelled) queue items."""
+        if not await webui.service.get_session_exists(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        count = await webui.coordinator.clear_queue_history(session_id)
+        await webui._broadcast_queue_update(session_id, "history_cleared", {"count": count})
+        return {"cleared_count": count}
+
     @router.put("/api/sessions/{session_id}/queue/pause")
     @handle_exceptions("pause queue")
     async def pause_queue(session_id: str, request: Request):
