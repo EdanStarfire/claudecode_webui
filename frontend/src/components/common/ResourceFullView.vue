@@ -87,7 +87,7 @@
           </div>
           <div class="text-body">
             <pre v-if="directTextContent && displayMode === 'raw'" class="text-content">{{ directTextContent }}</pre>
-            <div v-else-if="directTextContent && displayMode === 'markdown'" class="markdown-content" ref="directMarkdownRef" v-html="directRenderedMarkdown"></div>
+            <MarkdownView v-else-if="directTextContent && displayMode === 'markdown'" class="markdown-content" ref="directMarkdownRef" :content="strippedDirectContent" />
             <div v-else class="text-unavailable">No content available.</div>
           </div>
         </div>
@@ -184,7 +184,7 @@
             <!-- Content: Raw -->
             <pre v-else-if="textContent && displayMode === 'raw'" class="text-content">{{ textContent }}</pre>
             <!-- Content: Markdown -->
-            <div v-else-if="textContent && displayMode === 'markdown'" class="markdown-content" ref="resourceMarkdownRef" v-html="renderedMarkdown"></div>
+            <MarkdownView v-else-if="textContent && displayMode === 'markdown'" class="markdown-content" ref="resourceMarkdownRef" :content="textContent" />
             <!-- No content / unsupported -->
             <div v-else class="text-unavailable">
               Preview not available for this file type.
@@ -238,8 +238,7 @@
 <script setup>
 import { computed, watch, ref, nextTick, onUnmounted } from 'vue'
 import { useResourceStore } from '@/stores/resource'
-import { renderMarkdown } from '@/composables/useMarkdown'
-import { useMermaid } from '@/composables/useMermaid'
+import MarkdownView from './MarkdownView.vue'
 import CopyButton from './CopyButton.vue'
 import ExportPdfButton from './ExportPdfButton.vue'
 
@@ -252,10 +251,6 @@ const directMarkdownRef = ref(null)
 const resourceMarkdownRef = ref(null)
 let copyTimeout = null
 let printIframe = null
-
-// Mermaid diagram rendering for markdown content views
-useMermaid(directMarkdownRef)
-useMermaid(resourceMarkdownRef)
 
 // Computed properties
 const isOpen = computed(() => resourceStore.fullViewOpen)
@@ -288,8 +283,6 @@ const textContent = computed(() => textCacheEntry.value?.content || null)
 const textLoading = computed(() => textCacheEntry.value?.loading || false)
 const textError = computed(() => textCacheEntry.value?.error || null)
 
-const renderedMarkdown = computed(() => renderMarkdown(textContent.value))
-
 // Direct content mode
 const directTextContent = computed(() => resourceStore.directContent)
 
@@ -298,9 +291,9 @@ function stripLineNumbers(text) {
   return text.replace(/^\s*\d+[\t\u2192]/gm, '')
 }
 
-const directRenderedMarkdown = computed(() => {
+const strippedDirectContent = computed(() => {
   if (!directTextContent.value) return ''
-  return renderMarkdown(stripLineNumbers(directTextContent.value))
+  return stripLineNumbers(directTextContent.value)
 })
 
 // Focus overlay when opened for keyboard events
@@ -443,7 +436,8 @@ function printContent() {
 
   printFeedback.value = 'printing'
 
-  const html = markdownRef.innerHTML
+  // markdownRef is a MarkdownView component instance; its $el is the wrapper div
+  const html = (markdownRef.$el ?? markdownRef)?.innerHTML ?? ''
 
   let title = 'document'
   if (isDirectContent.value) {

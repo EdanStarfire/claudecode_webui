@@ -66,7 +66,17 @@
 
 <script setup>
 import { ref, watch, nextTick, onUnmounted } from 'vue'
-import { fullViewSource, fullViewDiagramId, loadMermaid } from '@/composables/useMermaid.js'
+import mermaid from 'mermaid'
+import { fullViewSource, fullViewDiagramId } from '@/composables/useMermaidFullView.js'
+
+let mermaidFullViewInitialized = false
+function ensureMermaidInit() {
+  if (!mermaidFullViewInitialized) {
+    mermaid.initialize({ startOnLoad: false })
+    mermaidFullViewInitialized = true
+  }
+}
+let fullViewRenderCounter = 0
 
 const isOpen = ref(false)
 const currentSource = ref('')
@@ -80,7 +90,6 @@ const overlayRef = ref(null)
 const contentRef = ref(null)
 const diagramRef = ref(null)
 
-let fullscreenDiagramCounter = 0
 let pngWarningTimer = null
 
 // Watch for fullViewSource changes to open the modal
@@ -114,47 +123,26 @@ watch(isOpen, (open) => {
 
 async function renderDiagram() {
   if (!diagramRef.value) return
+  ensureMermaidInit()
   rendering.value = true
   renderError.value = ''
-
-  // Clear any previous render
   diagramRef.value.innerHTML = ''
 
   try {
-    // Re-use the shared lazy-loaded mermaid instance (same config as inline rendering)
-    const mermaid = await loadMermaid()
-
-    const id = `mermaid-fullscreen-${++fullscreenDiagramCounter}`
-    const { svg } = await Promise.race([
-      mermaid.render(id, currentSource.value),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Render timeout (10s)')), 10000)
-      )
-    ])
-
+    const id = `mermaid-fv-${++fullViewRenderCounter}`
+    const { svg } = await mermaid.render(id, currentSource.value)
     if (diagramRef.value) {
       diagramRef.value.innerHTML = svg
-      // Scale SVG to fill the content area width while preserving aspect ratio
       const svgEl = diagramRef.value.querySelector('svg')
       if (svgEl) {
         svgEl.style.width = '100%'
         svgEl.style.height = 'auto'
-        // Preserve the intrinsic width attribute for PNG export canvas sizing
-        // (CSS styles don't affect img.naturalWidth when serializing the SVG)
       }
     }
   } catch (err) {
     renderError.value = `Diagram error: ${err.message || 'Invalid syntax'}`
   } finally {
     rendering.value = false
-    // Clean up any mermaid render artifacts that ended up outside the modal.
-    // Note: 'd' + id is Mermaid's internal detached-element naming convention
-    // and is version-sensitive — it may break silently on a Mermaid version bump.
-    const id = `mermaid-fullscreen-${fullscreenDiagramCounter}`
-    const leftover = document.getElementById(id)
-    if (leftover && !diagramRef.value?.contains(leftover)) leftover.remove()
-    const dLeftover = document.getElementById('d' + id)
-    if (dLeftover && !diagramRef.value?.contains(dLeftover)) dLeftover.remove()
   }
 }
 

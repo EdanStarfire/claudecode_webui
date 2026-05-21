@@ -25,7 +25,7 @@
       </button>
       <!-- Content (attachment section stripped from rendered markdown) -->
       <div class="msg-content-row">
-        <div class="msg-text" ref="contentRef" v-html="cleanRenderedContent"></div>
+        <MarkdownView class="msg-text" ref="contentRef" :content="cleanContent" />
         <button
           class="copy-markdown-btn"
           @click.stop="copyMarkdown"
@@ -85,12 +85,12 @@
 import { computed, ref, onUnmounted } from 'vue'
 import { formatTimestamp } from '@/utils/time'
 import { getAgentColor } from '@/composables/useAgentColor'
-import { useMarkdown } from '@/composables/useMarkdown'
 import { useResourceImages } from '@/composables/useResourceImages'
 import { useSessionStore } from '@/stores/session'
 import { useResourceStore } from '@/stores/resource'
 import { getFileIcon } from '@/utils/fileTypes'
 import AttachmentChip from '@/components/common/AttachmentChip.vue'
+import MarkdownView from '@/components/common/MarkdownView.vue'
 
 const props = defineProps({
   message: {
@@ -129,7 +129,6 @@ const splitContent = computed(() => {
 
 // Content rendered without the attachment section
 const cleanContent = computed(() => splitContent.value.main)
-const { renderedHtml: cleanRenderedContent } = useMarkdown(cleanContent)
 
 /**
  * Parse the attachment block into structured items (regex fallback for old messages).
