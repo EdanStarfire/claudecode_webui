@@ -10,7 +10,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { Comark } from '@comark/vue'
 import { useMarkdownPlugins, useMarkdownComponents } from '@/composables/useMarkdown'
 
@@ -24,12 +24,29 @@ const wrapEl = ref(null)
 const plugins = useMarkdownPlugins()
 const components = useMarkdownComponents()
 
-// Expose $el (unwrapped by Vue) and event-listener delegates so useResourceImages
-// and the ResourceFullView print path can reach the underlying DOM element.
+// Listeners registered before Suspense resolves are buffered and re-attached
+// once wrapEl becomes available (when the async Comark setup completes).
+const _pending = []
+
+watch(wrapEl, (el) => {
+  if (el) {
+    for (const { type, handler, options } of _pending) {
+      el.addEventListener(type, handler, options)
+    }
+  }
+})
+
 defineExpose({
   $el: wrapEl,
-  addEventListener: (...args) => wrapEl.value?.addEventListener(...args),
-  removeEventListener: (...args) => wrapEl.value?.removeEventListener(...args),
+  addEventListener(type, handler, options) {
+    _pending.push({ type, handler, options })
+    wrapEl.value?.addEventListener(type, handler, options)
+  },
+  removeEventListener(type, handler, options) {
+    const idx = _pending.findIndex((l) => l.type === type && l.handler === handler)
+    if (idx >= 0) _pending.splice(idx, 1)
+    wrapEl.value?.removeEventListener(type, handler, options)
+  },
 })
 </script>
 
