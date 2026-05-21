@@ -3,6 +3,7 @@
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import anyio
 import pytest
 from mcp.types import CallToolResult, TextContent, Tool
 
@@ -421,3 +422,76 @@ async def test_missing_secret_raises_and_no_transport_opened():
             await mgr._open_locked(cfg, conn)
 
     assert not transport_opened, "transport must not open when secret resolution fails"
+
+
+# ---------------------------------------------------------------------------
+# ClosedResourceError / BrokenResourceError handling (issue #1488)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_call_tool_returns_disconnect_on_closed_resource_error():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+
+    conn.session.call_tool = AsyncMock(side_effect=anyio.ClosedResourceError())
+
+    result = await mgr.call_tool(cfg, "t1", {})
+
+    assert result.isError is True
+    assert "disconnected" in result.content[0].text.lower()
+    assert conn.session is None
+    assert conn.exit_stack is None
+
+
+@pytest.mark.asyncio
+async def test_next_call_after_closed_resource_error_triggers_reopen():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+    open_calls = []
+
+    async def counting_open(self, c, conn):
+        open_calls.append(c.id)
+        conn.session = _fake_session()
+        conn.exit_stack = MagicMock()
+        conn.exit_stack.aclose = AsyncMock()
+        conn.cached_tools = [Tool(name="t1", description="tool1", inputSchema={"type": "object"})]
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", counting_open):
+        conn = await mgr.get_or_open(cfg)
+
+    assert len(open_calls) == 1
+
+    # First call raises ClosedResourceError — session should be cleared
+    conn.session.call_tool = AsyncMock(side_effect=anyio.ClosedResourceError())
+    result = await mgr.call_tool(cfg, "t1", {})
+    assert result.isError is True
+    assert conn.session is None
+
+    # Second call should trigger reopen via get_or_open's elif branch
+    with patch.object(SharedMcpConnectionManager, "_open_locked", counting_open):
+        result2 = await mgr.call_tool(cfg, "t1", {})
+
+    assert len(open_calls) == 2
+    assert result2.isError is False
+
+
+@pytest.mark.asyncio
+async def test_broken_resource_error_also_recovers():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+
+    conn.session.call_tool = AsyncMock(side_effect=anyio.BrokenResourceError())
+
+    result = await mgr.call_tool(cfg, "t1", {})
+
+    assert result.isError is True
+    assert "disconnected" in result.content[0].text.lower()
+    assert conn.session is None
+    assert conn.exit_stack is None
