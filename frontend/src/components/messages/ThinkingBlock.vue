@@ -15,16 +15,16 @@
     </div>
 
     <div v-if="isExpanded" class="thinking-content mt-2 p-3 rounded">
-      <div class="thinking-text" ref="thinkingRef" v-html="renderedThinking"></div>
+      <MarkdownView class="thinking-text" ref="thinkingRef" :content="thinkingContent" />
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed } from 'vue'
-import { useMarkdown } from '@/composables/useMarkdown'
 import { useResourceImages } from '@/composables/useResourceImages'
 import { useSessionStore } from '@/stores/session'
+import MarkdownView from '@/components/common/MarkdownView.vue'
 
 const props = defineProps({
   thinking: {
@@ -42,7 +42,6 @@ const contentLength = computed(() => {
 const sessionStore = useSessionStore()
 
 const thinkingContent = computed(() => props.thinking || '')
-const { renderedHtml: renderedThinking } = useMarkdown(thinkingContent)
 
 // Inline resource image click-to-open
 const thinkingRef = ref(null)

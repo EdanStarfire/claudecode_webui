@@ -126,13 +126,6 @@ watch(() => taskStore.currentHasTasks, (hasTasks, hadTasks) => {
 onMounted(async () => {
   uiStore.initTheme()
 
-  if (typeof marked !== 'undefined') {
-    marked.setOptions({
-      breaks: true,
-      gfm: true
-    })
-  }
-
   // Issue #728: Capture token from URL query param
   const urlParams = new URLSearchParams(window.location.search)
   const urlToken = urlParams.get('token')

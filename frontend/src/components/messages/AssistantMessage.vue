@@ -14,7 +14,7 @@
 
       <!-- Content -->
       <div v-if="hasContent" class="msg-content-row">
-        <div class="msg-text" ref="contentRef" v-html="renderedContent"></div>
+        <MarkdownView class="msg-text" ref="contentRef" :content="rawContent" />
         <button
           v-if="tts"
           class="tts-play-icon"
@@ -66,12 +66,11 @@
 <script setup>
 import { computed, inject, onUnmounted, ref } from 'vue'
 import { formatTimestamp } from '@/utils/time'
-import { useMarkdown } from '@/composables/useMarkdown'
-import { useMermaid } from '@/composables/useMermaid'
 import { useResourceImages } from '@/composables/useResourceImages'
 import { getEffectiveStatusForTool } from '@/composables/useToolStatus'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
+import MarkdownView from '@/components/common/MarkdownView.vue'
 import ThinkingBlock from './ThinkingBlock.vue'
 import ActivityTimeline from './tools/ActivityTimeline.vue'
 import SubagentTimeline from './SubagentTimeline.vue'
@@ -132,13 +131,9 @@ const hasContent = computed(() => {
 })
 
 const rawContent = computed(() => props.message.content || '')
-const { renderedHtml: renderedContent } = useMarkdown(rawContent)
-
-// Mermaid diagram rendering
-const contentRef = ref(null)
-useMermaid(contentRef)
 
 // Inline resource image click-to-open
+const contentRef = ref(null)
 const currentSessionId = computed(() => sessionStore.currentSessionId)
 useResourceImages(contentRef, currentSessionId)
 

@@ -23,7 +23,7 @@
         borderLeftStyle: 'solid',
       }"
     >
-      <div class="outbound-comm-content" ref="contentRef" v-html="renderedContent"></div>
+      <MarkdownView class="outbound-comm-content" ref="contentRef" :content="contentForRender" />
       <div v-if="attachments.length > 0" class="outbound-comm-attachments">
         <AttachmentChip
           v-for="(att, idx) in attachments"
@@ -46,14 +46,13 @@
 
 <script setup>
 import { computed, ref, toRef } from 'vue'
-import { renderMarkdown } from '@/composables/useMarkdown'
-import { useMermaid } from '@/composables/useMermaid'
 import { useResourceImages } from '@/composables/useResourceImages'
 import { useToolResult } from '@/composables/useToolResult'
 import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
 import { useSessionStore } from '@/stores/session'
 import { useResourceStore } from '@/stores/resource'
 import AttachmentChip from '@/components/common/AttachmentChip.vue'
+import MarkdownView from '@/components/common/MarkdownView.vue'
 
 const props = defineProps({
   toolCall: { type: Object, required: true }
@@ -113,14 +112,10 @@ function openAttachmentPreview(att) {
 // Agent color from recipient name
 const recipientColor = computed(() => getAgentColor(slugifyAgentName(recipientName.value)))
 
-// Render content as markdown
-const renderedContent = computed(() => renderMarkdown(content.value || summaryText.value))
-
-// Mermaid diagram rendering
-const contentRef = ref(null)
-useMermaid(contentRef)
+const contentForRender = computed(() => content.value || summaryText.value)
 
 // Inline resource image click-to-open
+const contentRef = ref(null)
 const currentSessionId = computed(() => sessionStore.currentSessionId)
 useResourceImages(contentRef, currentSessionId)
 

@@ -56,8 +56,7 @@ export default defineConfig({
       output: {
         manualChunks: {
           'vue-vendor': ['vue', 'vue-router', 'pinia'],
-          'markdown-vendor': ['marked', 'dompurify'],
-          'mermaid-vendor': ['mermaid'],
+          'comark-vendor': ['comark', '@comark/vue', 'beautiful-mermaid'],
           'diff-vendor': ['diff', 'diff2html']
         }
       }

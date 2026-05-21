@@ -11,10 +11,8 @@ const apiMock = vi.hoisted(() => ({
 vi.mock('@/utils/api', () => ({ api: apiMock, getAuthToken: vi.fn() }))
 vi.mock('@/composables/useNotifications', () => ({ notify: vi.fn() }))
 vi.mock('@/composables/useMarkdown', () => ({
-  useMarkdown: () => ({ renderMarkdown: (t) => t })
-}))
-vi.mock('@/composables/useMermaid', () => ({
-  useMermaid: () => ({ renderMermaid: vi.fn() })
+  useMarkdownPlugins: () => [],
+  useMarkdownComponents: () => ({}),
 }))
 
 beforeEach(() => {
