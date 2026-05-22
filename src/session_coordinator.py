@@ -4384,7 +4384,12 @@ class SessionCoordinator:
                     logger.exception(f"Failed to reset processing state for session {session_id}")
 
                 # Handle critical errors that require session state updates
-                if error_type in ["startup_failed", "message_processing_loop_error", "immediate_cli_failure"]:
+                if error_type in [
+                    "startup_failed",
+                    "message_processing_loop_error",
+                    "immediate_cli_failure",
+                    "consumer_task_died",          # Issue #1503
+                ]:
                     # logger.info(f"Handling critical SDK error: {error_type}")
 
                     # Extract user-friendly error message, preserve raw for details
