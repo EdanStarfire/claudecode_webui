@@ -59,7 +59,7 @@ const pillIcon = computed(() => {
 })
 
 const statusSegments = computed(() =>
-  projectStore.getStatusBarSegments(props.project.project_id, sessionStore)
+  projectStore.getStatusBarSegments(props.project.project_id, sessionStore, uiStore.agentSort)
 )
 
 function handleClick() {
