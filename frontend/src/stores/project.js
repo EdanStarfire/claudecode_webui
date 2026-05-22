@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api } from '../utils/api'
+import { compareAgents } from '../utils/agentSort'
 
 /**
  * Project Store - Manages project state and operations
@@ -208,7 +209,7 @@ export const useProjectStore = defineStore('project', () => {
    * Get status bar segments for a project's sessions (for ProjectPill status bar)
    * Returns array of { status: 'active'|'idle'|'waiting'|'error'|'none', flex: number }
    */
-  function getStatusBarSegments(projectId, sessionStore) {
+  function getStatusBarSegments(projectId, sessionStore, sortMode) {
     const project = projects.value.get(projectId)
     if (!project || !project.session_ids || project.session_ids.length === 0) {
       return [{ status: 'none', flex: 1 }]
@@ -229,10 +230,14 @@ export const useProjectStore = defineStore('project', () => {
       }
     }
 
-    // Top-level sessions sorted by order (matches AgentStrip)
+    // Top-level sessions sorted by the same mode as AgentStrip/MinionTree
     const topLevel = Array.from(sessionMap.values())
       .filter(s => !allChildIds.has(s.session_id))
-      .sort((a, b) => (a.order || 0) - (b.order || 0))
+      .sort((a, b) => compareAgents(sortMode, a, b, {
+        nameOf: s => s.name,
+        orderOf: s => s.order,
+        idOf: s => s.session_id,
+      }))
 
     if (topLevel.length === 0 && sessionMap.size === 0) {
       return [{ status: 'none', flex: 1 }]
@@ -250,11 +255,19 @@ export const useProjectStore = defineStore('project', () => {
     function walkTree(session, segments) {
       segments.push({ status: sessionStatus(session), flex: 1, name: session.name || null, unread: sessionStore.isUnreviewed(session.session_id) })
       if (session.child_minion_ids) {
-        for (const cid of session.child_minion_ids) {
+        const sortedChildIds = [...session.child_minion_ids].sort((a, b) => {
+          const sa = sessionMap.get(a)
+          const sb = sessionMap.get(b)
+          if (!sa || !sb) return 0
+          return compareAgents(sortMode, sa, sb, {
+            nameOf: s => s.name,
+            orderOf: s => s.order,
+            idOf: s => s.session_id,
+          })
+        })
+        for (const cid of sortedChildIds) {
           const child = sessionMap.get(cid)
-          if (child) {
-            walkTree(child, segments)
-          }
+          if (child) walkTree(child, segments)
         }
       }
     }
