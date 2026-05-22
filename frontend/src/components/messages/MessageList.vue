@@ -62,7 +62,7 @@
 </template>
 
 <script setup>
-import { computed, inject, onActivated, onDeactivated, onMounted, onUnmounted, provide, ref, watch, nextTick } from 'vue'
+import { computed, inject, onActivated, onDeactivated, provide, ref, watch, nextTick } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
@@ -84,6 +84,8 @@ const viewSessionId = inject('viewSessionId', ref(null))
 
 const messagesArea = ref(null)
 const isProgrammaticScroll = ref(false)
+const isInitialLoad = ref(false)
+const lastScrollTop = ref(0)
 
 // Per-instance message and tool-call sources derived from the injected session id.
 const sessionMessages = computed(() => messageStore.messagesBySession.get(viewSessionId.value) || [])
@@ -376,80 +378,25 @@ const deferredToolUse = computed(() =>
   messageStore.deferredToolUseBySession.get(viewSessionId.value) || null
 )
 
-/**
- * Capture current scroll position as a message index + isAtBottom flag.
- * Called by session store before switching away from a session.
- */
-function getScrollPosition() {
-  if (!messagesArea.value || displayableItems.value.length === 0) return null
-  const container = messagesArea.value
-  const scrollTop = container.scrollTop
-  const scrollHeight = container.scrollHeight
-  const clientHeight = container.clientHeight
-
-  // Check if at bottom (within 50px threshold)
-  if (scrollTop + clientHeight >= scrollHeight - 50) {
-    return { index: displayableItems.value.length - 1, isAtBottom: true }
-  }
-
-  // Find topmost visible direct child
-  const children = Array.from(container.children)
-  for (let i = 0; i < children.length; i++) {
-    if (children[i].offsetTop + children[i].offsetHeight > scrollTop) {
-      return { index: i, isAtBottom: false }
-    }
-  }
-  return { index: 0, isAtBottom: false }
-}
-
-/**
- * Restore scroll position for the current session from saved state.
- */
-async function restoreScrollPosition() {
-  const pos = sessionStore.scrollPositions.get(viewSessionId.value)
-  if (!pos || !messagesArea.value) return
-
-  await nextTick()
-  await new Promise(resolve => requestAnimationFrame(resolve))
-
-  if (!messagesArea.value) return
-  const container = messagesArea.value
-
-  if (pos.isAtBottom || pos.index >= displayableItems.value.length - 1) {
-    // Was at bottom — scroll to bottom, keep auto-scroll enabled
-    isProgrammaticScroll.value = true
-    container.scrollTop = container.scrollHeight
-    requestAnimationFrame(() => { isProgrammaticScroll.value = false })
-  } else {
-    // Restore to specific message index
-    const children = Array.from(container.children)
-    if (pos.index < children.length) {
-      isProgrammaticScroll.value = true
-      container.scrollTop = children[pos.index].offsetTop
-      requestAnimationFrame(() => { isProgrammaticScroll.value = false })
-    }
-  }
+function setScrollTop(position) {
+  isProgrammaticScroll.value = true
+  lastScrollTop.value = Math.round(position)
+  messagesArea.value.scrollTop = position
+  requestAnimationFrame(() => { isProgrammaticScroll.value = false })
 }
 
 // Auto-scroll function
 async function scrollToBottom() {
-  // Skip auto-scroll when a scroll position restore is pending for this instance's session.
-  if (sessionStore.pendingScrollRestoreSessionId === viewSessionId.value) {
-    return
-  }
-  if (uiStore.autoScrollEnabled) {
-    await nextTick()
-    if (messagesArea.value) {
-      isProgrammaticScroll.value = true
-      messagesArea.value.scrollTop = messagesArea.value.scrollHeight
-      requestAnimationFrame(() => { isProgrammaticScroll.value = false })
-    }
-  }
+  if (!uiStore.autoScrollEnabled) return
+  await nextTick()
+  if (!messagesArea.value) return
+  setScrollTop(messagesArea.value.scrollHeight)
 }
 
-// Scroll event handler: programmatic scroll guard only (manual toggle controls auto-scroll)
+// Scroll event handler: track user-initiated scroll position and guard programmatic scrolls
 function onScroll() {
   if (isProgrammaticScroll.value) return
+  if (messagesArea.value) lastScrollTop.value = messagesArea.value.scrollTop
 }
 
 // TTS: Auto-queue new assistant messages when read aloud is enabled.
@@ -486,54 +433,56 @@ watch(() => sessionMessages.value.length, (newLen) => {
   lastSeenMessageCount.value = newLen
 })
 
-// On reactivation, reset TTS counter so the restored message batch is treated as initial load.
-onActivated(() => {
+onActivated(async () => {
   lastSeenMessageCount.value = sessionMessages.value.length
   ttsInitialized.value = false
-})
 
-// Auto-scroll on new messages, or restore scroll position if pending
-watch(() => displayableItems.value.length, async (newLen) => {
-  if (newLen > 0 && sessionStore.pendingScrollRestoreSessionId === viewSessionId.value) {
-    sessionStore.clearScrollRestorePending()
-    await restoreScrollPosition()
+  isInitialLoad.value = true
+
+  await nextTick()
+  await new Promise(resolve => requestAnimationFrame(resolve))
+
+  if (!messagesArea.value) {
+    isInitialLoad.value = false
     return
   }
+
+  let targetScrollTop = messagesArea.value.scrollHeight
+  if (!uiStore.autoScrollEnabled) {
+    const saved = sessionStore.scrollPositions.get(viewSessionId.value)
+    if (typeof saved === 'number') targetScrollTop = saved
+  }
+  setScrollTop(targetScrollTop)
+
+  isInitialLoad.value = false
+})
+
+onDeactivated(() => {
+  if (viewSessionId.value) {
+    sessionStore.saveScrollPosition(viewSessionId.value, lastScrollTop.value)
+  }
+})
+
+// Auto-scroll on new messages
+watch(() => displayableItems.value.length, () => {
+  if (isInitialLoad.value) return
   scrollToBottom()
 })
 
 // Auto-scroll on tool call updates (for permission requests, status changes, etc.)
-watch(() => sessionToolCalls.value.length, scrollToBottom)
+watch(() => sessionToolCalls.value.length, () => {
+  if (isInitialLoad.value) return
+  scrollToBottom()
+})
 
 // Watch for tool call status changes (e.g., permission_required)
 watch(
   () => sessionToolCalls.value.map(tc => `${tc.id}-${tc.status}`).join(','),
-  scrollToBottom
-)
-
-// Register/unregister the scroll-position getter using activate/deactivate so that
-// exactly one MessageList instance holds the registration at any time.
-let isRegisteredGetter = false
-onActivated(() => {
-  sessionStore.registerScrollPositionGetter(getScrollPosition)
-  isRegisteredGetter = true
-})
-onDeactivated(() => {
-  if (isRegisteredGetter) {
-    sessionStore.registerScrollPositionGetter(null)
-    isRegisteredGetter = false
+  () => {
+    if (isInitialLoad.value) return
+    scrollToBottom()
   }
-})
-
-// First-mount-only: scroll to bottom after initial content render.
-onMounted(() => {
-  setTimeout(scrollToBottom, 100)
-})
-
-// Safety net for LRU eviction — deactivated already cleared but keep for completeness.
-onUnmounted(() => {
-  if (isRegisteredGetter) sessionStore.registerScrollPositionGetter(null)
-})
+)
 
 function shouldDisplayMessage(message) {
   // Filter messages that shouldn't be displayed

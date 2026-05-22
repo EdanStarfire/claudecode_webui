@@ -4,9 +4,6 @@ import { useRouter } from 'vue-router'
 import { api } from '../utils/api'
 import { useUIStore } from './ui'
 
-// Module-level scroll position getter (only one MessageList instance exists at a time)
-let _scrollPositionGetter = null
-
 /**
  * Session Store - Manages session state and operations
  * Replaces the complex Map+Array dual storage from vanilla JS
@@ -44,8 +41,7 @@ export const useSessionStore = defineStore('session', () => {
   const lastViewedArchive = ref(new Map())
 
   // Scroll position preservation across session switches
-  const scrollPositions = ref(new Map())            // sessionId → { index, isAtBottom }
-  const pendingScrollRestoreSessionId = ref(null)   // session awaiting scroll restoration
+  const scrollPositions = ref(new Map())            // sessionId → scrollTop (pixel offset)
 
   // Session reset counter (triggers archive re-fetch in AgentOverview)
   const sessionResets = ref(new Map())              // sessionId → reset count
@@ -282,19 +278,6 @@ export const useSessionStore = defineStore('session', () => {
     uiStore.setSuppressAutoShow(true)
 
     try {
-      // Save outgoing session's scroll position
-      if (leavingSessionId && _scrollPositionGetter) {
-        const pos = _scrollPositionGetter()
-        if (pos !== null) {
-          scrollPositions.value.set(leavingSessionId, pos)
-        }
-      }
-
-      // Set pending restore for incoming session
-      if (scrollPositions.value.has(sessionId)) {
-        pendingScrollRestoreSessionId.value = sessionId
-      }
-
       // Check if aborted before continuing
       if (abortController.signal.aborted) {
         console.log(`Selection of ${sessionId} aborted early`)
@@ -505,11 +488,6 @@ export const useSessionStore = defineStore('session', () => {
       }
       selectingSession.value = false
 
-      // Clear pending scroll restore if this selection was aborted
-      if (abortController.signal.aborted && pendingScrollRestoreSessionId.value === sessionId) {
-        pendingScrollRestoreSessionId.value = null
-      }
-
       // Clear suppression after Vue processes reactive updates from loaded data (#521)
       nextTick(() => uiStore.setSuppressAutoShow(false))
     }
@@ -553,9 +531,6 @@ export const useSessionStore = defineStore('session', () => {
         attachmentCache.value.delete(deletedId)
         initData.value.delete(deletedId)
         scrollPositions.value.delete(deletedId)
-        if (pendingScrollRestoreSessionId.value === deletedId) {
-          pendingScrollRestoreSessionId.value = null
-        }
       }
 
       // Trigger reactivity
@@ -664,12 +639,9 @@ export const useSessionStore = defineStore('session', () => {
 
   // ========== SCROLL POSITION ACTIONS ==========
 
-  function registerScrollPositionGetter(fn) {
-    _scrollPositionGetter = fn
-  }
-
-  function clearScrollRestorePending() {
-    pendingScrollRestoreSessionId.value = null
+  function saveScrollPosition(sessionId, scrollTop) {
+    if (!sessionId || typeof scrollTop !== 'number') return
+    scrollPositions.value.set(sessionId, scrollTop)
   }
 
   // ========== SESSION RESET TRACKING ==========
@@ -677,6 +649,7 @@ export const useSessionStore = defineStore('session', () => {
   function recordSessionReset(sessionId) {
     const current = sessionResets.value.get(sessionId) || 0
     sessionResets.value.set(sessionId, current + 1)
+    scrollPositions.value.delete(sessionId)
   }
 
   // ========== HISTORY & ARCHIVE ACTIONS ==========
@@ -724,7 +697,6 @@ export const useSessionStore = defineStore('session', () => {
     ghostAgents,
     lastViewedArchive,
     scrollPositions,
-    pendingScrollRestoreSessionId,
     sessionResets,
     archiveChanges,
     effectiveConfigBySession,
@@ -759,8 +731,7 @@ export const useSessionStore = defineStore('session', () => {
     checkHistoryArchivesStatus,
     addGhostAgent,
     removeGhostAgent,
-    registerScrollPositionGetter,
-    clearScrollRestorePending,
+    saveScrollPosition,
     recordSessionReset,
     clearSessionSelection
   }
