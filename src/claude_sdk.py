@@ -675,6 +675,12 @@ class ClaudeSDK:
                                     "immediate_cli_failure",
                                     Exception(error_msg),
                                 )
+                    finally:
+                        if not self._shutdown_event.is_set():
+                            sdk_logger.warning(
+                                f"[session {self.session_id}] consume_all_responses exited "
+                                f"while shutdown_event not set — watchdog will surface FAILED"
+                            )
 
                 # Start response consumer as background task
                 response_consumer_task = asyncio.create_task(consume_all_responses())
@@ -682,6 +688,9 @@ class ClaudeSDK:
 
                 # Main message loop - just send queries, consumer handles all responses
                 while not self._shutdown_event.is_set():
+                    if not await self._check_consumer_alive(response_consumer_task):
+                        break
+
                     try:
                         message_data = await asyncio.wait_for(
                             self._message_queue.get(),
@@ -816,6 +825,39 @@ class ClaudeSDK:
             sdk_logger.info(f"Total loop runtime: {cleanup_time - loop_start_time:.3f}s")
             sdk_logger.info("Message processing loop ENDED")
 
+
+    async def _check_consumer_alive(self, task: asyncio.Task) -> bool:
+        """Return False and transition to FAILED if consumer exited outside of shutdown."""
+        if not task.done():
+            return True
+        if self._shutdown_event.is_set():
+            return True
+
+        # Consumer died unexpectedly. Build a diagnostic.
+        exc: BaseException | None = None
+        if task.cancelled():
+            reason = "Response consumer task was cancelled"
+        else:
+            exc = task.exception()
+            reason = (
+                f"Response consumer exited with exception: {exc!r}"
+                if exc is not None
+                else "Response consumer exited normally (subprocess stdout closed?)"
+            )
+
+        sdk_logger.error(f"[session {self.session_id}] {reason}")
+
+        self.info.state = SessionState.FAILED
+        self.info.error_message = reason
+
+        if self.error_callback:
+            await self._safe_callback(
+                self.error_callback,
+                "consumer_task_died",
+                exc if exc is not None else Exception(reason),
+            )
+
+        return False
 
     def _get_sdk_options(self):
         """Configure SDK options with correct parameter names for new ClaudeSDKClient pattern."""

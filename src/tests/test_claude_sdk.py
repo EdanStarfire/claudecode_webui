@@ -1,6 +1,7 @@
 """Tests for Claude Code SDK wrapper."""
 
 import asyncio
+import contextlib
 import tempfile
 
 import pytest
@@ -261,6 +262,114 @@ class TestClaudeSDK:
 
         assert converted["type"] == "result"
         assert "deferred_tool_use" not in converted
+
+    # --- Issue #1503: _check_consumer_alive watchdog tests ---
+
+    @pytest.mark.asyncio
+    async def test_check_consumer_alive_detects_clean_exit(self, temp_dir, session_id):
+        """Issue #1503: consumer task that returned normally must be flagged dead."""
+        errors_received = []
+
+        async def error_callback(error_type, exc):
+            errors_received.append((error_type, exc))
+
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            error_callback=error_callback,
+        )
+        sdk.info.state = SessionState.RUNNING
+
+        async def immediate_return():
+            return
+
+        task = asyncio.create_task(immediate_return())
+        await task  # ensure task.done() is True
+
+        alive = await sdk._check_consumer_alive(task)
+
+        assert alive is False
+        assert sdk.info.state == SessionState.FAILED
+        assert sdk.info.error_message is not None
+        assert len(errors_received) == 1
+        assert errors_received[0][0] == "consumer_task_died"
+
+    @pytest.mark.asyncio
+    async def test_check_consumer_alive_detects_cancelled(self, temp_dir, session_id):
+        """Issue #1503: CancelledError leaking through consumer must be flagged dead
+        when shutdown_event is not set."""
+        errors_received = []
+
+        async def error_callback(error_type, exc):
+            errors_received.append((error_type, exc))
+
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            error_callback=error_callback,
+        )
+        sdk.info.state = SessionState.RUNNING
+
+        async def gets_cancelled():
+            await asyncio.sleep(10)
+
+        task = asyncio.create_task(gets_cancelled())
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        alive = await sdk._check_consumer_alive(task)
+
+        assert alive is False
+        assert sdk.info.state == SessionState.FAILED
+        assert errors_received[0][0] == "consumer_task_died"
+
+    @pytest.mark.asyncio
+    async def test_check_consumer_alive_silent_during_shutdown(self, temp_dir, session_id):
+        """Issue #1503: a finished consumer during intentional shutdown is not a failure."""
+        errors_received = []
+
+        async def error_callback(error_type, exc):
+            errors_received.append((error_type, exc))
+
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            error_callback=error_callback,
+        )
+        sdk.info.state = SessionState.RUNNING
+        sdk._shutdown_event.set()
+
+        async def immediate_return():
+            return
+
+        task = asyncio.create_task(immediate_return())
+        await task
+
+        alive = await sdk._check_consumer_alive(task)
+
+        assert alive is True
+        assert sdk.info.state == SessionState.RUNNING  # untouched
+        assert errors_received == []
+
+    @pytest.mark.asyncio
+    async def test_check_consumer_alive_healthy_task(self, temp_dir, session_id):
+        """Issue #1503: watchdog returns True and leaves state unchanged for a running task."""
+        sdk = ClaudeSDK(session_id=session_id, working_directory=temp_dir)
+        sdk.info.state = SessionState.RUNNING
+
+        async def long_running():
+            await asyncio.sleep(10)
+
+        task = asyncio.create_task(long_running())
+        try:
+            alive = await sdk._check_consumer_alive(task)
+            assert alive is True
+            assert sdk.info.state == SessionState.RUNNING
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
 
 class TestSessionInfo:
