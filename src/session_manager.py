@@ -130,6 +130,10 @@ class SessionInfo:
     # Watchdog activity tracking (issue #1130) — in-memory only on hot path
     last_activity_at: datetime | None = None
 
+    # Unread state tracking (issue #1513)
+    last_completion_at: datetime | None = None  # Set when a result message is stored
+    last_viewed_at: datetime | None = None      # Set when session poll endpoint hit AND completion > viewed
+
     # Per-session token for secrets resolve endpoint (issue #827)
     # Generated at start_session(), cleared at terminate_session()
     secret_fetch_token: str | None = None
@@ -166,6 +170,8 @@ class SessionInfo:
             "is_overseer": self.is_overseer,
             "is_processing": self.is_processing,
             "last_activity_at": self.last_activity_at.isoformat() if self.last_activity_at else None,
+            "last_completion_at": self.last_completion_at.isoformat() if self.last_completion_at else None,
+            "last_viewed_at": self.last_viewed_at.isoformat() if self.last_viewed_at else None,
             "latest_message": self.latest_message,
             "latest_message_time": self.latest_message_time.isoformat() if self.latest_message_time else None,
             "latest_message_type": self.latest_message_type,
@@ -204,6 +210,10 @@ class SessionInfo:
             data["latest_message_time"] = datetime.fromisoformat(data["latest_message_time"])
         if data.get("last_activity_at"):
             data["last_activity_at"] = datetime.fromisoformat(data["last_activity_at"])
+        if data.get("last_completion_at"):
+            data["last_completion_at"] = datetime.fromisoformat(data["last_completion_at"])
+        if data.get("last_viewed_at"):
+            data["last_viewed_at"] = datetime.fromisoformat(data["last_viewed_at"])
 
         # Issue #349: Silently ignore deprecated is_minion field from old data
         data.pop("is_minion", None)
@@ -226,6 +236,8 @@ class SessionInfo:
         data.setdefault("queue_paused", False)
         data.setdefault("template_id", None)
         data.setdefault("last_activity_at", None)
+        data.setdefault("last_completion_at", None)
+        data.setdefault("last_viewed_at", None)
         data.setdefault("secret_fetch_token", None)
         data.setdefault("secret_placeholders", None)
         data.setdefault("config", {})
@@ -240,8 +252,8 @@ class SessionInfo:
             "parent_overseer_id", "child_minion_ids", "capabilities", "expertise_score",
             "can_spawn_minions", "latest_message", "latest_message_type",
             "latest_message_time", "is_ephemeral", "queue_config", "queue_paused",
-            "template_id", "config", "last_activity_at", "secret_fetch_token",
-            "secret_placeholders",
+            "template_id", "config", "last_activity_at", "last_completion_at",
+            "last_viewed_at", "secret_fetch_token", "secret_placeholders",
         }
         for k in list(data.keys()):
             if k not in known:
@@ -363,6 +375,20 @@ class SessionManager:
                             original_state = session_info.state
                             original_processing = session_info.is_processing
                             state_changed = False
+
+                            # Issue #1513: Self-heal last_completion_at from messages.jsonl
+                            # for legacy sessions that lack the field.
+                            if session_info.last_completion_at is None:
+                                messages_file = session_dir / "messages.jsonl"
+                                if messages_file.exists():
+                                    derived = _derive_last_completion_from_jsonl(messages_file)
+                                    if derived is not None:
+                                        session_info.last_completion_at = derived
+                                        state_changed = True
+                                        session_logger.info(
+                                            f"Derived last_completion_at for session "
+                                            f"{session_info.session_id}: {derived}"
+                                        )
 
                             if session_info.state in RUNNABLE_STATES:
                                 session_info.state = SessionState.CREATED
@@ -914,6 +940,50 @@ class SessionManager:
                 logger.error(f"Failed to update latest message for session {session_id}: {e}")
                 return False
 
+    async def mark_completion(self, session_id: str, timestamp: datetime) -> bool:
+        """Set last_completion_at when a ResultMessage is stored (issue #1513)."""
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    return False
+                if session.last_completion_at and session.last_completion_at >= timestamp:
+                    return True
+                session.last_completion_at = timestamp
+                session.updated_at = datetime.now(UTC)
+                await self._persist_session_state(session_id)
+                await self._notify_state_change_callbacks(session_id, session.state)
+                session_logger.debug(f"Marked completion for session {session_id} at {timestamp}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to mark completion for session {session_id}: {e}")
+                return False
+
+    async def mark_viewed(self, session_id: str) -> bool:
+        """Set last_viewed_at when the session poll endpoint is hit (issue #1513).
+
+        Only writes when last_completion_at > last_viewed_at to avoid unnecessary
+        disk writes and broadcasts on every poll tick.
+        """
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    return False
+                if session.last_completion_at is None:
+                    return True
+                if session.last_viewed_at and session.last_viewed_at >= session.last_completion_at:
+                    return True
+                session.last_viewed_at = datetime.now(UTC)
+                session.updated_at = datetime.now(UTC)
+                await self._persist_session_state(session_id)
+                await self._notify_state_change_callbacks(session_id, session.state)
+                session_logger.debug(f"Marked viewed for session {session_id}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to mark viewed for session {session_id}: {e}")
+                return False
+
     def record_activity(self, session_id: str) -> None:
         """Update last_activity_at in memory for watchdog tracking (issue #1130).
 
@@ -1103,3 +1173,33 @@ class SessionManager:
                 await callback(session_id, new_state, is_processing, project_id=project_id)
             except Exception as e:
                 logger.error(f"Error in state change callback: {e}")
+
+
+def _derive_last_completion_from_jsonl(path: Path) -> datetime | None:
+    """Scan messages.jsonl backwards for the most recent ResultMessage timestamp (issue #1513)."""
+    try:
+        with open(path, encoding='utf-8') as f:
+            for line in reversed(f.readlines()):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if msg.get('type') == 'result':
+                    ts = msg.get('timestamp')
+                    if isinstance(ts, str):
+                        try:
+                            return datetime.fromisoformat(ts)
+                        except ValueError:
+                            return None
+                    elif isinstance(ts, (int, float)):
+                        try:
+                            return datetime.fromtimestamp(ts, tz=UTC)
+                        except (OSError, OverflowError, ValueError):
+                            return None
+                    return None
+        return None
+    except Exception:
+        return None

@@ -2,7 +2,7 @@
   <div class="session-status-bar border-top p-2" :class="uiStore.isRedBackground ? 'theme-red-panel' : 'bg-body-secondary'">
     <div class="d-flex justify-content-between align-items-center gap-2">
       <!-- Left side: Mode, Info, Manage -->
-      <div class="d-flex gap-2">
+      <div class="d-flex gap-2 align-items-center">
         <button
           class="btn btn-sm btn-outline-secondary"
           @click="cycleMode"
@@ -27,6 +27,12 @@
         >
           🛠 <span class="button-label">Manage</span>
         </button>
+        <span
+          v-if="isUnreviewed"
+          class="status-unread-dot"
+          aria-label="Unreviewed completion"
+          title="New activity since last viewed"
+        ></span>
       </div>
 
       <!-- Rate Limit Indicator (Issue #899) -->
@@ -192,6 +198,8 @@ const hasRateLimitData = computed(() =>
   uiStore.rateLimits?.five_hour?.used_percentage != null ||
   uiStore.rateLimits?.seven_day?.used_percentage != null
 )
+
+const isUnreviewed = computed(() => sessionStore.isUnreviewed(props.sessionId))
 </script>
 
 <style scoped>
@@ -205,5 +213,14 @@ const hasRateLimitData = computed(() =>
   .mode-label {
     display: none;
   }
+}
+
+.status-unread-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3b82f6;
+  flex-shrink: 0;
 }
 </style>

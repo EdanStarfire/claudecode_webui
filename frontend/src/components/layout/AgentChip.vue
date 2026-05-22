@@ -70,6 +70,15 @@
     >
       🛡️
     </div>
+
+    <!-- Unread indicator (issue #1513) -->
+    <div
+      v-if="isUnreviewed && !isGhost"
+      class="ac-unread-dot"
+      :class="effectiveDockerProxyEnabled ? 'ac-unread-dot--bottom' : ''"
+      aria-label="Unreviewed completion"
+      title="New activity since last viewed"
+    ></div>
   </div>
 </template>
 
@@ -171,6 +180,8 @@ const alertType = computed(() => {
   if (isPaused.value) return 'permission'
   return null
 })
+
+const isUnreviewed = computed(() => sessionStore.isUnreviewed(props.session.session_id))
 
 const chipTooltip = computed(() => {
   const parts = [displayName.value]
@@ -390,5 +401,28 @@ function handleClick() {
 @keyframes pulse-error {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
+}
+
+.ac-unread-dot {
+  position: absolute;
+  top: -3px;
+  left: -3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #3b82f6;
+  border: 1.5px solid var(--bs-body-bg);
+  box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.6);
+  animation: pulse-unread 2s infinite;
+}
+
+.ac-unread-dot--bottom {
+  top: auto;
+  bottom: -3px;
+}
+
+@keyframes pulse-unread {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.6); }
+  50%      { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0); }
 }
 </style>

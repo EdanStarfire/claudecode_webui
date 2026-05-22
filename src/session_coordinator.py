@@ -2487,6 +2487,16 @@ class SessionCoordinator:
             if hasattr(self, '_watchdog') and self._watchdog is not None:
                 self._watchdog.reset_session(session_id)
 
+            # Issue #1513: Reset unread state — a restart is a new context.
+            try:
+                await self.session_manager.update_session(
+                    session_id,
+                    last_completion_at=None,
+                    last_viewed_at=None,
+                )
+            except Exception:
+                logger.exception(f"Failed to clear unread timestamps for session {session_id}")
+
             # Start session again (will automatically resume using claude_code_session_id)
             success = await self.start_session(session_id, permission_callback)
 
@@ -2585,6 +2595,16 @@ class SessionCoordinator:
             await self._rotate_proxy_logs(session_id)
             await self._clear_docker_claude_data(session_id, keep_subdirs={"proxy"})
             await self._clear_session_tmp(session_id)
+
+            # Issue #1513: Reset unread state — a reset is a new context.
+            try:
+                await self.session_manager.update_session(
+                    session_id,
+                    last_completion_at=None,
+                    last_viewed_at=None,
+                )
+            except Exception:
+                logger.exception(f"Failed to clear unread timestamps for session {session_id}")
 
             # Issue #310: Reset DisplayProjection state (clears tool tracking)
             self._reset_display_projection(session_id)
@@ -4271,6 +4291,19 @@ class SessionCoordinator:
                         await self.session_manager.update_processing_state(session_id, False)
                     except Exception:
                         logger.exception(f"Failed to reset processing state for session {session_id}")
+
+                    # Issue #1513: Track unread state — a result message is new work the user hasn't seen.
+                    try:
+                        _ts = parsed_message.timestamp
+                        if isinstance(_ts, str):
+                            _completion_ts = datetime.fromisoformat(_ts)
+                        elif isinstance(_ts, (int, float)):
+                            _completion_ts = datetime.fromtimestamp(_ts, tz=UTC)
+                        else:
+                            _completion_ts = datetime.now(UTC)
+                        await self.session_manager.mark_completion(session_id, _completion_ts)
+                    except Exception:
+                        logger.exception(f"Failed to mark completion for session {session_id}")
 
                     # Issue #1125: Record turn usage in analytics DB and broadcast update
                     if self.analytics_store:

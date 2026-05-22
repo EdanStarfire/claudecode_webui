@@ -68,6 +68,16 @@ export const useSessionStore = defineStore('session', () => {
       .sort((a, b) => a.order - b.order)
   )
 
+  // Issue #1513: True when a session has a completion the user has not viewed yet.
+  function isUnreviewed(sessionId) {
+    const s = sessions.value.get(sessionId)
+    if (!s) return false
+    if (s.is_processing) return false
+    if (!s.last_completion_at) return false
+    if (!s.last_viewed_at) return true
+    return Date.parse(s.last_completion_at) > Date.parse(s.last_viewed_at)
+  }
+
   // Sessions filtered by project
   const sessionsInProject = (projectId) => computed(() =>
     orderedSessions.value.filter(s => s.project_id === projectId)
@@ -726,6 +736,7 @@ export const useSessionStore = defineStore('session', () => {
     sessionsInProject,
     currentInput,
     currentAttachments,
+    isUnreviewed,
 
     // Actions
     fetchSessions,

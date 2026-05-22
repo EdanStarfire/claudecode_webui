@@ -10,6 +10,7 @@
     <div class="peek-dot" :class="statusClass"></div>
     <span class="peek-letter">{{ letter }}</span>
     <div v-if="hasAlert" class="peek-alert" :class="alertClass"></div>
+    <div v-if="isUnreviewed" class="peek-unread" aria-label="Unreviewed completion"></div>
   </div>
 </template>
 
@@ -57,6 +58,10 @@ const hasAlert = computed(() => {
   if (!childSession.value) return false
   return childSession.value.has_pending_permission || childSession.value.state === 'error'
 })
+
+const isUnreviewed = computed(() =>
+  childSession.value ? sessionStore.isUnreviewed(props.sessionId) : false
+)
 
 const alertClass = computed(() => {
   if (!childSession.value) return ''
@@ -120,4 +125,15 @@ const alertClass = computed(() => {
 
 .alert-permission { background: #f59e0b; }
 .alert-error { background: #ef4444; }
+
+.peek-unread {
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #3b82f6;
+  border: 1px solid var(--bs-body-bg);
+}
 </style>

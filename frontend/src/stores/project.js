@@ -268,6 +268,18 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   /**
+   * Issue #1513: True if any session in this project has unreviewed completion.
+   */
+  function projectHasUnreviewed(projectId, sessionStore) {
+    const project = projects.value.get(projectId)
+    if (!project || !project.session_ids?.length) return false
+    for (const sid of project.session_ids) {
+      if (sessionStore.isUnreviewed(sid)) return true
+    }
+    return false
+  }
+
+  /**
    * Get project by ID
    */
   function getProject(projectId) {
@@ -325,6 +337,7 @@ export const useProjectStore = defineStore('project', () => {
     reorderSessionsInProject,
     getProject,
     getStatusBarSegments,
+    projectHasUnreviewed,
     selectProject,
     clearProjectSelection,
     formatPath
