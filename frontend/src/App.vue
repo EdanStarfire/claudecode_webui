@@ -176,38 +176,14 @@ async function initializeApp() {
   // Start polling after initial data is loaded, from current cursor (skips history)
   wsStore.startUIPolling(cursor)
 
-  // Handle URL-based navigation (deep linking)
-  const hash = window.location.hash
-  if (hash.startsWith('#/session/')) {
-    const sessionId = hash.replace('#/session/', '')
-    if (sessionStore.sessions.has(sessionId)) {
-      await sessionStore.selectSession(sessionId)
-    }
-  }
-
-  // Handle browser back/forward
-  window.addEventListener('popstate', handlePopState)
-
   // Handle window resize
   window.addEventListener('resize', uiStore.handleResize)
 }
 
 onUnmounted(() => {
-  window.removeEventListener('popstate', handlePopState)
   window.removeEventListener('resize', uiStore.handleResize)
   wsStore.stopUIPolling()
 })
-
-function handlePopState() {
-  const hash = window.location.hash
-  if (hash.startsWith('#/session/')) {
-    const sessionId = hash.replace('#/session/', '')
-    if (sessionStore.sessions.has(sessionId)) {
-      sessionStore.selectSession(sessionId)
-    }
-  }
-}
-
 </script>
 
 <style>
