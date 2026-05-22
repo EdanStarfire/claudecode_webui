@@ -26,7 +26,7 @@ USER claude
 # Install Claude Code using the official native installer
 # This downloads the correct platform binary, verifies checksum, and installs it
 # Bump in lockstep with claude-agent-sdk in pyproject.toml/uv.lock.
-ARG CLAUDE_CODE_VERSION=2.1.139
+ARG CLAUDE_CODE_VERSION=2.1.149
 RUN curl -fsSL https://claude.ai/install.sh | bash -s ${CLAUDE_CODE_VERSION}
 
 # Ensure the binary is on PATH
