@@ -789,6 +789,7 @@ class TestIssue1375SecretRefs:
         mock_cfg = MagicMock()
         mock_cfg.type = McpServerType.STDIO
         mock_cfg.oauth_enabled = False
+        mock_cfg.shared_connection = False
         mock_cfg.to_sdk_config.return_value = {
             "type": "stdio",
             "command": "mcp-server",
@@ -816,6 +817,7 @@ class TestIssue1375SecretRefs:
         mock_cfg.name = "oauth-server"
         mock_cfg.type = McpServerType.HTTP
         mock_cfg.oauth_enabled = True
+        mock_cfg.shared_connection = False
         mock_cfg.to_sdk_config.return_value = {
             "type": "http",
             "url": "https://example.com/mcp",
@@ -1418,6 +1420,7 @@ class TestIssue1425OAuthPlaceholder:
         mock_cfg.name = "gh-mcp"
         mock_cfg.type = McpServerType.SSE
         mock_cfg.oauth_enabled = True
+        mock_cfg.shared_connection = False
         mock_cfg.to_sdk_config.return_value = {
             "type": "sse",
             "url": "https://mcp.github.com/sse",
@@ -1449,6 +1452,7 @@ class TestIssue1425OAuthPlaceholder:
         mock_cfg.name = "no-auth-mcp"
         mock_cfg.type = McpServerType.HTTP
         mock_cfg.oauth_enabled = True
+        mock_cfg.shared_connection = False
         mock_cfg.to_sdk_config.return_value = {
             "type": "http",
             "url": "https://example.com/mcp",
@@ -1478,6 +1482,7 @@ class TestIssue1425OAuthPlaceholder:
         mock_cfg.name = "hardcoded-mcp"
         mock_cfg.type = McpServerType.HTTP
         mock_cfg.oauth_enabled = True
+        mock_cfg.shared_connection = False
         mock_cfg.to_sdk_config.return_value = {
             "type": "http",
             "url": "https://example.com/mcp",
@@ -1507,6 +1512,7 @@ class TestIssue1425OAuthPlaceholder:
         mock_cfg.name = "no-oauth-mcp"
         mock_cfg.type = McpServerType.HTTP
         mock_cfg.oauth_enabled = False
+        mock_cfg.shared_connection = False
         mock_cfg.to_sdk_config.return_value = {
             "type": "http",
             "url": "https://example.com/mcp",
@@ -1538,6 +1544,7 @@ class TestIssue1425OAuthPlaceholder:
         mock_cfg.name = "log-mcp"
         mock_cfg.type = McpServerType.HTTP
         mock_cfg.oauth_enabled = True
+        mock_cfg.shared_connection = False
         mock_cfg.to_sdk_config.return_value = {
             "type": "http",
             "url": "https://example.com/mcp",

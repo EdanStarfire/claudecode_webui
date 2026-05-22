@@ -17,6 +17,10 @@ Typed injection/scrub handlers are inlined (addon.py must be self-contained
 inside the Docker image — it cannot import from the host src/ tree).
 """
 
+from __future__ import (
+    annotations,  # lazy annotation evaluation — tcp.TCPFlow removed in mitmproxy 11+
+)
+
 import asyncio
 import base64
 import ipaddress

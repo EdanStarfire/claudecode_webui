@@ -276,6 +276,7 @@ def _make_mcp_cfg(server_id: str = "srv-oauth") -> MagicMock:
     mcp_cfg.id = server_id
     mcp_cfg.type = McpServerType.HTTP
     mcp_cfg.oauth_enabled = True
+    mcp_cfg.shared_connection = False
     mcp_cfg.to_sdk_config.return_value = {
         "type": "http",
         "url": "https://mcp.example.com/v1/mcp",
