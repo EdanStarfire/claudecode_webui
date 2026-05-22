@@ -251,8 +251,13 @@ export const useSessionStore = defineStore('session', () => {
    * Now with abort mechanism to prevent concurrent selections
    */
   async function selectSession(sessionId) {
-    // Don't re-select if already current AND not currently selecting another
-    if (currentSessionId.value === sessionId && !selectingSession.value) {
+    const leavingSessionId = currentSessionId.value
+    const wasAlreadyCurrent = leavingSessionId === sessionId
+
+    // Commit synchronously so chip highlight and content area update on the same tick.
+    currentSessionId.value = sessionId
+
+    if (wasAlreadyCurrent && !selectingSession.value) {
       return
     }
 
@@ -276,7 +281,6 @@ export const useSessionStore = defineStore('session', () => {
 
     try {
       // Save outgoing session's scroll position
-      const leavingSessionId = currentSessionId.value
       if (leavingSessionId && _scrollPositionGetter) {
         const pos = _scrollPositionGetter()
         if (pos !== null) {
@@ -284,13 +288,10 @@ export const useSessionStore = defineStore('session', () => {
         }
       }
 
-      // Set pending restore for incoming session (before currentSessionId changes)
+      // Set pending restore for incoming session
       if (scrollPositions.value.has(sessionId)) {
         pendingScrollRestoreSessionId.value = sessionId
       }
-
-      // Update current session immediately to prevent UI confusion
-      currentSessionId.value = sessionId
 
       // Check if aborted before continuing
       if (abortController.signal.aborted) {

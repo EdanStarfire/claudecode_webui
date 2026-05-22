@@ -200,6 +200,7 @@ function navigateToProject() {
   const projectId = props.session.project_id
   if (!projectId) return
   uiStore.setBrowsingProject(projectId)
+  sessionStore.clearSessionSelection()
   router.push(`/project/${projectId}`)
 }
 

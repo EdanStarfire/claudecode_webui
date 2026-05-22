@@ -199,7 +199,6 @@ function handleChipSelect(sessionId) {
   if (cachedArchive) {
     router.push(`/session/${sessionId}/archive/${cachedArchive}`)
   } else {
-    sessionStore.selectSession(sessionId)
     router.push(`/session/${sessionId}`)
   }
 }
