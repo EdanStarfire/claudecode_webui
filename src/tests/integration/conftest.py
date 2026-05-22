@@ -266,11 +266,7 @@ async def api_integration_env(request, tmp_path):
     # Cleanup
     await client.aclose()
     try:
-        for session_id in list(coordinator._active_sdks.keys()):
-            try:
-                await coordinator.terminate_session(session_id)
-            except Exception:
-                pass
+        await webui.cleanup()
     except Exception:
         pass
 
