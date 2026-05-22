@@ -13,7 +13,11 @@
     <div class="main-layout">
       <!-- Center Panel (router view) -->
       <main class="center-panel">
-        <router-view />
+        <router-view v-slot="{ Component }">
+          <KeepAlive :include="cacheableViewNames" :max="200">
+            <component :is="Component" :key="cacheKey" />
+          </KeepAlive>
+        </router-view>
       </main>
 
       <!-- Overlay backdrop for responsive right panel — inside .main-layout so it is anchored to the flex container -->
@@ -105,6 +109,19 @@ const isFullWidthRoute = computed(() =>
 
 // Settings routes suppress the project pill bar and agent strip
 const isSettingsRoute = computed(() => route.path.startsWith('/settings/'))
+
+// KeepAlive config: only SessionView benefits from DOM preservation.
+// All other views (ProjectOverview, NoSessionSelected, analytics, settings) pass through uncached.
+const cacheableViewNames = ['SessionView']
+
+// Cache key: one entry per route path, bumped on session reset so the stale tree is evicted.
+const cacheKey = computed(() => {
+  const path = route.path
+  const sid = route.params.sessionId || route.params.agentId
+  if (!sid) return path
+  const reset = sessionStore.sessionResets.get(sid) || 0
+  return `${path}::r${reset}`
+})
 
 // Clear project/session selection when navigating to analytics or audit (#1155, #1158)
 watch(() => route.name, (routeName) => {

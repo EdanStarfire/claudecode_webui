@@ -83,29 +83,21 @@ export const useSessionStore = defineStore('session', () => {
     orderedSessions.value.filter(s => s.project_id === projectId)
   )
 
-  // Current session's input text
-  const currentInput = computed({
-    get: () => inputCache.value.get(currentSessionId.value) || '',
-    set: (value) => {
-      if (currentSessionId.value) {
-        inputCache.value.set(currentSessionId.value, value)
-      }
-    }
-  })
-
-  // Current session's file attachments
-  const currentAttachments = computed({
-    get: () => attachmentCache.value.get(currentSessionId.value) || [],
-    set: (value) => {
-      if (currentSessionId.value) {
-        if (value.length === 0) {
-          attachmentCache.value.delete(currentSessionId.value)
-        } else {
-          attachmentCache.value.set(currentSessionId.value, value)
-        }
-      }
-    }
-  })
+  function getInput(sessionId) {
+    return inputCache.value.get(sessionId) || ''
+  }
+  function setInput(sessionId, value) {
+    if (!sessionId) return
+    inputCache.value.set(sessionId, value)
+  }
+  function getAttachments(sessionId) {
+    return attachmentCache.value.get(sessionId) || []
+  }
+  function setAttachments(sessionId, value) {
+    if (!sessionId) return
+    if (value.length === 0) attachmentCache.value.delete(sessionId)
+    else attachmentCache.value.set(sessionId, value)
+  }
 
   // ========== ACTIONS ==========
 
@@ -742,8 +734,10 @@ export const useSessionStore = defineStore('session', () => {
     currentSession,
     orderedSessions,
     sessionsInProject,
-    currentInput,
-    currentAttachments,
+    getInput,
+    setInput,
+    getAttachments,
+    setAttachments,
     isUnreviewed,
 
     // Actions

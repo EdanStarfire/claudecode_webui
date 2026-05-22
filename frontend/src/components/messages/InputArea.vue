@@ -145,6 +145,9 @@ const wsStore = usePollingStore()
 const resourceStore = useResourceStore()
 const uiStore = useUIStore()
 
+// Per-instance session id injected from SessionView — safe under KeepAlive.
+const viewSessionId = inject('viewSessionId', ref(null))
+
 // Inject pending resource attachment from App.vue
 const pendingResourceAttachment = inject('pendingResourceAttachment', ref(null))
 
@@ -162,10 +165,10 @@ function focusInput() {
 defineExpose({ focusInput })
 const windowWidth = ref(window.innerWidth)
 
-// File upload state - backed by session store for per-session persistence
+// File upload state — per-session, keyed by injected viewSessionId.
 const attachments = computed({
-  get: () => sessionStore.currentAttachments,
-  set: (value) => { sessionStore.currentAttachments = value }
+  get: () => sessionStore.getAttachments(viewSessionId.value),
+  set: (value) => { sessionStore.setAttachments(viewSessionId.value, value) }
 })
 const isDragging = ref(false)
 const isUploading = ref(false)
@@ -179,15 +182,15 @@ const slashFilter = ref('')
 const selectedSlashIndex = ref(0)
 
 const inputText = computed({
-  get: () => sessionStore.currentInput,
-  set: (value) => { sessionStore.currentInput = value }
+  get: () => sessionStore.getInput(viewSessionId.value),
+  set: (value) => { sessionStore.setInput(viewSessionId.value, value) }
 })
 
-const isProcessing = computed(() => sessionStore.currentSession?.is_processing || false)
+// Per-instance session state — reads this instance's session, not the global current.
+const currentSession = computed(() => sessionStore.sessions.get(viewSessionId.value))
+const isProcessing = computed(() => currentSession.value?.is_processing || false)
 const isConnected = computed(() => wsStore.sessionConnected)
-const currentSession = computed(() => sessionStore.currentSession)
 const { isStarting, isPaused } = useSessionState(currentSession)
-const currentSessionId = computed(() => sessionStore.currentSessionId)
 
 // Check if input has content (text or valid attachments)
 const hasContent = computed(() => !!inputText.value.trim() || attachments.value.filter(a => !a.error).length > 0)
@@ -210,7 +213,7 @@ const inputPlaceholder = computed(() => {
 
 // Available slash commands from session init data
 const slashCommands = computed(() => {
-  const sid = currentSessionId.value
+  const sid = viewSessionId.value
   if (!sid) return []
   const data = sessionStore.initData.get(sid)
   return data?.slash_commands || []
@@ -237,11 +240,11 @@ onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
 })
 
-// Watch for resource attachments added from ResourceGallery
+// Watch for resource attachments added from ResourceGallery.
+// Gate on active session so only the visible InputArea instance handles the event.
 watch(pendingResourceAttachment, (resource) => {
-  if (resource) {
+  if (resource && viewSessionId.value === sessionStore.currentSessionId) {
     addResourceAsAttachment(resource)
-    // Clear the pending resource
     pendingResourceAttachment.value = null
   }
 })
@@ -475,7 +478,7 @@ function generateId() {
  * Upload a single file to the backend
  */
 async function uploadFile(attachment) {
-  const sessionId = currentSessionId.value
+  const sessionId = viewSessionId.value
   if (!sessionId) return null
 
   attachment.uploading = true
@@ -637,7 +640,7 @@ function addResourceAsAttachment(resource) {
     return
   }
 
-  const sessionId = currentSessionId.value
+  const sessionId = viewSessionId.value
   if (!sessionId) {
     console.warn('No current session for resource attachment')
     return
@@ -688,7 +691,7 @@ function addResourceAsAttachment(resource) {
  * Execute /clear command: reset session via REST API and reconnect WebSocket
  */
 async function executeClearCommand() {
-  const sessionId = currentSessionId.value
+  const sessionId = viewSessionId.value
   if (!sessionId) return
   inputText.value = ''
   if (messageTextarea.value) messageTextarea.value.style.height = 'auto'

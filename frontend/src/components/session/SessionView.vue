@@ -28,8 +28,12 @@
   </div>
 </template>
 
+<script>
+export default { name: 'SessionView' }
+</script>
+
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onDeactivated, onUnmounted, provide, readonly, ref, toRef, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
@@ -56,6 +60,10 @@ const props = defineProps({
   }
 })
 
+// Provide per-instance session identity so cached descendants read their own session's data.
+provide('viewSessionId', readonly(toRef(props, 'sessionId')))
+provide('viewArchiveId', readonly(toRef(props, 'archiveId')))
+
 const route = useRoute()
 const inputAreaRef = ref(null)
 const sessionStore = useSessionStore()
@@ -63,7 +71,8 @@ const messageStore = useMessageStore()
 const resourceStore = useResourceStore()
 const uiStore = useUIStore()
 
-const currentSession = computed(() => sessionStore.currentSession)
+// Per-instance session lookup — safe under KeepAlive (reads this instance's own session).
+const currentSession = computed(() => sessionStore.sessions.get(props.sessionId))
 
 function focusInputWhenReady() {
   nextTick(() => inputAreaRef.value?.focusInput())
@@ -72,7 +81,7 @@ function focusInputWhenReady() {
 const isArchiveMode = computed(() => !!(props.archiveId || route.params.archiveId))
 const effectiveArchiveId = computed(() => props.archiveId || route.params.archiveId)
 
-// Ephemeral session that hasn't fired yet (or has been terminated after firing)
+// Per-instance ephemeral check — reads this instance's session state, not the global current.
 const isEphemeralIdle = computed(() => {
   const session = currentSession.value
   return session?.is_ephemeral && !isArchiveMode.value &&
@@ -102,43 +111,35 @@ async function loadArchiveMessages() {
   }
 }
 
-onMounted(async () => {
+// Runs on first mount AND every KeepAlive reactivation.
+// With :key="cacheKey", sessionId and archiveId never change within a single instance,
+// so there is no need to watch them — each route change spawns or reactivates a distinct instance.
+onActivated(async () => {
   if (isArchiveMode.value) {
     // Set currentSessionId so AgentOverview can display for deleted agents
     sessionStore.currentSessionId = props.sessionId
     sessionStore.lastViewedArchive.set(props.sessionId, effectiveArchiveId.value)
-    await loadArchiveMessages()
+    // Guard: skip reload if archive messages are already in the store from the first visit.
+    if (!messageStore.messagesBySession.has(props.sessionId)) {
+      await loadArchiveMessages()
+    }
   } else if (props.sessionId !== sessionStore.currentSessionId) {
     await sessionStore.selectSession(props.sessionId)
   }
   focusInputWhenReady()
 })
 
-watch([() => props.sessionId, () => effectiveArchiveId.value], async ([newSessionId, newArchiveId], [oldSessionId, oldArchiveId]) => {
-  if (newArchiveId) {
-    if (newSessionId !== oldSessionId || newArchiveId !== oldArchiveId) {
-      // Update currentSessionId so AgentOverview shows the correct agent
-      sessionStore.currentSessionId = newSessionId
-      sessionStore.lastViewedArchive.set(newSessionId, newArchiveId)
-      await loadArchiveMessages()
-    }
-  } else if (oldArchiveId && !newArchiveId) {
-    // Leaving archive mode via Active button → clear archive cache and messages
-    sessionStore.lastViewedArchive.delete(newSessionId)
-    messageStore.clearArchiveMessages(newSessionId)
-    resourceStore.clearResources(newSessionId)
-    resourceStore.clearArchiveContext(newSessionId)
-    // Force selectSession to run by clearing currentSessionId first
-    // (otherwise it bails out because the ID hasn't changed)
-    sessionStore.currentSessionId = null
-    await sessionStore.selectSession(newSessionId)
-    focusInputWhenReady()
-  } else if (newSessionId !== oldSessionId && newSessionId !== sessionStore.currentSessionId) {
-    await sessionStore.selectSession(newSessionId)
-    focusInputWhenReady()
+// Clear archive data on deactivation so regular-session instances for the same sessionId
+// do not inherit stale archive messages from messagesBySession when reactivated.
+onDeactivated(() => {
+  if (isArchiveMode.value) {
+    messageStore.clearArchiveMessages(props.sessionId)
+    resourceStore.clearResources(props.sessionId)
+    resourceStore.clearArchiveContext(props.sessionId)
   }
 })
 
+// Per-instance state watch: currentSession reads sessions.get(props.sessionId) — correct under KeepAlive.
 watch(
   () => currentSession.value?.state,
   (newState, oldState) => {
@@ -148,6 +149,7 @@ watch(
   }
 )
 
+// Safety-net cleanup for LRU eviction (onDeactivated already handles the normal navigation case).
 onUnmounted(() => {
   if (isArchiveMode.value) {
     messageStore.clearArchiveMessages(props.sessionId)

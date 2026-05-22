@@ -91,18 +91,14 @@ describe('session store', () => {
     expect(store.currentSessionId).toBeNull()
   })
 
-  it('currentInput getter/setter caches per session', async () => {
+  it('getInput/setInput caches per session', async () => {
     const { useSessionStore } = await import('@/stores/session')
     const store = useSessionStore()
 
-    store.currentSessionId = 'sess-1'
-    store.currentInput = 'hello'
+    store.setInput('sess-1', 'hello')
 
-    store.currentSessionId = 'sess-2'
-    expect(store.currentInput).toBe('')
-
-    store.currentSessionId = 'sess-1'
-    expect(store.currentInput).toBe('hello')
+    expect(store.getInput('sess-2')).toBe('')
+    expect(store.getInput('sess-1')).toBe('hello')
   })
 
   describe('selectSession cache gate (#1515)', () => {

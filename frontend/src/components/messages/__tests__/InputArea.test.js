@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { nextTick } from 'vue'
+import { nextTick, ref } from 'vue'
 import { setActivePinia, createPinia } from 'pinia'
 import { screen, fireEvent } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
@@ -24,14 +24,19 @@ vi.mock('@/composables/useSessionState', () => ({
   })
 }))
 
+const SESSION_ID = 'sess-1'
+const viewSessionIdRef = ref(SESSION_ID)
+
 beforeEach(() => {
   setActivePinia(createPinia())
+  viewSessionIdRef.value = SESSION_ID
   Object.values(apiMock).forEach(fn => fn.mockReset())
 })
 
 describe('InputArea', () => {
-  it('typing updates currentInput in session store', async () => {
+  it('typing updates input in session store', async () => {
     const { pinia } = renderWithStores(InputArea, {
+      provide: { viewSessionId: viewSessionIdRef },
       stubs: {
         AttachmentList: true,
         SlashCommandDropdown: true
@@ -42,7 +47,7 @@ describe('InputArea', () => {
     const { usePollingStore } = await import('@/stores/polling')
     const sessionStore = useSessionStore(pinia)
     const pollingStore = usePollingStore(pinia)
-    sessionStore.currentSessionId = 'sess-1'
+    sessionStore.currentSessionId = SESSION_ID
     pollingStore.sessionConnected = true
     await nextTick()
 
@@ -50,11 +55,12 @@ describe('InputArea', () => {
     fireEvent.input(textarea, { target: { value: 'hello' } })
     await nextTick()
 
-    expect(sessionStore.currentInput).toBe('hello')
+    expect(sessionStore.getInput(SESSION_ID)).toBe('hello')
   })
 
   it('Send button is disabled when input is empty', async () => {
     const { pinia } = renderWithStores(InputArea, {
+      provide: { viewSessionId: viewSessionIdRef },
       stubs: {
         AttachmentList: true,
         SlashCommandDropdown: true
@@ -65,8 +71,8 @@ describe('InputArea', () => {
     const { usePollingStore } = await import('@/stores/polling')
     const sessionStore = useSessionStore(pinia)
     const pollingStore = usePollingStore(pinia)
-    sessionStore.currentSessionId = 'sess-1'
-    sessionStore.currentInput = ''
+    sessionStore.currentSessionId = SESSION_ID
+    sessionStore.setInput(SESSION_ID, '')
     pollingStore.sessionConnected = true
 
     const btn = screen.getByRole('button', { name: /send/i })
@@ -75,6 +81,7 @@ describe('InputArea', () => {
 
   it('slash command dropdown opens when typing /', async () => {
     const { pinia } = renderWithStores(InputArea, {
+      provide: { viewSessionId: viewSessionIdRef },
       stubs: {
         AttachmentList: true,
         SlashCommandDropdown: { template: '<div role="listbox" aria-label="slash commands" />', props: ['commands', 'filter', 'selectedIndex'] }
@@ -85,11 +92,10 @@ describe('InputArea', () => {
     const { usePollingStore } = await import('@/stores/polling')
     const sessionStore = useSessionStore(pinia)
     const pollingStore = usePollingStore(pinia)
-    sessionStore.currentSessionId = 'sess-1'
+    sessionStore.currentSessionId = SESSION_ID
     pollingStore.sessionConnected = true
-    sessionStore.initData.set('sess-1', { slash_commands: ['memory', 'clear'] })
-    // Directly set input to trigger watcher in InputArea
-    sessionStore.currentInput = '/me'
+    sessionStore.initData.set(SESSION_ID, { slash_commands: ['memory', 'clear'] })
+    sessionStore.setInput(SESSION_ID, '/me')
     await nextTick()
 
     expect(screen.getByRole('listbox')).toBeTruthy()

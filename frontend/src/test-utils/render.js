@@ -17,7 +17,7 @@ afterEach(() => {
   }
 })
 
-export function renderWithStores(component, { props, slots, routes, initialRoute = '/', stubs } = {}) {
+export function renderWithStores(component, { props, slots, routes, initialRoute = '/', stubs, provide } = {}) {
   const pinia = createPinia()
   const router = createRouter({
     history: createMemoryHistory(),
@@ -36,7 +36,8 @@ export function renderWithStores(component, { props, slots, routes, initialRoute
     attachTo: container,
     global: {
       plugins: [pinia, router],
-      stubs: stubs ?? {}
+      stubs: stubs ?? {},
+      provide: provide ?? {}
     },
     props,
     slots
