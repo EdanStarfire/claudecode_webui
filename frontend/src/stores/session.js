@@ -375,7 +375,10 @@ export const useSessionStore = defineStore('session', () => {
         // No archives (or no project_id / fetch failed): show informational view
         // Set currentSessionId but skip auto-start entirely
         const messageStore = await import('./message')
-        await messageStore.useMessageStore().loadMessages(sessionId)
+        const msgStore = messageStore.useMessageStore()
+        if (!msgStore.messagesBySession.has(sessionId)) {
+          await msgStore.loadMessages(sessionId)
+        }
 
         if (abortController.signal.aborted) return
 
@@ -466,9 +469,14 @@ export const useSessionStore = defineStore('session', () => {
         return
       }
 
-      // Load messages for this session
+      // Load messages for this session — only on first visit.
+      // On switch-back, the preserved polling cursor replays any missed events,
+      // avoiding the multi-second reload and spurious tool-state regression warnings.
       const messageStore = await import('./message')
-      await messageStore.useMessageStore().loadMessages(sessionId)
+      const msgStore = messageStore.useMessageStore()
+      if (!msgStore.messagesBySession.has(sessionId)) {
+        await msgStore.loadMessages(sessionId)
+      }
 
       // Check abort after message load
       if (abortController.signal.aborted) {

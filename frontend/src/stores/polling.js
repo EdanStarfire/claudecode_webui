@@ -312,6 +312,8 @@ export const usePollingStore = defineStore('polling', () => {
           if (newState === 'error') {
             console.log(`[UI state_change] Session ${changedSessionId} entered error state, reloading messages`)
             const messageStore = useMessageStore()
+            messageStore.clearMessages(changedSessionId)
+            resetSessionCursor(changedSessionId)
             messageStore.loadMessages(changedSessionId)
           }
 

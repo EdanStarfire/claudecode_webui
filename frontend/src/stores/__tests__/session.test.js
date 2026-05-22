@@ -11,6 +11,18 @@ const apiMock = vi.hoisted(() => ({
 }))
 vi.mock('@/utils/api', () => ({ api: apiMock, getAuthToken: vi.fn() }))
 vi.mock('@/composables/useNotifications', () => ({ notify: vi.fn() }))
+vi.mock('@/stores/resource', () => ({
+  useResourceStore: vi.fn(() => ({ loadResources: vi.fn().mockResolvedValue(undefined) }))
+}))
+vi.mock('@/stores/usage', () => ({
+  useUsageStore: vi.fn(() => ({ loadUsage: vi.fn() }))
+}))
+vi.mock('@/stores/polling', () => ({
+  usePollingStore: vi.fn(() => ({
+    connectSession: vi.fn().mockResolvedValue(undefined),
+    disconnectSession: vi.fn()
+  }))
+}))
 
 beforeEach(() => {
   setActivePinia(createPinia())
@@ -91,5 +103,37 @@ describe('session store', () => {
 
     store.currentSessionId = 'sess-1'
     expect(store.currentInput).toBe('hello')
+  })
+
+  describe('selectSession cache gate (#1515)', () => {
+    it('calls loadMessages on first visit when session is not cached', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useSessionStore()
+
+      store.sessions.set('sess-fresh', makeSession({ session_id: 'sess-fresh', state: 'active' }))
+      apiMock.get.mockResolvedValue({ messages: [], total_count: 0, has_more: false })
+
+      await store.selectSession('sess-fresh')
+
+      expect(apiMock.get).toHaveBeenCalledWith(
+        expect.stringContaining('/api/sessions/sess-fresh/messages')
+      )
+    })
+
+    it('skips loadMessages on switch-back when session messages are already cached', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useSessionStore()
+      const msgStore = useMessageStore()
+
+      store.sessions.set('sess-cached', makeSession({ session_id: 'sess-cached', state: 'active' }))
+      msgStore.messagesBySession.set('sess-cached', [])
+
+      await store.selectSession('sess-cached')
+
+      expect(apiMock.get).not.toHaveBeenCalledWith(
+        expect.stringContaining('/api/sessions/sess-cached/messages')
+      )
+    })
   })
 })
