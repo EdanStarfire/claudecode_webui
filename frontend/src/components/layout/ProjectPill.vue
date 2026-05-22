@@ -29,6 +29,12 @@
         :title="segTooltip(seg)"
       ></div>
     </div>
+    <span
+      v-if="hasUnreviewed"
+      class="pill-unread-dot"
+      aria-label="Project has unreviewed completion"
+      title="One or more agents have new activity"
+    ></span>
   </div>
 </template>
 
@@ -51,6 +57,10 @@ const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 
 const sessionCount = computed(() => props.project.session_ids?.length || 0)
+
+const hasUnreviewed = computed(() =>
+  projectStore.projectHasUnreviewed(props.project.project_id, sessionStore)
+)
 
 const pillIcon = computed(() => {
   if (sessionCount.value > 1) return '🔷'
@@ -178,4 +188,15 @@ function showEditModal() {
 .seg.waiting { background: #ffc107; }
 .seg.error { background: #ef4444; }
 .seg.none { background: var(--bs-border-color); }
+
+.pill-unread-dot {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3b82f6;
+  border: 1.5px solid var(--bs-body-bg);
+}
 </style>

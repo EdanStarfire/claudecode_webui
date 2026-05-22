@@ -2,7 +2,7 @@
   <div class="agent-overview" v-if="session">
     <!-- Agent Identity -->
     <div class="overview-identity">
-      <div class="overview-avatar" :class="isArchiveMode ? 'status-archived-sq' : statusClass" :aria-label="`Agent status: ${statusLabel}`"></div>
+      <div class="overview-avatar" :class="[isArchiveMode ? 'status-archived-sq' : statusClass, { unread: isUnreviewed }]" :aria-label="`Agent status: ${statusLabel}`"></div>
       <div class="overview-info">
         <div class="overview-name">{{ session.name || 'Agent' }}</div>
         <div class="overview-sdk-title" v-if="session.sdk_generated_name">{{ session.sdk_generated_name }}</div>
@@ -167,6 +167,10 @@ const ratesKnown = computed(() => {
   if (!usage) return true
   return !!usage.rates_known
 })
+
+const isUnreviewed = computed(() =>
+  session.value?.session_id ? sessionStore.isUnreviewed(session.value.session_id) : false
+)
 
 const isArchiveMode = computed(() => !!route.params.archiveId)
 const currentArchiveId = computed(() => route.params.archiveId)
@@ -468,5 +472,20 @@ function showInfo() {
   text-align: center;
 }
 
+/* Unread indicator (issue #1513) */
+.overview-avatar {
+  position: relative;
+}
 
+.overview-avatar.unread::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #3b82f6;
+  border: 1.5px solid var(--bs-body-bg);
+}
 </style>

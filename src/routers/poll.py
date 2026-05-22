@@ -54,6 +54,14 @@ def build_router(webui) -> APIRouter:
         effective_timeout = min(float(timeout), 30.0)
         await queue.wait_for_events(since, timeout=effective_timeout)
         events, next_cursor = queue.events_since(since)
+
+        # Issue #1513: Mark session viewed after events are collected.
+        # Cheap no-op when already viewed (mark_viewed guards on completion > viewed).
+        try:
+            await webui.coordinator.session_manager.mark_viewed(session_id)
+        except Exception:
+            _polling_logger.exception("mark_viewed failed for session %s", session_id)
+
         if events:
             _polling_logger.info(
                 "poll session %s returned %d event(s) since=%d next_cursor=%d",

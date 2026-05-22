@@ -1,7 +1,7 @@
 <template>
   <div v-if="minionData" class="minion-tree-node" :style="{ marginLeft: `${indent}px` }">
     <!-- Sidebar Layout (vertical, single column) -->
-    <div v-if="layout === 'sidebar'" class="minion-card minion-card-clickable border-start border-2 mb-2 d-flex align-items-center p-2" :class="[statusTintClass, { active: isSelected }]" @click="handleClick">
+    <div v-if="layout === 'sidebar'" class="minion-card minion-card-clickable border-start border-2 mb-2 d-flex align-items-center p-2" :class="[statusTintClass, { active: isSelected, unread: isUnreviewed }]" @click="handleClick">
       <!-- Status Indicator Dot -->
       <div class="status-dot me-2" :class="statusDotClass"></div>
 
@@ -62,7 +62,7 @@
     </div>
 
     <!-- Two-Column Layout (for HierarchyView) -->
-    <div v-else class="minion-card minion-card-clickable border-start border-2 mb-2" :class="[statusTintClass, { active: isSelected }]" @click="handleClick">
+    <div v-else class="minion-card minion-card-clickable border-start border-2 mb-2" :class="[statusTintClass, { active: isSelected, unread: isUnreviewed }]" @click="handleClick">
       <div class="node-row">
         <!-- Left Column: Status + Name (30%) -->
         <div class="node-left">
@@ -295,6 +295,11 @@ const isSelected = computed(() => {
   if (!props.minionData || !props.minionData.id) return false
   return sessionStore.currentSessionId === props.minionData.id
 })
+
+// Issue #1513: Unread state
+const isUnreviewed = computed(() =>
+  props.minionData?.id ? sessionStore.isUnreviewed(props.minionData.id) : false
+)
 
 // Check if minion has children
 const hasChildren = computed(() => {
@@ -761,5 +766,17 @@ function showManageModal() {
 [data-bs-theme="dark"] .minion-card.status-tint-secondary,
 [data-bs-theme="sensitive-dark"] .minion-card.status-tint-secondary {
   background-color: color-mix(in oklab, var(--bs-secondary, #6c757d) 16%, var(--bs-body-bg, #131c2e));
+}
+
+/* Unread state (issue #1513) */
+.minion-card.unread {
+  border-left-color: #3b82f6 !important;
+  border-left-width: 4px !important;
+  background-color: color-mix(in oklab, #3b82f6 8%, var(--bs-body-bg, #fff));
+}
+
+[data-bs-theme="dark"] .minion-card.unread,
+[data-bs-theme="sensitive-dark"] .minion-card.unread {
+  background-color: color-mix(in oklab, #3b82f6 14%, var(--bs-body-bg, #131c2e));
 }
 </style>
