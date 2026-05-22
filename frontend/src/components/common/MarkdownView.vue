@@ -13,7 +13,7 @@
 import { ref, watch, computed } from 'vue'
 import { Comark } from '@comark/vue'
 import { useMarkdownPlugins, useMarkdownComponents } from '@/composables/useMarkdown'
-import { preprocessLeadingThematicBreak } from './markdownPreprocess'
+import { preprocessLeadingThematicBreak, preprocessPortColons } from './markdownPreprocess'
 
 defineOptions({ inheritAttrs: false })
 
@@ -21,7 +21,7 @@ const props = defineProps({
   content: { type: String, default: '' },
 })
 
-const safeContent = computed(() => preprocessLeadingThematicBreak(props.content))
+const safeContent = computed(() => preprocessPortColons(preprocessLeadingThematicBreak(props.content)))
 
 const wrapEl = ref(null)
 const plugins = useMarkdownPlugins()
