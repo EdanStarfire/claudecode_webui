@@ -16,6 +16,7 @@
 /* Reduce default font size */
 :root {
     --bs-body-font-size: 0.875rem; /* 14px if base is 16px */
+    --color-unread: #f97316;
 }
 
 /* ========== STANDARD LIGHT (Bootstrap defaults, explicit for clarity) ========== */

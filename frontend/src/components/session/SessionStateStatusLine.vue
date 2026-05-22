@@ -6,9 +6,10 @@
       :class="{ 'progress-bar-striped progress-bar-animated': isAnimated }"
       :style="{
         width: '100%',
-        backgroundColor: statusColor
+        backgroundColor: effectiveColor
       }"
       :title="statusTooltip"
+      :aria-label="`Session status: ${displayState}${isUnreviewed ? ' (new since last viewed)' : ''}`"
     ></div>
     <div
       v-else
@@ -22,7 +23,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useSessionStore } from '@/stores/session'
-import { useSessionState } from '@/composables/useSessionState'
+import { useSessionState, UNREAD_COLOR } from '@/composables/useSessionState'
 
 const props = defineProps({
   sessionId: {
@@ -36,6 +37,9 @@ const sessionStore = useSessionStore()
 const session = computed(() => sessionStore.sessions.get(props.sessionId))
 
 const { displayState, statusColor, isAnimated } = useSessionState(session)
+
+const isUnreviewed = computed(() => sessionStore.isUnreviewed(props.sessionId))
+const effectiveColor = computed(() => isUnreviewed.value ? UNREAD_COLOR : statusColor.value)
 
 /**
  * Generate tooltip text for status line

@@ -7,10 +7,9 @@
     :title="childSession?.name || 'Child agent'"
     @click.stop="$emit('click', sessionId)"
   >
-    <div class="peek-dot" :class="statusClass"></div>
+    <div class="peek-dot" :class="[statusClass, { unread: isUnreviewed }]"></div>
     <span class="peek-letter">{{ letter }}</span>
     <div v-if="hasAlert" class="peek-alert" :class="alertClass"></div>
-    <div v-if="isUnreviewed" class="peek-unread" aria-label="Unreviewed completion"></div>
   </div>
 </template>
 
@@ -105,6 +104,7 @@ const alertClass = computed(() => {
 .dot-waiting { background: #ffc107; }
 .dot-error { background: #ef4444; }
 .dot-none { background: #e2e8f0; }
+.peek-dot.unread { background: var(--color-unread); }
 
 .peek-letter {
   font-size: 10px;
@@ -126,14 +126,4 @@ const alertClass = computed(() => {
 .alert-permission { background: #f59e0b; }
 .alert-error { background: #ef4444; }
 
-.peek-unread {
-  position: absolute;
-  top: -2px;
-  left: -2px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #3b82f6;
-  border: 1px solid var(--bs-body-bg);
-}
 </style>

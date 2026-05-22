@@ -27,12 +27,6 @@
         >
           🛠 <span class="button-label">Manage</span>
         </button>
-        <span
-          v-if="isUnreviewed"
-          class="status-unread-dot"
-          aria-label="Unreviewed completion"
-          title="New activity since last viewed"
-        ></span>
       </div>
 
       <!-- Rate Limit Indicator (Issue #899) -->
@@ -199,7 +193,6 @@ const hasRateLimitData = computed(() =>
   uiStore.rateLimits?.seven_day?.used_percentage != null
 )
 
-const isUnreviewed = computed(() => sessionStore.isUnreviewed(props.sessionId))
 </script>
 
 <style scoped>
@@ -215,12 +208,4 @@ const isUnreviewed = computed(() => sessionStore.isUnreviewed(props.sessionId))
   }
 }
 
-.status-unread-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #3b82f6;
-  flex-shrink: 0;
-}
 </style>
