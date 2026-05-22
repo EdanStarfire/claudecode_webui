@@ -14,7 +14,7 @@
 
     <!-- Messages Area -->
     <div class="d-flex flex-column flex-grow-1 overflow-hidden">
-      <MessageList :key="props.sessionId" />
+      <MessageList />
     </div>
 
     <!-- Input Area -->
