@@ -33,13 +33,13 @@
       </template>
 
       <!-- Issue #662: Truncation banner after last assistant message when response was truncated -->
-      <TruncationBanner v-if="showTruncationBanner" :key="'truncation-' + sessionStore.currentSessionId" />
+      <TruncationBanner v-if="showTruncationBanner" :key="'truncation-' + viewSessionId" />
 
       <!-- Issue #1300: Deferred tool banner when a PreToolUse hook deferred a tool -->
       <DeferredToolBanner
         v-if="deferredToolUse"
         :deferredToolUse="deferredToolUse"
-        :key="'deferred-' + sessionStore.currentSessionId"
+        :key="'deferred-' + viewSessionId"
       />
     </div>
 
@@ -62,7 +62,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, nextTick, onMounted, onUnmounted, provide } from 'vue'
+import { computed, inject, onActivated, onDeactivated, onMounted, onUnmounted, provide, ref, watch, nextTick } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
@@ -77,17 +77,24 @@ const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 
+// Injected per-instance session id (provided by SessionView).
+// Every computed in this component reads from this id, not the global currentSessionId,
+// so cached instances under KeepAlive never display another session's data.
+const viewSessionId = inject('viewSessionId', ref(null))
+
 const messagesArea = ref(null)
 const isProgrammaticScroll = ref(false)
 
+// Per-instance message and tool-call sources derived from the injected session id.
+const sessionMessages = computed(() => messageStore.messagesBySession.get(viewSessionId.value) || [])
+const sessionToolCalls = computed(() => messageStore.toolCallsBySession.get(viewSessionId.value) || [])
 
 // TTS Read Aloud (issue #735)
 const tts = useTTSReadAloud()
 provide('ttsReadAloud', tts)
 
 // Provide all messages for play-from-here navigation
-const allMessages = computed(() => messageStore.currentMessages)
-provide('allMessages', allMessages)
+provide('allMessages', sessionMessages)
 
 /**
  * Group messages into displayable items, detecting compaction event sequences
@@ -97,7 +104,7 @@ provide('allMessages', allMessages)
  * - Compaction events: { type: 'compaction', messages: [{...}, {...}, {...}, {...}] }
  */
 const displayableItems = computed(() => {
-  const messages = messageStore.currentMessages
+  const messages = sessionMessages.value
   const items = []
   let i = 0
 
@@ -358,17 +365,15 @@ function isCompactionStart(msg, messages, index) {
   }
 }
 
-const currentToolCalls = computed(() => messageStore.currentToolCalls)
-
 // Issue #662: Show truncation banner when last stop_reason is max_tokens
 const showTruncationBanner = computed(() => {
-  const stopReason = messageStore.lastStopReasonBySession.get(sessionStore.currentSessionId)
+  const stopReason = messageStore.lastStopReasonBySession.get(viewSessionId.value)
   return stopReason === 'max_tokens'
 })
 
 // Issue #1300: Deferred tool use for deferral banner
 const deferredToolUse = computed(() =>
-  messageStore.deferredToolUseBySession.get(sessionStore.currentSessionId) || null
+  messageStore.deferredToolUseBySession.get(viewSessionId.value) || null
 )
 
 /**
@@ -401,7 +406,7 @@ function getScrollPosition() {
  * Restore scroll position for the current session from saved state.
  */
 async function restoreScrollPosition() {
-  const pos = sessionStore.scrollPositions.get(sessionStore.currentSessionId)
+  const pos = sessionStore.scrollPositions.get(viewSessionId.value)
   if (!pos || !messagesArea.value) return
 
   await nextTick()
@@ -428,8 +433,8 @@ async function restoreScrollPosition() {
 
 // Auto-scroll function
 async function scrollToBottom() {
-  // Skip auto-scroll when a scroll position restore is pending
-  if (sessionStore.pendingScrollRestoreSessionId === sessionStore.currentSessionId) {
+  // Skip auto-scroll when a scroll position restore is pending for this instance's session.
+  if (sessionStore.pendingScrollRestoreSessionId === viewSessionId.value) {
     return
   }
   if (uiStore.autoScrollEnabled) {
@@ -452,17 +457,22 @@ function onScroll() {
 // can merge/hide messages, making displayableItems.length unreliable for detection.
 // Use ttsInitialized flag to skip the initial message load (page reload / session switch)
 // so historical messages don't get queued for reading.
-const lastSeenMessageCount = ref(messageStore.currentMessages.length)
+const lastSeenMessageCount = ref(sessionMessages.value.length)
 const ttsInitialized = ref(false)
-watch(() => messageStore.currentMessages.length, (newLen) => {
+watch(() => sessionMessages.value.length, (newLen) => {
   if (!ttsInitialized.value) {
-    // First change after mount or session switch — treat as initial load, don't queue
+    // First change after mount or reactivation — treat as initial load, don't queue.
     lastSeenMessageCount.value = newLen
     ttsInitialized.value = true
     return
   }
+  // Only read-aloud for the currently active session; skip for cached-but-hidden instances.
+  if (viewSessionId.value !== sessionStore.currentSessionId) {
+    lastSeenMessageCount.value = newLen
+    return
+  }
   if (newLen > lastSeenMessageCount.value && uiStore.ttsReadAloudEnabled) {
-    const msgs = messageStore.currentMessages
+    const msgs = sessionMessages.value
     for (let i = lastSeenMessageCount.value; i < newLen; i++) {
       const msg = msgs[i]
       if (msg?.type === 'assistant') {
@@ -476,16 +486,15 @@ watch(() => messageStore.currentMessages.length, (newLen) => {
   lastSeenMessageCount.value = newLen
 })
 
-// Reset TTS message counter on session switch — mark as uninitialized
-// so the next batch of messages is treated as initial load
-watch(() => sessionStore.currentSessionId, () => {
-  lastSeenMessageCount.value = messageStore.currentMessages.length
+// On reactivation, reset TTS counter so the restored message batch is treated as initial load.
+onActivated(() => {
+  lastSeenMessageCount.value = sessionMessages.value.length
   ttsInitialized.value = false
 })
 
 // Auto-scroll on new messages, or restore scroll position if pending
 watch(() => displayableItems.value.length, async (newLen) => {
-  if (newLen > 0 && sessionStore.pendingScrollRestoreSessionId === sessionStore.currentSessionId) {
+  if (newLen > 0 && sessionStore.pendingScrollRestoreSessionId === viewSessionId.value) {
     sessionStore.clearScrollRestorePending()
     await restoreScrollPosition()
     return
@@ -494,26 +503,36 @@ watch(() => displayableItems.value.length, async (newLen) => {
 })
 
 // Auto-scroll on tool call updates (for permission requests, status changes, etc.)
-watch(() => messageStore.currentToolCalls.length, scrollToBottom)
+watch(() => sessionToolCalls.value.length, scrollToBottom)
 
 // Watch for tool call status changes (e.g., permission_required)
 watch(
-  () => messageStore.currentToolCalls.map(tc => `${tc.id}-${tc.status}`).join(','),
+  () => sessionToolCalls.value.map(tc => `${tc.id}-${tc.status}`).join(','),
   scrollToBottom
 )
 
-// Register scroll position getter and scroll to bottom on mount
-onMounted(() => {
+// Register/unregister the scroll-position getter using activate/deactivate so that
+// exactly one MessageList instance holds the registration at any time.
+let isRegisteredGetter = false
+onActivated(() => {
   sessionStore.registerScrollPositionGetter(getScrollPosition)
-  // Add a small delay to ensure content is fully rendered
-  setTimeout(() => {
-    scrollToBottom()
-  }, 100)
+  isRegisteredGetter = true
+})
+onDeactivated(() => {
+  if (isRegisteredGetter) {
+    sessionStore.registerScrollPositionGetter(null)
+    isRegisteredGetter = false
+  }
 })
 
-// Unregister scroll position getter and cancel pending rAF on unmount
+// First-mount-only: scroll to bottom after initial content render.
+onMounted(() => {
+  setTimeout(scrollToBottom, 100)
+})
+
+// Safety net for LRU eviction — deactivated already cleared but keep for completeness.
 onUnmounted(() => {
-  sessionStore.registerScrollPositionGetter(null)
+  if (isRegisteredGetter) sessionStore.registerScrollPositionGetter(null)
 })
 
 function shouldDisplayMessage(message) {

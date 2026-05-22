@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { render, screen } from '@testing-library/vue'
 import { createPinia as _createPinia } from 'pinia'
+import { ref } from 'vue'
 import { renderWithStores } from '@/test-utils/render'
 import { makeMessage } from '@/test-utils/factories'
 import MessageList from '@/components/messages/MessageList.vue'
@@ -23,14 +24,19 @@ vi.mock('@/composables/useMermaid', () => ({
   useMermaid: () => ({ renderMermaid: vi.fn() })
 }))
 
+const SESSION_ID = 'sess-1'
+const viewSessionIdRef = ref(SESSION_ID)
+
 beforeEach(() => {
   setActivePinia(createPinia())
+  viewSessionIdRef.value = SESSION_ID
   apiMock.get.mockResolvedValue({ messages: [], total_count: 0, has_more: false })
 })
 
 describe('MessageList', () => {
   it('renders messages from the message store', async () => {
     const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
       stubs: {
         MessageItem: { template: '<div role="article" data-testid="msg-item">{{ message.content }}</div>', props: ['message', 'attachedTools'] },
         TruncationBanner: true,
@@ -38,13 +44,10 @@ describe('MessageList', () => {
       }
     })
 
-    const { useSessionStore } = await import('@/stores/session')
     const { useMessageStore } = await import('@/stores/message')
-    const sessionStore = useSessionStore(pinia)
     const messageStore = useMessageStore(pinia)
 
-    sessionStore.currentSessionId = 'sess-1'
-    messageStore.messagesBySession.set('sess-1', [
+    messageStore.messagesBySession.set(SESSION_ID, [
       makeMessage({ content: 'First message' }),
       makeMessage({ content: 'Second message' })
     ])
@@ -57,17 +60,15 @@ describe('MessageList', () => {
   })
 
   it('shows empty state when no session is selected', async () => {
-    const { pinia } = renderWithStores(MessageList, {
+    const nullSessionRef = ref(null)
+    renderWithStores(MessageList, {
+      provide: { viewSessionId: nullSessionRef },
       stubs: {
         MessageItem: true,
         TruncationBanner: true,
         SubagentTimeline: true
       }
     })
-
-    const { useSessionStore } = await import('@/stores/session')
-    const sessionStore = useSessionStore(pinia)
-    sessionStore.currentSessionId = null
 
     await new Promise(r => setTimeout(r, 10))
 
@@ -77,6 +78,7 @@ describe('MessageList', () => {
 
   it('hides signature-only assistant messages from Auto mode', async () => {
     const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
       stubs: {
         MessageItem: { template: '<div role="article" data-testid="msg-item">{{ message.content }}</div>', props: ['message', 'attachedTools'] },
         TruncationBanner: true,
@@ -84,13 +86,10 @@ describe('MessageList', () => {
       }
     })
 
-    const { useSessionStore } = await import('@/stores/session')
     const { useMessageStore } = await import('@/stores/message')
-    const sessionStore = useSessionStore(pinia)
     const messageStore = useMessageStore(pinia)
 
-    sessionStore.currentSessionId = 'sess-1'
-    messageStore.messagesBySession.set('sess-1', [
+    messageStore.messagesBySession.set(SESSION_ID, [
       makeMessage({
         type: 'assistant',
         content: 'Assistant response',
@@ -129,6 +128,7 @@ describe('MessageList', () => {
 
   it('preserves assistant messages with non-empty thinking content', async () => {
     const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
       stubs: {
         MessageItem: { template: '<div role="article" data-testid="msg-item">{{ message.content }}</div>', props: ['message', 'attachedTools'] },
         TruncationBanner: true,
@@ -136,13 +136,10 @@ describe('MessageList', () => {
       }
     })
 
-    const { useSessionStore } = await import('@/stores/session')
     const { useMessageStore } = await import('@/stores/message')
-    const sessionStore = useSessionStore(pinia)
     const messageStore = useMessageStore(pinia)
 
-    sessionStore.currentSessionId = 'sess-1'
-    messageStore.messagesBySession.set('sess-1', [
+    messageStore.messagesBySession.set(SESSION_ID, [
       makeMessage({
         type: 'assistant',
         content: 'Assistant response',
@@ -164,6 +161,7 @@ describe('MessageList', () => {
 
   it('does not change grouping in non-Auto sequences', async () => {
     const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
       stubs: {
         MessageItem: { template: '<div role="article" data-testid="msg-item">{{ message.content }}</div>', props: ['message', 'attachedTools'] },
         TruncationBanner: true,
@@ -171,13 +169,10 @@ describe('MessageList', () => {
       }
     })
 
-    const { useSessionStore } = await import('@/stores/session')
     const { useMessageStore } = await import('@/stores/message')
-    const sessionStore = useSessionStore(pinia)
     const messageStore = useMessageStore(pinia)
 
-    sessionStore.currentSessionId = 'sess-1'
-    messageStore.messagesBySession.set('sess-1', [
+    messageStore.messagesBySession.set(SESSION_ID, [
       makeMessage({
         type: 'assistant',
         content: 'Assistant response',
