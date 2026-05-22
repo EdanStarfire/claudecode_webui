@@ -1,5 +1,7 @@
 import { computed } from 'vue'
 
+export const UNREAD_COLOR = '#f97316'
+
 /**
  * Shared color map for session display states.
  * Exported for components that need the raw map (e.g., MinionTreeNode CSS class mapping).

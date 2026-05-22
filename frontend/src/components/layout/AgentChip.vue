@@ -8,7 +8,7 @@
       ghost: isGhost
     }"
     role="button"
-    :aria-label="`Select agent ${displayName}`"
+    :aria-label="`Select agent ${displayName}${isUnreviewed && !isGhost ? ' (new since last viewed)' : ''}`"
     :data-testid="`session-chip-${props.session.session_id}`"
     @click="handleClick"
     @contextmenu.prevent="handleManage"
@@ -19,7 +19,7 @@
     :title="chipTooltip"
   >
     <!-- Status square (no letter — compact indicator) -->
-    <div class="ac-status-sq" :class="isGhost ? 'ghost' : statusClass"></div>
+    <div class="ac-status-sq" :class="[isGhost ? 'ghost' : statusClass, { unread: isUnreviewed && !isGhost }]"></div>
 
     <!-- Info stack — width driven by name; description truncates within it -->
     <div class="ac-info">
@@ -71,14 +71,6 @@
       🛡️
     </div>
 
-    <!-- Unread indicator (issue #1513) -->
-    <div
-      v-if="isUnreviewed && !isGhost"
-      class="ac-unread-dot"
-      :class="effectiveDockerProxyEnabled ? 'ac-unread-dot--bottom' : ''"
-      aria-label="Unreviewed completion"
-      title="New activity since last viewed"
-    ></div>
   </div>
 </template>
 
@@ -264,6 +256,7 @@ function handleClick() {
 .ac-status-sq.terminated   { background: #cbd5e1; }
 .ac-status-sq.error        { background: #ef4444; animation: pulse-error 1.5s infinite; }
 .ac-status-sq.ghost        { background: #e2e8f0; }
+.ac-status-sq.unread       { background: var(--color-unread); }
 
 /* Info column — name drives chip width; subtitle/description truncate within it */
 .ac-info {
@@ -403,26 +396,4 @@ function handleClick() {
   50% { opacity: 0.4; }
 }
 
-.ac-unread-dot {
-  position: absolute;
-  top: -3px;
-  left: -3px;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #3b82f6;
-  border: 1.5px solid var(--bs-body-bg);
-  box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.6);
-  animation: pulse-unread 2s infinite;
-}
-
-.ac-unread-dot--bottom {
-  top: auto;
-  bottom: -3px;
-}
-
-@keyframes pulse-unread {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.6); }
-  50%      { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0); }
-}
 </style>

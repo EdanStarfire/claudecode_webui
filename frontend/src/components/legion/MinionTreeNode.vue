@@ -768,15 +768,25 @@ function showManageModal() {
   background-color: color-mix(in oklab, var(--bs-secondary, #6c757d) 16%, var(--bs-body-bg, #131c2e));
 }
 
-/* Unread state (issue #1513) */
+/* Unread state (issue #1513 → #1523) — orange recolor of existing status surfaces */
 .minion-card.unread {
-  border-left-color: #3b82f6 !important;
+  border-left-color: var(--color-unread) !important;
   border-left-width: 4px !important;
-  background-color: color-mix(in oklab, #3b82f6 8%, var(--bs-body-bg, #fff));
+  background-color: color-mix(in oklab, var(--color-unread) 10%, var(--bs-body-bg, #fff));
 }
 
 [data-bs-theme="dark"] .minion-card.unread,
 [data-bs-theme="sensitive-dark"] .minion-card.unread {
-  background-color: color-mix(in oklab, #3b82f6 14%, var(--bs-body-bg, #131c2e));
+  background-color: color-mix(in oklab, var(--color-unread) 18%, var(--bs-body-bg, #131c2e));
+}
+
+.minion-card.unread .status-dot-green {
+  background-color: color-mix(in oklab, var(--color-unread) 35%, var(--bs-body-bg, #fff));
+  border-color: var(--color-unread);
+}
+
+.minion-card.unread .status-dot-grey {
+  background-color: color-mix(in oklab, var(--color-unread) 35%, var(--bs-body-bg, #fff));
+  border-color: var(--color-unread);
 }
 </style>

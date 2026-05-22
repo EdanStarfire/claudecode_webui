@@ -248,7 +248,7 @@ export const useProjectStore = defineStore('project', () => {
     }
 
     function walkTree(session, segments) {
-      segments.push({ status: sessionStatus(session), flex: 1, name: session.name || null })
+      segments.push({ status: sessionStatus(session), flex: 1, name: session.name || null, unread: sessionStore.isUnreviewed(session.session_id) })
       if (session.child_minion_ids) {
         for (const cid of session.child_minion_ids) {
           const child = sessionMap.get(cid)
