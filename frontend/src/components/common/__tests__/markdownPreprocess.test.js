@@ -135,4 +135,108 @@ describe('preprocessPortColons', () => {
     const input = 'some :word here'
     expect(preprocessPortColons(input)).toBe(input)
   })
+
+  // §4.1 — letter emoticons
+  it('escapes :D in prose', () => {
+    expect(preprocessPortColons('nice work :D'))
+      .toBe('nice work \\:D')
+  })
+
+  it('escapes :P, :O, :S, :X uppercase emoticons', () => {
+    expect(preprocessPortColons('feeling :P then :O then :S then :X'))
+      .toBe('feeling \\:P then \\:O then \\:S then \\:X')
+  })
+
+  it('escapes :D at start of line', () => {
+    expect(preprocessPortColons(':D wow'))
+      .toBe('\\:D wow')
+  })
+
+  it('escapes :D followed by punctuation', () => {
+    expect(preprocessPortColons('cool :D.'))
+      .toBe('cool \\:D.')
+  })
+
+  it('escapes :D at end of string', () => {
+    expect(preprocessPortColons('nice :D'))
+      .toBe('nice \\:D')
+  })
+
+  // §4.2 — paren / pipe / semicolon emoticons
+  it('escapes :) emoticon', () => {
+    expect(preprocessPortColons('hello :) world'))
+      .toBe('hello \\:) world')
+  })
+
+  it('escapes :( emoticon', () => {
+    expect(preprocessPortColons('oh no :( sad'))
+      .toBe('oh no \\:( sad')
+  })
+
+  it('escapes ;) wink', () => {
+    expect(preprocessPortColons('right ;) ok'))
+      .toBe('right \\;) ok')
+  })
+
+  it('escapes :| neutral emoticon', () => {
+    expect(preprocessPortColons('meh :| whatever'))
+      .toBe('meh \\:| whatever')
+  })
+
+  it('escapes mixed emoticons in one line', () => {
+    expect(preprocessPortColons('hi :D, sad :(, wink ;)'))
+      .toBe('hi \\:D, sad \\:(, wink \\;)')
+  })
+
+  // §4.3 — must NOT escape valid MDC components
+  it('leaves multi-letter MDC component :Alert alone', () => {
+    const input = 'see :Alert for details'
+    expect(preprocessPortColons(input)).toBe(input)
+  })
+
+  it('leaves :Alert{type="info"} component invocation alone', () => {
+    const input = ':Alert{type="info"} heads up'
+    expect(preprocessPortColons(input)).toBe(input)
+  })
+
+  it('leaves single-letter MDC component with attributes :D{prop=x} alone', () => {
+    const input = ':D{prop=x} component'
+    expect(preprocessPortColons(input)).toBe(input)
+  })
+
+  it('leaves :Door (starts with :D but continues with letters) alone', () => {
+    const input = 'open the :Door now'
+    expect(preprocessPortColons(input)).toBe(input)
+  })
+
+  // §4.4 — code / table / boundary preservation
+  it('leaves emoticons in fenced code blocks alone', () => {
+    const input = 'see\n```\nprint(":D")\nemoji = ":)"\n```\nafter'
+    expect(preprocessPortColons(input)).toBe(input)
+  })
+
+  it('leaves emoticons in inline code spans alone', () => {
+    const input = 'use `:D` literally'
+    expect(preprocessPortColons(input)).toBe(input)
+  })
+
+  it('leaves emoticons in indented code blocks alone', () => {
+    const input = 'para\n\n    log(":D happened")\n\nmore'
+    expect(preprocessPortColons(input)).toBe(input)
+  })
+
+  it('leaves GFM table alignment row unchanged', () => {
+    const input = '| col | num |\n|---:|:---|\n| 1   | a   |'
+    expect(preprocessPortColons(input)).toBe(input)
+  })
+
+  it('leaves lowercase :d alone (not a conventional emoticon)', () => {
+    const input = 'the :d thing'
+    expect(preprocessPortColons(input)).toBe(input)
+  })
+
+  it('leaves :D embedded after a word character alone', () => {
+    const input = 'abc:D thing'
+    expect(preprocessPortColons(input)).toBe(input)
+  })
 })

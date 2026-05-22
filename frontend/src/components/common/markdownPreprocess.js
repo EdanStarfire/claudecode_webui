@@ -19,19 +19,23 @@ export function preprocessLeadingThematicBreak(content) {
 // Module-level with g flag — lastIndex must be reset at the start of each call.
 const CODE_SEGMENT = /(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*?`)/g
 const INDENTED_CODE = /^ {4,}\S/
+const TABLE_DELIM = /^[\s|:\-]+$/
+// Escapes port colons (:\d) and letter/punctuation emoticons (:D :P :O :S :X :) :( :| ;) ;()
+const PROSE_COLON = /(^|[^A-Za-z0-9/])(:\d|:[DPOSX](?![A-Za-z{])|:[)(|]|;[)(])/g
 
 function escapeInProse(text) {
   if (!text) return text
   return text.split('\n').map(line => {
-    if (!line.includes(':')) return line
+    if (!line.includes(':') && !line.includes(';')) return line
     if (INDENTED_CODE.test(line)) return line
-    return line.replace(/(^|[^A-Za-z0-9/])(:\d)/g, '$1\\$2')
+    if (TABLE_DELIM.test(line)) return line
+    return line.replace(PROSE_COLON, '$1\\$2')
   }).join('\n')
 }
 
 export function preprocessPortColons(content) {
   if (typeof content !== 'string') return content
-  if (!content.includes(':')) return content
+  if (!content.includes(':') && !content.includes(';')) return content
 
   let out = ''
   let lastIndex = 0
