@@ -744,3 +744,131 @@ class TestMigrateSessionToConfigDict:
         assert result.permission_mode == "acceptEdits"
         # Orphan key not in effective config
         assert not hasattr(result, "removed_field_from_future_version")
+
+
+# ---------------------------------------------------------------------------
+# Issue #1530: upsert_link tests
+# ---------------------------------------------------------------------------
+
+class TestUpsertLink:
+    @pytest.mark.asyncio
+    async def test_issue_1530_upsert_link_appends_new(
+        self, temp_session_manager, sample_session_config
+    ):
+        """A new label is appended to session.links."""
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+
+        entry = await manager.upsert_link(sid, "GH Issue", "https://github.com/issues/1")
+        assert entry["label"] == "GH Issue"
+        assert entry["url"] == "https://github.com/issues/1"
+        assert "registered_at" in entry
+
+        session = await manager.get_session_info(sid)
+        assert len(session.links) == 1
+        assert session.links[0]["label"] == "GH Issue"
+
+    @pytest.mark.asyncio
+    async def test_issue_1530_upsert_link_updates_existing_label(
+        self, temp_session_manager, sample_session_config
+    ):
+        """Re-registering the same label updates URL in-place (no duplicate)."""
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+
+        await manager.upsert_link(sid, "Dashboard", "https://v1.example.com")
+        await manager.upsert_link(sid, "Dashboard", "https://v2.example.com")
+
+        session = await manager.get_session_info(sid)
+        assert len(session.links) == 1
+        assert session.links[0]["url"] == "https://v2.example.com"
+
+    @pytest.mark.asyncio
+    async def test_issue_1530_upsert_link_persists_across_reload(
+        self, sample_session_config
+    ):
+        """Links written to state.json survive a SessionManager reload."""
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            manager1 = SessionManager(data_dir)
+            await manager1.initialize()
+
+            sid = str(uuid.uuid4())
+            await manager1.create_session(sid, config=sample_session_config)
+            await manager1.upsert_link(sid, "Docs", "https://docs.example.com")
+
+            # Reload from disk
+            manager2 = SessionManager(data_dir)
+            await manager2.initialize()
+
+            session = await manager2.get_session_info(sid)
+            assert len(session.links) == 1
+            assert session.links[0]["label"] == "Docs"
+            assert session.links[0]["url"] == "https://docs.example.com"
+
+    @pytest.mark.asyncio
+    async def test_issue_1530_upsert_link_concurrent_no_dup(
+        self, temp_session_manager, sample_session_config
+    ):
+        """Concurrent upserts of the same label produce exactly one entry (last writer wins)."""
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+
+        # Run two concurrent upserts with same label but different URLs
+        await asyncio.gather(
+            manager.upsert_link(sid, "Race", "https://url-a.example.com"),
+            manager.upsert_link(sid, "Race", "https://url-b.example.com"),
+        )
+
+        session = await manager.get_session_info(sid)
+        assert len(session.links) == 1, "Concurrent upsert must not create duplicates"
+
+    @pytest.mark.asyncio
+    async def test_issue_1530_upsert_link_raises_for_missing_session(
+        self, temp_session_manager
+    ):
+        """upsert_link raises ValueError if session_id does not exist."""
+        manager = temp_session_manager
+        with pytest.raises(ValueError):
+            await manager.upsert_link("nonexistent-id", "X", "https://example.com")
+
+    @pytest.mark.asyncio
+    async def test_issue_1530_links_default_empty_on_new_session(
+        self, temp_session_manager, sample_session_config
+    ):
+        """A freshly created session has an empty links list."""
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+        session = await manager.get_session_info(sid)
+        assert session.links == []
+
+    def test_issue_1530_from_dict_backward_compat_no_links_key(self):
+        """from_dict succeeds when the stored dict has no 'links' key (legacy data)."""
+        now = datetime.now(UTC).isoformat()
+        data = {
+            "session_id": "abc",
+            "state": "created",
+            "created_at": now,
+            "updated_at": now,
+            "config": {},
+        }
+        info = SessionInfo.from_dict(data)
+        assert info.links == []
+
+    def test_issue_1530_to_dict_includes_links(self):
+        """to_dict includes the links field."""
+        now = datetime.now(UTC)
+        links = [{"label": "X", "url": "https://x.example.com", "registered_at": now.isoformat()}]
+        info = SessionInfo(
+            session_id="abc",
+            state=SessionState.CREATED,
+            created_at=now,
+            updated_at=now,
+            links=links,
+        )
+        d = info.to_dict()
+        assert d["links"] == links

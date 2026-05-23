@@ -15,8 +15,10 @@ function writeStorage(key, value) {
   try { localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(value)) } catch {}
 }
 
-// Panel state defaults: tasks + resources expanded by default, all weights equal
+// Panel state defaults: links + tasks + resources expanded by default, all weights equal
+// Issue #1530: links panel defaults expanded=true (ambient visibility even when empty)
 const DEFAULT_PANEL_STATE = {
+  links:     { expanded: true,  weight: 1 },
   tasks:     { expanded: true,  weight: 1 },
   resources: { expanded: true,  weight: 1 },
   queue:     { expanded: false, weight: 1 },

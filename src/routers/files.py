@@ -241,6 +241,15 @@ def build_router(webui) -> APIRouter:
             filename=requested_path.name,
         )
 
+    # Issue #1530: Agent-registered persistent links
+    @router.get("/api/sessions/{session_id}/links")
+    @handle_exceptions("get session links")
+    async def get_session_links(session_id: str):
+        """Return all agent-registered links for a session."""
+        if not await webui.service.get_session_exists(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        return {"links": await webui.coordinator.get_session_links(session_id)}
+
     # Issue #423: Remove resource from session display (soft-remove)
     @router.delete("/api/sessions/{session_id}/resources/{resource_id}")
     @handle_exceptions("remove session resource")

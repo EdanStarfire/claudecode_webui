@@ -122,6 +122,9 @@ class SessionInfo:
     # Template linkage (issue #1059)
     template_id: str | None = None
 
+    # Agent-registered persistent links (issue #1530)
+    links: list[dict] = field(default_factory=list)
+
     # Unified config dict — replaces flat CONFIG_FIELDS + session_overrides (issue #1230).
     # All mergeable configuration (permission_mode, allowed_tools, model, docker_*, etc.)
     # lives here. Resolution chain: profile.config → template.config → session.config.
@@ -175,6 +178,7 @@ class SessionInfo:
             "latest_message": self.latest_message,
             "latest_message_time": self.latest_message_time.isoformat() if self.latest_message_time else None,
             "latest_message_type": self.latest_message_type,
+            "links": self.links,
             "name": self.name,
             "order": self.order,
             "overseer_level": self.overseer_level,
@@ -241,6 +245,7 @@ class SessionInfo:
         data.setdefault("secret_fetch_token", None)
         data.setdefault("secret_placeholders", None)
         data.setdefault("config", {})
+        data.setdefault("links", [])
 
         # Drop any keys not in the post-#1230 schema (legacy flat CONFIG_FIELDS
         # and session_overrides are removed by migration before from_dict is called).
@@ -254,6 +259,7 @@ class SessionInfo:
             "latest_message_time", "is_ephemeral", "queue_config", "queue_paused",
             "template_id", "config", "last_activity_at", "last_completion_at",
             "last_viewed_at", "secret_fetch_token", "secret_placeholders",
+            "links",
         }
         for k in list(data.keys()):
             if k not in known:
@@ -842,6 +848,31 @@ class SessionManager:
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} permission mode: {e}")
                 return False
+
+    async def upsert_link(self, session_id: str, label: str, url: str) -> dict:
+        """Upsert a named link for a session (upsert by exact label match).
+
+        Issue #1530: Registers a persistent named link on the session. If a link with
+        the same label already exists, its URL is updated. Otherwise a new entry is appended.
+        Persists to state.json immediately.
+        """
+        async with self._get_session_lock(session_id):
+            session = self._active_sessions.get(session_id)
+            if not session:
+                raise ValueError(f"Session {session_id} not found")
+            now = datetime.now(UTC).isoformat()
+            for entry in session.links:
+                if entry["label"] == label:
+                    entry["url"] = url
+                    entry["registered_at"] = now
+                    session.updated_at = datetime.now(UTC)
+                    await self._persist_session_state(session_id)
+                    return dict(entry)
+            entry = {"label": label, "url": url, "registered_at": now}
+            session.links.append(entry)
+            session.updated_at = datetime.now(UTC)
+            await self._persist_session_state(session_id)
+            return dict(entry)
 
     async def update_additional_directories(self, session_id: str, dirs_to_add: list[str]) -> bool:
         """Add directories to session's config["additional_directories"] list (deduplicated).

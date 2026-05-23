@@ -408,6 +408,15 @@ class SessionCoordinator:
             broadcast_callback=self._broadcast_resource_registered
         )
 
+        # Issue #1530: Links MCP tools for registering persistent named links
+        # Callback for broadcasting link_registered events will be set by web_server
+        from src.mcp.links_mcp_tools import LinksMCPTools
+        self._link_broadcast_callback: Callable[[str, dict], None] | None = None
+        self.links_mcp_tools = LinksMCPTools(
+            session_coordinator=self,
+            broadcast_callback=self._broadcast_link_registered
+        )
+
     @staticmethod
     def _default_sdk_factory(session_id, working_directory, **kwargs):
         """Default factory that strips session_name before calling ClaudeSDK."""
@@ -1132,6 +1141,14 @@ class SessionCoordinator:
         """Deprecated: Use set_resource_broadcast_callback instead."""
         self.set_resource_broadcast_callback(callback)
 
+    def set_link_broadcast_callback(self, callback: Callable[[str, dict], None]) -> None:
+        """Set the callback for broadcasting link_registered events to the session poll queue.
+
+        Issue #1530: Called by web_server after coordinator is initialised.
+        """
+        self._link_broadcast_callback = callback
+        coord_logger.info("Link broadcast callback registered in SessionCoordinator")
+
     def set_enqueue_broadcast_callback(self, callback: Callable[[str, str, dict], Any]) -> None:
         """Set the callback for broadcasting queue_update (enqueued) events."""
         self._enqueue_broadcast_callback = callback
@@ -1155,6 +1172,30 @@ class SessionCoordinator:
                     self._resource_broadcast_callback(session_id, resource_metadata)
             except Exception:
                 logger.exception(f"Failed to broadcast resource_registered for {session_id}")
+
+    async def _broadcast_link_registered(self, session_id: str, link: dict) -> None:
+        """Broadcast link_registered event via the injected callback.
+
+        Issue #1530: Called by LinksMCPTools when a link is registered or updated.
+        """
+        if self._link_broadcast_callback:
+            try:
+                if asyncio.iscoroutinefunction(self._link_broadcast_callback):
+                    await self._link_broadcast_callback(session_id, link)
+                else:
+                    self._link_broadcast_callback(session_id, link)
+            except Exception:
+                logger.exception(f"Failed to broadcast link_registered for {session_id}")
+
+    async def get_session_links(self, session_id: str) -> list[dict]:
+        """Return the list of agent-registered links for a session.
+
+        Issue #1530: Used by the REST endpoint GET /api/sessions/{id}/links.
+        """
+        session_info = await self.session_manager.get_session_info(session_id)
+        if not session_info:
+            return []
+        return session_info.links or []
 
     async def start_session(self, session_id: str, permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None) -> bool:
         """Start a session with SDK integration"""
@@ -1280,6 +1321,14 @@ class SessionCoordinator:
                     mcp_servers["resources"] = resource_mcp_server
                     mcp_tools_list.append("mcp__resources")
                     coord_logger.info(f"Attaching Resource MCP tools to session {session_id}")
+
+            # Issue #1530: Attach links MCP tools to all sessions
+            if self.links_mcp_tools:
+                links_mcp_server = self.links_mcp_tools.create_mcp_server_for_session(session_id)
+                if links_mcp_server:
+                    mcp_servers["links"] = links_mcp_server
+                    mcp_tools_list.append("mcp__links")
+                    coord_logger.info(f"Attaching Links MCP tools to session {session_id}")
 
             # Issue #676: Attach user-selected global MCP server configs
             if effective_config.mcp_server_ids:
