@@ -1,5 +1,12 @@
 <template>
   <div class="proxy-panel">
+    <!-- Empty state when proxy is not configured for this session -->
+    <div v-if="!proxyEnabled" class="proxy-empty">
+      Proxy is not configured for this session
+    </div>
+
+    <!-- Proxy content when enabled -->
+    <template v-else>
     <!-- Sub-tab bar -->
     <div class="proxy-sub-tabs d-flex align-items-center gap-1 px-3 py-2 border-bottom">
       <button
@@ -131,6 +138,7 @@
     <div v-if="proxyStore.error" class="error-state">
       {{ proxyStore.error }}
     </div>
+    </template>
   </div>
 </template>
 
@@ -144,8 +152,10 @@ const proxyStore = useProxyStore()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 
-const isVisible = computed(() => uiStore.rightSidebarActiveTab === 'proxy')
+const isVisible = computed(() => uiStore.rightSidebarPanels.proxy?.expanded ?? false)
 const sessionId = computed(() => sessionStore.currentSessionId)
+
+const proxyEnabled = computed(() => isProxyEnabledForCurrent())
 
 // Persist hide-anthropic preference in localStorage (default: true = filter on)
 let _initHide = true
@@ -177,10 +187,10 @@ function isProxyEnabledForCurrent() {
   return ec?.docker_proxy_enabled === true
 }
 
-// Start/stop polling based on visibility and session
-watch([isVisible, sessionId], ([visible, sid]) => {
+// Start/stop polling based on panel visibility, session, and proxy enabled status
+watch([isVisible, sessionId, proxyEnabled], ([visible, sid, enabled]) => {
   proxyStore.stopPolling()
-  if (visible && sid && isProxyEnabledForCurrent()) {
+  if (visible && sid && enabled) {
     proxyStore.loadAllLogs(sid)
     proxyStore.startPolling(sid)
   }
@@ -228,6 +238,14 @@ function abbreviateReason(reason) {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+
+.proxy-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--bs-secondary-color);
+  font-size: 12px;
+  font-style: italic;
 }
 
 .proxy-sub-tabs {

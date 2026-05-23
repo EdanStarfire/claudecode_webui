@@ -134,7 +134,7 @@ watch(() => route.name, (routeName) => {
 // Auto-show right panel when tasks first appear (suppressed during session switch, #521)
 watch(() => taskStore.currentHasTasks, (hasTasks, hadTasks) => {
   if (hasTasks && !hadTasks && !uiStore.suppressAutoShow) {
-    uiStore.setRightSidebarTab('tasks')
+    uiStore.setPanelExpanded('tasks', true)
     uiStore.setRightPanelVisible(true)
   }
 })
