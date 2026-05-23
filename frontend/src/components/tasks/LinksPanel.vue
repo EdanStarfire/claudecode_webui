@@ -30,7 +30,9 @@ const links = linksStore.currentLinks
 
 <style scoped>
 .links-panel {
-  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
 }
 
 .empty-placeholder {
