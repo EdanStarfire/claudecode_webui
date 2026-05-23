@@ -362,6 +362,10 @@ export const useSessionStore = defineStore('session', () => {
 
         if (abortController.signal.aborted) return
 
+        // Issue #1530: Load agent-registered links
+        const linksStoreModule = await import('./links')
+        linksStoreModule.useLinksStore().loadLinks(sessionId)
+
         const wsStore = await import('./polling')
         await wsStore.usePollingStore().connectSession(sessionId)
 
@@ -469,6 +473,10 @@ export const useSessionStore = defineStore('session', () => {
         return
       }
 
+      // Issue #1530: Load agent-registered links for this session
+      const linksStoreModule = await import('./links')
+      linksStoreModule.useLinksStore().loadLinks(sessionId)
+
       // Issue #1125: Load existing usage data for cost badge
       const usageStore = await import('./usage')
       usageStore.useUsageStore().loadUsage(sessionId)
@@ -532,6 +540,14 @@ export const useSessionStore = defineStore('session', () => {
         initData.value.delete(deletedId)
         scrollPositions.value.delete(deletedId)
       }
+
+      // Issue #1530: Clear links for deleted sessions
+      import('./links').then(({ useLinksStore }) => {
+        const linksStore = useLinksStore()
+        for (const deletedId of deletedIds) {
+          linksStore.clearLinks(deletedId)
+        }
+      })
 
       // Trigger reactivity
       sessions.value = new Map(sessions.value)

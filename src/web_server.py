@@ -257,6 +257,10 @@ class ClaudeWebUI:
         self.coordinator.set_resource_broadcast_callback(self._broadcast_resource_registered)
         logger.info("Resource broadcast callback injected into SessionCoordinator")
 
+        # Issue #1530: Inject link broadcast callback into SessionCoordinator
+        self.coordinator.set_link_broadcast_callback(self._broadcast_link_registered)
+        logger.info("Link broadcast callback injected into SessionCoordinator")
+
         # Issue #976/#989: Inject OAuth refresh broadcast callback into OAuthRefreshManager
         self.coordinator.oauth_refresh_manager.set_broadcast_callback(self._broadcast_mcp_oauth_refreshed)
         logger.info("OAuth refresh broadcast callback injected into OAuthRefreshManager")
@@ -470,6 +474,22 @@ class ClaudeWebUI:
                 logger.debug(f"Appended resource_registered for {resource_metadata.get('resource_id')} to session {session_id}")
         except Exception:
             logger.exception("Error appending resource_registered")
+
+    async def _broadcast_link_registered(self, session_id: str, link: dict):
+        """Append link_registered event to session poll queue.
+
+        Issue #1530: Called by LinksMCPTools when a link is registered or updated.
+        """
+        try:
+            if session_id in self.session_queues:
+                self.session_queues[session_id].append({
+                    "type": "link_registered",
+                    "link": link,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                })
+                logger.debug(f"Appended link_registered for '{link.get('label')}' to session {session_id}")
+        except Exception:
+            logger.exception("Error appending link_registered")
 
     async def _broadcast_queue_update(self, session_id: str, action: str, item: dict):
         """

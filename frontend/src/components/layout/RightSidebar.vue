@@ -13,6 +13,23 @@
 
     <!-- Collapsible Panel Stack -->
     <div class="panel-stack">
+      <!-- Links — issue #1530 -->
+      <CollapsiblePanel
+        ref="linksPanelRef"
+        id="links"
+        title="Links"
+        :expanded="panels.links.expanded"
+        :badge="linksBadge"
+        :flex-weight="panels.links.weight"
+        :show-resize-handle="resizeHandleVisible.links"
+        @update:expanded="uiStore.togglePanel('links')"
+        @resize-start="onResizeStart"
+        @resize-move="onResizeMove"
+        @resize-end="onResizeEnd"
+      >
+        <LinksPanel />
+      </CollapsiblePanel>
+
       <!-- Tasks -->
       <CollapsiblePanel
         ref="tasksPanelRef"
@@ -145,8 +162,10 @@ import { useEditHistoryStore } from '@/stores/editHistory'
 import { useQueueStore } from '@/stores/queue'
 import { useProxyStore } from '@/stores/proxy'
 import { useScheduleStore } from '@/stores/schedule'
+import { useLinksStore } from '@/stores/links'
 import AgentOverview from './AgentOverview.vue'
 import CollapsiblePanel from './CollapsiblePanel.vue'
+import LinksPanel from '../tasks/LinksPanel.vue'
 import TaskListPanel from '../tasks/TaskListPanel.vue'
 import ResourceGallery from '../tasks/ResourceGallery.vue'
 import ResourceFullView from '../common/ResourceFullView.vue'
@@ -166,13 +185,18 @@ const editHistoryStore = useEditHistoryStore()
 const queueStore = useQueueStore()
 const proxyStore = useProxyStore()
 const scheduleStore = useScheduleStore()
+const linksStore = useLinksStore()
 
 const panels = computed(() => uiStore.rightSidebarPanels)
 
-const PANEL_IDS = ['tasks', 'resources', 'queue', 'diffs', 'edits', 'proxy', 'schedules']
+const PANEL_IDS = ['links', 'tasks', 'resources', 'queue', 'diffs', 'edits', 'proxy', 'schedules']
 const MIN_PANEL_HEIGHT_PX = 60
 
 // Badge counts — only non-null when count > 0 (CollapsiblePanel only renders badge when truthy)
+const linksBadge = computed(() => {
+  const c = linksStore.currentLinkCount
+  return c > 0 ? c : null
+})
 const taskBadge = computed(() => {
   const total = taskStore.currentTaskStats.total
   return total > 0 ? total : null
@@ -236,6 +260,7 @@ const resizeHandleVisible = computed(() => {
 })
 
 // Template refs for measuring panel heights during drag-resize
+const linksPanelRef = ref(null)
 const tasksPanelRef = ref(null)
 const resourcesPanelRef = ref(null)
 const queuePanelRef = ref(null)
@@ -245,6 +270,7 @@ const proxyPanelRef = ref(null)
 const schedulesPanelRef = ref(null)
 
 const panelRefMap = {
+  links: linksPanelRef,
   tasks: tasksPanelRef,
   resources: resourcesPanelRef,
   queue: queuePanelRef,

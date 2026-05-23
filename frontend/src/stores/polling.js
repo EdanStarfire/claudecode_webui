@@ -525,6 +525,14 @@ export const usePollingStore = defineStore('polling', () => {
         }
         break
 
+      case 'link_registered':
+        if (payload.link) {
+          import('./links').then(({ useLinksStore }) => {
+            useLinksStore().addLink(sessionId, payload.link)
+          })
+        }
+        break
+
       case 'resource_removed':
         if (payload.resource_id) {
           const resourceStore = useResourceStore()
