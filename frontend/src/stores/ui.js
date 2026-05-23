@@ -15,6 +15,36 @@ function writeStorage(key, value) {
   try { localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(value)) } catch {}
 }
 
+// Panel state defaults: tasks + resources expanded by default, all weights equal
+const DEFAULT_PANEL_STATE = {
+  tasks:     { expanded: true,  weight: 1 },
+  resources: { expanded: true,  weight: 1 },
+  queue:     { expanded: false, weight: 1 },
+  diffs:     { expanded: false, weight: 1 },
+  edits:     { expanded: false, weight: 1 },
+  proxy:     { expanded: false, weight: 1 },
+}
+
+function loadPanelState() {
+  try {
+    const stored = localStorage.getItem('webui-sidebar-panels')
+    if (!stored) return JSON.parse(JSON.stringify(DEFAULT_PANEL_STATE))
+    const parsed = JSON.parse(stored)
+    // Merge stored state against defaults so new panels get sensible defaults
+    const result = {}
+    for (const [id, defaults] of Object.entries(DEFAULT_PANEL_STATE)) {
+      result[id] = { ...defaults, ...(parsed[id] || {}) }
+    }
+    return result
+  } catch {
+    return JSON.parse(JSON.stringify(DEFAULT_PANEL_STATE))
+  }
+}
+
+// One-time cleanup of stale localStorage keys from the old tab/queue-height system
+try { localStorage.removeItem('webui-sidebar-activeTab') } catch {}
+try { localStorage.removeItem('webui-sidebar-queuePanelHeight') } catch {}
+
 /**
  * UI Store - Manages UI state (sidebar, modals, scroll, etc.)
  */
@@ -25,13 +55,13 @@ export const useUIStore = defineStore('ui', () => {
   const rightSidebarCollapsed = ref(readStorage('rightCollapsed', true))
   const rightSidebarWidth = ref(readStorage('rightWidth', 300))
 
-  // Right Sidebar active tab: 'diff', 'tasks', 'resources', 'comms'
-  const rightSidebarActiveTab = ref(readStorage('activeTab', 'diff'))
-
   // Right panel visibility for responsive toggle (tablet/mobile overlay)
   const rightPanelVisible = ref(
     window.innerWidth >= 768 ? readStorage('rightVisible', true) : false
   )
+
+  // Right sidebar collapsible panel state (replaces single active-tab model)
+  const rightSidebarPanels = ref(loadPanelState())
 
   // Browsing project (which project's agents are shown in the strip)
   // Distinct from active project (the project of the currently selected session)
@@ -78,9 +108,6 @@ export const useUIStore = defineStore('ui', () => {
   // Transient flag — not persisted to localStorage
   const suppressAutoShow = ref(false)
 
-  // Queue panel height (resizable, issue #552)
-  const queuePanelHeight = ref(readStorage('queuePanelHeight', 200))
-
   // TTS Read Aloud toggle (issue #735)
   const ttsReadAloudEnabled = ref(
     (() => {
@@ -123,11 +150,6 @@ export const useUIStore = defineStore('ui', () => {
     writeStorage('rightWidth', rightSidebarWidth.value)
   }
 
-  function setRightSidebarTab(tab) {
-    rightSidebarActiveTab.value = tab
-    writeStorage('activeTab', tab)
-  }
-
   function setAutoScroll(enabled) {
     autoScrollEnabled.value = enabled
   }
@@ -156,23 +178,42 @@ export const useUIStore = defineStore('ui', () => {
     watchdogAlerts.value = watchdogAlerts.value.filter(a => a.id !== id)
   }
 
-  let _pendingQueueHeight = null
-  let _queueHeightRafId = null
+  // --- Panel state actions (replaces tab + queue-height model) ---
 
-  function setQueuePanelHeight(height, containerHeight = 600) {
-    const maxHeight = Math.floor(containerHeight * 0.6)
-    _pendingQueueHeight = Math.max(80, Math.min(height, maxHeight))
-    if (_queueHeightRafId === null) {
-      _queueHeightRafId = requestAnimationFrame(() => {
-        queuePanelHeight.value = _pendingQueueHeight
-        _queueHeightRafId = null
+  let _pendingPanelState = null
+  let _panelStateRafId = null
+
+  function commitPanelState() {
+    _pendingPanelState = rightSidebarPanels.value
+    if (_panelStateRafId === null) {
+      _panelStateRafId = requestAnimationFrame(() => {
+        try { localStorage.setItem('webui-sidebar-panels', JSON.stringify(_pendingPanelState)) } catch {}
+        _panelStateRafId = null
       })
     }
   }
 
-  function commitQueuePanelHeight() {
-    writeStorage('queuePanelHeight', queuePanelHeight.value)
+  function togglePanel(id) {
+    if (!rightSidebarPanels.value[id]) return
+    rightSidebarPanels.value[id].expanded = !rightSidebarPanels.value[id].expanded
+    commitPanelState()
   }
+
+  function setPanelExpanded(id, value) {
+    if (!rightSidebarPanels.value[id]) return
+    rightSidebarPanels.value[id].expanded = value
+    commitPanelState()
+  }
+
+  function setPanelWeights(weightsObj) {
+    for (const [id, weight] of Object.entries(weightsObj)) {
+      if (rightSidebarPanels.value[id]) {
+        rightSidebarPanels.value[id].weight = weight
+      }
+    }
+  }
+
+  // --- Theme ---
 
   function initTheme() {
     const stored = localStorage.getItem('webui-theme') || localStorage.getItem('dev-theme') || 'light'
@@ -268,7 +309,7 @@ export const useUIStore = defineStore('ui', () => {
     // State
     rightSidebarCollapsed,
     rightSidebarWidth,
-    rightSidebarActiveTab,
+    rightSidebarPanels,
     rightPanelVisible,
     browsingProjectId,
     expandedStacks,
@@ -285,7 +326,6 @@ export const useUIStore = defineStore('ui', () => {
     restartInProgress,
     restartStatus,
     suppressAutoShow,
-    queuePanelHeight,
     ttsReadAloudEnabled,
     rateLimits,
     watchdogAlerts,
@@ -295,7 +335,10 @@ export const useUIStore = defineStore('ui', () => {
     toggleRightSidebar,
     setRightSidebarCollapsed,
     setRightSidebarWidth,
-    setRightSidebarTab,
+    togglePanel,
+    setPanelExpanded,
+    setPanelWeights,
+    commitPanelState,
     setBrowsingProject,
     toggleStack,
     collapseAllStacks,
@@ -304,8 +347,6 @@ export const useUIStore = defineStore('ui', () => {
     setAutoScroll,
     setTTSReadAloud,
     setSuppressAutoShow,
-    setQueuePanelHeight,
-    commitQueuePanelHeight,
     initTheme,
     cycleTheme,
     showModal,

@@ -1,150 +1,138 @@
 <template>
-  <div class="queue-section" v-if="allItems.length > 0 || isPaused" :style="sectionStyle" :class="{ 'is-resizing': isResizing }">
-    <!-- Section Header -->
-    <div
-      class="queue-header d-flex align-items-center gap-2 px-3 py-2"
-      @click="collapsed = !collapsed"
-    >
-      <svg
-        class="chevron-icon"
-        :class="{ expanded: !collapsed }"
-        width="12"
-        height="12"
-        viewBox="0 0 12 12"
+  <CollapsiblePanel
+    id="queue"
+    title="Queued Messages"
+    :expanded="expanded"
+    :badge="badge"
+    :flex-weight="flexWeight"
+    :show-resize-handle="showResizeHandle"
+    @update:expanded="$emit('update:expanded', $event)"
+    @resize-start="$emit('resize-start', $event)"
+    @resize-move="$emit('resize-move', $event)"
+    @resize-end="$emit('resize-end', $event)"
+  >
+    <!-- Action buttons forwarded to CollapsiblePanel's header-actions slot -->
+    <template #header-actions>
+      <!-- Show history toggle -->
+      <button
+        v-if="terminalCount > 0"
+        class="btn btn-sm btn-link text-muted p-0 history-toggle"
+        :title="showHistory ? 'Hide history' : `Show history (${terminalCount})`"
+        @click.stop="showHistory = !showHistory"
       >
-        <path
-          d="M4.5 2L8.5 6L4.5 10"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          fill="none"
-        />
-      </svg>
-      <span class="section-title">Message Queue</span>
-      <span v-if="pendingCount > 0" class="badge bg-primary">{{ pendingCount }}</span>
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8.515 1.019A7 7 0 0 0 8 1V0a8 8 0 0 1 .589.022l-.074.997zm2.004.45a7.003 7.003 0 0 0-.985-.299l.219-.976c.383.086.76.2 1.126.342l-.36.933zm1.37.71a7.01 7.01 0 0 0-.439-.27l.493-.87a8.025 8.025 0 0 1 .979.654l-.615.789a6.996 6.996 0 0 0-.418-.302zm1.834 1.79a6.99 6.99 0 0 0-.653-.796l.724-.69c.27.285.52.59.747.91l-.818.576zm.744 1.352a7.08 7.08 0 0 0-.214-.468l.893-.45a7.976 7.976 0 0 1 .45 1.088l-.95.313a7.023 7.023 0 0 0-.179-.483zm.53 2.507a6.991 6.991 0 0 0-.1-1.025l.985-.17c.067.386.106.778.116 1.17l-1 .025zm-.131 1.538c.033-.17.06-.339.081-.51l.993.123a7.957 7.957 0 0 1-.23 1.155l-.964-.267c.046-.165.086-.332.12-.501zm-.952 2.379c.184-.29.346-.594.486-.908l.914.405c-.16.36-.345.706-.555 1.038l-.845-.535zm-.964 1.205c.122-.122.239-.248.35-.378l.758.653a8.073 8.073 0 0 1-.401.432l-.707-.707z"/>
+          <path d="M8 1a7 7 0 1 0 4.95 11.95l.707.707A8.001 8.001 0 1 1 8 0v1z"/>
+          <path d="M7.5 3a.5.5 0 0 1 .5.5v5.21l3.248 1.856a.5.5 0 0 1-.496.868l-3.5-2A.5.5 0 0 1 7 9V3.5a.5.5 0 0 1 .5-.5z"/>
+        </svg>
+        <span class="history-count">{{ terminalCount }}</span>
+      </button>
 
-      <div class="ms-auto d-flex align-items-center gap-1">
-        <!-- Show history toggle -->
-        <button
-          v-if="terminalCount > 0"
-          class="btn btn-sm btn-link text-muted p-0 history-toggle"
-          :title="showHistory ? 'Hide history' : `Show history (${terminalCount})`"
-          @click.stop="showHistory = !showHistory"
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M8.515 1.019A7 7 0 0 0 8 1V0a8 8 0 0 1 .589.022l-.074.997zm2.004.45a7.003 7.003 0 0 0-.985-.299l.219-.976c.383.086.76.2 1.126.342l-.36.933zm1.37.71a7.01 7.01 0 0 0-.439-.27l.493-.87a8.025 8.025 0 0 1 .979.654l-.615.789a6.996 6.996 0 0 0-.418-.302zm1.834 1.79a6.99 6.99 0 0 0-.653-.796l.724-.69c.27.285.52.59.747.91l-.818.576zm.744 1.352a7.08 7.08 0 0 0-.214-.468l.893-.45a7.976 7.976 0 0 1 .45 1.088l-.95.313a7.023 7.023 0 0 0-.179-.483zm.53 2.507a6.991 6.991 0 0 0-.1-1.025l.985-.17c.067.386.106.778.116 1.17l-1 .025zm-.131 1.538c.033-.17.06-.339.081-.51l.993.123a7.957 7.957 0 0 1-.23 1.155l-.964-.267c.046-.165.086-.332.12-.501zm-.952 2.379c.184-.29.346-.594.486-.908l.914.405c-.16.36-.345.706-.555 1.038l-.845-.535zm-.964 1.205c.122-.122.239-.248.35-.378l.758.653a8.073 8.073 0 0 1-.401.432l-.707-.707z"/>
-            <path d="M8 1a7 7 0 1 0 4.95 11.95l.707.707A8.001 8.001 0 1 1 8 0v1z"/>
-            <path d="M7.5 3a.5.5 0 0 1 .5.5v5.21l3.248 1.856a.5.5 0 0 1-.496.868l-3.5-2A.5.5 0 0 1 7 9V3.5a.5.5 0 0 1 .5-.5z"/>
-          </svg>
-          <span class="history-count">{{ terminalCount }}</span>
-        </button>
+      <!-- Clear history button -->
+      <button
+        v-if="terminalCount > 0"
+        class="btn btn-sm btn-link text-muted p-0"
+        title="Clear history"
+        @click.stop="doClearHistory"
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
+          <path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
+        </svg>
+      </button>
 
-        <!-- Clear history button -->
-        <button
-          v-if="terminalCount > 0"
-          class="btn btn-sm btn-link text-muted p-0"
-          title="Clear history"
-          @click.stop="doClearHistory"
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
-            <path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
-          </svg>
-        </button>
+      <!-- Pause / Resume toggle -->
+      <button
+        v-if="isPaused"
+        class="btn btn-sm btn-outline-success"
+        title="Resume queue"
+        @click.stop="resumeQueue"
+      >
+        Resume
+      </button>
+      <button
+        v-else-if="pendingCount > 0"
+        class="btn btn-sm btn-outline-warning"
+        title="Pause queue"
+        @click.stop="doPause"
+      >
+        Pause
+      </button>
+    </template>
 
-        <!-- Pause / Resume toggle -->
-        <button
-          v-if="isPaused"
-          class="btn btn-sm btn-outline-success"
-          title="Resume queue"
-          @click.stop="resumeQueue"
+    <!-- Queue content -->
+    <div class="queue-content">
+      <!-- Empty state -->
+      <div v-if="allItems.length === 0 && !isPaused" class="queue-empty">
+        No queued messages
+      </div>
+
+      <!-- Item list -->
+      <div v-else class="queue-items">
+        <div
+          v-for="item in visibleItems"
+          :key="item.queue_id"
+          class="queue-item d-flex align-items-center gap-2 px-3 py-1"
+          :class="'status-' + item.status"
         >
-          Resume
-        </button>
-        <button
-          v-else-if="pendingCount > 0"
-          class="btn btn-sm btn-outline-warning"
-          title="Pause queue"
-          @click.stop="doPause"
-        >
-          Pause
-        </button>
+          <!-- Status icon -->
+          <span class="status-icon" :class="'icon-' + item.status" :title="item.status">
+            <svg v-if="item.status === 'sent'" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zm3.78 4.97a.75.75 0 0 0-1.06 0L7 8.69 5.28 6.97a.75.75 0 0 0-1.06 1.06l2.25 2.25a.75.75 0 0 0 1.06 0l4.25-4.25a.75.75 0 0 0 0-1.06z"/>
+            </svg>
+            <svg v-else-if="item.status === 'pending'" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm.5 4.5v3.793l2.354 2.353a.5.5 0 0 1-.708.708l-2.5-2.5A.5.5 0 0 1 7.5 8.5V4.5a.5.5 0 0 1 1 0z"/>
+            </svg>
+            <svg v-else-if="item.status === 'failed'" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/>
+            </svg>
+            <svg v-else width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm3.354 4.646a.5.5 0 0 1 0 .708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 1 1 .708-.708L8 7.293l2.646-2.647a.5.5 0 0 1 .708 0z"/>
+            </svg>
+          </span>
+
+          <span class="item-content flex-grow-1" :title="item.content">
+            {{ displayLabel(item) }}
+          </span>
+
+          <span class="item-timestamp text-muted">{{ displayTimestamp(item) }}</span>
+
+          <button
+            v-if="item.status === 'pending'"
+            class="btn btn-sm btn-link text-danger p-0 action-btn"
+            title="Cancel"
+            @click="doCancel(item.queue_id)"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
+            </svg>
+          </button>
+          <button
+            v-if="item.status === 'sent' || item.status === 'failed'"
+            class="btn btn-sm btn-link text-primary p-0 action-btn"
+            title="Re-queue"
+            @click="doRequeue(item.queue_id)"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/>
+              <path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Load More -->
+        <div v-if="canLoadMore" class="load-more-row px-3 py-2">
+          <button
+            class="btn btn-sm btn-outline-secondary w-100"
+            :disabled="loadingMore"
+            @click="doLoadMore"
+          >
+            {{ loadingMore ? 'Loading…' : 'Load More' }}
+          </button>
+        </div>
       </div>
     </div>
-
-    <!-- Item List -->
-    <div v-if="!collapsed" class="queue-items">
-      <div
-        v-for="item in visibleItems"
-        :key="item.queue_id"
-        class="queue-item d-flex align-items-center gap-2 px-3 py-1"
-        :class="'status-' + item.status"
-      >
-        <!-- Status icon -->
-        <span class="status-icon" :class="'icon-' + item.status" :title="item.status">
-          <!-- Sent: checkmark circle -->
-          <svg v-if="item.status === 'sent'" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zm3.78 4.97a.75.75 0 0 0-1.06 0L7 8.69 5.28 6.97a.75.75 0 0 0-1.06 1.06l2.25 2.25a.75.75 0 0 0 1.06 0l4.25-4.25a.75.75 0 0 0 0-1.06z"/>
-          </svg>
-          <!-- Pending: clock -->
-          <svg v-else-if="item.status === 'pending'" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm.5 4.5v3.793l2.354 2.353a.5.5 0 0 1-.708.708l-2.5-2.5A.5.5 0 0 1 7.5 8.5V4.5a.5.5 0 0 1 1 0z"/>
-          </svg>
-          <!-- Failed: exclamation triangle -->
-          <svg v-else-if="item.status === 'failed'" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/>
-          </svg>
-          <!-- Cancelled: X circle -->
-          <svg v-else width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm3.354 4.646a.5.5 0 0 1 0 .708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 1 1 .708-.708L8 7.293l2.646-2.647a.5.5 0 0 1 .708 0z"/>
-          </svg>
-        </span>
-
-        <!-- Content preview -->
-        <span class="item-content flex-grow-1" :title="item.content">
-          {{ displayLabel(item) }}
-        </span>
-
-        <!-- Timestamp -->
-        <span class="item-timestamp text-muted">{{ displayTimestamp(item) }}</span>
-
-        <!-- Action buttons -->
-        <button
-          v-if="item.status === 'pending'"
-          class="btn btn-sm btn-link text-danger p-0 action-btn"
-          title="Cancel"
-          @click="doCancel(item.queue_id)"
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
-          </svg>
-        </button>
-        <button
-          v-if="item.status === 'sent' || item.status === 'failed'"
-          class="btn btn-sm btn-link text-primary p-0 action-btn"
-          title="Re-queue"
-          @click="doRequeue(item.queue_id)"
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/>
-            <path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/>
-          </svg>
-        </button>
-      </div>
-
-      <!-- Load More -->
-      <div v-if="canLoadMore" class="load-more-row px-3 py-2">
-        <button
-          class="btn btn-sm btn-outline-secondary w-100"
-          :disabled="loadingMore"
-          @click="doLoadMore"
-        >
-          {{ loadingMore ? 'Loading…' : 'Load More' }}
-        </button>
-      </div>
-    </div>
-  </div>
+  </CollapsiblePanel>
 </template>
 
 <script setup>
@@ -152,43 +140,27 @@ import { ref, computed, watch } from 'vue'
 import { useQueueStore } from '@/stores/queue'
 import { useSessionStore } from '@/stores/session'
 import { formatQueueTimestamp } from '@/utils/time'
+import CollapsiblePanel from '@/components/layout/CollapsiblePanel.vue'
 
 const props = defineProps({
-  height: {
-    type: Number,
-    default: 200
-  },
-  isResizing: {
-    type: Boolean,
-    default: false
-  }
+  expanded: { type: Boolean, default: false },
+  flexWeight: { type: Number, default: 1 },
+  showResizeHandle: { type: Boolean, default: false },
+  badge: { type: Number, default: null },
 })
+
+const emit = defineEmits(['update:expanded', 'resize-start', 'resize-move', 'resize-end'])
 
 const queueStore = useQueueStore()
 const sessionStore = useSessionStore()
 
-const collapsed = ref(false)
-const loadingMore = ref(false)
-
-const sectionStyle = computed(() => {
-  if (collapsed.value) return {}
-  return {
-    flexShrink: 0,
-    height: props.height + 'px',
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden'
-  }
-})
 const showHistory = ref(false)
+const loadingMore = ref(false)
 
 const sessionId = computed(() => sessionStore.currentSessionId)
 
-// Fetch queue when session changes
 watch(sessionId, (newId) => {
-  if (newId) {
-    queueStore.fetchQueue(newId)
-  }
+  if (newId) queueStore.fetchQueue(newId)
 }, { immediate: true })
 
 const allItems = computed(() => {
@@ -196,9 +168,9 @@ const allItems = computed(() => {
   return queueStore.getItems(sessionId.value)
 })
 
-const terminalCount = computed(() => {
-  return allItems.value.filter(i => i.status === 'sent' || i.status === 'failed' || i.status === 'cancelled').length
-})
+const terminalCount = computed(() =>
+  allItems.value.filter(i => i.status === 'sent' || i.status === 'failed' || i.status === 'cancelled').length
+)
 
 const visibleItems = computed(() => {
   if (showHistory.value) return allItems.value
@@ -211,17 +183,14 @@ const pendingCount = computed(() => {
 })
 
 const canLoadMore = computed(() => {
-  if (!sessionId.value || collapsed.value) return false
+  if (!sessionId.value) return false
   return queueStore.hasMore(sessionId.value)
 })
 
 const isPaused = computed(() => {
   if (!sessionId.value) return false
-  // Check store state first, fall back to session data
-  const storePaused = queueStore.isPaused(sessionId.value)
-  if (storePaused) return true
-  const session = sessionStore.sessions.get(sessionId.value)
-  return session?.queue_paused || false
+  if (queueStore.isPaused(sessionId.value)) return true
+  return sessionStore.sessions.get(sessionId.value)?.queue_paused || false
 })
 
 function truncate(text, maxLen) {
@@ -276,44 +245,22 @@ async function doLoadMore() {
 </script>
 
 <style scoped>
-.queue-section {
-  border-top: 1px solid var(--bs-border-color);
-  contain: layout;
+.queue-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
 }
 
-.queue-section.is-resizing {
-  will-change: height;
-}
-
-.queue-header {
-  cursor: pointer;
-  user-select: none;
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--bs-body-color);
-}
-
-.queue-header:hover {
-  background-color: var(--bs-tertiary-bg);
-}
-
-.section-title {
-  flex-shrink: 0;
-}
-
-.chevron-icon {
+.queue-empty {
+  padding: 24px 16px;
+  text-align: center;
   color: var(--bs-secondary-color);
-  flex-shrink: 0;
-  transition: transform 0.2s ease;
-}
-
-.chevron-icon.expanded {
-  transform: rotate(90deg);
+  font-size: 12px;
+  font-style: italic;
 }
 
 .queue-items {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 1;
   overflow-y: auto;
 }
 
@@ -335,21 +282,10 @@ async function doLoadMore() {
   justify-content: center;
 }
 
-.status-icon.icon-sent {
-  color: var(--bs-success);
-}
-
-.status-icon.icon-pending {
-  color: var(--bs-link-color);
-}
-
-.status-icon.icon-failed {
-  color: var(--bs-danger);
-}
-
-.status-icon.icon-cancelled {
-  color: var(--bs-secondary-color);
-}
+.status-icon.icon-sent { color: var(--bs-success); }
+.status-icon.icon-pending { color: var(--bs-link-color); }
+.status-icon.icon-failed { color: var(--bs-danger); }
+.status-icon.icon-cancelled { color: var(--bs-secondary-color); }
 
 .action-btn {
   flex-shrink: 0;
@@ -365,17 +301,9 @@ async function doLoadMore() {
   color: var(--bs-body-color);
 }
 
-.status-sent .item-content {
-  color: var(--bs-secondary-color);
-}
-
-.status-failed .item-content {
-  color: var(--bs-danger);
-}
-
-.status-cancelled {
-  opacity: 0.5;
-}
+.status-sent .item-content { color: var(--bs-secondary-color); }
+.status-failed .item-content { color: var(--bs-danger); }
+.status-cancelled { opacity: 0.5; }
 
 .btn-link {
   font-size: 1rem;
@@ -394,13 +322,13 @@ async function doLoadMore() {
   font-size: 0.7rem;
 }
 
-.load-more-row {
-  border-top: 1px solid var(--bs-border-color);
-}
-
 .item-timestamp {
   font-size: 0.75rem;
   flex-shrink: 0;
   white-space: nowrap;
+}
+
+.load-more-row {
+  border-top: 1px solid var(--bs-border-color);
 }
 </style>
