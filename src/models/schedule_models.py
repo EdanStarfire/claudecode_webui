@@ -67,6 +67,9 @@ class Schedule:
     last_stdout: str | None = None           # most recent run's stdout (capped)
     last_stderr: str | None = None           # most recent run's stderr (capped)
     last_exit_code: int | None = None        # null when no run yet, -1 on timeout
+    # Disposable schedule support (issue #1538)
+    repeat_count: int | None = None  # None = unlimited; positive int = max fires before auto-delete
+    fire_count: int = 0              # increments once per fire dispatch regardless of outcome
 
     def to_dict(self, metrics: "ScheduleMetrics | None" = None) -> dict[str, Any]:
         """Convert to dictionary for serialization.
@@ -100,6 +103,8 @@ class Schedule:
             "last_stdout": self.last_stdout,
             "last_stderr": self.last_stderr,
             "last_exit_code": self.last_exit_code,
+            "repeat_count": self.repeat_count,
+            "fire_count": self.fire_count,
         }
         # Ephemeral fields (issue #578) - only include when set
         if self.session_config is not None:
@@ -138,6 +143,9 @@ class Schedule:
         data.setdefault("last_stdout", None)
         data.setdefault("last_stderr", None)
         data.setdefault("last_exit_code", None)
+        # Disposable schedule fields (issue #1538) - backwards-compatible defaults
+        data.setdefault("repeat_count", None)
+        data.setdefault("fire_count", 0)
         # Discard legacy field from old data
         data.pop("current_ephemeral_session_id", None)
         return cls(**data)

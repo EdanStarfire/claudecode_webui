@@ -119,8 +119,12 @@ export const useScheduleStore = defineStore('schedule', () => {
       fields
     )
     const schedule = data.schedule
-    _upsertSchedule(legionId, schedule)
-    return schedule
+    if (data.deleted) {
+      _removeSchedule(legionId, schedule.schedule_id)
+    } else {
+      _upsertSchedule(legionId, schedule)
+    }
+    return data  // return full response so callers can check data.deleted
   }
 
   /**

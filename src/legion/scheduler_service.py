@@ -40,6 +40,14 @@ if TYPE_CHECKING:
 
 legion_logger = get_logger("legion", "SCHEDULER")
 
+
+class _ScheduleAutoDeletedError(Exception):
+    """Sentinel raised by update_schedule when edit-time recompute triggers auto-delete."""
+
+    def __init__(self, schedule: "Schedule"):
+        super().__init__("schedule auto-deleted")
+        self.schedule = schedule
+
 TICK_INTERVAL = 30  # seconds between scheduler evaluations
 
 
@@ -143,6 +151,7 @@ class SchedulerService:
         schedule_type: str = "prompt",
         script_command: str | None = None,
         script_timeout_seconds: int = 60,
+        repeat_count: int | None = None,
     ) -> Schedule:
         """Create a new schedule.
 
@@ -176,6 +185,7 @@ class SchedulerService:
             schedule_type=schedule_type,
             script_command=script_command,
             script_timeout_seconds=script_timeout_seconds,
+            repeat_count=repeat_count,
         )
 
         self._schedules[schedule.schedule_id] = schedule
@@ -228,7 +238,7 @@ class SchedulerService:
 
         allowed = {
             "name", "cron_expression", "prompt", "max_retries", "timeout_seconds",
-            "session_config", "script_command", "script_timeout_seconds",
+            "session_config", "script_command", "script_timeout_seconds", "repeat_count",
         }
         for key, value in fields.items():
             if key in allowed:
@@ -239,6 +249,13 @@ class SchedulerService:
             schedule.next_run = get_next_run(schedule.cron_expression)
 
         schedule.updated_at = datetime.now(UTC).timestamp()
+
+        # Edit-time recompute: if the new repeat_count has already been reached, auto-delete
+        if "repeat_count" in fields and schedule.repeat_count is not None:
+            if schedule.fire_count >= schedule.repeat_count:
+                await self.delete_schedule(schedule_id)
+                raise _ScheduleAutoDeletedError(schedule)
+
         await self._persist_schedules(schedule.legion_id)
         await self._broadcast_schedule_event(schedule.legion_id, schedule)
         return schedule
@@ -426,6 +443,10 @@ class SchedulerService:
             f"for minion {schedule.minion_id}"
         )
 
+        # Increment fire_count before work so crashes still consume the count (issue #1538)
+        schedule.fire_count += 1
+        await self._persist_schedules(schedule.legion_id)
+
         # Get minion state for execution record
         minion_state = "unknown"
         try:
@@ -507,6 +528,13 @@ class SchedulerService:
         await self._broadcast_execution_event(schedule.legion_id, execution)
         await self._broadcast_schedule_event(schedule.legion_id, schedule)
 
+        # Auto-delete when repeat_count reached (issue #1538)
+        if schedule.repeat_count is not None and schedule.fire_count >= schedule.repeat_count:
+            try:
+                await self.delete_schedule(schedule.schedule_id)
+            except ValueError:
+                pass  # already deleted
+
     async def _fire_ephemeral_schedule(self, schedule: Schedule, now: float, trigger: str = "cron"):
         """Fire an ephemeral schedule using its static agent session.
 
@@ -567,6 +595,10 @@ class SchedulerService:
             f"Firing ephemeral schedule {schedule.schedule_id} '{schedule.name}' "
             f"with agent {agent_id}"
         )
+
+        # Increment fire_count before work so crashes still consume the count (issue #1538)
+        schedule.fire_count += 1
+        await self._persist_schedules(schedule.legion_id)
 
         execution = ScheduleExecution(
             execution_id=str(uuid.uuid4()),
@@ -647,6 +679,13 @@ class SchedulerService:
         await self._record_execution(schedule, execution)
         await self._broadcast_execution_event(schedule.legion_id, execution)
         await self._broadcast_schedule_event(schedule.legion_id, schedule)
+
+        # Auto-delete when repeat_count reached (issue #1538)
+        if schedule.repeat_count is not None and schedule.fire_count >= schedule.repeat_count:
+            try:
+                await self.delete_schedule(schedule.schedule_id)
+            except ValueError:
+                pass  # already deleted
 
     async def _migrate_ephemeral_schedule(self, schedule: Schedule) -> str | None:
         """Migrate old-format ephemeral schedule by creating a persistent agent."""
@@ -895,6 +934,10 @@ class SchedulerService:
         target_id = schedule.minion_id or schedule.ephemeral_agent_id
         started_clock = time.monotonic()
 
+        # Increment fire_count before work so crashes still consume the count (issue #1538)
+        schedule.fire_count += 1
+        await self._persist_schedules(schedule.legion_id)
+
         execution = ScheduleExecution(
             execution_id=str(uuid.uuid4()),
             schedule_id=schedule.schedule_id,
@@ -1059,6 +1102,13 @@ class SchedulerService:
         await self._record_execution(schedule, execution)
         await self._broadcast_execution_event(schedule.legion_id, execution)
         await self._broadcast_schedule_event(schedule.legion_id, schedule)
+
+        # Auto-delete when repeat_count reached (issue #1538)
+        if schedule.repeat_count is not None and schedule.fire_count >= schedule.repeat_count:
+            try:
+                await self.delete_schedule(schedule.schedule_id)
+            except ValueError:
+                pass  # already deleted
 
     async def _handle_retry(self, schedule: Schedule):
         """Apply exponential backoff for retry: 60s, 120s, 240s, ..."""

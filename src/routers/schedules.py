@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 
 from ..exception_handlers import handle_exceptions
+from ..legion.scheduler_service import _ScheduleAutoDeletedError
 from ._models import ScheduleCreateRequest, ScheduleUpdateRequest
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,7 @@ def build_router(webui) -> APIRouter:
             schedule_type=schedule_type,
             script_command=request.script_command,
             script_timeout_seconds=request.script_timeout_seconds,
+            repeat_count=request.repeat_count,
         )
         return {"schedule": await svc.schedule_to_api_dict(schedule)}
 
@@ -142,9 +144,20 @@ def build_router(webui) -> APIRouter:
                 detail="Cannot change schedule type after creation. Delete and recreate.",
             )
 
+        # Build field set, special-casing repeat_count so explicit null ("set to unlimited")
+        # propagates even though the default null-filter would drop it.
+        repeat_count_set = raw.pop("repeat_count_set", False)
         fields = {k: v for k, v in raw.items() if v is not None}
+        if repeat_count_set or "repeat_count" in {k for k, v in raw.items() if v is not None}:
+            # Caller explicitly set repeat_count (possibly to null); include it
+            fields["repeat_count"] = raw.get("repeat_count")  # may be None (unlimited)
+
         svc = webui.coordinator.legion_system.scheduler_service
-        updated = await svc.update_schedule(schedule_id, **fields)
+        try:
+            updated = await svc.update_schedule(schedule_id, **fields)
+        except _ScheduleAutoDeletedError as exc:
+            # Edit-time recompute triggered auto-delete; return snapshot with deleted=True
+            return {"schedule": await svc.schedule_to_api_dict(exc.schedule), "deleted": True}
         return {"schedule": await svc.schedule_to_api_dict(updated)}
 
     @router.post("/api/legions/{legion_id}/schedules/{schedule_id}/pause")
