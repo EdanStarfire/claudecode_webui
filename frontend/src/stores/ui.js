@@ -23,6 +23,7 @@ const DEFAULT_PANEL_STATE = {
   diffs:     { expanded: false, weight: 1 },
   edits:     { expanded: false, weight: 1 },
   proxy:     { expanded: false, weight: 1 },
+  schedules: { expanded: false, weight: 1 },
 }
 
 function loadPanelState() {

@@ -102,11 +102,27 @@
         :expanded="panels.proxy.expanded"
         :badge="proxyBadge"
         :flex-weight="panels.proxy.weight"
-        :show-resize-handle="false"
+        :show-resize-handle="resizeHandleVisible.proxy"
         @update:expanded="uiStore.togglePanel('proxy')"
+        @resize-start="onResizeStart"
+        @resize-move="onResizeMove"
+        @resize-end="onResizeEnd"
       >
         <ProxyPanel />
       </CollapsiblePanel>
+
+      <!-- Schedules — wraps CollapsiblePanel internally, like QueueSection -->
+      <SchedulesPanel
+        ref="schedulesPanelRef"
+        :expanded="panels.schedules.expanded"
+        :flex-weight="panels.schedules.weight"
+        :show-resize-handle="false"
+        :badge="scheduleBadge"
+        @update:expanded="uiStore.togglePanel('schedules')"
+        @resize-start="onResizeStart"
+        @resize-move="onResizeMove"
+        @resize-end="onResizeEnd"
+      />
     </div>
 
     <!-- Left-edge resize handle (sidebar width) -->
@@ -128,6 +144,7 @@ import { useSessionStore } from '@/stores/session'
 import { useEditHistoryStore } from '@/stores/editHistory'
 import { useQueueStore } from '@/stores/queue'
 import { useProxyStore } from '@/stores/proxy'
+import { useScheduleStore } from '@/stores/schedule'
 import AgentOverview from './AgentOverview.vue'
 import CollapsiblePanel from './CollapsiblePanel.vue'
 import TaskListPanel from '../tasks/TaskListPanel.vue'
@@ -138,6 +155,7 @@ import DiffFullView from '../common/DiffFullView.vue'
 import EditHistoryPanel from '../tasks/EditHistoryPanel.vue'
 import QueueSection from '../tasks/QueueSection.vue'
 import ProxyPanel from '../tasks/ProxyPanel.vue'
+import SchedulesPanel from '../tasks/SchedulesPanel.vue'
 
 const uiStore = useUIStore()
 const taskStore = useTaskStore()
@@ -147,10 +165,11 @@ const sessionStore = useSessionStore()
 const editHistoryStore = useEditHistoryStore()
 const queueStore = useQueueStore()
 const proxyStore = useProxyStore()
+const scheduleStore = useScheduleStore()
 
 const panels = computed(() => uiStore.rightSidebarPanels)
 
-const PANEL_IDS = ['tasks', 'resources', 'queue', 'diffs', 'edits', 'proxy']
+const PANEL_IDS = ['tasks', 'resources', 'queue', 'diffs', 'edits', 'proxy', 'schedules']
 const MIN_PANEL_HEIGHT_PX = 60
 
 // Badge counts — only non-null when count > 0 (CollapsiblePanel only renders badge when truthy)
@@ -180,6 +199,17 @@ const queueBadge = computed(() => {
   if (!sid) return null
   const c = queueStore.getPendingCount(sid)
   return c > 0 ? c : null
+})
+const scheduleBadge = computed(() => {
+  const session = sessionStore.currentSession
+  if (!session) return null
+  const sched = scheduleStore.getSchedules(session.project_id) || []
+  const sid = session.session_id
+  const active = sched.filter(s =>
+    s.status === 'active' &&
+    (s.minion_id === sid || s.ephemeral_agent_id === sid)
+  ).length
+  return active > 0 ? active : null
 })
 
 // Whether each panel should show the inter-panel resize handle:
@@ -212,6 +242,7 @@ const queuePanelRef = ref(null)
 const diffsPanelRef = ref(null)
 const editsPanelRef = ref(null)
 const proxyPanelRef = ref(null)
+const schedulesPanelRef = ref(null)
 
 const panelRefMap = {
   tasks: tasksPanelRef,
@@ -220,6 +251,7 @@ const panelRefMap = {
   diffs: diffsPanelRef,
   edits: editsPanelRef,
   proxy: proxyPanelRef,
+  schedules: schedulesPanelRef,
 }
 
 function getPanelHeight(id) {

@@ -267,6 +267,7 @@ import cronstrue from 'cronstrue'
 
 const props = defineProps({
   legionId: { type: String, required: true },
+  defaultMinionId: { type: String, default: '' },
 })
 
 const emit = defineEmits(['close'])
@@ -291,7 +292,7 @@ const templateApplied = ref(false)
 const appliedTemplateName = ref('')
 
 const form = ref({
-  minion_id: '',
+  minion_id: props.defaultMinionId || '',
   name: '',
   cron_expression: '',
   prompt: '',
