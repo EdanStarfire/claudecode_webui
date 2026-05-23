@@ -145,7 +145,7 @@ class MinionCreateRequest(SessionConfig):
 
 
 class ScheduleCreateRequest(BaseModel):
-    """Request to create a cron schedule (issue #495, #578, #1356)."""
+    """Request to create a cron schedule (issue #495, #578, #1356, #1538)."""
     minion_id: str | None = None  # Optional for ephemeral schedules (issue #578)
     name: str
     cron_expression: str
@@ -158,10 +158,23 @@ class ScheduleCreateRequest(BaseModel):
     schedule_type: str = "prompt"            # "prompt" | "script"
     script_command: str | None = None
     script_timeout_seconds: int = 60
+    # Disposable schedule fields (issue #1538): default 1 = one-shot
+    repeat_count: int | None = 1
+
+    @field_validator("repeat_count", mode="before")
+    @classmethod
+    def _validate_repeat_count(cls, v):
+        if v is None:
+            return None
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise ValueError("repeat_count must be a positive integer or null")
+        if v < 1:
+            raise ValueError("repeat_count must be >= 1 (use null for unlimited)")
+        return v
 
 
 class ScheduleUpdateRequest(BaseModel):
-    """Request to update a schedule (issue #495, #578, #1356)."""
+    """Request to update a schedule (issue #495, #578, #1356, #1538)."""
     name: str | None = None
     cron_expression: str | None = None
     prompt: str | None = None
@@ -174,6 +187,20 @@ class ScheduleUpdateRequest(BaseModel):
     # Script schedule fields (issue #1356) — schedule_type is intentionally absent (immutable post-create)
     script_command: str | None = None
     script_timeout_seconds: int | None = None
+    # Disposable schedule fields (issue #1538): None means "not set" unless repeat_count_set is True
+    repeat_count: int | None = None
+    repeat_count_set: bool = False  # True when caller explicitly wants to set/clear repeat_count
+
+    @field_validator("repeat_count", mode="before")
+    @classmethod
+    def _validate_repeat_count(cls, v):
+        if v is None:
+            return None
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise ValueError("repeat_count must be a positive integer or null")
+        if v < 1:
+            raise ValueError("repeat_count must be >= 1 (use null for unlimited)")
+        return v
 
 
 class TemplateCreateRequest(SessionConfig):

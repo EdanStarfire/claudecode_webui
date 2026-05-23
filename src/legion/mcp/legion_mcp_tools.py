@@ -2126,8 +2126,12 @@ class LegionMCPTools:
         if not fields:
             return self._err("Error: Must provide at least one of: name, prompt, cron_expression")
 
+        from src.legion.scheduler_service import _ScheduleAutoDeletedError
+
         try:
             updated = await self.system.scheduler_service.update_schedule(schedule_id, **fields)
+        except _ScheduleAutoDeletedError:
+            return self._err(f"Schedule {schedule_id} was auto-deleted (repeat count exhausted)")
         except ValueError as e:
             return self._err(f"Error: {e}")
 

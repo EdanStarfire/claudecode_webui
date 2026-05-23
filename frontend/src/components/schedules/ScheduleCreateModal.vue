@@ -213,6 +213,25 @@
           </div>
         </template>
 
+        <!-- Repeat count -->
+        <div class="form-group">
+          <label>Repeat</label>
+          <div class="repeat-row">
+            <input
+              v-model.number="form.repeat_count"
+              type="number"
+              min="1"
+              class="timeout-input"
+              :disabled="form.is_unlimited"
+            />
+            <label class="toggle-label">
+              <input type="checkbox" v-model="form.is_unlimited" />
+              <span>Unlimited</span>
+            </label>
+          </div>
+          <div class="mode-hint">Fires N times then deletes itself. Default 1 = one-shot reminder. Manual runs also consume the count.</div>
+        </div>
+
         <!-- Reset session toggle (only for permanent mode) -->
         <div v-if="mode === 'permanent'" class="form-group toggle-group">
           <label class="toggle-label">
@@ -280,6 +299,8 @@ const form = ref({
   schedule_type: 'prompt',
   script_command: '',
   script_timeout_seconds: 60,
+  repeat_count: 1,
+  is_unlimited: false,
 })
 
 const sessionConfig = ref({})
@@ -447,6 +468,7 @@ async function submit() {
       schedule_type: form.value.schedule_type,
       script_command: form.value.schedule_type === 'script' ? form.value.script_command : null,
       script_timeout_seconds: form.value.script_timeout_seconds,
+      repeat_count: form.value.is_unlimited ? null : form.value.repeat_count,
     }
 
     if (mode.value === 'permanent') {
@@ -812,5 +834,11 @@ form {
   background: var(--bs-secondary-bg);
   border-radius: 4px;
   border-left: 3px solid #6366f1;
+}
+
+.repeat-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 </style>

@@ -261,3 +261,144 @@ class TestScheduleHistory:
         assert body["executions"] == []
         assert "limit" in body
         assert "offset" in body
+
+
+class TestIssue1538RepeatCount:
+    """Tests for disposable schedules with configurable repeat count (issue #1538)."""
+
+    async def test_create_schedule_default_repeat_count_is_one(self, api_integration_env):
+        client = api_integration_env["client"]
+        lid, minion_id = await _setup_legion_with_minion(api_integration_env)
+
+        schedule = await _create_schedule(client, lid, minion_id, "One-shot Default")
+        assert schedule["repeat_count"] == 1, "Default repeat_count should be 1"
+        assert schedule["fire_count"] == 0
+
+    async def test_create_schedule_with_repeat_count_unlimited(self, api_integration_env):
+        client = api_integration_env["client"]
+        lid, minion_id = await _setup_legion_with_minion(api_integration_env)
+
+        resp = await client.post(
+            f"/api/legions/{lid}/schedules",
+            json={
+                "minion_id": minion_id,
+                "name": "Unlimited",
+                "cron_expression": "*/5 * * * *",
+                "prompt": "run forever",
+                "repeat_count": None,
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["schedule"]["repeat_count"] is None
+
+    async def test_create_schedule_with_explicit_repeat_count(self, api_integration_env):
+        client = api_integration_env["client"]
+        lid, minion_id = await _setup_legion_with_minion(api_integration_env)
+
+        resp = await client.post(
+            f"/api/legions/{lid}/schedules",
+            json={
+                "minion_id": minion_id,
+                "name": "Three-shot",
+                "cron_expression": "*/5 * * * *",
+                "prompt": "run three times",
+                "repeat_count": 3,
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["schedule"]["repeat_count"] == 3
+
+    async def test_create_schedule_repeat_count_zero_rejected(self, api_integration_env):
+        client = api_integration_env["client"]
+        lid, minion_id = await _setup_legion_with_minion(api_integration_env)
+
+        resp = await client.post(
+            f"/api/legions/{lid}/schedules",
+            json={
+                "minion_id": minion_id,
+                "name": "Zero",
+                "cron_expression": "*/5 * * * *",
+                "prompt": "invalid",
+                "repeat_count": 0,
+            },
+        )
+        assert resp.status_code == 422, "repeat_count=0 should fail validation"
+
+    async def test_create_schedule_repeat_count_negative_rejected(self, api_integration_env):
+        client = api_integration_env["client"]
+        lid, minion_id = await _setup_legion_with_minion(api_integration_env)
+
+        resp = await client.post(
+            f"/api/legions/{lid}/schedules",
+            json={
+                "minion_id": minion_id,
+                "name": "Negative",
+                "cron_expression": "*/5 * * * *",
+                "prompt": "invalid",
+                "repeat_count": -1,
+            },
+        )
+        assert resp.status_code == 422, "repeat_count=-1 should fail validation"
+
+    async def test_update_schedule_repeat_count(self, api_integration_env):
+        client = api_integration_env["client"]
+        lid, minion_id = await _setup_legion_with_minion(api_integration_env)
+        schedule = await _create_schedule(client, lid, minion_id)
+        sched_id = schedule["schedule_id"]
+
+        resp = await client.put(
+            f"/api/legions/{lid}/schedules/{sched_id}",
+            json={"repeat_count": 10, "repeat_count_set": True},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["schedule"]["repeat_count"] == 10
+
+    async def test_update_schedule_set_repeat_count_to_unlimited(self, api_integration_env):
+        client = api_integration_env["client"]
+        lid, minion_id = await _setup_legion_with_minion(api_integration_env)
+        schedule = await _create_schedule(client, lid, minion_id)
+        sched_id = schedule["schedule_id"]
+
+        resp = await client.put(
+            f"/api/legions/{lid}/schedules/{sched_id}",
+            json={"repeat_count": None, "repeat_count_set": True},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["schedule"]["repeat_count"] is None
+
+    async def test_update_schedule_repeat_count_below_fire_count_auto_deletes(
+        self, api_integration_env
+    ):
+        client = api_integration_env["client"]
+        lid, minion_id = await _setup_legion_with_minion(api_integration_env)
+
+        # Create schedule with repeat_count=5
+        resp = await client.post(
+            f"/api/legions/{lid}/schedules",
+            json={
+                "minion_id": minion_id,
+                "name": "Will be deleted",
+                "cron_expression": "*/5 * * * *",
+                "prompt": "test",
+                "repeat_count": 5,
+            },
+        )
+        assert resp.status_code == 200
+        sched_id = resp.json()["schedule"]["schedule_id"]
+
+        # Manually set fire_count=3 via direct service manipulation
+        svc = api_integration_env["webui"].coordinator.legion_system.scheduler_service
+        svc._schedules[sched_id].fire_count = 3
+
+        # Now update repeat_count to 2 (below fire_count=3) — should auto-delete
+        resp = await client.put(
+            f"/api/legions/{lid}/schedules/{sched_id}",
+            json={"repeat_count": 2, "repeat_count_set": True},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body.get("deleted") is True
+
+        # Confirm 404 after auto-delete
+        resp = await client.get(f"/api/legions/{lid}/schedules/{sched_id}")
+        assert resp.status_code == 404

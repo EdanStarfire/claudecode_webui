@@ -74,6 +74,9 @@
                 <span class="kind-chip" :class="isEphemeral(s) ? 'ephemeral' : 'permanent'">
                   {{ isEphemeral(s) ? 'ephemeral' : 'permanent' }}
                 </span>
+                <span class="repeat-chip" :title="repeatChipTitle(s)">
+                  {{ s.fire_count ?? 0 }} / {{ s.repeat_count != null ? s.repeat_count : '∞' }}
+                </span>
               </div>
               <span class="cron-text">{{ humanizeCron(s.cron_expression) }}</span>
             </div>
@@ -153,6 +156,13 @@ const groupedSchedules = computed(() => {
 
 function isEphemeral(schedule) {
   return !!schedule.session_config || !!schedule.ephemeral_agent_id
+}
+
+function repeatChipTitle(schedule) {
+  const fc = schedule.fire_count ?? 0
+  const rc = schedule.repeat_count
+  if (rc != null) return `${fc} of ${rc} fires used`
+  return `${fc} fires total (unlimited)`
 }
 
 function humanizeCron(expr) {
@@ -384,6 +394,18 @@ onMounted(async () => {
 
 .kind-chip.ephemeral { background: rgba(124, 58, 237, 0.15); color: #7c3aed; }
 .kind-chip.permanent { background: rgba(88, 166, 255, 0.15); color: #58a6ff; }
+
+.repeat-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  font-family: monospace;
+  background: var(--bs-secondary-bg);
+  color: var(--bs-secondary-color);
+  border: 1px solid var(--bs-border-color);
+}
 
 .cron-text {
   font-size: 11px;

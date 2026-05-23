@@ -103,6 +103,35 @@
         </div>
       </template>
 
+      <!-- Repeat count (issue #1538) -->
+      <div class="field-row">
+        <label class="field-label">Repeat</label>
+        <div class="field-control">
+          <div class="repeat-editor">
+            <input
+              type="number"
+              class="field-input field-input--narrow"
+              min="1"
+              :value="repeatCountValue"
+              :disabled="isUnlimited"
+              @input="handleRepeatCountInput($event.target.value)"
+            />
+            <label class="toggle-label">
+              <input
+                type="checkbox"
+                :checked="isUnlimited"
+                @change="handleUnlimitedToggle($event.target.checked)"
+              />
+              <span>Unlimited</span>
+            </label>
+          </div>
+          <div class="field-helper">
+            Fires N times then self-deletes. Manual runs also consume the count.
+            Currently: {{ fireCountLabel }}.
+          </div>
+        </div>
+      </div>
+
       <!-- Reset session toggle -->
       <div class="field-row">
         <label class="field-label">Reset Session</label>
@@ -211,7 +240,15 @@
         <div class="field-row">
           <label class="field-label">Executions</label>
           <div class="field-control">
-            <span class="field-value-readonly">{{ entity.execution_count ?? 0 }} total</span>
+            <span class="field-value-readonly">
+              <template v-if="entity.repeat_count != null">
+                {{ entity.fire_count ?? 0 }} / {{ entity.repeat_count }} fires
+              </template>
+              <template v-else>
+                {{ entity.fire_count ?? 0 }} fires
+              </template>
+              ({{ entity.execution_count ?? 0 }} total dispatches)
+            </span>
           </div>
         </div>
 
@@ -227,7 +264,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectStore } from '@/stores/project'
@@ -249,6 +286,36 @@ const sessionStore  = useSessionStore()
 const entityId = computed(() => route.params.scheduleId || '')
 const areaKey  = computed(() => `schedule:${entityId.value}:${SECTION_KEY}`)
 const entity   = computed(() => scheduleStore.getSchedule(entityId.value))
+
+// Repeat count helpers (issue #1538)
+const draftRepeatCount = computed(() => draft.value?.repeat_count)
+const draftRepeatCountSet = computed(() => 'repeat_count' in (draft.value || {}))
+const effectiveRepeatCount = computed(() => {
+  if (draftRepeatCountSet.value) return draftRepeatCount.value
+  return entity.value?.repeat_count ?? null
+})
+const isUnlimited = computed(() => effectiveRepeatCount.value === null)
+const repeatCountValue = computed(() => effectiveRepeatCount.value ?? 1)
+
+const fireCountLabel = computed(() => {
+  const fc = entity.value?.fire_count ?? 0
+  const rc = effectiveRepeatCount.value
+  if (rc != null) return `${fc} / ${rc} fires`
+  return `${fc} fires`
+})
+
+function handleRepeatCountInput(raw) {
+  const v = parseInt(raw, 10)
+  if (!isNaN(v) && v >= 1) {
+    settingsStore.setField(areaKey.value, 'repeat_count', v)
+    settingsStore.setField(areaKey.value, 'repeat_count_set', true)
+  }
+}
+
+function handleUnlimitedToggle(checked) {
+  settingsStore.setField(areaKey.value, 'repeat_count', checked ? null : 1)
+  settingsStore.setField(areaKey.value, 'repeat_count_set', true)
+}
 
 const draft    = computed(() => settingsStore.getDraft(areaKey.value))
 const isDirty  = computed(() => settingsStore.dirtyAreas.has(areaKey.value))
@@ -302,8 +369,17 @@ async function handleSave() {
     for (const k of ['name', 'cron_expression', 'prompt', 'reset_session', 'max_retries', 'script_command', 'script_timeout_seconds']) {
       if (k in d) updates[k] = d[k]
     }
-    await scheduleStore.updateSchedule(entity.value.legion_id, entity.value.schedule_id, updates)
+    // repeat_count: include when explicitly set (repeat_count_set flag), even if null (unlimited)
+    if (d.repeat_count_set) {
+      updates.repeat_count = d.repeat_count  // may be null for "unlimited"
+      updates.repeat_count_set = true
+    }
+    const result = await scheduleStore.updateSchedule(entity.value.legion_id, entity.value.schedule_id, updates)
     settingsStore.markClean(areaKey.value)
+    // If the server auto-deleted the schedule (fire_count >= new repeat_count), navigate away
+    if (result?.deleted) {
+      router.push('/settings/library/schedules')
+    }
   } catch (err) {
     console.error('Save failed:', err)
   } finally {
@@ -316,6 +392,13 @@ function handleCancel() {
 }
 
 defineExpose({ save: handleSave, cancel: handleCancel })
+
+// Navigate away when schedule is deleted while this page is open (issue #1538 R5)
+watch(entity, (val, oldVal) => {
+  if (oldVal && !val) {
+    router.push('/settings/library/schedules')
+  }
+})
 
 onMounted(async () => {
   sessionStore.fetchSessions?.()
@@ -578,5 +661,11 @@ onMounted(async () => {
   padding: 1px 4px;
   border-radius: 3px;
   font-size: 11px;
+}
+
+.repeat-editor {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 </style>
