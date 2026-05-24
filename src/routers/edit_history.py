@@ -36,6 +36,47 @@ def _classify_bash(command: str) -> bool:
     return bool(_MODIFYING_BASH_RE.search(command))
 
 
+def _is_tool_use_block(block: dict) -> bool:
+    """A tool_use block has id and name (real SDK shape has no 'type' field)."""
+    if not isinstance(block, dict):
+        return False
+    t = block.get("type")
+    if t and t != "tool_use":
+        return False
+    return "id" in block and "name" in block
+
+
+def _is_tool_result_block(block: dict) -> bool:
+    """A tool_result block has tool_use_id (real SDK shape has no 'type' field)."""
+    if not isinstance(block, dict):
+        return False
+    t = block.get("type")
+    if t and t != "tool_result":
+        return False
+    return "tool_use_id" in block
+
+
+def _build_entry(block: dict, ts: float | None) -> dict:
+    """Build an edit-history entry from a tool_use block."""
+    name = block.get("name")
+    inp = block.get("input") or {}
+    entry: dict = {
+        "tool_use_id": block.get("id"),
+        "tool_name": name,
+        "timestamp": ts,
+        "input": inp,
+    }
+    if name == "Edit":
+        entry["file_path"] = inp.get("file_path")
+    elif name == "Write":
+        entry["file_path"] = inp.get("file_path")
+        entry["line_count"] = len((inp.get("content") or "").splitlines())
+    elif name == "Bash":
+        entry["command"] = inp.get("command", "")
+        entry["likely_modifying"] = _classify_bash(entry["command"])
+    return entry
+
+
 def build_router(webui) -> APIRouter:
     router = APIRouter()
 
@@ -77,43 +118,39 @@ def build_router(webui) -> APIRouter:
 
                 if msg_type == "AssistantMessage":
                     for block in content:
-                        if not isinstance(block, dict):
-                            continue
-                        if block.get("type") != "tool_use":
+                        if not _is_tool_use_block(block):
                             continue
                         name = block.get("name")
                         if name not in ("Edit", "Write", "Bash"):
                             continue
-                        inp = block.get("input") or {}
-                        entry: dict = {
-                            "tool_use_id": block.get("id"),
-                            "tool_name": name,
-                            "timestamp": ts,
-                            "input": inp,
-                        }
-                        if name == "Edit":
-                            entry["file_path"] = inp.get("file_path")
-                        elif name == "Write":
-                            entry["file_path"] = inp.get("file_path")
-                            entry["line_count"] = len(
-                                (inp.get("content") or "").splitlines()
-                            )
-                        elif name == "Bash":
-                            entry["command"] = inp.get("command", "")
-                            entry["likely_modifying"] = _classify_bash(
-                                entry["command"]
-                            )
-                        entries.append(entry)
+                        entries.append(_build_entry(block, ts))
 
                 elif msg_type == "UserMessage":
                     for block in content:
-                        if not isinstance(block, dict):
-                            continue
-                        if block.get("type") != "tool_result":
+                        if not _is_tool_result_block(block):
                             continue
                         tid = block.get("tool_use_id")
                         if tid:
                             results[tid] = not block.get("is_error", False)
+
+                elif msg_type == "assistant":
+                    # Fallback: legacy prepare_for_storage() shape used by mock SDK
+                    metadata = msg.get("metadata") or {}
+                    for tu in metadata.get("tool_uses") or []:
+                        if not isinstance(tu, dict):
+                            continue
+                        if tu.get("name") not in ("Edit", "Write", "Bash"):
+                            continue
+                        entries.append(_build_entry(tu, ts))
+
+                elif msg_type == "user":
+                    metadata = msg.get("metadata") or {}
+                    for tr in metadata.get("tool_results") or []:
+                        if not isinstance(tr, dict):
+                            continue
+                        tid = tr.get("tool_use_id")
+                        if tid:
+                            results[tid] = not tr.get("is_error", False)
 
         # Stitch result success flags
         for entry in entries:
