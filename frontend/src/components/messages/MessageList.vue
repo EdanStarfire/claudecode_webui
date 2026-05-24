@@ -1,46 +1,48 @@
 <template>
   <div class="messages-area-wrapper flex-grow-1">
     <div class="messages-area overflow-auto" :class="{ 'theme-red': uiStore.isRedBackground }" ref="messagesArea" role="log" aria-live="polite" aria-label="Conversation messages" @scroll="onScroll" data-testid="message-list">
-      <div v-if="displayableItems.length === 0" class="text-muted text-center py-5">
-        No messages yet. Start a conversation!
-      </div>
-
-      <!-- Messages and compaction events using new component architecture -->
-      <!-- Tool cards are embedded within AssistantMessage components -->
-      <template v-for="(item, index) in displayableItems" :key="`item-${index}`">
-        <!-- Regular message -->
-        <MessageItem
-          v-if="item.type === 'message'"
-          :message="normalizeMessage(item.message)"
-          :attachedTools="item.attachedTools || []"
-        />
-
-        <!-- Compaction event group -->
-        <CompactionEventGroup
-          v-else-if="item.type === 'compaction'"
-          :messages="item.messages"
-        />
-
-        <!-- Date separator -->
-        <div
-          v-else-if="item.type === 'date_separator'"
-          class="date-separator"
-          role="separator"
-          aria-label="Date divider"
-        >
-          <span class="date-separator-label">{{ item.label }}</span>
+      <div class="messages-content" ref="messagesContent">
+        <div v-if="displayableItems.length === 0" class="text-muted text-center py-5">
+          No messages yet. Start a conversation!
         </div>
-      </template>
 
-      <!-- Issue #662: Truncation banner after last assistant message when response was truncated -->
-      <TruncationBanner v-if="showTruncationBanner" :key="'truncation-' + viewSessionId" />
+        <!-- Messages and compaction events using new component architecture -->
+        <!-- Tool cards are embedded within AssistantMessage components -->
+        <template v-for="(item, index) in displayableItems" :key="`item-${index}`">
+          <!-- Regular message -->
+          <MessageItem
+            v-if="item.type === 'message'"
+            :message="normalizeMessage(item.message)"
+            :attachedTools="item.attachedTools || []"
+          />
 
-      <!-- Issue #1300: Deferred tool banner when a PreToolUse hook deferred a tool -->
-      <DeferredToolBanner
-        v-if="deferredToolUse"
-        :deferredToolUse="deferredToolUse"
-        :key="'deferred-' + viewSessionId"
-      />
+          <!-- Compaction event group -->
+          <CompactionEventGroup
+            v-else-if="item.type === 'compaction'"
+            :messages="item.messages"
+          />
+
+          <!-- Date separator -->
+          <div
+            v-else-if="item.type === 'date_separator'"
+            class="date-separator"
+            role="separator"
+            aria-label="Date divider"
+          >
+            <span class="date-separator-label">{{ item.label }}</span>
+          </div>
+        </template>
+
+        <!-- Issue #662: Truncation banner after last assistant message when response was truncated -->
+        <TruncationBanner v-if="showTruncationBanner" :key="'truncation-' + viewSessionId" />
+
+        <!-- Issue #1300: Deferred tool banner when a PreToolUse hook deferred a tool -->
+        <DeferredToolBanner
+          v-if="deferredToolUse"
+          :deferredToolUse="deferredToolUse"
+          :key="'deferred-' + viewSessionId"
+        />
+      </div>
     </div>
 
     <!-- TTS Floating Controls (issue #735) — outside scroll container to avoid layout shift -->
@@ -62,7 +64,7 @@
 </template>
 
 <script setup>
-import { computed, inject, onActivated, onDeactivated, provide, ref, watch, nextTick } from 'vue'
+import { computed, inject, onActivated, onBeforeUnmount, onDeactivated, provide, ref, watch, nextTick } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
@@ -83,9 +85,14 @@ const uiStore = useUIStore()
 const viewSessionId = inject('viewSessionId', ref(null))
 
 const messagesArea = ref(null)
+const messagesContent = ref(null)
 const isProgrammaticScroll = ref(false)
 const isInitialLoad = ref(false)
 const lastScrollTop = ref(0)
+const stickyToBottom = ref(true)
+const pendingRestoreTarget = ref(null)
+let resizeObserver = null
+const STICKY_THRESHOLD_PX = 24
 
 // Per-instance message and tool-call sources derived from the injected session id.
 const sessionMessages = computed(() => messageStore.messagesBySession.get(viewSessionId.value) || [])
@@ -385,18 +392,51 @@ function setScrollTop(position) {
   requestAnimationFrame(() => { isProgrammaticScroll.value = false })
 }
 
+function scrollToBottomNow() {
+  if (!messagesArea.value) return
+  setScrollTop(messagesArea.value.scrollHeight)
+}
+
+function applyPendingRestore() {
+  if (pendingRestoreTarget.value === null || !messagesArea.value) return
+  const el = messagesArea.value
+  const target = pendingRestoreTarget.value
+  const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight)
+  const clamped = Math.min(target, maxScroll)
+  setScrollTop(clamped)
+  if (clamped >= target) pendingRestoreTarget.value = null
+}
+
+function recomputeStickyFromScroll(el) {
+  const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+  stickyToBottom.value = distance < STICKY_THRESHOLD_PX
+}
+
+function teardownObserver() {
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
+}
+
 // Auto-scroll function
 async function scrollToBottom() {
   if (!uiStore.autoScrollEnabled) return
+  if (!stickyToBottom.value) return
   await nextTick()
-  if (!messagesArea.value) return
-  setScrollTop(messagesArea.value.scrollHeight)
+  scrollToBottomNow()
 }
 
 // Scroll event handler: track user-initiated scroll position and guard programmatic scrolls
 function onScroll() {
   if (isProgrammaticScroll.value) return
-  if (messagesArea.value) lastScrollTop.value = messagesArea.value.scrollTop
+  const el = messagesArea.value
+  if (!el) return
+  lastScrollTop.value = el.scrollTop
+  if (pendingRestoreTarget.value !== null) {
+    pendingRestoreTarget.value = null
+  }
+  recomputeStickyFromScroll(el)
 }
 
 // TTS: Auto-queue new assistant messages when read aloud is enabled.
@@ -437,31 +477,54 @@ onActivated(async () => {
   lastSeenMessageCount.value = sessionMessages.value.length
   ttsInitialized.value = false
 
-  isInitialLoad.value = true
+  isInitialLoad.value = true  // PERF GUARD: suppress watcher burst during bulk message load
 
   await nextTick()
   await new Promise(resolve => requestAnimationFrame(resolve))
 
-  if (!messagesArea.value) {
+  if (!messagesArea.value || !messagesContent.value) {
     isInitialLoad.value = false
     return
   }
 
-  let targetScrollTop = messagesArea.value.scrollHeight
-  if (!uiStore.autoScrollEnabled) {
+  if (uiStore.autoScrollEnabled) {
+    stickyToBottom.value = true
+    pendingRestoreTarget.value = null
+    scrollToBottomNow()
+  } else {
+    stickyToBottom.value = false
     const saved = sessionStore.scrollPositions.get(viewSessionId.value)
-    if (typeof saved === 'number') targetScrollTop = saved
+    if (typeof saved === 'number' && saved > 0) {
+      pendingRestoreTarget.value = saved
+      applyPendingRestore()
+    } else {
+      setScrollTop(0)
+    }
   }
-  setScrollTop(targetScrollTop)
 
-  isInitialLoad.value = false
+  resizeObserver = new ResizeObserver(() => {
+    if (!messagesArea.value) return
+    if (pendingRestoreTarget.value !== null) {
+      applyPendingRestore()
+      return
+    }
+    if (uiStore.autoScrollEnabled && stickyToBottom.value) {
+      scrollToBottomNow()
+    }
+  })
+  resizeObserver.observe(messagesContent.value)
+
+  isInitialLoad.value = false  // PERF GUARD released
 })
 
 onDeactivated(() => {
   if (viewSessionId.value) {
     sessionStore.saveScrollPosition(viewSessionId.value, lastScrollTop.value)
   }
+  teardownObserver()
 })
+
+onBeforeUnmount(teardownObserver)
 
 // Auto-scroll on new messages
 watch(() => displayableItems.value.length, () => {
@@ -623,6 +686,10 @@ function normalizeMessage(message) {
   overflow: auto;
   background: var(--bs-body-bg);
   padding: 8px 0;
+}
+
+.messages-content {
+  min-height: 100%;
 }
 
 .date-separator {
