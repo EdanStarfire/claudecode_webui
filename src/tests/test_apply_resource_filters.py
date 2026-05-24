@@ -79,6 +79,26 @@ def test_format_filter_image(resources):
     assert result[0]["original_name"] == "beta.png"
 
 
+def test_format_filter_video():
+    video_resources = [
+        {"title": "Clip", "original_name": "clip.webm", "format": "webm", "is_image": False, "is_video": True, "timestamp": 10},
+        {"title": "Demo", "original_name": "demo.mp4", "format": "mp4", "is_image": False, "is_video": True, "timestamp": 20},
+        {"title": "Image", "original_name": "img.png", "format": "png", "is_image": True, "is_video": False, "timestamp": 30},
+        {"title": "Text", "original_name": "notes.txt", "format": "txt", "is_image": False, "is_video": False, "timestamp": 40},
+    ]
+    result = _apply_resource_filters(video_resources, search=None, format_filter="video", sort="newest")
+    assert len(result) == 2
+    assert all(r["is_video"] for r in result)
+
+
+def test_format_filter_video_no_match():
+    resources = [
+        {"title": "Image", "original_name": "img.png", "format": "png", "is_image": True, "is_video": False, "timestamp": 10},
+    ]
+    result = _apply_resource_filters(resources, search=None, format_filter="video", sort="newest")
+    assert result == []
+
+
 def test_format_filter_text(resources):
     result = _apply_resource_filters(resources, search=None, format_filter="text", sort="newest")
     formats = {r["format"] for r in result}

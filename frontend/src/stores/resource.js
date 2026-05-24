@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useSessionStore } from './session'
 import { apiGet, apiDelete, getAuthToken } from '../utils/api'
-import { IMAGE_EXTENSIONS, FILE_TYPE_ICONS } from '../utils/fileTypes'
+import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, FILE_TYPE_ICONS } from '../utils/fileTypes'
 
 /**
  * Resource Store - Manages resources (images, files) displayed via MCP tool per session
@@ -81,11 +81,39 @@ export const useResourceStore = defineStore('resource', () => {
   }
 
   /**
+   * Check if a resource is a video based on its format/extension
+   */
+  function isVideoResource(resource) {
+    if (!resource) return false
+
+    // Check explicit is_video flag from backend
+    if (resource.is_video === true) return true
+
+    // Check mime_type field (e.g., "video/mp4")
+    const mimeType = (resource.mime_type || '').toLowerCase()
+    if (mimeType.startsWith('video/')) return true
+
+    // Check format field
+    const format = (resource.format || '').toLowerCase()
+    if (format.startsWith('video/')) return true
+    if (VIDEO_EXTENSIONS.has('.' + format)) return true
+
+    // Check original filename extension
+    const filename = resource.original_filename || resource.original_name || ''
+    if (filename) {
+      const ext = '.' + filename.split('.').pop().toLowerCase()
+      return VIDEO_EXTENSIONS.has(ext)
+    }
+    return false
+  }
+
+  /**
    * Check if a resource is a text-based file that can be previewed as text
    */
   function isTextResource(resource) {
     if (!resource) return false
     if (isImageResource(resource)) return false
+    if (isVideoResource(resource)) return false
 
     const textExtensions = new Set([
       '.txt', '.log', '.md', '.json', '.xml', '.yaml', '.yml', '.csv',
@@ -113,6 +141,7 @@ export const useResourceStore = defineStore('resource', () => {
    */
   function getResourceIcon(resource) {
     if (isImageResource(resource)) return '🖼️'
+    if (isVideoResource(resource)) return '🎬'
     if (resource.original_filename) {
       const ext = '.' + resource.original_filename.split('.').pop().toLowerCase()
       return FILE_TYPE_ICONS[ext] || FILE_TYPE_ICONS['default']
@@ -738,6 +767,7 @@ export const useResourceStore = defineStore('resource', () => {
     getResourceUrl,
     getDownloadUrl,
     isImageResource,
+    isVideoResource,
     isTextResource,
     getResourceIcon,
     getResourceExtension,

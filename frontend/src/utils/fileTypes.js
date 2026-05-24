@@ -3,6 +3,9 @@ export const IMAGE_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico'
 ])
 
+// Video file extensions (dot-prefixed)
+export const VIDEO_EXTENSIONS = new Set(['.webm', '.mp4'])
+
 // File type icon mapping (dot-prefixed extension → emoji)
 export const FILE_TYPE_ICONS = {
   // Documents
@@ -53,6 +56,9 @@ export const FILE_TYPE_ICONS = {
   // Docs
   '.md': '📝',
   '.rst': '📝',
+  // Video
+  '.webm': '🎬',
+  '.mp4': '🎬',
   // Archives
   '.zip': '📦',
   '.tar': '📦',
@@ -77,6 +83,12 @@ export const IMAGE_MIME_TYPES = {
   ico: 'image/x-icon',
 }
 
+// Extension (without dot) to MIME type map for videos
+export const VIDEO_MIME_TYPES = {
+  webm: 'video/webm',
+  mp4: 'video/mp4',
+}
+
 /**
  * Check if a filename or path refers to an image based on extension.
  * @param {string} filename
@@ -89,6 +101,17 @@ export function isImageFile(filename) {
 }
 
 /**
+ * Check if a filename or path refers to a video based on extension.
+ * @param {string} filename
+ * @returns {boolean}
+ */
+export function isVideoFile(filename) {
+  if (!filename) return false
+  const ext = '.' + filename.split('.').pop().toLowerCase()
+  return VIDEO_EXTENSIONS.has(ext)
+}
+
+/**
  * Get an icon emoji for a file based on its name or path.
  * @param {string} filename
  * @returns {string} emoji
@@ -96,6 +119,7 @@ export function isImageFile(filename) {
 export function getFileIcon(filename) {
   if (!filename) return FILE_TYPE_ICONS.default
   const ext = '.' + filename.split('.').pop().toLowerCase()
+  if (VIDEO_EXTENSIONS.has(ext)) return '🎬'
   if (IMAGE_EXTENSIONS.has(ext)) return '🖼️'
   return FILE_TYPE_ICONS[ext] || FILE_TYPE_ICONS.default
 }
@@ -107,6 +131,7 @@ export function getFileIcon(filename) {
  */
 export function getFileIconByMimeType(mimeType) {
   if (!mimeType) return FILE_TYPE_ICONS.default
+  if (mimeType.startsWith('video/')) return '🎬'
   if (mimeType.startsWith('image/')) return '🖼️'
   if (
     mimeType.startsWith('text/x-python') ||
@@ -129,4 +154,15 @@ export function getImageMimeType(path) {
   if (!path) return 'image/png'
   const ext = path.split('.').pop().toLowerCase()
   return IMAGE_MIME_TYPES[ext] || 'image/png'
+}
+
+/**
+ * Get the MIME type string for a video file path.
+ * @param {string} path
+ * @returns {string} MIME type, defaulting to 'video/mp4'
+ */
+export function getVideoMimeType(path) {
+  if (!path) return 'video/mp4'
+  const ext = path.split('.').pop().toLowerCase()
+  return VIDEO_MIME_TYPES[ext] || 'video/mp4'
 }
