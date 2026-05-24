@@ -72,6 +72,16 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
     && apt-get update && apt-get install -y --no-install-recommends gh
 
+# ---------- Layer 4b: Playwright CLI (global, run as root before user switch) ----------
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    npm install -g @playwright/cli@latest
+
+# ---------- Layer 4c: ffmpeg for playwright-cli video recording ----------
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    apt-get update && apt-get install -y --no-install-recommends ffmpeg
+
 # ssh 7.3+ silently ignores an Include of a non-existent path — safe when no SSH secrets are configured.
 RUN echo "Include /run/ssh/config" >> /etc/ssh/ssh_config
 
@@ -79,6 +89,12 @@ RUN echo "Include /run/ssh/config" >> /etc/ssh/ssh_config
 RUN useradd -m -s /bin/bash claude
 
 USER claude
+
+# ---------- Layer 5b: Playwright CLI — install global skills + config ----------
+RUN playwright-cli install --skills 2>/dev/null || true
+RUN mkdir -p /home/claude/.playwright && \
+    printf '{\n  "browser": {\n    "browserName": "chromium",\n    "launchOptions": {\n      "executablePath": "/usr/bin/chromium",\n      "chromiumSandbox": false,\n      "args": ["--no-sandbox", "--disable-setuid-sandbox"]\n    }\n  }\n}\n' \
+    > /home/claude/.playwright/cli.config.json
 
 # ---------- Layer 6: UV Python package manager ----------
 RUN curl -fsSL https://astral.sh/uv/install.sh | bash
