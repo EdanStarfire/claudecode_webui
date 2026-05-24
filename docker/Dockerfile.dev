@@ -59,7 +59,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     chromium \
     chromium-driver \
-    fonts-noto-color-emoji
+    fonts-noto-color-emoji \
+    libnss3-tools
 
 # ---------- Layer 4: gh CLI (GitHub CLI) ----------
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -104,8 +105,11 @@ RUN curl -fsSL https://astral.sh/uv/install.sh | bash
 ARG CLAUDE_CODE_VERSION=2.1.149
 RUN curl -fsSL https://claude.ai/install.sh | bash -s ${CLAUDE_CODE_VERSION}
 
-# ---------- Layer 8: PATH and entrypoint ----------
+# ---------- Layer 8: PATH, environment, and entrypoint ----------
 ENV PATH="/home/claude/.local/bin:${PATH}"
+ENV UV_NATIVE_TLS=1
 
 # Workspace path and working directory set at runtime via docker run -w
-ENTRYPOINT ["claude"]
+COPY --chown=claude:claude entrypoint.sh /home/claude/.local/bin/entrypoint.sh
+RUN chmod +x /home/claude/.local/bin/entrypoint.sh
+ENTRYPOINT ["entrypoint.sh"]
