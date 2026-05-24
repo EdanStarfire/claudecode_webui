@@ -1,6 +1,9 @@
 <template>
   <div class="header-row1">
-    <h1 class="header-title">Claude Code WebUI</h1>
+    <div class="header-brand">
+      <img class="header-logo" src="/favicon-32x32.png" alt="ccWebUI logo" width="20" height="20">
+      <h1 class="header-title">ccWebUI</h1>
+    </div>
     <div class="header-right">
       <div class="header-indicator" :class="uiConnected ? 'connected' : 'disconnected'" data-testid="connection-indicator">
         <span class="indicator-dot"></span>
@@ -115,6 +118,18 @@ function toggleAudit() {
   padding: 0 16px;
   flex-shrink: 0;
   z-index: 100;
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-logo {
+  width: 20px;
+  height: 20px;
+  display: block;
 }
 
 .header-title {

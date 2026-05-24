@@ -4,7 +4,7 @@ import { waitForPollConnected } from '../helpers/wait';
 test.describe('App load', () => {
   test('T-001 app-loads', async ({ page }) => {
     await page.goto('/');
-    await expect(page).toHaveTitle(/Claude/i);
+    await expect(page).toHaveTitle(/ccWebUI/i);
     await expect(page.getByTestId('app-root')).toBeVisible();
   });
 
