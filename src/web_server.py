@@ -285,6 +285,9 @@ class ClaudeWebUI:
                 "Run 'cd frontend && npm run build' to create production build."
             )
         self.app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
+        # Serve root-level public files (favicons, robots.txt, etc.) from dist/ root.
+        # Registered after all API routes so it only handles paths that don't match any route.
+        self.app.mount("/", StaticFiles(directory=str(static_dir)), name="static-root")
 
     def _get_permission_callback_factory(self):
         """
