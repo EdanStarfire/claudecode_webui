@@ -23,7 +23,7 @@
           <button
             class="category-add-btn"
             :title="`New schedule in ${group.legionName}`"
-            @click="openCreateModal(group.legionId)"
+            @click="openCreate(group.legionId)"
           >+</button>
         </div>
 
@@ -113,12 +113,6 @@
       </div>
     </div>
 
-    <!-- Create modal -->
-    <ScheduleCreateModal
-      v-if="createModalLegionId"
-      :legion-id="createModalLegionId"
-      @close="createModalLegionId = null"
-    />
   </div>
 </template>
 
@@ -128,7 +122,6 @@ import { useRouter } from 'vue-router'
 import { useScheduleStore } from '@/stores/schedule'
 import { useProjectStore } from '@/stores/project'
 import SettingsToolbar from '../SettingsToolbar.vue'
-import ScheduleCreateModal from '../../schedules/ScheduleCreateModal.vue'
 import cronstrue from 'cronstrue'
 
 const router = useRouter()
@@ -136,7 +129,6 @@ const scheduleStore = useScheduleStore()
 const projectStore  = useProjectStore()
 
 const loading = ref(true)
-const createModalLegionId = ref(null)
 const pendingDeleteId    = ref(null)
 const pendingDeleteAgent = ref(true)
 const deleting           = ref(false)
@@ -197,8 +189,8 @@ function openEdit(schedule) {
   router.push(`/settings/schedule/${schedule.schedule_id}/general`)
 }
 
-function openCreateModal(legionId) {
-  createModalLegionId.value = legionId
+function openCreate(legionId) {
+  router.push(`/settings/schedule/__new__/general?legion_id=${legionId}`)
 }
 
 function startDelete(schedule) {
