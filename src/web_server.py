@@ -56,7 +56,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
     WebSocket auth is handled separately in each WS endpoint handler.
     """
 
-    EXEMPT_PATHS = {'/', '/health', '/api/auth/check', '/oauth/callback'}
+    EXEMPT_PATHS = {
+        '/', '/health', '/api/auth/check', '/oauth/callback',
+        # Public static assets from frontend/public/ — served at root without hashing,
+        # must be accessible without a token (browsers fetch favicons unauthenticated).
+        '/favicon.ico', '/favicon-16x16.png', '/favicon-32x32.png',
+        '/apple-touch-icon.png', '/android-chrome-192x192.png', '/android-chrome-512x512.png',
+        '/site.webmanifest', '/robots.txt',
+    }
     EXEMPT_PREFIXES = ('/assets/',)
     # Issue #827: The per-session secrets resolve endpoint uses its own Bearer token auth,
     # not the global operator token. Exempt it from global AuthMiddleware.
