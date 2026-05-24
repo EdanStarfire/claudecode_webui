@@ -111,13 +111,6 @@
       </div>
     </div>
 
-    <!-- Create modal -->
-    <ScheduleCreateModal
-      v-if="createModalOpen && legionId && currentSession"
-      :legion-id="legionId"
-      :default-minion-id="currentSession.is_ephemeral ? '' : currentSession.session_id"
-      @close="createModalOpen = false"
-    />
   </CollapsiblePanel>
 </template>
 
@@ -127,7 +120,6 @@ import { useRouter } from 'vue-router'
 import { useScheduleStore } from '@/stores/schedule'
 import { useSessionStore } from '@/stores/session'
 import CollapsiblePanel from '@/components/layout/CollapsiblePanel.vue'
-import ScheduleCreateModal from '@/components/schedules/ScheduleCreateModal.vue'
 import cronstrue from 'cronstrue'
 
 const props = defineProps({
@@ -143,7 +135,6 @@ const router = useRouter()
 const scheduleStore = useScheduleStore()
 const sessionStore = useSessionStore()
 
-const createModalOpen = ref(false)
 const pendingDeleteId = ref(null)
 const pendingDeleteAgent = ref(true)
 const deleting = ref(false)
@@ -232,7 +223,9 @@ function openEdit(s) {
 
 function openCreateModal() {
   if (!currentSession.value || currentSession.value.is_ephemeral) return
-  createModalOpen.value = true
+  const lid = legionId.value
+  const mid = currentSession.value.session_id
+  router.push(`/settings/schedule/__new__/general?legion_id=${lid}&minion_id=${mid}`)
 }
 
 function startDelete(s) {

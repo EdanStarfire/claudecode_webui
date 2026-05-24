@@ -11,7 +11,7 @@ Agent-oriented guide to the Claude WebUI frontend. For backend architecture, see
 | Build | Vite 7.1 |
 | Router | Vue Router 4 (hash history) |
 | CSS | Bootstrap 5.3 + scoped component styles |
-| Components | 152 `.vue` files |
+| Components | 151 `.vue` files |
 | Composables | 17 |
 | Utils | 14 |
 
@@ -38,7 +38,6 @@ frontend/
 │   │   ├── messages/      (13)    # MessageList, MessageItem, InputArea, SubagentTimeline, TruncationBanner, etc.
 │   │   ├── messages/tools/ (5)    # ActivityTimeline, PermissionPrompt, TimelineNode/Detail/Segment
 │   │   ├── project/       (3)     # ProjectOverview, ProjectCreateModal, ProjectEditModal
-│   │   ├── schedules/     (1)     # ScheduleCreateModal
 │   │   ├── session/       (7)     # SessionView, SessionCostBadge, McpServerDetail, modals, etc.
 │   │   ├── settings/      (10)    # SettingsLayout, SettingsSidebar, SettingsToolbar, SourceMarker, etc.
 │   │   ├── settings/sections/ (18) # Per-area settings sections (General, Model, MCP, Isolation, etc.)
@@ -452,12 +451,6 @@ See [TOOL_HANDLERS.md](../TOOL_HANDLERS.md) for detailed documentation.
 | `ProjectOverview` | Project details view |
 | `ProjectCreateModal` | New project dialog |
 | `ProjectEditModal` | Edit/delete project dialog |
-
-### Schedules (`schedules/`) — 1 component
-
-| Component | Purpose |
-|-----------|---------|
-| `ScheduleCreateModal` | Create/edit cron schedule |
 
 ### Session (`session/`) — 7 components
 

@@ -300,11 +300,30 @@ const scheduleEntityId = computed(() => route.params.scheduleId || '')
 
 const currentSchedule = computed(() => scheduleStore.getSchedule(scheduleEntityId.value))
 
-const scheduleEntityName = computed(() => currentSchedule.value?.name || '')
+const scheduleEntityName = computed(() => {
+  if (scheduleEntityId.value === '__new__') return 'New Schedule'
+  return currentSchedule.value?.name || ''
+})
 
 const scheduleSectionItems = computed(() => {
   if (!scheduleEntityId.value) return []
   const base = `/settings/schedule/${scheduleEntityId.value}`
+  const isNew = scheduleEntityId.value === '__new__'
+
+  if (isNew) {
+    const lid = route.query.legion_id
+    const q = lid
+      ? `?legion_id=${lid}${route.query.minion_id ? `&minion_id=${route.query.minion_id}` : ''}`
+      : ''
+    return EDIT_SECTIONS.map(s => ({
+      to: s.section === 'general' ? `${base}/general${q}` : `${base}/${s.section}`,
+      icon: s.icon,
+      label: s.label,
+      sectionKey: s.sectionKey,
+      disabled: s.section !== 'general',
+    }))
+  }
+
   const isPermanent = currentSchedule.value?.minion_id && !currentSchedule.value?.session_config
   return EDIT_SECTIONS.map(s => ({
     to: `${base}/${s.section}`,
