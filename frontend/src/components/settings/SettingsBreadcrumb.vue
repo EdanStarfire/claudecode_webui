@@ -40,6 +40,12 @@ const sectionLabel = computed(() => {
     const s = route.params.section
     return s ? `Profile › ${humanize(s)}` : 'Profile'
   }
+  if (route.path.startsWith('/settings/secret/')) {
+    const s = route.params.section
+    const isNew = route.params.secretName === '__new__'
+    const prefix = isNew ? 'New Secret' : 'Secret'
+    return s ? `${prefix} › ${humanize(s)}` : prefix
+  }
   return ''
 })
 

@@ -69,7 +69,7 @@ export const settingsIndex = [
   { section: 'profiles', fieldKey: 'profile_mcp',         label: 'MCP Servers' },
   { section: 'profiles', fieldKey: 'profile_isolation',   label: 'Isolation' },
 
-  // Secrets section (LibrarySecretsSection / SecretsTab)
+  // Secrets section (LibrarySecretsSection + SecretGeneralSection)
   { section: 'secrets', fieldKey: 'secret_name',          label: 'Secret Name' },
   { section: 'secrets', fieldKey: 'secret_type',          label: 'Type' },
   { section: 'secrets', fieldKey: 'secret_api_key',       label: 'API Key' },
