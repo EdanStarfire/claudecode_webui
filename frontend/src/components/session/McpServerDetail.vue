@@ -8,7 +8,6 @@
           <strong class="server-name small">{{ server.name }}</strong>
         </div>
         <button
-          v-if="server.status === 'failed'"
           class="btn btn-outline-warning btn-sm py-0 px-2"
           @click="$emit('reconnect', server.name)"
         >
