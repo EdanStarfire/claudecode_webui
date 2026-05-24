@@ -5,7 +5,7 @@
 # and GitHub CLI (gh) for GitHub operations.
 #
 # Build:
-#   docker build -f docker/Dockerfile.dev -t claudecode-webui-dev:local docker/
+#   docker build -f docker/Dockerfile.dev -t claudecode-webui-dev:local .
 #
 # Usage with claude-docker:
 #   Set session Docker image to "claudecode-webui-dev:local" or:
@@ -99,17 +99,43 @@ RUN mkdir -p /home/claude/.playwright && \
 
 # ---------- Layer 6: UV Python package manager ----------
 RUN curl -fsSL https://astral.sh/uv/install.sh | bash
+ENV PATH="/home/claude/.local/bin:${PATH}"
+
+# ---------- Layer 6b: Pre-warm uv cache (Issue #1548) ----------
+# Approach A (bake-into-image): copy the project's lock + manifest and run
+# `uv sync` at build time so all wheels — including native packages like
+# uvloop, cryptography, pydantic-core, watchfiles — are downloaded and
+# compiled once and cached at /home/claude/.cache/uv. At runtime, `uv sync`
+# in the mounted workspace reads the cache and assembles .venv from copies,
+# bypassing source compilation.
+#
+# Placement: this layer MUST sit ABOVE the Claude Code CLI layer below.
+# CLAUDE_CODE_VERSION is bumped every few days in lockstep with
+# claude-agent-sdk; anything beneath that layer is rebuilt on every bump,
+# which would re-compile all native wheels and defeat the cache. Project
+# deps (pyproject.toml / uv.lock) change much less often than the Claude
+# Code CLI version, so this is the correct layer ordering.
+#
+# Drift caveat: when pyproject.toml/uv.lock change, the runtime `uv sync`
+# will pull/build the delta online; rebuild the image to refresh the
+# baseline.
+COPY --chown=claude:claude pyproject.toml uv.lock /tmp/prewarm/
+RUN cd /tmp/prewarm \
+    && uv python install 3.13 \
+    && uv sync --frozen --no-install-project \
+    && rm -rf /tmp/prewarm
 
 # ---------- Layer 7: Claude Code CLI ----------
 # Bump in lockstep with claude-agent-sdk in pyproject.toml/uv.lock.
 ARG CLAUDE_CODE_VERSION=2.1.149
 RUN curl -fsSL https://claude.ai/install.sh | bash -s ${CLAUDE_CODE_VERSION}
 
-# ---------- Layer 8: PATH, environment, and entrypoint ----------
-ENV PATH="/home/claude/.local/bin:${PATH}"
+# ---------- Layer 8: Environment and entrypoint ----------
 ENV UV_NATIVE_TLS=1
+ENV UV_CACHE_DIR=/home/claude/.cache/uv
+ENV UV_LINK_MODE=copy
 
 # Workspace path and working directory set at runtime via docker run -w
-COPY --chown=claude:claude entrypoint.sh /home/claude/.local/bin/entrypoint.sh
+COPY --chown=claude:claude docker/entrypoint.sh /home/claude/.local/bin/entrypoint.sh
 RUN chmod +x /home/claude/.local/bin/entrypoint.sh
 ENTRYPOINT ["entrypoint.sh"]
