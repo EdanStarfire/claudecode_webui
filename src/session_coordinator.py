@@ -90,6 +90,8 @@ def _apply_resource_filters(
     if format_filter:
         if format_filter == "image":
             result = [r for r in result if r.get("is_image")]
+        elif format_filter == "video":
+            result = [r for r in result if r.get("is_video")]
         elif format_filter == "text":
             result = [r for r in result if r.get("format") in _TEXT_RESOURCE_FORMATS]
         else:

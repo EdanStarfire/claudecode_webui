@@ -92,6 +92,38 @@
           </div>
         </div>
 
+        <!-- Video Container (for video resources) -->
+        <div v-else-if="isCurrentVideo" class="image-container" @click.stop>
+          <video
+            v-if="currentResource"
+            :src="getResourceUrl(currentResource.resource_id)"
+            controls
+            preload="metadata"
+            class="full-image"
+          ></video>
+
+          <!-- Video Info -->
+          <div class="resource-info" v-if="currentResource">
+            <h5 v-if="currentResource.title" class="resource-title">
+              {{ currentResource.title }}
+            </h5>
+            <p v-if="currentResource.description" class="resource-description">
+              {{ currentResource.description }}
+            </p>
+            <div class="resource-meta">
+              <span class="meta-item">
+                {{ formatSize(currentResource.size_bytes) }}
+              </span>
+              <span class="meta-item">
+                {{ currentResource.format?.toUpperCase() }}
+              </span>
+              <span class="meta-item">
+                {{ formatTimestamp(currentResource.timestamp) }}
+              </span>
+            </div>
+          </div>
+        </div>
+
         <!-- Image Container (for image resources) -->
         <div v-else-if="isCurrentImage" class="image-container" @click.stop>
           <img
@@ -269,6 +301,10 @@ const isCurrentImage = computed(() => {
   return !isDirectContent.value && !isDirectImage.value && resourceStore.isImageResource(currentResource.value)
 })
 
+const isCurrentVideo = computed(() => {
+  return !isDirectContent.value && !isDirectImage.value && resourceStore.isVideoResource(currentResource.value)
+})
+
 const isCurrentText = computed(() => {
   return resourceStore.isTextResource(currentResource.value)
 })
@@ -315,7 +351,7 @@ watch(currentIndex, () => {
 
 // Fetch text content when navigating to a text resource
 watch([currentIndex, isOpen], () => {
-  if (isOpen.value && currentResource.value && !isCurrentImage.value) {
+  if (isOpen.value && currentResource.value && !isCurrentImage.value && !isCurrentVideo.value) {
     const rid = currentResource.value.resource_id
     const cached = resourceStore.getTextContent(rid)
     if (!cached || cached.error) {
@@ -380,7 +416,7 @@ function handleKeydown(event) {
     case 'm':
       if (isDirectContent.value && directTextContent.value) {
         displayMode.value = displayMode.value === 'raw' ? 'markdown' : 'raw'
-      } else if (!isCurrentImage.value && !isDirectImage.value && textContent.value) {
+      } else if (!isCurrentImage.value && !isCurrentVideo.value && !isDirectImage.value && textContent.value) {
         displayMode.value = displayMode.value === 'raw' ? 'markdown' : 'raw'
       }
       break

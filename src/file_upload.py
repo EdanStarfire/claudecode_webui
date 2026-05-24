@@ -38,6 +38,8 @@ ALLOWED_EXTENSIONS = {
     '.xml', '.plist',
     # Image files
     '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico',
+    # Video files
+    '.webm', '.mp4',
     # Data files
     '.sql', '.graphql',
 }
@@ -66,6 +68,9 @@ MIME_TYPES = {
     '.gif': 'image/gif',
     '.webp': 'image/webp',
     '.svg': 'image/svg+xml',
+    # Videos
+    '.webm': 'video/webm',
+    '.mp4': 'video/mp4',
 }
 
 

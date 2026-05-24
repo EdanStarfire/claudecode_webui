@@ -4,6 +4,7 @@ import mermaid from 'comark/plugins/mermaid'
 import { resourceTokenPlugin } from './comarkPlugins/resourceToken'
 import { externalLinksPlugin } from './comarkPlugins/externalLinks'
 import { getAuthToken } from '@/utils/api'
+import { useResourceStore } from '@/stores/resource'
 import MermaidWrapper from '@/components/common/MermaidWrapper.vue'
 
 const SECURITY_CONFIG = {
@@ -16,7 +17,11 @@ const PLUGINS = [
   breaks(),
   security(SECURITY_CONFIG),
   mermaid(),
-  resourceTokenPlugin({ getToken: getAuthToken }),
+  resourceTokenPlugin({
+    getToken: getAuthToken,
+    // Lazy store access inside the closure so it runs after Pinia is initialized
+    getResource: (sessionId, resourceId) => useResourceStore().getResourceById(sessionId, resourceId),
+  }),
   externalLinksPlugin(),
 ]
 

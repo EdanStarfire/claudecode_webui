@@ -5,8 +5,8 @@ function makeState(nodes) {
   return { tree: { nodes, frontmatter: {}, meta: {} } }
 }
 
-function runPlugin(nodes, token) {
-  const plugin = resourceTokenPlugin({ getToken: () => token })
+function runPlugin(nodes, token, getResource) {
+  const plugin = resourceTokenPlugin({ getToken: () => token, getResource })
   const state = makeState(nodes)
   plugin.post(state)
   return state.tree.nodes
@@ -67,5 +67,48 @@ describe('resourceTokenPlugin', () => {
     const state = makeState(nodes)
     plugin.post(state)
     expect(state.tree.nodes[0][1].src).toBe('/api/sessions/abc/resources/def')
+  })
+})
+
+describe('resourceTokenPlugin — video resource rewriting', () => {
+  const videoResource = { is_video: true, mime_type: 'video/webm' }
+  const imageResource = { is_video: false, is_image: true, mime_type: 'image/png' }
+
+  it('rewrites img to video for a video resource', () => {
+    const nodes = [['img', { src: '/api/sessions/abc/resources/def', alt: 'clip' }]]
+    const result = runPlugin(nodes, 'tok', () => videoResource)
+    expect(result[0][0]).toBe('video')
+    expect(result[0][1].src).toBe('/api/sessions/abc/resources/def?token=tok')
+    expect(result[0][1].controls).toBe('')
+    expect(result[0][1].preload).toBe('metadata')
+    expect(result[0][1].alt).toBeUndefined()
+  })
+
+  it('leaves img unchanged for an image resource', () => {
+    const nodes = [['img', { src: '/api/sessions/abc/resources/def', alt: 'photo' }]]
+    const result = runPlugin(nodes, 'tok', () => imageResource)
+    expect(result[0][0]).toBe('img')
+    expect(result[0][1].src).toBe('/api/sessions/abc/resources/def?token=tok')
+  })
+
+  it('leaves img unchanged when getResource returns null', () => {
+    const nodes = [['img', { src: '/api/sessions/abc/resources/def', alt: 'x' }]]
+    const result = runPlugin(nodes, 'tok', () => null)
+    expect(result[0][0]).toBe('img')
+    expect(result[0][1].src).toBe('/api/sessions/abc/resources/def?token=tok')
+  })
+
+  it('leaves img unchanged when getResource is not provided', () => {
+    const nodes = [['img', { src: '/api/sessions/abc/resources/def' }]]
+    const result = runPlugin(nodes, 'tok', undefined)
+    expect(result[0][0]).toBe('img')
+    expect(result[0][1].src).toBe('/api/sessions/abc/resources/def?token=tok')
+  })
+
+  it('does not affect non-resource URLs even with getResource', () => {
+    const nodes = [['img', { src: 'https://example.com/video.webm' }]]
+    const result = runPlugin(nodes, 'tok', () => videoResource)
+    expect(result[0][0]).toBe('img')
+    expect(result[0][1].src).toBe('https://example.com/video.webm')
   })
 })

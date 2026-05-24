@@ -47,12 +47,17 @@ SUPPORTED_EXTENSIONS = {
     '.xml', '.plist',
     # Image files
     '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.tiff', '.tif',
+    # Video files
+    '.webm', '.mp4',
     # Data files
     '.sql', '.graphql',
 }
 
 # Image extensions for format detection
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.tiff', '.tif'}
+
+# Video extensions for format detection
+VIDEO_EXTENSIONS = {'.webm', '.mp4'}
 
 # MIME type mapping
 MIME_TYPES = {
@@ -82,6 +87,9 @@ MIME_TYPES = {
     '.ico': 'image/x-icon',
     '.tiff': 'image/tiff',
     '.tif': 'image/tiff',
+    # Videos
+    '.webm': 'video/webm',
+    '.mp4': 'video/mp4',
 }
 
 
@@ -162,7 +170,7 @@ Examples:
   register_resource(file_path="/tmp/output.json", title="API Response")
   register_resource(file_path="/var/log/app.log", title="Application Log")
 
-Supported types: Text, Code, Config, Images, Data files
+Supported types: Text, Code, Config, Images, Videos (webm, mp4), Data files
 Maximum size: 10MB per resource""",
             {
                 "file_path": str,      # Absolute path to file (required)
@@ -344,8 +352,9 @@ At least one of resource_id or filename must be provided.""",
                     "is_error": True
                 }
 
-            # Determine if this is an image
+            # Determine if this is an image or video
             is_image = ext in IMAGE_EXTENSIONS
+            is_video = ext in VIDEO_EXTENSIONS
             mime_type = MIME_TYPES.get(ext, 'application/octet-stream')
 
             # Read file
@@ -365,8 +374,18 @@ At least one of resource_id or filename must be provided.""",
                     }
                 if ext == '.svg':
                     resource_format = 'svg'
+            elif is_video:
+                resource_format = self._detect_video_format(file_bytes)
+                if not resource_format:
+                    return {
+                        "content": [{
+                            "type": "text",
+                            "text": "Error: File does not appear to be a valid video."
+                        }],
+                        "is_error": True
+                    }
             else:
-                # Use extension as format for non-images
+                # Use extension as format for non-images and non-videos
                 resource_format = ext.lstrip('.')
 
             # Get storage manager for this session
@@ -389,6 +408,7 @@ At least one of resource_id or filename must be provided.""",
                 "format": resource_format,
                 "mime_type": mime_type,
                 "is_image": is_image,
+                "is_video": is_video,
                 "size_bytes": file_size,
                 "original_path": str(file_path),
                 "original_name": file_path.name,
@@ -417,9 +437,14 @@ At least one of resource_id or filename must be provided.""",
                 except Exception as e:
                     logger.error(f"Failed to broadcast resource_registered: {e}")
 
-            type_label = "Image" if is_image else "File"
-            markdown_field = ""
             if is_image:
+                type_label = "Image"
+            elif is_video:
+                type_label = "Video"
+            else:
+                type_label = "File"
+            markdown_field = ""
+            if is_image or is_video:
                 markdown_field = self._get_resource_url(
                     session_id, resource_id, title, is_image=True
                 )
@@ -432,9 +457,10 @@ At least one of resource_id or filename must be provided.""",
                 f"- Source: {file_path}\n"
             )
             if markdown_field:
+                media_noun = "video" if is_video else "image"
                 result_text += (
                     f"- Markdown: {markdown_field}\n\n"
-                    f"The image is now visible in the Resource Gallery. "
+                    f"The {media_noun} is now visible in the Resource Gallery. "
                     f"To display it inline in your response, paste the markdown above "
                     f"into your message text."
                 )
@@ -504,6 +530,7 @@ At least one of resource_id or filename must be provided.""",
                     "format": r.get("format"),
                     "mime_type": r.get("mime_type"),
                     "is_image": r.get("is_image", False),
+                    "is_video": r.get("is_video", False),
                     "size_bytes": r.get("size_bytes"),
                     "markdown": self._get_resource_url(
                         session_id,
@@ -581,6 +608,7 @@ At least one of resource_id or filename must be provided.""",
                 "format": match.get("format"),
                 "mime_type": match.get("mime_type"),
                 "is_image": match.get("is_image", False),
+                "is_video": match.get("is_video", False),
                 "size_bytes": match.get("size_bytes"),
                 "markdown": self._get_resource_url(
                     session_id,
@@ -641,6 +669,25 @@ At least one of resource_id or filename must be provided.""",
         # ICO: 00 00 01 00
         if image_bytes[:4] == b'\x00\x00\x01\x00':
             return "ico"
+
+        return None
+
+    def _detect_video_format(self, file_bytes: bytes) -> str | None:
+        """
+        Detect video format from magic bytes.
+
+        Returns 'webm', 'mp4', or None if not a recognised video format.
+        """
+        if len(file_bytes) < 8:
+            return None
+
+        # WebM / Matroska: EBML header 1A 45 DF A3
+        if file_bytes[:4] == b'\x1a\x45\xdf\xa3':
+            return "webm"
+
+        # MP4 / ISO Base Media File Format: bytes 4-7 == "ftyp"
+        if len(file_bytes) >= 8 and file_bytes[4:8] == b'ftyp':
+            return "mp4"
 
         return None
 

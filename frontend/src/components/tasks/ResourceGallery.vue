@@ -14,6 +14,7 @@
       <select v-model="typeFilter" class="gallery-sort" aria-label="Filter by type">
         <option value="">All</option>
         <option value="image">Images</option>
+        <option value="video">Videos</option>
         <option value="text">Text</option>
       </select>
       <!-- Sort -->
