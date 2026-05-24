@@ -71,6 +71,12 @@ const routes = [
     props: true
   },
   {
+    path: '/settings/secret/:secretName/:section?',
+    name: 'settings-secret',
+    component: SettingsLayout,
+    props: true
+  },
+  {
     path: '/settings/schedules',
     name: 'settings-schedules',
     component: SettingsLayout

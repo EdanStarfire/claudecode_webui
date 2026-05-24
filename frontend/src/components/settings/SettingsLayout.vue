@@ -62,6 +62,7 @@ import LibrarySecretsSection from './sections/LibrarySecretsSection.vue'
 import LibrarySchedulesSection from './sections/LibrarySchedulesSection.vue'
 import GeneralSection from './sections/GeneralSection.vue'
 import ScheduleGeneralSection from './sections/ScheduleGeneralSection.vue'
+import SecretGeneralSection from './sections/SecretGeneralSection.vue'
 import ModelTuningSection from './sections/ModelTuningSection.vue'
 import ToolsPermissionsSection from './sections/ToolsPermissionsSection.vue'
 import McpServersSection from './sections/McpServersSection.vue'
@@ -79,6 +80,7 @@ const modeTintVars = computed(() => {
   if (p.startsWith('/settings/template/')) return { '--mode-tint': '#d2992215', '--mode-border': '#d2992244', '--mode-fg': '#d29922' }
   if (p.startsWith('/settings/profile/'))  return { '--mode-tint': '#3fb95018', '--mode-border': '#3fb95044', '--mode-fg': '#3fb950' }
   if (p.startsWith('/settings/schedule/')) return { '--mode-tint': '#7c3aed18', '--mode-border': '#7c3aed44', '--mode-fg': '#7c3aed' }
+  if (p.startsWith('/settings/secret/'))  return { '--mode-tint': '#06b6d418', '--mode-border': '#06b6d444', '--mode-fg': '#06b6d4' }
   return {}
 })
 
@@ -95,10 +97,12 @@ const EDIT_SECTION_MAP = {
 const sectionComponent = computed(() => {
   const p = route.path
   const isSchedule = p.startsWith('/settings/schedule/')
+  const isSecret   = p.startsWith('/settings/secret/')
   if (p.startsWith('/settings/session/') || p.startsWith('/settings/template/') ||
-      p.startsWith('/settings/profile/') || isSchedule) {
+      p.startsWith('/settings/profile/') || isSchedule || isSecret) {
     const section = route.params.section || 'general'
     if (section === 'general' && isSchedule) return ScheduleGeneralSection
+    if (section === 'general' && isSecret)   return SecretGeneralSection
     return EDIT_SECTION_MAP[section] ?? null
   }
   switch (p) {
