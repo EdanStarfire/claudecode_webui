@@ -167,6 +167,7 @@ class NetworkingConfig:
 @dataclass
 class FeaturesConfig:
     skill_sync_enabled: bool = True
+    disable_openai_responses_count_tokens_api: bool = True  # issue #1473
 
 
 @dataclass
@@ -261,6 +262,9 @@ class AppConfig:
         features_data = data.get("features", {})
         features = FeaturesConfig(
             skill_sync_enabled=features_data.get("skill_sync_enabled", True),
+            disable_openai_responses_count_tokens_api=features_data.get(
+                "disable_openai_responses_count_tokens_api", True
+            ),
         )
         proxy_data = data.get("proxy", {})
         proxy = ProxyConfig(
@@ -342,6 +346,9 @@ class AppConfig:
             },
             "features": {
                 "skill_sync_enabled": self.features.skill_sync_enabled,
+                "disable_openai_responses_count_tokens_api": (
+                    self.features.disable_openai_responses_count_tokens_api
+                ),
             },
             "proxy": {
                 "proxy_image": self.proxy.proxy_image,

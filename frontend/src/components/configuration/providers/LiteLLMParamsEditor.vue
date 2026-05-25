@@ -14,7 +14,7 @@
       />
       <div class="value-wrap">
         <input
-          :ref="el => { el ? valueRefs.value[idx] = el : delete valueRefs.value[idx] }"
+          :ref="el => { el ? valueRefs[idx] = el : delete valueRefs[idx] }"
           v-model="row.value"
           type="text"
           class="form-control form-control-sm"
@@ -73,7 +73,9 @@ const emit = defineEmits(['update:modelValue'])
 
 const secretsStore = useSecretsStore()
 const showSecretPicker = ref(null)
-const valueRefs = ref({})
+// Plain object (not a ref) — Vue's template compiler auto-unwraps refs, which
+// would make `.value` resolve to undefined inside the :ref function callback.
+const valueRefs = {}
 
 const rows = ref([])
 
@@ -103,12 +105,13 @@ function removeRow(idx) {
   rows.value.splice(idx, 1)
   // Rebuild refs keyed by new indices after splice
   const shifted = {}
-  for (const [k, el] of Object.entries(valueRefs.value)) {
+  for (const [k, el] of Object.entries(valueRefs)) {
     const n = Number(k)
     if (n < idx) shifted[n] = el
     else if (n > idx) shifted[n - 1] = el
   }
-  valueRefs.value = shifted
+  Object.keys(valueRefs).forEach(k => delete valueRefs[k])
+  Object.assign(valueRefs, shifted)
   emitUpdate()
 }
 
@@ -117,7 +120,7 @@ function toggleSecretPicker(idx) {
 }
 
 function insertSecretRef(idx, secretName) {
-  const input = valueRefs.value[idx]
+  const input = valueRefs[idx]
   const ref = `\${secret:${secretName}}`
   if (input) {
     const start = input.selectionStart ?? rows.value[idx].value.length
@@ -133,7 +136,7 @@ function insertSecretRef(idx, secretName) {
 
 watch(() => props.modelValue, (val) => {
   rows.value = dictToRows(val)
-  valueRefs.value = {}
+  Object.keys(valueRefs).forEach(k => delete valueRefs[k])
 }, { immediate: true })
 
 onMounted(() => {

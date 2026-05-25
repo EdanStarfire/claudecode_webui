@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.logging_config import get_logger
@@ -32,10 +33,18 @@ class LiteLLMProxyManager:
     - Maintain a per-session virtual key registry for custom_auth
     """
 
-    def __init__(self, catalog_manager: ProviderCatalogManager, vault, port: int = 4000):
+    def __init__(
+        self,
+        catalog_manager: ProviderCatalogManager,
+        vault,
+        port: int = 4000,
+        *,
+        config_file: Path | None = None,
+    ):
         self._catalog_manager = catalog_manager
         self._vault = vault
         self._port = port
+        self._config_file = config_file
         self._key_registry: dict[str, str] = {}  # api_key -> session_id
         self._routing_registry: dict[str, dict] = {}  # session_id -> {virtual_key, base_url}
         self._server_task: asyncio.Task | None = None
@@ -188,6 +197,18 @@ class LiteLLMProxyManager:
 
     # ── Internal ───────────────────────────────────────────────────────────
 
+    def _disable_openai_responses_ct_api(self) -> bool:
+        """Read the feature flag from disk on every call.
+
+        Reading on every _launch_server invocation means an operator can flip
+        the flag in config.json and trigger a rebuild via
+        POST /api/provider-catalog/restart without restarting the process.
+        """
+        if self._config_file is None:
+            return True  # default-on; matches FeaturesConfig default
+        from .config_manager import load_config
+        return load_config(self._config_file).features.disable_openai_responses_count_tokens_api
+
     async def _build_model_list(self) -> list[dict]:
         """Resolve catalog entries + secrets into LiteLLM model_list format."""
         entries = await self._catalog_manager.list_entries()
@@ -234,6 +255,36 @@ class LiteLLMProxyManager:
             from litellm.proxy.anthropic_endpoints import endpoints as _anthropic_ep
             _ps.app.include_router(_anthropic_ep.router)
             _ps.app.state._anthropic_endpoints_registered = True
+
+        # Issue #1473: short-circuit the OpenAI Responses API token-count path.
+        # OpenAITokenCounter.should_use_token_counting_api returning True causes
+        # LiteLLM to POST Anthropic-shaped tools/messages to
+        # api.openai.com/v1/responses/input_tokens, which rejects them with 400.
+        # Patching to return False lets LiteLLM fall back to local tiktoken.
+        disable_flag = self._disable_openai_responses_ct_api()
+        from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
+
+        if disable_flag and not getattr(_ps.app.state, "_openai_count_tokens_disabled", False):
+            _ps.app.state._openai_count_tokens_original = (
+                OpenAITokenCounter.should_use_token_counting_api
+            )
+            OpenAITokenCounter.should_use_token_counting_api = (
+                lambda self, custom_llm_provider=None: False
+            )
+            _ps.app.state._openai_count_tokens_disabled = True
+            legion_logger.info(
+                "Disabled OpenAITokenCounter Responses API path; using local tiktoken "
+                "fallback (issue #1473). Toggle via "
+                "features.disable_openai_responses_count_tokens_api in config + rebuild."
+            )
+        elif not disable_flag and getattr(_ps.app.state, "_openai_count_tokens_disabled", False):
+            OpenAITokenCounter.should_use_token_counting_api = (
+                _ps.app.state._openai_count_tokens_original
+            )
+            _ps.app.state._openai_count_tokens_disabled = False
+            legion_logger.info(
+                "Restored stock OpenAITokenCounter Responses API path (issue #1473)."
+            )
 
         import uvicorn
 
