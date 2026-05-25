@@ -287,8 +287,16 @@ export const useMessageStore = defineStore('message', () => {
     if (dedupKey) {
       const existingIndex = messages.findIndex(m => (m.message_id || m.id) === dedupKey)
       if (existingIndex !== -1) {
-        // Issue #1486: streaming placeholder → merge terminal message in-place to finalise content
+        // Issue #1486: streaming placeholder → merge terminal message in-place to finalise content.
+        // Guard: only finalise when message_stop has fired (buf.streamingDone = true) or there is
+        // no active buffer.  The Anthropic API with extended thinking emits an intermediate
+        // AssistantMessage mid-stream (before message_stop) that carries the same message_id but
+        // incomplete content — skip that one so the buffer stays alive for the text deltas.
         if (messages[existingIndex].streaming) {
+          const buf = _deltaBuffers.get(sessionId)
+          if (buf && !buf.streamingDone) {
+            return  // Intermediate partial message — streaming still in progress, skip
+          }
           messages[existingIndex] = { ...messages[existingIndex], ...message, streaming: false }
           _deltaBuffers.delete(sessionId)
           messagesBySession.value = new Map(messagesBySession.value)
@@ -1164,6 +1172,10 @@ export const useMessageStore = defineStore('message', () => {
         if (buf) {
           if (buf.rafHandle) { cancelAnimationFrame(buf.rafHandle); buf.rafHandle = null }
           _flushDeltaBuffer(sessionId)
+          // Signal that streaming is complete so the next addMessage() dedup can finalise the
+          // placeholder.  Without this flag, an intermediate AssistantMessage (emitted mid-stream
+          // by the SDK for extended-thinking responses) would prematurely kill the placeholder.
+          buf.streamingDone = true
         }
         // Leave streaming: true — terminal AssistantMessage dedupes and clears it
         break
