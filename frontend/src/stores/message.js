@@ -271,6 +271,15 @@ export const useMessageStore = defineStore('message', () => {
       messagesBySession.value.set(sessionId, [])
     }
 
+    // Issue #1486: drop internal SDK status/requesting messages — they are not displayable
+    if (message.type === 'system') {
+      const subtype = message.subtype || message.metadata?.subtype
+      const status = message.metadata?.init_data?.status
+      if (subtype === 'status' && status === 'requesting') {
+        return
+      }
+    }
+
     const messages = messagesBySession.value.get(sessionId)
 
     // Issue #1000: Deduplicate by message_id (stable UUID from backend) or id
@@ -286,6 +295,26 @@ export const useMessageStore = defineStore('message', () => {
         } else {
           console.log(`Skipping duplicate message ${dedupKey} (already exists at index ${existingIndex})`)
         }
+        return
+      }
+    }
+
+    // Issue #1486: fallback dedup — when terminal assistant arrives without a dedupKey
+    // (backend didn't propagate message_id), replace the last streaming placeholder so the
+    // streamed content is not duplicated by the final assembled message.
+    if (!dedupKey && message.type === 'assistant' && !message.streaming) {
+      const streamingIdx = messages.findLastIndex(m => m.streaming && m.type === 'assistant')
+      if (streamingIdx !== -1) {
+        const existing = messages[streamingIdx]
+        messages[streamingIdx] = {
+          ...existing,
+          ...message,
+          content: message.content || existing.content,
+          thinking: message.thinking || existing.thinking,
+          streaming: false,
+        }
+        _deltaBuffers.delete(sessionId)
+        messagesBySession.value = new Map(messagesBySession.value)
         return
       }
     }
@@ -1205,6 +1234,10 @@ export const useMessageStore = defineStore('message', () => {
       if (msg.type === 'system') {
         const subtype = msg.subtype || msg.metadata?.subtype
         if (subtype === 'init' && !msg.content) {
+          return
+        }
+        // Issue #1486: internal SDK state transitions are not displayable
+        if (subtype === 'status' && msg.metadata?.init_data?.status === 'requesting') {
           return
         }
       }
