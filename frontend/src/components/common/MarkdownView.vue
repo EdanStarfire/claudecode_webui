@@ -16,7 +16,7 @@
 </template>
 
 <script setup>
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, provide } from 'vue'
 import { Comark } from '@comark/vue'
 import { useMarkdownPlugins, useMarkdownComponents } from '@/composables/useMarkdown'
 import { preprocessLeadingThematicBreak, preprocessPortColons } from './markdownPreprocess'
@@ -30,6 +30,9 @@ const props = defineProps({
 })
 
 const safeContent = computed(() => preprocessPortColons(preprocessLeadingThematicBreak(props.content)))
+
+// Issue #1486: expose streaming state to nested components (e.g. MermaidWrapper) via provide/inject
+provide('comark-streaming', computed(() => props.streaming))
 
 const wrapEl = ref(null)
 const plugins = useMarkdownPlugins()
