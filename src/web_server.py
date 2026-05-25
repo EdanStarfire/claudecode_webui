@@ -207,6 +207,7 @@ class ClaudeWebUI:
             self.provider_catalog_manager,
             self.coordinator.credential_vault,
             port=_litellm_port,
+            config_file=self.config_file,
         )
         self.coordinator.litellm_proxy_manager = self.litellm_proxy_manager
 
