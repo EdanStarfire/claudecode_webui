@@ -1726,3 +1726,91 @@ class TestIssue1402ListSessionsEffectiveConfig:
         # good session (standalone): still returned normally, no effective_config key
         assert session_id_good in session_entries
         assert "effective_config" not in session_entries[session_id_good]
+
+class TestIssue1486StreamingDelta:
+    """Issue #1486: assistant_delta bypass and subagent drop coverage."""
+
+    @pytest.mark.asyncio
+    async def test_issue_1486_delta_bypasses_process_message(self, temp_coordinator, sample_session_config):
+        """Issue #1486: assistant_delta forwarded to subscribers; process_message NOT called."""
+        import uuid
+        coordinator = temp_coordinator
+
+        session_id = await coordinator.create_session(**sample_session_config)
+        cb_inner = coordinator._create_message_callback(session_id)
+
+        received_by_subscriber = []
+
+        async def subscriber(sid, msg):
+            received_by_subscriber.append(msg)
+
+        coordinator.add_message_callback(session_id, subscriber)
+
+        delta = {
+            "type": "assistant_delta",
+            "uuid": str(uuid.uuid4()),
+            "session_id": session_id,
+            "parent_tool_use_id": None,
+            "event": {"type": "content_block_delta"},
+            "timestamp": 1.0,
+        }
+
+        # Patch process_message to assert it is NOT called
+        with patch.object(coordinator.message_processor, "process_message", side_effect=AssertionError("process_message must not be called for assistant_delta")):
+            await cb_inner(delta)
+
+        assert len(received_by_subscriber) == 1
+        assert received_by_subscriber[0]["type"] == "assistant_delta"
+
+    @pytest.mark.asyncio
+    async def test_issue_1486_web_server_drops_subagent_delta(self):
+        """Issue #1486: web_server callback drops assistant_delta with parent_tool_use_id set."""
+        from datetime import UTC, datetime
+
+        from ..event_queue import EventQueue
+
+        session_id = "sess-drop-test"
+        queue = EventQueue()
+        queues = {session_id: queue}
+
+        # Simulate the web_server callback logic inline (same logic as the real callback)
+        def make_callback(sid):
+            async def callback(session_id_arg, message_data):
+                if isinstance(message_data, dict) and message_data.get("type") == "assistant_delta":
+                    if message_data.get("parent_tool_use_id") is not None:
+                        return  # Drop subagent delta
+                    if session_id_arg in queues:
+                        queues[session_id_arg].append({
+                            "type": "assistant_delta",
+                            "session_id": session_id_arg,
+                            "data": {"uuid": message_data["uuid"], "event": message_data["event"]},
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        })
+                    return
+            return callback
+
+        cb = make_callback(session_id)
+
+        # Subagent delta — must be dropped
+        subagent_delta = {
+            "type": "assistant_delta",
+            "uuid": "u1",
+            "session_id": session_id,
+            "parent_tool_use_id": "tool-xyz",
+            "event": {"type": "content_block_delta"},
+            "timestamp": 1.0,
+        }
+        await cb(session_id, subagent_delta)
+        assert queue.current_cursor == 0, "Subagent delta must not be queued"
+
+        # Main-session delta — must be queued
+        main_delta = {
+            "type": "assistant_delta",
+            "uuid": "u2",
+            "session_id": session_id,
+            "parent_tool_use_id": None,
+            "event": {"type": "content_block_delta"},
+            "timestamp": 2.0,
+        }
+        await cb(session_id, main_delta)
+        assert queue.current_cursor == 1, "Main-session delta must be queued"

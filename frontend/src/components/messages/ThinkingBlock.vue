@@ -15,7 +15,7 @@
     </div>
 
     <div v-if="isExpanded" class="thinking-content mt-2 p-3 rounded">
-      <MarkdownView class="thinking-text" ref="thinkingRef" :content="thinkingContent" />
+      <MarkdownView class="thinking-text" ref="thinkingRef" :content="thinkingContent" :streaming="streaming" :caret="streaming" />
     </div>
   </div>
 </template>
@@ -30,6 +30,10 @@ const props = defineProps({
   thinking: {
     type: String,
     required: true
+  },
+  streaming: {   // Issue #1486 — forwarded from AssistantMessage when message is mid-stream
+    type: Boolean,
+    default: false
   }
 })
 

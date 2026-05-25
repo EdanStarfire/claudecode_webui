@@ -57,6 +57,10 @@ export const useMessageStore = defineStore('message', () => {
   // Map<tool_use_id, { subtype, description, last_tool_name, status, summary, timestamp }>
   const taskActivityByToolUseId = ref(new Map())
 
+  // Issue #1486: Per-session streaming delta buffers (in-memory only, never persisted)
+  // Map<sessionId, { uuid, pendingText, pendingThinking, blockTypeByIndex, rafHandle }>
+  const _deltaBuffers = new Map()
+
   // ========== COMPUTED ==========
 
   // Current session's messages
@@ -239,6 +243,8 @@ export const useMessageStore = defineStore('message', () => {
           : new Date(message.timestamp).getTime() / 1000
         launchTimestampBySession.value.set(sessionId, ts)
       }
+      // Issue #1486: cancel any in-flight streaming placeholder
+      _stopStreamingPlaceholder(sessionId)
     }
 
     // Detect interrupt during real-time
@@ -247,6 +253,8 @@ export const useMessageStore = defineStore('message', () => {
         markToolUseOrphaned(sessionId, id, 'Session was interrupted')
       })
       openTools.clear()
+      // Issue #1486: flush pending deltas and stop streaming caret
+      _stopStreamingPlaceholder(sessionId)
     }
 
     activeToolUses.value.set(sessionId, openTools)
@@ -270,8 +278,15 @@ export const useMessageStore = defineStore('message', () => {
     if (dedupKey) {
       const existingIndex = messages.findIndex(m => (m.message_id || m.id) === dedupKey)
       if (existingIndex !== -1) {
-        console.log(`Skipping duplicate message ${dedupKey} (already exists at index ${existingIndex})`)
-        return // Skip duplicate message
+        // Issue #1486: streaming placeholder → merge terminal message in-place to finalise content
+        if (messages[existingIndex].streaming) {
+          messages[existingIndex] = { ...messages[existingIndex], ...message, streaming: false }
+          _deltaBuffers.delete(sessionId)
+          messagesBySession.value = new Map(messagesBySession.value)
+        } else {
+          console.log(`Skipping duplicate message ${dedupKey} (already exists at index ${existingIndex})`)
+        }
+        return
       }
     }
 
@@ -846,6 +861,7 @@ export const useMessageStore = defineStore('message', () => {
    * Clear messages for a session (for reset)
    */
   function clearMessages(sessionId) {
+    _deltaBuffers.delete(sessionId)  // Issue #1486: discard any in-flight streaming buffer
     messagesBySession.value.delete(sessionId)
     toolCallsBySession.value.delete(sessionId)
     toolSignatureToId.value.delete(sessionId)
@@ -1010,6 +1026,119 @@ export const useMessageStore = defineStore('message', () => {
     }
   }
 
+  // ========== STREAMING (Issue #1486) ==========
+
+  function _createStreamingPlaceholder(sessionId, uuid) {
+    if (!messagesBySession.value.has(sessionId)) {
+      messagesBySession.value.set(sessionId, [])
+    }
+    const messages = messagesBySession.value.get(sessionId)
+    if (messages.find(m => m.message_id === uuid)) return  // guard: no duplicate placeholder
+
+    messages.push({
+      id: uuid,
+      message_id: uuid,
+      type: 'assistant',
+      content: '',
+      thinking: '',
+      streaming: true,
+      timestamp: Date.now() / 1000,  // Unix seconds, same convention as backend messages
+    })
+
+    _deltaBuffers.set(sessionId, {
+      uuid,
+      pendingText: '',
+      pendingThinking: '',
+      blockTypeByIndex: {},
+      rafHandle: null,
+    })
+
+    messagesBySession.value = new Map(messagesBySession.value)
+  }
+
+  function _flushDeltaBuffer(sessionId) {
+    const buf = _deltaBuffers.get(sessionId)
+    if (!buf) return
+
+    const messages = messagesBySession.value.get(sessionId)
+    if (!messages) return
+
+    const idx = messages.findIndex(m => m.message_id === buf.uuid)
+    if (idx < 0) { buf.rafHandle = null; return }
+    if (buf.pendingText === '' && buf.pendingThinking === '') { buf.rafHandle = null; return }
+
+    messages[idx] = {
+      ...messages[idx],
+      content: messages[idx].content + buf.pendingText,
+      thinking: messages[idx].thinking + buf.pendingThinking,
+    }
+    buf.pendingText = ''
+    buf.pendingThinking = ''
+    buf.rafHandle = null
+
+    messagesBySession.value = new Map(messagesBySession.value)
+  }
+
+  function _stopStreamingPlaceholder(sessionId) {
+    const buf = _deltaBuffers.get(sessionId)
+    if (!buf) return
+    if (buf.rafHandle) { cancelAnimationFrame(buf.rafHandle); buf.rafHandle = null }
+    _flushDeltaBuffer(sessionId)
+    // Clear streaming flag so the caret disappears
+    const messages = messagesBySession.value.get(sessionId)
+    if (messages) {
+      const idx = messages.findIndex(m => m.message_id === buf.uuid)
+      if (idx >= 0) {
+        messages[idx] = { ...messages[idx], streaming: false }
+        messagesBySession.value = new Map(messagesBySession.value)
+      }
+    }
+    _deltaBuffers.delete(sessionId)
+  }
+
+  function handleAssistantDelta(sessionId, data) {
+    // data = { uuid, event } where event is the raw Anthropic streaming event dict
+    const eventType = data?.event?.type
+    if (!eventType) return
+
+    switch (eventType) {
+      case 'message_start':
+        _createStreamingPlaceholder(sessionId, data.uuid)
+        break
+
+      case 'content_block_start': {
+        const buf = _deltaBuffers.get(sessionId)
+        if (buf) buf.blockTypeByIndex[data.event.index] = data.event.content_block?.type
+        break
+      }
+
+      case 'content_block_delta': {
+        const buf = _deltaBuffers.get(sessionId)
+        if (!buf) break
+        const deltaType = data.event.delta?.type
+        if (deltaType === 'text_delta') {
+          buf.pendingText += data.event.delta.text || ''
+          if (!buf.rafHandle) buf.rafHandle = requestAnimationFrame(() => _flushDeltaBuffer(sessionId))
+        } else if (deltaType === 'thinking_delta') {
+          buf.pendingThinking += data.event.delta.thinking || ''
+          if (!buf.rafHandle) buf.rafHandle = requestAnimationFrame(() => _flushDeltaBuffer(sessionId))
+        }
+        // input_json_delta: out of scope per §2, ignore
+        break
+      }
+
+      case 'message_stop': {
+        const buf = _deltaBuffers.get(sessionId)
+        if (buf) {
+          if (buf.rafHandle) { cancelAnimationFrame(buf.rafHandle); buf.rafHandle = null }
+          _flushDeltaBuffer(sessionId)
+        }
+        // Leave streaming: true — terminal AssistantMessage dedupes and clears it
+        break
+      }
+    }
+  }
+
   // ========== SESSION STATE WATCHER ==========
   // Watch for session state changes to detect post-load terminations
   const sessionStore = useSessionStore()
@@ -1032,6 +1161,8 @@ export const useMessageStore = defineStore('message', () => {
 
         if (wasActive && isInactive) {
           clearOrphanedToolUses(newState.id, 'Session was terminated')
+          // Issue #1486: stop any in-flight streaming placeholder so the caret doesn't linger
+          _stopStreamingPlaceholder(newState.id)
         }
       })
     },
@@ -1113,6 +1244,8 @@ export const useMessageStore = defineStore('message', () => {
     handlePermissionResponse,
     toggleToolExpansion,
     clearMessages,
+    // Issue #1486: streaming delta handler
+    handleAssistantDelta,
 
     // Orphaned tool tracking
     markToolUseOrphaned,

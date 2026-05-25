@@ -1,7 +1,13 @@
 <template>
   <Suspense>
     <div ref="wrapEl" v-bind="$attrs">
-      <Comark :markdown="safeContent" :plugins="plugins" :components="components" />
+      <Comark
+        :markdown="safeContent"
+        :plugins="plugins"
+        :components="components"
+        :streaming="streaming"
+        :caret="caret"
+      />
     </div>
     <template #fallback>
       <div v-bind="$attrs" class="markdown-loading" />
@@ -19,6 +25,8 @@ defineOptions({ inheritAttrs: false })
 
 const props = defineProps({
   content: { type: String, default: '' },
+  streaming: { type: Boolean, default: false },         // Issue #1486 — forwards to comark
+  caret: { type: [Boolean, Object], default: false },   // Issue #1486 — forwards to comark
 })
 
 const safeContent = computed(() => preprocessPortColons(preprocessLeadingThematicBreak(props.content)))

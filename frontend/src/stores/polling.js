@@ -563,6 +563,11 @@ export const usePollingStore = defineStore('polling', () => {
         break
       }
 
+      // Issue #1486: streaming text delta — forward to message store for RAF-batched mutation
+      case 'assistant_delta':
+        messageStore.handleAssistantDelta(sessionId, payload.data)
+        break
+
       default:
         console.warn('Unknown session poll message type:', payload.type)
     }

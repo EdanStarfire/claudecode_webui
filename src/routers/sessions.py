@@ -300,6 +300,8 @@ def build_router(webui) -> APIRouter:
             updates["strict_mcp_config"] = request.strict_mcp_config
         if request.bare_mode is not None:
             updates["bare_mode"] = request.bare_mode
+        if request.enable_streaming_text is not None:
+            updates["enable_streaming_text"] = request.enable_streaming_text
 
         if request.working_directory is not None:
             updates["working_directory"] = request.working_directory.strip() or None

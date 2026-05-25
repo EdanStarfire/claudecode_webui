@@ -344,6 +344,7 @@ class TemplateManager:
         setting_sources: list[str] | None = None,
         bare_mode: bool | None = None,
         env_scrub_enabled: bool | None = None,
+        enable_streaming_text: bool | None = None,  # Issue #1486
         # Non-secret direct env passthrough (issue #1396)
         extra_env: dict[str, str] | None = None,
         provider_catalog_id: str | None = None,
@@ -418,6 +419,7 @@ class TemplateManager:
             "setting_sources": setting_sources,
             "bare_mode": bare_mode,
             "env_scrub_enabled": env_scrub_enabled,
+            "enable_streaming_text": enable_streaming_text,
             "extra_env": extra_env,
             "provider_catalog_id": provider_catalog_id,
             "provider_model_id": provider_model_id,

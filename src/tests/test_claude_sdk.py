@@ -263,6 +263,66 @@ class TestClaudeSDK:
         assert converted["type"] == "result"
         assert "deferred_tool_use" not in converted
 
+    # --- Issue #1486: StreamEvent / assistant_delta tests ---
+
+    def test_issue_1486_convert_sdk_message_stream_event(self, sdk_instance):
+        """Issue #1486: StreamEvent converts to assistant_delta envelope, never stored."""
+        from claude_agent_sdk import StreamEvent
+
+        event = StreamEvent(
+            uuid="msg-uuid-1",
+            session_id=sdk_instance.session_id,
+            event={"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}},
+            parent_tool_use_id=None,
+        )
+        converted = sdk_instance._convert_sdk_message(event)
+
+        assert converted["type"] == "assistant_delta"
+        assert converted["uuid"] == "msg-uuid-1"
+        assert converted["session_id"] == sdk_instance.session_id
+        assert converted["parent_tool_use_id"] is None
+        assert converted["event"]["type"] == "content_block_delta"
+        assert "timestamp" in converted
+
+    def test_issue_1486_convert_sdk_message_stream_event_subagent(self, sdk_instance):
+        """Issue #1486: StreamEvent with parent_tool_use_id is still converted (drop happens in web_server)."""
+        from claude_agent_sdk import StreamEvent
+
+        event = StreamEvent(
+            uuid="msg-uuid-2",
+            session_id=sdk_instance.session_id,
+            event={"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "sub"}},
+            parent_tool_use_id="tool-use-abc",
+        )
+        converted = sdk_instance._convert_sdk_message(event)
+
+        assert converted["type"] == "assistant_delta"
+        assert converted["parent_tool_use_id"] == "tool-use-abc"
+
+    @pytest.mark.asyncio
+    async def test_issue_1486_process_sdk_message_delta_bypasses_storage(self, sdk_instance):
+        """Issue #1486: assistant_delta messages are forwarded to callback and NOT stored."""
+        received = []
+
+        async def mock_callback(msg):
+            received.append(msg)
+
+        sdk_instance.message_callback = mock_callback
+        delta_msg = {
+            "type": "assistant_delta",
+            "uuid": "msg-uuid-x",
+            "session_id": sdk_instance.session_id,
+            "parent_tool_use_id": None,
+            "event": {"type": "content_block_delta"},
+            "timestamp": 1.0,
+        }
+        await sdk_instance._process_sdk_message(delta_msg)
+
+        assert len(received) == 1
+        assert received[0]["type"] == "assistant_delta"
+        # storage_manager is None on a bare ClaudeSDK instance — confirms no storage was attempted
+        assert sdk_instance.storage_manager is None
+
     # --- Issue #1503: _check_consumer_alive watchdog tests ---
 
     @pytest.mark.asyncio

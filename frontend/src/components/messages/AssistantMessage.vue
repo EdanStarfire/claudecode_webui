@@ -9,12 +9,12 @@
     <div class="msg-bubble msg-bubble-assistant" :class="{ 'has-permission-prompt': hasActivePermission, 'tts-playing': isTTSPlaying }">
       <!-- Thinking Block (collapsible) -->
       <div v-if="hasThinking" class="thinking-block mb-2">
-        <ThinkingBlock :thinking="thinkingContent" />
+        <ThinkingBlock :thinking="thinkingContent" :streaming="!!message.streaming" />
       </div>
 
       <!-- Content -->
-      <div v-if="hasContent" class="msg-content-row">
-        <MarkdownView class="msg-text" ref="contentRef" :content="rawContent" />
+      <div v-if="hasContent || message.streaming" class="msg-content-row">
+        <MarkdownView class="msg-text" ref="contentRef" :content="rawContent" :streaming="!!message.streaming" :caret="!!message.streaming" />
         <button
           v-if="tts"
           class="tts-play-icon"
@@ -138,11 +138,14 @@ const currentSessionId = computed(() => sessionStore.currentSessionId)
 useResourceImages(contentRef, currentSessionId)
 
 const hasThinking = computed(() => {
-  return props.message.metadata?.has_thinking &&
-         props.message.metadata?.thinking_content
+  // Issue #1486: streaming placeholder carries thinking in message.thinking
+  if (props.message.streaming && props.message.thinking) return true
+  return props.message.metadata?.has_thinking && props.message.metadata?.thinking_content
 })
 
 const thinkingContent = computed(() => {
+  // Issue #1486: streaming placeholder uses message.thinking; terminal uses metadata
+  if (props.message.streaming) return props.message.thinking || ''
   return props.message.metadata?.thinking_content || ''
 })
 

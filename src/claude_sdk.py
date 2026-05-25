@@ -32,6 +32,7 @@ try:
         PermissionResultDeny,
         RateLimitEvent,
         ResultMessage,
+        StreamEvent,
         SystemMessage,
         TaskNotificationMessage,
         TaskProgressMessage,
@@ -53,6 +54,7 @@ except ImportError:
     SystemMessage = None
     ResultMessage = None
     RateLimitEvent = None
+    StreamEvent = None
     TaskStartedMessage = None
     TaskProgressMessage = None
     TaskNotificationMessage = None
@@ -237,6 +239,7 @@ class ClaudeSDK:
         self.auto_memory_mode = config.auto_memory_mode
         self.auto_memory_directory = config.auto_memory_directory
         self.enable_claudeai_mcp_servers = config.enable_claudeai_mcp_servers
+        self.enable_streaming_text = config.enable_streaming_text
         self.strict_mcp_config = config.strict_mcp_config
         self.bare_mode = config.bare_mode if config else False
         self.env_scrub_enabled = config.env_scrub_enabled if config else False
@@ -1009,6 +1012,13 @@ class ClaudeSDK:
         # stream as HookEventMessage objects. Without this flag, hook events are silently dropped.
         options_kwargs["include_hook_events"] = True
 
+        # Issue #1486: opt into SDK streaming when both per-session AND global flags allow
+        if self.enable_streaming_text:
+            from .config_manager import load_config as _load_app_config
+            _app_cfg = _load_app_config()
+            if _app_cfg.features.streaming_text_enabled:
+                options_kwargs["include_partial_messages"] = True
+
         options_kwargs["env"] = self._resolve_env_vars()
 
         # Add stderr handler to capture SDK CLI errors (issue #517)
@@ -1143,6 +1153,12 @@ class ClaudeSDK:
 
             converted_message = self._convert_sdk_message(sdk_message)
             self.info.last_activity = time.time()
+
+            # Issue #1486: assistant_delta is ephemeral — bypass storage, deliver directly
+            if converted_message.get("type") == "assistant_delta":
+                if self.message_callback:
+                    await self._safe_callback(self.message_callback, converted_message)
+                return
 
             # Debug log raw SDK response structure
             sdk_logger.debug(f"Raw SDK response: {sdk_message=}")
@@ -1371,6 +1387,17 @@ class ClaudeSDK:
     def _convert_sdk_message(self, sdk_message: Any) -> dict[str, Any]:
         """Convert SDK message to a serializable format while preserving type information."""
         try:
+            # Issue #1486: StreamEvent — partial message delta, never persisted
+            if StreamEvent is not None and isinstance(sdk_message, StreamEvent):
+                return {
+                    "type": "assistant_delta",
+                    "uuid": sdk_message.uuid,
+                    "session_id": sdk_message.session_id,
+                    "parent_tool_use_id": sdk_message.parent_tool_use_id,
+                    "event": sdk_message.event,
+                    "timestamp": time.time(),
+                }
+
             # Handle dict-like objects (for backward compatibility)
             if isinstance(sdk_message, dict):
                 message_dict = {

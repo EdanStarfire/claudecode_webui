@@ -637,6 +637,27 @@ class ClaudeWebUI:
         async def callback(session_id: str, message_data: Any):
             logger.info(f"Message callback triggered for session {session_id}, message type: {getattr(message_data, 'type', 'unknown')}")
             try:
+                # Issue #1486: assistant_delta — lightweight envelope, no MessageProcessor
+                if isinstance(message_data, dict) and message_data.get("type") == "assistant_delta":
+                    if message_data.get("parent_tool_use_id") is not None:
+                        # Out of scope for v1: subagent streaming deltas are dropped
+                        logger.debug(
+                            f"Dropped subagent assistant_delta for session {session_id} "
+                            f"(parent_tool_use_id={message_data['parent_tool_use_id']})"
+                        )
+                        return
+                    if session_id in self.session_queues:
+                        self.session_queues[session_id].append({
+                            "type": "assistant_delta",
+                            "session_id": session_id,
+                            "data": {
+                                "uuid": message_data["uuid"],
+                                "event": message_data["event"],
+                            },
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        })
+                    return
+
                 # Process message and prepare for poll queue using MessageProcessor
                 if hasattr(message_data, '__dict__'):
                     # Handle ParsedMessage objects (from MessageProcessor)
