@@ -243,7 +243,10 @@ const hasActivePermission = computed(() => {
 })
 
 const hasAnythingToShow = computed(() => {
-  return hasContent.value ||
+  // Issue #1486: always show the streaming placeholder so the caret is visible from the first
+  // token — without this guard a thinking-first response is invisible until text arrives.
+  return !!props.message.streaming ||
+    hasContent.value ||
     hasThinking.value ||
     mainTimelineTools.value.length > 0 ||
     taskToolCalls.value.length > 0 ||
