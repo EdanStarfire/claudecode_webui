@@ -988,17 +988,24 @@ class ClaudeSDK:
             options_kwargs["sandbox"] = sandbox_settings
             sdk_logger.info(f"Sandbox enabled for session {self.session_id}: {sandbox_settings}")
 
-        # Issue #540: Thinking configuration
+        # Issue #540 / #1486: Thinking configuration.
+        # Opus 4.7+ defaults to display="omitted" (signature-only, empty thinking text).
+        # Always request display="summarized" so thinking content is visible in the UI.
         if self.thinking_mode:
             if self.thinking_mode == "adaptive":
-                options_kwargs["thinking"] = {"type": "adaptive"}
+                options_kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
             elif self.thinking_mode == "enabled":
                 options_kwargs["thinking"] = {
                     "type": "enabled",
                     "budget_tokens": self.thinking_budget_tokens or 10240,
+                    "display": "summarized",
                 }
             elif self.thinking_mode == "disabled":
                 options_kwargs["thinking"] = {"type": "disabled"}
+        else:
+            # Opus 4.7+ thinks implicitly (adaptive) and returns signature-only by default.
+            # Request "summarized" display so the thinking text reaches the frontend.
+            options_kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
 
         # Issue #540: Effort configuration
         if self.effort:
