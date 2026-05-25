@@ -1156,6 +1156,19 @@ class ClaudeSDK:
 
             # Issue #1486: assistant_delta is ephemeral — bypass storage, deliver directly
             if converted_message.get("type") == "assistant_delta":
+                ev = converted_message.get("event", {})
+                ev_type = ev.get("type", "?")
+                if ev_type == "content_block_delta":
+                    delta = ev.get("delta", {})
+                    dt = delta.get("type", "?")
+                    # Log thinking/text deltas concisely; omit signature_delta noise
+                    if dt in ("thinking_delta", "text_delta"):
+                        preview = (delta.get("thinking") or delta.get("text") or "")[:40]
+                        sdk_logger.debug(f"[delta] {dt} idx={ev.get('index')} len={len(delta.get('thinking') or delta.get('text') or '')} preview={preview!r}")
+                    elif dt != "signature_delta":
+                        sdk_logger.debug(f"[delta] {dt} idx={ev.get('index')}")
+                else:
+                    sdk_logger.debug(f"[delta] event={ev_type}")
                 if self.message_callback:
                     await self._safe_callback(self.message_callback, converted_message)
                 return
