@@ -138,15 +138,17 @@ const currentSessionId = computed(() => sessionStore.currentSessionId)
 useResourceImages(contentRef, currentSessionId)
 
 const hasThinking = computed(() => {
-  // Issue #1486: streaming placeholder carries thinking in message.thinking
-  if (props.message.streaming && props.message.thinking) return true
+  // Issue #1486: message.thinking is built up by thinking_delta events during streaming.
+  // After the fallback-dedup merge the field persists on the message object even though
+  // streaming=false, so check it unconditionally before falling back to metadata.
+  if (props.message.thinking) return true
   return props.message.metadata?.has_thinking && props.message.metadata?.thinking_content
 })
 
 const thinkingContent = computed(() => {
-  // Issue #1486: streaming placeholder uses message.thinking; terminal uses metadata
-  if (props.message.streaming) return props.message.thinking || ''
-  return props.message.metadata?.thinking_content || ''
+  // Prefer the direct thinking field (populated by streaming deltas or persisted after merge)
+  // over metadata.thinking_content, which is empty for the SDK's text-only terminal message.
+  return props.message.thinking || props.message.metadata?.thinking_content || ''
 })
 
 const hasToolUses = computed(() => {
