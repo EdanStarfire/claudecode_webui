@@ -6,6 +6,29 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-25
+
+### Added
+- **Collapsible right sidebar panels** — replaced tab bar with stacked expandable sections (#1540)
+- **Schedules** — session-scoped panel, disposable repeat-count scheduling, and inline `__new__` creation flow (#1539, #1541, #1562)
+- **Agent-registered persistent links** — agents can pin links to their session panel (#1543)
+- **Video resource support** — `.webm`/`.mp4` files displayable in resource gallery (#1555)
+- **MCP reconnect button** — always visible in server detail, not just on error (#1554)
+- **Unread session state** — orange indicator for completed-but-unviewed sessions (#1517)
+- **Secrets section redesign** — matches settings layout (#1561)
+
+### Fixed
+- **Edits panel** — repaired data display (backend block detection), removed `/dev/null` false positives, fixed "just now" timestamps, and resolved dark mode unreadable text with intrusive banner replaced by tooltip (#1564, #1566, #1568)
+- **Session navigation** — autoscroll race condition, instant switch-back via KeepAlive, scroll position persistence, and duplicate loadMessages on deep-link (#1518, #1521, #1525, #1528, #1529, #1557)
+- **Emoticon escaping** — letter-based emoticons no longer mangled in markdown (#1534)
+- **Agent ordering** — consistent sort in segmented session bar (#1535)
+
+### Changed
+- **Rebranding to ccWebUI** — new favicon, header logo, PWA manifest, and auth-exempt public assets (#1556, #1558, #1559, #1560)
+- **claude-agent-sdk → 0.2.85** (#1533)
+
+[1.1.0]: https://github.com/EdanStarfire/claudecode_webui/releases/tag/v1.1.0
+
 ## [1.0.0] - 2026-05-22
 
 ### Added
