@@ -671,9 +671,11 @@ class ClaudeWebUI:
                 # Issue #324: Emit tool_call messages for tool lifecycle events
                 await self._emit_tool_call_updates(session_id, parsed_message)
 
-                # Issue #1000: Propagate message_id from storage for frontend dedup
+                # Issue #1000/#1486: Propagate message_id for frontend streaming dedup
                 if isinstance(message_data, dict) and 'message_id' in message_data:
                     websocket_data['message_id'] = message_data['message_id']
+                elif isinstance((meta := getattr(message_data, 'metadata', None)), dict) and meta.get('message_id'):
+                    websocket_data['message_id'] = meta['message_id']
 
                 # Wrap in standard poll queue envelope
                 serialized = {

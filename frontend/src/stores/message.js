@@ -58,7 +58,7 @@ export const useMessageStore = defineStore('message', () => {
   const taskActivityByToolUseId = ref(new Map())
 
   // Issue #1486: Per-session streaming delta buffers (in-memory only, never persisted)
-  // Map<sessionId, { uuid, pendingText, pendingThinking, blockTypeByIndex, rafHandle }>
+  // Map<sessionId, { messageId, pendingText, pendingThinking, blockTypeByIndex, rafHandle }>
   const _deltaBuffers = new Map()
 
   // ========== COMPUTED ==========
@@ -1028,16 +1028,17 @@ export const useMessageStore = defineStore('message', () => {
 
   // ========== STREAMING (Issue #1486) ==========
 
-  function _createStreamingPlaceholder(sessionId, uuid) {
+  function _createStreamingPlaceholder(sessionId, messageId) {
+    if (!messageId) return
     if (!messagesBySession.value.has(sessionId)) {
       messagesBySession.value.set(sessionId, [])
     }
     const messages = messagesBySession.value.get(sessionId)
-    if (messages.find(m => m.message_id === uuid)) return  // guard: no duplicate placeholder
+    if (messages.find(m => m.message_id === messageId)) return  // guard: no duplicate placeholder
 
     messages.push({
-      id: uuid,
-      message_id: uuid,
+      id: messageId,
+      message_id: messageId,
       type: 'assistant',
       content: '',
       thinking: '',
@@ -1046,7 +1047,7 @@ export const useMessageStore = defineStore('message', () => {
     })
 
     _deltaBuffers.set(sessionId, {
-      uuid,
+      messageId,
       pendingText: '',
       pendingThinking: '',
       blockTypeByIndex: {},
@@ -1063,7 +1064,7 @@ export const useMessageStore = defineStore('message', () => {
     const messages = messagesBySession.value.get(sessionId)
     if (!messages) return
 
-    const idx = messages.findIndex(m => m.message_id === buf.uuid)
+    const idx = messages.findIndex(m => m.message_id === buf.messageId)
     if (idx < 0) { buf.rafHandle = null; return }
     if (buf.pendingText === '' && buf.pendingThinking === '') { buf.rafHandle = null; return }
 
@@ -1087,7 +1088,7 @@ export const useMessageStore = defineStore('message', () => {
     // Clear streaming flag so the caret disappears
     const messages = messagesBySession.value.get(sessionId)
     if (messages) {
-      const idx = messages.findIndex(m => m.message_id === buf.uuid)
+      const idx = messages.findIndex(m => m.message_id === buf.messageId)
       if (idx >= 0) {
         messages[idx] = { ...messages[idx], streaming: false }
         messagesBySession.value = new Map(messagesBySession.value)
@@ -1103,7 +1104,9 @@ export const useMessageStore = defineStore('message', () => {
 
     switch (eventType) {
       case 'message_start':
-        _createStreamingPlaceholder(sessionId, data.uuid)
+        // Use Anthropic message ID (stable across all streaming events for this message)
+        // data.uuid is a per-event CLI envelope UUID and must NOT be used as message identity
+        _createStreamingPlaceholder(sessionId, data.event?.message?.id)
         break
 
       case 'content_block_start': {
