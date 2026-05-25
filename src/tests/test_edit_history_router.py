@@ -94,6 +94,29 @@ class TestClassifyBash:
     def test_grep_is_not_modifying(self):
         assert _classify_bash("grep -r 'pattern' .") is False
 
+    def test_dev_null_redirect_is_not_modifying(self):
+        assert _classify_bash("cmd >/dev/null") is False
+        assert _classify_bash("cmd >> /dev/null") is False
+        assert _classify_bash("cmd 2>/dev/null") is False
+
+    def test_dev_null_with_suppression_pattern_is_not_modifying(self):
+        assert _classify_bash("npm test >/dev/null 2>&1") is False
+
+    def test_mixed_real_and_dev_null_is_modifying(self):
+        assert _classify_bash("cmd > real.txt 2>/dev/null") is True
+
+    def test_dev_null_with_trailing_punctuation(self):
+        assert _classify_bash("cmd > /dev/null; ls") is False
+
+    def test_combined_redirect_to_real_file(self):
+        assert _classify_bash("cmd &>>file.log") is True
+
+    def test_append_to_dev_null_is_not_modifying(self):
+        assert _classify_bash("cmd >> /dev/null") is False
+
+    def test_dev_null_in_subshell_is_not_modifying(self):
+        assert _classify_bash("(echo hello >/dev/null)") is False
+
 
 # ---------------------------------------------------------------------------
 # Endpoint tests
@@ -222,6 +245,21 @@ class TestGetEditHistory:
                 r = await client.get("/api/sessions/s1/edit-history")
         entries = r.json()["entries"]
         assert [e["tool_use_id"] for e in entries] == ["tu7", "tu8", "tu9"]
+
+    @pytest.mark.asyncio
+    async def test_issue_1565_dev_null_bash_is_not_modifying(self):
+        """A Bash command that redirects only to /dev/null returns likely_modifying=False."""
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "messages.jsonl"
+            block = _tool_use_block("tu_dnull", "Bash", {"command": "npm test >/dev/null 2>&1"})
+            _write_messages(path, [_assistant_msg([block])])
+            webui = _make_webui(str(path))
+            app = _make_app(webui)
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                r = await client.get("/api/sessions/s1/edit-history")
+        entries = r.json()["entries"]
+        assert len(entries) == 1
+        assert entries[0]["likely_modifying"] is False
 
     @pytest.mark.asyncio
     async def test_pending_result_when_no_tool_result(self):

@@ -132,7 +132,7 @@ import { useEditHistoryStore } from '@/stores/editHistory'
 import { useSessionStore } from '@/stores/session'
 import { useResourceStore } from '@/stores/resource'
 import { buildEditDiff } from '@/utils/diffRender'
-import { getRelativeTime, formatFullTimestamp, parseTimestamp } from '@/utils/time'
+import { getRelativeTime, formatFullTimestamp } from '@/utils/time'
 
 const editHistoryStore = useEditHistoryStore()
 const sessionStore = useSessionStore()
@@ -188,12 +188,12 @@ function entryLabel(entry) {
 
 function relativeTs(ts) {
   if (!ts) return ''
-  return getRelativeTime(parseTimestamp(ts))
+  return getRelativeTime(ts)
 }
 
 function fullTs(ts) {
   if (!ts) return ''
-  return formatFullTimestamp(parseTimestamp(ts))
+  return formatFullTimestamp(ts)
 }
 
 function statusIcon(succeeded) {

@@ -25,7 +25,7 @@ _MODIFYING_BASH_RE = re.compile(
     r"make\b|cmake\b|cargo\s+(?:build|add|remove)|"
     r"dd\s|mkfs\s"
     r")|"
-    r"(?:>|>>)\s*\S"  # output redirection
+    r"(?<!>)>{1,2}(?!>)\s*(?!/dev/null(?:[\s;&|)]|$))(?!&)\S"  # output redirection (excl. /dev/null, fd dup)
 )
 
 
