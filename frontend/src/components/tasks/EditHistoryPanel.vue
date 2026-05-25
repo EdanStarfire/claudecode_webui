@@ -2,7 +2,7 @@
   <div class="edit-history-panel">
     <!-- Header -->
     <div class="panel-header">
-      <span class="panel-title">Edit History</span>
+      <span class="panel-title" title="Bash file changes are listed by command only — no inline diff. See the Diff tab for aggregate git changes.">Edit History</span>
       <div class="header-actions">
         <label class="bash-toggle" :title="showNonModifyingBash ? 'Hiding non-modifying Bash' : 'Showing only likely-modifying Bash'">
           <input type="checkbox" v-model="editHistoryStore.showNonModifyingBash" />
@@ -12,12 +12,6 @@
           <span :class="{ spinning: isLoading }">↺</span>
         </button>
       </div>
-    </div>
-
-    <!-- Gap warning banner -->
-    <div class="gap-warning">
-      Bash file changes listed by command only — no inline diff.
-      See the <strong>Diff</strong> tab for aggregate git changes.
     </div>
 
     <!-- Loading state -->
@@ -247,13 +241,14 @@ watch(
   align-items: center;
   justify-content: space-between;
   padding: 8px 10px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--bs-border-color);
   flex-shrink: 0;
 }
 
 .panel-title {
   font-weight: 600;
-  color: #334155;
+  color: var(--bs-emphasis-color);
+  cursor: help;
 }
 
 .header-actions {
@@ -267,7 +262,7 @@ watch(
   align-items: center;
   gap: 4px;
   cursor: pointer;
-  color: #64748b;
+  color: var(--bs-secondary-color);
   font-size: 11px;
   user-select: none;
 }
@@ -276,13 +271,13 @@ watch(
   background: none;
   border: none;
   cursor: pointer;
-  color: #64748b;
+  color: var(--bs-secondary-color);
   font-size: 16px;
   padding: 0 2px;
   line-height: 1;
 }
 
-.refresh-btn:hover { color: #334155; }
+.refresh-btn:hover { color: var(--bs-body-color); }
 .refresh-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .spinning {
@@ -292,33 +287,25 @@ watch(
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.gap-warning {
-  background: #fef9c3;
-  border-bottom: 1px solid #fde68a;
-  padding: 5px 10px;
-  font-size: 11px;
-  color: #92400e;
-  flex-shrink: 0;
-}
-
 .state-placeholder,
 .state-error {
   padding: 24px 16px;
   text-align: center;
-  color: #94a3b8;
+  color: var(--bs-tertiary-color);
   font-size: 12px;
 }
 
-.state-error { color: #dc3545; }
+.state-error { color: var(--bs-danger-text-emphasis, #dc3545); }
 
 .retry-btn {
   display: block;
   margin: 8px auto 0;
   padding: 4px 12px;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
+  background: var(--bs-tertiary-bg);
+  border: 1px solid var(--bs-border-color);
   border-radius: 4px;
   cursor: pointer;
+  color: var(--bs-body-color);
   font-size: 11px;
 }
 
@@ -329,7 +316,7 @@ watch(
 }
 
 .entry-item {
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--bs-border-color);
 }
 
 .entry-row {
@@ -342,7 +329,7 @@ watch(
 }
 
 .entry-row:hover {
-  background: #f8fafc;
+  background: var(--bs-tertiary-bg);
 }
 
 .entry-icon {
@@ -355,7 +342,7 @@ watch(
   min-width: 0;
   font-family: 'Courier New', monospace;
   font-size: 11px;
-  color: #334155;
+  color: var(--bs-body-color);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -367,17 +354,17 @@ watch(
   font-family: 'Courier New', monospace;
 }
 
-.stat-removed { color: #dc3545; }
-.stat-added { color: #198754; }
+.stat-removed { color: var(--bs-danger-text-emphasis, #dc3545); }
+.stat-added { color: var(--bs-success-text-emphasis, #198754); }
 .stat-diff { display: flex; gap: 4px; }
 
 .write-lines {
-  color: #64748b;
+  color: var(--bs-secondary-color);
 }
 
 .entry-ts {
   flex-shrink: 0;
-  color: #94a3b8;
+  color: var(--bs-tertiary-color);
   font-size: 10px;
   white-space: nowrap;
 }
@@ -391,7 +378,7 @@ watch(
 
 .expand-arrow {
   flex-shrink: 0;
-  color: #94a3b8;
+  color: var(--bs-tertiary-color);
   font-size: 9px;
 }
 
@@ -440,16 +427,16 @@ watch(
 
 /* Write preview */
 .write-preview {
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--bs-border-color);
   border-radius: 4px;
   overflow: hidden;
 }
 
 .write-meta {
-  background: #f1f5f9;
+  background: var(--bs-tertiary-bg);
   padding: 4px 8px;
   font-size: 11px;
-  color: #64748b;
+  color: var(--bs-secondary-color);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -458,30 +445,30 @@ watch(
 
 .write-meta code {
   font-family: 'Courier New', monospace;
-  color: #0d6efd;
+  color: var(--bs-link-color);
   font-size: 10px;
 }
 
 .view-full-btn {
   margin-left: auto;
   padding: 2px 8px;
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
   border-radius: 4px;
   cursor: pointer;
   font-size: 10px;
-  color: #3b82f6;
+  color: var(--bs-link-color);
 }
 
-.view-full-btn:hover { background: #f0f9ff; }
+.view-full-btn:hover { background: var(--bs-tertiary-bg); }
 
 .write-content {
   margin: 0;
   padding: 6px 8px;
   font-family: 'Courier New', monospace;
   font-size: 10px;
-  color: #334155;
-  background: #fff;
+  color: var(--bs-body-color);
+  background: var(--bs-secondary-bg);
   max-height: 200px;
   overflow: auto;
   white-space: pre;
@@ -489,7 +476,7 @@ watch(
 
 /* Bash detail */
 .bash-detail {
-  background: #1e1e2e;
+  background: var(--bs-tertiary-bg);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -499,7 +486,7 @@ watch(
   padding: 8px 10px;
   font-family: 'Courier New', monospace;
   font-size: 11px;
-  color: #cdd6f4;
+  color: var(--bs-body-color);
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 160px;
@@ -509,7 +496,7 @@ watch(
 .bash-note {
   padding: 4px 10px;
   font-size: 10px;
-  color: #6c7086;
-  border-top: 1px solid #313244;
+  color: var(--bs-secondary-color);
+  border-top: 1px solid var(--bs-border-color);
 }
 </style>
