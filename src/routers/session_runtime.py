@@ -101,6 +101,14 @@ def build_router(webui) -> APIRouter:
         """Reset a session (clear messages and start fresh)"""
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
+
+        # Fix 6: parity with /restart — clear and re-register message callback
+        webui.coordinator.clear_message_callbacks(session_id)
+        webui.coordinator.add_message_callback(
+            session_id,
+            webui._create_message_callback(session_id)
+        )
+
         success = await webui.coordinator.reset_session(
             session_id,
             permission_callback=webui.permission_service.create_permission_callback(session_id),

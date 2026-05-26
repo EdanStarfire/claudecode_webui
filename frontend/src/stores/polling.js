@@ -31,6 +31,17 @@ export const usePollingStore = defineStore('polling', () => {
 
   // Loop control flags
   let uiPollGeneration = 0
+  let sessionPollGeneration = 0
+
+  // Session loop exit promise — used by disconnectSession() to await clean teardown
+  let sessionLoopExitPromise = null
+
+  // Stall detector state
+  let stallDetectorInterval = null
+  let lastHealedAt = 0
+  const STALL_TIMEOUT_MS = 15000
+  const HEAL_COOLDOWN_MS = 10000
+  const STALL_CHECK_INTERVAL_MS = 5000
 
   // Page Visibility cleanup
   let visibilityUnsubscribe = null
@@ -111,11 +122,16 @@ export const usePollingStore = defineStore('polling', () => {
   function disconnectUI() { stopUIPolling() }
 
   // ========== SESSION POLL LOOP ==========
-  async function _runSessionPollLoop(sessionId) {
-    while (sessionConnected.value && currentSessionId.value === sessionId) {
+  async function _runSessionPollLoop(sessionId, myGeneration) {
+    while (sessionPollGeneration === myGeneration
+           && sessionConnected.value
+           && currentSessionId.value === sessionId) {
       try {
         sessionAbortController = new AbortController()
-        const url = getPollUrl(`/api/poll/session/${sessionId}`, sessionCursors[sessionId])
+        // Fix 4: normalize cursor to avoid ?since=undefined producing a 422
+        const rawCursor = sessionCursors[sessionId]
+        const cursor = (typeof rawCursor === 'number') ? rawCursor : 0
+        const url = getPollUrl(`/api/poll/session/${sessionId}`, cursor)
         const response = await fetch(url, { signal: sessionAbortController.signal })
 
         if (response.status === 404) {
@@ -146,8 +162,10 @@ export const usePollingStore = defineStore('polling', () => {
         sessionConnected.value = false
         sessionRetryCount.value++
         const delay = Math.min(2000 * sessionRetryCount.value, 30000)
+        // Fix 2: coupling note — this sleep is 2s; disconnectSession timeout must stay >2s
         await new Promise(resolve => setTimeout(resolve, delay))
-        if (currentSessionId.value === sessionId) {
+        // Fix 1: guard generation before re-enabling connected — superseded loop must not re-arm
+        if (sessionPollGeneration === myGeneration && currentSessionId.value === sessionId) {
           sessionConnected.value = true
         }
       }
@@ -155,9 +173,10 @@ export const usePollingStore = defineStore('polling', () => {
   }
 
   async function connectSession(sessionId) {
-    // Stop any existing session poll
+    // Stop any existing session poll (Fix 2: truly awaits loop exit)
     await disconnectSession()
 
+    const myGeneration = ++sessionPollGeneration  // Fix 1: generation guard
     currentSessionId.value = sessionId
     sessionConnected.value = true
     sessionRetryCount.value = 0
@@ -178,23 +197,91 @@ export const usePollingStore = defineStore('polling', () => {
       }
     }
 
-    // Start poll loop as fire-and-forget (runs for session lifetime).
-    // Do NOT await — connectSession must return promptly so callers' finally blocks execute.
-    _runSessionPollLoop(sessionId)
+    // Capture the loop promise so disconnectSession() can await clean exit (Fix 2)
+    sessionLoopExitPromise = _runSessionPollLoop(sessionId, myGeneration)
+
+    // Start stall detector (Fix 5: idempotent, early-returns when sid is null)
+    startStallDetector()
   }
 
-  function disconnectSession() {
-    return new Promise(resolve => {
-      sessionConnected.value = false
-      currentSessionId.value = null
-      sessionAbortController?.abort()
-      sessionAbortController = null
-      resolve()
-    })
+  async function disconnectSession() {
+    // Fix 1: bump generation first so any in-setTimeout loop exits on timer fire
+    sessionPollGeneration++
+    sessionConnected.value = false
+    currentSessionId.value = null
+    sessionAbortController?.abort()
+    sessionAbortController = null
+    // Fix 2: await loop exit with 3s budget (must exceed 2s catch-block sleep)
+    if (sessionLoopExitPromise) {
+      try {
+        await Promise.race([
+          sessionLoopExitPromise,
+          new Promise(resolve => setTimeout(resolve, 3000))
+        ])
+      } catch { /* ignore */ }
+      sessionLoopExitPromise = null
+    }
   }
 
   function resetSessionCursor(sessionId) {
     delete sessionCursors[sessionId]
+  }
+
+  // ========== STALL DETECTOR (Fix 5) ==========
+  function startStallDetector() {
+    if (stallDetectorInterval) return
+    stallDetectorInterval = setInterval(checkSessionStall, STALL_CHECK_INTERVAL_MS)
+  }
+
+  async function checkSessionStall() {
+    const sessionStore = useSessionStore()
+    const messageStore = useMessageStore()
+    const sid = currentSessionId.value
+    if (!sid) return
+
+    const session = sessionStore.sessions.get(sid)
+    if (!session) return
+
+    // Gate: must be actively processing and not paused (permission prompt)
+    if (!session.is_processing) return
+    if (session.state === 'paused') return
+
+    const lastTs = messageStore.getLastReceivedTimestamp(sid)
+    if (!lastTs) return
+    const lastMs = (typeof lastTs === 'number') ? lastTs * 1000 : new Date(lastTs).getTime()
+    const stallMs = Date.now() - lastMs
+    if (stallMs < STALL_TIMEOUT_MS) return
+
+    // Cooldown: prevent heal storms
+    if (Date.now() - lastHealedAt < HEAL_COOLDOWN_MS) return
+    lastHealedAt = Date.now()
+
+    console.warn(`[stall-heal] Session ${sid} stalled ${Math.round(stallMs / 1000)}s while is_processing=true; re-syncing`)
+
+    // Step 1: backfill any missed messages via REST (deduplicates by message ID)
+    try {
+      await messageStore.syncMessages(sid)
+    } catch (err) {
+      console.error('[stall-heal] syncMessages failed:', err)
+    }
+
+    // Step 2: re-fetch cursor and restart poll loop
+    try {
+      const result = await api.get(`/api/poll/session/${sid}/cursor`)
+      sessionCursors[sid] = result?.cursor ?? 0
+    } catch {
+      sessionCursors[sid] = 0
+    }
+
+    // Guard: abort if the user switched sessions during the async operations above
+    if (currentSessionId.value !== sid) {
+      console.warn(`[stall-heal] Session ${sid} heal aborted — session changed during sync`)
+      return
+    }
+    await disconnectSession()
+    await connectSession(sid)
+
+    console.warn(`[stall-heal] Session ${sid} re-synced; resumed polling at cursor ${sessionCursors[sid]}`)
   }
 
   // ========== PAGE VISIBILITY ==========
@@ -313,7 +400,8 @@ export const usePollingStore = defineStore('polling', () => {
             console.log(`[UI state_change] Session ${changedSessionId} entered error state, reloading messages`)
             const messageStore = useMessageStore()
             messageStore.clearMessages(changedSessionId)
-            resetSessionCursor(changedSessionId)
+            // Fix 3: do NOT reset cursor — backend EventQueue survives error state,
+            // cursor is still valid. Resetting it produced ?since=undefined (422 wedge).
             messageStore.loadMessages(changedSessionId)
           }
 
