@@ -22,10 +22,11 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import { useLinksStore } from '@/stores/links'
 
 const linksStore = useLinksStore()
-const links = linksStore.currentLinks
+const links = computed(() => linksStore.currentLinks)
 </script>
 
 <style scoped>
