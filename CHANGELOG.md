@@ -6,6 +6,20 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-05-26
+
+### Added
+- **Per-session opt-in streaming text rendering** — enable "Stream Assistant Text (experimental)" in Session → Settings → Features to see assistant responses appear word-by-word as they are generated; uses comark's native streaming API with thinking block support, live caret indicator, and a global operator kill switch (`features.streaming_text_enabled`) (#1571)
+
+### Fixed
+- **LiteLLMParamsEditor crash** — `addRow()` no longer crashes when adding provider parameter rows due to a Vue ref auto-unwrap issue in the `:ref` callback (#1571)
+- **count_tokens log noise on OpenAI-catalog routes** — LiteLLM no longer attempts a doomed round-trip to `api.openai.com/v1/responses/input_tokens` for every token count request; local tiktoken fallback is used directly, eliminating error log noise and wasted API traffic (#1570)
+
+### Changed
+- **claude-agent-sdk → 0.2.87** (#1569)
+
+[1.2.0]: https://github.com/EdanStarfire/claudecode_webui/releases/tag/v1.2.0
+
 ## [1.1.0] - 2026-05-25
 
 ### Added
