@@ -2253,6 +2253,11 @@ class SessionCoordinator:
         """Public wrapper: find the project containing the given session."""
         return await self._find_project_for_session(session_id)
 
+    async def get_all_descendants(self, session_id: str) -> list[dict]:
+        """Return the complete descendant list (unpaginated). Use for
+        membership/cycle checks where truncation produces incorrect results."""
+        return await self._get_all_descendants(session_id)
+
     async def _get_all_descendants(self, session_id: str) -> list[dict]:
         """
         Get all descendant sessions (children, grandchildren, etc.) of a session.

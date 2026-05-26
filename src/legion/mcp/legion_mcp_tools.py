@@ -795,10 +795,10 @@ class LegionMCPTools:
 
             # Validate: named minion must be a descendant of the caller (or caller themselves)
             if named_minion.session_id != parent_overseer_id:
-                _desc_page = await self.system.session_coordinator.get_descendants(
-                    parent_overseer_id
-                )
-                descendant_ids = {d["session_id"] for d in _desc_page["descendants"]}
+                descendant_ids = {
+                    d["session_id"]
+                    for d in await self.system.session_coordinator.get_all_descendants(parent_overseer_id)
+                }
 
                 if named_minion.session_id not in descendant_ids:
                     return self._err(
@@ -1129,11 +1129,8 @@ class LegionMCPTools:
 
             if not is_direct_child:
                 # Search full descendant subtree for the target
-                _desc_page = await self.system.session_coordinator.get_descendants(
-                    parent_overseer_id
-                )
                 target_desc = None
-                for d in _desc_page["descendants"]:
+                for d in await self.system.session_coordinator.get_all_descendants(parent_overseer_id):
                     d_slug = _slugify(d["name"])
                     if d_slug == target_slug:
                         target_desc = d
@@ -1228,9 +1225,7 @@ class LegionMCPTools:
             subject_slug = _slugify(subject_name)
             new_parent_slug = _slugify(new_parent_name)
 
-            # get_descendants returns a paginated dict; extract the list from ["descendants"]
-            _desc_page = await self.system.session_coordinator.get_descendants(caller_id)
-            caller_descendants = _desc_page["descendants"]
+            caller_descendants = await self.system.session_coordinator.get_all_descendants(caller_id)
 
             subject_id = None
             new_parent_id = None

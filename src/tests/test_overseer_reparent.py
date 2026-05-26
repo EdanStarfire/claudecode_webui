@@ -82,6 +82,17 @@ def _build_system(session_map):
                 queue.extend(s.child_minion_ids or [])
         return {"descendants": result, "total": len(result), "limit": limit, "offset": offset, "has_more": False}
 
+    async def _get_all_descendants_mock(session_id):
+        result = []
+        queue = list(session_map[session_id].child_minion_ids) if session_map.get(session_id) else []
+        while queue:
+            sid = queue.pop(0)
+            s = session_map.get(sid)
+            if s:
+                result.append({"session_id": sid})
+                queue.extend(s.child_minion_ids or [])
+        return result
+
     project = Mock()
     project.to_dict = Mock(return_value={"project_id": "legion-1"})
 
@@ -90,6 +101,7 @@ def _build_system(session_map):
 
     coord = Mock()
     coord.get_descendants = AsyncMock(side_effect=_get_descendants_mock)
+    coord.get_all_descendants = AsyncMock(side_effect=_get_all_descendants_mock)
     coord.session_manager = sm
     coord.project_manager = pm
 
@@ -430,3 +442,62 @@ class TestEdgeMcpNewParentOutsideSubtree:
 
         with pytest.raises(ValueError, match="Authority violation"):
             await oc.reparent_minion(subject_id="b-id", new_parent_id="x-id", caller_id="a-id")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Issue #1581 regression: large subtrees (>50 descendants)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestIssue1581LargeSubtree:
+    @pytest.mark.asyncio
+    async def test_issue_1581_cycle_detection_beyond_page(self):
+        """
+        Cycle detection must catch a proposed new_parent that lives beyond
+        position 50 in the subject's descendant list.
+        """
+        # Build subject with 60 linear descendants: s → d1 → d2 → … → d60
+        subject = _make_session("s-id", "Subject", parent_id=None, children=["d1"], is_overseer=True, overseer_level=0)
+        sessions = {"s-id": subject}
+        prev = subject
+        for i in range(1, 61):
+            sid = f"d{i}"
+            next_id = f"d{i + 1}" if i < 60 else None
+            children = [next_id] if next_id else []
+            s = _make_session(sid, f"Desc{i}", parent_id=prev.session_id, children=children, is_overseer=bool(children), overseer_level=i)
+            sessions[sid] = s
+            prev = s
+
+        system = _build_system(sessions)
+        oc = OverseerController(system)
+
+        # d55 is beyond page limit 50; using it as new_parent would create a cycle
+        with pytest.raises(ValueError, match="cycle"):
+            await oc.reparent_minion(subject_id="s-id", new_parent_id="d55", caller_id=None)
+
+    @pytest.mark.asyncio
+    async def test_issue_1581_authority_check_still_rejects_outsider(self):
+        """
+        Authority check must still reject a subject that is genuinely outside
+        the caller's subtree, even when the caller has >50 descendants.
+        """
+        # Caller has 60 linear descendants
+        caller = _make_session("caller-id", "Caller", parent_id=None, children=["d1"], is_overseer=True, overseer_level=0)
+        sessions = {"caller-id": caller}
+        prev = caller
+        for i in range(1, 61):
+            sid = f"d{i}"
+            next_id = f"d{i + 1}" if i < 60 else None
+            children = [next_id] if next_id else []
+            s = _make_session(sid, f"Desc{i}", parent_id=prev.session_id, children=children, is_overseer=bool(children), overseer_level=i)
+            sessions[sid] = s
+            prev = s
+
+        # outsider is NOT in caller's subtree
+        outsider = _make_session("out-id", "Outsider", parent_id=None, children=[], is_overseer=False, overseer_level=0)
+        sessions["out-id"] = outsider
+
+        system = _build_system(sessions)
+        oc = OverseerController(system)
+
+        with pytest.raises(ValueError, match="Authority violation"):
+            await oc.reparent_minion(subject_id="out-id", new_parent_id="d1", caller_id="caller-id")
