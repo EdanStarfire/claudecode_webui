@@ -114,6 +114,15 @@ export const useMessageStore = defineStore('message', () => {
           return // Don't add tool_call to message display list
         }
 
+        // Issue #1575: drop internal SDK status/requesting messages — match real-time suppression
+        if (message.type === 'system') {
+          const subtype = message.subtype || message.metadata?.subtype
+          const status = message.metadata?.init_data?.status
+          if (subtype === 'status' && status === 'requesting') {
+            return
+          }
+        }
+
         // Track launch timestamp for uptime calculation
         if (message.type === 'system' && message.metadata?.subtype === 'client_launched') {
           if (message.timestamp) {
@@ -1003,9 +1012,19 @@ export const useMessageStore = defineStore('message', () => {
       uniqueNewMessages.forEach(message => {
         if (message.type === 'tool_call') {
           newToolCallMessages.push(message)
-        } else {
-          newRegularMessages.push(message)
+          return
         }
+
+        // Issue #1575: drop internal SDK status/requesting messages — match real-time suppression
+        if (message.type === 'system') {
+          const subtype = message.subtype || message.metadata?.subtype
+          const status = message.metadata?.init_data?.status
+          if (subtype === 'status' && status === 'requesting') {
+            return
+          }
+        }
+
+        newRegularMessages.push(message)
       })
 
       // Route tool_call messages through unified handler (silent: skip notifications for synced history)
