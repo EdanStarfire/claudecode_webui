@@ -1082,8 +1082,9 @@ async def test_issue_1419_update_schedule_handler_rejects_non_empty_prompt_on_sc
 @pytest.mark.asyncio
 async def test_issue_1433_reparent_extracts_descendants_from_dict():
     """
-    Issue #1433 regression: _handle_reparent_minion must extract ["descendants"]
-    from the paginated dict returned by get_descendants, not iterate the dict itself.
+    Issue #1433 regression: _handle_reparent_minion now uses get_all_descendants
+    which returns a plain list (not a paginated dict). Verify it resolves names
+    correctly and calls overseer_controller.reparent_minion.
     """
     from unittest.mock import AsyncMock, MagicMock
 
@@ -1097,24 +1098,18 @@ async def test_issue_1433_reparent_extracts_descendants_from_dict():
     caller_session.name = "CallerMinion"
     caller_session.state = SessionState.ACTIVE
 
-    # Simulate the real paginated return shape from get_descendants
-    paginated_result = {
-        "descendants": [
-            {"name": "ChildA", "session_id": "child-a-id"},
-            {"name": "NewParent", "session_id": "new-parent-id"},
-        ],
-        "total": 2,
-        "limit": 50,
-        "offset": 0,
-        "has_more": False,
-    }
+    # get_all_descendants returns a plain list
+    all_descendants = [
+        {"name": "ChildA", "session_id": "child-a-id"},
+        {"name": "NewParent", "session_id": "new-parent-id"},
+    ]
 
     session_manager = MagicMock()
     session_manager.get_session_info = AsyncMock(return_value=caller_session)
 
     session_coordinator = MagicMock()
     session_coordinator.session_manager = session_manager
-    session_coordinator.get_descendants = AsyncMock(return_value=paginated_result)
+    session_coordinator.get_all_descendants = AsyncMock(return_value=all_descendants)
 
     overseer_controller = MagicMock()
     overseer_controller.reparent_minion = AsyncMock(
@@ -1136,6 +1131,61 @@ async def test_issue_1433_reparent_extracts_descendants_from_dict():
     assert result.get("is_error") is False, f"Expected success, got: {result}"
     overseer_controller.reparent_minion.assert_awaited_once_with(
         subject_id="child-a-id",
+        new_parent_id="new-parent-id",
+        caller_id=caller_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_issue_1581_reparent_with_large_subtree():
+    """
+    Issue #1581 regression: _handle_reparent_minion must succeed when the caller
+    has >50 descendants and the subject/new_parent are beyond position 50.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from src.session_manager import SessionState
+
+    caller_id = "caller-session-id"
+
+    caller_session = MagicMock()
+    caller_session.session_id = caller_id
+    caller_session.name = "CallerMinion"
+    caller_session.state = SessionState.ACTIVE
+
+    # 60 descendants; subject at index 54, new_parent at index 58
+    all_descendants = [{"name": f"Desc{i}", "session_id": f"desc-{i}-id"} for i in range(60)]
+    all_descendants[54] = {"name": "SubjectMinion", "session_id": "subject-id"}
+    all_descendants[58] = {"name": "NewParentMinion", "session_id": "new-parent-id"}
+
+    session_manager = MagicMock()
+    session_manager.get_session_info = AsyncMock(return_value=caller_session)
+
+    session_coordinator = MagicMock()
+    session_coordinator.session_manager = session_manager
+    session_coordinator.get_all_descendants = AsyncMock(return_value=all_descendants)
+
+    overseer_controller = MagicMock()
+    overseer_controller.reparent_minion = AsyncMock(
+        return_value={"descendants_moved": 0}
+    )
+
+    mock_system = MagicMock()
+    mock_system.session_coordinator = session_coordinator
+    mock_system.overseer_controller = overseer_controller
+
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_reparent_minion({
+        "_caller_id": caller_id,
+        "subject_name": "SubjectMinion",
+        "new_parent_name": "NewParentMinion",
+    })
+
+    assert result.get("is_error") is False, f"Expected success, got: {result}"
+    overseer_controller.reparent_minion.assert_awaited_once_with(
+        subject_id="subject-id",
         new_parent_id="new-parent-id",
         caller_id=caller_id,
     )

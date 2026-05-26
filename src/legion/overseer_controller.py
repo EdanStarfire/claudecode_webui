@@ -506,8 +506,10 @@ class OverseerController:
             if new_parent.project_id != legion_id:
                 raise ValueError("Cannot reparent to a minion in a different legion")
 
-        _desc_page = await self.system.session_coordinator.get_descendants(subject_id)
-        subject_descendant_ids = {d["session_id"] for d in _desc_page["descendants"]}
+        subject_descendant_ids = {
+            d["session_id"]
+            for d in await self.system.session_coordinator.get_all_descendants(subject_id)
+        }
         if new_parent_id is not None and new_parent_id in subject_descendant_ids:
             raise ValueError(
                 "Cannot reparent: the new parent is a descendant of the subject (would create a cycle)"
@@ -518,8 +520,10 @@ class OverseerController:
             if not caller:
                 raise ValueError(f"Caller {caller_id} not found")
 
-            _caller_desc_page = await self.system.session_coordinator.get_descendants(caller_id)
-            caller_descendant_ids = {d["session_id"] for d in _caller_desc_page["descendants"]}
+            caller_descendant_ids = {
+                d["session_id"]
+                for d in await self.system.session_coordinator.get_all_descendants(caller_id)
+            }
 
             # Subject must be in caller's descendant closure
             if subject_id not in caller_descendant_ids:

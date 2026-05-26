@@ -1228,9 +1228,7 @@ class LegionMCPTools:
             subject_slug = _slugify(subject_name)
             new_parent_slug = _slugify(new_parent_name)
 
-            # get_descendants returns a paginated dict; extract the list from ["descendants"]
-            _desc_page = await self.system.session_coordinator.get_descendants(caller_id)
-            caller_descendants = _desc_page["descendants"]
+            caller_descendants = await self.system.session_coordinator.get_all_descendants(caller_id)
 
             subject_id = None
             new_parent_id = None
