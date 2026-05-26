@@ -1192,6 +1192,134 @@ async def test_issue_1581_reparent_with_large_subtree():
 
 
 @pytest.mark.asyncio
+async def test_issue_1581_spawn_parent_name_large_subtree():
+    """
+    Issue #1581 regression: _handle_spawn_minion must succeed when the caller has
+    >50 descendants and the named parent_name is beyond position 50.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from src.session_manager import SessionState
+
+    caller_id = "caller-id"
+
+    caller_session = MagicMock()
+    caller_session.session_id = caller_id
+    caller_session.project_id = "legion-1"
+    caller_session.state = SessionState.ACTIVE
+    caller_session.current_permission_mode = "default"
+    caller_session.working_directory = "/tmp/test"
+    caller_session.config = {}
+
+    # named_minion lives at position 54 in the descendants list
+    named_minion = MagicMock()
+    named_minion.session_id = "named-parent-id"
+    named_minion.name = "NamedParent"
+    named_minion.config = {}
+    named_minion.current_permission_mode = "default"
+    named_minion.working_directory = "/tmp/test"
+
+    # 60 descendants; named_minion at index 54
+    all_descendants = [{"name": f"Desc{i}", "session_id": f"desc-{i}-id"} for i in range(60)]
+    all_descendants[54] = {"name": "NamedParent", "session_id": "named-parent-id"}
+
+    session_manager = MagicMock()
+    session_manager.get_session_info = AsyncMock(return_value=caller_session)
+
+    session_coordinator = MagicMock()
+    session_coordinator.session_manager = session_manager
+    session_coordinator.get_all_descendants = AsyncMock(return_value=all_descendants)
+
+    legion_coordinator = MagicMock()
+    legion_coordinator.get_minion_by_name_in_legion = AsyncMock(return_value=named_minion)
+
+    overseer_controller = MagicMock()
+    overseer_controller.spawn_minion = AsyncMock(return_value={
+        "session_id": "new-child-id",
+        "name": "NewChild",
+        "slug": "newchild",
+    })
+
+    mock_system = MagicMock()
+    mock_system.session_coordinator = session_coordinator
+    mock_system.legion_coordinator = legion_coordinator
+    mock_system.overseer_controller = overseer_controller
+
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_spawn_minion({
+        "_parent_overseer_id": caller_id,
+        "name": "NewChild",
+        "role": "Worker",
+        "system_prompt": "Do work.",
+        "parent_name": "NamedParent",
+    })
+
+    # Must NOT fail with the pagination-truncation error
+    assert result.get("is_error") is not True or "descendant" not in result.get("content", [{}])[0].get("text", ""), \
+        f"Spurious descendant error: {result}"
+    # parent_name at position 54 must have been resolved and spawn called
+    overseer_controller.spawn_minion.assert_awaited_once()
+    call_kwargs = overseer_controller.spawn_minion.call_args
+    assert call_kwargs.kwargs.get("parent_overseer_id") == "named-parent-id"
+
+
+@pytest.mark.asyncio
+async def test_issue_1581_dispose_minion_large_subtree():
+    """
+    Issue #1581 regression: _handle_dispose_minion must succeed when the caller has
+    >50 descendants and the target minion is beyond position 50.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from src.session_manager import SessionState
+
+    caller_id = "caller-id"
+
+    caller_session = MagicMock()
+    caller_session.session_id = caller_id
+    caller_session.state = SessionState.ACTIVE
+    caller_session.child_minion_ids = []  # no direct children → forces subtree search
+
+    # Target at position 54 with a distinct parent
+    all_descendants = [
+        {"name": f"Desc{i}", "session_id": f"desc-{i}-id", "parent_id": caller_id}
+        for i in range(60)
+    ]
+    all_descendants[54] = {"name": "TargetMinion", "session_id": "target-id", "parent_id": "mid-parent-id"}
+
+    session_manager = MagicMock()
+    session_manager.get_session_info = AsyncMock(return_value=caller_session)
+
+    session_coordinator = MagicMock()
+    session_coordinator.session_manager = session_manager
+    session_coordinator.get_all_descendants = AsyncMock(return_value=all_descendants)
+
+    overseer_controller = MagicMock()
+    overseer_controller.dispose_minion = AsyncMock(return_value={"descendants_count": 0})
+
+    mock_system = MagicMock()
+    mock_system.session_coordinator = session_coordinator
+    mock_system.overseer_controller = overseer_controller
+
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_dispose_minion({
+        "_parent_overseer_id": caller_id,
+        "minion_name": "TargetMinion",
+    })
+
+    assert result.get("is_error") is False, f"Expected success, got: {result}"
+    overseer_controller.dispose_minion.assert_awaited_once_with(
+        parent_overseer_id="mid-parent-id",
+        child_minion_name="TargetMinion",
+        delete_after_archive=False,
+    )
+
+
+@pytest.mark.asyncio
 async def test_issue_1433_list_minions_includes_parent_field():
     """
     Issue #1433: list_minions must include a Parent: line for each minion.
