@@ -282,8 +282,12 @@ export const useMessageStore = defineStore('message', () => {
 
     const messages = messagesBySession.value.get(sessionId)
 
-    // Issue #1000: Deduplicate by message_id (stable UUID from backend) or id
-    const dedupKey = message.message_id || message.id
+    // Issue #1000: Deduplicate by message_id (stable UUID from backend) or id.
+    // Issue #1486: also check metadata.message_id — the backend sets Anthropic message_id
+    // there for AssistantMessage events; without this fallback, intermediate AssistantMessages
+    // emitted mid-stream (extended thinking) bypass the streamingDone guard and prematurely
+    // finalise the streaming placeholder.
+    const dedupKey = message.message_id || message.id || message.metadata?.message_id
     if (dedupKey) {
       const existingIndex = messages.findIndex(m => (m.message_id || m.id) === dedupKey)
       if (existingIndex !== -1) {
@@ -294,12 +298,17 @@ export const useMessageStore = defineStore('message', () => {
         // incomplete content — skip that one so the buffer stays alive for the text deltas.
         if (messages[existingIndex].streaming) {
           const buf = _deltaBuffers.get(sessionId)
-          if (buf && !buf.streamingDone) {
-            return  // Intermediate partial message — streaming still in progress, skip
+          if (buf) {
+            // Store as candidate terminal message; message_stop will apply it.
+            // Multiple SDK AssistantMessages may arrive before message_stop — last wins.
+            buf.pendingTerminalMessage = message
+            return
           }
+          // No buffer (after page reload) — merge directly
           messages[existingIndex] = { ...messages[existingIndex], ...message, streaming: false }
           _deltaBuffers.delete(sessionId)
           messagesBySession.value = new Map(messagesBySession.value)
+          return
         } else {
           console.log(`Skipping duplicate message ${dedupKey} (already exists at index ${existingIndex})`)
         }
@@ -569,6 +578,13 @@ export const useMessageStore = defineStore('message', () => {
 
       existing.status = frontendStatus
       existing.backendStatus = toolCall.status
+
+      // Issue #1486: always accept the incoming input — the first event for a tool may arrive
+      // with input:{} (from an intermediate AssistantMessage emitted while input_json_delta
+      // events are still streaming); a subsequent event carries the fully-assembled input.
+      if (toolCall.input !== undefined && toolCall.input !== null) {
+        existing.input = toolCall.input
+      }
 
       // Update permission fields
       if (toolCall.permission) {
@@ -1172,12 +1188,34 @@ export const useMessageStore = defineStore('message', () => {
         if (buf) {
           if (buf.rafHandle) { cancelAnimationFrame(buf.rafHandle); buf.rafHandle = null }
           _flushDeltaBuffer(sessionId)
-          // Signal that streaming is complete so the next addMessage() dedup can finalise the
-          // placeholder.  Without this flag, an intermediate AssistantMessage (emitted mid-stream
-          // by the SDK for extended-thinking responses) would prematurely kill the placeholder.
-          buf.streamingDone = true
+          // Apply the stored terminal AssistantMessage (if any) to finalise the placeholder.
+          // The terminal message arrives BEFORE message_stop, so it was stored in
+          // buf.pendingTerminalMessage by addMessage() instead of being applied immediately.
+          const messages = messagesBySession.value.get(sessionId)
+          if (messages) {
+            const idx = messages.findIndex(m => m.message_id === buf.messageId)
+            if (idx >= 0 && messages[idx].streaming) {
+              if (buf.pendingTerminalMessage) {
+                const existing = messages[idx]
+                const terminal = buf.pendingTerminalMessage
+                messages[idx] = {
+                  ...existing,
+                  ...terminal,
+                  content: (terminal.content && terminal.content !== 'Assistant response')
+                    ? terminal.content
+                    : existing.content,
+                  thinking: terminal.thinking || existing.thinking,
+                  streaming: false,
+                }
+              } else {
+                // No terminal message matched — just stop the streaming caret
+                messages[idx] = { ...messages[idx], streaming: false }
+              }
+              messagesBySession.value = new Map(messagesBySession.value)
+            }
+          }
+          _deltaBuffers.delete(sessionId)
         }
-        // Leave streaming: true — terminal AssistantMessage dedupes and clears it
         break
       }
     }

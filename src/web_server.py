@@ -671,11 +671,17 @@ class ClaudeWebUI:
                 # Issue #324: Emit tool_call messages for tool lifecycle events
                 await self._emit_tool_call_updates(session_id, parsed_message)
 
-                # Issue #1000/#1486: Propagate message_id for frontend streaming dedup
+                # Issue #1000/#1486: Propagate message_id for frontend streaming dedup.
+                # parsed_message.metadata is the most reliable source — MessageProcessor
+                # extracts sdk_msg.message_id into metadata['message_id'] for AssistantMessages.
+                # The SDK AssistantMessage object has no .metadata attribute, so the original
+                # isinstance(meta, dict) guard never fired; fall back to parsed_message.
                 if isinstance(message_data, dict) and 'message_id' in message_data:
                     websocket_data['message_id'] = message_data['message_id']
                 elif isinstance((meta := getattr(message_data, 'metadata', None)), dict) and meta.get('message_id'):
                     websocket_data['message_id'] = meta['message_id']
+                elif parsed_message.metadata and parsed_message.metadata.get('message_id'):
+                    websocket_data['message_id'] = parsed_message.metadata['message_id']
 
                 # Wrap in standard poll queue envelope
                 serialized = {
