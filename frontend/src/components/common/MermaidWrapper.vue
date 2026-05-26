@@ -1,32 +1,35 @@
 <template>
   <div class="mermaid-container" :class="{ 'has-error': error }">
+    <!-- During streaming: show raw code, don't attempt render -->
+    <pre v-if="isStreaming" class="mermaid-code-view"><code class="language-mermaid">{{ content }}</code></pre>
+
     <!-- Diagram view (default) -->
     <div
-      v-if="!showCode && !error"
+      v-else-if="!showCode && !error"
       class="mermaid-diagram"
       v-html="svgContent"
       @click="openFullscreen"
     />
 
     <!-- Error banner + code fallback -->
-    <template v-if="error">
+    <template v-if="!isStreaming && error">
       <div class="mermaid-error">Diagram error: {{ error }}</div>
       <pre class="mermaid-code-view"><code class="language-mermaid">{{ content }}</code></pre>
     </template>
 
     <!-- Code view toggle -->
-    <pre v-if="showCode && !error" class="mermaid-code-view"><code class="language-mermaid">{{ content }}</code></pre>
+    <pre v-if="!isStreaming && showCode && !error" class="mermaid-code-view"><code class="language-mermaid">{{ content }}</code></pre>
 
     <!-- Buttons -->
     <button
-      v-if="!error"
+      v-if="!isStreaming && !error"
       class="mermaid-toggle"
       :title="showCode ? 'Show diagram' : 'Toggle code/diagram view'"
       @click.stop="showCode = !showCode"
     >{{ showCode ? '▶' : '</>' }}</button>
 
     <button
-      v-if="!error && !showCode"
+      v-if="!isStreaming && !error && !showCode"
       class="mermaid-fullscreen-btn"
       title="View fullscreen"
       @click.stop="openFullscreen"
@@ -41,13 +44,18 @@ let _mermaidInitialized = false
 </script>
 
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, inject, onMounted, watch } from 'vue'
 import mermaid from 'mermaid'
 import { openFullView } from '@/composables/useMermaidFullView'
 
 const props = defineProps({
   content: { type: String, required: true },
+  streaming: { type: Boolean, default: false },
 })
+
+// Issue #1486: MarkdownView provides this when it's inside a streaming message
+const _ctxStreaming = inject('comark-streaming', ref(false))
+const isStreaming = computed(() => props.streaming || _ctxStreaming.value)
 
 const svgContent = ref('')
 const error = ref('')
@@ -64,21 +72,28 @@ function ensureInit() {
 }
 
 async function render() {
+  // During streaming the code block is incomplete — skip rendering to avoid mermaid
+  // injecting error SVGs into document.body outside the Vue app's DOM tree.
+  if (isStreaming.value) return
   ensureInit()
   const seq = ++renderSeq
   error.value = ''
+  const id = `mermaid-${++_mermaidCounter}`
+  lastRenderId = id
   try {
-    const id = `mermaid-${++_mermaidCounter}`
-    lastRenderId = id
     const { svg } = await mermaid.render(id, props.content)
     if (seq === renderSeq) svgContent.value = svg
   } catch (err) {
+    // mermaid leaves an error <div id="d{id}"> in document.body on failure — remove it
+    document.getElementById('d' + id)?.remove()
     if (seq === renderSeq) error.value = err?.message || 'Invalid syntax'
   }
 }
 
 onMounted(render)
 watch(() => props.content, render)
+// Trigger final render when streaming completes
+watch(isStreaming, (stillStreaming) => { if (!stillStreaming) render() })
 
 function openFullscreen() {
   if (!error.value) {

@@ -168,6 +168,7 @@ class NetworkingConfig:
 class FeaturesConfig:
     skill_sync_enabled: bool = True
     disable_openai_responses_count_tokens_api: bool = True  # issue #1473
+    streaming_text_enabled: bool = True  # Issue #1486 — global kill switch (False disables platform-wide)
 
 
 @dataclass
@@ -265,6 +266,7 @@ class AppConfig:
             disable_openai_responses_count_tokens_api=features_data.get(
                 "disable_openai_responses_count_tokens_api", True
             ),
+            streaming_text_enabled=features_data.get("streaming_text_enabled", True),
         )
         proxy_data = data.get("proxy", {})
         proxy = ProxyConfig(
@@ -349,6 +351,7 @@ class AppConfig:
                 "disable_openai_responses_count_tokens_api": (
                     self.features.disable_openai_responses_count_tokens_api
                 ),
+                "streaming_text_enabled": self.features.streaming_text_enabled,
             },
             "proxy": {
                 "proxy_image": self.proxy.proxy_image,

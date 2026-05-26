@@ -32,6 +32,7 @@ try:
         PermissionResultDeny,
         RateLimitEvent,
         ResultMessage,
+        StreamEvent,
         SystemMessage,
         TaskNotificationMessage,
         TaskProgressMessage,
@@ -53,6 +54,7 @@ except ImportError:
     SystemMessage = None
     ResultMessage = None
     RateLimitEvent = None
+    StreamEvent = None
     TaskStartedMessage = None
     TaskProgressMessage = None
     TaskNotificationMessage = None
@@ -237,6 +239,7 @@ class ClaudeSDK:
         self.auto_memory_mode = config.auto_memory_mode
         self.auto_memory_directory = config.auto_memory_directory
         self.enable_claudeai_mcp_servers = config.enable_claudeai_mcp_servers
+        self.enable_streaming_text = config.enable_streaming_text
         self.strict_mcp_config = config.strict_mcp_config
         self.bare_mode = config.bare_mode if config else False
         self.env_scrub_enabled = config.env_scrub_enabled if config else False
@@ -985,17 +988,24 @@ class ClaudeSDK:
             options_kwargs["sandbox"] = sandbox_settings
             sdk_logger.info(f"Sandbox enabled for session {self.session_id}: {sandbox_settings}")
 
-        # Issue #540: Thinking configuration
+        # Issue #540 / #1486: Thinking configuration.
+        # Opus 4.7+ defaults to display="omitted" (signature-only, empty thinking text).
+        # Always request display="summarized" so thinking content is visible in the UI.
         if self.thinking_mode:
             if self.thinking_mode == "adaptive":
-                options_kwargs["thinking"] = {"type": "adaptive"}
+                options_kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
             elif self.thinking_mode == "enabled":
                 options_kwargs["thinking"] = {
                     "type": "enabled",
                     "budget_tokens": self.thinking_budget_tokens or 10240,
+                    "display": "summarized",
                 }
             elif self.thinking_mode == "disabled":
                 options_kwargs["thinking"] = {"type": "disabled"}
+        else:
+            # Opus 4.7+ thinks implicitly (adaptive) and returns signature-only by default.
+            # Request "summarized" display so the thinking text reaches the frontend.
+            options_kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
 
         # Issue #540: Effort configuration
         if self.effort:
@@ -1008,6 +1018,13 @@ class ClaudeSDK:
         # Issue #1299: Emit hook lifecycle events (hook_started/hook_response) into the message
         # stream as HookEventMessage objects. Without this flag, hook events are silently dropped.
         options_kwargs["include_hook_events"] = True
+
+        # Issue #1486: opt into SDK streaming when both per-session AND global flags allow
+        if self.enable_streaming_text:
+            from .config_manager import load_config as _load_app_config
+            _app_cfg = _load_app_config()
+            if _app_cfg.features.streaming_text_enabled:
+                options_kwargs["include_partial_messages"] = True
 
         options_kwargs["env"] = self._resolve_env_vars()
 
@@ -1143,6 +1160,25 @@ class ClaudeSDK:
 
             converted_message = self._convert_sdk_message(sdk_message)
             self.info.last_activity = time.time()
+
+            # Issue #1486: assistant_delta is ephemeral — bypass storage, deliver directly
+            if converted_message.get("type") == "assistant_delta":
+                ev = converted_message.get("event", {})
+                ev_type = ev.get("type", "?")
+                if ev_type == "content_block_delta":
+                    delta = ev.get("delta", {})
+                    dt = delta.get("type", "?")
+                    # Log thinking/text deltas concisely; omit signature_delta noise
+                    if dt in ("thinking_delta", "text_delta"):
+                        preview = (delta.get("thinking") or delta.get("text") or "")[:40]
+                        sdk_logger.debug(f"[delta] {dt} idx={ev.get('index')} len={len(delta.get('thinking') or delta.get('text') or '')} preview={preview!r}")
+                    elif dt != "signature_delta":
+                        sdk_logger.debug(f"[delta] {dt} idx={ev.get('index')}")
+                else:
+                    sdk_logger.debug(f"[delta] event={ev_type}")
+                if self.message_callback:
+                    await self._safe_callback(self.message_callback, converted_message)
+                return
 
             # Debug log raw SDK response structure
             sdk_logger.debug(f"Raw SDK response: {sdk_message=}")
@@ -1371,6 +1407,17 @@ class ClaudeSDK:
     def _convert_sdk_message(self, sdk_message: Any) -> dict[str, Any]:
         """Convert SDK message to a serializable format while preserving type information."""
         try:
+            # Issue #1486: StreamEvent — partial message delta, never persisted
+            if StreamEvent is not None and isinstance(sdk_message, StreamEvent):
+                return {
+                    "type": "assistant_delta",
+                    "uuid": sdk_message.uuid,
+                    "session_id": sdk_message.session_id,
+                    "parent_tool_use_id": sdk_message.parent_tool_use_id,
+                    "event": sdk_message.event,
+                    "timestamp": time.time(),
+                }
+
             # Handle dict-like objects (for backward compatibility)
             if isinstance(sdk_message, dict):
                 message_dict = {

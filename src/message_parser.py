@@ -491,6 +491,9 @@ class AssistantMessageHandler(MessageHandler):
             # Handle SDK message object
             if "sdk_message" in message_data and isinstance(message_data["sdk_message"], AssistantMessage):
                 sdk_msg = message_data["sdk_message"]
+                # Issue #1486: capture Anthropic message ID for streaming placeholder dedup
+                if getattr(sdk_msg, 'message_id', None):
+                    extracted["metadata"]["message_id"] = sdk_msg.message_id
                 if hasattr(sdk_msg, 'content'):
                     for block in sdk_msg.content:
                         if isinstance(block, TextBlock):
@@ -513,6 +516,12 @@ class AssistantMessageHandler(MessageHandler):
             # Handle nested message structure (legacy)
             else:
                 self._extract_from_legacy_format(message_data, text_parts)
+
+        # Fallback: restore message_id from stored metadata (dict-format messages)
+        if "message_id" not in extracted["metadata"]:
+            stored_mid = (message_data.get("metadata") or {}).get("message_id")
+            if stored_mid:
+                extracted["metadata"]["message_id"] = stored_mid
 
         # Extract tool_uses from metadata (covers dict-format messages from mock SDK)
         if not tool_uses:

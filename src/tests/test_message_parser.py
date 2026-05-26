@@ -696,3 +696,80 @@ class TestHookMessageHandling:
         assert parsed.type == MessageType.SYSTEM
         assert "guard" in parsed.content
         assert "PreToolUse" in parsed.content
+
+
+class TestIssue1486MessageIdPropagation:
+    """Regression tests for issue #1486 duplicate-message bug.
+
+    Root cause: _createStreamingPlaceholder used StreamEvent.uuid (per-event CLI UUID)
+    as the placeholder's message_id.  The terminal AssistantMessage carries a different
+    identifier (the Anthropic message ID stored in AssistantMessage.message_id), so
+    the dedup check in addMessage() always missed, producing a duplicate entry.
+
+    Fix: AssistantMessageHandler now captures sdk_msg.message_id into metadata so that
+    web_server.py can propagate it in the poll event, and the frontend placeholder is
+    keyed on data.event.message.id from the message_start Anthropic streaming event.
+    """
+
+    def test_assistant_message_id_captured_from_sdk_object(self):
+        """message_id from AssistantMessage SDK object is surfaced in parsed metadata."""
+        from claude_agent_sdk import AssistantMessage
+        from claude_agent_sdk.types import TextBlock
+
+        sdk_msg = AssistantMessage(
+            content=[TextBlock(text="hello")],
+            model="claude-3-5-sonnet-20241022",
+            message_id="msg_abc123",
+            uuid="some-per-event-uuid",
+        )
+        message_data = {
+            "type": "assistant",
+            "sdk_message": sdk_msg,
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+        }
+        handler = AssistantMessageHandler()
+        parsed = handler.parse(message_data)
+
+        assert parsed.metadata.get("message_id") == "msg_abc123", (
+            "Anthropic message_id must be propagated so the frontend can dedup the "
+            "streaming placeholder against the terminal AssistantMessage"
+        )
+
+    def test_assistant_message_id_absent_when_none(self):
+        """metadata message_id is absent when SDK object has no message_id."""
+        from claude_agent_sdk import AssistantMessage
+        from claude_agent_sdk.types import TextBlock
+
+        sdk_msg = AssistantMessage(
+            content=[TextBlock(text="hello")],
+            model="claude-3-5-sonnet-20241022",
+            message_id=None,
+            uuid="some-per-event-uuid",
+        )
+        message_data = {
+            "type": "assistant",
+            "sdk_message": sdk_msg,
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+        }
+        handler = AssistantMessageHandler()
+        parsed = handler.parse(message_data)
+
+        assert "message_id" not in parsed.metadata or parsed.metadata["message_id"] is None
+
+    def test_assistant_message_id_restored_from_stored_dict(self):
+        """message_id is restored when re-parsing a stored assistant message that has it in metadata."""
+        handler = AssistantMessageHandler()
+        message_data = {
+            "type": "assistant",
+            "content": "Stored response",
+            "metadata": {
+                "message_id": "msg_stored456",
+                "model": "claude-3-5-sonnet-20241022",
+            },
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+        assert parsed.metadata.get("message_id") == "msg_stored456"

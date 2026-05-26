@@ -339,5 +339,12 @@ export const FIELD_SCHEMAS = {
       defaultValue: false,
       description: 'Includes skill-maker guidance in session system prompt.',
     },
+    {
+      key: 'enable_streaming_text',
+      label: 'Stream Assistant Text (experimental)',
+      widget: 'toggle',
+      defaultValue: false,
+      description: 'Render assistant responses incrementally as they are generated. Requires server feature flag.',
+    },
   ],
 }

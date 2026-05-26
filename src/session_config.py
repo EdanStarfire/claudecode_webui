@@ -65,6 +65,7 @@ class SessionConfig(BaseModel):
     auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
     auto_memory_directory: str | None = None  # Custom directory for auto-memory when mode is "claude" (issue #906)
     skill_creating_enabled: bool = False
+    enable_streaming_text: bool = False  # Issue #1486 — opt-in streaming text rendering
 
     # MCP servers (issue #676)
     mcp_server_ids: list[str] | None = None  # Global MCP config IDs to attach
@@ -110,7 +111,7 @@ CONFIG_FIELDS: set[str] = {
     "docker_home_directory", "docker_proxy_enabled", "docker_proxy_image",
     "assigned_secrets", "docker_proxy_allowlist_domains",
     "history_distillation_enabled", "auto_memory_mode", "auto_memory_directory",
-    "skill_creating_enabled",
+    "skill_creating_enabled", "enable_streaming_text",
     "mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config",
     "bare_mode", "env_scrub_enabled", "extra_env",
     "provider_catalog_id", "provider_model_id",

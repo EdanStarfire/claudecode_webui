@@ -9,12 +9,12 @@
     <div class="msg-bubble msg-bubble-assistant" :class="{ 'has-permission-prompt': hasActivePermission, 'tts-playing': isTTSPlaying }">
       <!-- Thinking Block (collapsible) -->
       <div v-if="hasThinking" class="thinking-block mb-2">
-        <ThinkingBlock :thinking="thinkingContent" />
+        <ThinkingBlock :thinking="thinkingContent" :streaming="!!message.streaming" />
       </div>
 
       <!-- Content -->
-      <div v-if="hasContent" class="msg-content-row">
-        <MarkdownView class="msg-text" ref="contentRef" :content="rawContent" />
+      <div v-if="hasContent || message.streaming" class="msg-content-row">
+        <MarkdownView class="msg-text" ref="contentRef" :content="rawContent" :streaming="!!message.streaming" :caret="!!message.streaming" />
         <button
           v-if="tts"
           class="tts-play-icon"
@@ -138,12 +138,17 @@ const currentSessionId = computed(() => sessionStore.currentSessionId)
 useResourceImages(contentRef, currentSessionId)
 
 const hasThinking = computed(() => {
-  return props.message.metadata?.has_thinking &&
-         props.message.metadata?.thinking_content
+  // Issue #1486: message.thinking is built up by thinking_delta events during streaming.
+  // After the fallback-dedup merge the field persists on the message object even though
+  // streaming=false, so check it unconditionally before falling back to metadata.
+  if (props.message.thinking) return true
+  return props.message.metadata?.has_thinking && props.message.metadata?.thinking_content
 })
 
 const thinkingContent = computed(() => {
-  return props.message.metadata?.thinking_content || ''
+  // Prefer the direct thinking field (populated by streaming deltas or persisted after merge)
+  // over metadata.thinking_content, which is empty for the SDK's text-only terminal message.
+  return props.message.thinking || props.message.metadata?.thinking_content || ''
 })
 
 const hasToolUses = computed(() => {
@@ -238,7 +243,10 @@ const hasActivePermission = computed(() => {
 })
 
 const hasAnythingToShow = computed(() => {
-  return hasContent.value ||
+  // Issue #1486: always show the streaming placeholder so the caret is visible from the first
+  // token — without this guard a thinking-first response is invisible until text arrives.
+  return !!props.message.streaming ||
+    hasContent.value ||
     hasThinking.value ||
     mainTimelineTools.value.length > 0 ||
     taskToolCalls.value.length > 0 ||

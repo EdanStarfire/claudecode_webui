@@ -57,6 +57,10 @@ export const useMessageStore = defineStore('message', () => {
   // Map<tool_use_id, { subtype, description, last_tool_name, status, summary, timestamp }>
   const taskActivityByToolUseId = ref(new Map())
 
+  // Issue #1486: Per-session streaming delta buffers (in-memory only, never persisted)
+  // Map<sessionId, { messageId, pendingText, pendingThinking, blockTypeByIndex, rafHandle }>
+  const _deltaBuffers = new Map()
+
   // ========== COMPUTED ==========
 
   // Current session's messages
@@ -239,6 +243,8 @@ export const useMessageStore = defineStore('message', () => {
           : new Date(message.timestamp).getTime() / 1000
         launchTimestampBySession.value.set(sessionId, ts)
       }
+      // Issue #1486: cancel any in-flight streaming placeholder
+      _stopStreamingPlaceholder(sessionId)
     }
 
     // Detect interrupt during real-time
@@ -247,6 +253,8 @@ export const useMessageStore = defineStore('message', () => {
         markToolUseOrphaned(sessionId, id, 'Session was interrupted')
       })
       openTools.clear()
+      // Issue #1486: flush pending deltas and stop streaming caret
+      _stopStreamingPlaceholder(sessionId)
     }
 
     activeToolUses.value.set(sessionId, openTools)
@@ -263,15 +271,68 @@ export const useMessageStore = defineStore('message', () => {
       messagesBySession.value.set(sessionId, [])
     }
 
+    // Issue #1486: drop internal SDK status/requesting messages — they are not displayable
+    if (message.type === 'system') {
+      const subtype = message.subtype || message.metadata?.subtype
+      const status = message.metadata?.init_data?.status
+      if (subtype === 'status' && status === 'requesting') {
+        return
+      }
+    }
+
     const messages = messagesBySession.value.get(sessionId)
 
-    // Issue #1000: Deduplicate by message_id (stable UUID from backend) or id
-    const dedupKey = message.message_id || message.id
+    // Issue #1000: Deduplicate by message_id (stable UUID from backend) or id.
+    // Issue #1486: also check metadata.message_id — the backend sets Anthropic message_id
+    // there for AssistantMessage events; without this fallback, intermediate AssistantMessages
+    // emitted mid-stream (extended thinking) bypass the streamingDone guard and prematurely
+    // finalise the streaming placeholder.
+    const dedupKey = message.message_id || message.id || message.metadata?.message_id
     if (dedupKey) {
       const existingIndex = messages.findIndex(m => (m.message_id || m.id) === dedupKey)
       if (existingIndex !== -1) {
-        console.log(`Skipping duplicate message ${dedupKey} (already exists at index ${existingIndex})`)
-        return // Skip duplicate message
+        // Issue #1486: streaming placeholder → merge terminal message in-place to finalise content.
+        // Guard: only finalise when message_stop has fired (buf.streamingDone = true) or there is
+        // no active buffer.  The Anthropic API with extended thinking emits an intermediate
+        // AssistantMessage mid-stream (before message_stop) that carries the same message_id but
+        // incomplete content — skip that one so the buffer stays alive for the text deltas.
+        if (messages[existingIndex].streaming) {
+          const buf = _deltaBuffers.get(sessionId)
+          if (buf) {
+            // Store as candidate terminal message; message_stop will apply it.
+            // Multiple SDK AssistantMessages may arrive before message_stop — last wins.
+            buf.pendingTerminalMessage = message
+            return
+          }
+          // No buffer (after page reload) — merge directly
+          messages[existingIndex] = { ...messages[existingIndex], ...message, streaming: false }
+          _deltaBuffers.delete(sessionId)
+          messagesBySession.value = new Map(messagesBySession.value)
+          return
+        } else {
+          console.log(`Skipping duplicate message ${dedupKey} (already exists at index ${existingIndex})`)
+        }
+        return
+      }
+    }
+
+    // Issue #1486: fallback dedup — when terminal assistant arrives without a dedupKey
+    // (backend didn't propagate message_id), replace the last streaming placeholder so the
+    // streamed content is not duplicated by the final assembled message.
+    if (!dedupKey && message.type === 'assistant' && !message.streaming) {
+      const streamingIdx = messages.findLastIndex(m => m.streaming && m.type === 'assistant')
+      if (streamingIdx !== -1) {
+        const existing = messages[streamingIdx]
+        messages[streamingIdx] = {
+          ...existing,
+          ...message,
+          content: message.content || existing.content,
+          thinking: message.thinking || existing.thinking,
+          streaming: false,
+        }
+        _deltaBuffers.delete(sessionId)
+        messagesBySession.value = new Map(messagesBySession.value)
+        return
       }
     }
 
@@ -517,6 +578,13 @@ export const useMessageStore = defineStore('message', () => {
 
       existing.status = frontendStatus
       existing.backendStatus = toolCall.status
+
+      // Issue #1486: always accept the incoming input — the first event for a tool may arrive
+      // with input:{} (from an intermediate AssistantMessage emitted while input_json_delta
+      // events are still streaming); a subsequent event carries the fully-assembled input.
+      if (toolCall.input !== undefined && toolCall.input !== null) {
+        existing.input = toolCall.input
+      }
 
       // Update permission fields
       if (toolCall.permission) {
@@ -846,6 +914,7 @@ export const useMessageStore = defineStore('message', () => {
    * Clear messages for a session (for reset)
    */
   function clearMessages(sessionId) {
+    _deltaBuffers.delete(sessionId)  // Issue #1486: discard any in-flight streaming buffer
     messagesBySession.value.delete(sessionId)
     toolCallsBySession.value.delete(sessionId)
     toolSignatureToId.value.delete(sessionId)
@@ -1010,6 +1079,148 @@ export const useMessageStore = defineStore('message', () => {
     }
   }
 
+  // ========== STREAMING (Issue #1486) ==========
+
+  function _createStreamingPlaceholder(sessionId, messageId) {
+    if (!messageId) return
+    if (!messagesBySession.value.has(sessionId)) {
+      messagesBySession.value.set(sessionId, [])
+    }
+    const messages = messagesBySession.value.get(sessionId)
+    if (messages.find(m => m.message_id === messageId)) return  // guard: no duplicate placeholder
+
+    messages.push({
+      id: messageId,
+      message_id: messageId,
+      type: 'assistant',
+      content: '',
+      thinking: '',
+      streaming: true,
+      timestamp: Date.now() / 1000,  // Unix seconds, same convention as backend messages
+    })
+
+    _deltaBuffers.set(sessionId, {
+      messageId,
+      pendingText: '',
+      pendingThinking: '',
+      blockTypeByIndex: {},
+      rafHandle: null,
+    })
+
+    messagesBySession.value = new Map(messagesBySession.value)
+  }
+
+  function _flushDeltaBuffer(sessionId) {
+    const buf = _deltaBuffers.get(sessionId)
+    if (!buf) return
+
+    const messages = messagesBySession.value.get(sessionId)
+    if (!messages) return
+
+    const idx = messages.findIndex(m => m.message_id === buf.messageId)
+    if (idx < 0) { buf.rafHandle = null; return }
+    if (buf.pendingText === '' && buf.pendingThinking === '') { buf.rafHandle = null; return }
+
+    messages[idx] = {
+      ...messages[idx],
+      content: messages[idx].content + buf.pendingText,
+      thinking: messages[idx].thinking + buf.pendingThinking,
+    }
+    buf.pendingText = ''
+    buf.pendingThinking = ''
+    buf.rafHandle = null
+
+    messagesBySession.value = new Map(messagesBySession.value)
+  }
+
+  function _stopStreamingPlaceholder(sessionId) {
+    const buf = _deltaBuffers.get(sessionId)
+    if (!buf) return
+    if (buf.rafHandle) { cancelAnimationFrame(buf.rafHandle); buf.rafHandle = null }
+    _flushDeltaBuffer(sessionId)
+    // Clear streaming flag so the caret disappears
+    const messages = messagesBySession.value.get(sessionId)
+    if (messages) {
+      const idx = messages.findIndex(m => m.message_id === buf.messageId)
+      if (idx >= 0) {
+        messages[idx] = { ...messages[idx], streaming: false }
+        messagesBySession.value = new Map(messagesBySession.value)
+      }
+    }
+    _deltaBuffers.delete(sessionId)
+  }
+
+  function handleAssistantDelta(sessionId, data) {
+    // data = { uuid, event } where event is the raw Anthropic streaming event dict
+    const eventType = data?.event?.type
+    if (!eventType) return
+
+    switch (eventType) {
+      case 'message_start':
+        // Use Anthropic message ID (stable across all streaming events for this message)
+        // data.uuid is a per-event CLI envelope UUID and must NOT be used as message identity
+        _createStreamingPlaceholder(sessionId, data.event?.message?.id)
+        break
+
+      case 'content_block_start': {
+        const buf = _deltaBuffers.get(sessionId)
+        if (buf) buf.blockTypeByIndex[data.event.index] = data.event.content_block?.type
+        break
+      }
+
+      case 'content_block_delta': {
+        const buf = _deltaBuffers.get(sessionId)
+        if (!buf) break
+        const deltaType = data.event.delta?.type
+        if (deltaType === 'text_delta') {
+          buf.pendingText += data.event.delta.text || ''
+          if (!buf.rafHandle) buf.rafHandle = requestAnimationFrame(() => _flushDeltaBuffer(sessionId))
+        } else if (deltaType === 'thinking_delta') {
+          buf.pendingThinking += data.event.delta.thinking || ''
+          if (!buf.rafHandle) buf.rafHandle = requestAnimationFrame(() => _flushDeltaBuffer(sessionId))
+        }
+        // input_json_delta: out of scope per §2, ignore
+        break
+      }
+
+      case 'message_stop': {
+        const buf = _deltaBuffers.get(sessionId)
+        if (buf) {
+          if (buf.rafHandle) { cancelAnimationFrame(buf.rafHandle); buf.rafHandle = null }
+          _flushDeltaBuffer(sessionId)
+          // Apply the stored terminal AssistantMessage (if any) to finalise the placeholder.
+          // The terminal message arrives BEFORE message_stop, so it was stored in
+          // buf.pendingTerminalMessage by addMessage() instead of being applied immediately.
+          const messages = messagesBySession.value.get(sessionId)
+          if (messages) {
+            const idx = messages.findIndex(m => m.message_id === buf.messageId)
+            if (idx >= 0 && messages[idx].streaming) {
+              if (buf.pendingTerminalMessage) {
+                const existing = messages[idx]
+                const terminal = buf.pendingTerminalMessage
+                messages[idx] = {
+                  ...existing,
+                  ...terminal,
+                  content: (terminal.content && terminal.content !== 'Assistant response')
+                    ? terminal.content
+                    : existing.content,
+                  thinking: terminal.thinking || existing.thinking,
+                  streaming: false,
+                }
+              } else {
+                // No terminal message matched — just stop the streaming caret
+                messages[idx] = { ...messages[idx], streaming: false }
+              }
+              messagesBySession.value = new Map(messagesBySession.value)
+            }
+          }
+          _deltaBuffers.delete(sessionId)
+        }
+        break
+      }
+    }
+  }
+
   // ========== SESSION STATE WATCHER ==========
   // Watch for session state changes to detect post-load terminations
   const sessionStore = useSessionStore()
@@ -1032,6 +1243,8 @@ export const useMessageStore = defineStore('message', () => {
 
         if (wasActive && isInactive) {
           clearOrphanedToolUses(newState.id, 'Session was terminated')
+          // Issue #1486: stop any in-flight streaming placeholder so the caret doesn't linger
+          _stopStreamingPlaceholder(newState.id)
         }
       })
     },
@@ -1071,6 +1284,10 @@ export const useMessageStore = defineStore('message', () => {
       if (msg.type === 'system') {
         const subtype = msg.subtype || msg.metadata?.subtype
         if (subtype === 'init' && !msg.content) {
+          return
+        }
+        // Issue #1486: internal SDK state transitions are not displayable
+        if (subtype === 'status' && msg.metadata?.init_data?.status === 'requesting') {
           return
         }
       }
@@ -1113,6 +1330,8 @@ export const useMessageStore = defineStore('message', () => {
     handlePermissionResponse,
     toggleToolExpansion,
     clearMessages,
+    // Issue #1486: streaming delta handler
+    handleAssistantDelta,
 
     // Orphaned tool tracking
     markToolUseOrphaned,

@@ -4236,6 +4236,15 @@ class SessionCoordinator:
         """Create message callback for a session using unified MessageProcessor"""
         async def callback(message_data: dict[str, Any]):
             try:
+                # Issue #1486: assistant_delta bypasses parser, projection, and activity tracking
+                if isinstance(message_data, dict) and message_data.get("type") == "assistant_delta":
+                    for cb in self._message_callbacks.get(session_id, []):
+                        try:
+                            await cb(session_id, message_data)
+                        except Exception:
+                            coord_logger.exception("Error forwarding assistant_delta to subscriber")
+                    return
+
                 # Issue #1130: Track activity for idle watchdog
                 self.session_manager.record_activity(session_id)
 

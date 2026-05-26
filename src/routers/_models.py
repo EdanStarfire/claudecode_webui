@@ -91,6 +91,7 @@ class SessionUpdateRequest(BaseModel):
     enable_claudeai_mcp_servers: bool | None = None
     strict_mcp_config: bool | None = None
     bare_mode: bool | None = None
+    enable_streaming_text: bool | None = None  # Issue #1486 — opt-in streaming text rendering
     working_directory: str | None = None
     # Issue #1230: reject legacy field that was removed
     session_overrides: dict | None = None
@@ -273,6 +274,7 @@ class TemplateUpdateRequest(BaseModel):
     setting_sources: list[str] | None = None
     bare_mode: bool | None = None
     env_scrub_enabled: bool | None = None
+    enable_streaming_text: bool | None = None  # Issue #1486 — opt-in streaming text rendering
     # Non-secret direct env passthrough (issue #1396)
     extra_env: dict[str, str] | None = None
     provider_catalog_id: str | None = None

@@ -50,7 +50,7 @@ PROFILE_AREAS: dict[str, set[str]] = {
     },
     "features": {
         "history_distillation_enabled", "auto_memory_mode", "auto_memory_directory",
-        "skill_creating_enabled",
+        "skill_creating_enabled", "enable_streaming_text",
     },
 }
 

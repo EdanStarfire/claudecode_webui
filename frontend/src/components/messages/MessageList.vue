@@ -632,7 +632,8 @@ function shouldDisplayMessage(message) {
   // These contain a ThinkingBlock with empty thinking text plus a signature blob, no text,
   // no tool_use. Keeping them fragments tool timelines because the grouping walk-back in
   // groupToolsToParentMessages stops at the first empty assistant it finds.
-  if (message.type === 'assistant') {
+  // Issue #1486: streaming placeholders are always shown — content is being built up.
+  if (message.type === 'assistant' && !message.streaming) {
     const meta = message.metadata || {}
     const text = (message.content || '').trim()
     const hasText = text.length > 0 && text !== 'Assistant response'
@@ -656,6 +657,10 @@ function normalizeMessage(message) {
     message_id: message.message_id,
     type: message.type || 'unknown',
     content: message.content || '',
+    // Issue #1486: preserve streaming placeholder fields — stripping them breaks the caret and
+    // thinking-block display because AssistantMessage.vue reads these directly off the message.
+    streaming: message.streaming || false,
+    thinking: message.thinking || '',
     timestamp: message.timestamp || Date.now() / 1000,
     metadata: {
       has_tool_uses: false,
