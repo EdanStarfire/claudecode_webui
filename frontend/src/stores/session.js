@@ -40,6 +40,12 @@ export const useSessionStore = defineStore('session', () => {
   // Last viewed archive per session (so chip clicks restore archive view)
   const lastViewedArchive = ref(new Map())
 
+  // Issue #1589: Optimistic local "viewed" timestamps to clear the unreviewed
+  // (orange) indicator immediately on selection, without waiting for the
+  // server's mark_viewed write at the next poll boundary (up to 30s away).
+  // Server-side last_viewed_at remains the source of truth across reloads.
+  const localViewedAt = ref(new Map()) // sessionId → epoch ms
+
   // Scroll position preservation across session switches
   const scrollPositions = ref(new Map())            // sessionId → scrollTop (pixel offset)
 
@@ -65,13 +71,17 @@ export const useSessionStore = defineStore('session', () => {
   )
 
   // Issue #1513: True when a session has a completion the user has not viewed yet.
+  // Issue #1589: Uses max(server, local) viewed timestamp to clear immediately on selection.
   function isUnreviewed(sessionId) {
     const s = sessions.value.get(sessionId)
     if (!s) return false
     if (s.is_processing) return false
     if (!s.last_completion_at) return false
-    if (!s.last_viewed_at) return true
-    return Date.parse(s.last_completion_at) > Date.parse(s.last_viewed_at)
+    const serverViewed = s.last_viewed_at ? Date.parse(s.last_viewed_at) : 0
+    const localViewed = localViewedAt.value.get(sessionId) || 0
+    const effectiveViewed = Math.max(serverViewed, localViewed)
+    if (!effectiveViewed) return true
+    return Date.parse(s.last_completion_at) > effectiveViewed
   }
 
   // Sessions filtered by project
@@ -254,6 +264,11 @@ export const useSessionStore = defineStore('session', () => {
 
     // Commit synchronously so chip highlight and content area update on the same tick.
     currentSessionId.value = sessionId
+
+    // Issue #1589: Optimistic local mark — clears unreviewed indicator
+    // immediately on selection. Server confirms via mark_viewed() on next poll.
+    localViewedAt.value.set(sessionId, Date.now())
+    localViewedAt.value = new Map(localViewedAt.value) // trigger reactivity
 
     if (wasAlreadyCurrent && !selectingSession.value) {
       return
@@ -712,6 +727,7 @@ export const useSessionStore = defineStore('session', () => {
     deletingSessions,
     ghostAgents,
     lastViewedArchive,
+    localViewedAt,
     scrollPositions,
     sessionResets,
     archiveChanges,
