@@ -233,14 +233,11 @@ const latestMessageFromStore = computed(() => {
           (content.includes('<command-name>') || content.match(/\nARGUMENTS:/))) continue
     }
 
-    // Skip system messages with generic placeholder content
-    if (msg.type === 'system' && msg.content === 'System message') continue
-
     // Skip assistant messages with only tool uses (no actual text)
     if (msg.type === 'assistant' && msg.content === 'Assistant response') continue
 
-    // Accept user, assistant (with content), or system (with content) messages
-    if (msg.type === 'user' || msg.type === 'assistant' || msg.type === 'system') {
+    // Accept only user and assistant messages (system messages are excluded)
+    if (msg.type === 'user' || msg.type === 'assistant') {
       return {
         content: msg.content,
         type: msg.type,
