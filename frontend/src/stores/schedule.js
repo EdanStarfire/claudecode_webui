@@ -85,15 +85,26 @@ export const useScheduleStore = defineStore('schedule', () => {
   // ========== ACTIONS ==========
 
   /**
-   * Load schedules for a legion from the API
+   * Load schedules for a legion from the API, auto-paginating until has_more=false.
+   * Store is written once after all pages are collected — no mid-load partial state.
    */
   async function loadSchedules(legionId) {
+    const pageSize = 200
+    const all = []
+    let offset = 0
     try {
-      const data = await api.get(`/api/legions/${legionId}/schedules`)
-      const schedules = data.schedules || []
-      schedulesByLegion.value.set(legionId, schedules)
+      while (true) {
+        const data = await api.get(
+          `/api/legions/${legionId}/schedules?limit=${pageSize}&offset=${offset}`
+        )
+        const page = data.schedules || []
+        all.push(...page)
+        if (!data.has_more || page.length === 0) break
+        offset += page.length
+      }
+      schedulesByLegion.value.set(legionId, all)
       _rebuildMinionCounts(legionId, null)
-      return schedules
+      return all
     } catch (error) {
       console.error('Failed to load schedules:', error)
       return []
