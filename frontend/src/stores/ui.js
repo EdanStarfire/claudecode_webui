@@ -136,6 +136,15 @@ export const useUIStore = defineStore('ui', () => {
     writeStorage('agentSort', mode)
   }
 
+  // Issue #1587: Max peek cards in collapsed chip stack — synced from /api/config via settings page
+  const maxPeekCards = ref(readStorage('maxPeekCards', 100))
+
+  function setMaxPeekCards(n) {
+    const value = Math.max(1, parseInt(n, 10) || 100)
+    maxPeekCards.value = value
+    writeStorage('maxPeekCards', value)
+  }
+
   // ========== ACTIONS ==========
 
   function toggleRightSidebar() {
@@ -333,6 +342,7 @@ export const useUIStore = defineStore('ui', () => {
     rateLimits,
     watchdogAlerts,
     agentSort,
+    maxPeekCards,
 
     // Actions
     toggleRightSidebar,
@@ -362,5 +372,6 @@ export const useUIStore = defineStore('ui', () => {
     pushAlert,
     dismissAlert,
     setAgentSort,
+    setMaxPeekCards,
   }
 })

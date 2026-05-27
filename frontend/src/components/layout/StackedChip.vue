@@ -13,12 +13,20 @@
       <!-- Peek Cards (collapsed state) -->
       <template v-if="!isExpanded && childIds.length > 0">
         <PeekCard
-          v-for="(item, index) in allDescendantsForPeek"
+          v-for="(item, index) in visiblePeek"
           :key="item.sessionId"
           :sessionId="item.sessionId"
           :index="index"
           :depth="item.depth"
+          :cap="cap"
           @click="handlePeekClick"
+        />
+        <PeekSentinelCard
+          v-if="showSentinel"
+          :index="visiblePeek.length"
+          :cap="cap"
+          :hiddenSessionIds="hiddenPeek.map(d => d.sessionId)"
+          @click="toggleExpand"
         />
       </template>
 
@@ -68,6 +76,7 @@ import { useUIStore } from '@/stores/ui'
 import { compareAgents } from '@/utils/agentSort'
 import AgentChip from './AgentChip.vue'
 import PeekCard from './PeekCard.vue'
+import PeekSentinelCard from './PeekSentinelCard.vue'
 import ChipConnector from './ChipConnector.vue'
 
 defineOptions({ name: 'StackedChip' })
@@ -169,12 +178,19 @@ const allDescendantsForPeek = computed(() => {
   return result
 })
 
-// Margin-right for peek card protrusion
+const cap = computed(() => uiStore.maxPeekCards)
+const visiblePeek = computed(() => allDescendantsForPeek.value.slice(0, cap.value))
+const hiddenPeek = computed(() => allDescendantsForPeek.value.slice(cap.value))
+const showSentinel = computed(() => hiddenPeek.value.length > 0)
+
+const SENTINEL_EXTRA = 110
+
 const stackStyle = computed(() => {
-  if (isExpanded.value || allDescendantsForPeek.value.length === 0) return {}
-  return {
-    marginRight: `${allDescendantsForPeek.value.length * 22}px`
-  }
+  const base = { '--parent-z': cap.value + 10 }
+  if (isExpanded.value || allDescendantsForPeek.value.length === 0) return base
+  const renderedCount = visiblePeek.value.length
+  const sentinelPx = showSentinel.value ? SENTINEL_EXTRA : 0
+  return { ...base, marginRight: `${renderedCount * 22 + sentinelPx}px` }
 })
 
 function getChildSession(childId) {
@@ -226,7 +242,7 @@ function handlePeekClick(childSessionId) {
 
 .parent-wrapper > :deep(.agent-chip) {
   position: relative;
-  z-index: 25;
+  z-index: var(--parent-z, 25);
 }
 
 .stack-count {
@@ -245,7 +261,7 @@ function handlePeekClick(childSessionId) {
   justify-content: center;
   padding: 0 3px;
   cursor: pointer;
-  z-index: 26;
+  z-index: calc(var(--parent-z, 25) + 1);
 }
 
 .stack-count:hover {
