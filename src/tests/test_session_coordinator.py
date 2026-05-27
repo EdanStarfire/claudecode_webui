@@ -596,6 +596,28 @@ class TestSessionCoordinator:
         assert success is True
         mock_start.assert_called_once_with(session_id, None)
 
+    @pytest.mark.asyncio
+    async def test_issue_1579_reset_re_registers_message_callback(self, temp_coordinator, sample_session_config):
+        """After reset, _message_callbacks contains exactly one (fresh) callback — Fix 6."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        # Register an initial callback (simulating what web_server does on start)
+        initial_sentinel = object()
+        coordinator.add_message_callback(session_id, initial_sentinel)
+        assert len(coordinator._message_callbacks.get(session_id, [])) == 1
+
+        # Simulate what the /reset endpoint now does (Fix 6): clear + re-register
+        fresh_sentinel = object()
+        coordinator.clear_message_callbacks(session_id)
+        coordinator.add_message_callback(session_id, fresh_sentinel)
+
+        # Verify exactly one callback remains and it is the fresh one
+        callbacks = coordinator._message_callbacks.get(session_id, [])
+        assert len(callbacks) == 1, "reset must leave exactly one (fresh) callback"
+        assert callbacks[0] is fresh_sentinel, "the surviving callback must be the fresh one"
+        assert callbacks[0] is not initial_sentinel, "the old callback must have been cleared"
+
 
 class TestDeleteSessionScheduleCancellation:
     """Tests for schedule deletion when deleting sessions (Issue #671)."""
