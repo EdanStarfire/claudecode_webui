@@ -25,9 +25,11 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { apiGet, apiPut } from '@/utils/api'
+import { useUIStore } from '@/stores/ui'
 import FeaturesTab from '@/components/configuration/FeaturesTab.vue'
 import SettingsToolbar from '../SettingsToolbar.vue'
 
+const uiStore = useUIStore()
 const config = ref({})
 const originalConfig = ref({})
 const loading = ref(false)
@@ -45,6 +47,7 @@ async function load() {
     const data = await apiGet('/api/config')
     config.value = data.config
     originalConfig.value = JSON.parse(JSON.stringify(data.config))
+    uiStore.setMaxPeekCards(config.value.features?.max_peek_cards ?? 100)
   } catch (e) {
     error.value = e.message || 'Failed to load configuration'
   } finally {
@@ -67,6 +70,7 @@ async function save() {
     const data = await apiPut('/api/config', config.value)
     config.value = data.config
     originalConfig.value = JSON.parse(JSON.stringify(data.config))
+    uiStore.setMaxPeekCards(config.value.features?.max_peek_cards ?? 100)
   } catch (e) {
     error.value = e.message || 'Failed to save'
   } finally {

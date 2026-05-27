@@ -169,6 +169,7 @@ class FeaturesConfig:
     skill_sync_enabled: bool = True
     disable_openai_responses_count_tokens_api: bool = True  # issue #1473
     streaming_text_enabled: bool = True  # Issue #1486 — global kill switch (False disables platform-wide)
+    max_peek_cards: int = 100  # Issue #1587 — cap for collapsed chip peek stack
 
 
 @dataclass
@@ -267,6 +268,7 @@ class AppConfig:
                 "disable_openai_responses_count_tokens_api", True
             ),
             streaming_text_enabled=features_data.get("streaming_text_enabled", True),
+            max_peek_cards=features_data.get("max_peek_cards", 100),
         )
         proxy_data = data.get("proxy", {})
         proxy = ProxyConfig(
@@ -352,6 +354,7 @@ class AppConfig:
                     self.features.disable_openai_responses_count_tokens_api
                 ),
                 "streaming_text_enabled": self.features.streaming_text_enabled,
+                "max_peek_cards": self.features.max_peek_cards,
             },
             "proxy": {
                 "proxy_image": self.proxy.proxy_image,

@@ -20,7 +20,8 @@ import { useSessionStore } from '@/stores/session'
 const props = defineProps({
   sessionId: { type: String, required: true },
   index: { type: Number, default: 0 },
-  depth: { type: Number, default: 1 }
+  depth: { type: Number, default: 1 },
+  cap: { type: Number, default: 100 }
 })
 
 defineEmits(['click'])
@@ -38,7 +39,7 @@ const scale = computed(() => Math.max(0.5, Math.pow(0.9, props.depth)))
 
 const peekStyle = computed(() => ({
   right: `${-22 - (props.index * 22)}px`,
-  zIndex: 20 - props.index,
+  zIndex: props.cap + 1 - props.index,
   transform: `scale(${scale.value})`,
   transformOrigin: 'right center'
 }))

@@ -51,6 +51,29 @@
 
     <hr class="my-3">
 
+    <h6 class="mb-2">Agent Strip</h6>
+    <div class="mb-3">
+      <label class="form-label" for="maxPeekCards">Max peek cards</label>
+      <input
+        id="maxPeekCards"
+        type="number"
+        class="form-control form-control-sm"
+        :class="{ 'is-invalid': maxPeekCardsError }"
+        min="1"
+        step="1"
+        :value="config?.max_peek_cards ?? 100"
+        @input="onMaxPeekCardsInput($event.target.value)"
+      >
+      <div v-if="maxPeekCardsError" class="invalid-feedback">{{ maxPeekCardsError }}</div>
+      <small class="form-text text-muted">
+        Maximum peek cards rendered in a collapsed agent stack before showing a sentinel summary
+        (default: 100, minimum: 1). Larger values increase strip width; smaller values rely
+        more heavily on the sentinel chip for at-a-glance state visibility.
+      </small>
+    </div>
+
+    <hr class="my-3">
+
     <h6 class="mb-2">Legion</h6>
     <div class="mb-3">
       <label class="form-label" for="maxConcurrentMinions">Max Concurrent Minions</label>
@@ -84,6 +107,17 @@ const props = defineProps({
 const emit = defineEmits(['update:config', 'update:legionConfig'])
 
 const maxMinionsError = ref(null)
+const maxPeekCardsError = ref(null)
+
+function onMaxPeekCardsInput(value) {
+  const parsed = parseInt(value, 10)
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    maxPeekCardsError.value = 'Must be a positive integer'
+    return
+  }
+  maxPeekCardsError.value = null
+  emit('update:config', { ...props.config, max_peek_cards: parsed })
+}
 
 function onMaxMinionsInput(value) {
   const parsed = parseInt(value, 10)

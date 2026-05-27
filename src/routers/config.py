@@ -35,6 +35,11 @@ def build_router(webui) -> APIRouter:
             features = body["features"]
             if "skill_sync_enabled" in features:
                 config.features.skill_sync_enabled = features["skill_sync_enabled"]
+            if "max_peek_cards" in features:
+                val = features["max_peek_cards"]
+                if not isinstance(val, int) or val < 1:
+                    raise ValueError("max_peek_cards must be a positive integer")
+                config.features.max_peek_cards = val
 
         # Merge networking section
         if "networking" in body:
