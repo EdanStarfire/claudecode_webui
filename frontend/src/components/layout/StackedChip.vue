@@ -186,8 +186,9 @@ const showSentinel = computed(() => hiddenPeek.value.length > 0)
 const stackStyle = computed(() => {
   const base = { '--parent-z': cap.value + 10 }
   if (isExpanded.value || allDescendantsForPeek.value.length === 0) return base
-  const slotCount = visiblePeek.value.length + (showSentinel.value ? 1 : 0)
-  return { ...base, marginRight: `${slotCount * 22}px` }
+  const peekPx = visiblePeek.value.length * 22
+  const sentinelPx = showSentinel.value ? 90 : 0
+  return { ...base, marginRight: `${peekPx + sentinelPx}px` }
 })
 
 function getChildSession(childId) {
