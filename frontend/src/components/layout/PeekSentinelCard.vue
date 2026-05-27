@@ -53,8 +53,8 @@ const counts = computed(() => {
 const total = computed(() => Object.values(counts.value).reduce((a, b) => a + b, 0))
 
 const sentinelStyle = computed(() => ({
-  right: `${-22 - props.index * 22}px`,
-  zIndex: 1,
+  right: `${-(props.index * 22 + 90)}px`,
+  zIndex: props.cap + 1 - props.index,
 }))
 
 const titleText = computed(() =>

@@ -183,14 +183,11 @@ const visiblePeek = computed(() => allDescendantsForPeek.value.slice(0, cap.valu
 const hiddenPeek = computed(() => allDescendantsForPeek.value.slice(cap.value))
 const showSentinel = computed(() => hiddenPeek.value.length > 0)
 
-const SENTINEL_EXTRA = 110
-
 const stackStyle = computed(() => {
   const base = { '--parent-z': cap.value + 10 }
   if (isExpanded.value || allDescendantsForPeek.value.length === 0) return base
-  const renderedCount = visiblePeek.value.length
-  const sentinelPx = showSentinel.value ? SENTINEL_EXTRA : 0
-  return { ...base, marginRight: `${renderedCount * 22 + sentinelPx}px` }
+  const slotCount = visiblePeek.value.length + (showSentinel.value ? 1 : 0)
+  return { ...base, marginRight: `${slotCount * 22}px` }
 })
 
 function getChildSession(childId) {
