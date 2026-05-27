@@ -83,20 +83,11 @@ watch(() => route.path, (path) => {
 
 function toggleSettings() {
   if (isSettingsRoute.value) {
-    const sessionId = route.params.sessionId
-    if (sessionId && sessionId !== '__new__') {
-      router.push(`/session/${sessionId}`)
-    } else {
-      router.push(lastContentRoute.value)
-    }
+    router.push(lastContentRoute.value)
     return
   }
   const sessionId = sessionStore.currentSessionId
-  if (sessionId) {
-    router.push(`/settings/session/${sessionId}/general`)
-  } else {
-    router.push('/settings/features')
-  }
+  router.push(sessionId ? `/settings/session/${sessionId}/general` : '/settings/features')
 }
 
 function toggleAnalytics() {
