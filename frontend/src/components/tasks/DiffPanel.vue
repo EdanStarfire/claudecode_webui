@@ -77,25 +77,17 @@
 
         <!-- Total Changes Mode -->
         <div v-if="diffStore.currentMode === 'total'" class="file-list">
-          <div
-            v-for="file in diffStore.currentFiles"
-            :key="file.path"
-            class="file-item d-flex align-items-center gap-2 px-3 py-2 border-bottom"
-            @click="openFile(file.path, null)"
-          >
-            <span class="status-icon" :class="'status-' + file.status">
-              {{ statusIcon(file.status) }}
-            </span>
-            <span class="file-path text-truncate flex-grow-1" :title="file.path">
-              {{ file.path }}
-            </span>
-            <span v-if="!file.is_binary" class="file-stats small text-nowrap">
-              <span v-if="file.insertions > 0" class="text-success">+{{ file.insertions }}</span>
-              <span v-if="file.insertions > 0 && file.deletions > 0" class="text-muted">/</span>
-              <span v-if="file.deletions > 0" class="text-danger">-{{ file.deletions }}</span>
-            </span>
-            <span v-else class="file-stats small text-muted">binary</span>
-          </div>
+          <DiffTreeNode
+            v-for="node in totalTree"
+            :key="node.path"
+            :node="node"
+            :file-ref="null"
+            :expanded-folders="expandedFolders"
+            :show-stats="true"
+            :depth="0"
+            @open-file="(path, fileRef) => openFile(path, fileRef)"
+            @toggle-folder="toggleFolder"
+          />
         </div>
 
         <!-- By Commit Mode -->
@@ -122,19 +114,17 @@
               </span>
             </div>
             <div v-if="expandedCommits.has(commit.hash)" class="commit-files">
-              <div
-                v-for="filePath in commit.files"
-                :key="filePath"
-                class="file-item d-flex align-items-center gap-2 px-4 py-1"
-                @click="openFile(filePath, commit.is_uncommitted ? 'uncommitted' : commit.hash)"
-              >
-                <span class="status-icon" :class="'status-' + getFileStatus(filePath)">
-                  {{ statusIcon(getFileStatus(filePath)) }}
-                </span>
-                <span class="file-path text-truncate small" :title="filePath">
-                  {{ filePath }}
-                </span>
-              </div>
+              <DiffTreeNode
+                v-for="node in commitTree(commit)"
+                :key="node.path"
+                :node="node"
+                :file-ref="commit.is_uncommitted ? 'uncommitted' : commit.hash"
+                :expanded-folders="expandedFolders"
+                :show-stats="false"
+                :depth="0"
+                @open-file="(path, fileRef) => openFile(path, fileRef)"
+                @toggle-folder="toggleFolder"
+              />
             </div>
           </div>
         </div>
@@ -149,14 +139,16 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { useDiffStore } from '@/stores/diff'
 import { useSessionStore } from '@/stores/session'
+import DiffTreeNode from './DiffTreeNode.vue'
 
 const diffStore = useDiffStore()
 const sessionStore = useSessionStore()
 
 const expandedCommits = ref(new Set())
+const expandedFolders = ref(new Set())
 
 function refresh() {
   if (sessionStore.currentSessionId) {
@@ -179,6 +171,80 @@ function toggleCommit(hash) {
   expandedCommits.value = new Set(expandedCommits.value)
 }
 
+function toggleFolder(folderPath) {
+  if (expandedFolders.value.has(folderPath)) {
+    expandedFolders.value.delete(folderPath)
+  } else {
+    expandedFolders.value.add(folderPath)
+  }
+  expandedFolders.value = new Set(expandedFolders.value)
+}
+
+function buildTree(files) {
+  const root = { type: 'folder', name: '', path: '', children: [], insertions: 0, deletions: 0 }
+  for (const file of files) {
+    const parts = file.path.split('/')
+    let cursor = root
+    for (let i = 0; i < parts.length - 1; i++) {
+      const segment = parts[i]
+      const folderPath = parts.slice(0, i + 1).join('/')
+      let child = cursor.children.find(c => c.type === 'folder' && c.name === segment)
+      if (!child) {
+        child = { type: 'folder', name: segment, path: folderPath, children: [], insertions: 0, deletions: 0 }
+        cursor.children.push(child)
+      }
+      child.insertions += (file.insertions || 0)
+      child.deletions += (file.deletions || 0)
+      cursor = child
+    }
+    cursor.children.push({
+      type: 'file',
+      name: parts[parts.length - 1],
+      path: file.path,
+      status: file.status,
+      insertions: file.insertions || 0,
+      deletions: file.deletions || 0,
+      is_binary: !!file.is_binary
+    })
+  }
+  function sortNode(node) {
+    if (!node.children) return
+    node.children.sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'folder' ? -1 : 1
+      return a.name.localeCompare(b.name)
+    })
+    node.children.forEach(sortNode)
+  }
+  sortNode(root)
+  return root.children
+}
+
+function collectFolderPaths(nodes, out = []) {
+  for (const node of nodes) {
+    if (node.type === 'folder') {
+      out.push(node.path)
+      collectFolderPaths(node.children, out)
+    }
+  }
+  return out
+}
+
+const totalTree = computed(() => buildTree(diffStore.currentFiles))
+
+function commitTree(commit) {
+  const fileObjects = commit.files.map(path => {
+    const info = diffStore.currentDiff?.files?.[path] || {}
+    return {
+      path,
+      status: info.status || 'modified',
+      insertions: info.insertions || 0,
+      deletions: info.deletions || 0,
+      is_binary: !!info.is_binary
+    }
+  })
+  return buildTree(fileObjects)
+}
+
 function statusIcon(status) {
   switch (status) {
     case 'added': return '+'
@@ -186,11 +252,6 @@ function statusIcon(status) {
     case 'renamed': return 'R'
     default: return 'M'
   }
-}
-
-function getFileStatus(filePath) {
-  if (!diffStore.currentDiff || !diffStore.currentDiff.files) return 'modified'
-  return diffStore.currentDiff.files[filePath]?.status || 'modified'
 }
 
 function formatDate(isoDate) {
@@ -218,7 +279,7 @@ watch(
   { immediate: true }
 )
 
-// Auto-expand uncommitted commit when diff data loads
+// Auto-expand uncommitted commit and seed all folders when diff data loads
 watch(
   () => diffStore.currentDiff,
   (diff) => {
@@ -228,6 +289,15 @@ watch(
         expandedCommits.value.add(uncommitted.hash)
         expandedCommits.value = new Set(expandedCommits.value)
       }
+    }
+    if (diff?.files) {
+      const allFiles = Object.keys(diff.files).map(path => ({ path }))
+      const tree = buildTree(allFiles)
+      const allFolders = collectFolderPaths(tree)
+      for (const folder of allFolders) {
+        expandedFolders.value.add(folder)
+      }
+      expandedFolders.value = new Set(expandedFolders.value)
     }
   },
   { immediate: true }
