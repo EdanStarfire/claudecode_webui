@@ -72,7 +72,11 @@ export const useSessionStore = defineStore('session', () => {
 
   // Issue #1513: True when a session has a completion the user has not viewed yet.
   // Issue #1589: Uses max(server, local) viewed timestamp to clear immediately on selection.
+  // Issue #1598: Suppress for currently selected session — the session being viewed
+  // is inherently read regardless of timing, eliminating any orange-flash window
+  // between completion-event arrival and the next poll's mark_viewed write.
   function isUnreviewed(sessionId) {
+    if (sessionId === currentSessionId.value) return false
     const s = sessions.value.get(sessionId)
     if (!s) return false
     if (s.is_processing) return false
