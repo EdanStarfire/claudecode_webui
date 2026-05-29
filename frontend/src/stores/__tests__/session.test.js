@@ -101,6 +101,64 @@ describe('session store', () => {
     expect(store.getInput('sess-1')).toBe('hello')
   })
 
+  describe('isUnreviewed active-session suppression (#1598)', () => {
+    it('returns false for the currently selected session even when completion > viewed', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useSessionStore()
+
+      const past = new Date(Date.now() - 10000).toISOString()
+      const recent = new Date(Date.now() - 1000).toISOString()
+
+      store.sessions.set('sess-active', makeSession({
+        session_id: 'sess-active',
+        last_completion_at: recent,
+        last_viewed_at: past,
+        is_processing: false
+      }))
+      store.currentSessionId = 'sess-active'
+
+      expect(store.isUnreviewed('sess-active')).toBe(false)
+    })
+
+    it('returns true for a non-active session with unread completion', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useSessionStore()
+
+      const past = new Date(Date.now() - 10000).toISOString()
+      const recent = new Date(Date.now() - 1000).toISOString()
+
+      store.sessions.set('sess-other', makeSession({
+        session_id: 'sess-other',
+        last_completion_at: recent,
+        last_viewed_at: past,
+        is_processing: false
+      }))
+      store.sessions.set('sess-active', makeSession({ session_id: 'sess-active' }))
+      store.currentSessionId = 'sess-active'
+
+      expect(store.isUnreviewed('sess-other')).toBe(true)
+    })
+
+    it('returns false for a non-active session when effectiveViewed >= last_completion_at', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useSessionStore()
+
+      const recent = new Date(Date.now() - 1000).toISOString()
+      const evenMoreRecent = new Date(Date.now() - 500).toISOString()
+
+      store.sessions.set('sess-read', makeSession({
+        session_id: 'sess-read',
+        last_completion_at: recent,
+        last_viewed_at: evenMoreRecent,
+        is_processing: false
+      }))
+      store.sessions.set('sess-active', makeSession({ session_id: 'sess-active' }))
+      store.currentSessionId = 'sess-active'
+
+      expect(store.isUnreviewed('sess-read')).toBe(false)
+    })
+  })
+
   describe('selectSession cache gate (#1515)', () => {
     it('calls loadMessages on first visit when session is not cached', async () => {
       const { useSessionStore } = await import('@/stores/session')
