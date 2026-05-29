@@ -142,6 +142,16 @@
                 <div class="small text-muted">Reassign this minion within the hierarchy</div>
               </button>
 
+              <button
+                v-if="canMarkUnread"
+                class="btn btn-outline-secondary text-start"
+                @click="handleMarkUnread"
+                :disabled="isPerformingAction || session?.is_processing"
+              >
+                <strong><i class="bi bi-envelope-exclamation me-1"></i> Mark Unread</strong>
+                <div class="small text-muted">Restore the orange unread indicator</div>
+              </button>
+
               <!-- Visual separator -->
               <hr class="my-2">
 
@@ -276,6 +286,11 @@ const reparentError = ref('')
 const selectedReparentTargetId = ref(undefined)
 
 // Computed
+const canMarkUnread = computed(() =>
+  !!session.value?.last_completion_at &&
+  !sessionStore.isUnreviewed(session.value?.session_id)
+)
+
 const confirmationTitle = computed(() => {
   if (confirmationView.value === 'reset') return 'Reset Session'
   if (confirmationView.value === 'delete') return 'Delete Session'
@@ -374,6 +389,29 @@ async function executeReparent() {
 // Cancel confirmation and return to main view
 function cancelConfirmation() {
   confirmationView.value = null
+}
+
+// Mark session as unread (issue #1597)
+async function handleMarkUnread() {
+  if (!session.value) return
+  const sessionId = session.value.session_id
+  const projectId = session.value.project_id
+  const wasCurrent = sessionStore.currentSessionId === sessionId
+  isPerformingAction.value = true
+  loadingMessage.value = 'Marking unread...'
+  try {
+    // Disconnect poll first so mark_viewed() cannot race with mark_unread() on the server.
+    // The poll calls mark_viewed() at request start; aborting the in-flight fetch prevents
+    // a new cycle from firing between mark_unread() clearing last_viewed_at and navigation.
+    if (wasCurrent) await wsStore.disconnectSession()
+    await sessionStore.markUnread(sessionId)
+    if (modalInstance) modalInstance.hide()
+    if (wasCurrent && projectId) router.push(`/project/${projectId}`)
+  } catch (error) {
+    errorMessage.value = `Failed to mark unread: ${error.data?.detail || error.message || 'Unknown error'}`
+  } finally {
+    isPerformingAction.value = false
+  }
 }
 
 // Execute the pending confirmation action
