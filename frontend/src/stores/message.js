@@ -291,36 +291,37 @@ export const useMessageStore = defineStore('message', () => {
 
     const messages = messagesBySession.value.get(sessionId)
 
-    // Issue #1000: Deduplicate by message_id (stable UUID from backend) or id.
-    // Issue #1486: also check metadata.message_id — the backend sets Anthropic message_id
-    // there for AssistantMessage events; without this fallback, intermediate AssistantMessages
-    // emitted mid-stream (extended thinking) bypass the streamingDone guard and prematurely
-    // finalise the streaming placeholder.
-    const dedupKey = message.message_id || message.id || message.metadata?.message_id
+    // Issue #1601 / #1486: Step 1 — streaming-placeholder collection (PRECEDENCE).
+    // The Anthropic API with extended thinking emits multiple AssistantMessage objects sharing
+    // the same metadata.message_id (Anthropic ID) within one turn. Each must become its own
+    // display bubble (matching the page-load path), so collect them in arrival order on the
+    // buffer and splice them all in at message_stop.  This check runs BEFORE backend-UUID dedup
+    // so a terminal AM is never accidentally dropped as a duplicate of a not-yet-added message.
+    const placeholderKey = message.metadata?.message_id
+    if (placeholderKey) {
+      const placeholderIdx = messages.findIndex(m => m.streaming === true && m.message_id === placeholderKey)
+      if (placeholderIdx !== -1) {
+        const buf = _deltaBuffers.get(sessionId)
+        if (buf) {
+          if (!buf.collectedTerminalMessages) buf.collectedTerminalMessages = []
+          buf.collectedTerminalMessages.push(message)
+          return
+        }
+        // No buffer (page reload / reconnect mid-stream) — merge directly into placeholder
+        messages[placeholderIdx] = { ...messages[placeholderIdx], ...message, streaming: false }
+        messagesBySession.value = new Map(messagesBySession.value)
+        return
+      }
+    }
+
+    // Issue #1000: Step 2 — backend-UUID dedup. Deduplicate by message_id (stable UUID from
+    // backend) or id. The Anthropic-ID fallback was removed from dedupKey; that case is handled
+    // above by the streaming-placeholder collection path.
+    const dedupKey = message.message_id || message.id
     if (dedupKey) {
       const existingIndex = messages.findIndex(m => (m.message_id || m.id) === dedupKey)
       if (existingIndex !== -1) {
-        // Issue #1486: streaming placeholder → merge terminal message in-place to finalise content.
-        // Guard: only finalise when message_stop has fired (buf.streamingDone = true) or there is
-        // no active buffer.  The Anthropic API with extended thinking emits an intermediate
-        // AssistantMessage mid-stream (before message_stop) that carries the same message_id but
-        // incomplete content — skip that one so the buffer stays alive for the text deltas.
-        if (messages[existingIndex].streaming) {
-          const buf = _deltaBuffers.get(sessionId)
-          if (buf) {
-            // Store as candidate terminal message; message_stop will apply it.
-            // Multiple SDK AssistantMessages may arrive before message_stop — last wins.
-            buf.pendingTerminalMessage = message
-            return
-          }
-          // No buffer (after page reload) — merge directly
-          messages[existingIndex] = { ...messages[existingIndex], ...message, streaming: false }
-          _deltaBuffers.delete(sessionId)
-          messagesBySession.value = new Map(messagesBySession.value)
-          return
-        } else {
-          console.log(`Skipping duplicate message ${dedupKey} (already exists at index ${existingIndex})`)
-        }
+        console.log(`Skipping duplicate message ${dedupKey} (already exists at index ${existingIndex})`)
         return
       }
     }
@@ -1207,27 +1208,16 @@ export const useMessageStore = defineStore('message', () => {
         if (buf) {
           if (buf.rafHandle) { cancelAnimationFrame(buf.rafHandle); buf.rafHandle = null }
           _flushDeltaBuffer(sessionId)
-          // Apply the stored terminal AssistantMessage (if any) to finalise the placeholder.
-          // The terminal message arrives BEFORE message_stop, so it was stored in
-          // buf.pendingTerminalMessage by addMessage() instead of being applied immediately.
+          // Issue #1601: replace placeholder with collected terminal AMs via splice so each
+          // AM becomes its own bubble, matching the page-load (JSONL) bubble layout exactly.
           const messages = messagesBySession.value.get(sessionId)
           if (messages) {
             const idx = messages.findIndex(m => m.message_id === buf.messageId)
             if (idx >= 0 && messages[idx].streaming) {
-              if (buf.pendingTerminalMessage) {
-                const existing = messages[idx]
-                const terminal = buf.pendingTerminalMessage
-                messages[idx] = {
-                  ...existing,
-                  ...terminal,
-                  content: (terminal.content && terminal.content !== 'Assistant response')
-                    ? terminal.content
-                    : existing.content,
-                  thinking: terminal.thinking || existing.thinking,
-                  streaming: false,
-                }
+              if (buf.collectedTerminalMessages?.length > 0) {
+                messages.splice(idx, 1, ...buf.collectedTerminalMessages.map(m => ({ ...m, streaming: false })))
               } else {
-                // No terminal message matched — just stop the streaming caret
+                // No terminal AM collected — just stop the streaming caret
                 messages[idx] = { ...messages[idx], streaming: false }
               }
               messagesBySession.value = new Map(messagesBySession.value)
