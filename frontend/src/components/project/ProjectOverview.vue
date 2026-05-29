@@ -85,87 +85,195 @@
             <span class="badge bg-secondary">{{ projectSessions.length }}</span>
           </div>
           <div class="card-body">
-            <!-- Loading hierarchy -->
-            <div v-if="loadingHierarchy" class="text-center py-4">
-              <div class="spinner-border spinner-border-sm" role="status">
-                <span class="visually-hidden">Loading...</span>
+            <!-- Control row: view mode toggle + sort buttons + group-by-state -->
+            <div class="d-flex flex-wrap justify-content-end gap-2 mb-2 me-4">
+              <!-- View mode toggle -->
+              <div class="btn-group btn-group-sm" role="group" aria-label="View mode">
+                <button
+                  type="button"
+                  class="btn"
+                  :class="uiStore.projectViewMode === 'hierarchy' ? 'btn-primary' : 'btn-outline-secondary'"
+                  @click="uiStore.setProjectViewMode('hierarchy')"
+                  title="Hierarchy view"
+                >🌳 Hierarchy</button>
+                <button
+                  type="button"
+                  class="btn"
+                  :class="uiStore.projectViewMode === 'flat' ? 'btn-primary' : 'btn-outline-secondary'"
+                  @click="uiStore.setProjectViewMode('flat')"
+                  title="Flat list view"
+                >☰ Flat</button>
               </div>
-              <p class="text-muted mt-2 mb-0">Loading hierarchy...</p>
+
+              <!-- Hierarchy sort toggle (visible only in hierarchy mode) -->
+              <div
+                v-if="uiStore.projectViewMode === 'hierarchy'"
+                class="btn-group btn-group-sm"
+                role="group"
+                aria-label="Hierarchy sort order"
+              >
+                <button
+                  type="button"
+                  class="btn"
+                  :class="uiStore.agentSort === 'alpha' ? 'btn-primary' : 'btn-outline-secondary'"
+                  @click="uiStore.setAgentSort('alpha')"
+                  title="Sort alphabetically"
+                >A–Z</button>
+                <button
+                  type="button"
+                  class="btn"
+                  :class="uiStore.agentSort === 'creation' ? 'btn-primary' : 'btn-outline-secondary'"
+                  @click="uiStore.setAgentSort('creation')"
+                  title="Sort by creation order"
+                >Created</button>
+              </div>
+
+              <!-- Flat sort toggle (visible only in flat mode) -->
+              <div
+                v-else
+                class="btn-group btn-group-sm"
+                role="group"
+                aria-label="Flat list sort order"
+              >
+                <button
+                  type="button"
+                  class="btn"
+                  :class="uiStore.flatSort === 'alpha' ? 'btn-primary' : 'btn-outline-secondary'"
+                  @click="uiStore.setFlatSort('alpha')"
+                  title="Sort alphabetically"
+                >A–Z</button>
+                <button
+                  type="button"
+                  class="btn"
+                  :class="uiStore.flatSort === 'creation' ? 'btn-primary' : 'btn-outline-secondary'"
+                  @click="uiStore.setFlatSort('creation')"
+                  title="Sort by creation order"
+                >Created</button>
+                <button
+                  type="button"
+                  class="btn"
+                  :class="uiStore.flatSort === 'last_active' ? 'btn-primary' : 'btn-outline-secondary'"
+                  @click="uiStore.setFlatSort('last_active')"
+                  title="Sort by most recent completion"
+                >Last Active</button>
+              </div>
+
+              <!-- Group by state (flat mode only) -->
+              <div v-if="uiStore.projectViewMode === 'flat'" class="form-check form-switch d-flex align-items-center mb-0 ms-2">
+                <input
+                  id="group-by-state-toggle"
+                  type="checkbox"
+                  role="switch"
+                  class="form-check-input me-2"
+                  :checked="uiStore.groupByState"
+                  @change="uiStore.setGroupByState($event.target.checked)"
+                >
+                <label for="group-by-state-toggle" class="form-check-label small">Group by state</label>
+              </div>
             </div>
 
-            <!-- Empty state -->
-            <div v-else-if="!minionHierarchy || !minionHierarchy.children || minionHierarchy.children.length === 0" class="text-center text-muted py-4">
-              No sessions yet. Click "Add Session" to create one.
-            </div>
+            <!-- Hierarchy view -->
+            <template v-if="uiStore.projectViewMode === 'hierarchy'">
+              <!-- Loading hierarchy -->
+              <div v-if="loadingHierarchy" class="text-center py-4">
+                <div class="spinner-border spinner-border-sm" role="status">
+                  <span class="visually-hidden">Loading...</span>
+                </div>
+                <p class="text-muted mt-2 mb-0">Loading hierarchy...</p>
+              </div>
 
-            <!-- Hierarchy tree with User root node -->
-            <div v-else class="hierarchy-tree">
-              <!-- User Root Node -->
-              <div class="user-root-node mb-3 border rounded">
-                <div class="node-row">
-                  <!-- Left Column: Status + Name (30%) -->
-                  <div class="node-left">
-                    <span class="me-2" style="font-size: 1.2rem;">👤</span>
-                    <div class="node-text">
-                      <div class="node-name-row">
-                        <strong class="node-name">{{ minionHierarchy.name }}</strong>
-                        <span class="badge bg-primary ms-2">
-                          {{ minionHierarchy.children.length }} {{ minionHierarchy.children.length === 1 ? 'minion' : 'minions' }}
+              <!-- Empty state -->
+              <div v-else-if="!minionHierarchy || !minionHierarchy.children || minionHierarchy.children.length === 0" class="text-center text-muted py-4">
+                No sessions yet. Click "Add Session" to create one.
+              </div>
+
+              <!-- Hierarchy tree with User root node -->
+              <div v-else class="hierarchy-tree">
+                <!-- User Root Node -->
+                <div class="user-root-node mb-3 border rounded">
+                  <div class="node-row">
+                    <!-- Left Column: Status + Name (30%) -->
+                    <div class="node-left">
+                      <span class="me-2" style="font-size: 1.2rem;">👤</span>
+                      <div class="node-text">
+                        <div class="node-name-row">
+                          <strong class="node-name">{{ minionHierarchy.name }}</strong>
+                          <span class="badge bg-primary ms-2">
+                            {{ minionHierarchy.children.length }} {{ minionHierarchy.children.length === 1 ? 'minion' : 'minions' }}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- Right Column: Last Comm (70%) -->
+                    <div class="node-right">
+                      <div v-if="minionHierarchy.last_comm" class="last-comm-preview">
+                        <span class="comm-direction">
+                          → <strong>{{ getCommRecipient(minionHierarchy.last_comm) }}</strong>:
                         </span>
+                        <span
+                          class="comm-content"
+                          :title="minionHierarchy.last_comm.content || ''"
+                        >
+                          {{ getCommSummary(minionHierarchy.last_comm) }}
+                        </span>
+                      </div>
+                      <div v-else class="text-muted fst-italic">
+                        No communications yet
                       </div>
                     </div>
                   </div>
+                </div>
 
-                  <!-- Right Column: Last Comm (70%) -->
-                  <div class="node-right">
-                    <div v-if="minionHierarchy.last_comm" class="last-comm-preview">
-                      <span class="comm-direction">
-                        → <strong>{{ getCommRecipient(minionHierarchy.last_comm) }}</strong>:
-                      </span>
-                      <span
-                        class="comm-content"
-                        :title="minionHierarchy.last_comm.content || ''"
-                      >
-                        {{ getCommSummary(minionHierarchy.last_comm) }}
-                      </span>
-                    </div>
-                    <div v-else class="text-muted fst-italic">
-                      No communications yet
-                    </div>
-                  </div>
+                <!-- Root Minions (user-spawned) -->
+                <div class="root-minions ms-4">
+                  <MinionTreeNode
+                    v-for="minion in sortedRootMinions"
+                    :key="minion.id"
+                    :minion-data="minion"
+                    :level="1"
+                    layout="two-column"
+                    @minion-click="navigateToSession"
+                  />
                 </div>
               </div>
+            </template>
 
-              <!-- Sort toggle -->
-              <div class="d-flex justify-content-end mb-2 me-4">
-                <div class="btn-group btn-group-sm" role="group" aria-label="Agent sort order">
-                  <button
-                    type="button"
-                    class="btn"
-                    :class="uiStore.agentSort === 'alpha' ? 'btn-primary' : 'btn-outline-secondary'"
-                    @click="uiStore.setAgentSort('alpha')"
-                    title="Sort alphabetically"
-                  >A–Z</button>
-                  <button
-                    type="button"
-                    class="btn"
-                    :class="uiStore.agentSort === 'creation' ? 'btn-primary' : 'btn-outline-secondary'"
-                    @click="uiStore.setAgentSort('creation')"
-                    title="Sort by creation order"
-                  >Created</button>
-                </div>
-              </div>
-
-              <!-- Root Minions (user-spawned) -->
-              <div class="root-minions ms-4">
+            <!-- Flat list view -->
+            <div v-else class="flat-list">
+              <!-- Ungrouped -->
+              <div v-if="!uiStore.groupByState" class="flat-list-nodes">
                 <MinionTreeNode
-                  v-for="minion in sortedRootMinions"
-                  :key="minion.id"
-                  :minion-data="minion"
-                  :level="1"
+                  v-for="node in sortedFlatNodes"
+                  :key="node.id"
+                  :minion-data="node"
+                  :level="0"
                   layout="two-column"
                   @minion-click="navigateToSession"
                 />
+              </div>
+
+              <!-- Grouped (action-priority: unread → prompting → error → active → idle → terminated) -->
+              <div v-else>
+                <div v-for="group in groupedFlatNodes" :key="group.key" class="flat-group mb-3">
+                  <h6 class="flat-group-heading text-muted">
+                    {{ group.label }}
+                    <span class="badge bg-secondary ms-2">{{ group.nodes.length }}</span>
+                  </h6>
+                  <MinionTreeNode
+                    v-for="node in group.nodes"
+                    :key="node.id"
+                    :minion-data="node"
+                    :level="0"
+                    layout="two-column"
+                    @minion-click="navigateToSession"
+                  />
+                </div>
+              </div>
+
+              <!-- Empty state -->
+              <div v-if="sortedFlatNodes.length === 0" class="text-center text-muted py-4">
+                No sessions yet. Click "Add Session" to create one.
               </div>
             </div>
           </div>
@@ -210,7 +318,8 @@ import { useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
-import { compareAgents } from '@/utils/agentSort'
+import { compareAgents, normalizeLastActive } from '@/utils/agentSort'
+import { getDisplayState } from '@/composables/useSessionState'
 import { api } from '@/utils/api'
 import { findInHierarchy } from '@/utils/hierarchyUtils'
 import MinionTreeNode from '../legion/MinionTreeNode.vue'
@@ -311,6 +420,62 @@ const sortedRootMinions = computed(() => {
     orderOf: n => sessionStore.getSession(n.id)?.order,
     idOf: n => n.id
   }))
+})
+
+const flatNodes = computed(() =>
+  projectSessions.value.map(s => ({
+    id: s.session_id,
+    name: s.name || s.session_id,
+    type: 'minion',
+    state: s.state,
+    is_processing: s.is_processing,
+    latest_message: s.latest_message,
+    latest_message_type: s.latest_message_type,
+    latest_message_time: s.latest_message_time,
+    children: [],
+  }))
+)
+
+const sortedFlatNodes = computed(() => {
+  const nodes = flatNodes.value
+  const mode = uiStore.flatSort
+  return [...nodes].sort((a, b) => compareAgents(mode, a, b, {
+    nameOf: n => n.name,
+    orderOf: n => sessionStore.getSession(n.id)?.order,
+    idOf: n => n.id,
+    lastActiveOf: n => normalizeLastActive(sessionStore.getSession(n.id)?.last_completion_at),
+  }))
+})
+
+const STATE_GROUPS = [
+  { key: 'unread',     label: 'Unread' },
+  { key: 'prompting',  label: 'Prompting' },
+  { key: 'error',      label: 'Error' },
+  { key: 'active',     label: 'Active' },
+  { key: 'idle',       label: 'Idle' },
+  { key: 'terminated', label: 'Terminated' },
+]
+
+function classifyNode(node) {
+  if (sessionStore.isUnreviewed(node.id)) return 'unread'
+  const live = sessionStore.getSession(node.id)
+  const ds = getDisplayState(live || node)
+  if (ds === 'pending-prompt') return 'prompting'
+  if (ds === 'error' || ds === 'failed') return 'error'
+  if (ds === 'active' || ds === 'starting' || ds === 'processing' || ds === 'running') return 'active'
+  if (ds === 'created' || ds === 'paused') return 'idle'
+  if (ds === 'terminated') return 'terminated'
+  return 'idle'
+}
+
+const groupedFlatNodes = computed(() => {
+  const sorted = sortedFlatNodes.value
+  const buckets = STATE_GROUPS.map(g => ({ ...g, nodes: [] }))
+  const byKey = Object.fromEntries(buckets.map(b => [b.key, b]))
+  for (const node of sorted) {
+    byKey[classifyNode(node)].nodes.push(node)
+  }
+  return buckets.filter(b => b.nodes.length > 0)
 })
 
 // Helper: Get comm recipient name
@@ -538,5 +703,21 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: help;
+}
+
+.flat-list {
+  background-color: var(--bs-secondary-bg);
+  padding: 0.5rem;
+  border-radius: 0.25rem;
+}
+
+.flat-group-heading {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 0.25rem 0.5rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid var(--bs-border-color);
 }
 </style>
