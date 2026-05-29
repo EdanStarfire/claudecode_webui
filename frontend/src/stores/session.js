@@ -710,6 +710,36 @@ export const useSessionStore = defineStore('session', () => {
     currentSessionId.value = null
   }
 
+  /**
+   * Restore the unread indicator for a session (issue #1597).
+   * Synchronously clears the local optimistic timestamp BEFORE the API call so
+   * isUnreviewed() re-evaluates immediately — the local timestamp would otherwise
+   * keep masking the cleared server value.
+   */
+  async function markUnread(sessionId) {
+    // Step 1 (synchronous): drop the optimistic viewed timestamp so isUnreviewed()
+    // re-evaluates as true on the very next reactivity flush, before the API response.
+    // Save the old value so we can roll back if the API call fails — without rollback,
+    // serverViewed (from sessions Map) would keep dominating and the indicator would
+    // stay hidden even though the intent was to show it.
+    const previousLocalViewed = localViewedAt.value.get(sessionId)
+    localViewedAt.value.delete(sessionId)
+    localViewedAt.value = new Map(localViewedAt.value) // trigger Vue reactivity
+
+    // Step 2: persist the cleared state on the server
+    try {
+      await api.post(`/api/sessions/${sessionId}/mark-unread`)
+    } catch (error) {
+      // Rollback: restore the local timestamp so the indicator doesn't stay hidden
+      if (previousLocalViewed !== undefined) {
+        localViewedAt.value.set(sessionId, previousLocalViewed)
+        localViewedAt.value = new Map(localViewedAt.value)
+      }
+      throw error
+    }
+    // Step 3: state-change broadcast from the server will update last_viewed_at in sessions Map
+  }
+
   // ========== GHOST AGENT ACTIONS ==========
 
   function addGhostAgent(agentId, agentData) {
@@ -769,6 +799,7 @@ export const useSessionStore = defineStore('session', () => {
     removeGhostAgent,
     saveScrollPosition,
     recordSessionReset,
-    clearSessionSelection
+    clearSessionSelection,
+    markUnread
   }
 })

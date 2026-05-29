@@ -872,3 +872,78 @@ class TestUpsertLink:
         )
         d = info.to_dict()
         assert d["links"] == links
+
+
+# ---------------------------------------------------------------------------
+# Issue #1597: mark_unread tests
+# ---------------------------------------------------------------------------
+
+
+class TestMarkUnread:
+    """Tests for SessionManager.mark_unread() (issue #1597)."""
+
+    @pytest.mark.asyncio
+    async def test_mark_unread_clears_last_viewed_at(
+        self, temp_session_manager, sample_session_config
+    ):
+        """Happy path: session with completion+viewed → mark_unread clears last_viewed_at."""
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+
+        # Record completion and viewed timestamps
+        completion_ts = datetime.now(UTC)
+        await manager.mark_completion(sid, completion_ts)
+        await manager.mark_viewed(sid)
+
+        session = manager._active_sessions.get(sid)
+        assert session.last_viewed_at is not None, "Expected last_viewed_at set after mark_viewed"
+
+        # Register a state-change callback to confirm broadcast fires
+        state_changes = []
+
+        async def _capture_change(session_id, new_state, is_processing, **kwargs):
+            state_changes.append(session_id)
+
+        manager.add_state_change_callback(_capture_change)
+
+        result = await manager.mark_unread(sid)
+
+        assert result is True
+        session = manager._active_sessions.get(sid)
+        assert session.last_viewed_at is None, "last_viewed_at must be None after mark_unread"
+
+        # Confirm persisted to disk (reload and check)
+        data_dir = manager.sessions_dir.parent
+        manager2 = SessionManager(data_dir)
+        await manager2.initialize()
+        reloaded = await manager2.get_session_info(sid)
+        assert reloaded.last_viewed_at is None, "last_viewed_at must persist as None"
+
+        # State-change broadcast fired
+        assert sid in state_changes, "mark_unread must broadcast state change"
+
+    @pytest.mark.asyncio
+    async def test_mark_unread_no_completion_returns_false(
+        self, temp_session_manager, sample_session_config
+    ):
+        """Session without any completion: mark_unread returns False, no write."""
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+
+        session = manager._active_sessions.get(sid)
+        assert session.last_completion_at is None
+
+        result = await manager.mark_unread(sid)
+
+        assert result is False
+        session = manager._active_sessions.get(sid)
+        assert session.last_viewed_at is None  # unchanged (was already None)
+
+    @pytest.mark.asyncio
+    async def test_mark_unread_missing_session_returns_false(self, temp_session_manager):
+        """Missing session: mark_unread returns False."""
+        manager = temp_session_manager
+        result = await manager.mark_unread("nonexistent-session-id")
+        assert result is False

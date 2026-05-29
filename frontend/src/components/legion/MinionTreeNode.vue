@@ -44,6 +44,16 @@
 
       <!-- Action Buttons (Issue #296) -->
       <button
+        v-if="canMarkUnread"
+        class="btn btn-sm btn-outline-secondary me-1"
+        title="Mark unread"
+        aria-label="Mark unread"
+        :disabled="liveSession?.is_processing"
+        @click.stop="handleMarkUnread"
+      >
+        <i class="bi bi-envelope-exclamation"></i>
+      </button>
+      <button
         class="btn btn-sm btn-outline-secondary me-1"
         title="Edit minion"
         aria-label="Edit minion"
@@ -106,6 +116,16 @@
 
         <!-- Action Buttons -->
         <div class="node-actions">
+          <button
+            v-if="canMarkUnread"
+            class="btn btn-sm btn-outline-secondary me-1"
+            title="Mark unread"
+            aria-label="Mark unread"
+            :disabled="liveSession?.is_processing"
+            @click.stop="handleMarkUnread"
+          >
+            <i class="bi bi-envelope-exclamation"></i>
+          </button>
           <button
             class="btn btn-sm btn-outline-secondary me-1"
             title="Edit minion"
@@ -298,6 +318,11 @@ const isUnreviewed = computed(() =>
   props.minionData?.id ? sessionStore.isUnreviewed(props.minionData.id) : false
 )
 
+// Issue #1597: show Mark Unread button only when session has completed work and isn't already unread
+const canMarkUnread = computed(() =>
+  !!liveSession.value?.last_completion_at && !isUnreviewed.value
+)
+
 // Check if minion has children
 const hasChildren = computed(() => {
   return (
@@ -464,6 +489,15 @@ function showManageModal() {
   const session = sessionStore.sessions.get(props.minionData.id)
   if (session) {
     uiStore.showModal('manage-session', { session })
+  }
+}
+
+// Issue #1597: Mark session unread from the tree node (no navigation — already on project view)
+async function handleMarkUnread() {
+  try {
+    await sessionStore.markUnread(props.minionData.id)
+  } catch (e) {
+    console.error('Failed to mark unread:', e)
   }
 }
 </script>
