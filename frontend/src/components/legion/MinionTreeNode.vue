@@ -291,15 +291,13 @@ const minionWithLiveData = computed(() => {
     }
   }
 
-  // Merge latest message if available from message store (for active session)
-  if (latestMessageFromStore.value) {
+  // Merge latest message if available from message store (only for the selected session;
+  // for background sessions the broadcast-updated liveSession value is the source of truth)
+  if (isSelected.value && latestMessageFromStore.value) {
     merged.latest_message = latestMessageFromStore.value.content
     merged.latest_message_type = latestMessageFromStore.value.type
     merged.latest_message_time = latestMessageFromStore.value.timestamp
   }
-  // Otherwise keep hierarchy data for latest_message (contains cached data from backend)
-  // Note: For non-active sessions, we rely on hierarchy API data which should be
-  // periodically refreshed or updated via WebSocket broadcasts
 
   return merged
 })
