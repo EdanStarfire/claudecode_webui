@@ -136,6 +136,32 @@ export const useUIStore = defineStore('ui', () => {
     writeStorage('agentSort', mode)
   }
 
+  // Project overview view mode ('hierarchy' | 'flat') — persisted
+  const projectViewMode = ref(readStorage('projectViewMode', 'hierarchy'))
+
+  function setProjectViewMode(mode) {
+    if (mode !== 'hierarchy' && mode !== 'flat') return
+    projectViewMode.value = mode
+    writeStorage('projectViewMode', mode)
+  }
+
+  // Flat-list sort preference (independent from hierarchy's agentSort) — persisted
+  const flatSort = ref(readStorage('flatSort', 'last_active'))
+
+  function setFlatSort(mode) {
+    if (mode !== 'alpha' && mode !== 'creation' && mode !== 'last_active') return
+    flatSort.value = mode
+    writeStorage('flatSort', mode)
+  }
+
+  // Flat-list state grouping toggle — persisted
+  const groupByState = ref(readStorage('groupByState', false))
+
+  function setGroupByState(value) {
+    groupByState.value = !!value
+    writeStorage('groupByState', groupByState.value)
+  }
+
   // Issue #1587: Max peek cards in collapsed chip stack — synced from /api/config via settings page
   const maxPeekCards = ref(readStorage('maxPeekCards', 100))
 
@@ -342,6 +368,9 @@ export const useUIStore = defineStore('ui', () => {
     rateLimits,
     watchdogAlerts,
     agentSort,
+    projectViewMode,
+    flatSort,
+    groupByState,
     maxPeekCards,
 
     // Actions
@@ -372,6 +401,9 @@ export const useUIStore = defineStore('ui', () => {
     pushAlert,
     dismissAlert,
     setAgentSort,
+    setProjectViewMode,
+    setFlatSort,
+    setGroupByState,
     setMaxPeekCards,
   }
 })
