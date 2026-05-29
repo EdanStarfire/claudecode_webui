@@ -94,7 +94,7 @@ def build_router(webui) -> APIRouter:
 
         # Detect uncommitted changes (staged + unstaged + untracked)
         status_output = await webui._run_git_command(
-            ["git", "status", "--porcelain"], cwd
+            ["git", "status", "--porcelain", "-u"], cwd
         )
         uncommitted_files = []
         untracked_paths = []
@@ -309,6 +309,9 @@ def build_router(webui) -> APIRouter:
         cwd = ctx.get("working_directory")
         if not cwd or not Path(cwd).exists():
             raise HTTPException(status_code=400, detail="Invalid working directory")
+
+        if (Path(cwd) / path).is_dir():
+            raise HTTPException(status_code=400, detail="Cannot diff a directory")
 
         if ref and ref != "uncommitted":
             # Commit-specific diff: validate ref then diff against parent
