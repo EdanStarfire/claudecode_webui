@@ -108,6 +108,28 @@ export const useResourceStore = defineStore('resource', () => {
   }
 
   /**
+   * Check if a resource is an HTML file
+   */
+  function isHtmlResource(resource) {
+    if (!resource) return false
+    if (isImageResource(resource)) return false
+    if (isVideoResource(resource)) return false
+
+    const mimeType = (resource.mime_type || '').toLowerCase()
+    if (mimeType === 'text/html') return true
+
+    const format = (resource.format || '').toLowerCase()
+    if (format === 'text/html' || format === 'html' || format === 'htm') return true
+
+    const filename = resource.original_filename || resource.original_name || ''
+    if (filename) {
+      const ext = '.' + filename.split('.').pop().toLowerCase()
+      if (ext === '.html' || ext === '.htm') return true
+    }
+    return false
+  }
+
+  /**
    * Check if a resource is a text-based file that can be previewed as text
    */
   function isTextResource(resource) {
@@ -768,6 +790,7 @@ export const useResourceStore = defineStore('resource', () => {
     getDownloadUrl,
     isImageResource,
     isVideoResource,
+    isHtmlResource,
     isTextResource,
     getResourceIcon,
     getResourceExtension,

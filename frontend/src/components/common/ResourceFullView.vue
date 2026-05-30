@@ -156,6 +156,72 @@
           </div>
         </div>
 
+        <!-- HTML Container (for HTML resources) -->
+        <div v-else-if="isCurrentHtml" class="html-container" @click.stop>
+          <!-- HTML Header -->
+          <div class="text-header">
+            <div class="text-header-info">
+              <h5 class="text-filename">
+                {{ currentResource?.title || currentResource?.original_filename || 'HTML Resource' }}
+              </h5>
+              <div class="resource-meta">
+                <span v-if="currentResource?.size_bytes" class="meta-item">
+                  {{ formatSize(currentResource.size_bytes) }}
+                </span>
+                <span v-if="currentResource?.format" class="meta-item">
+                  {{ currentResource.format.toUpperCase() }}
+                </span>
+              </div>
+            </div>
+            <!-- Rendered / Source toggle -->
+            <div class="display-mode-toggle">
+              <button
+                class="toggle-btn"
+                :class="{ active: displayMode === 'rendered' }"
+                @click.stop="displayMode = 'rendered'"
+                title="Rendered HTML"
+              >Rendered</button>
+              <button
+                class="toggle-btn"
+                :class="{ active: displayMode === 'source' }"
+                @click.stop="displayMode = 'source'"
+                title="HTML source"
+              >Source</button>
+            </div>
+            <!-- Pop-out button -->
+            <button class="popout-btn" @click.stop="popoutHtml" title="Open in new tab">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                <polyline points="15 3 21 3 21 9"></polyline>
+                <line x1="10" y1="14" x2="21" y2="3"></line>
+              </svg>
+              Pop out
+            </button>
+          </div>
+          <!-- HTML Body -->
+          <div class="html-body">
+            <!-- Rendered mode: authenticated iframe -->
+            <iframe
+              v-if="displayMode === 'rendered' && currentResource"
+              :src="getResourceUrl(currentResource.resource_id)"
+              class="html-iframe"
+              title="HTML resource preview"
+            ></iframe>
+            <!-- Source mode: raw HTML text -->
+            <div v-else class="text-body">
+              <div v-if="textLoading" class="text-loading">
+                <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
+                <span>Loading content...</span>
+              </div>
+              <div v-else-if="textError" class="text-error">
+                Failed to load content: {{ textError }}
+              </div>
+              <pre v-else-if="textContent" class="text-content">{{ textContent }}</pre>
+              <div v-else class="text-unavailable">No content available.</div>
+            </div>
+          </div>
+        </div>
+
         <!-- Text Container (for text resources) -->
         <div v-else class="text-container" @click.stop>
           <!-- Text Header -->
@@ -305,6 +371,10 @@ const isCurrentVideo = computed(() => {
   return !isDirectContent.value && !isDirectImage.value && resourceStore.isVideoResource(currentResource.value)
 })
 
+const isCurrentHtml = computed(() => {
+  return !isDirectContent.value && !isDirectImage.value && resourceStore.isHtmlResource(currentResource.value)
+})
+
 const isCurrentText = computed(() => {
   return resourceStore.isTextResource(currentResource.value)
 })
@@ -339,6 +409,12 @@ watch(isOpen, (open) => {
       overlayRef.value?.focus()
     })
     document.body.style.overflow = 'hidden'
+    if (isCurrentHtml.value) {
+      displayMode.value = 'rendered'
+    } else if (displayMode.value === 'source') {
+      // 'source' is HTML-only; reset to 'raw' when opening a non-HTML resource
+      displayMode.value = 'raw'
+    }
   } else {
     document.body.style.overflow = ''
   }
@@ -346,7 +422,7 @@ watch(isOpen, (open) => {
 
 // Reset display mode when navigating between resources
 watch(currentIndex, () => {
-  displayMode.value = 'raw'
+  displayMode.value = isCurrentHtml.value ? 'rendered' : 'raw'
 })
 
 // Fetch text content when navigating to a text resource
@@ -416,11 +492,16 @@ function handleKeydown(event) {
     case 'm':
       if (isDirectContent.value && directTextContent.value) {
         displayMode.value = displayMode.value === 'raw' ? 'markdown' : 'raw'
-      } else if (!isCurrentImage.value && !isCurrentVideo.value && !isDirectImage.value && textContent.value) {
+      } else if (!isCurrentImage.value && !isCurrentVideo.value && !isCurrentHtml.value && !isDirectImage.value && textContent.value) {
         displayMode.value = displayMode.value === 'raw' ? 'markdown' : 'raw'
       }
       break
   }
+}
+
+function popoutHtml() {
+  if (!currentResource.value) return
+  window.open(getResourceUrl(currentResource.value.resource_id), '_blank', 'noopener,noreferrer')
 }
 
 async function copyDirectContent() {
@@ -1032,6 +1113,58 @@ function handleImageError(event) {
 
 .strip-text-icon {
   font-size: 1.5rem;
+}
+
+/* ===== HTML View ===== */
+
+.html-container {
+  max-width: calc(100% - 80px);
+  max-height: calc(100% - 80px);
+  width: 1200px;
+  height: 800px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bs-body-bg);
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+
+.html-body {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.html-iframe {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: white;
+  min-height: 0;
+}
+
+.popout-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 6px;
+  color: var(--bs-body-color);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s;
+  flex-shrink: 0;
+  margin-left: 12px;
+}
+
+.popout-btn:hover {
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-emphasis-color);
 }
 
 /* ===== Modal Transition ===== */
