@@ -654,6 +654,10 @@ export const useMessageStore = defineStore('message', () => {
       if (toolCall.auto_approved_reason) {
         existing.autoApprovedReason = toolCall.auto_approved_reason
       }
+      // Issue #1593: Sender attachment resource IDs for outbound comm chips
+      if (toolCall.sender_attachments != null) {
+        existing.senderAttachments = toolCall.sender_attachments
+      }
 
       console.log(`Updated tool call ${toolUseId} to status: ${frontendStatus} (backend: ${toolCall.status})`)
     } else {
@@ -691,6 +695,8 @@ export const useMessageStore = defineStore('message', () => {
         autoApprovedReason: toolCall.auto_approved_reason || null,
         // Issue #953: Sub-agent ID for parallel permission disambiguation
         agentId: toolCall.agent_id || null,
+        // Issue #1593: Sender attachment resource IDs for outbound comm chips
+        senderAttachments: toolCall.sender_attachments || null,
       }
 
       if (toolCall.error) {

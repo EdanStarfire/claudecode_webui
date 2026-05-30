@@ -3549,6 +3549,13 @@ class SessionCoordinator:
                                     if matched_tool.display:
                                         matched_tool.display.state = ToolState.COMPLETED
                                         matched_tool.display.style = "success"
+                                    # Issue #1593: resolve sender attachment resource IDs
+                                    if matched_tool.name == "mcp__legion__send_comm":
+                                        matched_tool.sender_attachments = (
+                                            await self._resolve_send_comm_sender_attachments(
+                                                session_id, matched_tool.input
+                                            )
+                                        )
                                 tc_data = matched_tool.to_dict()
                                 tc_data["type"] = "tool_call"
                                 parsed_messages.append(tc_data)
@@ -4002,6 +4009,7 @@ class SessionCoordinator:
         result: Any,
         is_error: bool = False,
         triggering_message: dict[str, Any] | None = None,
+        sender_attachments: list[dict] | None = None,
     ) -> ToolCall | None:
         """
         Update ToolCall with result (Issue #324).
@@ -4033,6 +4041,10 @@ class SessionCoordinator:
                 tool_call.display.state = ToolState.COMPLETED
                 tool_call.display.style = "success"
 
+        # Issue #1593: Attach sender attachment resource IDs for send_comm chips
+        if sender_attachments is not None:
+            tool_call.sender_attachments = sender_attachments
+
         # Remove from active (completed/failed tools are terminal)
         self._remove_active_tool_call(session_id, tool_use_id)
 
@@ -4049,6 +4061,58 @@ class SessionCoordinator:
             self._watchdog.record_tool_outcome(session_id, tool_use_id, outcome)
 
         return tool_call
+
+    async def _resolve_send_comm_sender_attachments(
+        self,
+        session_id: str,
+        tool_input: dict,
+    ) -> list[dict] | None:
+        """Issue #1593: Resolve sender resource IDs for mcp__legion__send_comm attachments.
+
+        Looks up each attachment filename in the session's resource storage to find
+        the resource_id registered when send_comm ran. Returns a list of dicts with
+        {name, resource_id, size, mime_type} for use by SendCommToolHandler.
+        """
+        import json as _json
+        from pathlib import Path
+
+        raw = tool_input.get("attachments")
+        if not raw:
+            return None
+
+        try:
+            paths = _json.loads(raw) if isinstance(raw, str) else raw
+            paths = paths if isinstance(paths, list) else [str(raw)]
+        except Exception:
+            return None
+
+        storage = self._storage_managers.get(session_id)
+        if not storage:
+            return None
+
+        try:
+            resources = await storage.read_resources()
+        except Exception:
+            return None
+
+        result = []
+        for p in paths:
+            filename = Path(p).name
+            resource = next(
+                (
+                    r
+                    for r in resources
+                    if r.get("title") == filename or r.get("original_name") == filename
+                ),
+                None,
+            )
+            result.append({
+                "name": filename,
+                "resource_id": resource["resource_id"] if resource else None,
+                "size": resource.get("size_bytes") if resource else None,
+                "mime_type": resource.get("mime_type") if resource else None,
+            })
+        return result if result else None
 
     def mark_session_tools_interrupted(self, session_id: str) -> list[ToolCall]:
         """

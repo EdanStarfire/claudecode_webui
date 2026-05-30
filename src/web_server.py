@@ -777,6 +777,15 @@ class ClaudeWebUI:
                     is_error = tool_result.get('is_error', False)
 
                     if tool_use_id:
+                        # Issue #1593: resolve sender attachment resource IDs for send_comm
+                        sender_attachments = None
+                        if not is_error:
+                            active_tc = self.coordinator._get_active_tool_call(session_id, tool_use_id)
+                            if active_tc and active_tc.name == "mcp__legion__send_comm":
+                                sender_attachments = await self.coordinator._resolve_send_comm_sender_attachments(
+                                    session_id, active_tc.input
+                                )
+
                         # Update ToolCall with result
                         updated_tool_call = self.coordinator.update_tool_call_result(
                             session_id=session_id,
@@ -784,6 +793,7 @@ class ClaudeWebUI:
                             result=result_content,
                             is_error=is_error,
                             triggering_message=tool_result,  # Issue #494: embed ToolResultBlock
+                            sender_attachments=sender_attachments,
                         )
 
                         if updated_tool_call:
