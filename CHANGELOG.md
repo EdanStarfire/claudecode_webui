@@ -6,6 +6,33 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-05-30
+
+### Added
+- **HTML resource viewer** — HTML files registered by agents now open in a full-screen overlay with three modes: Rendered (authenticated iframe, default), Source (raw markup), and Pop-out (new browser tab) (#1608)
+- **Flat list view for project overview** — toggle between tree and flat list layout in the project sessions view (#1604)
+- **Mark Unread action** — manually restore the orange unread indicator on any session from the session management modal (#1602)
+
+### Fixed
+- **Outbound comm attachment chips** — send_comm attachment chips are now always clickable; backend resolves resource IDs at tool-result time instead of relying on a timing-sensitive frontend store lookup (#1609)
+- **Stale session preview in minion tree** — visiting a session no longer permanently overrides its preview text for all future background updates (#1607)
+- **Streaming placeholder content drop** — collect-and-replace approach prevents assistant message content being silently dropped when streaming placeholders were resolved mid-stream (#1603)
+- **Session viewed timestamp** — unread indicator now clears correctly; timestamp is recorded at poll start rather than poll end, preventing a race that left sessions incorrectly marked unread (#1600)
+- **Diff panel untracked directories** — untracked directories are now expanded to individual files in the diff panel; tree view added (#1596)
+- **Peek stack overflow** — recursion depth sentinel added to prevent stack overflow on deeply nested peek chains; depth cap is configurable (#1592)
+- **Schedule pagination** — `loadSchedules` now auto-paginates to retrieve all schedules instead of silently truncating to the first page (#1591)
+- **Unreviewed indicator** — clears immediately on session selection without waiting for the next poll cycle (#1594)
+- **System messages in project overview** — status and requesting SystemMessages are excluded from last-message display and sync (#1576, #1590)
+- **LinksPanel reactivity** — links panel now correctly updates when the session's link list changes (#1578)
+- **Streaming after session restart** — streaming resumes correctly after a session is restarted or reset (#1580)
+- **Reparent membership check** — uses `get_all_descendants` to correctly detect circular reparent attempts across the full hierarchy (#1582)
+- **Settings navigation** — always returns to the last content route when exiting the settings panel (#1588)
+
+### Changed
+- **Dependency bumps** — `black` 26.1.0 → 26.3.1, `pytest` 9.0.2 → 9.0.3, `idna` 3.11 → 3.15, `python-dotenv` 1.2.1 → 1.2.2 (#1574)
+
+[1.3.0]: https://github.com/EdanStarfire/claudecode_webui/releases/tag/v1.3.0
+
 ## [1.2.0] - 2026-05-26
 
 ### Added
