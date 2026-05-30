@@ -80,21 +80,38 @@ const sessionStore = useSessionStore()
 const resourceStore = useResourceStore()
 
 const attachments = computed(() => {
+  // Issue #1593: prefer backend-resolved sender_attachments (reliable resource_id)
+  // over the filename-based store lookup (which fails on timing or format mismatch).
+  const senderAttachments = props.toolCall.senderAttachments
+  if (senderAttachments && senderAttachments.length > 0) {
+    const sid = props.toolCall.session_id || sessionStore.currentSessionId
+    return senderAttachments.map(a => ({
+      filename: a.name,
+      resourceId: a.resource_id || null,
+      sessionId: a.resource_id ? sid : null,
+      size: a.size || null,
+      mimeType: a.mime_type || null,
+    }))
+  }
+
+  // Fallback: filename-based store lookup for older tool calls without sender_attachments.
   const raw = props.toolCall.input?.attachments
   if (!raw) return []
   try {
     const paths = typeof raw === 'string' ? JSON.parse(raw) : raw
     const list = Array.isArray(paths) ? paths : [String(raw)]
+    const sid = props.toolCall.session_id || sessionStore.currentSessionId
+    const resources = resourceStore.resourcesBySession.get(sid) || []
     return list.map(p => {
       const filename = p.split('/').pop()
-      const sid = sessionStore.currentSessionId
-      const resources = resourceStore.resourcesBySession.get(sid) || []
-      const resource = resources.find(r => r.title === filename || r.filename === filename)
+      const resource = resources.find(
+        r => r.title === filename || r.original_name === filename
+      )
       return {
         filename,
         resourceId: resource?.resource_id || null,
         sessionId: resource ? sid : null,
-        size: resource?.size || null,
+        size: resource?.size_bytes || null,
         mimeType: resource?.mime_type || null,
       }
     })

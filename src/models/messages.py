@@ -177,6 +177,11 @@ class ToolCall:
     # Display hints (backend-computed)
     display: "ToolDisplayInfo | None" = None
 
+    # Issue #1593: sender resource IDs for outbound comm attachment chips
+    # Set when the tool call is mcp__legion__send_comm with file attachments.
+    # Each entry: {name, resource_id, size, mime_type}
+    sender_attachments: list[dict[str, Any]] | None = None
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict for storage/WebSocket."""
         result = {
@@ -223,6 +228,10 @@ class ToolCall:
         if self.display is not None:
             result["display"] = self.display.to_dict()
 
+        # Issue #1593: sender attachment resource IDs for outbound comm chips
+        if self.sender_attachments is not None:
+            result["sender_attachments"] = self.sender_attachments
+
         return result
 
     @classmethod
@@ -264,6 +273,7 @@ class ToolCall:
             parent_tool_use_id=data.get("parent_tool_use_id"),
             auto_approved_reason=data.get("auto_approved_reason"),
             display=display,
+            sender_attachments=data.get("sender_attachments"),
         )
 
     def with_status_update(self, **updates: Any) -> "ToolCall":
