@@ -676,9 +676,10 @@ onMounted(() => {
   // Clear session selection when viewing project overview
   sessionStore.currentSessionId = null
 
-  // Restore stopped set from sessionStorage and notify user if non-empty
-  const allIds = projectSessions.value.map(s => s.session_id)
-  const restored = pruneStoppedSet(props.projectId, allIds)
+  // Restore stopped set from sessionStorage — read raw count without pruning,
+  // since sessions may not be loaded yet when onMounted fires.
+  // Pruning happens in refreshStoppedCount() after stop/resume actions.
+  const restored = getStoppedSet(props.projectId)
   stoppedCount.value = restored.length
   if (restored.length > 0) {
     setFleetToast('info', `ⓘ Stop All from earlier still pending — Resume is available for ${restored.length} session${restored.length !== 1 ? 's' : ''}.`, 0)
@@ -741,8 +742,7 @@ watch(() => props.projectId, (newId) => {
   resuming.value = false
   fleetToast.value = null
   clearTimeout(fleetToastTimer)
-  const allIds = projectSessions.value.map(s => s.session_id)
-  const restored = pruneStoppedSet(newId, allIds)
+  const restored = getStoppedSet(newId)
   stoppedCount.value = restored.length
   if (restored.length > 0) {
     setFleetToast('info', `ⓘ Stop All from earlier still pending — Resume is available for ${restored.length} session${restored.length !== 1 ? 's' : ''}.`, 0)
