@@ -285,6 +285,10 @@ class ClaudeSDK:
             "total_responses_received": 0
         }
 
+        # Issue #1614: per-stream state for stamping message_id / tool_use_id on delta events.
+        # Keyed by parent_tool_use_id (None = top-level session).
+        self._stream_state: dict[str | None, dict] = {}
+
         # Set up SDK error detection handler to capture immediate CLI failures
         self._sdk_error_handler = None
         self._setup_sdk_error_detection()
@@ -1409,14 +1413,50 @@ class ClaudeSDK:
         try:
             # Issue #1486: StreamEvent — partial message delta, never persisted
             if StreamEvent is not None and isinstance(sdk_message, StreamEvent):
-                return {
+                # Issue #1614: stamp stable message_id / tool_use_id on every delta so the
+                # frontend can associate deltas with placeholders without depending on event order.
+                key = sdk_message.parent_tool_use_id  # None for top-level session
+                event = sdk_message.event if isinstance(sdk_message.event, dict) else {}
+                event_type = event.get("type")
+
+                if event_type == "message_start":
+                    # Overwrite any stale state (guards against dropped message_stop).
+                    self._stream_state[key] = {
+                        "message_id": event.get("message", {}).get("id"),
+                        "tool_use_id_by_index": {},
+                    }
+                elif event_type == "content_block_start":
+                    content_block = event.get("content_block", {})
+                    if content_block.get("type") == "tool_use":
+                        state = self._stream_state.setdefault(key, {"message_id": None, "tool_use_id_by_index": {}})
+                        idx = event.get("index")
+                        state["tool_use_id_by_index"][idx] = content_block.get("id")
+                elif event_type == "content_block_stop":
+                    state = self._stream_state.get(key, {})
+                    idx = event.get("index")
+                    state.get("tool_use_id_by_index", {}).pop(idx, None)
+                elif event_type == "message_stop":
+                    self._stream_state.pop(key, None)
+
+                state = self._stream_state.get(key, {})
+                payload: dict[str, Any] = {
                     "type": "assistant_delta",
                     "uuid": sdk_message.uuid,
                     "session_id": sdk_message.session_id,
                     "parent_tool_use_id": sdk_message.parent_tool_use_id,
                     "event": sdk_message.event,
                     "timestamp": time.time(),
+                    "message_id": state.get("message_id"),
                 }
+                # Stamp tool_use_id only on input_json_delta (keyed by block index).
+                if event_type == "content_block_delta":
+                    delta = event.get("delta", {})
+                    if isinstance(delta, dict) and delta.get("type") == "input_json_delta":
+                        idx = event.get("index")
+                        tool_use_id = state.get("tool_use_id_by_index", {}).get(idx)
+                        if tool_use_id:
+                            payload["tool_use_id"] = tool_use_id
+                return payload
 
             # Handle dict-like objects (for backward compatibility)
             if isinstance(sdk_message, dict):
