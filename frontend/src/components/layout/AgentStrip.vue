@@ -2,47 +2,49 @@
   <div class="agent-strip" :class="{ 'theme-red': uiStore.isRedBackground }" ref="stripEl" v-if="browsingProject" @click="handleStripClick">
     <span class="strip-project-label">{{ browsingProject.name }}</span>
     <span v-if="isBrowsingOther" class="strip-viewing-badge" aria-label="Temporarily viewing this project">VIEWING</span>
-    <template v-for="session in topLevelSessions" :key="session.session_id">
-      <!-- Stacked chip for parents with children -->
-      <StackedChip
-        v-if="hasChildren(session)"
-        :session="session"
-        :isActive="session.session_id === currentSessionId || isChildActive(session)"
-        @select="handleChipSelect"
-      />
-      <!-- Plain chip for standalone sessions -->
-      <AgentChip
-        v-else
-        :session="session"
-        :isActive="session.session_id === currentSessionId"
-        @select="handleChipSelect"
-      />
-    </template>
-    <!-- Ghost chips for deleted agents (filtered to current project) -->
-    <template v-for="[agentId, ghost] in projectGhosts" :key="'ghost-' + agentId">
-      <AgentChip
-        :session="{ session_id: agentId, agent_id: agentId, name: ghost.name, role: ghost.role }"
-        :isGhost="true"
-        @select="handleGhostSelect(agentId, ghost)"
-        @dismiss="handleGhostDismiss(agentId)"
-      />
-    </template>
+    <div class="strip-scroll">
+      <template v-for="session in topLevelSessions" :key="session.session_id">
+        <!-- Stacked chip for parents with children -->
+        <StackedChip
+          v-if="hasChildren(session)"
+          :session="session"
+          :isActive="session.session_id === currentSessionId || isChildActive(session)"
+          @select="handleChipSelect"
+        />
+        <!-- Plain chip for standalone sessions -->
+        <AgentChip
+          v-else
+          :session="session"
+          :isActive="session.session_id === currentSessionId"
+          @select="handleChipSelect"
+        />
+      </template>
+      <!-- Ghost chips for deleted agents (filtered to current project) -->
+      <template v-for="[agentId, ghost] in projectGhosts" :key="'ghost-' + agentId">
+        <AgentChip
+          :session="{ session_id: agentId, agent_id: agentId, name: ghost.name, role: ghost.role }"
+          :isGhost="true"
+          @select="handleGhostSelect(agentId, ghost)"
+          @dismiss="handleGhostDismiss(agentId)"
+        />
+      </template>
 
-    <button class="strip-add-btn" @click.stop="showCreateSessionModal" title="Add agent" aria-label="Add new agent" data-testid="add-session-button">
-      +
-    </button>
-    <!-- Archive/recovery button -->
-    <button
-      class="strip-archive-btn"
-      @click.stop="showDeletedAgentsModal"
-      title="View archived agents"
-      aria-label="View archived agents"
-    >
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-        <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 14.5A6.5 6.5 0 1 1 8 1.5a6.5 6.5 0 0 1 0 13zM8.5 4H7v5l4.25 2.55.75-1.23L8.5 8.25V4z"/>
-      </svg>
-    </button>
-    <span v-if="topLevelSessions.length === 0 && projectGhosts.length === 0" class="strip-empty">No agents yet</span>
+      <button class="strip-add-btn" @click.stop="showCreateSessionModal" title="Add agent" aria-label="Add new agent" data-testid="add-session-button">
+        +
+      </button>
+      <!-- Archive/recovery button -->
+      <button
+        class="strip-archive-btn"
+        @click.stop="showDeletedAgentsModal"
+        title="View archived agents"
+        aria-label="View archived agents"
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 14.5A6.5 6.5 0 1 1 8 1.5a6.5 6.5 0 0 1 0 13zM8.5 4H7v5l4.25 2.55.75-1.23L8.5 8.25V4z"/>
+        </svg>
+      </button>
+      <span v-if="topLevelSessions.length === 0 && projectGhosts.length === 0" class="strip-empty">No agents yet</span>
+    </div>
     <button
       class="strip-panel-btn"
       :class="{ 'panel-open': uiStore.rightPanelVisible }"
@@ -53,7 +55,9 @@
     >☰</button>
   </div>
   <div v-else class="agent-strip agent-strip-empty" :class="{ 'theme-red': uiStore.isRedBackground }">
-    <span class="strip-empty">Select a project above</span>
+    <div class="strip-scroll">
+      <span class="strip-empty">Select a project above</span>
+    </div>
     <button
       class="strip-panel-btn"
       :class="{ 'panel-open': uiStore.rightPanelVisible }"
@@ -204,8 +208,8 @@ function handleChipSelect(sessionId) {
 }
 
 function handleStripClick(e) {
-  // Collapse all expanded stacks when clicking empty strip area
-  if (e.target.classList.contains('agent-strip')) {
+  // Collapse all expanded stacks when clicking empty strip area (outer or scroll container)
+  if (e.target.classList.contains('agent-strip') || e.target.classList.contains('strip-scroll')) {
     uiStore.collapseAllStacks()
   }
 }
@@ -254,20 +258,28 @@ function handleGhostDismiss(agentId) {
   align-items: center;
   gap: 6px;
   padding: 0 16px;
-  overflow-x: auto;
   flex-shrink: 0;
 }
 
-.agent-strip::-webkit-scrollbar {
+.strip-scroll {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.strip-scroll::-webkit-scrollbar {
   height: 3px;
 }
 
-.agent-strip::-webkit-scrollbar-thumb {
+.strip-scroll::-webkit-scrollbar-thumb {
   background: var(--bs-border-color);
   border-radius: 3px;
 }
 
-.agent-strip-empty {
+.agent-strip-empty .strip-scroll {
   justify-content: center;
 }
 
@@ -356,9 +368,6 @@ function handleGhostDismiss(agentId) {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-left: auto;
-  position: sticky;
-  right: 0;
 }
 
 .strip-panel-btn:hover {
@@ -377,6 +386,9 @@ function handleGhostDismiss(agentId) {
 @media (max-width: 767px) {
   .agent-strip {
     padding: 0 8px;
+    gap: 4px;
+  }
+  .strip-scroll {
     gap: 4px;
   }
 }
