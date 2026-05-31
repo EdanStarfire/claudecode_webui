@@ -12,7 +12,7 @@
     <AgentOverview />
 
     <!-- Collapsible Panel Stack -->
-    <div class="panel-stack">
+    <div ref="panelStackRef" class="panel-stack">
       <!-- Links — issue #1530 -->
       <CollapsiblePanel
         ref="linksPanelRef"
@@ -152,7 +152,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useUIStore } from '@/stores/ui'
 import { useTaskStore } from '@/stores/task'
 import { useResourceStore } from '@/stores/resource'
@@ -260,6 +260,7 @@ const resizeHandleVisible = computed(() => {
 })
 
 // Template refs for measuring panel heights during drag-resize
+const panelStackRef = ref(null)
 const linksPanelRef = ref(null)
 const tasksPanelRef = ref(null)
 const resourcesPanelRef = ref(null)
@@ -285,6 +286,11 @@ function getPanelHeight(id) {
   return el ? el.getBoundingClientRect().height : 0
 }
 
+function getHeaderHeight(id) {
+  const el = panelRefMap[id]?.value?.$el?.querySelector('.panel-header')
+  return el ? el.getBoundingClientRect().height : 0
+}
+
 function getNextOpenPanel(panelId) {
   const idx = PANEL_IDS.indexOf(panelId)
   const p = uiStore.rightSidebarPanels
@@ -297,7 +303,8 @@ function getNextOpenPanel(panelId) {
 // --- Inter-panel drag-resize state ---
 let _resizingPanelId = null
 let _resizingNextId = null
-let _resizeStartH = {}    // { panelId: px } captured at drag start
+let _resizeStartH = {}        // { panelId: px } captured at drag start
+let _resizeStartHeaderH = {}  // { panelId: px } header heights captured at drag start
 let _resizeAccumY = 0
 let _pendingResizeWeights = null
 let _resizeRafId = null
@@ -309,6 +316,8 @@ function onResizeStart({ panelId }) {
   if (_resizingPanelId && _resizingNextId) {
     _resizeStartH[_resizingPanelId] = getPanelHeight(_resizingPanelId)
     _resizeStartH[_resizingNextId] = getPanelHeight(_resizingNextId)
+    _resizeStartHeaderH[_resizingPanelId] = getHeaderHeight(_resizingPanelId)
+    _resizeStartHeaderH[_resizingNextId] = getHeaderHeight(_resizingNextId)
   }
 }
 
@@ -321,15 +330,24 @@ function onResizeMove({ deltaY }) {
   const HTotal = Ha + Hb
   if (HTotal <= 0) return
 
-  const Ha_new = Math.max(MIN_PANEL_HEIGHT_PX, Ha + _resizeAccumY)
-  const Hb_new = Math.max(MIN_PANEL_HEIGHT_PX, Hb - _resizeAccumY)
+  const minA = _resizeStartHeaderH[_resizingPanelId] || 0
+  const minB = _resizeStartHeaderH[_resizingNextId] || 0
+
+  // Clamp delta so neither panel dips below its header height.
+  // Ha_new + Hb_new === HTotal → combined-weight invariant preserved.
+  let clamped = _resizeAccumY
+  clamped = Math.min(clamped, Hb - minB)
+  clamped = Math.max(clamped, minA - Ha)
+
+  const Ha_new = Ha + clamped
+  const Hb_new = Hb - clamped
 
   const p = uiStore.rightSidebarPanels
   const WTotal = (p[_resizingPanelId]?.weight ?? 1) + (p[_resizingNextId]?.weight ?? 1)
 
   _pendingResizeWeights = {
-    [_resizingPanelId]: Math.max(0.1, (Ha_new / HTotal) * WTotal),
-    [_resizingNextId]: Math.max(0.1, (Hb_new / HTotal) * WTotal),
+    [_resizingPanelId]: Math.max(0.01, (Ha_new / HTotal) * WTotal),
+    [_resizingNextId]:  Math.max(0.01, (Hb_new / HTotal) * WTotal),
   }
 
   if (_resizeRafId === null) {
@@ -358,6 +376,64 @@ function onResizeEnd() {
   _resizingNextId = null
   _resizeAccumY = 0
 }
+
+// --- Capacity enforcement: collapse oldest-expanded panels when sidebar is too short ---
+let _enforceRafId = null
+
+function enforceCapacity() {
+  if (_resizingPanelId) return  // never collapse mid-drag
+  const stack = panelStackRef.value
+  if (!stack) return
+  const containerH = stack.clientHeight
+  if (containerH <= 0) return
+
+  const expandedIds = PANEL_IDS.filter(id => uiStore.rightSidebarPanels[id]?.expanded)
+  let sumMin = 0
+  const headerHeights = {}
+  for (const id of expandedIds) {
+    const h = getHeaderHeight(id)
+    headerHeights[id] = h
+    sumMin += h
+  }
+  if (sumMin <= containerH) return
+
+  // Sort most-recent first; collapse from the end (oldest) until it fits
+  const order = uiStore.panelExpansionOrder
+  const orderedExpanded = expandedIds.slice().sort((a, b) => {
+    const ia = order.indexOf(a)
+    const ib = order.indexOf(b)
+    // Use a finite fallback so subtraction never produces NaN (Infinity - Infinity).
+    // Panels not yet in the order list are treated as "oldest" (highest index).
+    const fa = ia === -1 ? PANEL_IDS.length : ia
+    const fb = ib === -1 ? PANEL_IDS.length : ib
+    return fa - fb
+  })
+  for (let i = orderedExpanded.length - 1; i >= 1 && sumMin > containerH; i--) {
+    const victim = orderedExpanded[i]
+    uiStore.setPanelExpanded(victim, false)
+    sumMin -= headerHeights[victim] || 0
+  }
+}
+
+onMounted(() => {
+  if (panelStackRef.value) {
+    const ro = new ResizeObserver(() => {
+      if (_enforceRafId === null) {
+        _enforceRafId = requestAnimationFrame(() => {
+          _enforceRafId = null
+          enforceCapacity()
+        })
+      }
+    })
+    ro.observe(panelStackRef.value)
+    onBeforeUnmount(() => ro.disconnect())
+  }
+})
+
+watch(
+  () => PANEL_IDS.map(id => uiStore.rightSidebarPanels[id]?.expanded).join(','),
+  () => enforceCapacity()
+)
 
 // --- Sidebar width resize (left edge) ---
 const isResizing = ref(false)
