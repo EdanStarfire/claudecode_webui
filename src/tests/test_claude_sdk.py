@@ -323,6 +323,90 @@ class TestClaudeSDK:
         # storage_manager is None on a bare ClaudeSDK instance — confirms no storage was attempted
         assert sdk_instance.storage_manager is None
 
+    # --- Issue #1614: message_id / tool_use_id stamping on delta events ---
+
+    def test_issue_1614_message_id_stamped_on_deltas(self, sdk_instance):
+        """Issue #1614: message_id captured from message_start is stamped on subsequent deltas."""
+        from claude_agent_sdk import StreamEvent
+
+        def se(event_dict):
+            return StreamEvent(uuid="u1", session_id=sdk_instance.session_id, event=event_dict)
+
+        sdk_instance._convert_sdk_message(se({"type": "message_start", "message": {"id": "msg_abc123"}}))
+        delta = sdk_instance._convert_sdk_message(se({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "hi"},
+        }))
+        assert delta["message_id"] == "msg_abc123"
+
+    def test_issue_1614_message_id_cleared_on_message_stop(self, sdk_instance):
+        """Issue #1614: message_stop clears stream state; next message_start resets correctly."""
+        from claude_agent_sdk import StreamEvent
+
+        def se(event_dict):
+            return StreamEvent(uuid="u2", session_id=sdk_instance.session_id, event=event_dict)
+
+        sdk_instance._convert_sdk_message(se({"type": "message_start", "message": {"id": "msg_first"}}))
+        sdk_instance._convert_sdk_message(se({"type": "message_stop"}))
+        # After message_stop, state is cleared; delta carries no message_id
+        delta_after = sdk_instance._convert_sdk_message(se({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "orphan"},
+        }))
+        assert delta_after.get("message_id") is None
+
+        # Next turn starts fresh with new message_id
+        sdk_instance._convert_sdk_message(se({"type": "message_start", "message": {"id": "msg_second"}}))
+        delta_new = sdk_instance._convert_sdk_message(se({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "fresh"},
+        }))
+        assert delta_new["message_id"] == "msg_second"
+
+    def test_issue_1614_tool_use_id_stamped_on_input_json_delta(self, sdk_instance):
+        """Issue #1614: tool_use_id captured from content_block_start is stamped on input_json_delta."""
+        from claude_agent_sdk import StreamEvent
+
+        def se(event_dict):
+            return StreamEvent(uuid="u3", session_id=sdk_instance.session_id, event=event_dict)
+
+        sdk_instance._convert_sdk_message(se({"type": "message_start", "message": {"id": "msg_x"}}))
+        sdk_instance._convert_sdk_message(se({
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_abc", "name": "Bash"},
+        }))
+        delta = sdk_instance._convert_sdk_message(se({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"cmd":'},
+        }))
+        assert delta.get("tool_use_id") == "toolu_abc"
+
+        # Non-input_json_delta for same block should NOT carry tool_use_id
+        text_delta = sdk_instance._convert_sdk_message(se({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "nope"},
+        }))
+        assert "tool_use_id" not in text_delta
+
+    def test_issue_1614_tool_use_id_cleared_on_content_block_stop(self, sdk_instance):
+        """Issue #1614: content_block_stop removes the tool_use_id for that block index."""
+        from claude_agent_sdk import StreamEvent
+
+        def se(event_dict):
+            return StreamEvent(uuid="u4", session_id=sdk_instance.session_id, event=event_dict)
+
+        sdk_instance._convert_sdk_message(se({"type": "message_start", "message": {"id": "msg_y"}}))
+        sdk_instance._convert_sdk_message(se({
+            "type": "content_block_start", "index": 1,
+            "content_block": {"type": "tool_use", "id": "toolu_xyz", "name": "Read"},
+        }))
+        sdk_instance._convert_sdk_message(se({"type": "content_block_stop", "index": 1}))
+        delta_after_stop = sdk_instance._convert_sdk_message(se({
+            "type": "content_block_delta", "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": "{}"},
+        }))
+        assert delta_after_stop.get("tool_use_id") is None
+
     # --- Issue #1503: _check_consumer_alive watchdog tests ---
 
     @pytest.mark.asyncio

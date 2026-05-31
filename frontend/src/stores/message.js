@@ -291,6 +291,17 @@ export const useMessageStore = defineStore('message', () => {
 
     const messages = messagesBySession.value.get(sessionId)
 
+    // Issue #1614: Generalized defer — if a stream is active for this session,
+    // any terminal assistant message must wait for message_stop to splice into the placeholder.
+    // This is keyed on "stream active" (buffer present), not on message_id match, so it handles
+    // terminals whose IDs were absent or mismatched (e.g. extended-thinking multi-AM turns).
+    if (message.type === 'assistant' && !message.streaming && _deltaBuffers.has(sessionId)) {
+      const buf = _deltaBuffers.get(sessionId)
+      if (!buf.collectedTerminalMessages) buf.collectedTerminalMessages = []
+      buf.collectedTerminalMessages.push(message)
+      return
+    }
+
     // Issue #1601 / #1486: Step 1 — streaming-placeholder collection (PRECEDENCE).
     // The Anthropic API with extended thinking emits multiple AssistantMessage objects sharing
     // the same metadata.message_id (Anthropic ID) within one turn. Each must become its own
@@ -1222,6 +1233,12 @@ export const useMessageStore = defineStore('message', () => {
             if (idx >= 0 && messages[idx].streaming) {
               if (buf.collectedTerminalMessages?.length > 0) {
                 messages.splice(idx, 1, ...buf.collectedTerminalMessages.map(m => ({ ...m, streaming: false })))
+                // Issue #1614: apply side effects skipped by the generalized defer in addMessage.
+                buf.collectedTerminalMessages.forEach(m => {
+                  if (m.timestamp) lastReceivedTimestamp.value.set(sessionId, m.timestamp)
+                  applyDisplayMetadata(sessionId, m)
+                  handleRealtimeToolTracking(sessionId, m)
+                })
               } else {
                 // No terminal AM collected — just stop the streaming caret
                 messages[idx] = { ...messages[idx], streaming: false }
