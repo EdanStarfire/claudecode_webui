@@ -10,7 +10,7 @@
           </h4>
           <small class="text-muted font-monospace">{{ project?.working_directory }}</small>
         </div>
-        <div class="d-flex gap-2">
+        <div class="d-flex align-items-center gap-2 flex-wrap">
           <button
             class="btn btn-sm btn-outline-secondary"
             title="Edit project"
@@ -27,8 +27,68 @@
           >
             ➕ {{ hasMinions ? 'Add Minion' : 'Add Session' }}
           </button>
+
+          <span class="vr mx-1"></span>
+
+          <!-- Stop All: default state -->
+          <button
+            v-if="stopState === 'default'"
+            class="btn btn-sm btn-outline-danger"
+            :disabled="projectSessions.length === 0"
+            :title="projectSessions.length === 0 ? 'No sessions to stop' : 'Stop all sessions'"
+            @click="beginStopConfirm"
+          >
+            ⏹ Stop All
+          </button>
+
+          <!-- Stop All: inline confirmation (no auto-cancel timer) -->
+          <div
+            v-else-if="stopState === 'confirming'"
+            class="d-inline-flex align-items-center gap-1 border border-danger rounded px-2 py-1"
+            style="background: rgba(var(--bs-danger-rgb), 0.12);"
+          >
+            <span class="text-danger small">⚠️ Stop {{ projectSessions.length }} session{{ projectSessions.length !== 1 ? 's' : '' }}?</span>
+            <button class="btn btn-sm btn-outline-secondary py-0" @click="cancelStop">Cancel</button>
+            <button class="btn btn-sm btn-danger py-0" @click="confirmStop">Confirm Stop All</button>
+          </div>
+
+          <!-- Stop All: stopping in progress -->
+          <button
+            v-else-if="stopState === 'stopping'"
+            class="btn btn-sm btn-danger"
+            disabled
+          >
+            <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+            Stopping…
+          </button>
+
+          <!-- Resume Sessions -->
+          <button
+            class="btn btn-sm btn-outline-warning"
+            :disabled="stoppedCount === 0 || stopState === 'stopping' || resuming"
+            :title="stoppedCount === 0 ? 'No stopped sessions to resume' : `Resume ${stoppedCount} stopped session${stoppedCount !== 1 ? 's' : ''}`"
+            @click="resumeSessions"
+          >
+            <span v-if="resuming" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+            <span v-else>↻</span>
+            {{ resuming ? 'Resuming…' : 'Resume Sessions' }}
+            <span
+              v-if="stoppedCount > 0 && !resuming"
+              class="badge bg-warning text-dark ms-1"
+            >{{ stoppedCount }}</span>
+          </button>
         </div>
       </div>
+    </div>
+
+    <!-- Fleet operation toast -->
+    <div
+      v-if="fleetToast"
+      class="alert mb-0 py-2 px-3 rounded-0 border-start-0 border-end-0"
+      :class="`alert-${fleetToast.type}`"
+      role="alert"
+    >
+      {{ fleetToast.message }}
     </div>
 
     <!-- Content area -->
@@ -318,10 +378,13 @@ import { useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
+import { useLegionStore } from '@/stores/legion'
+import { useQueueStore } from '@/stores/queue'
 import { compareAgents, normalizeLastActive } from '@/utils/agentSort'
 import { getDisplayState } from '@/composables/useSessionState'
 import { api } from '@/utils/api'
 import { findInHierarchy } from '@/utils/hierarchyUtils'
+import { getStoppedSet, setStoppedSet, addToStoppedSet, clearStoppedSet, pruneStoppedSet } from '@/utils/stoppedSet'
 import MinionTreeNode from '../legion/MinionTreeNode.vue'
 
 const props = defineProps({
@@ -331,16 +394,110 @@ const props = defineProps({
   }
 })
 
+const RESUME_MESSAGE = "Your session was stopped using an emergency stop feature, and is now being allowed to resume. If you had anything you were mid-progress on, continue it now. Otherwise, you are back online and ready to help."
+
 const router = useRouter()
 const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
+const legionStore = useLegionStore()
+const queueStore = useQueueStore()
 
 const loading = ref(false)
 const error = ref(null)
 const minionHierarchy = ref(null)
 const loadingHierarchy = ref(false)
 let sessionWatchStop = null
+
+// Fleet control state
+const stopState = ref('default') // 'default' | 'confirming' | 'stopping'
+const resuming = ref(false)
+const stoppedCount = ref(0)
+const fleetToast = ref(null)
+let fleetToastTimer = null
+
+function setFleetToast(type, message, autoDismissMs = 8000) {
+  fleetToast.value = { type, message }
+  clearTimeout(fleetToastTimer)
+  if (autoDismissMs) {
+    fleetToastTimer = setTimeout(() => { fleetToast.value = null }, autoDismissMs)
+  }
+}
+
+function refreshStoppedCount() {
+  const allIds = projectSessions.value.map(s => s.session_id)
+  const pruned = pruneStoppedSet(props.projectId, allIds)
+  stoppedCount.value = pruned.length
+}
+
+function beginStopConfirm() {
+  stopState.value = 'confirming'
+  fleetToast.value = null
+}
+
+function cancelStop() {
+  stopState.value = 'default'
+}
+
+async function confirmStop() {
+  stopState.value = 'stopping'
+  try {
+    const result = await legionStore.haltAll(props.projectId)
+    const stopped = result.stopped_session_ids ?? []
+    const failed = result.failed_sessions ?? []
+
+    addToStoppedSet(props.projectId, stopped)
+    refreshStoppedCount()
+
+    if (failed.length === 0) {
+      setFleetToast('success', `✓ Stopped ${stopped.length} session${stopped.length !== 1 ? 's' : ''}. Click "Resume Sessions" to bring them back online.`)
+    } else {
+      const failedNames = failed.map(([id, err]) => {
+        const s = sessionStore.getSession(id)
+        return `${s?.name || id} (${err})`
+      }).join(', ')
+      setFleetToast('danger', `✗ Stopped ${stopped.length} of ${result.total_sessions} sessions. Failed: ${failedNames}. You can retry Stop All for remaining sessions.`, 0)
+    }
+  } catch (err) {
+    setFleetToast('danger', `✗ Stop All failed: ${err.message || err}`, 0)
+  } finally {
+    stopState.value = 'default'
+  }
+}
+
+async function resumeSessions() {
+  if (resuming.value || stoppedCount.value === 0) return
+  resuming.value = true
+  fleetToast.value = null
+  try {
+    const allIds = projectSessions.value.map(s => s.session_id)
+    const toResume = pruneStoppedSet(props.projectId, allIds).filter(id => {
+      const s = sessionStore.getSession(id)
+      if (!s) return false
+      const state = s.state?.toUpperCase?.() || s.state
+      return state !== 'ACTIVE' && state !== 'STARTING'
+    })
+
+    const settled = await Promise.allSettled(toResume.map(id => queueStore.enqueueMessage(id, RESUME_MESSAGE)))
+    const succeeded = toResume.filter((_, i) => settled[i].status === 'fulfilled')
+    const failed = toResume.filter((_, i) => settled[i].status === 'rejected')
+
+    // Clear successfully queued sessions from the stopped set so retries don't double-enqueue
+    const remaining = getStoppedSet(props.projectId).filter(id => failed.includes(id))
+    setStoppedSet(props.projectId, remaining)
+    refreshStoppedCount()
+
+    if (failed.length === 0) {
+      setFleetToast('success', `✓ Resume message queued to ${succeeded.length} session${succeeded.length !== 1 ? 's' : ''}. They will restart shortly.`)
+    } else {
+      setFleetToast('danger', `✗ Queued ${succeeded.length} sessions; ${failed.length} failed. You can retry Resume for the remaining sessions.`, 0)
+    }
+  } catch (err) {
+    setFleetToast('danger', `✗ Resume failed: ${err.message || err}`, 0)
+  } finally {
+    resuming.value = false
+  }
+}
 
 // Get project data
 const project = computed(() => projectStore.getProject(props.projectId))
@@ -519,6 +676,15 @@ onMounted(() => {
   // Clear session selection when viewing project overview
   sessionStore.currentSessionId = null
 
+  // Restore stopped set from sessionStorage — read raw count without pruning,
+  // since sessions may not be loaded yet when onMounted fires.
+  // Pruning happens in refreshStoppedCount() after stop/resume actions.
+  const restored = getStoppedSet(props.projectId)
+  stoppedCount.value = restored.length
+  if (restored.length > 0) {
+    setFleetToast('info', `ⓘ Stop All from earlier still pending — Resume is available for ${restored.length} session${restored.length !== 1 ? 's' : ''}.`, 0)
+  }
+
   // Load minion hierarchy
   loadMinionHierarchy()
 
@@ -572,6 +738,15 @@ onMounted(() => {
 watch(() => props.projectId, (newId) => {
   projectStore.selectProject(newId)
   sessionStore.currentSessionId = null
+  stopState.value = 'default'
+  resuming.value = false
+  fleetToast.value = null
+  clearTimeout(fleetToastTimer)
+  const restored = getStoppedSet(newId)
+  stoppedCount.value = restored.length
+  if (restored.length > 0) {
+    setFleetToast('info', `ⓘ Stop All from earlier still pending — Resume is available for ${restored.length} session${restored.length !== 1 ? 's' : ''}.`, 0)
+  }
   loadMinionHierarchy()
 })
 
@@ -580,6 +755,7 @@ onUnmounted(() => {
   if (sessionWatchStop) {
     sessionWatchStop()
   }
+  clearTimeout(fleetToastTimer)
 })
 </script>
 

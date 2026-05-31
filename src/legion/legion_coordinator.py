@@ -39,16 +39,6 @@ class LegionCoordinator:
         # Example: {"python": [("minion-123", 0.9), ("minion-456", 0.6)]}
         self.capability_registry: dict[str, list[tuple]] = {}
 
-        # Emergency halt state
-        self.emergency_halt_active: dict[str, bool] = {}  # {legion_id: bool}
-
-        # Queued comms during halt, organized by recipient minion
-        # {legion_id: {minion_id: [Comm, Comm, ...], ...}}
-        self.halted_comm_queues: dict[str, dict[str, list]] = {}
-
-        # Queue size limit per legion
-        self.MAX_QUEUED_COMMS = 10000
-
     @property
     def project_manager(self):
         """Access ProjectManager through SessionCoordinator."""
@@ -521,19 +511,11 @@ class LegionCoordinator:
 
     async def emergency_halt_all(self, legion_id: str) -> dict:
         """
-        Emergency halt all minions in a legion with comm queuing.
+        Emergency halt all sessions in a project by terminating them.
 
-        Steps:
-        1. Set emergency_halt_active flag (atomic - blocks all comm routing)
-        2. Initialize empty comm queue for this legion
-        3. Halt all minions in parallel (minimize race window)
-        4. Return results
-
-        Calls SessionCoordinator.interrupt_session() for each ACTIVE minion.
-        Does NOT change session state - minions stay ACTIVE.
-        Equivalent to user clicking stop button for each minion.
-
-        While halt is active, all comms are queued and delivered on resume.
+        Terminates ALL sessions regardless of state (CREATED, ACTIVE, PAUSED, etc.)
+        in parallel. Terminate handles each state correctly: TERMINATING/TERMINATED
+        are no-ops, PAUSED denies pending permissions, CREATED/ERROR are tolerated.
 
         Args:
             legion_id: Legion UUID (project_id)
@@ -541,60 +523,47 @@ class LegionCoordinator:
         Returns:
             Dict with operation results:
             {
-                "halted_count": int,
-                "failed_minions": [(minion_id, error_msg), ...],
-                "total_minions": int
+                "stopped_session_ids": [str, ...],
+                "failed_sessions": [(session_id, error_msg), ...],
+                "total_sessions": int
             }
         """
-        # Step 1: Atomic flag - blocks comm routing IMMEDIATELY
-        self.emergency_halt_active[legion_id] = True
-        self.halted_comm_queues[legion_id] = {}
+        # Get all sessions in this project (issue #349: all sessions are minions)
+        all_sessions = await self.session_manager.list_sessions()
+        sessions = [s for s in all_sessions if s.project_id == legion_id]
 
-        try:
-            # Step 2: Get all minions (issue #349: all sessions are minions)
-            all_sessions = await self.session_manager.list_sessions()
-            minions = [s for s in all_sessions if s.project_id == legion_id]
+        # Terminate all sessions in parallel
+        terminate_tasks = [
+            self.system.session_coordinator.terminate_session(s.session_id)
+            for s in sessions
+        ]
+        results = await asyncio.gather(*terminate_tasks, return_exceptions=True)
 
-            # Step 3: Parallel halt (minimize window)
-            active_minions = [m for m in minions if m.state.value == "active"]
-            halt_tasks = [
-                self.system.session_coordinator.interrupt_session(m.session_id)
-                for m in active_minions
-            ]
+        stopped_session_ids = []
+        failed_sessions = []
+        for i, result in enumerate(results):
+            session_id = sessions[i].session_id
+            if isinstance(result, Exception):
+                failed_sessions.append((session_id, str(result)))
+            elif result is True:
+                stopped_session_ids.append(session_id)
+            else:
+                # terminate_session() returned False: session not found or already cleaned up
+                failed_sessions.append((session_id, "terminate_session returned False"))
 
-            results = await asyncio.gather(*halt_tasks, return_exceptions=True)
-
-            # Count successes/failures
-            halted_count = sum(1 for r in results if r is True)
-            failed_minions = [
-                (active_minions[i].session_id, str(results[i]))
-                for i, r in enumerate(results)
-                if r is not True
-            ]
-
-            return {
-                "halted_count": halted_count,
-                "failed_minions": failed_minions,
-                "total_minions": len(minions)
-            }
-        except Exception:
-            # On error, clear halt state to avoid deadlock
-            self.emergency_halt_active.pop(legion_id, None)
-            self.halted_comm_queues.pop(legion_id, None)
-            raise
+        return {
+            "stopped_session_ids": stopped_session_ids,
+            "failed_sessions": failed_sessions,
+            "total_sessions": len(sessions),
+        }
 
     async def resume_all(self, legion_id: str) -> dict:
         """
-        Resume all minions in a legion and deliver queued comms.
+        Resume all ACTIVE minions in a legion by sending "continue".
 
-        Steps:
-        1. Clear emergency_halt_active flag (re-enable comm routing)
-        2. Send "continue" to each minion
-        3. Immediately flush queued comms to that minion (FIFO order)
-        4. Clear queue
-
-        Calls SessionCoordinator.send_message() with "continue" for each minion.
-        Does NOT use comm protocol - sends message directly to minion session.
+        Note: This endpoint is superseded by frontend resume orchestration for issue #1613.
+        The frontend reads sessionStorage stopped set and enqueues the resume message per
+        session directly. This method remains for backward compatibility.
 
         Args:
             legion_id: Legion UUID (project_id)
@@ -607,12 +576,6 @@ class LegionCoordinator:
                 "total_minions": int
             }
         """
-        # Step 1: Clear halt flag FIRST - allow normal comm routing
-        self.emergency_halt_active.pop(legion_id, None)
-
-        # Get queued comms (if any)
-        queued_comms = self.halted_comm_queues.pop(legion_id, {})
-
         # Get all minions (issue #349: all sessions are minions)
         all_sessions = await self.session_manager.list_sessions()
         minions = [s for s in all_sessions if s.project_id == legion_id]
@@ -624,7 +587,6 @@ class LegionCoordinator:
             # Send "continue" to all ACTIVE minions
             if minion.state.value == "active":
                 try:
-                    # Step 2: Send "continue"
                     success = await self.system.session_coordinator.send_message(
                         minion.session_id,
                         "continue"
@@ -632,14 +594,6 @@ class LegionCoordinator:
 
                     if success:
                         resumed_count += 1
-
-                        # Step 3: Flush this minion's queued comms immediately
-                        minion_queue = queued_comms.get(minion.session_id, [])
-                        if minion_queue:
-                            await self._flush_queued_comms_for_minion(
-                                minion.session_id,
-                                minion_queue
-                            )
                     else:
                         failed_minions.append((minion.session_id, "Send message returned False"))
                 except Exception as e:
@@ -650,26 +604,6 @@ class LegionCoordinator:
             "failed_minions": failed_minions,
             "total_minions": len(minions)
         }
-
-    async def _flush_queued_comms_for_minion(
-        self,
-        minion_id: str,
-        queued_comms: list
-    ) -> None:
-        """
-        Deliver queued comms to a specific minion in FIFO order.
-
-        Args:
-            minion_id: Target minion session ID
-            queued_comms: List of Comm objects in chronological order
-        """
-        for comm in queued_comms:
-            try:
-                # Route through normal comm system
-                await self.system.comm_router.route_comm(comm)
-            except Exception as e:
-                # Log error but continue flushing
-                print(f"Failed to flush queued comm {comm.comm_id} to {minion_id}: {e}")
 
     # TODO: Implement additional legion management methods in later phases
     # - delete_legion()

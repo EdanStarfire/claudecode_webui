@@ -21,9 +21,9 @@ def build_router(webui) -> APIRouter:
 
         return {
             "success": True,
-            "halted_count": result["halted_count"],
-            "failed_minions": result["failed_minions"],
-            "total_minions": result["total_minions"]
+            "stopped_session_ids": result["stopped_session_ids"],
+            "failed_sessions": result["failed_sessions"],
+            "total_sessions": result["total_sessions"],
         }
 
     @router.post("/api/legions/{legion_id}/resume-all")

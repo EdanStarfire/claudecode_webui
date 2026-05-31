@@ -43,15 +43,21 @@ describe('legion store', () => {
     expect(result.minion_id).toBe('m-1')
   })
 
-  it('haltAll posts to halt-all endpoint', async () => {
+  it('haltAll posts to halt-all endpoint and returns new shape', async () => {
     const { useLegionStore } = await import('@/stores/legion')
     const store = useLegionStore()
 
-    apiMock.post.mockResolvedValue({ halted_count: 2, total_minions: 2, failed_minions: [] })
+    apiMock.post.mockResolvedValue({
+      stopped_session_ids: ['s-1', 's-2'],
+      failed_sessions: [],
+      total_sessions: 2,
+    })
 
     const result = await store.haltAll('leg-1')
 
     expect(apiMock.post).toHaveBeenCalledWith('/api/legions/leg-1/halt-all')
-    expect(result.halted_count).toBe(2)
+    expect(result.stopped_session_ids).toEqual(['s-1', 's-2'])
+    expect(result.failed_sessions).toEqual([])
+    expect(result.total_sessions).toBe(2)
   })
 })

@@ -77,27 +77,32 @@ export const useLegionStore = defineStore('legion', () => {
   }
 
   /**
-   * Emergency halt all minions in legion
+   * Emergency halt all sessions in project (terminates all regardless of state).
+   * Returns { stopped_session_ids, failed_sessions, total_sessions }.
    */
   async function haltAll(legionId) {
     try {
       const data = await api.post(`/api/legions/${legionId}/halt-all`)
 
-      console.log(`Halted ${data.halted_count} of ${data.total_minions} minions in legion ${legionId}`)
+      console.log(`Stopped ${data.stopped_session_ids?.length ?? 0} of ${data.total_sessions} sessions in project ${legionId}`)
 
-      if (data.failed_minions && data.failed_minions.length > 0) {
-        console.warn('Failed to halt some minions:', data.failed_minions)
+      if (data.failed_sessions && data.failed_sessions.length > 0) {
+        console.warn('Failed to stop some sessions:', data.failed_sessions)
       }
 
       return data
     } catch (error) {
-      console.error('Failed to halt all minions:', error)
+      console.error('Failed to halt all sessions:', error)
       throw error
     }
   }
 
   /**
-   * Resume all minions in legion
+   * Resume all ACTIVE minions in legion (sends "continue" directly).
+   * Superseded by frontend resume orchestration for issue #1613:
+   * ProjectOverview.vue reads sessionStorage stopped set and enqueues the
+   * resume message per session directly via queueStore.enqueueMessage().
+   * This endpoint is left in place for backward compatibility.
    */
   async function resumeAll(legionId) {
     try {
