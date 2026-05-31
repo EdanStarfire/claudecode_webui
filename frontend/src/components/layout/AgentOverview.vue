@@ -8,6 +8,14 @@
         <div class="overview-sdk-title" v-if="session.sdk_generated_name">{{ session.sdk_generated_name }}</div>
         <div class="overview-role" v-if="session.role">{{ session.role }}</div>
       </div>
+      <div
+        v-if="!isArchiveMode && estimatedCost !== '--'"
+        class="overview-cost"
+        :title="costTitle"
+      >
+        <span class="cost-label">Cost</span>
+        <span class="cost-value">{{ estimatedCost }}</span>
+      </div>
     </div>
 
     <!-- Archive Navigation (always visible) -->
@@ -35,42 +43,9 @@
       </button>
     </div>
 
-    <!-- Stats Grid -->
-    <div class="overview-stats">
-      <div class="stat-item">
-        <span class="stat-value">{{ messageCount }}</span>
-        <span class="stat-label">Messages</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-value">{{ toolCallCount }}</span>
-        <span class="stat-label">Tool Calls</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-value">{{ childCount }}</span>
-        <span class="stat-label">Children</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-value">{{ estimatedCost }}</span>
-        <span class="stat-label">Est. Cost</span>
-      </div>
-    </div>
-
     <!-- Rates unknown notice -->
     <div v-if="!isArchiveMode && session && !ratesKnown && usageStore.currentUsage" class="rates-unknown-notice">
       <RouterLink to="/settings/pricing">Add pricing rates</RouterLink> to estimate cost.
-    </div>
-
-    <!-- Action Buttons (hidden in archive mode) -->
-    <div v-if="!isArchiveMode" class="overview-actions">
-      <button class="btn-overview" @click="showInfo" title="View session details" aria-label="View session details">
-        Info
-      </button>
-      <button class="btn-overview" @click="editSession" title="Edit session settings" aria-label="Edit session settings">
-        Edit
-      </button>
-      <button class="btn-overview" @click="manageSession" title="Manage session lifecycle" aria-label="Manage session lifecycle">
-        Manage
-      </button>
     </div>
   </div>
   <div class="agent-overview agent-overview-empty" v-else>
@@ -83,16 +58,12 @@ import { computed, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
-import { useMessageStore } from '@/stores/message'
-import { useUIStore } from '@/stores/ui'
 import { useUsageStore } from '@/stores/usage'
 import { apiGet } from '@/utils/api'
 
 const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
-const messageStore = useMessageStore()
-const uiStore = useUIStore()
 const usageStore = useUsageStore()
 
 const archives = ref([])
@@ -134,26 +105,6 @@ const statusLabel = computed(() => {
   return state
 })
 
-const messageCount = computed(() => {
-  const id = sessionStore.currentSessionId
-  if (!id) return 0
-  const msgs = messageStore.messagesBySession.get(id)
-  if (!msgs) return 0
-  return msgs.filter(m => m.type === 'user' || m.type === 'assistant').length
-})
-
-const toolCallCount = computed(() => {
-  const id = sessionStore.currentSessionId
-  if (!id) return 0
-  const tools = messageStore.toolCallsBySession.get(id)
-  return tools ? tools.length : 0
-})
-
-const childCount = computed(() => {
-  if (!session.value) return 0
-  return session.value.child_minion_ids?.length || 0
-})
-
 const estimatedCost = computed(() => {
   const usage = usageStore.currentUsage
   if (!usage) return '--'
@@ -166,6 +117,11 @@ const ratesKnown = computed(() => {
   const usage = usageStore.currentUsage
   if (!usage) return true
   return !!usage.rates_known
+})
+
+const costTitle = computed(() => {
+  if (!ratesKnown.value) return 'Estimated cost — pricing rates not configured'
+  return 'Estimated session cost (USD)'
 })
 
 const isUnreviewed = computed(() =>
@@ -286,23 +242,7 @@ function jumpToActive() {
   router.push(`/session/${sid}`)
 }
 
-function editSession() {
-  if (session.value) {
-    router.push(`/settings/session/${session.value.session_id}/general`)
-  }
-}
 
-function manageSession() {
-  if (session.value) {
-    uiStore.showModal('manage-session', { session: session.value })
-  }
-}
-
-function showInfo() {
-  if (session.value) {
-    uiStore.showModal('session-info', { sessionId: session.value.session_id })
-  }
-}
 </script>
 
 <style scoped>
@@ -351,6 +291,7 @@ function showInfo() {
 
 .overview-info {
   min-width: 0;
+  flex: 1;
   overflow: hidden;
 }
 
@@ -376,42 +317,6 @@ function showInfo() {
 .overview-role {
   font-size: 11px;
   color: #94a3b8;
-}
-
-/* Stats Grid */
-.overview-stats {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 4px;
-  margin-bottom: 10px;
-}
-
-.stat-item {
-  text-align: center;
-  padding: 4px 2px;
-  background: var(--bs-secondary-bg);
-  border-radius: 4px;
-}
-
-.stat-value {
-  display: block;
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--bs-emphasis-color);
-}
-
-.stat-label {
-  display: block;
-  font-size: 9px;
-  color: #94a3b8;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
-/* Action Buttons */
-.overview-actions {
-  display: flex;
-  gap: 6px;
 }
 
 .btn-overview {
@@ -455,6 +360,34 @@ function showInfo() {
 
 .rates-unknown-notice a {
   color: var(--bs-link-color);
+}
+
+/* Cost pill in identity row */
+.overview-cost {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--bs-border-color);
+  border-radius: 4px;
+  background: var(--bs-secondary-bg);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.overview-cost .cost-label {
+  display: block;
+  font-size: 9px;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 2px;
+}
+
+.overview-cost .cost-value {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  color: var(--bs-emphasis-color);
 }
 
 /* Archive Navigation */
