@@ -155,7 +155,24 @@ class TestHaltAll:
         assert resp.status_code == 200
         body = resp.json()
         assert body["success"] is True
-        assert body["halted_count"] == 0
+        assert body["stopped_session_ids"] == []
+        assert body["failed_sessions"] == []
+        assert body["total_sessions"] == 0
+
+    async def test_halt_all_response_shape(self, api_integration_env):
+        client = api_integration_env["client"]
+        project = await _setup_legion(api_integration_env)
+        lid = project["project_id"]
+
+        resp = await client.post(f"/api/legions/{lid}/halt-all")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "stopped_session_ids" in body
+        assert "failed_sessions" in body
+        assert "total_sessions" in body
+        assert isinstance(body["stopped_session_ids"], list)
+        assert isinstance(body["failed_sessions"], list)
+        assert isinstance(body["total_sessions"], int)
 
     async def test_halt_nonexistent(self, api_integration_env):
         client = api_integration_env["client"]

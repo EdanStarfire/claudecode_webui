@@ -156,24 +156,15 @@ class CommRouter:
             attachment_data: Optional dict mapping filename -> bytes for file attachments
 
         Returns:
-            bool: True if routing succeeded (or queued during halt)
+            bool: True if routing succeeded
 
         Raises:
-            ValueError: If comm validation fails or queue overflow
+            ValueError: If comm validation fails
         """
         legion_logger.debug(f"Routing comm {comm.comm_id}: from={comm.from_minion_id}, to_minion={comm.to_minion_id}, to_user={comm.to_user}")
 
         # Validate comm has proper routing
         comm.validate()
-
-        # Check for emergency halt - queue instead of routing
-        legion_id = await self._get_legion_id_for_comm(comm)
-        if legion_id:
-            coordinator = self.system.legion_coordinator
-            if coordinator.emergency_halt_active.get(legion_id, False):
-                # Legion is halted - queue this comm
-                legion_logger.info(f"Legion {legion_id} in emergency halt - queuing comm {comm.comm_id}")
-                return await self._queue_comm_during_halt(legion_id, comm)
 
         # Normal routing - persist and route
         await self._persist_comm(comm)
@@ -691,63 +682,6 @@ class CommRouter:
                 return minion.project_id
 
         return None
-
-    async def _queue_comm_during_halt(self, legion_id: str, comm: Comm) -> bool:
-        """
-        Queue comm during emergency halt.
-
-        Organizes queue by recipient minion for FIFO delivery per minion.
-
-        Args:
-            legion_id: Legion UUID
-            comm: Comm to queue
-
-        Returns:
-            True if queued successfully
-
-        Raises:
-            ValueError: If queue size exceeds limit (10,000 comms)
-        """
-        coordinator = self.system.legion_coordinator
-
-        # Get or create queue for this legion
-        if legion_id not in coordinator.halted_comm_queues:
-            coordinator.halted_comm_queues[legion_id] = {}
-
-        legion_queue = coordinator.halted_comm_queues[legion_id]
-
-        # Determine target minion(s)
-        target_minions = await self._get_target_minions_for_comm(comm)
-
-        # Queue for each target minion
-        for minion_id in target_minions:
-            if minion_id not in legion_queue:
-                legion_queue[minion_id] = []
-
-            legion_queue[minion_id].append(comm)
-
-        # Check total queue size across all minions
-        total_queued = sum(len(q) for q in legion_queue.values())
-
-        if total_queued > coordinator.MAX_QUEUED_COMMS:
-            # Remove the comm we just added (overflow)
-            for minion_id in target_minions:
-                if legion_queue[minion_id] and legion_queue[minion_id][-1] == comm:
-                    legion_queue[minion_id].pop()
-
-            raise ValueError(
-                f"Comm queue overflow for legion {legion_id}: "
-                f"{total_queued} comms queued (limit: {coordinator.MAX_QUEUED_COMMS}). "
-                f"Latest comm dropped."
-            )
-
-        # Log queuing
-        legion_logger.info(
-            f"Queued comm {comm.comm_id} during emergency halt "
-            f"(total: {total_queued}, targets: {len(target_minions)})"
-        )
-
-        return True
 
     async def _get_target_minions_for_comm(self, comm: Comm) -> list[str]:
         """
