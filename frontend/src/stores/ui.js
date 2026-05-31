@@ -66,6 +66,11 @@ export const useUIStore = defineStore('ui', () => {
   // Right sidebar collapsible panel state (replaces single active-tab model)
   const rightSidebarPanels = ref(loadPanelState())
 
+  // Ephemeral expansion recency order — most-recently-expanded first.
+  // Used by enforceCapacity() in RightSidebar to collapse oldest panels first.
+  // NOT persisted to localStorage and NOT included in commitPanelState().
+  const panelExpansionOrder = ref([])
+
   // Browsing project (which project's agents are shown in the strip)
   // Distinct from active project (the project of the currently selected session)
   const browsingProjectId = ref(null)
@@ -233,13 +238,21 @@ export const useUIStore = defineStore('ui', () => {
 
   function togglePanel(id) {
     if (!rightSidebarPanels.value[id]) return
-    rightSidebarPanels.value[id].expanded = !rightSidebarPanels.value[id].expanded
+    const wasExpanded = rightSidebarPanels.value[id].expanded
+    rightSidebarPanels.value[id].expanded = !wasExpanded
+    if (!wasExpanded) {
+      panelExpansionOrder.value = [id, ...panelExpansionOrder.value.filter(x => x !== id)]
+    }
     commitPanelState()
   }
 
   function setPanelExpanded(id, value) {
     if (!rightSidebarPanels.value[id]) return
+    const wasExpanded = rightSidebarPanels.value[id].expanded
     rightSidebarPanels.value[id].expanded = value
+    if (value && !wasExpanded) {
+      panelExpansionOrder.value = [id, ...panelExpansionOrder.value.filter(x => x !== id)]
+    }
     commitPanelState()
   }
 
@@ -348,6 +361,7 @@ export const useUIStore = defineStore('ui', () => {
     rightSidebarCollapsed,
     rightSidebarWidth,
     rightSidebarPanels,
+    panelExpansionOrder,
     rightPanelVisible,
     browsingProjectId,
     expandedStacks,

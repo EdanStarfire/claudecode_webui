@@ -1,6 +1,7 @@
 <template>
   <div
     class="collapsible-panel"
+    :class="{ 'collapsible-panel--expanded': expanded }"
     :style="panelStyle"
   >
     <!-- Header -->
@@ -74,7 +75,7 @@ const emit = defineEmits(['update:expanded', 'resize-start', 'resize-move', 'res
 
 const panelStyle = computed(() => {
   if (!props.expanded) return { flex: '0 0 auto' }
-  return { flex: `${props.flexWeight} 1 0`, minHeight: '0' }
+  return { flex: `${props.flexWeight} 1 0` }
 })
 
 // Pointer-based resize handle (pointer capture keeps events even when cursor leaves)
@@ -112,7 +113,14 @@ function onResizePointerUp(e) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.collapsible-panel:not(.collapsible-panel--expanded) {
   min-height: 0;
+}
+
+.collapsible-panel--expanded {
+  min-height: min-content;
 }
 
 .panel-header {
