@@ -21,6 +21,14 @@
         </button>
         <button
           class="btn btn-sm btn-outline-secondary"
+          @click="editSession"
+          :disabled="!session"
+          aria-label="Edit session settings"
+        >
+          ✏️ <span class="button-label">Edit</span>
+        </button>
+        <button
+          class="btn btn-sm btn-outline-secondary"
           @click="showManage"
           :disabled="!session"
           aria-label="Manage session"
@@ -86,6 +94,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import RateLimitBadge from './RateLimitBadge.vue'
@@ -97,6 +106,7 @@ const props = defineProps({
   }
 })
 
+const router = useRouter()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 
@@ -146,6 +156,10 @@ const cycleMode = async () => {
 
 const showInfo = () => {
   uiStore.showModal('session-info', { sessionId: props.sessionId })
+}
+
+const editSession = () => {
+  router.push(`/settings/session/${props.sessionId}/general`)
 }
 
 const showManage = () => {
