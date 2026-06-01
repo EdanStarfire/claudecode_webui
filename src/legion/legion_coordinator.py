@@ -13,6 +13,7 @@ import json
 from typing import TYPE_CHECKING, Optional
 
 from src.logging_config import get_logger
+from src.session_manager import SessionState
 
 legion_logger = get_logger('legion', 'LEGION_COORDINATOR')
 
@@ -511,11 +512,12 @@ class LegionCoordinator:
 
     async def emergency_halt_all(self, legion_id: str) -> dict:
         """
-        Emergency halt all sessions in a project by terminating them.
+        Emergency halt all non-terminated sessions in a project by terminating them.
 
-        Terminates ALL sessions regardless of state (CREATED, ACTIVE, PAUSED, etc.)
-        in parallel. Terminate handles each state correctly: TERMINATING/TERMINATED
-        are no-ops, PAUSED denies pending permissions, CREATED/ERROR are tolerated.
+        Sessions already in TERMINATED state are silently skipped — they are not
+        counted in total_sessions, not added to stopped_session_ids, and not
+        reported as failures. All other states (CREATED, ACTIVE, PAUSED, etc.)
+        are terminated in parallel.
 
         Args:
             legion_id: Legion UUID (project_id)
@@ -525,12 +527,14 @@ class LegionCoordinator:
             {
                 "stopped_session_ids": [str, ...],
                 "failed_sessions": [(session_id, error_msg), ...],
-                "total_sessions": int
+                "total_sessions": int  # excludes pre-TERMINATED sessions
             }
         """
         # Get all sessions in this project (issue #349: all sessions are minions)
         all_sessions = await self.session_manager.list_sessions()
         sessions = [s for s in all_sessions if s.project_id == legion_id]
+        # Skip sessions already in TERMINATED state — they need no action
+        sessions = [s for s in sessions if s.state != SessionState.TERMINATED]
 
         # Terminate all sessions in parallel
         terminate_tasks = [
