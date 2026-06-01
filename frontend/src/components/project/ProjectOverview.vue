@@ -478,7 +478,7 @@ async function resumeSessions() {
       return state !== 'ACTIVE' && state !== 'STARTING'
     })
 
-    const settled = await Promise.allSettled(toResume.map(id => queueStore.enqueueMessage(id, RESUME_MESSAGE)))
+    const settled = await Promise.allSettled(toResume.map(id => queueStore.enqueueMessage(id, RESUME_MESSAGE, false)))
     const succeeded = toResume.filter((_, i) => settled[i].status === 'fulfilled')
     const failed = toResume.filter((_, i) => settled[i].status === 'rejected')
 
