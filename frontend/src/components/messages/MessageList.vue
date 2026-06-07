@@ -386,9 +386,18 @@ const deferredToolUse = computed(() =>
 )
 
 function setScrollTop(position) {
+  const prevFocused = document.activeElement
   isProgrammaticScroll.value = true
   lastScrollTop.value = Math.round(position)
   messagesArea.value.scrollTop = position
+  if (
+    prevFocused &&
+    prevFocused !== document.body &&
+    document.activeElement !== prevFocused &&
+    typeof prevFocused.focus === 'function'
+  ) {
+    prevFocused.focus({ preventScroll: true })
+  }
   requestAnimationFrame(() => { isProgrammaticScroll.value = false })
 }
 
