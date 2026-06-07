@@ -3,6 +3,7 @@
     :is="messageComponent"
     :message="message"
     :attachedTools="attachedTools"
+    :orphanedPermissionTools="orphanedPermissionTools"
   />
 </template>
 
@@ -18,6 +19,10 @@ const props = defineProps({
     required: true
   },
   attachedTools: {
+    type: Array,
+    default: () => []
+  },
+  orphanedPermissionTools: {
     type: Array,
     default: () => []
   }

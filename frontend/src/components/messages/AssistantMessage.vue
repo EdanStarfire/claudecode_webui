@@ -84,6 +84,10 @@ const props = defineProps({
   attachedTools: {
     type: Array,
     default: () => []
+  },
+  orphanedPermissionTools: {
+    type: Array,
+    default: () => []
   }
 })
 
@@ -166,6 +170,14 @@ const toolUses = computed(() => {
   for (const tool of attachedTools) {
     if (!existingIds.has(tool.id)) {
       allTools.push(tool)
+      existingIds.add(tool.id)
+    }
+  }
+  // Issue #1626 Fix B: append any orphaned permission tools not yet referenced above
+  for (const tool of props.orphanedPermissionTools || []) {
+    if (!existingIds.has(tool.id)) {
+      allTools.push(tool)
+      existingIds.add(tool.id)
     }
   }
   return allTools
