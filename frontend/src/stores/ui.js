@@ -181,6 +181,31 @@ export const useUIStore = defineStore('ui', () => {
     writeStorage('maxPeekCards', value)
   }
 
+  // Issue #1625: Schedules library grouping mode — persisted
+  const schedulesGroupBy = ref(readStorage('schedulesGroupBy', 'legion'))
+
+  function setSchedulesGroupBy(mode) {
+    if (!['legion', 'state', 'instance'].includes(mode)) return
+    schedulesGroupBy.value = mode
+    writeStorage('schedulesGroupBy', mode)
+  }
+
+  // Issue #1625: Schedules library per-group collapse state — persisted as array, hydrated to Set
+  const schedulesCollapsedGroups = ref(
+    new Set(readStorage('schedulesCollapsedGroups', []))
+  )
+
+  function toggleScheduleGroupCollapsed(key) {
+    const next = new Set(schedulesCollapsedGroups.value)
+    if (next.has(key)) next.delete(key); else next.add(key)
+    schedulesCollapsedGroups.value = next
+    writeStorage('schedulesCollapsedGroups', [...next])
+  }
+
+  function isScheduleGroupCollapsed(key) {
+    return schedulesCollapsedGroups.value.has(key)
+  }
+
   // ========== ACTIONS ==========
 
   function toggleRightSidebar() {
@@ -441,5 +466,10 @@ export const useUIStore = defineStore('ui', () => {
     setFlatSort,
     setGroupByState,
     setMaxPeekCards,
+    schedulesGroupBy,
+    schedulesCollapsedGroups,
+    setSchedulesGroupBy,
+    toggleScheduleGroupCollapsed,
+    isScheduleGroupCollapsed,
   }
 })
