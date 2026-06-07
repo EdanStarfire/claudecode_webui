@@ -138,13 +138,13 @@ const summaryResource = computed(() => {
   const bts = boundaryTimestamp.value
   if (!sessionId || bts == null) return null
   const target = `compaction:${Math.floor(bts)}`
-  return resourceStore.resourcesBySession.value.get(sessionId)?.find(r => r.description === target) ?? null
+  return resourceStore.resourcesBySession.get(sessionId)?.find(r => r.description === target) ?? null
 })
 
 // Issue #1628: Whether distillation is disabled in the session's effective config.
 const distillationDisabled = computed(() => {
   const sessionId = viewSessionId.value || sessionStore.currentSessionId
-  const eff = sessionStore.effectiveConfigBySession.value?.get(sessionId)
+  const eff = sessionStore.effectiveConfigBySession?.get(sessionId)
   // If effective config is not yet loaded, assume enabled (default true).
   if (eff == null) return false
   return eff.history_distillation_enabled === false
