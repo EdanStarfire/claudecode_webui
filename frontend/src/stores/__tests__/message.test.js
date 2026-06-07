@@ -228,7 +228,7 @@ describe('streaming merge — collect-and-replace (#1601)', () => {
     expect(msgs[1].streaming).toBe(false)
   })
 
-  it('Case C: message_stop before terminal AM preserves streamed content and late AM becomes a second bubble', async () => {
+  it('Case C: message_stop before terminal AM — terminal merges into finalized placeholder (Fix A #1626)', async () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
     const SID = 'sess-c'
@@ -246,7 +246,8 @@ describe('streaming merge — collect-and-replace (#1601)', () => {
     expect(msgsAfterStop[0].content).toBe('partial response')
     expect(msgsAfterStop[0].streaming).toBe(false)
 
-    // Late-arriving terminal AM — placeholder is no longer streaming so it pushes as a new bubble
+    // Late-arriving terminal AM — Fix A merges it into the finalized placeholder.
+    // The terminal's content wins (authoritative full response over streamed approximation).
     store.addMessage(SID, {
       type: 'assistant',
       message_id: 'am-c-uuid',
@@ -255,8 +256,119 @@ describe('streaming merge — collect-and-replace (#1601)', () => {
     })
 
     const msgsAfterLate = store.messagesBySession.get(SID)
-    expect(msgsAfterLate.length).toBe(2)
-    expect(msgsAfterLate[0].content).toBe('partial response')
-    expect(msgsAfterLate[1].content).toBe('late content')
+    expect(msgsAfterLate.length).toBe(1)
+    expect(msgsAfterLate[0].content).toBe('late content')
+    expect(msgsAfterLate[0].streaming).toBe(false)
+  })
+})
+
+describe('terminal-AM after finalized placeholder — Fix A (#1626)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('requestAnimationFrame', () => 1)
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('terminal AM with tool_uses after message_stop merges into finalized placeholder', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1626-a'
+    const ANTHROPIC_ID = 'msg_1626_a'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ANTHROPIC_ID } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'I will edit the file.' } }))
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    // Verify: placeholder is finalized with no tool_uses
+    let msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].streaming).toBe(false)
+    expect(msgs[0].metadata?.tool_uses?.length || 0).toBe(0)
+
+    // Terminal AM arrives after message_stop with tool_uses populated (the bug scenario)
+    store.addMessage(SID, {
+      type: 'assistant',
+      message_id: 'am-1626-a-uuid',
+      content: 'I will edit the file.',
+      metadata: {
+        message_id: ANTHROPIC_ID,
+        has_tool_uses: true,
+        tool_uses: [{ id: 'toolA', name: 'Edit', input: { file_path: '/tmp/foo.txt' } }],
+      },
+    })
+
+    // Fix A: merged — still one message, now with tool_uses populated
+    msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].streaming).toBe(false)
+    expect(msgs[0].metadata.tool_uses).toHaveLength(1)
+    expect(msgs[0].metadata.tool_uses[0].id).toBe('toolA')
+  })
+
+  it('terminal AM during active stream still defers to buffer (regression guard)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1626-b'
+    const ANTHROPIC_ID = 'msg_1626_b'
+
+    // Stream is active
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ANTHROPIC_ID } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'partial' } }))
+
+    // Terminal AM arrives WHILE stream is active — should be deferred, not merged yet
+    store.addMessage(SID, {
+      type: 'assistant',
+      message_id: 'am-1626-b-uuid',
+      content: 'I will edit the file.',
+      metadata: {
+        message_id: ANTHROPIC_ID,
+        has_tool_uses: true,
+        tool_uses: [{ id: 'toolB', name: 'Edit', input: {} }],
+      },
+    })
+
+    // Placeholder is still streaming with no tool_uses yet
+    let msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].streaming).toBe(true)
+    expect(msgs[0].metadata?.tool_uses?.length || 0).toBe(0)
+
+    // After message_stop, the terminal is spliced in
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+    msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].streaming).toBe(false)
+    expect(msgs[0].metadata.tool_uses).toHaveLength(1)
+    expect(msgs[0].metadata.tool_uses[0].id).toBe('toolB')
+  })
+
+  it('same terminal arriving twice after merge does not create a duplicate bubble', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1626-c'
+    const ANTHROPIC_ID = 'msg_1626_c'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ANTHROPIC_ID } }))
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    const terminal = {
+      type: 'assistant',
+      message_id: 'am-1626-c-uuid',
+      content: 'response',
+      metadata: {
+        message_id: ANTHROPIC_ID,
+        has_tool_uses: true,
+        tool_uses: [{ id: 'toolC', name: 'Edit', input: {} }],
+      },
+    }
+
+    store.addMessage(SID, terminal)
+    expect(store.messagesBySession.get(SID).length).toBe(1)
+
+    // Second arrival of the same terminal (reconnect/replay scenario) — must not duplicate
+    store.addMessage(SID, terminal)
+    expect(store.messagesBySession.get(SID).length).toBe(1)
   })
 })

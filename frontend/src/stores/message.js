@@ -302,25 +302,45 @@ export const useMessageStore = defineStore('message', () => {
       return
     }
 
-    // Issue #1601 / #1486: Step 1 — streaming-placeholder collection (PRECEDENCE).
-    // The Anthropic API with extended thinking emits multiple AssistantMessage objects sharing
-    // the same metadata.message_id (Anthropic ID) within one turn. Each must become its own
-    // display bubble (matching the page-load path), so collect them in arrival order on the
-    // buffer and splice them all in at message_stop.  This check runs BEFORE backend-UUID dedup
-    // so a terminal AM is never accidentally dropped as a duplicate of a not-yet-added message.
+    // Issue #1626 + #1601 + #1486: placeholder-merge precedence.
+    // Match by message_id whether or not the placeholder is still streaming. This
+    // closes a race where message_stop arrives before the terminal AM, leaving the
+    // placeholder finalized (streaming:false) but missing metadata.tool_uses; the
+    // subsequent dedup branch was silently dropping the terminal in that case.
     const placeholderKey = message.metadata?.message_id
     if (placeholderKey) {
-      const placeholderIdx = messages.findIndex(m => m.streaming === true && m.message_id === placeholderKey)
+      const placeholderIdx = messages.findIndex(m => m.message_id === placeholderKey)
       if (placeholderIdx !== -1) {
-        const buf = _deltaBuffers.get(sessionId)
-        if (buf) {
-          if (!buf.collectedTerminalMessages) buf.collectedTerminalMessages = []
-          buf.collectedTerminalMessages.push(message)
+        const existing = messages[placeholderIdx]
+        if (existing.streaming === true) {
+          // Stream still active — collect into buffer for splice at message_stop.
+          const buf = _deltaBuffers.get(sessionId)
+          if (buf) {
+            if (!buf.collectedTerminalMessages) buf.collectedTerminalMessages = []
+            buf.collectedTerminalMessages.push(message)
+            return
+          }
+          // No buffer (page reload mid-stream) — merge directly into placeholder.
+          messages[placeholderIdx] = { ...existing, ...message, streaming: false }
+          messagesBySession.value = new Map(messagesBySession.value)
           return
         }
-        // No buffer (page reload / reconnect mid-stream) — merge directly into placeholder
-        messages[placeholderIdx] = { ...messages[placeholderIdx], ...message, streaming: false }
+        // Placeholder already finalized — merge terminal's metadata in.
+        // Preserve any accumulated streaming text/thinking in case the terminal
+        // arrives with empty content (some SDK paths do this).
+        messages[placeholderIdx] = {
+          ...existing,
+          ...message,
+          content: message.content || existing.content,
+          thinking: message.thinking || existing.thinking,
+          streaming: false,
+        }
         messagesBySession.value = new Map(messagesBySession.value)
+        applyDisplayMetadata(sessionId, message)
+        handleRealtimeToolTracking(sessionId, message)
+        if (message.timestamp) {
+          lastReceivedTimestamp.value.set(sessionId, message.timestamp)
+        }
         return
       }
     }

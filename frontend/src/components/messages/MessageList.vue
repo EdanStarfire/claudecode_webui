@@ -14,6 +14,7 @@
             v-if="item.type === 'message'"
             :message="normalizeMessage(item.message)"
             :attachedTools="item.attachedTools || []"
+            :orphanedPermissionTools="item.orphanedPermissionTools || []"
           />
 
           <!-- Compaction event group -->
@@ -74,6 +75,7 @@ import TruncationBanner from './TruncationBanner.vue'
 import DeferredToolBanner from './DeferredToolBanner.vue'
 import { useTTSReadAloud } from '@/composables/useTTSReadAloud'
 import { parseTimestamp, formatDateSeparatorLabel } from '@/utils/time'
+import { getEffectiveStatusForTool } from '@/composables/useToolStatus'
 
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
@@ -151,7 +153,11 @@ const displayableItems = computed(() => {
 
   // Second pass: Group tools to parent assistant messages
   // Third pass: Inject date separators between items on different calendar dates
-  return injectDateSeparators(groupToolsToParentMessages(items))
+  // Fourth pass: Attach any permission_required tools not yet anchored to a bubble
+  return attachOrphanedPermissionTools(
+    injectDateSeparators(groupToolsToParentMessages(items)),
+    viewSessionId.value,
+  )
 })
 
 function timestampForItem(item) {
@@ -570,6 +576,57 @@ watch(
     }
   }
 )
+
+/**
+ * Issue #1626 Fix B: Attach any permission_required tools from toolCallsBySession that are
+ * not yet referenced by any displayed bubble to the last assistant item. This ensures the
+ * permission prompt renders even when the bubble's metadata.tool_uses is empty due to the
+ * streaming dedup race (before Fix A fully resolves the issue across all SDK variants).
+ */
+function attachOrphanedPermissionTools(items, sessionId) {
+  if (!sessionId) return items
+  const liveTools = messageStore.toolCallsBySession.get(sessionId) || []
+  if (liveTools.length === 0) return items
+
+  // Collect tool_use_ids already referenced by any displayed bubble.
+  const referenced = new Set()
+  for (const item of items) {
+    if (item.type !== 'message') continue
+    const msg = item.message
+    if (msg.type !== 'assistant') continue
+    for (const t of msg.metadata?.tool_uses || []) referenced.add(t.id)
+    for (const t of item.attachedTools || []) referenced.add(t.id)
+  }
+
+  // Find permission_required tools not yet referenced.
+  const orphans = []
+  for (const tc of liveTools) {
+    if (referenced.has(tc.id)) continue
+    if (getEffectiveStatusForTool(tc) !== 'permission_required') continue
+    orphans.push({ id: tc.id, name: tc.name, input: tc.input })
+  }
+  if (orphans.length === 0) return items
+
+  // Attach to the last assistant item.
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].type === 'message' && items[i].message?.type === 'assistant') {
+      items[i].orphanedPermissionTools = [...(items[i].orphanedPermissionTools || []), ...orphans]
+      return items
+    }
+  }
+
+  // No assistant bubble yet — push a minimal anchor so the prompt has a slot.
+  // This path is defensive only; in practice the model always emits an assistant
+  // message before a tool_use. Log a warning if it ever fires.
+  console.warn('[issue-1626] attachOrphanedPermissionTools: no assistant bubble found, creating anchor')
+  items.push({
+    type: 'message',
+    message: { type: 'assistant', content: '', metadata: { tool_uses: [] }, timestamp: Date.now() / 1000 },
+    attachedTools: [],
+    orphanedPermissionTools: orphans,
+  })
+  return items
+}
 
 function shouldDisplayMessage(message) {
   // Filter messages that shouldn't be displayed
