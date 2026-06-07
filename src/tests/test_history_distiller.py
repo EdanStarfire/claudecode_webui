@@ -448,6 +448,75 @@ async def test_issue_722_stored_skipped_types(temp_dir):
 
 
 @pytest.mark.asyncio
+async def test_issue_1628_slice_between_boundaries(temp_dir):
+    """Distillation of a second compaction boundary excludes pre-first-boundary messages.
+
+    Simulates a session with two compaction events. When the second boundary is
+    distilled, only messages between the first and second boundary should appear.
+    """
+    ts_start = 1700000000.0
+    ts_mid = 1700002000.0
+    ts_second_boundary = 1700003000.0
+
+    # Build a temp slice containing only messages from (first_boundary, second_boundary].
+    messages_in_slice = [
+        # This message is AFTER the first boundary — should appear
+        {"type": "user", "content": "Post-first-boundary message", "timestamp": ts_mid, "metadata": {}},
+        {"type": "assistant", "content": "Mid-session reply", "timestamp": ts_mid + 10, "metadata": {}},
+        # The second boundary marker itself
+        {
+            "_type": "SystemMessage",
+            "timestamp": ts_second_boundary,
+            "data": {"subtype": "compact_boundary", "content": []},
+        },
+    ]
+    # This message is BEFORE the first boundary — would be excluded by the slice helper
+    pre_boundary_msg = {"type": "user", "content": "Pre-first-boundary message", "timestamp": ts_start, "metadata": {}}
+
+    slice_file = temp_dir / "slice.jsonl"
+    output = temp_dir / "history" / "second_boundary.md"
+    # Write only the post-first-boundary messages (as _distill_compaction would do)
+    _write_jsonl(slice_file, messages_in_slice)
+
+    result = await distill_session_history(
+        slice_file, output, "sess-slice", "2024-01-01T00:50:00+00:00"
+    )
+    assert result is True
+    content = output.read_text()
+    assert "Post-first-boundary message" in content
+    assert "Mid-session reply" in content
+    # Pre-boundary message must NOT appear (it was excluded by the slicer, not written to file)
+    assert pre_boundary_msg["content"] not in content
+    assert "User messages: 1" in content
+    assert "Agent messages: 1" in content
+
+
+@pytest.mark.asyncio
+async def test_issue_1628_slice_from_session_start(temp_dir):
+    """First compaction boundary: slice covers from session start (no prior boundary)."""
+    messages = [
+        {"type": "user", "content": "First user message", "timestamp": 1700000000.0, "metadata": {}},
+        {"type": "assistant", "content": "First reply", "timestamp": 1700000010.0, "metadata": {}},
+        {
+            "_type": "SystemMessage",
+            "timestamp": 1700000100.0,
+            "data": {"subtype": "compact_boundary", "content": []},
+        },
+    ]
+    jsonl = temp_dir / "messages.jsonl"
+    output = temp_dir / "first.md"
+    _write_jsonl(jsonl, messages)
+
+    result = await distill_session_history(jsonl, output, "sess-first", "2024-01-01T00:00:00+00:00")
+    assert result is True
+    content = output.read_text()
+    assert "First user message" in content
+    assert "First reply" in content
+    assert "User messages: 1" in content
+    assert "Agent messages: 1" in content
+
+
+@pytest.mark.asyncio
 async def test_issue_722_mixed_legacy_and_stored(temp_dir):
     """Mixed legacy and StoredMessage formats are both handled correctly."""
     messages = [

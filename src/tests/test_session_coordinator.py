@@ -1836,3 +1836,164 @@ class TestIssue1486StreamingDelta:
         }
         await cb(session_id, main_delta)
         assert queue.current_cursor == 1, "Main-session delta must be queued"
+
+
+class TestIssue1628CompactBoundaryDistillation:
+    """Tests for issue #1628: distill pre-compaction history on compact_boundary."""
+
+    def _make_parsed_message(self, subtype: str, timestamp: float = 1700010000.0):
+        """Build a minimal ParsedMessage for a system message with the given subtype."""
+        from ..message_parser import MessageType, ParsedMessage
+        return ParsedMessage(
+            type=MessageType.SYSTEM,
+            timestamp=timestamp,
+            metadata={'subtype': subtype},
+        )
+
+    @pytest.mark.asyncio
+    async def test_issue_1628_distillation_disabled_no_task(self, temp_coordinator):
+        """history_distillation_enabled=False → _handle_compact_boundary returns without scheduling a task."""
+        coordinator = temp_coordinator
+
+        session_id = "test-compact-disabled"
+        parsed_msg = self._make_parsed_message('compact_boundary')
+
+        mock_eff = MagicMock()
+        mock_eff.history_distillation_enabled = False
+
+        mock_session_info = MagicMock()
+
+        with patch.object(
+            coordinator.session_manager, 'get_session_info', new_callable=AsyncMock, return_value=mock_session_info
+        ), patch(
+            'src.session_coordinator.resolve_effective_config',
+            new_callable=AsyncMock,
+            return_value=mock_eff,
+        ), patch(
+            'asyncio.create_task',
+        ) as mock_create_task:
+            await coordinator._handle_compact_boundary(session_id, parsed_msg)
+            mock_create_task.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_issue_1628_distillation_enabled_schedules_task(self, temp_coordinator):
+        """history_distillation_enabled=True → asyncio.create_task is called with _distill_compaction."""
+        coordinator = temp_coordinator
+
+        session_id = "test-compact-enabled"
+        boundary_ts = 1700010000.0
+        parsed_msg = self._make_parsed_message('compact_boundary', timestamp=boundary_ts)
+
+        mock_eff = MagicMock()
+        mock_eff.history_distillation_enabled = True
+
+        mock_session_info = MagicMock()
+        mock_task = MagicMock()
+        mock_task.add_done_callback = MagicMock()
+
+        with patch.object(
+            coordinator.session_manager, 'get_session_info', new_callable=AsyncMock, return_value=mock_session_info
+        ), patch(
+            'src.session_coordinator.resolve_effective_config',
+            new_callable=AsyncMock,
+            return_value=mock_eff,
+        ), patch(
+            'asyncio.create_task', return_value=mock_task
+        ) as mock_create_task:
+            await coordinator._handle_compact_boundary(session_id, parsed_msg)
+            mock_create_task.assert_called_once()
+            # Verify the coroutine arg is a _distill_compaction call
+            coro_arg = mock_create_task.call_args[0][0]
+            assert 'distill_compaction' in type(coro_arg).__qualname__
+            coro_arg.close()  # clean up unawaited coroutine
+            mock_task.add_done_callback.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_issue_1628_handler_exception_does_not_propagate(self, temp_coordinator):
+        """Exception inside _handle_compact_boundary is caught; the session continues."""
+        coordinator = temp_coordinator
+
+        session_id = "test-compact-exc"
+        parsed_msg = self._make_parsed_message('compact_boundary')
+
+        with patch.object(
+            coordinator.session_manager, 'get_session_info', new_callable=AsyncMock,
+            side_effect=RuntimeError("boom")
+        ):
+            # Must not raise
+            await coordinator._handle_compact_boundary(session_id, parsed_msg)
+
+    @pytest.mark.asyncio
+    async def test_issue_1628_microcompact_boundary_does_not_trigger(self, temp_coordinator):
+        """microcompact_boundary system message must NOT invoke _handle_compact_boundary."""
+        coordinator = temp_coordinator
+
+        session_id = "test-microcompact"
+        # Wire up the message callback
+        coordinator._message_callbacks[session_id] = []
+        cb = coordinator._create_message_callback(session_id)
+
+        microcompact_message = {
+            "type": "system",
+            "content": "",
+            "metadata": {"subtype": "microcompact_boundary"},
+            "timestamp": 1700010000.0,
+        }
+
+        with patch.object(
+            coordinator, '_handle_compact_boundary', new_callable=AsyncMock
+        ) as mock_handler:
+            await cb(microcompact_message)
+            mock_handler.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_issue_1628_distill_compaction_registers_resource(self, temp_coordinator):
+        """_distill_compaction calls distill_session_history and registers a resource on success."""
+        import json as _json
+
+        from ..session_config import SessionConfig
+        coordinator = temp_coordinator
+
+        # Create a real session so sessions_dir / session_id exists.
+        import uuid
+        project = await coordinator.project_manager.create_project(
+            name="Test Project", working_directory="/tmp"
+        )
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(),
+        )
+
+        # Write a minimal messages.jsonl with a compact_boundary entry.
+        session_dir = coordinator.session_manager.sessions_dir / session_id
+        messages_file = session_dir / "messages.jsonl"
+        boundary_ts = 1700010000.0
+        rows = [
+            {"type": "user", "content": "Hello before compaction", "timestamp": boundary_ts - 100, "metadata": {}},
+            {
+                "_type": "SystemMessage",
+                "timestamp": boundary_ts,
+                "data": {"subtype": "compact_boundary", "content": []},
+            },
+        ]
+        with open(messages_file, "w") as f:
+            for row in rows:
+                f.write(_json.dumps(row) + "\n")
+
+        with patch(
+            'src.history_distiller.distill_session_history',
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_distill, patch.object(
+            coordinator, 'register_uploaded_resource', new_callable=AsyncMock
+        ) as mock_register:
+            await coordinator._distill_compaction(session_id, boundary_ts)
+
+            mock_distill.assert_called_once()
+            mock_register.assert_called_once()
+            title_arg = mock_register.call_args.kwargs.get('title')
+            description_arg = mock_register.call_args.kwargs.get('description')
+            assert title_arg is not None and "Compaction Summary" in title_arg
+            assert description_arg == f"compaction:{int(boundary_ts)}"
