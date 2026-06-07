@@ -171,6 +171,36 @@ export const useScheduleStore = defineStore('schedule', () => {
   }
 
   /**
+   * Pause all schedules in the list that are not already paused. Returns {succeeded, failed}.
+   */
+  async function pauseSchedulesBulk(schedules) {
+    const results = await Promise.allSettled(
+      schedules
+        .filter(s => s.status !== 'paused')
+        .map(s => pauseSchedule(s.legion_id, s.schedule_id))
+    )
+    return {
+      succeeded: results.filter(r => r.status === 'fulfilled').length,
+      failed: results.filter(r => r.status === 'rejected').length,
+    }
+  }
+
+  /**
+   * Resume all schedules in the list that are not already active. Returns {succeeded, failed}.
+   */
+  async function resumeSchedulesBulk(schedules) {
+    const results = await Promise.allSettled(
+      schedules
+        .filter(s => s.status !== 'active')
+        .map(s => resumeSchedule(s.legion_id, s.schedule_id))
+    )
+    return {
+      succeeded: results.filter(r => r.status === 'fulfilled').length,
+      failed: results.filter(r => r.status === 'rejected').length,
+    }
+  }
+
+  /**
    * Delete a schedule. Pass options.delete_agent = true to also delete the bound ephemeral agent.
    */
   async function deleteSchedule(legionId, scheduleId, options = {}) {
@@ -343,6 +373,8 @@ export const useScheduleStore = defineStore('schedule', () => {
     updateSchedule,
     pauseSchedule,
     resumeSchedule,
+    pauseSchedulesBulk,
+    resumeSchedulesBulk,
     deleteSchedule,
     loadHistory,
     runNow,
