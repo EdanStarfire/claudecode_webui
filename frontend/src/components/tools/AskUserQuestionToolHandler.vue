@@ -1,7 +1,86 @@
 <template>
   <div class="ask-user-question-handler">
+    <!-- Orphaned mode: session interrupted before user could answer -->
+    <template v-if="isOrphaned">
+      <div v-if="questions.length > 0" class="questions-container">
+        <div v-for="(question, qIndex) in questions" :key="qIndex" class="question-block orphaned mb-3">
+          <div class="question-header d-flex align-items-center gap-2 mb-2">
+            <span v-if="question.header" class="badge bg-secondary">{{ question.header }}</span>
+            <span class="question-text fw-medium">{{ question.question }}</span>
+            <span class="orphaned-tag ms-auto">{{ hasCachedAnswer(question.question) ? 'Not delivered' : 'Not answered' }}</span>
+          </div>
+
+          <!-- Options list (if any) -->
+          <div v-if="question.options && question.options.length > 0" class="options-list">
+            <div
+              v-for="(option, oIndex) in question.options"
+              :key="oIndex"
+              class="option-item orphaned form-check"
+              :class="{ 'was-selected': isOrphanedOptionSelected(question, option.label) }"
+            >
+              <input
+                v-if="question.multiSelect"
+                type="checkbox"
+                class="form-check-input"
+                disabled
+                :checked="isOrphanedOptionSelected(question, option.label)"
+              >
+              <input
+                v-else
+                type="radio"
+                class="form-check-input"
+                disabled
+                :checked="isOrphanedOptionSelected(question, option.label)"
+              >
+              <label class="form-check-label">
+                <span class="option-label">{{ option.label }}</span>
+                <span v-if="option.description" class="option-description text-muted d-block small">
+                  {{ option.description }}
+                </span>
+              </label>
+            </div>
+
+            <!-- "Other" option -->
+            <div
+              class="option-item orphaned form-check other-option"
+              :class="{ 'was-selected': isOrphanedOtherSelected(question) }"
+            >
+              <input
+                v-if="question.multiSelect"
+                type="checkbox"
+                class="form-check-input"
+                disabled
+                :checked="isOrphanedOtherSelected(question)"
+              >
+              <input
+                v-else
+                type="radio"
+                class="form-check-input"
+                disabled
+                :checked="isOrphanedOtherSelected(question)"
+              >
+              <label class="form-check-label">
+                <span class="option-label">Other</span>
+              </label>
+              <div v-if="isOrphanedOtherSelected(question) && getOrphanedOtherText(question)" class="orphaned-other-display mt-1">
+                {{ getOrphanedOtherText(question) }}
+              </div>
+            </div>
+          </div>
+
+          <!-- Free-text only (no options) -->
+          <div v-else class="orphaned-other-display">
+            Free-text response was requested — no preset options.
+          </div>
+        </div>
+      </div>
+      <div v-else class="alert alert-info mb-0">
+        No questions to display.
+      </div>
+    </template>
+
     <!-- Read-only mode: Show completed answers -->
-    <template v-if="isCompleted">
+    <template v-else-if="isCompleted">
       <div v-if="hasAnswers" class="answers-summary">
         <div v-for="(answer, question) in completedAnswers" :key="question" class="answer-item mb-2">
           <div class="answer-question text-muted small">{{ question }}</div>
@@ -109,7 +188,8 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, toRef } from 'vue'
+import { useToolStatus } from '@/composables/useToolStatus'
 
 const props = defineProps({
   toolCall: {
@@ -124,6 +204,8 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['answer'])
+
+const { isOrphaned } = useToolStatus(toRef(props, 'toolCall'))
 
 // Check if tool is completed (has result)
 const isCompleted = computed(() => {
@@ -170,6 +252,43 @@ const questions = computed(() => {
   const input = props.toolCall.input || {}
   return input.questions || []
 })
+
+// Orphaned branch helpers — answers persisted in input.answers before interrupt
+const cachedAnswers = computed(() => props.toolCall.input?.answers || {})
+const hasCachedAnswer = (qText) => qText in cachedAnswers.value
+const cachedAnswerFor = (qText) => cachedAnswers.value[qText]
+
+// Returns true when a preset option label was included in the cached answer
+function isOrphanedOptionSelected(question, label) {
+  const cached = cachedAnswerFor(question.question)
+  if (!cached) return false
+  if (question.multiSelect) {
+    return cached.split(', ').includes(label)
+  }
+  return cached === label
+}
+
+// Returns true when the cached answer does not match any preset option (i.e. "Other" was used)
+function isOrphanedOtherSelected(question) {
+  const cached = cachedAnswerFor(question.question)
+  if (!cached) return false
+  const optionLabels = (question.options || []).map(o => o.label)
+  if (question.multiSelect) {
+    return cached.split(', ').some(p => !optionLabels.includes(p))
+  }
+  return !optionLabels.includes(cached)
+}
+
+// Returns the free-text portion of a cached answer (the part that wasn't a preset option)
+function getOrphanedOtherText(question) {
+  const cached = cachedAnswerFor(question.question)
+  if (!cached) return ''
+  const optionLabels = (question.options || []).map(o => o.label)
+  if (question.multiSelect) {
+    return cached.split(', ').filter(p => !optionLabels.includes(p)).join(', ')
+  }
+  return optionLabels.includes(cached) ? '' : cached
+}
 
 // Store selected answers per question
 // For single-select: string value
@@ -464,5 +583,83 @@ defineExpose({
 .form-check-label {
   cursor: pointer;
   width: 100%;
+}
+
+/* Orphaned state */
+.question-block.orphaned {
+  border-style: dashed;
+  border-color: rgba(148, 163, 184, 0.4);
+  opacity: 0.92;
+}
+
+.question-block.orphaned .question-text {
+  color: var(--bs-secondary-color, #6c757d);
+}
+
+.orphaned-tag {
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--bs-secondary-color, #6c757d);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.option-item.orphaned {
+  background: transparent;
+  border-color: rgba(148, 163, 184, 0.25);
+  color: var(--bs-secondary-color, #6c757d);
+  cursor: default;
+  pointer-events: none;
+  transition: none;
+}
+
+.option-item.orphaned:hover {
+  background: transparent;
+  border-color: rgba(148, 163, 184, 0.25);
+}
+
+.option-item.orphaned .form-check-input {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.option-item.orphaned .option-label {
+  color: var(--bs-body-color);
+  opacity: 0.85;
+}
+
+.option-item.orphaned .form-check-label {
+  cursor: default;
+}
+
+.option-item.orphaned.was-selected {
+  background: rgba(148, 163, 184, 0.10);
+  border-color: rgba(148, 163, 184, 0.5);
+  border-style: solid;
+}
+
+.option-item.orphaned.was-selected .option-label::after {
+  content: " — selected before interrupt";
+  color: var(--bs-secondary-color, #6c757d);
+  font-size: 11px;
+  font-style: italic;
+  font-weight: 400;
+}
+
+.orphaned-other-display {
+  margin-top: 0.375rem;
+  margin-left: 1.5rem;
+  padding: 0.25rem 0.5rem;
+  background: rgba(148, 163, 184, 0.10);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 3px;
+  font-style: italic;
+  color: var(--bs-secondary-color, #6c757d);
+  font-size: 12px;
 }
 </style>
