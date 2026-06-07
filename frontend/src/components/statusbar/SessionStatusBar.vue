@@ -80,12 +80,17 @@
         </button>
         <button
           class="btn btn-sm"
-          :class="uiStore.autoScrollEnabled ? 'btn-primary' : 'btn-outline-secondary'"
+          :class="{
+            'btn-primary': effectiveAutoScrollState === 'on',
+            'btn-warning': effectiveAutoScrollState === 'suspended',
+            'btn-outline-secondary': effectiveAutoScrollState === 'off'
+          }"
           @click="toggleAutoScroll"
           aria-label="Toggle auto-scroll"
-          :aria-pressed="uiStore.autoScrollEnabled"
+          :aria-pressed="effectiveAutoScrollState === 'on'"
+          :title="effectiveAutoScrollState === 'on' ? 'Auto-scroll on — following new messages' : effectiveAutoScrollState === 'suspended' ? 'Auto-scroll paused — scrolled up. Click to jump to bottom.' : 'Auto-scroll disabled'"
         >
-          ⬇️ {{ uiStore.autoScrollEnabled ? 'ON' : 'OFF' }}
+          ⬇️ {{ effectiveAutoScrollState === 'on' ? 'ON' : effectiveAutoScrollState === 'suspended' ? 'PAUSED' : 'OFF' }}
         </button>
       </div>
     </div>
@@ -170,8 +175,21 @@ const toggleReadAloud = () => {
   uiStore.setTTSReadAloud(!uiStore.ttsReadAloudEnabled)
 }
 
+// Issue #1631: Three-way effective auto-scroll state
+// 'on' = pref enabled + at bottom, 'suspended' = pref enabled + scrolled up, 'off' = pref disabled
+const effectiveAutoScrollState = computed(() => {
+  if (!uiStore.autoScrollEnabled) return 'off'
+  const sticky = uiStore.stickyToBottomBySession.get(props.sessionId)
+  return sticky === false ? 'suspended' : 'on'
+})
+
 const toggleAutoScroll = () => {
-  uiStore.setAutoScroll(!uiStore.autoScrollEnabled)
+  if (effectiveAutoScrollState.value === 'on') {
+    uiStore.setAutoScroll(false)
+  } else {
+    uiStore.setAutoScroll(true)
+    uiStore.requestScrollToBottom(props.sessionId)
+  }
 }
 
 // Issue #905: Context window usage

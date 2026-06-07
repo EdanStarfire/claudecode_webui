@@ -419,6 +419,7 @@ function applyPendingRestore() {
 function recomputeStickyFromScroll(el) {
   const distance = el.scrollHeight - el.scrollTop - el.clientHeight
   stickyToBottom.value = distance < STICKY_THRESHOLD_PX
+  uiStore.setStickyToBottom(viewSessionId.value, stickyToBottom.value)
 }
 
 function teardownObserver() {
@@ -498,10 +499,12 @@ onActivated(async () => {
 
   if (uiStore.autoScrollEnabled) {
     stickyToBottom.value = true
+    uiStore.setStickyToBottom(viewSessionId.value, true)
     pendingRestoreTarget.value = null
     scrollToBottomNow()
   } else {
     stickyToBottom.value = false
+    uiStore.setStickyToBottom(viewSessionId.value, false)
     const saved = sessionStore.scrollPositions.get(viewSessionId.value)
     if (typeof saved === 'number' && saved > 0) {
       pendingRestoreTarget.value = saved
@@ -553,6 +556,18 @@ watch(
   () => {
     if (isInitialLoad.value) return
     scrollToBottom()
+  }
+)
+
+// Issue #1631: Immediate scroll-to-bottom on token increment (triggered by SessionStatusBar re-enable click)
+watch(
+  () => uiStore.scrollToBottomTokenBySession.get(viewSessionId.value),
+  (token, prev) => {
+    if (token !== prev && token != null) {
+      stickyToBottom.value = true
+      uiStore.setStickyToBottom(viewSessionId.value, true)
+      scrollToBottomNow()
+    }
   }
 )
 
