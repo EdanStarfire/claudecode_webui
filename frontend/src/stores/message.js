@@ -3,6 +3,7 @@ import { ref, computed, readonly, watch } from 'vue'
 import { api } from '../utils/api'
 import { useSessionStore } from './session'
 import { useTaskStore } from './task'
+import { correlateHooks } from '../utils/hookCorrelation'
 
 /**
  * Message Store - Manages messages and tool calls per session
@@ -60,6 +61,10 @@ export const useMessageStore = defineStore('message', () => {
   // Issue #1486: Per-session streaming delta buffers (in-memory only, never persisted)
   // Map<sessionId, { messageId, pendingText, pendingThinking, blockTypeByIndex, rafHandle }>
   const _deltaBuffers = new Map()
+
+  // Issue #1350: Hook correlation cache — non-reactive, internal memoization only.
+  // Shape: Map<sessionId, { result: HookCorrelationResult, messageCount: number, lastId: string|null }>
+  const _hookCorrelationCache = new Map()
 
   // ========== COMPUTED ==========
 
@@ -1360,6 +1365,55 @@ export const useMessageStore = defineStore('message', () => {
     toolCallsBySession.value.delete(sessionId)
   }
 
+  // ========== HOOK CORRELATION (Issue #1350) ==========
+
+  /**
+   * Return the cached HookCorrelationResult for a session, recomputing only when
+   * the message stream has actually advanced (different count or last message ID).
+   */
+  function getHookCorrelation(sessionId) {
+    const messages = messagesBySession.value.get(sessionId) || []
+    const count = messages.length
+    const lastId = count > 0 ? (messages[count - 1].message_id || messages[count - 1].id || null) : null
+
+    const cached = _hookCorrelationCache.get(sessionId)
+    if (cached && cached.messageCount === count && cached.lastId === lastId) {
+      return cached.result
+    }
+
+    const toolCalls = toolCallsBySession.value.get(sessionId) || []
+    const result = correlateHooks(messages, toolCalls)
+    _hookCorrelationCache.set(sessionId, { result, messageCount: count, lastId })
+    return result
+  }
+
+  /** Returns hooks correlated to a specific tool call (PreToolUse + PostToolUse). */
+  function hooksForToolCall(sessionId, toolId) {
+    if (!sessionId || !toolId) return []
+    return getHookCorrelation(sessionId).hooksByToolId.get(toolId) || []
+  }
+
+  /** Returns hooks correlated to a user or assistant message (UserPromptSubmit / Stop / etc.). */
+  function hooksForMessageId(sessionId, messageId) {
+    if (!sessionId || !messageId) return []
+    return getHookCorrelation(sessionId).hooksByMessageId.get(messageId) || []
+  }
+
+  /** Returns hooks correlated to a compaction event group by ordinal index. */
+  function hooksForCompaction(sessionId, groupIndex) {
+    if (!sessionId || groupIndex == null || groupIndex < 0) return []
+    return getHookCorrelation(sessionId).hooksByCompactionIndex.get(groupIndex) || []
+  }
+
+  /**
+   * Returns true when a hook system message has been successfully correlated to a
+   * parent element and should be hidden from the top-level displayable list.
+   */
+  function isHookMessageAttached(sessionId, messageId) {
+    if (!sessionId || !messageId) return false
+    return getHookCorrelation(sessionId).attachedHookMessageIds.has(messageId)
+  }
+
   // ========== RETURN ==========
   return {
     // State
@@ -1418,6 +1472,12 @@ export const useMessageStore = defineStore('message', () => {
     getTaskActivity,
 
     // Issue #1000: Event cursors from REST /messages, consumed by connectSession()
-    loadedEventCursors
+    loadedEventCursors,
+
+    // Issue #1350: Hook correlation helpers
+    hooksForToolCall,
+    hooksForMessageId,
+    hooksForCompaction,
+    isHookMessageAttached,
   }
 })

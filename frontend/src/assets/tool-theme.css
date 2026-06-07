@@ -44,6 +44,25 @@
   /* File path tokens */
   --tool-path-bg: var(--bs-tertiary-bg);
   --tool-path-color: var(--bs-link-color);
+
+  /* Hook palette tokens (Issue #1350) */
+  --hook-success-bg: #dcfce7;
+  --hook-success-border: #86efac;
+  --hook-success-text: #166534;
+  --hook-failure-bg: #fee2e2;
+  --hook-failure-border: #f87171;
+  --hook-failure-text: #991b1b;
+  --hook-pending-bg: #fef9c3;
+  --hook-pending-border: #fbbf24;
+  --hook-pending-text: #92400e;
+  --hook-mixed-bg: #fef3c7;
+  --hook-mixed-border: #f59e0b;
+  --hook-mixed-text: #78350f;
+  --hook-badge-success-bg: #16a34a;
+  --hook-badge-failure-bg: #dc2626;
+  --hook-badge-pending-bg: #d97706;
+  --hook-badge-mixed-bg: #b45309;
+  --hook-badge-text: #ffffff;
 }
 
 /* Dark-mode overrides for semantic status colors */
@@ -61,6 +80,24 @@
   --agent-badge-text: #ede9fe;
   /* Light purple for foreground text on dark backgrounds */
   --agent-badge-accent: #a78bfa;
+
+  /* Hook palette — dark mode (Issue #1350) */
+  --hook-success-bg: rgba(34, 197, 94, 0.12);
+  --hook-success-border: rgba(34, 197, 94, 0.4);
+  --hook-success-text: #86efac;
+  --hook-failure-bg: rgba(239, 68, 68, 0.15);
+  --hook-failure-border: rgba(239, 68, 68, 0.45);
+  --hook-failure-text: #fca5a5;
+  --hook-pending-bg: rgba(251, 191, 36, 0.12);
+  --hook-pending-border: rgba(251, 191, 36, 0.4);
+  --hook-pending-text: #fde68a;
+  --hook-mixed-bg: rgba(245, 158, 11, 0.12);
+  --hook-mixed-border: rgba(245, 158, 11, 0.4);
+  --hook-mixed-text: #fcd34d;
+  --hook-badge-success-bg: #15803d;
+  --hook-badge-failure-bg: #b91c1c;
+  --hook-badge-pending-bg: #b45309;
+  --hook-badge-mixed-bg: #92400e;
 }
 
 /* Shared section container */

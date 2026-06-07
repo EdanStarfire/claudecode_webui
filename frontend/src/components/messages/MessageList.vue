@@ -21,6 +21,7 @@
           <CompactionEventGroup
             v-else-if="item.type === 'compaction'"
             :messages="item.messages"
+            :compaction-group-index="item.groupIndex"
           />
 
           <!-- Date separator -->
@@ -119,6 +120,8 @@ const displayableItems = computed(() => {
   const items = []
   let i = 0
 
+  let compactionGroupCount = 0
+
   while (i < messages.length) {
     const msg = messages[i]
 
@@ -133,8 +136,10 @@ const displayableItems = computed(() => {
       const compactionMessages = messages.slice(i, i + messageCount)
       items.push({
         type: 'compaction',
-        messages: compactionMessages
+        messages: compactionMessages,
+        groupIndex: compactionGroupCount,  // Issue #1350: ordinal for PreCompact hook lookup
       })
+      compactionGroupCount++
       i += messageCount // Skip the compaction messages
       continue
     }
@@ -706,6 +711,19 @@ function shouldDisplayMessage(message) {
     const metadata = message.metadata || {}
     if (metadata.parent_tool_use_id && !metadata.has_tool_results) {
       return false
+    }
+  }
+
+  // Issue #1350: Hide hook system messages that have been successfully correlated to a
+  // parent element (tool node, user/assistant bubble, compaction group). Messages that
+  // could NOT be correlated stay visible and render through the SystemMessage pill path.
+  if (message.type === 'system') {
+    const subtype2 = message.metadata?.subtype
+    if (subtype2 === 'hook_started' || subtype2 === 'hook_response') {
+      const msgId = message.id || message.message_id
+      if (msgId && messageStore.isHookMessageAttached(viewSessionId.value, msgId)) {
+        return false
+      }
     }
   }
 

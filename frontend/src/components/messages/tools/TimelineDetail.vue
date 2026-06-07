@@ -46,14 +46,19 @@
       <a class="view-full-link" @click.stop="openFullResult">View Full Result</a>
     </div>
 
+    <!-- Hook indicators attached to this tool call (Issue #1350) -->
+    <HookList v-if="toolHooks.length" :hooks="toolHooks" />
+
   </div>
 </template>
 
 <script setup>
-import { ref, computed, toRef } from 'vue'
+import { ref, computed, toRef, inject } from 'vue'
 import { useToolStatus } from '@/composables/useToolStatus'
 import { useToolResult } from '@/composables/useToolResult'
 import { useResourceStore } from '@/stores/resource'
+import { useMessageStore } from '@/stores/message'
+import HookList from './HookList.vue'
 import BaseToolHandler from '@/components/tools/BaseToolHandler.vue'
 import ReadToolHandler from '@/components/tools/ReadToolHandler.vue'
 import WriteToolHandler from '@/components/tools/WriteToolHandler.vue'
@@ -84,6 +89,15 @@ const props = defineProps({
 const { effectiveStatus, isOrphaned, orphanedInfo } = useToolStatus(toRef(props, 'toolCall'))
 const { resultContent } = useToolResult(toRef(props, 'toolCall'))
 const resourceStore = useResourceStore()
+const messageStore = useMessageStore()
+
+// Issue #1350: hook correlation
+const viewSessionId = inject('viewSessionId', null)
+const toolHooks = computed(() => {
+  const sid = viewSessionId?.value
+  if (!sid || !props.toolCall.id) return []
+  return messageStore.hooksForToolCall(sid, props.toolCall.id)
+})
 
 // Local state
 const handlerRef = ref(null)

@@ -21,6 +21,12 @@
         role="img"
       >{{ approvalIndicator.icon }}</span>
     </span>
+    <span
+      v-if="hookSummary.count > 0"
+      class="hook-count-badge"
+      :class="'hook-badge-' + hookSummary.aggregateStatus"
+      :aria-label="`${hookSummary.count} hook${hookSummary.count > 1 ? 's' : ''} (${hookSummary.aggregateStatus})`"
+    >⚙ {{ hookSummary.count }}</span>
   </div>
 </template>
 
@@ -28,11 +34,13 @@
 import { computed, ref, toRef } from 'vue'
 import { generateShortToolSummary } from '@/utils/toolSummary'
 import { useToolStatus } from '@/composables/useToolStatus'
+import { aggregateHookStatus } from '@/utils/hookCorrelation'
 
 const props = defineProps({
   tool: { type: Object, required: true },
   isExpanded: { type: Boolean, default: false },
-  compact: { type: Boolean, default: false }
+  compact: { type: Boolean, default: false },
+  hooks: { type: Array, default: () => [] },
 })
 
 defineEmits(['click'])
@@ -92,6 +100,11 @@ const toolLabel = computed(() => {
   return name.replace(/Tool$/, '')
 })
 
+const hookSummary = computed(() => ({
+  count: props.hooks.length,
+  aggregateStatus: aggregateHookStatus(props.hooks) || 'success',
+}))
+
 // Expose for parent
 defineExpose({ statusColor, effectiveStatus })
 </script>
@@ -106,6 +119,7 @@ defineExpose({ statusColor, effectiveStatus })
   min-width: 20px;
   cursor: pointer;
   z-index: 1;
+  position: relative;
 }
 
 .node-dot {
@@ -197,4 +211,24 @@ defineExpose({ statusColor, effectiveStatus })
 .node-compact .approval-icon {
   font-size: 7px;
 }
+
+/* Hook count badge — positioned top-right of the node */
+.hook-count-badge {
+  position: absolute;
+  top: -4px;
+  right: -6px;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 14px;
+  white-space: nowrap;
+  color: var(--hook-badge-text);
+  pointer-events: none;
+}
+
+.hook-badge-success { background: var(--hook-badge-success-bg); }
+.hook-badge-failure { background: var(--hook-badge-failure-bg); }
+.hook-badge-pending { background: var(--hook-badge-pending-bg); }
+.hook-badge-mixed   { background: var(--hook-badge-mixed-bg); }
 </style>
