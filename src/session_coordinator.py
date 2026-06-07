@@ -4491,6 +4491,12 @@ class SessionCoordinator:
                     except Exception:
                         logger.exception(f"Failed to reset processing state after interrupt for session {session_id}")
 
+                # Issue #1628: Distill pre-compaction history on compact_boundary.
+                # microcompact_boundary is explicitly skipped — it does not represent a full
+                # context wipe and does not warrant a dedicated summary.
+                elif parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'compact_boundary':
+                    await self._handle_compact_boundary(session_id, parsed_message)
+
                 # Call registered callbacks with processed message (maintain backward compatibility)
                 callbacks = self._message_callbacks.get(session_id, [])
                 # logger.info(f"Processing message for session {session_id}, found {len(callbacks)} callbacks")
@@ -5006,6 +5012,167 @@ class SessionCoordinator:
         if session_id in self._uploaded_file_paths:
             del self._uploaded_file_paths[session_id]
             coord_logger.debug(f"Cleared uploaded files tracking for session {session_id}")
+
+    # ==================== COMPACTION-TIME DISTILLATION (Issue #1628) ====================
+
+    async def _handle_compact_boundary(self, session_id: str, parsed_message) -> None:
+        """Handle a compact_boundary system message by scheduling history distillation.
+
+        Only fires on exact 'compact_boundary' subtype. 'microcompact_boundary' is
+        explicitly excluded — it represents a smaller in-context compaction (not a full
+        context wipe) and does not warrant a dedicated summary. If a future product
+        decision wants microcompactions summarized, extend the detection condition in
+        _create_message_callback.
+
+        No-ops when history_distillation_enabled is False in the session's effective
+        config, matching the existing archive-time distillation gate.
+        """
+        try:
+            session_info = await self.session_manager.get_session_info(session_id)
+            if session_info is None:
+                return
+            eff = await resolve_effective_config(
+                session_info, self.template_manager, self.profile_manager
+            )
+            if not eff.history_distillation_enabled:
+                return
+            boundary_ts = parsed_message.timestamp
+            t = asyncio.create_task(self._distill_compaction(session_id, boundary_ts))
+            t.add_done_callback(task_done_log_exception)
+            coord_logger.debug(
+                f"Launched compaction-time distillation for session {session_id} at ts={boundary_ts}"
+            )
+        except Exception:
+            logger.exception(
+                f"Failed to schedule compaction distillation for session {session_id}"
+            )
+
+    async def _distill_compaction(self, session_id: str, boundary_ts: float) -> None:
+        """Distill messages from the previous compaction boundary to this one.
+
+        Scans messages.jsonl for prior compact_boundary entries to determine the
+        slice window, writes a temp jsonl for that slice, calls distill_session_history,
+        then registers the result as a session resource so the frontend can display it.
+        """
+        from datetime import UTC, datetime
+
+        from src.history_distiller import distill_session_history
+
+        session_dir = self.session_manager.sessions_dir / session_id
+        messages_file = session_dir / "messages.jsonl"
+
+        if not messages_file.exists():
+            return
+
+        # Scan for all compact_boundary timestamps to determine slice window.
+        import json as _json
+        boundary_timestamps: list[float] = []
+        try:
+            with open(messages_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = _json.loads(line)
+                    except _json.JSONDecodeError:
+                        continue
+                    stored_type = row.get("_type")
+                    if stored_type:
+                        # StoredMessage format
+                        if stored_type == "SystemMessage":
+                            subtype = row.get("data", {}).get("subtype", "")
+                            if subtype == "compact_boundary":
+                                ts = row.get("timestamp")
+                                if ts is not None:
+                                    boundary_timestamps.append(float(ts))
+                    else:
+                        # Legacy format
+                        if row.get("type") == "system":
+                            meta = row.get("metadata") or {}
+                            if meta.get("subtype") == "compact_boundary":
+                                ts = row.get("timestamp")
+                                if ts is not None:
+                                    boundary_timestamps.append(float(ts))
+        except OSError:
+            logger.exception(f"Failed to scan messages.jsonl for {session_id}")
+            return
+
+        # Determine previous boundary (slice starts at prev_ts, exclusive).
+        boundary_timestamps_sorted = sorted(boundary_timestamps)
+        prev_ts: float | None = None
+        for ts in boundary_timestamps_sorted:
+            if ts < boundary_ts:
+                prev_ts = ts
+
+        # Write slice to temp file.
+        history_dir = session_dir / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        safe_ts = str(int(boundary_ts))
+        tmp_path = history_dir / f".compaction_{safe_ts}.tmp.jsonl"
+        output_path = history_dir / f"{safe_ts}.md"
+
+        try:
+            with open(messages_file, encoding="utf-8") as src, \
+                    open(tmp_path, "w", encoding="utf-8") as dst:
+                for line in src:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        row = _json.loads(stripped)
+                    except _json.JSONDecodeError:
+                        continue
+                    ts = row.get("timestamp")
+                    if ts is None:
+                        continue
+                    ts_f = float(ts)
+                    # Include messages after prev boundary (exclusive) up to and
+                    # including this boundary (inclusive).
+                    if prev_ts is not None and ts_f <= prev_ts:
+                        continue
+                    if ts_f > boundary_ts:
+                        continue
+                    dst.write(stripped + "\n")
+
+            boundary_iso = datetime.fromtimestamp(boundary_ts, tz=UTC).isoformat()
+            success = await distill_session_history(
+                tmp_path, output_path, session_id, boundary_iso
+            )
+        finally:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+
+        if not success:
+            if output_path.exists():
+                try:
+                    output_path.unlink()
+                except OSError:
+                    pass
+            return
+
+        # Register the markdown file as a session resource for frontend correlation.
+        try:
+            from datetime import datetime as _dt
+            time_label = _dt.fromtimestamp(boundary_ts, tz=UTC).strftime("%H:%M")
+            title = f"Compaction Summary — {time_label}"
+            description = f"compaction:{int(boundary_ts)}"
+            await self.register_uploaded_resource(
+                session_id,
+                str(output_path),
+                title=title,
+                description=description,
+            )
+            coord_logger.info(
+                f"Registered compaction summary resource for session {session_id} at ts={boundary_ts}"
+            )
+        except Exception:
+            logger.exception(
+                f"Failed to register compaction summary resource for session {session_id}"
+            )
 
     # ==================== RESOURCE GALLERY INTEGRATION (Issue #404) ====================
 
