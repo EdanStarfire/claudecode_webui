@@ -1904,7 +1904,7 @@ class TestIssue1628CompactBoundaryDistillation:
             mock_create_task.assert_called_once()
             # Verify the coroutine arg is a _distill_compaction call
             coro_arg = mock_create_task.call_args[0][0]
-            assert 'distill_compaction' in type(coro_arg).__qualname__
+            assert 'distill_compaction' in coro_arg.__qualname__
             coro_arg.close()  # clean up unawaited coroutine
             mock_task.add_done_callback.assert_called_once()
 
