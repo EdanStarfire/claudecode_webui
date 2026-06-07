@@ -60,6 +60,9 @@
       :key="comm.id"
       :toolCall="comm"
     />
+
+    <!-- Hook indicators for Stop / SubagentStop / PostResponse events (Issue #1350) -->
+    <HookPillStrip v-if="stopHooks.length" :hooks="stopHooks" align="left" />
   </div>
 </template>
 
@@ -75,6 +78,7 @@ import ThinkingBlock from './ThinkingBlock.vue'
 import ActivityTimeline from './tools/ActivityTimeline.vue'
 import SubagentTimeline from './SubagentTimeline.vue'
 import SendCommToolHandler from '@/components/tools/SendCommToolHandler.vue'
+import HookPillStrip from './HookPillStrip.vue'
 
 const props = defineProps({
   message: {
@@ -97,6 +101,15 @@ const sessionStore = useSessionStore()
 // TTS Read Aloud (provided by MessageList)
 const tts = inject('ttsReadAloud', null)
 const allMessages = inject('allMessages', null)
+
+// Issue #1350: hook correlation (viewSessionId provided by MessageList)
+const viewSessionId = inject('viewSessionId', null)
+const stopHooks = computed(() => {
+  const sid = viewSessionId?.value
+  const msgId = props.message.message_id || props.message.id
+  if (!sid || !msgId) return []
+  return messageStore.hooksForMessageId(sid, msgId)
+})
 
 const isTTSPlaying = computed(() => {
   if (!tts) return false

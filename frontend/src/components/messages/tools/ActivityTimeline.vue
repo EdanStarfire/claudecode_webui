@@ -18,6 +18,7 @@
           :tool="tool"
           :isExpanded="expandedNodeId === tool.id"
           :compact="uiStore.isMobile"
+          :hooks="hooksForTool(tool.id)"
           @click="toggleDetail(tool.id)"
         />
       </template>
@@ -39,8 +40,9 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, nextTick } from 'vue'
+import { computed, ref, watch, nextTick, inject } from 'vue'
 import { useUIStore } from '@/stores/ui'
+import { useMessageStore } from '@/stores/message'
 import { getEffectiveStatusForTool, getColorForStatus } from '@/composables/useToolStatus'
 import TimelineNode from './TimelineNode.vue'
 import TimelineSegment from './TimelineSegment.vue'
@@ -60,6 +62,16 @@ const props = defineProps({
 })
 
 const uiStore = useUIStore()
+const messageStore = useMessageStore()
+
+// Issue #1350: inject session id for hook correlation
+const viewSessionId = inject('viewSessionId', null)
+
+function hooksForTool(toolId) {
+  const sid = viewSessionId?.value
+  if (!sid || !toolId) return []
+  return messageStore.hooksForToolCall(sid, toolId)
+}
 
 // Local state for this timeline instance
 const expandedNodeId = ref(null)

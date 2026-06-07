@@ -21,6 +21,9 @@
       <span class="pill-chevron" :class="{ expanded: isOpen }">&#x25B6;</span>
     </div>
 
+    <!-- PreCompact hook indicators (Issue #1350) -->
+    <HookPillStrip v-if="preCompactHooks.length" :hooks="preCompactHooks" align="center" />
+
     <!-- Expanded detail -->
     <div v-if="isOpen" class="compaction-detail">
       <!-- Compaction Metadata -->
@@ -67,20 +70,34 @@ import { computed, inject, onMounted, onUnmounted, ref } from 'vue'
 import { formatTimestamp } from '@/utils/time'
 import { useResourceStore } from '@/stores/resource'
 import { useSessionStore } from '@/stores/session'
+import { useMessageStore } from '@/stores/message'
+import HookPillStrip from './HookPillStrip.vue'
 
 const props = defineProps({
   messages: {
     type: Array,
     required: true,
     validator: (messages) => messages.length === 4 || messages.length === 5
-  }
+  },
+  compactionGroupIndex: {
+    type: Number,
+    default: -1,
+  },
 })
 
 const resourceStore = useResourceStore()
 const sessionStore = useSessionStore()
+const messageStore = useMessageStore()
 
 // Injected per-instance session id (provided by SessionView via MessageList).
 const viewSessionId = inject('viewSessionId', ref(null))
+
+// Issue #1350: PreCompact hooks attached to this compaction group
+const preCompactHooks = computed(() => {
+  const sid = viewSessionId.value
+  if (!sid || props.compactionGroupIndex < 0) return []
+  return messageStore.hooksForCompaction(sid, props.compactionGroupIndex)
+})
 
 const isOpen = ref(false)
 // Set to true after the 30s pending→failed window elapses with no resource.

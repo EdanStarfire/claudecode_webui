@@ -78,19 +78,24 @@
         </div>
       </div>
     </div>
+
+    <!-- Hook indicators for UserPromptSubmit events (Issue #1350) -->
+    <HookPillStrip v-if="userHooks.length" :hooks="userHooks" align="right" />
   </div>
 </template>
 
 <script setup>
-import { computed, ref, onUnmounted } from 'vue'
+import { computed, ref, onUnmounted, inject } from 'vue'
 import { formatTimestamp } from '@/utils/time'
 import { getAgentColor } from '@/composables/useAgentColor'
 import { useResourceImages } from '@/composables/useResourceImages'
 import { useSessionStore } from '@/stores/session'
 import { useResourceStore } from '@/stores/resource'
+import { useMessageStore } from '@/stores/message'
 import { getFileIcon } from '@/utils/fileTypes'
 import AttachmentChip from '@/components/common/AttachmentChip.vue'
 import MarkdownView from '@/components/common/MarkdownView.vue'
+import HookPillStrip from './HookPillStrip.vue'
 
 const props = defineProps({
   message: {
@@ -109,6 +114,16 @@ const commSenderName = computed(() => props.message.metadata?.comm?.from_display
 
 const sessionStore = useSessionStore()
 const resourceStore = useResourceStore()
+const messageStore = useMessageStore()
+
+// Issue #1350: hook correlation
+const viewSessionId = inject('viewSessionId', null)
+const userHooks = computed(() => {
+  const sid = viewSessionId?.value
+  const msgId = props.message.message_id || props.message.id
+  if (!sid || !msgId) return []
+  return messageStore.hooksForMessageId(sid, msgId)
+})
 
 // Separator used by InputArea.vue when appending the attachment block
 const ATTACHMENT_SEPARATOR = '\n\n---\nAttached files (use Read tool to access, or embed via markdown URL):\n'
