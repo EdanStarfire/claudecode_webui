@@ -85,6 +85,11 @@ export const useUIStore = defineStore('ui', () => {
   // Auto-scroll state
   const autoScrollEnabled = ref(true)
 
+  // Issue #1631: Per-session sticky-to-bottom visibility (read by SessionStatusBar)
+  const stickyToBottomBySession = ref(new Map())
+  // Issue #1631: Per-session scroll-to-bottom request tokens (watched by MessageList)
+  const scrollToBottomTokenBySession = ref(new Map())
+
   // Theme: cycles through light → dark → sensitive-light → sensitive-dark
   const THEMES = ['light', 'dark', 'sensitive-light', 'sensitive-dark']
   const theme = ref('light')
@@ -195,6 +200,19 @@ export const useUIStore = defineStore('ui', () => {
 
   function setAutoScroll(enabled) {
     autoScrollEnabled.value = enabled
+  }
+
+  function setStickyToBottom(sessionId, value) {
+    if (stickyToBottomBySession.value.get(sessionId) === value) return
+    const next = new Map(stickyToBottomBySession.value)
+    next.set(sessionId, value)
+    stickyToBottomBySession.value = next
+  }
+
+  function requestScrollToBottom(sessionId) {
+    const next = new Map(scrollToBottomTokenBySession.value)
+    next.set(sessionId, (next.get(sessionId) || 0) + 1)
+    scrollToBottomTokenBySession.value = next
   }
 
   function setSuppressAutoShow(value) {
@@ -368,6 +386,8 @@ export const useUIStore = defineStore('ui', () => {
     windowWidth,
     isMobile,
     autoScrollEnabled,
+    stickyToBottomBySession,
+    scrollToBottomTokenBySession,
     theme,
     isRedBackground,
     activeModal,
@@ -401,6 +421,8 @@ export const useUIStore = defineStore('ui', () => {
     toggleRightPanel,
     setRightPanelVisible,
     setAutoScroll,
+    setStickyToBottom,
+    requestScrollToBottom,
     setTTSReadAloud,
     setSuppressAutoShow,
     initTheme,
