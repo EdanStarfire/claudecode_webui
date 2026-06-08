@@ -16,7 +16,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Default Docker image name used by the bundled wrapper
-DEFAULT_DOCKER_IMAGE = "claude-code:local"
+DEFAULT_DOCKER_IMAGE = "claudecode-webui-dev:local"
 
 
 def get_wrapper_script_path() -> Path:
