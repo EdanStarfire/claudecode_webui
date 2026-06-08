@@ -6,6 +6,8 @@
 #
 # Build:
 #   docker build -f docker/Dockerfile.dev -t claudecode-webui-dev:local .
+# Dev container for claudecode_webui — canonical tag: claudecode-webui-dev:local
+# (Session container uses claude-code:local — see src/docker/Dockerfile)
 #
 # Usage with claude-docker:
 #   Set session Docker image to "claudecode-webui-dev:local" or:
