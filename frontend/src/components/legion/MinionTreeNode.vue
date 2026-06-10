@@ -44,6 +44,16 @@
 
       <!-- Action Buttons (Issue #296) -->
       <button
+        v-if="canMarkRead"
+        class="btn btn-sm btn-outline-secondary me-1"
+        title="Mark read"
+        aria-label="Mark read"
+        :disabled="liveSession?.is_processing"
+        @click.stop="handleMarkRead"
+      >
+        <i class="bi bi-envelope-open"></i>
+      </button>
+      <button
         v-if="canMarkUnread"
         class="btn btn-sm btn-outline-secondary me-1"
         title="Mark unread"
@@ -116,6 +126,16 @@
 
         <!-- Action Buttons -->
         <div class="node-actions">
+          <button
+            v-if="canMarkRead"
+            class="btn btn-sm btn-outline-secondary me-1"
+            title="Mark read"
+            aria-label="Mark read"
+            :disabled="liveSession?.is_processing"
+            @click.stop="handleMarkRead"
+          >
+            <i class="bi bi-envelope-open"></i>
+          </button>
           <button
             v-if="canMarkUnread"
             class="btn btn-sm btn-outline-secondary me-1"
@@ -321,6 +341,11 @@ const canMarkUnread = computed(() =>
   !!liveSession.value?.last_completion_at && !isUnreviewed.value
 )
 
+// Issue #1646: show Mark Read button only when session is currently unread (inverse of canMarkUnread)
+const canMarkRead = computed(() =>
+  !!liveSession.value?.last_completion_at && isUnreviewed.value
+)
+
 // Check if minion has children
 const hasChildren = computed(() => {
   return (
@@ -496,6 +521,15 @@ async function handleMarkUnread() {
     await sessionStore.markUnread(props.minionData.id)
   } catch (e) {
     console.error('Failed to mark unread:', e)
+  }
+}
+
+// Issue #1646: Mark session read from the tree node (no navigation — already on project view)
+async function handleMarkRead() {
+  try {
+    await sessionStore.markRead(props.minionData.id)
+  } catch (e) {
+    console.error('Failed to mark read:', e)
   }
 }
 </script>
