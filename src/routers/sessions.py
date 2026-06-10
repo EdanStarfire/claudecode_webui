@@ -169,6 +169,16 @@ def build_router(webui) -> APIRouter:
         success = await webui.coordinator.session_manager.mark_unread(session_id)
         return {"success": success}
 
+    @router.post("/api/sessions/{session_id}/mark-read")
+    @handle_exceptions("mark session read")
+    async def mark_session_read(session_id: str):
+        """Clear the unread indicator by aligning last_viewed_at with last_completion_at (issue #1646)."""
+        if not await webui.service.get_session_exists(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        success = await webui.coordinator.session_manager.mark_read(session_id)
+        return {"success": success}
+
     @router.post("/api/sessions/{session_id}/terminate")
     @handle_exceptions("terminate session")
     async def terminate_session(session_id: str):

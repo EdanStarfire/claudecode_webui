@@ -947,3 +947,109 @@ class TestMarkUnread:
         manager = temp_session_manager
         result = await manager.mark_unread("nonexistent-session-id")
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Issue #1646: mark_read tests
+# ---------------------------------------------------------------------------
+
+
+class TestMarkRead:
+    """Tests for SessionManager.mark_read() (issue #1646)."""
+
+    @pytest.mark.asyncio
+    async def test_mark_read_sets_viewed_to_completion(
+        self, temp_session_manager, sample_session_config
+    ):
+        """Happy path: session with completion → mark_read sets last_viewed_at == last_completion_at."""
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+
+        completion_ts = datetime.now(UTC)
+        await manager.mark_completion(sid, completion_ts)
+
+        session = manager._active_sessions.get(sid)
+        assert session.last_completion_at == completion_ts
+
+        result = await manager.mark_read(sid)
+
+        assert result is True
+        session = manager._active_sessions.get(sid)
+        assert session.last_viewed_at == completion_ts, "last_viewed_at must equal last_completion_at"
+
+    @pytest.mark.asyncio
+    async def test_mark_read_no_completion_returns_false(
+        self, temp_session_manager, sample_session_config
+    ):
+        """Session without any completion: mark_read returns False, no write."""
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+
+        session = manager._active_sessions.get(sid)
+        assert session.last_completion_at is None
+
+        result = await manager.mark_read(sid)
+
+        assert result is False
+        session = manager._active_sessions.get(sid)
+        assert session.last_viewed_at is None  # unchanged
+
+    @pytest.mark.asyncio
+    async def test_mark_read_missing_session_returns_false(self, temp_session_manager):
+        """Missing session: mark_read returns False."""
+        manager = temp_session_manager
+        result = await manager.mark_read("nonexistent-session-id")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_mark_read_persists_state_and_broadcasts(
+        self, temp_session_manager, sample_session_config
+    ):
+        """mark_read must persist to disk and broadcast state-change callback."""
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+
+        completion_ts = datetime.now(UTC)
+        await manager.mark_completion(sid, completion_ts)
+
+        state_changes = []
+
+        async def _capture_change(session_id, new_state, is_processing, **kwargs):
+            state_changes.append(session_id)
+
+        manager.add_state_change_callback(_capture_change)
+
+        result = await manager.mark_read(sid)
+
+        assert result is True
+        assert sid in state_changes, "mark_read must broadcast state change"
+
+        # Confirm persisted: reload and verify
+        data_dir = manager.sessions_dir.parent
+        manager2 = SessionManager(data_dir)
+        await manager2.initialize()
+        reloaded = await manager2.get_session_info(sid)
+        assert reloaded.last_viewed_at == completion_ts, "last_viewed_at must persist"
+
+    @pytest.mark.asyncio
+    async def test_mark_read_is_idempotent(
+        self, temp_session_manager, sample_session_config
+    ):
+        """Calling mark_read twice produces identical state."""
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+
+        completion_ts = datetime.now(UTC)
+        await manager.mark_completion(sid, completion_ts)
+
+        await manager.mark_read(sid)
+        session_after_first = manager._active_sessions.get(sid)
+        viewed_after_first = session_after_first.last_viewed_at
+
+        await manager.mark_read(sid)
+        session_after_second = manager._active_sessions.get(sid)
+        assert session_after_second.last_viewed_at == viewed_after_first, "idempotent"

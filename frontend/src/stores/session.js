@@ -740,6 +740,35 @@ export const useSessionStore = defineStore('session', () => {
     // Step 3: state-change broadcast from the server will update last_viewed_at in sessions Map
   }
 
+  /**
+   * Mark a session as read (issue #1646).
+   *
+   * Symmetric inverse of markUnread(): synchronously SETS the optimistic viewed timestamp
+   * to now so isUnreviewed() re-evaluates as false on the next reactivity flush, before the
+   * API response. On failure, rolls back to the previous local timestamp.
+   */
+  async function markRead(sessionId) {
+    // Step 1 (synchronous): set the optimistic viewed timestamp to clear the indicator immediately.
+    const previousLocalViewed = localViewedAt.value.get(sessionId)
+    localViewedAt.value.set(sessionId, Date.now())
+    localViewedAt.value = new Map(localViewedAt.value) // trigger Vue reactivity
+
+    // Step 2: persist on the server (sets last_viewed_at = last_completion_at).
+    try {
+      await api.post(`/api/sessions/${sessionId}/mark-read`)
+    } catch (error) {
+      // Rollback: restore the previous local timestamp.
+      if (previousLocalViewed === undefined) {
+        localViewedAt.value.delete(sessionId)
+      } else {
+        localViewedAt.value.set(sessionId, previousLocalViewed)
+      }
+      localViewedAt.value = new Map(localViewedAt.value)
+      throw error
+    }
+    // Step 3: state-change broadcast from the server will update last_viewed_at in sessions Map.
+  }
+
   // ========== GHOST AGENT ACTIONS ==========
 
   function addGhostAgent(agentId, agentData) {
@@ -800,6 +829,7 @@ export const useSessionStore = defineStore('session', () => {
     saveScrollPosition,
     recordSessionReset,
     clearSessionSelection,
-    markUnread
+    markUnread,
+    markRead
   }
 })

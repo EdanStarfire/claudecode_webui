@@ -1038,6 +1038,33 @@ class SessionManager:
                 logger.error(f"Failed to mark unread for session {session_id}: {e}")
                 return False
 
+    async def mark_read(self, session_id: str) -> bool:
+        """Clear the unread indicator by aligning last_viewed_at with last_completion_at (issue #1646).
+
+        Symmetric inverse of mark_unread(): instead of clearing the timestamp, set it to the
+        completion timestamp so the unread predicate (last_completion_at > last_viewed_at)
+        evaluates false. Idempotent — repeated calls produce the same state.
+
+        Returns False if the session is missing or has no completion yet
+        (no-op guard: there's nothing to mark read without a completion).
+        """
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    return False
+                if session.last_completion_at is None:
+                    return False
+                session.last_viewed_at = session.last_completion_at
+                session.updated_at = datetime.now(UTC)
+                await self._persist_session_state(session_id)
+                await self._notify_state_change_callbacks(session_id, session.state)
+                session_logger.debug(f"Marked read for session {session_id}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to mark read for session {session_id}: {e}")
+                return False
+
     def record_activity(self, session_id: str) -> None:
         """Update last_activity_at in memory for watchdog tracking (issue #1130).
 
