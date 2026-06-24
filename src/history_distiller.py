@@ -17,6 +17,7 @@ _EXCLUDED_SYSTEM_SUBTYPES = frozenset({
     "task_started",
     "task_progress",
     "task_notification",
+    "task_updated",
     "thinking_tokens",
     "status_update",
     "local_command_response",
