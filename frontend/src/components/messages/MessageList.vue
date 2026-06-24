@@ -646,7 +646,7 @@ function shouldDisplayMessage(message) {
   // Issue #689: Suppress task lifecycle messages — now displayed inside SubagentTimeline cards
   if (message.type === 'system') {
     const taskSubtype = message.metadata?.subtype
-    if (['task_started', 'task_progress', 'task_notification', 'thinking_tokens'].includes(taskSubtype)) {
+    if (['task_started', 'task_progress', 'task_notification', 'task_updated', 'thinking_tokens'].includes(taskSubtype)) {
       return false
     }
   }
