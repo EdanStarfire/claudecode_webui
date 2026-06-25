@@ -3065,7 +3065,7 @@ class SessionCoordinator:
                 )
 
             # Handle SystemMessage subtypes (including Task* subclasses)
-            if _type in ("SystemMessage", "HookEventMessage", "TaskStartedMessage", "TaskProgressMessage", "TaskNotificationMessage"):
+            if _type in ("SystemMessage", "HookEventMessage", "TaskStartedMessage", "TaskProgressMessage", "TaskNotificationMessage", "TaskUpdatedMessage"):
                 subtype = data.get("subtype")
                 if subtype:
                     metadata["subtype"] = subtype
@@ -3111,6 +3111,13 @@ class SessionCoordinator:
                     status = data.get("status", "unknown")
                     summary = data.get("summary") or ""
                     content = f"Agent {status}: {summary}" if summary else f"Agent {status}"
+                elif _type == "TaskUpdatedMessage":
+                    metadata["subtype"] = "task_updated"
+                    metadata["task_id"] = data.get("task_id")
+                    metadata["status"] = data.get("status")
+                    metadata["tool_use_id"] = data.get("tool_use_id")
+                    metadata["uuid"] = data.get("uuid")
+                    content = "Agent task updated"
 
                 # Issue #571: Synthesize content for hook messages from stored format
                 elif subtype in ("hook_started", "hook_response"):
