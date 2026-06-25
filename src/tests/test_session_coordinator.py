@@ -1997,3 +1997,88 @@ class TestIssue1628CompactBoundaryDistillation:
             description_arg = mock_register.call_args.kwargs.get('description')
             assert title_arg is not None and "Compaction Summary" in title_arg
             assert description_arg == f"compaction:{int(boundary_ts)}"
+
+
+class TestConvertStoredMessageToWebsocket:
+    """Tests for _convert_stored_message_to_websocket (issue #1657 regression)."""
+
+    @pytest.fixture
+    def coordinator(self, tmp_path):
+        return SessionCoordinator(tmp_path)
+
+    def test_issue_1657_task_updated_message_sets_subtype(self, coordinator):
+        stored = {
+            "_type": "TaskUpdatedMessage",
+            "timestamp": 1700000000.0,
+            "data": {
+                "subtype": "task_updated",
+                "task_id": "task-abc",
+                "status": "in_progress",
+                "tool_use_id": "toolu_xyz",
+                "uuid": "uuid-123",
+                "patch": {"description": "updated"},
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        assert result["type"] == "system"
+        assert result["metadata"]["subtype"] == "task_updated"
+
+    def test_issue_1657_task_updated_copies_fields(self, coordinator):
+        stored = {
+            "_type": "TaskUpdatedMessage",
+            "timestamp": 1700000000.0,
+            "data": {
+                "subtype": "task_updated",
+                "task_id": "task-xyz",
+                "status": "completed",
+                "tool_use_id": "toolu_aaa",
+                "uuid": "uuid-456",
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        meta = result["metadata"]
+        assert meta["task_id"] == "task-xyz"
+        assert meta["status"] == "completed"
+        assert meta["tool_use_id"] == "toolu_aaa"
+        assert meta["uuid"] == "uuid-456"
+
+    def test_issue_1657_task_started_unchanged(self, coordinator):
+        stored = {
+            "_type": "TaskStartedMessage",
+            "timestamp": 1700000000.0,
+            "data": {
+                "subtype": "task_started",
+                "task_id": "task-start",
+                "description": "Do something",
+                "session_id": "sess-1",
+                "task_type": "agent",
+                "uuid": "uuid-s",
+                "tool_use_id": "toolu_s",
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        assert result["type"] == "system"
+        assert result["metadata"]["subtype"] == "task_started"
+        assert result["metadata"]["task_id"] == "task-start"
+
+    def test_issue_1657_task_notification_unchanged(self, coordinator):
+        stored = {
+            "_type": "TaskNotificationMessage",
+            "timestamp": 1700000000.0,
+            "data": {
+                "subtype": "task_notification",
+                "task_id": "task-notif",
+                "status": "done",
+                "summary": "All done",
+                "session_id": "sess-2",
+                "uuid": "uuid-n",
+                "tool_use_id": "toolu_n",
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        assert result["type"] == "system"
+        assert result["metadata"]["subtype"] == "task_notification"
