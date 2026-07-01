@@ -6,6 +6,38 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-01
+
+### Added
+- **Hook events in parent session UI** — hook trigger/result events fired by minion agents are now surfaced in the parent session's message stream (#1350)
+- **Emergency Stop All / Resume All** — bulk-stop all running sessions in a project from the overview page; a resume bar tracks the stopped batch and lets you restart them in one click (#1619)
+- **Compact Agent Overview** — toggle a condensed view of the agent overview panel to fit more sessions on screen (#1618)
+- **Schedule grouping and bulk actions** — schedules panel now groups rows and supports bulk pause/resume/delete (#1625)
+- **Pre-compaction history distillation** — session history is summarised to a compact digest before context compaction, giving long-running sessions better continuity (#1637)
+- **Mark as Read** — mark sessions as read from the project overview without navigating into them (#1648)
+- **Run Now for schedules** — ⚡ button on each schedule row triggers an immediate run without shifting the cron time; shows a spinner while in flight and a brief inline error on conflict (#1662)
+
+### Fixed
+- **Streaming deduplication** — duplicate streaming chunks no longer appear in assistant messages (#1615)
+- **Agent chip clipping** — agent chip labels no longer overflow or clip in the session header bar (#1616)
+- **Sidebar panel headers** — right-sidebar section headers now render with correct styling (#1617)
+- **Stop All pre-terminated exclusion** — Stop All no longer counts or resumes sessions that were already terminated before the action was triggered (#1621)
+- **Scroll-to-bottom focus** — scroll focus behaviour corrected after navigating between sessions (#1632)
+- **Auto-scroll persistence** — auto-scroll enabled/disabled state now persists correctly across session switches (#1633)
+- **Orphaned AskUserQuestion blocks** — permission prompts that never received a response are now resolved on session reload instead of remaining in a permanently pending state (#1636)
+- **Permission prompt display** — permission prompts render and resolve correctly following the SDK update (#1626)
+- **Compaction state pill** — the compaction indicator in the session header correctly reflects live store state (#1644 related)
+- **thinking_tokens suppression** — thinking-token content is correctly hidden in contexts where it should not be shown (#1644)
+- **task_updated events — live** — agent task-update events are now displayed in real time during active streaming (#1655, #1656)
+- **task_updated events — reload** — task_updated history is restored correctly when the page is reloaded; blank pills no longer appear (#1657, #1659)
+- **Stop All resume count** — the resume-sessions bar count now decrements automatically whenever a stopped session restarts by any means (manual, scheduled, or API) (#1661, #1663)
+- **MCP stale config snapshots** — MCP server settings no longer show inherited profile values as session-level overrides after a profile update; inherited snapshots are pruned at spawn time and on startup (#1660, #1664)
+
+### Changed
+- **claude-agent-sdk 0.2.93 → 0.2.107** — multiple patch bumps with SDK stability improvements (#1623, #1647, #1650, #1652, #1654)
+
+[1.4.0]: https://github.com/EdanStarfire/claudecode_webui/releases/tag/v1.4.0
+
 ## [1.3.0] - 2026-05-30
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "name": "claude-code-webui-frontend",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "type": "module",
   "description": "Vue 3 frontend for Claude Code WebUI",
   "scripts": {
