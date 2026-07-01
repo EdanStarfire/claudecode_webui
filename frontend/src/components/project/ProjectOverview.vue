@@ -384,7 +384,7 @@ import { compareAgents, normalizeLastActive } from '@/utils/agentSort'
 import { getDisplayState } from '@/composables/useSessionState'
 import { api } from '@/utils/api'
 import { findInHierarchy } from '@/utils/hierarchyUtils'
-import { getStoppedSet, setStoppedSet, addToStoppedSet, clearStoppedSet, pruneStoppedSet } from '@/utils/stoppedSet'
+import { getStoppedSet, setStoppedSet, addToStoppedSet, clearStoppedSet, pruneStoppedSet, removeFromStoppedSet } from '@/utils/stoppedSet'
 import MinionTreeNode from '../legion/MinionTreeNode.vue'
 
 const props = defineProps({
@@ -428,6 +428,18 @@ function refreshStoppedCount() {
   const allIds = projectSessions.value.map(s => s.session_id)
   const pruned = pruneStoppedSet(props.projectId, allIds)
   stoppedCount.value = pruned.length
+}
+
+function releaseStartedSessions() {
+  const current = getStoppedSet(props.projectId)
+  if (current.length === 0) return
+  const started = current.filter(id => {
+    const s = sessionStore.getSession(id)
+    return s?.state?.toUpperCase() === 'ACTIVE'
+  })
+  if (started.length === 0) return
+  removeFromStoppedSet(props.projectId, started)
+  refreshStoppedCount()
 }
 
 function beginStopConfirm() {
@@ -681,8 +693,9 @@ onMounted(() => {
   // Pruning happens in refreshStoppedCount() after stop/resume actions.
   const restored = getStoppedSet(props.projectId)
   stoppedCount.value = restored.length
-  if (restored.length > 0) {
-    setFleetToast('info', `ⓘ Stop All from earlier still pending — Resume is available for ${restored.length} session${restored.length !== 1 ? 's' : ''}.`, 0)
+  releaseStartedSessions()
+  if (stoppedCount.value > 0) {
+    setFleetToast('info', `ⓘ Stop All from earlier still pending — Resume is available for ${stoppedCount.value} session${stoppedCount.value !== 1 ? 's' : ''}.`, 0)
   }
 
   // Load minion hierarchy
@@ -692,6 +705,8 @@ onMounted(() => {
   sessionWatchStop = watch(
     () => sessionStore.sessions,
     (sessions) => {
+      releaseStartedSessions()
+
       if (!minionHierarchy.value) return
 
       // Update all minion states, is_processing, and latest_message in hierarchy
@@ -744,8 +759,9 @@ watch(() => props.projectId, (newId) => {
   clearTimeout(fleetToastTimer)
   const restored = getStoppedSet(newId)
   stoppedCount.value = restored.length
-  if (restored.length > 0) {
-    setFleetToast('info', `ⓘ Stop All from earlier still pending — Resume is available for ${restored.length} session${restored.length !== 1 ? 's' : ''}.`, 0)
+  releaseStartedSessions()
+  if (stoppedCount.value > 0) {
+    setFleetToast('info', `ⓘ Stop All from earlier still pending — Resume is available for ${stoppedCount.value} session${stoppedCount.value !== 1 ? 's' : ''}.`, 0)
   }
   loadMinionHierarchy()
 })
