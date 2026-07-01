@@ -37,3 +37,10 @@ export function pruneStoppedSet(projectId, validSessionIds) {
   setStoppedSet(projectId, pruned)
   return pruned
 }
+
+export function removeFromStoppedSet(projectId, ids) {
+  const drop = new Set(ids)
+  const remaining = getStoppedSet(projectId).filter(id => !drop.has(id))
+  setStoppedSet(projectId, remaining)
+  return remaining
+}
