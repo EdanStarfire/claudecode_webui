@@ -69,6 +69,23 @@ _TEXT_RESOURCE_FORMATS = {
     "php", "sql", "r", "swift", "kt",
 }
 
+# Issue #1660: MCP config fields that the spawn path snapshots into session.config.
+# These are the only fields subject to stale-snapshot pruning.
+_MCP_INHERITABLE_FIELDS = ("mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config")
+
+
+def _mcp_field_equal(field: str, a, b) -> bool:
+    """Compare an MCP config field value, treating mcp_server_ids order-insensitively.
+
+    None and [] are treated as distinct: None means "inherit from chain", [] means
+    "explicitly no servers". Only a list-vs-list comparison uses set equality.
+    """
+    if field == "mcp_server_ids":
+        if (a is None) != (b is None):
+            return False
+        return set(a or []) == set(b or [])
+    return a == b
+
 
 def _apply_resource_filters(
     resources: list[dict],
@@ -620,6 +637,7 @@ class SessionCoordinator:
             # Load configuration profiles from disk (issue #1062)
             await self.profile_manager.load_profiles()
             coord_logger.info("Loaded configuration profiles")
+            await self._migrate_stale_mcp_snapshots()  # issue #1660
 
             # Load global MCP server configs (issue #676)
             await self.mcp_config_manager.load_configs()
@@ -870,6 +888,9 @@ class SessionCoordinator:
             # and store non-matching fields as initial session_overrides (#1079).
             if config.template_id:
                 await self._init_session_overrides(session_id, config)
+                sinfo = await self.session_manager.get_session_info(session_id)
+                if sinfo:
+                    await self._prune_inherited_mcp_snapshot(sinfo)  # issue #1660
 
             # Add session to project
             await self.project_manager.add_session_to_project(project_id, session_id)
@@ -5323,3 +5344,54 @@ class SessionCoordinator:
                 )
         except Exception:
             logger.exception(f"Failed to compute initial session_overrides for {session_id}")
+
+    async def _prune_inherited_mcp_snapshot(self, session_info) -> bool:
+        """Remove MCP config fields from session.config that merely mirror the current
+        template/profile resolution (inherited snapshots, not real overrides).
+
+        Returns True if the session was modified. Issue #1660.
+        """
+        if not session_info.template_id:
+            return False
+        try:
+            from src.config_resolution import resolve_template_config
+
+            template = await self.template_manager.get_template(session_info.template_id)
+            if template is None:
+                return False
+            resolved = await resolve_template_config(template, self.profile_manager)
+            cfg = dict(session_info.config or {})
+            changed = False
+            for field in _MCP_INHERITABLE_FIELDS:
+                if field not in cfg:
+                    continue
+                if _mcp_field_equal(field, cfg[field], resolved.get(field)):
+                    del cfg[field]
+                    changed = True
+            if changed:
+                await self.session_manager.update_session(
+                    session_info.session_id, _replace_config=cfg
+                )
+            return changed
+        except Exception:
+            logger.exception(
+                f"Failed to prune MCP snapshot for session {session_info.session_id}"
+            )
+            return False
+
+    async def _migrate_stale_mcp_snapshots(self) -> None:
+        """Issue #1660: one-time cleanup of inherited MCP snapshots persisted into
+        session.config by the spawn path. Conservative — only clears fields that still
+        equal the current template/profile resolution. Never blocks startup."""
+        try:
+            sessions = await self.session_manager.list_sessions()
+            cleared = 0
+            for s in sessions:
+                if await self._prune_inherited_mcp_snapshot(s):
+                    cleared += 1
+            if cleared:
+                coord_logger.info(
+                    f"#1660 migration: cleared stale MCP snapshots on {cleared} session(s)"
+                )
+        except Exception:
+            logger.exception("Failed MCP snapshot migration (#1660)")

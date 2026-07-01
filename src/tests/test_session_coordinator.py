@@ -2082,3 +2082,258 @@ class TestConvertStoredMessageToWebsocket:
         assert result is not None
         assert result["type"] == "system"
         assert result["metadata"]["subtype"] == "task_notification"
+
+
+# ---------------------------------------------------------------------------
+# Issue #1660 — MCP snapshot pruning
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestIssue1660McpSnapshotPrune:
+    """Tests for issue #1660 — _prune_inherited_mcp_snapshot removes MCP config fields
+    that merely mirror the current template/profile resolution (inherited snapshots,
+    not real overrides)."""
+
+    async def _make_project(self, coordinator, suffix=""):
+        return await coordinator.project_manager.create_project(
+            name=f"Test Project {suffix}", working_directory="/tmp/test_1660"
+        )
+
+    async def test_spawn_prune_removes_mcp_server_ids_equal_to_chain(self, temp_coordinator):
+        """After create_session, an mcp_server_ids snapshot equal to the template/profile
+        chain is pruned from session.config so that subsequent profile changes propagate."""
+        import uuid
+
+        coordinator = temp_coordinator
+        profile = await coordinator.profile_manager.create_profile(
+            name="MCP Profile", area="mcp", config={"mcp_server_ids": ["srv-a"]}
+        )
+        template = await coordinator.template_manager.create_template(
+            name="MCP Template",
+            config={},
+            profile_ids={"mcp": profile.profile_id},
+        )
+        project = await self._make_project(coordinator, "spawn-prune")
+        session_id = str(uuid.uuid4())
+
+        # Simulate spawn path: pass same mcp_server_ids as the profile defines
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(template_id=template.template_id, mcp_server_ids=["srv-a"]),
+        )
+
+        sinfo = await coordinator.session_manager.get_session_info(session_id)
+        assert "mcp_server_ids" not in sinfo.config, (
+            "mcp_server_ids equal to template/profile chain must be pruned at create time"
+        )
+
+    async def test_profile_update_propagates_after_prune(self, temp_coordinator):
+        """After spawn prune clears mcp_server_ids, a profile update is reflected by
+        resolve_effective_config without any session.config change."""
+        import uuid
+
+        from ..config_resolution import resolve_effective_config
+
+        coordinator = temp_coordinator
+        profile = await coordinator.profile_manager.create_profile(
+            name="MCP Profile 2", area="mcp", config={"mcp_server_ids": ["srv-old"]}
+        )
+        template = await coordinator.template_manager.create_template(
+            name="MCP Template 2",
+            config={},
+            profile_ids={"mcp": profile.profile_id},
+        )
+        project = await self._make_project(coordinator, "profile-update")
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(template_id=template.template_id, mcp_server_ids=["srv-old"]),
+        )
+
+        sinfo = await coordinator.session_manager.get_session_info(session_id)
+        assert "mcp_server_ids" not in sinfo.config  # prune worked at create time
+
+        # Update the profile to a new server list
+        await coordinator.profile_manager.update_profile(
+            profile.profile_id, config={"mcp_server_ids": ["srv-new"]}
+        )
+
+        sinfo2 = await coordinator.session_manager.get_session_info(session_id)
+        resolved = await resolve_effective_config(
+            sinfo2, coordinator.template_manager, profile_manager=coordinator.profile_manager
+        )
+        assert resolved.mcp_server_ids == ["srv-new"], (
+            "Profile update must propagate to session that has no mcp_server_ids in config"
+        )
+
+    async def test_genuine_override_preserved(self, temp_coordinator):
+        """_prune_inherited_mcp_snapshot must NOT prune a field that differs from the chain."""
+        import uuid
+
+        coordinator = temp_coordinator
+        profile = await coordinator.profile_manager.create_profile(
+            name="MCP Profile 3", area="mcp", config={"mcp_server_ids": ["profile-srv"]}
+        )
+        template = await coordinator.template_manager.create_template(
+            name="MCP Template 3",
+            config={},
+            profile_ids={"mcp": profile.profile_id},
+        )
+        project = await self._make_project(coordinator, "override")
+        session_id = str(uuid.uuid4())
+
+        # Pass a DIFFERENT value than the profile → genuine session override
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(
+                template_id=template.template_id,
+                mcp_server_ids=["user-override-srv"],
+            ),
+        )
+
+        sinfo = await coordinator.session_manager.get_session_info(session_id)
+        assert sinfo.config.get("mcp_server_ids") == ["user-override-srv"], (
+            "mcp_server_ids that differs from chain must be preserved as a genuine override"
+        )
+
+    async def test_prune_helper_directly_clears_order_insensitive(self, temp_coordinator):
+        """Direct _prune_inherited_mcp_snapshot call returns True and clears a snapshot
+        that equals the chain modulo ordering."""
+        import uuid
+
+        coordinator = temp_coordinator
+        profile = await coordinator.profile_manager.create_profile(
+            name="MCP Profile 4", area="mcp", config={"mcp_server_ids": ["x", "y"]}
+        )
+        template = await coordinator.template_manager.create_template(
+            name="MCP Template 4",
+            config={},
+            profile_ids={"mcp": profile.profile_id},
+        )
+        project = await self._make_project(coordinator, "direct-prune")
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(template_id=template.template_id),
+        )
+
+        # Manually inject a reversed-order snapshot (should be treated as equal)
+        await coordinator.session_manager.update_session(
+            session_id, mcp_server_ids=["y", "x"]
+        )
+        sinfo = await coordinator.session_manager.get_session_info(session_id)
+        assert "mcp_server_ids" in sinfo.config
+
+        pruned = await coordinator._prune_inherited_mcp_snapshot(sinfo)
+        assert pruned is True
+
+        sinfo2 = await coordinator.session_manager.get_session_info(session_id)
+        assert "mcp_server_ids" not in sinfo2.config
+
+    async def test_no_template_link_untouched(self, temp_coordinator):
+        """Sessions without a template_id must not be modified by the prune helper."""
+        import uuid
+
+        coordinator = temp_coordinator
+        project = await self._make_project(coordinator, "no-template")
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(),
+        )
+
+        # Manually put something in config
+        await coordinator.session_manager.update_session(
+            session_id, mcp_server_ids=["keep-me"]
+        )
+        sinfo = await coordinator.session_manager.get_session_info(session_id)
+        assert sinfo.template_id is None
+
+        pruned = await coordinator._prune_inherited_mcp_snapshot(sinfo)
+        assert pruned is False
+
+        sinfo2 = await coordinator.session_manager.get_session_info(session_id)
+        assert sinfo2.config.get("mcp_server_ids") == ["keep-me"]
+
+    async def test_boolean_mcp_fields_pruned_when_equal(self, temp_coordinator):
+        """strict_mcp_config and enable_claudeai_mcp_servers are pruned when equal to chain."""
+        import uuid
+
+        coordinator = temp_coordinator
+        profile = await coordinator.profile_manager.create_profile(
+            name="MCP Bool Profile", area="mcp",
+            config={"strict_mcp_config": True, "enable_claudeai_mcp_servers": False},
+        )
+        template = await coordinator.template_manager.create_template(
+            name="MCP Bool Template",
+            config={},
+            profile_ids={"mcp": profile.profile_id},
+        )
+        project = await self._make_project(coordinator, "bool-fields")
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(template_id=template.template_id),
+        )
+
+        # Inject equal snapshots
+        await coordinator.session_manager.update_session(
+            session_id,
+            strict_mcp_config=True,
+            enable_claudeai_mcp_servers=False,
+        )
+        sinfo = await coordinator.session_manager.get_session_info(session_id)
+        assert "strict_mcp_config" in sinfo.config
+        assert "enable_claudeai_mcp_servers" in sinfo.config
+
+        pruned = await coordinator._prune_inherited_mcp_snapshot(sinfo)
+        assert pruned is True
+
+        sinfo2 = await coordinator.session_manager.get_session_info(session_id)
+        assert "strict_mcp_config" not in sinfo2.config
+        assert "enable_claudeai_mcp_servers" not in sinfo2.config
+
+    async def test_migrate_stale_mcp_snapshots_idempotency(self, temp_coordinator):
+        """_migrate_stale_mcp_snapshots clears equal snapshots once; second run is a no-op."""
+        import uuid
+
+        coordinator = temp_coordinator
+        profile = await coordinator.profile_manager.create_profile(
+            name="MCP Mig Profile", area="mcp", config={"mcp_server_ids": ["mig-srv"]}
+        )
+        template = await coordinator.template_manager.create_template(
+            name="MCP Mig Template",
+            config={},
+            profile_ids={"mcp": profile.profile_id},
+        )
+        project = await self._make_project(coordinator, "migration")
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(template_id=template.template_id),
+        )
+
+        # Simulate a pre-fix spawned session by injecting a stale snapshot
+        await coordinator.session_manager.update_session(
+            session_id, mcp_server_ids=["mig-srv"]
+        )
+        sinfo = await coordinator.session_manager.get_session_info(session_id)
+        assert "mcp_server_ids" in sinfo.config
+
+        # First run — clears the stale snapshot
+        await coordinator._migrate_stale_mcp_snapshots()
+        sinfo2 = await coordinator.session_manager.get_session_info(session_id)
+        assert "mcp_server_ids" not in sinfo2.config
+
+        # Second run — no-op, nothing to clear
+        await coordinator._migrate_stale_mcp_snapshots()
+        sinfo3 = await coordinator.session_manager.get_session_info(session_id)
+        assert "mcp_server_ids" not in sinfo3.config
