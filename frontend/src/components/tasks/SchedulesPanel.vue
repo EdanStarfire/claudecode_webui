@@ -84,6 +84,16 @@
             </div>
             <div class="row-actions">
               <button
+                class="action-btn run-btn"
+                :class="{ 'run-error': runErrorId === s.schedule_id }"
+                :disabled="scheduleStore.isRunning(s.schedule_id) || runErrorId === s.schedule_id"
+                :title="runNowTitle(s)"
+                @click.stop="runNow(s)"
+              >
+                <span v-if="scheduleStore.isRunning(s.schedule_id)" class="btn-spinner"></span>
+                <span v-else>⚡</span>
+              </button>
+              <button
                 class="action-btn play-btn"
                 :class="{ 'is-active': s.status === 'active' }"
                 :title="s.status === 'active' ? 'Active' : 'Activate'"
@@ -115,7 +125,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useScheduleStore } from '@/stores/schedule'
 import { useSessionStore } from '@/stores/session'
@@ -138,6 +148,9 @@ const sessionStore = useSessionStore()
 const pendingDeleteId = ref(null)
 const pendingDeleteAgent = ref(true)
 const deleting = ref(false)
+const runErrorId = ref(null)
+let runErrorTimer = null
+onUnmounted(() => clearTimeout(runErrorTimer))
 
 const currentSession = computed(() => sessionStore.currentSession)
 const legionId = computed(() => currentSession.value?.project_id)
@@ -205,6 +218,24 @@ function formatRelativeTime(ts) {
   if (absDiff < 3600) return `${prefix}${Math.ceil(absDiff / 60)}m${suffix}`
   if (absDiff < 86400) return `${prefix}${Math.ceil(absDiff / 3600)}h${suffix}`
   return `${prefix}${Math.ceil(absDiff / 86400)}d${suffix}`
+}
+
+function runNowTitle(s) {
+  if (scheduleStore.isRunning(s.schedule_id)) return 'Run in progress…'
+  if (runErrorId.value === s.schedule_id) return 'Already running — try again shortly'
+  return 'Run now'
+}
+
+async function runNow(s) {
+  if (scheduleStore.isRunning(s.schedule_id)) return
+  try {
+    await scheduleStore.runNow(s.legion_id, s.schedule_id)
+  } catch (err) {
+    runErrorId.value = s.schedule_id
+    clearTimeout(runErrorTimer)
+    runErrorTimer = setTimeout(() => { runErrorId.value = null }, 3000)
+    console.error('Run now failed:', err)
+  }
 }
 
 async function setActive(s) {
@@ -556,4 +587,26 @@ async function executeDelete(s) {
   background: var(--bs-secondary-bg);
   color: var(--bs-emphasis-color);
 }
+
+/* ── Run Now button ─────────────────────────────────────────── */
+.run-btn:hover:not(:disabled) {
+  background: rgba(56, 189, 248, 0.14);
+  color: #38bdf8;
+}
+
+.run-btn:disabled { opacity: 0.55; cursor: default; }
+
+.run-btn.run-error { color: #f87171; }
+
+.btn-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(56, 189, 248, 0.25);
+  border-top-color: #38bdf8;
+  border-radius: 50%;
+  animation: run-spin 0.7s linear infinite;
+}
+
+@keyframes run-spin { to { transform: rotate(360deg); } }
 </style>
