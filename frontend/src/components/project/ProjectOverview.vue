@@ -384,7 +384,7 @@ import { compareAgents, normalizeLastActive } from '@/utils/agentSort'
 import { getDisplayState } from '@/composables/useSessionState'
 import { api } from '@/utils/api'
 import { findInHierarchy } from '@/utils/hierarchyUtils'
-import { getStoppedSet, setStoppedSet, addToStoppedSet, clearStoppedSet, pruneStoppedSet, removeFromStoppedSet, getProcessingSet, setProcessingSet, clearProcessingSet } from '@/utils/stoppedSet'
+import { getStoppedSet, setStoppedSet, addToStoppedSet, clearStoppedSet, pruneStoppedSet, removeFromStoppedSet, getProcessingSet, setProcessingSet } from '@/utils/stoppedSet'
 import MinionTreeNode from '../legion/MinionTreeNode.vue'
 
 const props = defineProps({
