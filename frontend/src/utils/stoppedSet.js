@@ -44,3 +44,25 @@ export function removeFromStoppedSet(projectId, ids) {
   setStoppedSet(projectId, remaining)
   return remaining
 }
+
+const PROCESSING_KEY = (projectId) => `webui:processing-set:${projectId}`
+
+export function getProcessingSet(projectId) {
+  try {
+    return new Set(JSON.parse(sessionStorage.getItem(PROCESSING_KEY(projectId)) || '[]'))
+  } catch {
+    return new Set()
+  }
+}
+
+export function setProcessingSet(projectId, ids) {
+  if (!ids || ids.length === 0) {
+    sessionStorage.removeItem(PROCESSING_KEY(projectId))
+  } else {
+    sessionStorage.setItem(PROCESSING_KEY(projectId), JSON.stringify([...ids]))
+  }
+}
+
+export function clearProcessingSet(projectId) {
+  sessionStorage.removeItem(PROCESSING_KEY(projectId))
+}

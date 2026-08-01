@@ -384,7 +384,7 @@ import { compareAgents, normalizeLastActive } from '@/utils/agentSort'
 import { getDisplayState } from '@/composables/useSessionState'
 import { api } from '@/utils/api'
 import { findInHierarchy } from '@/utils/hierarchyUtils'
-import { getStoppedSet, setStoppedSet, addToStoppedSet, clearStoppedSet, pruneStoppedSet, removeFromStoppedSet } from '@/utils/stoppedSet'
+import { getStoppedSet, setStoppedSet, addToStoppedSet, clearStoppedSet, pruneStoppedSet, removeFromStoppedSet, getProcessingSet, setProcessingSet } from '@/utils/stoppedSet'
 import MinionTreeNode from '../legion/MinionTreeNode.vue'
 
 const props = defineProps({
@@ -453,12 +453,19 @@ function cancelStop() {
 
 async function confirmStop() {
   stopState.value = 'stopping'
+  // Snapshot is_processing before termination — sessions may be mid-task
+  const processingSnapshot = new Map(
+    projectSessions.value.map(s => [s.session_id, !!s.is_processing])
+  )
   try {
     const result = await legionStore.haltAll(props.projectId)
     const stopped = result.stopped_session_ids ?? []
     const failed = result.failed_sessions ?? []
 
     addToStoppedSet(props.projectId, stopped)
+    // Record which stopped sessions were actively processing at halt time
+    const wasProcessing = stopped.filter(id => processingSnapshot.get(id))
+    setProcessingSet(props.projectId, wasProcessing)
     refreshStoppedCount()
 
     if (failed.length === 0) {
@@ -490,19 +497,34 @@ async function resumeSessions() {
       return state !== 'ACTIVE' && state !== 'STARTING'
     })
 
-    const settled = await Promise.allSettled(toResume.map(id => queueStore.enqueueMessage(id, RESUME_MESSAGE, false)))
+    const processingSet = getProcessingSet(props.projectId)
+
+    const settled = await Promise.allSettled(
+      toResume.map(id =>
+        processingSet.has(id)
+          ? queueStore.enqueueMessage(id, RESUME_MESSAGE, false)
+          : sessionStore.startSession(id)
+      )
+    )
+
     const succeeded = toResume.filter((_, i) => settled[i].status === 'fulfilled')
     const failed = toResume.filter((_, i) => settled[i].status === 'rejected')
+    const failedSet = new Set(failed)
 
-    // Clear successfully queued sessions from the stopped set so retries don't double-enqueue
-    const remaining = getStoppedSet(props.projectId).filter(id => failed.includes(id))
+    // Clear successfully resumed sessions from stopped set; keep failed for retry
+    const remaining = getStoppedSet(props.projectId).filter(id => failedSet.has(id))
     setStoppedSet(props.projectId, remaining)
+
+    // Keep processing set consistent with remaining stopped set for correct retry behavior
+    const remainingProcessing = [...processingSet].filter(id => failedSet.has(id))
+    setProcessingSet(props.projectId, remainingProcessing)
+
     refreshStoppedCount()
 
     if (failed.length === 0) {
-      setFleetToast('success', `✓ Resume message queued to ${succeeded.length} session${succeeded.length !== 1 ? 's' : ''}. They will restart shortly.`)
+      setFleetToast('success', `✓ Resumed ${succeeded.length} session${succeeded.length !== 1 ? 's' : ''}. They will restart shortly.`)
     } else {
-      setFleetToast('danger', `✗ Queued ${succeeded.length} sessions; ${failed.length} failed. You can retry Resume for the remaining sessions.`, 0)
+      setFleetToast('danger', `✗ Resumed ${succeeded.length} session${succeeded.length !== 1 ? 's' : ''}; ${failed.length} failed. You can retry Resume for the remaining sessions.`, 0)
     }
   } catch (err) {
     setFleetToast('danger', `✗ Resume failed: ${err.message || err}`, 0)
