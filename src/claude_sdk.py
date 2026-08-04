@@ -230,6 +230,7 @@ class ClaudeSDK:
         self.setting_sources = config.setting_sources
         self.experimental = experimental
         self.cli_path = config.cli_path
+        self.process_wrapper = config.process_wrapper
         self.stderr_callback = stderr_callback
         self.additional_directories = config.additional_directories or []
         self.extra_env = extra_env or {}
@@ -1106,6 +1107,10 @@ class ClaudeSDK:
         # Issue #1669: always-set (not opt-in) — WebUI default (1) diverges from CC's
         # own CLI default (3), so omitting the var when unset would silently pick up 3.
         env_vars["CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"] = str(self.max_subagent_spawn_depth)
+
+        # Issue #1672: Route Claude Code self-spawns through a corporate launcher wrapper
+        if self.process_wrapper:
+            env_vars["CLAUDE_CODE_PROCESS_WRAPPER"] = self.process_wrapper
 
         # Issue #496: Merge extra env vars (highest priority; e.g., CLAUDE_DOCKER_*)
         if self.extra_env:

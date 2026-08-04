@@ -1443,6 +1443,11 @@ class SessionCoordinator:
 
             # Issue #496: Auto-resolve cli_path when Docker mode is enabled
             effective_cli_path = effective_config.cli_path
+            # Issue #1672: process_wrapper is a host-path launcher; unreachable from inside
+            # the container, so force it off whenever Docker isolation is active.
+            effective_process_wrapper = (
+                None if effective_config.docker_enabled else effective_config.process_wrapper
+            )
             docker_env_vars = {}
             if effective_config.docker_enabled and not effective_config.cli_path:
                 from src.docker_utils import get_session_tmp_dir, resolve_docker_cli_path
@@ -1718,14 +1723,16 @@ class SessionCoordinator:
                         "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
                     }
 
-            # Override 3 fields computed earlier in this method:
-            #   system_prompt — assembled above (includes legion guide, history ref, etc.)
-            #   allowed_tools — merged MCP + session tools list built above
-            #   cli_path      — Docker-resolved path computed above
+            # Override fields computed earlier in this method:
+            #   system_prompt   — assembled above (includes legion guide, history ref, etc.)
+            #   allowed_tools   — merged MCP + session tools list built above
+            #   cli_path        — Docker-resolved path computed above
+            #   process_wrapper — forced to None under Docker isolation (computed above)
             sdk_config = effective_config.model_copy(update={
                 "system_prompt": minion_system_prompt,
                 "allowed_tools": all_tools,
                 "cli_path": effective_cli_path,
+                "process_wrapper": effective_process_wrapper,
                 **catalog_model_update,
             })
 

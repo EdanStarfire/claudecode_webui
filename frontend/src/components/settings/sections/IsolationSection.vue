@@ -173,6 +173,7 @@ function handleIsolationField(key, value) {
   }
   if (key === 'docker_enabled' && value) {
     settingsStore.setField(areaKey.value, 'cli_path', '')
+    settingsStore.setField(areaKey.value, 'process_wrapper', '')
   }
   settingsStore.setField(areaKey.value, key, value)
 }

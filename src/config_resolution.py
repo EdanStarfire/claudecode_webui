@@ -41,7 +41,7 @@ PROFILE_AREAS: dict[str, set[str]] = {
         "mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config",
     },
     "isolation": {
-        "cli_path", "sandbox_enabled", "sandbox_config",
+        "cli_path", "process_wrapper", "sandbox_enabled", "sandbox_config",
         "docker_enabled", "docker_image", "docker_extra_mounts",
         "docker_home_directory", "docker_proxy_enabled", "docker_proxy_image",
         "docker_proxy_allowlist_domains",

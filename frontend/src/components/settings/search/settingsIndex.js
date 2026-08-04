@@ -118,6 +118,7 @@ export const settingsIndex = [
 
   // Isolation section
   { section: 'edit-isolation', fieldKey: 'cli_path',                       label: 'CLI Path' },
+  { section: 'edit-isolation', fieldKey: 'process_wrapper',                label: 'Process Wrapper' },
   { section: 'edit-isolation', fieldKey: 'sandbox_enabled',                label: 'Sandbox Mode' },
   { section: 'edit-isolation', fieldKey: 'docker_enabled',                 label: 'Docker Isolation' },
   { section: 'edit-isolation', fieldKey: 'docker_image',                   label: 'Docker Image' },

@@ -883,6 +883,10 @@ class LegionMCPTools:
                 # SECURITY: cli_path flows only through user-controlled templates
                 cli_path = resolved.get('cli_path')
 
+                # Apply process_wrapper from resolved config (issue #1672)
+                # SECURITY: process_wrapper flows only through user-controlled templates
+                process_wrapper = resolved.get('process_wrapper')
+
                 # Apply Docker isolation from resolved config (issue #496)
                 # SECURITY: Docker config flows only through user-controlled templates
                 docker_enabled = resolved.get('docker_enabled', False)
@@ -936,6 +940,7 @@ class LegionMCPTools:
             model = None
             override_system_prompt = False
             cli_path = None
+            process_wrapper = None
             _pc = parent_session.config
             docker_enabled = _pc.get('docker_enabled', False)
             docker_image = _pc.get('docker_image')
@@ -985,6 +990,7 @@ class LegionMCPTools:
                 model=model,
                 working_directory=working_directory,
                 cli_path=cli_path,
+                process_wrapper=process_wrapper,
                 sandbox_enabled=sandbox_enabled,
                 sandbox_config=sandbox_config,
                 docker_enabled=docker_enabled,

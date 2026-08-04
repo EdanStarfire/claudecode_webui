@@ -228,6 +228,14 @@ export const FIELD_SCHEMAS = {
       placeholder: '/path/to/claude-cli',
       disabledWhen: (config) => !!config.docker_enabled,
     },
+    {
+      key: 'process_wrapper',
+      label: 'Process Wrapper',
+      widget: 'text-input',
+      placeholder: '/path/to/launcher-wrapper',
+      disabledWhen: (config) => !!config.docker_enabled,
+      description: 'Routes every Claude Code self-spawn through this executable (corporate launcher requirement).',
+    },
     { key: 'sandbox_enabled', label: 'Sandbox Mode', widget: 'toggle', defaultValue: false },
     {
       key: 'sandbox_config',

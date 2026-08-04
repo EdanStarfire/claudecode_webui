@@ -27,6 +27,7 @@ export const CONFIG_FIELDS_LIST = Object.freeze([
   'strict_mcp_config',
   // isolation area
   'cli_path',
+  'process_wrapper',
   'sandbox_enabled',
   'sandbox_config',
   'docker_enabled',
@@ -60,6 +61,7 @@ export const FIELD_DEFAULTS = Object.freeze({
   effort: null,
   additional_directories: null,
   cli_path: null,
+  process_wrapper: null,
   setting_sources: null,
   sandbox_enabled: false,
   sandbox_config: null,
@@ -105,6 +107,7 @@ const _FIELD_TO_AREA = Object.freeze({
   strict_mcp_config: 'mcp',
   // isolation
   cli_path: 'isolation',
+  process_wrapper: 'isolation',
   sandbox_enabled: 'isolation',
   sandbox_config: 'isolation',
   docker_enabled: 'isolation',

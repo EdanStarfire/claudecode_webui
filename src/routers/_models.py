@@ -69,6 +69,7 @@ class SessionUpdateRequest(BaseModel):
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
     cli_path: str | None = None  # Issue #489: custom CLI executable path
+    process_wrapper: str | None = None  # Issue #1672: launcher wrapper for CC self-spawns
     additional_directories: list[str] | None = None  # Issue #630: extra dirs for agent access
     # Docker sub-field updates (issue #787): docker_enabled is immutable; image/mounts/home are editable
     docker_image: str | None = None
@@ -242,6 +243,7 @@ class TemplateUpdateRequest(BaseModel):
     sandbox_enabled: bool | None = None
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
     cli_path: str | None = None  # Issue #489: custom CLI path
+    process_wrapper: str | None = None  # Issue #1672: launcher wrapper for CC self-spawns
     additional_directories: list[str] | None = None  # Issue #630
     # Docker session isolation (issue #496)
     docker_enabled: bool | None = None
