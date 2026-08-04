@@ -8,6 +8,15 @@
  * Correlation is performed by forward pass over the message stream using
  * stream position and hook_event type.
  *
+ * Issue #1676: Background subagent notifications (Notification hook events with
+ * hook_event_name === "Notification") are re-tagged by the backend to
+ * metadata.subtype === "agent_notification" before reaching the frontend, so they
+ * never match the hook_started/hook_response checks below and are intentionally
+ * excluded from this correlation pass. They render standalone via
+ * AgentNotificationStrip.vue instead — a future tool_use_id-correlation upgrade
+ * (once confirmed against the live task_started/task_updated stream) should not be
+ * bolted onto this module without re-evaluating that design.
+ *
  * @see plan-issue-1350.md §2
  */
 

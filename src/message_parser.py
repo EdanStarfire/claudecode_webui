@@ -281,6 +281,40 @@ class TaskNotificationHandler(MessageHandler):
         )
 
 
+# Issue #1676: CLI phrasing for background subagent Notification hook messages.
+_AGENT_NOTIFICATION_MESSAGE_SUFFIXES = (
+    " needs your input",
+    " finished",
+    " failed",
+)
+
+
+def _parse_agent_notification_label(message: str | None) -> str | None:
+    """Best-effort label parse from a Notification hook's free-text message (issue #1676).
+
+    Isolated here as a single edit point if the CLI's message phrasing changes.
+    """
+    if not message:
+        return None
+    for suffix in _AGENT_NOTIFICATION_MESSAGE_SUFFIXES:
+        if message.endswith(suffix):
+            return message[: -len(suffix)]
+    return None
+
+
+def _apply_agent_notification_fields(extracted: dict[str, Any], hook_payload: dict[str, Any]) -> None:
+    """Populate system-message fields for a background subagent Notification hook event (issue #1676)."""
+    message = hook_payload.get("message")
+    extracted["metadata"]["subtype"] = "agent_notification"
+    extracted["metadata"]["notification_type"] = hook_payload.get("notification_type")
+    extracted["metadata"]["message"] = message
+    extracted["metadata"]["title"] = hook_payload.get("title")
+    if hook_payload.get("session_id"):
+        extracted["metadata"]["session_id"] = hook_payload["session_id"]
+    extracted["metadata"]["label"] = _parse_agent_notification_label(message)
+    extracted["content"] = message or extracted["content"]
+
+
 class SystemMessageHandler(MessageHandler):
     """Handler for SDK system messages."""
 
@@ -334,19 +368,27 @@ class SystemMessageHandler(MessageHandler):
             # Issue #571: Synthesize content for hook messages
             if subtype in ("hook_started", "hook_response"):
                 hook_data = sdk_msg.data if hasattr(sdk_msg, 'data') and sdk_msg.data else {}
-                hook_name = hook_data.get("hook_name", hook_data.get("hookName", "unknown"))
-                hook_event = hook_data.get("hook_event", hook_data.get("hookEvent", ""))
-                if subtype == "hook_started":
-                    extracted["content"] = f"Hook: {hook_name} ({hook_event})" if hook_event else f"Hook: {hook_name}"
+                # Issue #1676: background subagent notifications (agent_needs_input/agent_completed)
+                if getattr(sdk_msg, "hook_event_name", None) == "Notification" or hook_data.get("hook_event_name") == "Notification":
+                    _apply_agent_notification_fields(extracted, hook_data)
+                    # Issue #1676: capture the per-event id (HookEventMessage.uuid is not part of
+                    # the nested hook payload) so the frontend can dismiss individual notifications.
+                    if getattr(sdk_msg, "uuid", None):
+                        extracted["metadata"]["uuid"] = sdk_msg.uuid
                 else:
-                    exit_code = hook_data.get("exit_code", hook_data.get("exitCode"))
-                    if exit_code == 0:
-                        display = hook_data.get("stdout") or hook_data.get("outcome", "success")
+                    hook_name = hook_data.get("hook_name", hook_data.get("hookName", "unknown"))
+                    hook_event = hook_data.get("hook_event", hook_data.get("hookEvent", ""))
+                    if subtype == "hook_started":
+                        extracted["content"] = f"Hook: {hook_name} ({hook_event})" if hook_event else f"Hook: {hook_name}"
                     else:
-                        display = hook_data.get("stderr") or hook_data.get("outcome", "failed")
-                    extracted["content"] = f"Hook: {hook_name} \u2192 {display}"
-                    if exit_code is not None:
-                        extracted["metadata"]["exit_code"] = exit_code
+                        exit_code = hook_data.get("exit_code", hook_data.get("exitCode"))
+                        if exit_code == 0:
+                            display = hook_data.get("stdout") or hook_data.get("outcome", "success")
+                        else:
+                            display = hook_data.get("stderr") or hook_data.get("outcome", "failed")
+                        extracted["content"] = f"Hook: {hook_name} \u2192 {display}"
+                        if exit_code is not None:
+                            extracted["metadata"]["exit_code"] = exit_code
 
             # Issue #894: Extract retry fields for api_retry messages
             if subtype in ("api_retry", "tengu_api_retry"):
@@ -391,21 +433,33 @@ class SystemMessageHandler(MessageHandler):
             extracted["metadata"]["subtype"] = subtype
 
             # Issue #571: Synthesize content for stored hook messages
-            if subtype in ("hook_started", "hook_response"):
-                init_data = (message_data.get("metadata") or {}).get("init_data", {})
-                hook_name = init_data.get("hook_name", init_data.get("hookName", "unknown"))
-                hook_event = init_data.get("hook_event", init_data.get("hookEvent", ""))
-                if subtype == "hook_started":
-                    extracted["content"] = f"Hook: {hook_name} ({hook_event})" if hook_event else f"Hook: {hook_name}"
+            if subtype in ("hook_started", "hook_response", "agent_notification"):
+                stored_meta = message_data.get("metadata") or {}
+                init_data = stored_meta.get("init_data", {})
+                # Issue #1676: background subagent notifications (agent_needs_input/agent_completed).
+                # On reload the persisted subtype is already "agent_notification" (not
+                # hook_started/hook_response), so fields are restored from the flat stored
+                # metadata rather than re-derived from init_data.
+                if subtype == "agent_notification":
+                    _apply_agent_notification_fields(extracted, stored_meta)
+                    if stored_meta.get("uuid"):
+                        extracted["metadata"]["uuid"] = stored_meta["uuid"]
+                elif init_data.get("hook_event_name") == "Notification":
+                    _apply_agent_notification_fields(extracted, init_data)
                 else:
-                    exit_code = init_data.get("exit_code", init_data.get("exitCode"))
-                    if exit_code == 0:
-                        display = init_data.get("stdout") or init_data.get("outcome", "success")
+                    hook_name = init_data.get("hook_name", init_data.get("hookName", "unknown"))
+                    hook_event = init_data.get("hook_event", init_data.get("hookEvent", ""))
+                    if subtype == "hook_started":
+                        extracted["content"] = f"Hook: {hook_name} ({hook_event})" if hook_event else f"Hook: {hook_name}"
                     else:
-                        display = init_data.get("stderr") or init_data.get("outcome", "failed")
-                    extracted["content"] = f"Hook: {hook_name} \u2192 {display}"
-                    if exit_code is not None:
-                        extracted["metadata"]["exit_code"] = exit_code
+                        exit_code = init_data.get("exit_code", init_data.get("exitCode"))
+                        if exit_code == 0:
+                            display = init_data.get("stdout") or init_data.get("outcome", "success")
+                        else:
+                            display = init_data.get("stderr") or init_data.get("outcome", "failed")
+                        extracted["content"] = f"Hook: {hook_name} \u2192 {display}"
+                        if exit_code is not None:
+                            extracted["metadata"]["exit_code"] = exit_code
 
             # Issue #894: Restore retry fields for stored api_retry messages
             if subtype in ("api_retry", "tengu_api_retry"):

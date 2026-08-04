@@ -66,6 +66,10 @@ export const useMessageStore = defineStore('message', () => {
   // Shape: Map<sessionId, { result: HookCorrelationResult, messageCount: number, lastId: string|null }>
   const _hookCorrelationCache = new Map()
 
+  // Issue #1676: Dismissed background-agent notifications, per session.
+  // Not persisted — dismissal resets on reload (session-local UI state only).
+  const dismissedAgentNotifications = ref(new Map())
+
   // ========== COMPUTED ==========
 
   // Current session's messages
@@ -1414,6 +1418,63 @@ export const useMessageStore = defineStore('message', () => {
     return getHookCorrelation(sessionId).attachedHookMessageIds.has(messageId)
   }
 
+  // ========== AGENT NOTIFICATIONS (Issue #1676) ==========
+  // Background subagent notifications (agent_needs_input / agent_completed), tagged
+  // by the backend as system messages with metadata.subtype === 'agent_notification'.
+  // Rendered session-level via AgentNotificationStrip.vue rather than anchored to a
+  // specific message/tool card (no reliable tool_use_id correlation — see #1676 plan).
+
+  /**
+   * Returns active (non-dismissed) agent notifications for a session, oldest first.
+   *
+   * Issue #1676: the CLI's include_hook_events plumbing is not confirmed to emit exactly
+   * one message per Notification event (hook lifecycle events generally arrive as a
+   * hook_started/hook_response pair) — dedupe by (notificationType, message) so an
+   * unconfirmed duplicate phase never renders as two rows for the same event.
+   */
+  function agentNotificationsForSession(sessionId) {
+    if (!sessionId) return []
+    const messages = messagesBySession.value.get(sessionId) || []
+    const dismissed = dismissedAgentNotifications.value.get(sessionId)
+
+    const results = []
+    const seen = new Set()
+    for (const msg of messages) {
+      if (msg.type !== 'system' || msg.metadata?.subtype !== 'agent_notification') continue
+      // HookEventMessage.uuid is the only stable per-event id the backend surfaces for
+      // this subtype; message_id/id are never populated for system messages.
+      const id = msg.metadata?.uuid || msg.message_id || msg.id
+      if (id && dismissed?.has(id)) continue
+
+      const notificationType = msg.metadata?.notification_type || null
+      const message = msg.metadata?.message || msg.content || ''
+      const dedupeKey = `${notificationType}::${message}`
+      if (seen.has(dedupeKey)) continue
+      seen.add(dedupeKey)
+
+      results.push({
+        id,
+        notificationType,
+        label: msg.metadata?.label || null,
+        message,
+        title: msg.metadata?.title || null,
+        timestamp: msg.timestamp || null,
+        dismissed: false,
+      })
+    }
+    return results
+  }
+
+  /** Dismisses a single agent notification for a session (session-local, not persisted). */
+  function dismissAgentNotification(sessionId, notificationId) {
+    if (!sessionId || !notificationId) return
+    if (!dismissedAgentNotifications.value.has(sessionId)) {
+      dismissedAgentNotifications.value.set(sessionId, new Set())
+    }
+    dismissedAgentNotifications.value.get(sessionId).add(notificationId)
+    dismissedAgentNotifications.value = new Map(dismissedAgentNotifications.value)
+  }
+
   // ========== RETURN ==========
   return {
     // State
@@ -1479,5 +1540,9 @@ export const useMessageStore = defineStore('message', () => {
     hooksForMessageId,
     hooksForCompaction,
     isHookMessageAttached,
+
+    // Issue #1676: Background subagent notifications
+    agentNotificationsForSession,
+    dismissAgentNotification,
   }
 })
