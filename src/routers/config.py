@@ -45,6 +45,11 @@ def build_router(webui) -> APIRouter:
                 if not isinstance(val, int) or not (1 <= val <= 200):
                     raise ValueError("max_subagents_per_session must be an integer between 1 and 200")
                 config.features.max_subagents_per_session = val
+            if "forward_subagent_text" in features:
+                val = features["forward_subagent_text"]
+                if not isinstance(val, bool):
+                    raise ValueError("forward_subagent_text must be a boolean")
+                config.features.forward_subagent_text = val
 
         # Merge networking section
         if "networking" in body:

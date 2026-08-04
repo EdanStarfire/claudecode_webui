@@ -1189,6 +1189,12 @@ class ClaudeSDK:
         if max_subagents < 200:
             env_vars["CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION"] = str(max_subagents)
 
+        # Issue #1671: always-set (not opt-in) — WebUI default (on) diverges from CC's
+        # own CLI default (off), so omitting the var would silently disable forwarding.
+        env_vars["CLAUDE_CODE_FORWARD_SUBAGENT_TEXT"] = (
+            "1" if app_cfg.features.forward_subagent_text else "0"
+        )
+
         # Issue #496: Merge extra env vars (highest priority; e.g., CLAUDE_DOCKER_*)
         if self.extra_env:
             env_vars.update(self.extra_env)

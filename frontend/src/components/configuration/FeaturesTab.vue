@@ -92,6 +92,25 @@
       </small>
     </div>
 
+    <div class="form-check form-switch mb-3">
+      <input
+        class="form-check-input"
+        type="checkbox"
+        id="forwardSubagentText"
+        :checked="config?.forward_subagent_text"
+        @change="toggleForwardSubagentText"
+      >
+      <label class="form-check-label" for="forwardSubagentText">
+        Forward subagent text and thinking
+      </label>
+      <small class="form-text text-muted d-block">
+        Streams subagent (Task tool) assistant text and thinking into the parent session's
+        message stream (default: on). Forwarded content is hidden from the main timeline and
+        does not yet render anywhere else. Takes effect on the next session start, not
+        mid-session.
+      </small>
+    </div>
+
     <hr class="my-3">
 
     <h6 class="mb-2">Legion</h6>
@@ -173,6 +192,13 @@ function toggleSync(event) {
   emit('update:config', {
     ...props.config,
     skill_sync_enabled: event.target.checked
+  })
+}
+
+function toggleForwardSubagentText(event) {
+  emit('update:config', {
+    ...props.config,
+    forward_subagent_text: event.target.checked
   })
 }
 

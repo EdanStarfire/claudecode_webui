@@ -210,3 +210,34 @@ class TestMaxSubagentsPerSession:
         with patch("src.config_manager.load_config", return_value=config):
             env = sdk._resolve_env_vars()
         assert env["CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION"] == "10"
+
+
+class TestForwardSubagentText:
+    """Issue #1671 — CLAUDE_CODE_FORWARD_SUBAGENT_TEXT is always set, defaulting to on."""
+
+    def test_default_config_sets_var_to_1(self):
+        sdk = _make_sdk()
+        config = AppConfig(features=FeaturesConfig(forward_subagent_text=True))
+        with patch("src.config_manager.load_config", return_value=config):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_FORWARD_SUBAGENT_TEXT"] == "1"
+
+    def test_toggled_off_sets_var_to_0(self):
+        sdk = _make_sdk()
+        config = AppConfig(features=FeaturesConfig(forward_subagent_text=False))
+        with patch("src.config_manager.load_config", return_value=config):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_FORWARD_SUBAGENT_TEXT"] == "0"
+
+    def test_var_always_present_even_under_full_suppression(self):
+        sdk = _make_sdk()
+        with patch("src.config_manager.load_config", return_value=_all_suppressed_config()):
+            env = sdk._resolve_env_vars()
+        assert "CLAUDE_CODE_FORWARD_SUBAGENT_TEXT" in env
+
+    def test_extra_env_can_override(self):
+        sdk = _make_sdk(extra_env={"CLAUDE_CODE_FORWARD_SUBAGENT_TEXT": "0"})
+        config = AppConfig(features=FeaturesConfig(forward_subagent_text=True))
+        with patch("src.config_manager.load_config", return_value=config):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_FORWARD_SUBAGENT_TEXT"] == "0"
