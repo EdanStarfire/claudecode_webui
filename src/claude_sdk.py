@@ -614,6 +614,32 @@ class ClaudeSDK:
 
         await self._sdk_client.reconnect_mcp_server(name)
 
+    async def register_repo_root(self, directory: str) -> dict:
+        """Register a new working directory on the live session (issue #1675).
+
+        No public ClaudeSDKClient method exists for this as of claude-agent-sdk==0.2.128
+        (verified against installed CLI 2.1.220, whose control-request dispatcher accepts
+        a "register_repo_root" subtype alongside "add_directory"). Calls the private
+        _query._send_control_request path directly, mirroring toggle_mcp_server's
+        guard-then-delegate shape. Re-evaluate this if/when the SDK exposes a public
+        wrapper. Raises on failure.
+        """
+        if not self._sdk_client:
+            raise RuntimeError(f"No active SDK client for session {self.session_id}")
+
+        if self.info.state not in SDK_ACTIVE_STATES:
+            raise RuntimeError(f"Session not in valid state for add-directory: {self.info.state}")
+
+        try:
+            return await self._sdk_client._query._send_control_request(
+                {"subtype": "register_repo_root", "directory": directory}
+            )
+        except AttributeError as e:
+            raise RuntimeError(
+                "SDK internal control-request API (_query._send_control_request) is "
+                "unavailable — claude-agent-sdk internals may have changed since 0.2.128"
+            ) from e
+
     async def disconnect(self) -> bool:
         """
         Disconnect from the Claude SDK session gracefully.

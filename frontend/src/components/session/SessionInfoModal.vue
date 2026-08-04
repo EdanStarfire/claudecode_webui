@@ -47,6 +47,48 @@
               />
             </div>
 
+            <!-- Additional Directories -->
+            <div class="mb-3">
+              <h6 class="text-muted">Additional Directories</h6>
+              <div v-if="additionalDirectories.length > 0" class="mb-2">
+                <div
+                  v-for="dir in additionalDirectories"
+                  :key="dir"
+                  class="small font-monospace"
+                >{{ dir }}</div>
+              </div>
+              <div v-else class="text-muted small mb-2">No additional directories registered.</div>
+
+              <div v-if="isDockerEnabled" class="text-muted small">
+                Adding directories to a running Docker session requires a restart — the
+                path cannot be mounted into the running container.
+              </div>
+              <div v-else class="d-flex gap-2">
+                <input
+                  type="text"
+                  class="form-control form-control-sm font-monospace"
+                  v-model="newDirectory"
+                  placeholder="Add directory path..."
+                  :disabled="isAddingDirectory"
+                  @keydown.enter.prevent="handleAddDirectory"
+                />
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-secondary"
+                  :disabled="isAddingDirectory"
+                  @click="handleBrowseDirectory"
+                  title="Browse"
+                >&#x1F4C2;</button>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-primary"
+                  :disabled="isAddingDirectory || !newDirectory.trim()"
+                  @click="handleAddDirectory"
+                >Add</button>
+              </div>
+              <div v-if="addDirectoryError" class="text-danger small mt-1">{{ addDirectoryError }}</div>
+            </div>
+
             <!-- Model -->
             <div class="mb-3">
               <h6 class="text-muted">Model</h6>
@@ -248,6 +290,9 @@ const modalElement = ref(null)
 const sessionData = ref(null)
 const isLoading = ref(false)
 const fetchError = ref(null)
+const newDirectory = ref('')
+const isAddingDirectory = ref(false)
+const addDirectoryError = ref(null)
 let modalInstance = null
 
 // Model display names mapping
@@ -285,6 +330,22 @@ const permissionModeDisplay = computed(() => {
 })
 
 const sdkSessionInfo = computed(() => sessionData.value?.sdk_session_info || null)
+
+// Additional directories (issue #1675) — from API response, falling back to Pinia initData
+const additionalDirectories = computed(() => {
+  const fromApi = sessionData.value?.session?.config?.additional_directories
+  if (fromApi) return fromApi
+  if (!sessionId.value) return []
+  return sessionStore.initData.get(sessionId.value)?.additional_directories || []
+})
+
+const isDockerEnabled = computed(() => {
+  if (sessionData.value?.session) {
+    return !!sessionData.value.session.config?.docker_enabled
+  }
+  if (!sessionId.value) return false
+  return !!sessionStore.sessions.get(sessionId.value)?.config?.docker_enabled
+})
 
 // Proxy status — only shown when proxy is enabled for this session
 const currentProxyStatus = computed(() => {
@@ -346,6 +407,49 @@ function handleReconnect(name) {
   }
 }
 
+// Open the folder browser and stage the selected path into the add-directory input
+function handleBrowseDirectory() {
+  uiStore.showModal('folder-browser', {
+    defaultPath: displayData.value?.cwd || '',
+    currentPath: '',
+    onSelect: (path) => {
+      newDirectory.value = path
+    },
+  })
+}
+
+// Register the entered directory on the live session (issue #1675)
+async function handleAddDirectory() {
+  const directory = newDirectory.value.trim()
+  if (!directory || !sessionId.value) return
+
+  isAddingDirectory.value = true
+  addDirectoryError.value = null
+  try {
+    const resolvedDirectory = await sessionStore.addDirectory(sessionId.value, directory)
+
+    // Reflect immediately in the modal's own display data — this component reads from
+    // the locally-fetched `sessionData` snapshot, not the reactive Pinia session map,
+    // so the store-level sync in addDirectory() alone wouldn't update this view.
+    if (sessionData.value?.session) {
+      const config = sessionData.value.session.config || {}
+      const existing = config.additional_directories || []
+      if (!existing.includes(resolvedDirectory)) {
+        sessionData.value.session.config = {
+          ...config,
+          additional_directories: [...existing, resolvedDirectory],
+        }
+      }
+    }
+
+    newDirectory.value = ''
+  } catch (e) {
+    addDirectoryError.value = e.message || 'Failed to add directory'
+  } finally {
+    isAddingDirectory.value = false
+  }
+}
+
 // Fetch session info from API
 async function fetchSessionInfo(sid) {
   if (!sid) return
@@ -391,6 +495,8 @@ function resetState() {
   showRawData.value = false
   sessionData.value = null
   fetchError.value = null
+  newDirectory.value = ''
+  addDirectoryError.value = null
 }
 
 // Handle modal hidden event
@@ -408,6 +514,8 @@ watch(
       sessionId.value = data.sessionId
       sessionData.value = null
       showRawData.value = false
+      newDirectory.value = ''
+      addDirectoryError.value = null
       if (data.sessionId) {
         fetchSessionInfo(data.sessionId)
         // Fetch MCP status if session is active
