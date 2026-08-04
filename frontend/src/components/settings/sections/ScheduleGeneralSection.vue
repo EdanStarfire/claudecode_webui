@@ -334,7 +334,7 @@
               </div>
               <div class="config-summary-line">
                 <span class="config-label">Permissions:</span>
-                <span class="config-value">{{ newDraftSessionConfig.permission_mode || 'default' }}</span>
+                <span class="config-value">{{ newDraftPermissionModeDisplay }}</span>
               </div>
               <div class="config-hint">Further configuration available in Schedule Settings after creation.</div>
             </div>
@@ -670,6 +670,13 @@ const newDraftMinionId       = computed(() => draft.value?.minion_id ?? minionId
 const newDraftConfigSource   = computed(() => draft.value?.config_source ?? 'capture')
 const newDraftSessionConfig  = computed(() => draft.value?.session_config ?? null)
 
+// 'default' is the legacy stored value for the manual permission mode; both display as 'Manual'.
+const newDraftPermissionModeDisplay = computed(() => {
+  const mode = newDraftSessionConfig.value?.permission_mode
+  if (mode === 'default' || mode === 'manual') return 'Manual'
+  return mode || 'Manual'
+})
+
 const effectiveLegionId = computed(() => legionIdFromQuery.value || newDraftLegionId.value)
 
 // Legion display name
@@ -818,7 +825,7 @@ function applyTemplate() {
   if (!tmpl) return
   const project = projectStore.getProject(effectiveLegionId.value)
   const cfg = {
-    permission_mode: tmpl.permission_mode || 'default',
+    permission_mode: tmpl.permission_mode || 'manual',
     model: tmpl.model || '',
     system_prompt: tmpl.system_prompt || '',
     override_system_prompt: tmpl.override_system_prompt || false,

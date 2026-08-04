@@ -116,7 +116,12 @@ const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 
 const session = computed(() => sessionStore.sessions.get(props.sessionId))
-const currentMode = computed(() => session.value?.current_permission_mode || 'default')
+// 'manual' is the canonical new-write value for the legacy 'default' mode; normalize
+// so label/icon lookup and cycling (keyed on 'default') resolve correctly either way.
+const currentMode = computed(() => {
+  const mode = session.value?.current_permission_mode || 'default'
+  return mode === 'manual' ? 'default' : mode
+})
 
 // Mode icon mapping
 const modeIcons = {
@@ -129,7 +134,7 @@ const modeIcons = {
 }
 
 const modeLabels = {
-  default: 'Default',
+  default: 'Manual',
   acceptEdits: 'Accept Edits',
   plan: 'Plan',
   dontAsk: "Don't Ask",

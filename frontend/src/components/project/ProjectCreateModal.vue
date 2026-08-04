@@ -215,7 +215,7 @@ async function handleSubmit() {
     if (formData.value.createSession) {
       createdSession = await sessionStore.createSession(project.project_id, {
         name: formData.value.sessionName || 'main',
-        permission_mode: 'default',
+        permission_mode: 'manual',
         tools: [],
         model: 'sonnet'
       })
