@@ -243,6 +243,7 @@ class ClaudeSDK:
         self.strict_mcp_config = config.strict_mcp_config
         self.bare_mode = config.bare_mode if config else False
         self.env_scrub_enabled = config.env_scrub_enabled if config else False
+        self.max_subagent_spawn_depth = config.max_subagent_spawn_depth if config else 1
         self.permission_handler = permission_handler
         self.auto_approval_callback: Callable | None = None  # Issue #707: notifies coordinator
         self._stderr_buffer: list[str] = []
@@ -1061,7 +1062,14 @@ class ClaudeSDK:
         """Build the env dict for ClaudeAgentOptions.
 
         Merge order (highest priority wins):
-          global BackgroundCallsConfig → per-session opt-back-in → extra_env
+          global BackgroundCallsConfig → per-session opt-back-in → always-set → extra_env
+
+        Note: most categories here are additive/opt-in (a var is only added when a
+        flag is true, or removed to opt back in to CC's own default). The
+        always-set category (e.g. CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH) is the
+        exception — it is emitted unconditionally because the WebUI default
+        diverges from CC's own CLI default, and omitting it would silently
+        revert to CC's default.
         """
         # Always-on
         env_vars: dict[str, str] = {"CLAUDE_CODE_ENABLE_TASKS": "true"}
@@ -1094,6 +1102,10 @@ class ClaudeSDK:
         # Issue #957: subprocess env scrub — only additive (no session-level opt-out)
         if self.env_scrub_enabled:
             env_vars["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] = "1"
+
+        # Issue #1669: always-set (not opt-in) — WebUI default (1) diverges from CC's
+        # own CLI default (3), so omitting the var when unset would silently pick up 3.
+        env_vars["CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"] = str(self.max_subagent_spawn_depth)
 
         # Issue #496: Merge extra env vars (highest priority; e.g., CLAUDE_DOCKER_*)
         if self.extra_env:

@@ -304,6 +304,16 @@ export const FIELD_SCHEMAS = {
       defaultValue: false,
       description: 'Strips API keys and cloud credentials from subprocess environments.',
     },
+    {
+      key: 'max_subagent_spawn_depth',
+      label: 'Max Subagent Spawn Depth',
+      widget: 'range-slider',
+      min: 1,
+      max: 3,
+      step: 1,
+      defaultValue: 1,
+      description: 'How many levels deep subagents may spawn nested subagents. WebUI restores the pre-2.1.220 default of 1.',
+    },
   ],
 
   features: [
