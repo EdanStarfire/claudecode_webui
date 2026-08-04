@@ -4,7 +4,8 @@ from fastapi import APIRouter, HTTPException
 
 from ..exception_handlers import handle_exceptions
 from ..models.permission_mode import PermissionMode
-from ._models import McpReconnectRequest, McpToggleRequest, PermissionModeRequest
+from ..session_manager import VALID_MODELS
+from ._models import McpReconnectRequest, McpToggleRequest, ModelRequest, PermissionModeRequest
 
 
 def build_router(webui) -> APIRouter:
@@ -39,6 +40,20 @@ def build_router(webui) -> APIRouter:
         if not success:
             raise HTTPException(status_code=400, detail="Failed to set permission mode")
         return {"success": success, "mode": request.mode}
+
+    # ==================== MODEL ENDPOINT ====================
+
+    @router.post("/api/sessions/{session_id}/model")
+    @handle_exceptions("set model", value_error_status=400)
+    async def set_model(session_id: str, request: ModelRequest):
+        """Set the model for a session, live-switching if active (no restart required)"""
+        if request.model not in VALID_MODELS:
+            raise HTTPException(status_code=400, detail=f"Invalid model: {request.model}")
+
+        success = await webui.coordinator.set_model(session_id, request.model)
+        if not success:
+            raise HTTPException(status_code=400, detail="Failed to set model")
+        return {"success": success, "model": request.model}
 
     @router.get("/api/sessions/{session_id}/mcp-status")
     @handle_exceptions("get mcp status")

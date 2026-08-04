@@ -218,7 +218,9 @@ def build_router(webui) -> APIRouter:
         if request.name is not None:
             updates["name"] = request.name
 
-        # Handle model update (takes effect on next restart if session is active)
+        # Handle model update (persisted-config-only; takes effect on next restart if
+        # session is active). Live sessions should use POST /api/sessions/{id}/model
+        # instead, which switches the model immediately without a restart (issue #1673).
         if request.model is not None:
             valid_models = ["sonnet", "opus", "haiku", "opusplan"]
             if request.model not in valid_models:

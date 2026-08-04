@@ -627,6 +627,29 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
+   * Set model for session (live switch, no restart required)
+   * Also syncs to initData for UI consistency
+   */
+  async function setModel(sessionId, model) {
+    try {
+      await api.post(`/api/sessions/${sessionId}/model`, { model })
+      updateSession(sessionId, { current_model: model })
+
+      // Sync to initData so SessionInfoModal shows updated model
+      const storedInitData = initData.value.get(sessionId)
+      if (storedInitData) {
+        storedInitData.model = model
+        initData.value.set(sessionId, storedInitData)
+      }
+
+      console.log(`Set model for session ${sessionId} to ${model}`)
+    } catch (error) {
+      console.error('Failed to set model:', error)
+      throw error
+    }
+  }
+
+  /**
    * Start a session
    */
   async function startSession(sessionId) {
@@ -817,6 +840,7 @@ export const useSessionStore = defineStore('session', () => {
     deleteSession,
     patchSession,
     setPermissionMode,
+    setModel,
     startSession,
     terminateSession,
     getSession,

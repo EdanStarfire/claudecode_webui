@@ -516,6 +516,93 @@ class TestClaudeSDK:
                 await task
 
 
+class TestSetModel:
+    """Tests for ClaudeSDK.set_model() (issue #1673)."""
+
+    @pytest.fixture
+    def session_id(self):
+        return "test-session-set-model"
+
+    @pytest.fixture
+    def sdk_instance(self, tmp_path, session_id):
+        return ClaudeSDK(
+            session_id=session_id,
+            working_directory=str(tmp_path),
+            config=SessionConfig(model="sonnet"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_model_success(self, sdk_instance):
+        """set_model() calls through to the SDK client and updates local tracking."""
+        from unittest.mock import AsyncMock
+
+        sdk_instance.info.state = SessionState.RUNNING
+        sdk_instance._sdk_client = AsyncMock()
+
+        result = await sdk_instance.set_model("opus")
+
+        assert result is True
+        sdk_instance._sdk_client.set_model.assert_awaited_once_with("opus")
+        assert sdk_instance.model == "opus"
+
+    @pytest.mark.asyncio
+    async def test_set_model_invalid_model(self, sdk_instance):
+        """set_model() rejects unknown model aliases without touching the SDK client."""
+        from unittest.mock import AsyncMock
+
+        sdk_instance.info.state = SessionState.RUNNING
+        sdk_instance._sdk_client = AsyncMock()
+
+        result = await sdk_instance.set_model("not-a-real-model")
+
+        assert result is False
+        sdk_instance._sdk_client.set_model.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_set_model_no_active_client(self, sdk_instance):
+        """set_model() returns False when there is no connected SDK client."""
+        sdk_instance.info.state = SessionState.RUNNING
+        sdk_instance._sdk_client = None
+
+        result = await sdk_instance.set_model("opus")
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_set_model_invalid_state(self, sdk_instance):
+        """set_model() returns False when the session isn't in an active SDK state."""
+        from unittest.mock import AsyncMock
+
+        sdk_instance.info.state = SessionState.CREATED
+        sdk_instance._sdk_client = AsyncMock()
+
+        result = await sdk_instance.set_model("opus")
+
+        assert result is False
+        sdk_instance._sdk_client.set_model.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_set_model_propagates_exception_and_fires_error_callback(self, sdk_instance):
+        """set_model() re-raises SDK errors and fires the error callback (issue #1673)."""
+        from unittest.mock import AsyncMock
+
+        errors_received = []
+
+        async def error_callback(kind, exc):
+            errors_received.append((kind, exc))
+
+        sdk_instance.error_callback = error_callback
+        sdk_instance.info.state = SessionState.RUNNING
+        sdk_instance._sdk_client = AsyncMock()
+        sdk_instance._sdk_client.set_model.side_effect = RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await sdk_instance.set_model("opus")
+
+        assert errors_received
+        assert errors_received[0][0] == "set_model_failed"
+
+
 class TestSessionInfo:
     """Test cases for SessionInfo dataclass."""
 
