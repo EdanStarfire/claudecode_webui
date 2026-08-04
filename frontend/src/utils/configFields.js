@@ -39,6 +39,7 @@ export const CONFIG_FIELDS_LIST = Object.freeze([
   'assigned_secrets',
   'bare_mode',
   'env_scrub_enabled',
+  'max_subagent_spawn_depth',
   // features area
   'history_distillation_enabled',
   'auto_memory_mode',
@@ -79,6 +80,7 @@ export const FIELD_DEFAULTS = Object.freeze({
   strict_mcp_config: false,
   bare_mode: false,
   env_scrub_enabled: false,
+  max_subagent_spawn_depth: 1,
 })
 
 /** Reverse lookup: field name → profile area key. */
@@ -115,6 +117,7 @@ const _FIELD_TO_AREA = Object.freeze({
   assigned_secrets: 'isolation',
   bare_mode: 'isolation',
   env_scrub_enabled: 'isolation',
+  max_subagent_spawn_depth: 'isolation',
   // features
   history_distillation_enabled: 'features',
   auto_memory_mode: 'features',

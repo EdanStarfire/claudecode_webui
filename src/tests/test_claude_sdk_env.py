@@ -126,3 +126,32 @@ class TestResolveEnvVars:
             env = sdk._resolve_env_vars()
         assert env.get("FOO") == "bar"
         assert env.get("ANOTHER") == "val"
+
+
+class TestMaxSubagentSpawnDepth:
+    """Issue #1669 — CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH is always set, defaulting to 1."""
+
+    def test_default_config_sets_depth_1(self):
+        sdk = _make_sdk()
+        with patch("src.config_manager.load_config", return_value=_suppression_off_config()):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"] == "1"
+
+    def test_configured_depth_reflected_in_env(self):
+        config = SessionConfig(max_subagent_spawn_depth=3)
+        sdk = _make_sdk(config=config)
+        with patch("src.config_manager.load_config", return_value=_suppression_off_config()):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"] == "3"
+
+    def test_var_always_present_even_under_full_suppression(self):
+        sdk = _make_sdk()
+        with patch("src.config_manager.load_config", return_value=_all_suppressed_config()):
+            env = sdk._resolve_env_vars()
+        assert "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH" in env
+
+    def test_extra_env_can_override(self):
+        sdk = _make_sdk(extra_env={"CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "2"})
+        with patch("src.config_manager.load_config", return_value=_suppression_off_config()):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"] == "2"

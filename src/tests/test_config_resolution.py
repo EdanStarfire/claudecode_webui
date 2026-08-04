@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from ..config_resolution import (
     CONFIG_FIELDS,
@@ -923,3 +924,78 @@ class TestIssue1396ExtraEnvResolution:
         result = await resolve_effective_config(session, tm)
 
         assert result.extra_env is None
+
+
+class TestIssue1669MaxSubagentSpawnDepth:
+    """Tests for max_subagent_spawn_depth cascade resolution (issue #1669)."""
+
+    def test_field_registered_in_isolation_area(self):
+        """max_subagent_spawn_depth belongs to the isolation profile area."""
+        assert FIELD_TO_AREA.get("max_subagent_spawn_depth") == "isolation"
+        assert "max_subagent_spawn_depth" in PROFILE_AREAS["isolation"]
+
+    @pytest.mark.asyncio
+    async def test_profile_only_override(self):
+        """Profile value is used when template does not set the field."""
+        profile = _make_profile(area="isolation", config={"max_subagent_spawn_depth": 3})
+        pm = _make_profile_manager([profile])
+        template = _make_template(profile_ids={"isolation": profile.profile_id})
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm, pm)
+
+        assert result.max_subagent_spawn_depth == 3
+
+    @pytest.mark.asyncio
+    async def test_template_overrides_profile(self):
+        """Template config value wins over profile value."""
+        profile = _make_profile(area="isolation", config={"max_subagent_spawn_depth": 3})
+        pm = _make_profile_manager([profile])
+        template = _make_template(
+            profile_ids={"isolation": profile.profile_id},
+            template_overrides={"max_subagent_spawn_depth": 2},
+        )
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm, pm)
+
+        assert result.max_subagent_spawn_depth == 2
+
+    @pytest.mark.asyncio
+    async def test_session_overrides_template(self):
+        """Session config value wins over template value."""
+        template = _make_template(max_subagent_spawn_depth=2)
+        session = _make_session(
+            template_id="tmpl-001",
+            session_overrides={"max_subagent_spawn_depth": 3},
+        )
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm)
+
+        assert result.max_subagent_spawn_depth == 3
+
+    @pytest.mark.asyncio
+    async def test_no_override_falls_back_to_default(self):
+        """With no profile/template/session override, resolves to the WebUI default of 1."""
+        template = _make_template()
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm)
+
+        assert result.max_subagent_spawn_depth == 1
+
+    def test_value_below_range_raises(self):
+        with pytest.raises(ValidationError):
+            SessionConfig(max_subagent_spawn_depth=0)
+
+    def test_value_above_range_raises(self):
+        with pytest.raises(ValidationError):
+            SessionConfig(max_subagent_spawn_depth=4)
+
+    def test_valid_range_accepted(self):
+        for depth in (1, 2, 3):
+            assert SessionConfig(max_subagent_spawn_depth=depth).max_subagent_spawn_depth == depth

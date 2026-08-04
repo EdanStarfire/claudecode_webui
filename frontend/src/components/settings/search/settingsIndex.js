@@ -129,4 +129,5 @@ export const settingsIndex = [
   { section: 'edit-isolation', fieldKey: 'assigned_secrets',               label: 'Assigned Secrets' },
   { section: 'edit-isolation', fieldKey: 'bare_mode',                      label: 'Bare Mode' },
   { section: 'edit-isolation', fieldKey: 'env_scrub_enabled',              label: 'Scrub Subprocess Credentials' },
+  { section: 'edit-isolation', fieldKey: 'max_subagent_spawn_depth',       label: 'Max Subagent Spawn Depth' },
 ]

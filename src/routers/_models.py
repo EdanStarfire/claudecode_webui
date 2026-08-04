@@ -274,6 +274,8 @@ class TemplateUpdateRequest(BaseModel):
     setting_sources: list[str] | None = None
     bare_mode: bool | None = None
     env_scrub_enabled: bool | None = None
+    # Issue #1669: max depth for nested subagent spawning (WebUI default: 1)
+    max_subagent_spawn_depth: int | None = Field(None, ge=1, le=3)
     enable_streaming_text: bool | None = None  # Issue #1486 — opt-in streaming text rendering
     # Non-secret direct env passthrough (issue #1396)
     extra_env: dict[str, str] | None = None
