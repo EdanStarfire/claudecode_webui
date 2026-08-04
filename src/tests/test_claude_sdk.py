@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import tempfile
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -514,6 +515,48 @@ class TestClaudeSDK:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+
+    # ── register_repo_root (issue #1675) ─────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_sends_correct_control_request_payload(self, sdk_instance):
+        """Verifies the register_repo_root subtype/payload sent to the SDK's control-request path."""
+        mock_query = AsyncMock()
+        mock_query._send_control_request.return_value = {"directory": "/tmp/resolved"}
+        sdk_instance._sdk_client = Mock(_query=mock_query)
+        sdk_instance.info.state = SessionState.RUNNING
+
+        result = await sdk_instance.register_repo_root("/tmp/some/dir")
+
+        mock_query._send_control_request.assert_called_once_with(
+            {"subtype": "register_repo_root", "directory": "/tmp/some/dir"}
+        )
+        assert result == {"directory": "/tmp/resolved"}
+
+    @pytest.mark.asyncio
+    async def test_attribute_error_reraised_as_runtime_error(self, sdk_instance):
+        """If the SDK's internal _query/_send_control_request API is renamed on upgrade,
+        this should surface as an actionable RuntimeError instead of a raw AttributeError."""
+        sdk_instance._sdk_client = Mock(spec=[])  # no `_query` attribute at all
+        sdk_instance.info.state = SessionState.RUNNING
+
+        with pytest.raises(RuntimeError, match="claude-agent-sdk internals"):
+            await sdk_instance.register_repo_root("/tmp/some/dir")
+
+    @pytest.mark.asyncio
+    async def test_no_active_sdk_client_raises(self, sdk_instance):
+        sdk_instance._sdk_client = None
+
+        with pytest.raises(RuntimeError, match="No active SDK client"):
+            await sdk_instance.register_repo_root("/tmp/some/dir")
+
+    @pytest.mark.asyncio
+    async def test_inactive_state_raises(self, sdk_instance):
+        sdk_instance._sdk_client = Mock()
+        sdk_instance.info.state = SessionState.TERMINATED
+
+        with pytest.raises(RuntimeError, match="not in valid state"):
+            await sdk_instance.register_repo_root("/tmp/some/dir")
 
 
 class TestSetModel:

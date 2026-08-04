@@ -2337,3 +2337,79 @@ class TestIssue1660McpSnapshotPrune:
         await coordinator._migrate_stale_mcp_snapshots()
         sinfo3 = await coordinator.session_manager.get_session_info(session_id)
         assert "mcp_server_ids" not in sinfo3.config
+
+
+class TestIssue1675AddDirectory:
+    """Tests for SessionCoordinator.add_directory() (issue #1675)."""
+
+    @pytest.mark.asyncio
+    async def test_success_calls_sdk_and_persists(self, temp_coordinator, sample_session_config):
+        """Live SDK call succeeds and the resolved directory is persisted for restart."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        mock_sdk = AsyncMock()
+        mock_sdk.register_repo_root.return_value = {"directory": "/test/project/subdir"}
+        coordinator._active_sdks[session_id] = mock_sdk
+
+        result = await coordinator.add_directory(session_id, "/test/project/subdir")
+
+        assert result == {"directory": "/test/project/subdir"}
+        mock_sdk.register_repo_root.assert_called_once_with("/test/project/subdir")
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.config.get("additional_directories") == ["/test/project/subdir"]
+
+    @pytest.mark.asyncio
+    async def test_docker_enabled_rejected(self, temp_coordinator):
+        """Docker-isolated sessions must be rejected with a clear restart-required message."""
+        import uuid
+
+        coordinator = temp_coordinator
+        project = await coordinator.project_manager.create_project(
+            name="Docker Project", working_directory="/test/docker-project"
+        )
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(docker_enabled=True, docker_image="claude-code:local"),
+        )
+
+        with pytest.raises(ValueError, match="restart"):
+            await coordinator.add_directory(session_id, "/test/docker-project/subdir")
+
+    @pytest.mark.asyncio
+    async def test_invalid_path_rejected(self, temp_coordinator, sample_session_config):
+        """A directory that isn't a subdirectory of cwd/registered roots is rejected."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        mock_sdk = AsyncMock()
+        coordinator._active_sdks[session_id] = mock_sdk
+
+        with pytest.raises(ValueError, match="subdirectory"):
+            await coordinator.add_directory(session_id, "/completely/unrelated/path")
+
+        mock_sdk.register_repo_root.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_active_sdk_rejected(self, temp_coordinator, sample_session_config):
+        """An active session without a live SDK instance cannot register a directory."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        with pytest.raises(ValueError, match="No active SDK"):
+            await coordinator.add_directory(session_id, "/test/project/subdir")
+
+    @pytest.mark.asyncio
+    async def test_inactive_session_state_rejected(self, temp_coordinator, sample_session_config):
+        """A non-active session (e.g. still CREATED) cannot register a directory live."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        with pytest.raises(ValueError, match="not in active state"):
+            await coordinator.add_directory(session_id, "/test/project/subdir")

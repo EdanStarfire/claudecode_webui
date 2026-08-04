@@ -650,6 +650,41 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
+   * Register a new working directory on an active session, live (issue #1675).
+   * Also syncs to the session map and initData so SessionInfoModal reflects the
+   * change without a full refetch.
+   */
+  async function addDirectory(sessionId, directory) {
+    try {
+      const result = await api.post(`/api/sessions/${sessionId}/add-directory`, { directory })
+      const resolvedDirectory = result.directory || directory
+
+      const session = sessions.value.get(sessionId)
+      const existingDirs = session?.config?.additional_directories || []
+      if (!existingDirs.includes(resolvedDirectory)) {
+        updateSession(sessionId, {
+          config: { ...(session?.config || {}), additional_directories: [...existingDirs, resolvedDirectory] }
+        })
+      }
+
+      const storedInitData = initData.value.get(sessionId)
+      if (storedInitData) {
+        const initDirs = storedInitData.additional_directories || []
+        if (!initDirs.includes(resolvedDirectory)) {
+          storedInitData.additional_directories = [...initDirs, resolvedDirectory]
+          initData.value.set(sessionId, storedInitData)
+        }
+      }
+
+      console.log(`Added directory for session ${sessionId}: ${resolvedDirectory}`)
+      return resolvedDirectory
+    } catch (error) {
+      console.error('Failed to add directory:', error)
+      throw error
+    }
+  }
+
+  /**
    * Start a session
    */
   async function startSession(sessionId) {
@@ -841,6 +876,7 @@ export const useSessionStore = defineStore('session', () => {
     patchSession,
     setPermissionMode,
     setModel,
+    addDirectory,
     startSession,
     terminateSession,
     getSession,

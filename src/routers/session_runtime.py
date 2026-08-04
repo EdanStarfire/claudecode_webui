@@ -5,7 +5,13 @@ from fastapi import APIRouter, HTTPException
 from ..exception_handlers import handle_exceptions
 from ..models.permission_mode import PermissionMode
 from ..session_manager import VALID_MODELS
-from ._models import McpReconnectRequest, McpToggleRequest, ModelRequest, PermissionModeRequest
+from ._models import (
+    AddDirectoryRequest,
+    McpReconnectRequest,
+    McpToggleRequest,
+    ModelRequest,
+    PermissionModeRequest,
+)
 
 
 def build_router(webui) -> APIRouter:
@@ -54,6 +60,15 @@ def build_router(webui) -> APIRouter:
         if not success:
             raise HTTPException(status_code=400, detail="Failed to set model")
         return {"success": success, "model": request.model}
+
+    @router.post("/api/sessions/{session_id}/add-directory")
+    @handle_exceptions("add directory", value_error_status=400)
+    async def add_directory(session_id: str, request: AddDirectoryRequest):
+        """Register a new working directory on an active session, live (issue #1675)."""
+        if not await webui.service.get_session_exists(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        result = await webui.coordinator.add_directory(session_id, request.directory)
+        return {"success": True, **result}
 
     @router.get("/api/sessions/{session_id}/mcp-status")
     @handle_exceptions("get mcp status")

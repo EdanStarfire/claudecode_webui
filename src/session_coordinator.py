@@ -2590,6 +2590,54 @@ class SessionCoordinator:
 
         await sdk.reconnect_mcp_server(name)
 
+    async def add_directory(self, session_id: str, directory: str) -> dict:
+        """Register a new working directory on an active session, live (issue #1675).
+
+        Unlike a stopped-session config edit, this takes effect immediately via the
+        SDK's register_repo_root control request, and is persisted so it survives a
+        future restart. Docker-isolated sessions are rejected — new host paths can't
+        be mounted into an already-running container. Raises ValueError on any
+        rejection (Docker guard, path validation, CLI-side error) so the REST layer
+        can surface a clear 400.
+        """
+        from .routers._models import _validate_new_additional_directory
+
+        session_info = await self.session_manager.get_session_info(session_id)
+        if not session_info:
+            raise ValueError(f"Session {session_id} not found")
+
+        if session_info.config.get("docker_enabled"):
+            raise ValueError(
+                "Adding directories to a running Docker session requires a restart — "
+                "the path cannot be mounted into the running container."
+            )
+
+        if session_info.state != SessionState.ACTIVE:
+            raise ValueError(f"Session not in active state (state: {session_info.state})")
+
+        sdk = self._active_sdks.get(session_id)
+        if not sdk:
+            raise ValueError(f"No active SDK found for session {session_id}")
+
+        normalized = _validate_new_additional_directory(
+            directory,
+            session_info.working_directory,
+            session_info.config.get("additional_directories"),
+        )
+
+        try:
+            result = await sdk.register_repo_root(normalized)
+        except Exception as e:
+            logger.exception(f"Failed to register repo root for session {session_id}")
+            raise ValueError(str(e)) from e
+
+        resolved_directory = result.get("directory", normalized) if isinstance(result, dict) else normalized
+
+        await self.session_manager.update_additional_directories(session_id, [resolved_directory])
+        coord_logger.info(f"Registered directory '{resolved_directory}' for session {session_id}")
+
+        return {"directory": resolved_directory}
+
     async def restart_session(self, session_id: str, permission_callback: Callable | None = None) -> bool:
         """
         Restart a session by disconnecting SDK and resuming with same session ID.

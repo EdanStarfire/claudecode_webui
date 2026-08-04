@@ -125,6 +125,11 @@ class McpToggleRequest(BaseModel):
     enabled: bool
 
 
+class AddDirectoryRequest(BaseModel):
+    """Request to register a new working directory on a live session (issue #1675)."""
+    directory: str
+
+
 class McpReconnectRequest(BaseModel):
     name: str
 
@@ -464,3 +469,40 @@ def _validate_additional_directories(dirs: list[str] | None, working_directory: 
         seen.add(normalized)
         validated.append(normalized)
     return validated or None
+
+
+def _validate_new_additional_directory(
+    directory: str, working_directory: str | None, existing_directories: list[str] | None
+) -> str:
+    """Validate a single directory to add to a *live* session (issue #1675).
+
+    Mirrors the CLI's own register_repo_root constraint: the new directory must be
+    an absolute path that is a strict subdirectory of the session's cwd or of an
+    already-registered directory. Raises ValueError with a clear message so the
+    REST layer can return 400 instead of surfacing a raw CLI control-response error.
+    """
+    import os
+    directory = (directory or "").strip()
+    if not directory:
+        raise ValueError("Directory is required")
+    if not os.path.isabs(directory):
+        raise ValueError(f"Directory must be an absolute path: {directory}")
+
+    normalized = os.path.normpath(directory)
+    normalized_cwd = os.path.normpath(working_directory) if working_directory else None
+    normalized_existing = [os.path.normpath(d) for d in (existing_directories or [])]
+
+    if normalized == normalized_cwd or normalized in normalized_existing:
+        raise ValueError(f"Directory is already registered for this session: {directory}")
+
+    def _is_subdir(child: str, parent: str) -> bool:
+        return child.startswith(parent.rstrip(os.sep) + os.sep)
+
+    allowed_roots = ([normalized_cwd] if normalized_cwd else []) + normalized_existing
+    if not any(_is_subdir(normalized, root) for root in allowed_roots):
+        raise ValueError(
+            "Directory must be a subdirectory of the session's working directory "
+            f"or an already-registered directory: {directory}"
+        )
+
+    return normalized
