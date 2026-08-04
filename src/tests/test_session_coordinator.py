@@ -2084,6 +2084,59 @@ class TestConvertStoredMessageToWebsocket:
         assert result["metadata"]["subtype"] == "task_notification"
 
 
+class TestIssue1676AgentNotification:
+    """Tests for background subagent Notification hook tagging (issue #1676)."""
+
+    @pytest.fixture
+    def coordinator(self, tmp_path):
+        return SessionCoordinator(tmp_path)
+
+    def test_notification_hook_tagged_as_agent_notification(self, coordinator):
+        stored = {
+            "_type": "HookEventMessage",
+            "timestamp": 1700000000.0,
+            "data": {
+                "subtype": "hook_response",
+                "hook_event_name": "Notification",
+                "session_id": "sess-3",
+                "uuid": "uuid-notif",
+                "data": {
+                    "hook_event_name": "Notification",
+                    "message": "alpha needs your input",
+                    "notification_type": "agent_needs_input",
+                    "title": "Agent waiting",
+                },
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        assert result["type"] == "system"
+        assert result["metadata"]["subtype"] == "agent_notification"
+        assert result["metadata"]["notification_type"] == "agent_needs_input"
+        assert result["metadata"]["label"] == "alpha"
+        assert result["content"] == "alpha needs your input"
+
+    def test_non_notification_hook_event_unaffected(self, coordinator):
+        stored = {
+            "_type": "HookEventMessage",
+            "timestamp": 1700000000.0,
+            "data": {
+                "subtype": "hook_started",
+                "hook_event_name": "PreToolUse",
+                "session_id": "sess-4",
+                "uuid": "uuid-pre",
+                "data": {
+                    "hook_name": "pre-tool-guard",
+                    "hook_event": "PreToolUse",
+                },
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        assert result["metadata"]["subtype"] == "hook_started"
+        assert "pre-tool-guard" in result["content"]
+
+
 # ---------------------------------------------------------------------------
 # Issue #1660 — MCP snapshot pruning
 # ---------------------------------------------------------------------------

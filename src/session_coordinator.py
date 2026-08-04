@@ -3089,6 +3089,26 @@ class SessionCoordinator:
             return description[:colon_idx].strip()
         return description[:40] + "..." if len(description) > 40 else description
 
+    # Issue #1676: CLI phrasing for background subagent Notification hook messages.
+    _AGENT_NOTIFICATION_MESSAGE_SUFFIXES = (
+        " needs your input",
+        " finished",
+        " failed",
+    )
+
+    @staticmethod
+    def _parse_agent_notification_label(message: str | None) -> str | None:
+        """Best-effort label parse from a Notification hook's free-text message (issue #1676).
+
+        Isolated here as a single edit point if the CLI's message phrasing changes.
+        """
+        if not message:
+            return None
+        for suffix in SessionCoordinator._AGENT_NOTIFICATION_MESSAGE_SUFFIXES:
+            if message.endswith(suffix):
+                return message[: -len(suffix)]
+        return None
+
     def _convert_stored_message_to_websocket(self, stored_msg: dict[str, Any]) -> dict[str, Any] | None:
         """
         Convert new StoredMessage format (_type discriminator) to WebSocket format.
@@ -3254,19 +3274,32 @@ class SessionCoordinator:
                 # Issue #571: Synthesize content for hook messages from stored format
                 elif subtype in ("hook_started", "hook_response"):
                     hook_data = data.get("data") or {}
-                    hook_name = hook_data.get("hook_name", hook_data.get("hookName", "unknown"))
-                    hook_event = hook_data.get("hook_event", hook_data.get("hookEvent", ""))
-                    if subtype == "hook_started":
-                        content = f"Hook: {hook_name} ({hook_event})" if hook_event else f"Hook: {hook_name}"
+                    # Issue #1676: background subagent notifications (agent_needs_input/agent_completed)
+                    if data.get("hook_event_name") == "Notification" or hook_data.get("hook_event_name") == "Notification":
+                        metadata["subtype"] = "agent_notification"
+                        metadata["notification_type"] = hook_data.get("notification_type")
+                        metadata["message"] = hook_data.get("message")
+                        metadata["title"] = hook_data.get("title")
+                        metadata["label"] = self._parse_agent_notification_label(hook_data.get("message"))
+                        # Issue #1676: HookEventMessage.uuid (top-level dataclass field, not part
+                        # of the nested hook payload) lets the frontend dismiss individual notifications.
+                        if data.get("uuid"):
+                            metadata["uuid"] = data["uuid"]
+                        content = hook_data.get("message") or content
                     else:
-                        exit_code = hook_data.get("exit_code", hook_data.get("exitCode"))
-                        if exit_code == 0:
-                            display = hook_data.get("stdout") or hook_data.get("outcome", "success")
+                        hook_name = hook_data.get("hook_name", hook_data.get("hookName", "unknown"))
+                        hook_event = hook_data.get("hook_event", hook_data.get("hookEvent", ""))
+                        if subtype == "hook_started":
+                            content = f"Hook: {hook_name} ({hook_event})" if hook_event else f"Hook: {hook_name}"
                         else:
-                            display = hook_data.get("stderr") or hook_data.get("outcome", "failed")
-                        content = f"Hook: {hook_name} \u2192 {display}"
-                        if exit_code is not None:
-                            metadata["exit_code"] = exit_code
+                            exit_code = hook_data.get("exit_code", hook_data.get("exitCode"))
+                            if exit_code == 0:
+                                display = hook_data.get("stdout") or hook_data.get("outcome", "success")
+                            else:
+                                display = hook_data.get("stderr") or hook_data.get("outcome", "failed")
+                            content = f"Hook: {hook_name} \u2192 {display}"
+                            if exit_code is not None:
+                                metadata["exit_code"] = exit_code
 
             # Handle ResultMessage
             if _type == "ResultMessage":

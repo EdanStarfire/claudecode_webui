@@ -12,6 +12,14 @@
       <span class="ephemeral-label">This agent is managed by a schedule and starts automatically when the schedule fires.</span>
     </div>
 
+    <!-- Background subagent notifications (Issue #1676) -->
+    <AgentNotificationStrip
+      v-if="!isArchiveMode"
+      :notifications="agentNotifications"
+      @reply="replyToAgent"
+      @dismiss="dismissAgentNotification"
+    />
+
     <!-- Messages Area -->
     <div class="d-flex flex-column flex-grow-1 overflow-hidden">
       <MessageList />
@@ -44,6 +52,7 @@ import SessionStateStatusLine from './SessionStateStatusLine.vue'
 import SessionStatusBar from '../statusbar/SessionStatusBar.vue'
 import MessageList from '../messages/MessageList.vue'
 import InputArea from '../messages/InputArea.vue'
+import AgentNotificationStrip from '../messages/AgentNotificationStrip.vue'
 
 const props = defineProps({
   sessionId: {
@@ -76,6 +85,19 @@ const currentSession = computed(() => sessionStore.sessions.get(props.sessionId)
 
 function focusInputWhenReady() {
   nextTick(() => inputAreaRef.value?.focusInput())
+}
+
+// Issue #1676: Background subagent notifications (agent_needs_input/agent_completed)
+const agentNotifications = computed(() => messageStore.agentNotificationsForSession(props.sessionId))
+
+function dismissAgentNotification(notificationId) {
+  messageStore.dismissAgentNotification(props.sessionId, notificationId)
+}
+
+function replyToAgent(label) {
+  const prefix = label ? `Please relay to ${label}: ` : 'Please relay to the background agent: '
+  sessionStore.setInput(props.sessionId, prefix)
+  focusInputWhenReady()
 }
 
 const isArchiveMode = computed(() => !!(props.archiveId || route.params.archiveId))

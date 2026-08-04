@@ -698,6 +698,142 @@ class TestHookMessageHandling:
         assert "PreToolUse" in parsed.content
 
 
+class TestAgentNotificationHandling:
+    """Test cases for background subagent Notification hook events (Issue #1676)."""
+
+    def test_notification_sdk_object_needs_input(self):
+        """Notification hook (SDK object) with agent_needs_input is tagged and labeled."""
+        from claude_agent_sdk.types import HookEventMessage
+
+        handler = SystemMessageHandler()
+        sdk_msg = HookEventMessage(
+            subtype="hook_response",
+            data={
+                "session_id": "test-session",
+                "transcript_path": "/tmp/transcript.jsonl",
+                "cwd": "/tmp",
+                "hook_event_name": "Notification",
+                "message": "alpha needs your input",
+                "title": "Agent waiting",
+                "notification_type": "agent_needs_input",
+            },
+            hook_event_name="Notification",
+            session_id="test-session",
+            uuid="uuid-1",
+        )
+        message_data = {
+            "sdk_message": sdk_msg,
+            # Issue #571/#1676: claude_sdk.py._convert_sdk_message() copies sdk_msg.subtype
+            # to the top-level dict before it reaches SystemMessageHandler.
+            "subtype": sdk_msg.subtype,
+            "session_id": "test-session",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+        assert parsed.type == MessageType.SYSTEM
+        assert parsed.metadata["subtype"] == "agent_notification"
+        assert parsed.metadata["notification_type"] == "agent_needs_input"
+        assert parsed.metadata["label"] == "alpha"
+        assert parsed.metadata["title"] == "Agent waiting"
+        assert parsed.content == "alpha needs your input"
+
+    def test_notification_sdk_object_completed(self):
+        """Notification hook (SDK object) with agent_completed parses a 'finished' label."""
+        from claude_agent_sdk.types import HookEventMessage
+
+        handler = SystemMessageHandler()
+        sdk_msg = HookEventMessage(
+            subtype="hook_response",
+            data={
+                "session_id": "test-session",
+                "transcript_path": "/tmp/transcript.jsonl",
+                "cwd": "/tmp",
+                "hook_event_name": "Notification",
+                "message": "beta finished",
+                "notification_type": "agent_completed",
+            },
+            hook_event_name="Notification",
+            session_id="test-session",
+            uuid="uuid-2",
+        )
+        message_data = {
+            "sdk_message": sdk_msg,
+            "subtype": sdk_msg.subtype,
+            "session_id": "test-session",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+        assert parsed.metadata["subtype"] == "agent_notification"
+        assert parsed.metadata["notification_type"] == "agent_completed"
+        assert parsed.metadata["label"] == "beta"
+
+    def test_notification_dict_format_live(self):
+        """Notification hook (stored-dict path, live first pass) is tagged from init_data."""
+        handler = SystemMessageHandler()
+        message_data = {
+            "type": "system",
+            "content": "",
+            "metadata": {
+                "subtype": "hook_response",
+                "init_data": {
+                    "hook_event_name": "Notification",
+                    "message": "gamma failed",
+                    "notification_type": "agent_completed",
+                },
+            },
+            "session_id": "test-hooks",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+        assert parsed.metadata["subtype"] == "agent_notification"
+        assert parsed.metadata["notification_type"] == "agent_completed"
+        assert parsed.metadata["label"] == "gamma"
+        assert parsed.content == "gamma failed"
+
+    def test_notification_dict_format_reload(self):
+        """Notification fields survive reload, when the persisted subtype is already
+        'agent_notification' (not hook_started/hook_response) and init_data is absent
+        from the flat stored metadata view used on this path."""
+        handler = SystemMessageHandler()
+        message_data = {
+            "type": "system",
+            "content": "delta needs your input",
+            "metadata": {
+                "subtype": "agent_notification",
+                "notification_type": "agent_needs_input",
+                "message": "delta needs your input",
+                "title": None,
+                "label": "delta",
+            },
+            "session_id": "test-hooks",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+        assert parsed.metadata["subtype"] == "agent_notification"
+        assert parsed.metadata["notification_type"] == "agent_needs_input"
+        assert parsed.metadata["label"] == "delta"
+
+    def test_non_notification_hooks_unaffected(self):
+        """Regular hook_started/hook_response events are not misclassified as notifications."""
+        handler = SystemMessageHandler()
+        message_data = {
+            "type": "system",
+            "content": "",
+            "metadata": {
+                "subtype": "hook_started",
+                "init_data": {
+                    "hook_name": "pre-tool-guard",
+                    "hook_event": "PreToolUse",
+                },
+            },
+            "session_id": "test-hooks",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+        assert parsed.metadata["subtype"] == "hook_started"
+        assert "pre-tool-guard" in parsed.content
+
+
 class TestIssue1486MessageIdPropagation:
     """Regression tests for issue #1486 duplicate-message bug.
 

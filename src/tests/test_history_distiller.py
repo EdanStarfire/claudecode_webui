@@ -448,6 +448,45 @@ async def test_issue_722_stored_skipped_types(temp_dir):
 
 
 @pytest.mark.asyncio
+async def test_issue_1676_hook_event_notification_survives(temp_dir):
+    """HookEventMessage Notification events (agent_needs_input/agent_completed) survive
+    distillation, while other hook lifecycle events on the same _type remain skipped."""
+    messages = [
+        {
+            "_type": "HookEventMessage",
+            "timestamp": 1700000000.0,
+            "data": {
+                "subtype": "hook_response",
+                "hook_event_name": "Notification",
+                "data": {
+                    "hook_event_name": "Notification",
+                    "message": "alpha needs your input",
+                    "notification_type": "agent_needs_input",
+                },
+            },
+        },
+        {
+            "_type": "HookEventMessage",
+            "timestamp": 1700000001.0,
+            "data": {
+                "subtype": "hook_started",
+                "hook_event_name": "PreToolUse",
+                "data": {"hook_name": "pre-tool-guard", "hook_event": "PreToolUse"},
+            },
+        },
+    ]
+    jsonl = temp_dir / "messages.jsonl"
+    output = temp_dir / "out.md"
+    _write_jsonl(jsonl, messages)
+
+    await distill_session_history(jsonl, output, "s1", "2024-01-01T00:00:00+00:00")
+    content = output.read_text()
+    assert "System messages: 1" in content
+    assert "alpha needs your input" in content
+    assert "pre-tool-guard" not in content
+
+
+@pytest.mark.asyncio
 async def test_issue_1628_slice_between_boundaries(temp_dir):
     """Distillation of a second compaction boundary excludes pre-first-boundary messages.
 

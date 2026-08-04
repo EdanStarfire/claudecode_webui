@@ -211,6 +211,17 @@ async def distill_session_history(
                             stats["comm_outbound"] += 1
                             stats["total"] += 1
 
+                    elif stored_type == "HookEventMessage":
+                        # Issue #1676: background subagent notifications (agent_needs_input/
+                        # agent_completed) survive distillation; all other hook lifecycle
+                        # events (PreToolUse/PostToolUse/etc.) remain silently skipped as noise.
+                        if data.get("hook_event_name") == "Notification":
+                            message = (data.get("data") or {}).get("message", "")
+                            if message:
+                                entries.append(f"## {formatted_ts} - System\n{message}\n")
+                                stats["system"] += 1
+                                stats["total"] += 1
+
                     # All other StoredMessage _types (ResultMessage, TaskStartedMessage,
                     # PermissionRequestMessage, etc.) are silently skipped.
 

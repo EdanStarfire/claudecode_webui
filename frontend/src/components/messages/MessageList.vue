@@ -651,6 +651,12 @@ function shouldDisplayMessage(message) {
     }
   }
 
+  // Issue #1676: Suppress background subagent notifications from the inline message
+  // list — they render exclusively in the session-level AgentNotificationStrip.
+  if (message.type === 'system' && message.metadata?.subtype === 'agent_notification') {
+    return false
+  }
+
   // Note: We do NOT hide 'status' or 'compact_boundary' messages here
   // because they are handled by the compaction event grouping logic above
 
