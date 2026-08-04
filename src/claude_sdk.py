@@ -1082,7 +1082,8 @@ class ClaudeSDK:
 
         # Issue #1126: Apply global background-call suppression as the floor
         from .config_manager import load_config
-        bg_cfg = load_config().background_calls
+        app_cfg = load_config()
+        bg_cfg = app_cfg.background_calls
         for attr, (var, value) in _BACKGROUND_CALL_ENV_MAP.items():
             if getattr(bg_cfg, attr):
                 env_vars[var] = value
@@ -1111,6 +1112,12 @@ class ClaudeSDK:
         # Issue #1672: Route Claude Code self-spawns through a corporate launcher wrapper
         if self.process_wrapper:
             env_vars["CLAUDE_CODE_PROCESS_WRAPPER"] = self.process_wrapper
+
+        # Issue #1670: opt-in (not always-set) — WebUI default (200) matches CC's own
+        # CLI default exactly, so omitting the var at default is fully transparent.
+        max_subagents = app_cfg.features.max_subagents_per_session
+        if max_subagents < 200:
+            env_vars["CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION"] = str(max_subagents)
 
         # Issue #496: Merge extra env vars (highest priority; e.g., CLAUDE_DOCKER_*)
         if self.extra_env:

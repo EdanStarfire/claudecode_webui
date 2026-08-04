@@ -158,3 +158,69 @@ async def test_put_config_response_includes_pricing_defaults(tmp_path):
         })
     assert resp.status_code == 200
     assert "pricing_defaults" in resp.json()["config"]
+
+
+# ── GET/PUT /api/config — max_subagents_per_session (issue #1670) ────────────
+
+@pytest.mark.asyncio
+async def test_get_config_max_subagents_default(tmp_path):
+    app, _ = _make_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/config")
+    assert resp.status_code == 200
+    assert resp.json()["config"]["features"]["max_subagents_per_session"] == 200
+
+
+@pytest.mark.asyncio
+async def test_put_config_max_subagents_round_trip(tmp_path):
+    app, _ = _make_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        put_resp = await client.put("/api/config", json={
+            "features": {"max_subagents_per_session": 50}
+        })
+        assert put_resp.status_code == 200
+        assert put_resp.json()["config"]["features"]["max_subagents_per_session"] == 50
+
+        get_resp = await client.get("/api/config")
+    assert get_resp.json()["config"]["features"]["max_subagents_per_session"] == 50
+
+
+@pytest.mark.asyncio
+async def test_put_config_max_subagents_accepts_upper_bound_200(tmp_path):
+    app, _ = _make_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.put("/api/config", json={
+            "features": {"max_subagents_per_session": 200}
+        })
+    assert resp.status_code == 200
+    assert resp.json()["config"]["features"]["max_subagents_per_session"] == 200
+
+
+@pytest.mark.asyncio
+async def test_put_config_max_subagents_rejects_zero(tmp_path):
+    app, _ = _make_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.put("/api/config", json={
+            "features": {"max_subagents_per_session": 0}
+        })
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_put_config_max_subagents_rejects_above_ceiling(tmp_path):
+    app, _ = _make_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.put("/api/config", json={
+            "features": {"max_subagents_per_session": 201}
+        })
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_put_config_max_subagents_rejects_non_int(tmp_path):
+    app, _ = _make_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.put("/api/config", json={
+            "features": {"max_subagents_per_session": "fifty"}
+        })
+    assert resp.status_code == 400

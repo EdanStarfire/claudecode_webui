@@ -40,6 +40,11 @@ def build_router(webui) -> APIRouter:
                 if not isinstance(val, int) or val < 1:
                     raise ValueError("max_peek_cards must be a positive integer")
                 config.features.max_peek_cards = val
+            if "max_subagents_per_session" in features:
+                val = features["max_subagents_per_session"]
+                if not isinstance(val, int) or not (1 <= val <= 200):
+                    raise ValueError("max_subagents_per_session must be an integer between 1 and 200")
+                config.features.max_subagents_per_session = val
 
         # Merge networking section
         if "networking" in body:
