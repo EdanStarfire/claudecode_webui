@@ -38,12 +38,19 @@ function hasSchemaDefault() {
   return props.defaultValue !== null && props.defaultValue !== undefined
 }
 
+// Options may declare `aliases` — other raw values that should match this option
+// (e.g. a legacy stored value that now shares a label with its canonical replacement).
+function matchesOption(opt, val) {
+  return opt.value === val || (opt.aliases && opt.aliases.includes(val))
+}
+
 function isActive(optValue) {
+  const opt = props.options.find(o => o.value === optValue)
   if (props.multiple) {
     const arr = Array.isArray(props.value) ? props.value : []
     return arr.includes(optValue)
   }
-  if (!noExplicitValue()) return props.value === optValue
+  if (!noExplicitValue()) return opt ? matchesOption(opt, props.value) : props.value === optValue
   if (hasSchemaDefault()) return optValue === props.defaultValue
   // Legacy fallback: '' option acts as Default button
   return optValue === '' || optValue === null || optValue === undefined

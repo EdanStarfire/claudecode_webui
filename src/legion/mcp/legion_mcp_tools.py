@@ -133,7 +133,7 @@ class LegionMCPTools:
             "\n- Template enforces permission_mode and allowed_tools (secure, user-controlled)"
             "\n\n**Without Template:**"
             "\nIf no template specified, child gets default restricted permissions:"
-            "\n- permission_mode='default' (prompts for every tool use)"
+            "\n- permission_mode='manual' (prompts for every tool use)"
             "\n- allowed_tools=[] (no pre-authorized tools)"
             "\n\n**Working Directory (Optional):**"
             "\nSpecify a custom working directory for git worktrees or multi-repo workflows:"
@@ -931,7 +931,7 @@ class LegionMCPTools:
                 return self._err(f"❌ Error applying template: {str(e)}")
         else:
             # No template - use safe default restricted permissions
-            permission_mode = "default"  # Prompts for most actions
+            permission_mode = "manual"  # Prompts for most actions
             allowed_tools = []  # No pre-authorized tools (user must approve each tool use)
             model = None
             override_system_prompt = False
@@ -1025,13 +1025,13 @@ class LegionMCPTools:
                 tools_str = ", ".join(_tpl_tools) if _tpl_tools else "all"
                 perm_info = (
                     f"\n**Permissions** (from template '{template_applied.name}'):\n"
-                    f"  - Permission Mode: {template_applied.config.get('permission_mode', 'default')}\n"
+                    f"  - Permission Mode: {template_applied.config.get('permission_mode', 'manual')}\n"
                     f"  - Allowed Tools: {tools_str}"
                 )
             else:
                 perm_info = (
                     "\n**Permissions** (safe defaults):\n"
-                    "  - Permission Mode: default\n"
+                    "  - Permission Mode: manual\n"
                     "  - Allowed Tools: none (user must approve each tool use)"
                 )
 
@@ -1629,7 +1629,7 @@ class LegionMCPTools:
                 result_lines.append(
                     f"• **{template.name}**\n"
                     f"  - Description: {template.description or 'No description'}\n"
-                    f"  - Permission Mode: {template.config.get('permission_mode', 'default')}\n"
+                    f"  - Permission Mode: {template.config.get('permission_mode', 'manual')}\n"
                     f"  - Allowed Tools: {tools_str}\n"
                     f"  - Role: {template.role or 'Not specified'}\n"
                 )

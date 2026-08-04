@@ -56,7 +56,7 @@
             <!-- Permission Mode -->
             <div class="mb-3">
               <h6 class="text-muted">Permission Mode</h6>
-              <div>{{ displayData.permissionMode || 'default' }}</div>
+              <div>{{ permissionModeDisplay }}</div>
             </div>
 
             <!-- Proxy Status (only when proxy enabled) -->
@@ -275,6 +275,13 @@ const displayData = computed(() => {
   // Fallback: Pinia initData (populated from SDK init message)
   if (!sessionId.value) return null
   return sessionStore.initData.get(sessionId.value) || null
+})
+
+// 'default' is the legacy stored value for the manual permission mode; both display as 'Manual'.
+const permissionModeDisplay = computed(() => {
+  const mode = displayData.value?.permissionMode
+  if (mode === 'default' || mode === 'manual') return 'Manual'
+  return mode || 'Manual'
 })
 
 const sdkSessionInfo = computed(() => sessionData.value?.sdk_session_info || null)

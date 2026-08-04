@@ -149,7 +149,8 @@ export const FIELD_SCHEMAS = {
       widget: 'button-group',
       defaultValue: 'acceptEdits',
       options: [
-        { value: 'default', label: 'Default' },
+        // 'manual' is the canonical new-write value for this legacy 'default' mode; both match this option.
+        { value: 'default', label: 'Manual', aliases: ['manual'] },
         { value: 'acceptEdits', label: 'Accept Edits' },
         { value: 'plan', label: 'Plan' },
         { value: 'dontAsk', label: "Don't Ask" },

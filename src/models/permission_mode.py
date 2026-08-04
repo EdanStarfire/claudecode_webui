@@ -12,6 +12,7 @@ class PermissionMode(str, Enum):
     """
 
     DEFAULT = "default"
+    MANUAL = "manual"
     ACCEPT_EDITS = "acceptEdits"
     PLAN = "plan"
     BYPASS_PERMISSIONS = "bypassPermissions"

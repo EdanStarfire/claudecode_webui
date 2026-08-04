@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.models.minion_template import MinionTemplate
+from src.models.permission_mode import PermissionMode
 from src.session_config import SessionConfig
 from src.session_manager import SessionInfo, SessionState
 from src.template_manager import TemplateConflictError, TemplateInUseError, TemplateManager
@@ -208,6 +209,23 @@ class TestCreateTemplate:
         assert template.config.get("thinking_mode") is None
         assert template.config.get("thinking_budget_tokens") is None
         assert template.config.get("effort") is None
+
+
+class TestManualPermissionMode:
+    """Issue #1677: 'manual' is the new canonical value for the legacy 'default' mode."""
+
+    def test_enum_accepts_both_default_and_manual(self):
+        assert "default" in PermissionMode._value2member_map_
+        assert "manual" in PermissionMode._value2member_map_
+
+    @pytest.mark.asyncio
+    async def test_create_template_accepts_manual(self, manager):
+        template = await manager.create_template(
+            name="Manual Mode Template",
+            config=SessionConfig(permission_mode="manual"),
+        )
+
+        assert template.config.get("permission_mode") == "manual"
 
 
 # --- TemplateManager.update_template() tests ---
