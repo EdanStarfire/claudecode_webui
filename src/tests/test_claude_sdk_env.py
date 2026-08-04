@@ -4,7 +4,7 @@ import tempfile
 from unittest.mock import patch
 
 from src.claude_sdk import ClaudeSDK
-from src.config_manager import AppConfig, BackgroundCallsConfig
+from src.config_manager import AppConfig, BackgroundCallsConfig, FeaturesConfig
 from src.session_config import SessionConfig
 
 
@@ -185,3 +185,28 @@ class TestProcessWrapper:
         with patch("src.config_manager.load_config", return_value=_suppression_off_config()):
             env = sdk._resolve_env_vars()
         assert env["CLAUDE_CODE_PROCESS_WRAPPER"] == "/other/wrapper"
+
+
+class TestMaxSubagentsPerSession:
+    """Issue #1670 — CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION is opt-in, only set when < 200."""
+
+    def test_absent_at_default_value_200(self):
+        sdk = _make_sdk()
+        config = AppConfig(features=FeaturesConfig(max_subagents_per_session=200))
+        with patch("src.config_manager.load_config", return_value=config):
+            env = sdk._resolve_env_vars()
+        assert "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION" not in env
+
+    def test_present_when_below_200(self):
+        sdk = _make_sdk()
+        config = AppConfig(features=FeaturesConfig(max_subagents_per_session=50))
+        with patch("src.config_manager.load_config", return_value=config):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION"] == "50"
+
+    def test_extra_env_can_override(self):
+        sdk = _make_sdk(extra_env={"CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION": "10"})
+        config = AppConfig(features=FeaturesConfig(max_subagents_per_session=50))
+        with patch("src.config_manager.load_config", return_value=config):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION"] == "10"

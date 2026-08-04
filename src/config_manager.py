@@ -170,6 +170,7 @@ class FeaturesConfig:
     disable_openai_responses_count_tokens_api: bool = True  # issue #1473
     streaming_text_enabled: bool = True  # Issue #1486 — global kill switch (False disables platform-wide)
     max_peek_cards: int = 100  # Issue #1587 — cap for collapsed chip peek stack
+    max_subagents_per_session: int = 200  # Issue #1670 — global cap on concurrent subagent spawns
 
 
 @dataclass
@@ -269,6 +270,7 @@ class AppConfig:
             ),
             streaming_text_enabled=features_data.get("streaming_text_enabled", True),
             max_peek_cards=features_data.get("max_peek_cards", 100),
+            max_subagents_per_session=features_data.get("max_subagents_per_session", 200),
         )
         proxy_data = data.get("proxy", {})
         proxy = ProxyConfig(
@@ -355,6 +357,7 @@ class AppConfig:
                 ),
                 "streaming_text_enabled": self.features.streaming_text_enabled,
                 "max_peek_cards": self.features.max_peek_cards,
+                "max_subagents_per_session": self.features.max_subagents_per_session,
             },
             "proxy": {
                 "proxy_image": self.proxy.proxy_image,

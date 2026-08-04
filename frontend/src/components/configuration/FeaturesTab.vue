@@ -72,6 +72,26 @@
       </small>
     </div>
 
+    <div class="mb-3">
+      <label class="form-label" for="maxSubagentsPerSession">Max subagents per session</label>
+      <input
+        id="maxSubagentsPerSession"
+        type="number"
+        class="form-control form-control-sm"
+        :class="{ 'is-invalid': maxSubagentsError }"
+        min="1"
+        max="200"
+        step="1"
+        :value="config?.max_subagents_per_session ?? 200"
+        @input="onMaxSubagentsInput($event.target.value)"
+      >
+      <div v-if="maxSubagentsError" class="invalid-feedback">{{ maxSubagentsError }}</div>
+      <small class="form-text text-muted">
+        Global cap on concurrent subagent spawns per session (default: 200, CC's own ceiling).
+        Lower this to bound runaway delegation loops.
+      </small>
+    </div>
+
     <hr class="my-3">
 
     <h6 class="mb-2">Legion</h6>
@@ -108,6 +128,7 @@ const emit = defineEmits(['update:config', 'update:legionConfig'])
 
 const maxMinionsError = ref(null)
 const maxPeekCardsError = ref(null)
+const maxSubagentsError = ref(null)
 
 function onMaxPeekCardsInput(value) {
   const parsed = parseInt(value, 10)
@@ -117,6 +138,16 @@ function onMaxPeekCardsInput(value) {
   }
   maxPeekCardsError.value = null
   emit('update:config', { ...props.config, max_peek_cards: parsed })
+}
+
+function onMaxSubagentsInput(value) {
+  const parsed = parseInt(value, 10)
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 200) {
+    maxSubagentsError.value = 'Must be an integer between 1 and 200'
+    return
+  }
+  maxSubagentsError.value = null
+  emit('update:config', { ...props.config, max_subagents_per_session: parsed })
 }
 
 function onMaxMinionsInput(value) {
