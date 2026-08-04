@@ -763,6 +763,11 @@ class MockClaudeSDK:
         self.current_permission_mode = mode
         return True
 
+    async def set_model(self, model: str) -> bool:
+        """No-op for mock — model changes are ignored."""
+        self.model = model
+        return True
+
     async def disconnect(self) -> bool:
         """Disconnect the mock session."""
         self._shutdown_event.set()

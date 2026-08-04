@@ -264,7 +264,7 @@ const displayData = computed(() => {
   if (s) {
     return {
       cwd: s.working_directory,
-      model: s.model,
+      model: s.current_model ?? s.config?.model,
       permissionMode: s.current_permission_mode,
       allowed_tools: s.allowed_tools || [],
       systemPrompt: s.system_prompt || s.override_system_prompt,

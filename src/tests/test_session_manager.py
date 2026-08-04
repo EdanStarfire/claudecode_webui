@@ -525,6 +525,31 @@ class TestConfigDictUpdates:
         assert session.config.get("permission_mode") == "bypassPermissions"
         assert session.current_permission_mode == "bypassPermissions"
 
+    async def test_update_model_writes_to_config_and_flat(self, temp_session_manager):
+        """update_model writes to both config['model'] and current_model (issue #1673)."""
+        manager = temp_session_manager
+        session_id = str(uuid.uuid4())
+        await manager.create_session(session_id, config=SessionConfig())
+
+        result = await manager.update_model(session_id, "opus")
+
+        assert result is True
+        session = await manager.get_session_info(session_id)
+        assert session.config.get("model") == "opus"
+        assert session.current_model == "opus"
+
+    async def test_update_model_rejects_invalid_model(self, temp_session_manager):
+        """update_model returns False and does not persist an invalid model string."""
+        manager = temp_session_manager
+        session_id = str(uuid.uuid4())
+        await manager.create_session(session_id, config=SessionConfig())
+
+        result = await manager.update_model(session_id, "not-a-real-model")
+
+        assert result is False
+        session = await manager.get_session_info(session_id)
+        assert session.current_model is None
+
     async def test_update_session_multiple_config_fields(self, temp_session_manager):
         """update_session writes multiple CONFIG_FIELDS to config dict."""
         manager = temp_session_manager

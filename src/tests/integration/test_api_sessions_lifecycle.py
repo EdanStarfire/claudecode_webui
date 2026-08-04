@@ -117,6 +117,57 @@ class TestPermissionMode:
         assert resp.status_code == 400
 
 
+class TestModel:
+    async def test_set_model_on_created_session(self, api_integration_env):
+        """Setting model on a non-active (created) session persists the model."""
+        client = api_integration_env["client"]
+        session = await _create_named_session(api_integration_env, "single_turn")
+        sid = session["session_id"]
+
+        resp = await client.post(
+            f"/api/sessions/{sid}/model",
+            json={"model": "opus"},
+        )
+        # Non-running sessions can have their model changed (persisted to disk)
+        assert resp.status_code == 200
+        # Verify the model is reflected in the session state
+        session_resp = await client.get(f"/api/sessions/{sid}")
+        assert session_resp.status_code == 200
+        assert session_resp.json()["session"]["current_model"] == "opus"
+
+    async def test_set_model_on_active_session(self, api_integration_env):
+        """Setting model on an active session live-switches without restarting it."""
+        client = api_integration_env["client"]
+        session = await _create_named_session(api_integration_env, "single_turn")
+        sid = session["session_id"]
+
+        await client.post(f"/api/sessions/{sid}/start")
+        await _wait_for_state(client, sid, "active")
+
+        resp = await client.post(
+            f"/api/sessions/{sid}/model",
+            json={"model": "opus"},
+        )
+        assert resp.status_code == 200
+
+        session_resp = await client.get(f"/api/sessions/{sid}")
+        assert session_resp.status_code == 200
+        assert session_resp.json()["session"]["current_model"] == "opus"
+        # Session should remain active — no restart triggered by a live model switch
+        assert session_resp.json()["session"]["state"] == "active"
+
+    async def test_set_model_invalid(self, api_integration_env):
+        client = api_integration_env["client"]
+        session = await _create_named_session(api_integration_env, "single_turn")
+        sid = session["session_id"]
+
+        resp = await client.post(
+            f"/api/sessions/{sid}/model",
+            json={"model": "invalid_model"},
+        )
+        assert resp.status_code == 400
+
+
 class TestSendMessage:
     async def test_send_message_to_active_session(self, api_integration_env):
         client = api_integration_env["client"]

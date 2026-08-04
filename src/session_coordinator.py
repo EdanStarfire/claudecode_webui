@@ -45,7 +45,7 @@ from .project_manager import ProjectInfo, ProjectManager
 from .queue_manager import QueueManager
 from .queue_processor import QueueProcessor
 from .session_config import SessionConfig
-from .session_manager import STOPPED_STATES, SessionManager, SessionState
+from .session_manager import STOPPED_STATES, VALID_MODELS, SessionManager, SessionState
 from .task_utils import task_done_log_exception
 from .timestamp_utils import get_unix_timestamp
 
@@ -2496,6 +2496,62 @@ class SessionCoordinator:
         except Exception as e:
             # Re-raise as ValueError so web_server can surface the SDK error message to the user
             logger.exception(f"Failed to set permission mode for session {session_id}")
+            raise ValueError(str(e)) from e
+
+    async def set_model(self, session_id: str, model: str) -> bool:
+        """Set the model for a session, live-switching if active (no restart required)."""
+        try:
+            coord_logger.info(f"Setting model to '{model}' for session {session_id}")
+
+            # Validate model
+            if model not in VALID_MODELS:
+                logger.error(f"Invalid model: {model}")
+                return False
+
+            # Check session state
+            session_info = await self.session_manager.get_session_info(session_id)
+            if not session_info:
+                logger.warning(f"Session {session_id} not found - cannot set model")
+                return False
+
+            # For non-running sessions, just persist to disk — the model will be applied at startup
+            if session_info.state in STOPPED_STATES:
+                await self.session_manager.update_model(
+                    session_id, model, template_manager=self.template_manager
+                )
+                coord_logger.info(f"Model persisted to '{model}' for stopped session {session_id}")
+                return True
+
+            # Check if SDK exists for live update
+            sdk = self._active_sdks.get(session_id)
+            if not sdk:
+                logger.warning(f"No active SDK found for session {session_id} - cannot set model")
+                return False
+
+            # Only allow live model change for active sessions
+            if session_info.state != SessionState.ACTIVE:
+                logger.warning(f"Session {session_id} not in active state (state: {session_info.state})")
+                return False
+
+            # Call SDK set_model method (may raise if SDK rejects the model)
+            sdk_result = await sdk.set_model(model)
+
+            if sdk_result:
+                # Update session manager's tracking of current model
+                await self.session_manager.update_model(
+                    session_id, model, template_manager=self.template_manager
+                )
+                coord_logger.info(f"Model set to '{model}' for session {session_id}")
+            else:
+                logger.warning(f"Failed to set model for session {session_id}")
+
+            return sdk_result
+
+        except ValueError:
+            raise
+        except Exception as e:
+            # Re-raise as ValueError so web_server can surface the SDK error message to the user
+            logger.exception(f"Failed to set model for session {session_id}")
             raise ValueError(str(e)) from e
 
     async def get_mcp_status(self, session_id: str) -> dict:

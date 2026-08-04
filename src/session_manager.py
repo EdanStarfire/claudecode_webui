@@ -87,6 +87,9 @@ class SessionInfo:
     # Live runtime permission mode (distinct from config["permission_mode"])
     current_permission_mode: str = "acceptEdits"
     initial_permission_mode: str | None = None
+    # Live runtime model (distinct from config["model"]) - issue #1673
+    current_model: str | None = None
+    initial_model: str | None = None
     error_message: str | None = None
     claude_code_session_id: str | None = None
     is_processing: bool = False
@@ -165,9 +168,11 @@ class SessionInfo:
             "claude_code_session_id": self.claude_code_session_id,
             "config": self.config,
             "created_at": self.created_at.isoformat(),
+            "current_model": self.current_model,
             "current_permission_mode": self.current_permission_mode,
             "error_message": self.error_message,
             "expertise_score": self.expertise_score,
+            "initial_model": self.initial_model,
             "initial_permission_mode": self.initial_permission_mode,
             "is_ephemeral": self.is_ephemeral,
             "is_overseer": self.is_overseer,
@@ -228,6 +233,8 @@ class SessionInfo:
                 data["slug"] = slugify_name(name)
 
         data.setdefault("initial_permission_mode", data.get("current_permission_mode", "acceptEdits"))
+        data.setdefault("current_model", data.get("config", {}).get("model"))
+        data.setdefault("initial_model", data.get("current_model"))
         data.setdefault("sdk_generated_name", None)
         data.setdefault("overseer_level", 0)
         data.setdefault("expertise_score", 0.5)
@@ -251,7 +258,8 @@ class SessionInfo:
         # and session_overrides are removed by migration before from_dict is called).
         known = {
             "session_id", "state", "created_at", "updated_at", "working_directory",
-            "current_permission_mode", "initial_permission_mode", "error_message",
+            "current_permission_mode", "initial_permission_mode",
+            "current_model", "initial_model", "error_message",
             "claude_code_session_id", "is_processing", "name", "sdk_generated_name",
             "slug", "order", "project_id", "role", "is_overseer", "overseer_level",
             "parent_overseer_id", "child_minion_ids", "capabilities", "expertise_score",
@@ -489,6 +497,8 @@ class SessionManager:
             working_directory=config.working_directory,
             current_permission_mode=config.permission_mode,
             initial_permission_mode=config.permission_mode,
+            current_model=config.model,
+            initial_model=config.model,
             name=name,
             slug=slugify_name(name) if name else None,
             order=order,
@@ -847,6 +857,40 @@ class SessionManager:
                 return True
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} permission mode: {e}")
+                return False
+
+    async def update_model(
+        self,
+        session_id: str,
+        model: str,
+        template_manager: TemplateManager | None = None,
+    ) -> bool:
+        """Update session model.
+
+        Updates both the live runtime field (current_model) and the
+        persistent config dict (config["model"]).
+        """
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                # Validate model
+                if model not in VALID_MODELS:
+                    logger.error(f"Invalid model: {model}")
+                    return False
+
+                session.current_model = model
+                session.config["model"] = model
+                session.updated_at = datetime.now(UTC)
+                await self._persist_session_state(session_id)
+                await self._notify_state_change_callbacks(session_id, session.state)
+                session_logger.info(f"Updated session {session_id} model to '{model}'")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to update session {session_id} model: {e}")
                 return False
 
     async def upsert_link(self, session_id: str, label: str, url: str) -> dict:

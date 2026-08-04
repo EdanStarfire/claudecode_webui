@@ -19,6 +19,7 @@ from .message_parser import MessageParser, MessageProcessor
 from .models.messages import sdk_message_to_stored
 from .models.permission_mode import PermissionMode
 from .session_config import SessionConfig
+from .session_manager import VALID_MODELS
 from .task_utils import task_done_log_exception
 
 # Import SDK components
@@ -517,6 +518,49 @@ class ClaudeSDK:
             logger.exception(f"Failed to set permission mode for session {self.session_id}")
             if self.error_callback:
                 await self._safe_callback(self.error_callback, "set_permission_mode_failed", e)
+            raise  # Propagate so callers can surface the SDK error message to the user
+
+    async def set_model(self, model: str) -> bool:
+        """
+        Set the model for the current session without restarting it.
+
+        Args:
+            model: Model alias ("sonnet", "opus", "haiku", "opusplan")
+
+        Returns:
+            True if model was set successfully, False otherwise
+        """
+        try:
+            sdk_logger.info(f"Setting model to '{model}' for session {self.session_id}")
+
+            # Validate model
+            if model not in VALID_MODELS:
+                logger.error(f"Invalid model: {model}")
+                return False
+
+            # Check if we have an active SDK client
+            if not self._sdk_client:
+                logger.warning(f"No active SDK client for session {self.session_id} - cannot set model")
+                return False
+
+            # Check if we're in a valid state
+            if self.info.state not in SDK_ACTIVE_STATES:
+                logger.warning(f"Session {self.session_id} not in valid state for model change: {self.info.state}")
+                return False
+
+            # Call SDK's set_model method
+            await self._sdk_client.set_model(model)
+
+            # Update local model tracking
+            self.model = model
+
+            sdk_logger.info(f"Successfully set model to '{model}' for session {self.session_id}")
+            return True
+
+        except Exception as e:
+            logger.exception(f"Failed to set model for session {self.session_id}")
+            if self.error_callback:
+                await self._safe_callback(self.error_callback, "set_model_failed", e)
             raise  # Propagate so callers can surface the SDK error message to the user
 
     async def get_mcp_status(self) -> dict:

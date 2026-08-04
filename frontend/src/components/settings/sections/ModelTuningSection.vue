@@ -234,6 +234,15 @@ async function handleSave() {
     if (isSessionMode.value) {
       const newConfig = { ...(entity.value?.config || {}), ...d }
       for (const k of keysToDelete) delete newConfig[k]
+
+      // Issue #1673: live-switch the model on an active session (no restart) via the
+      // dedicated endpoint. newConfig still carries the model value so the config PATCH
+      // below persists it as usual — patchSession does a full config replace, so the
+      // field can't be dropped from that call without losing the persisted value.
+      const isActive = entity.value?.state === 'active'
+      if (isActive && Object.prototype.hasOwnProperty.call(d, 'model') && newConfig.model) {
+        await sessionStore.setModel(entityId.value, newConfig.model)
+      }
       await sessionStore.patchSession(entityId.value, { config: newConfig })
     } else if (isTemplateMode.value) {
       if (keysToDelete.length > 0) {

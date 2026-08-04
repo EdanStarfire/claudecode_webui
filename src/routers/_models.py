@@ -116,6 +116,10 @@ class PermissionModeRequest(BaseModel):
     mode: str
 
 
+class ModelRequest(BaseModel):
+    model: str
+
+
 class McpToggleRequest(BaseModel):
     name: str
     enabled: bool
