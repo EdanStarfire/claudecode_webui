@@ -714,6 +714,16 @@ function shouldDisplayMessage(message) {
     }
   }
 
+  // Issue #1671: Hide assistant messages forwarded from a subagent (CLAUDE_CODE_FORWARD_SUBAGENT_TEXT).
+  // These carry parent_tool_use_id and would otherwise appear as stray top-level bubbles;
+  // subagent activity already surfaces via the Task tool card.
+  if (message.type === 'assistant') {
+    const metadata = message.metadata || {}
+    if (metadata.parent_tool_use_id) {
+      return false
+    }
+  }
+
   // Issue #1350: Hide hook system messages that have been successfully correlated to a
   // parent element (tool node, user/assistant bubble, compaction group). Messages that
   // could NOT be correlated stay visible and render through the SystemMessage pill path.

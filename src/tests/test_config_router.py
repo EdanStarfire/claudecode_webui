@@ -224,3 +224,38 @@ async def test_put_config_max_subagents_rejects_non_int(tmp_path):
             "features": {"max_subagents_per_session": "fifty"}
         })
     assert resp.status_code == 400
+
+
+# ── GET/PUT /api/config — forward_subagent_text (issue #1671) ────────────────
+
+@pytest.mark.asyncio
+async def test_get_config_forward_subagent_text_default(tmp_path):
+    app, _ = _make_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/config")
+    assert resp.status_code == 200
+    assert resp.json()["config"]["features"]["forward_subagent_text"] is True
+
+
+@pytest.mark.asyncio
+async def test_put_config_forward_subagent_text_round_trip(tmp_path):
+    app, _ = _make_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        put_resp = await client.put("/api/config", json={
+            "features": {"forward_subagent_text": False}
+        })
+        assert put_resp.status_code == 200
+        assert put_resp.json()["config"]["features"]["forward_subagent_text"] is False
+
+        get_resp = await client.get("/api/config")
+    assert get_resp.json()["config"]["features"]["forward_subagent_text"] is False
+
+
+@pytest.mark.asyncio
+async def test_put_config_forward_subagent_text_rejects_non_bool(tmp_path):
+    app, _ = _make_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.put("/api/config", json={
+            "features": {"forward_subagent_text": "yes"}
+        })
+    assert resp.status_code == 400

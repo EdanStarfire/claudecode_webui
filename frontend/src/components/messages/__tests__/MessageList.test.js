@@ -159,6 +159,41 @@ describe('MessageList', () => {
     expect(screen.getAllByRole('article').length).toBe(1)
   })
 
+  it('hides forwarded subagent assistant messages (parent_tool_use_id) from the main timeline', async () => {
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: {
+        MessageItem: { template: '<div role="article" data-testid="msg-item">{{ message.content }}</div>', props: ['message', 'attachedTools'] },
+        TruncationBanner: true,
+        SubagentTimeline: true
+      }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({
+        type: 'assistant',
+        content: 'Top-level assistant reply',
+        metadata: { has_tool_uses: false, tool_uses: [] }
+      }),
+      // Forwarded subagent text (CLAUDE_CODE_FORWARD_SUBAGENT_TEXT) — must not leak as a top-level bubble
+      makeMessage({
+        type: 'assistant',
+        content: 'Subagent thinking out loud',
+        metadata: { parent_tool_use_id: 'toolu_task1', has_tool_uses: false, tool_uses: [] }
+      })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    const items = screen.getAllByRole('article')
+    expect(items.length).toBe(1)
+    expect(items[0].textContent).toBe('Top-level assistant reply')
+  })
+
   it('does not change grouping in non-Auto sequences', async () => {
     const { pinia } = renderWithStores(MessageList, {
       provide: { viewSessionId: viewSessionIdRef },
