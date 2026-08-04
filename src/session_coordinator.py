@@ -129,6 +129,39 @@ def _apply_resource_filters(
     return result
 
 
+def _group_resources_by_filename(resources: list[dict]) -> list[dict]:
+    """Group resources into versions by original_name (case-insensitive).
+
+    Issue #1680: re-registering a resource under the same filename represents
+    an update, not a new independent entry. Groups by the full filename
+    (including extension) so "report.md" and "report.txt" stay separate.
+
+    Each returned item is the group's latest entry (by timestamp), augmented
+    with `version_count`. Groups with more than one entry also carry a
+    `versions` list (newest-first, each entry tagged with `version_number`,
+    oldest = 1). Single-entry groups pass through with only `version_count=1`.
+    """
+    groups: dict[str, list[dict]] = {}
+    for r in resources:
+        key = (r.get("original_name") or "").lower()
+        groups.setdefault(key, []).append(r)
+
+    result = []
+    for entries in groups.values():
+        ordered = sorted(entries, key=lambda x: x.get("timestamp", 0))
+        version_count = len(ordered)
+        versions = [dict(entry, version_number=i + 1) for i, entry in enumerate(ordered)]
+        versions.reverse()  # newest first
+
+        latest = dict(versions[0])
+        latest["version_count"] = version_count
+        if version_count > 1:
+            latest["versions"] = versions
+        result.append(latest)
+
+    return result
+
+
 def _normalize_result_usage(
     usage: dict | None,
     model_usage: dict | None,
@@ -957,6 +990,7 @@ class SessionCoordinator:
         if storage_manager:
             all_resources = await storage_manager.read_resources()
 
+        all_resources = _group_resources_by_filename(all_resources)
         all_resources = _apply_resource_filters(all_resources, search, format_filter, sort)
 
         total = len(all_resources)
@@ -968,6 +1002,33 @@ class SessionCoordinator:
             "offset": offset,
             "has_more": offset + len(sliced) < total,
         }
+
+    async def get_session_resource_by_id(self, session_id: str, resource_id: str) -> dict | None:
+        """
+        Look up a single resource's metadata by ID against the raw (ungrouped) log.
+
+        Issue #1680: byte-serving endpoints must resolve the exact version
+        requested, not just the latest representative of its filename group.
+
+        Args:
+            session_id: Session ID
+            resource_id: Resource ID
+
+        Returns:
+            Resource metadata dict or None
+        """
+        storage_manager = self._storage_managers.get(session_id)
+        if not storage_manager:
+            session_dir = await self.session_manager.get_session_directory(session_id)
+            if session_dir:
+                storage_manager = DataStorageManager(session_dir)
+                await storage_manager.initialize()
+
+        if not storage_manager:
+            return None
+
+        all_resources = await storage_manager.read_resources()
+        return next((r for r in all_resources if r.get("resource_id") == resource_id), None)
 
     async def get_session_resource_file(self, session_id: str, resource_id: str) -> bytes | None:
         """
@@ -3440,6 +3501,7 @@ class SessionCoordinator:
             session_id, archive_id
         )
 
+        all_resources = _group_resources_by_filename(all_resources)
         all_resources = _apply_resource_filters(all_resources, search, format_filter, sort)
 
         total = len(all_resources)
@@ -3451,6 +3513,20 @@ class SessionCoordinator:
             "offset": offset,
             "has_more": offset + len(sliced) < total,
         }
+
+    async def get_archive_resource_by_id(
+        self, session_id: str, archive_id: str, resource_id: str
+    ) -> dict | None:
+        """Look up a single archived resource's metadata by ID against the raw (ungrouped) log.
+
+        Issue #1680: mirrors get_session_resource_by_id() for archive byte-serving.
+        """
+        if not self.legion_system:
+            return None
+        all_resources = await self.legion_system.archive_manager.get_archive_resources(
+            session_id, archive_id
+        )
+        return next((r for r in all_resources if r.get("resource_id") == resource_id), None)
 
     async def get_archive_resource_file(
         self, session_id: str, archive_id: str, resource_id: str

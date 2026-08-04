@@ -159,3 +159,84 @@ async def test_register_mov_rejected(tmp_path, tools):
 
     assert result["is_error"]
     assert "Unsupported file extension" in result["content"][0]["text"]
+
+
+# ---- _handle_get_resource newest-match (issue #1680) ----
+
+class ReadResourcesStorageManager:
+    """Fake storage manager whose read_resources() returns fixed, oldest-first data."""
+
+    def __init__(self, resources):
+        self._resources = resources
+
+    async def read_resources(self):
+        return self._resources
+
+
+def _tools_with_fixed_resources(resources):
+    storage = ReadResourcesStorageManager(resources)
+    coordinator = FakeSessionCoordinator(storage)
+    t = ResourceMCPTools.__new__(ResourceMCPTools)
+    t.session_coordinator = coordinator
+    t.broadcast_callback = None
+
+    async def _get_storage_manager(session_id):
+        return storage
+
+    t._get_storage_manager = _get_storage_manager
+    return t
+
+
+@pytest.mark.asyncio
+async def test_get_resource_by_filename_returns_newest_version():
+    resources = [
+        {"resource_id": "r1", "original_name": "report.md", "timestamp": 100},
+        {"resource_id": "r2", "original_name": "report.md", "timestamp": 300},
+        {"resource_id": "r3", "original_name": "report.md", "timestamp": 200},
+    ]
+    t = _tools_with_fixed_resources(resources)
+
+    result = await t._handle_get_resource("sess1", {"filename": "report.md"})
+
+    assert not result["is_error"]
+    assert '"resource_id": "r2"' in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_get_resource_by_filename_case_insensitive_newest():
+    resources = [
+        {"resource_id": "r1", "original_name": "Report.MD", "timestamp": 200},
+        {"resource_id": "r2", "original_name": "report.md", "timestamp": 100},
+    ]
+    t = _tools_with_fixed_resources(resources)
+
+    result = await t._handle_get_resource("sess1", {"filename": "report.md"})
+
+    assert not result["is_error"]
+    assert '"resource_id": "r1"' in result["content"][0]["text"]
+
+
+# ---- register_resource tool description carries versioning guidance ----
+
+def test_register_resource_description_mentions_versioning():
+    from ..mcp import resource_mcp_tools as mod
+
+    coordinator = FakeSessionCoordinator(FakeStorageManager())
+    t = mod.ResourceMCPTools(coordinator)
+
+    captured = {}
+    original_tool = mod.tool
+
+    def capturing_tool(name, description, *args, **kwargs):
+        captured[name] = description
+        return original_tool(name, description, *args, **kwargs)
+
+    mod.tool = capturing_tool
+    try:
+        t.create_mcp_server_for_session("sess1")
+    finally:
+        mod.tool = original_tool
+
+    description = captured["register_resource"]
+    assert "version" in description.lower()
+    assert "_v2" in description or "_final" in description

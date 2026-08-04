@@ -154,10 +154,7 @@ def build_router(webui) -> APIRouter:
         from fastapi.responses import Response
 
         # Get resource metadata to determine content type
-        result = await webui.coordinator.get_session_resources(session_id, limit=10000)
-        resource_meta = next(
-            (r for r in result["resources"] if r.get("resource_id") == resource_id), None
-        )
+        resource_meta = await webui.coordinator.get_session_resource_by_id(session_id, resource_id)
 
         if not resource_meta:
             raise HTTPException(status_code=404, detail="Resource not found")
@@ -186,10 +183,7 @@ def build_router(webui) -> APIRouter:
         from fastapi.responses import Response
 
         # Get resource metadata
-        result = await webui.coordinator.get_session_resources(session_id, limit=10000)
-        resource_meta = next(
-            (r for r in result["resources"] if r.get("resource_id") == resource_id), None
-        )
+        resource_meta = await webui.coordinator.get_session_resource_by_id(session_id, resource_id)
 
         if not resource_meta:
             raise HTTPException(status_code=404, detail="Resource not found")

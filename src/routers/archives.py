@@ -84,11 +84,8 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.validate_project_exists(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
 
-        result = await webui.coordinator.get_archive_resources(
-            session_id, archive_id, limit=10000
-        )
-        resource_meta = next(
-            (r for r in result["resources"] if r.get("resource_id") == resource_id), None
+        resource_meta = await webui.coordinator.get_archive_resource_by_id(
+            session_id, archive_id, resource_id
         )
         if not resource_meta:
             raise HTTPException(status_code=404, detail="Resource not found")

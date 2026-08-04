@@ -159,6 +159,17 @@ Resources appear in the Task Panel where users can:
 - Click to preview or download files
 - Add resources back to the chat as context
 
+VERSIONING: Re-registering a file whose path ends in the SAME filename as a
+previous registration (e.g. calling this again with a file_path ending in
+"report.md") creates a new version of that same Gallery entry, not a separate
+one. The Gallery shows one card per filename with the newest version displayed
+and prior versions available in its expandable history. This is the correct way
+to represent an update to a file you registered earlier — iterate on a
+screenshot, log, or generated report by re-registering it under its original
+filename. Do NOT invent suffixed filenames like "report_v2.md" or "report_final.md"
+to represent updates; that creates a separate, unrelated Gallery entry instead of a
+new version of the existing one.
+
 INLINE DISPLAY: For image resources, the response includes a `markdown` field with
 ready-to-use markdown. To display the image inline in your response, paste the markdown
 from the `markdown` field directly into your message text.
@@ -169,6 +180,7 @@ Examples:
   register_resource(file_path="/home/user/screenshot.png", title="Login Page")
   register_resource(file_path="/tmp/output.json", title="API Response")
   register_resource(file_path="/var/log/app.log", title="Application Log")
+  register_resource(file_path="/tmp/report.md", title="Report")  # re-register to version it
 
 Supported types: Text, Code, Config, Images, Videos (webm, mp4), Data files
 Maximum size: 10MB per resource""",
@@ -588,11 +600,14 @@ At least one of resource_id or filename must be provided.""",
                 match = next((r for r in resources if r.get("resource_id") == resource_id), None)
 
             if not match and filename:
+                # Issue #1680: filename may match multiple versions (same file
+                # re-registered) — prefer the newest by timestamp.
                 filename_lower = filename.lower()
-                match = next(
-                    (r for r in resources if (r.get("original_name") or "").lower() == filename_lower),
-                    None,
-                )
+                filename_matches = [
+                    r for r in resources if (r.get("original_name") or "").lower() == filename_lower
+                ]
+                if filename_matches:
+                    match = max(filename_matches, key=lambda r: r.get("timestamp", 0))
 
             if not match:
                 lookup = resource_id or filename

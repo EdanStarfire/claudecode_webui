@@ -86,6 +86,20 @@
             </svg>
           </button>
 
+          <!-- Version badge (Issue #1680): re-registering under the same filename versions it -->
+          <button
+            v-if="resource.version_count > 1"
+            class="version-badge"
+            @click.stop="toggleGroup(resource)"
+            :title="isGroupExpanded(resource) ? 'Hide version history' : 'Show version history'"
+            data-testid="version-badge"
+          >
+            v{{ resource.version_count }}
+            <svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor" :class="{ 'is-expanded': isGroupExpanded(resource) }">
+              <path d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
+            </svg>
+          </button>
+
           <!-- Image thumbnail -->
           <div
             v-if="isImage(resource)"
@@ -143,54 +157,145 @@
               </a>
             </div>
           </div>
+
+          <!-- Expanded version history (Issue #1680) -->
+          <div
+            v-if="resource.version_count > 1 && isGroupExpanded(resource)"
+            class="version-history"
+            data-testid="version-history"
+          >
+            <div
+              v-for="version in resource.versions"
+              :key="version.resource_id"
+              class="version-row"
+            >
+              <span class="version-number">v{{ version.version_number }}</span>
+              <span class="version-time">{{ formatVersionTime(version.timestamp) }}</span>
+              <div class="version-actions">
+                <a
+                  :href="getDownloadUrl(version.resource_id)"
+                  class="btn btn-sm btn-outline-secondary action-btn"
+                  :download="version.original_filename || version.title || 'download'"
+                  title="Download this version"
+                  @click.stop
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
+                    <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/>
+                  </svg>
+                </a>
+                <button
+                  class="btn btn-sm btn-outline-danger action-btn"
+                  @click.stop="removeResource(version.resource_id)"
+                  title="Remove this version"
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
       <!-- List View (Issue #523) -->
       <div v-else class="resource-list">
-        <div
-          v-for="resource in resources"
-          :key="resource.resource_id"
-          class="resource-list-item"
-          @click="openFullViewForResource(resource)"
-        >
-          <span class="list-item-icon">{{ getIcon(resource) }}</span>
-          <span class="list-item-title" :title="resource.title || resource.original_filename">
-            {{ resource.title || resource.original_filename || 'Untitled' }}
-          </span>
-          <div class="list-item-actions">
+        <template v-for="resource in resources" :key="resource.resource_id">
+          <div
+            class="resource-list-item"
+            @click="openFullViewForResource(resource)"
+          >
+            <span class="list-item-icon">{{ getIcon(resource) }}</span>
+            <span class="list-item-title" :title="resource.title || resource.original_filename">
+              {{ resource.title || resource.original_filename || 'Untitled' }}
+            </span>
+            <!-- Version badge (Issue #1680) -->
             <button
-              class="btn btn-sm btn-outline-primary action-btn"
-              @click.stop="addToAttachments(resource)"
-              title="Add to message attachments"
+              v-if="resource.version_count > 1"
+              class="version-badge"
+              @click.stop="toggleGroup(resource)"
+              :title="isGroupExpanded(resource) ? 'Hide version history' : 'Show version history'"
+              data-testid="version-badge"
             >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z"/>
+              v{{ resource.version_count }}
+              <svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor" :class="{ 'is-expanded': isGroupExpanded(resource) }">
+                <path d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
               </svg>
             </button>
-            <a
-              :href="getDownloadUrl(resource.resource_id)"
-              class="btn btn-sm btn-outline-secondary action-btn"
-              :download="resource.original_filename || resource.title || 'download'"
-              title="Download"
-              @click.stop
-            >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
-                <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/>
-              </svg>
-            </a>
-            <button
-              class="btn btn-sm btn-outline-danger action-btn"
-              @click.stop="removeResource(resource.resource_id)"
-              title="Remove from panel"
-            >
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
-              </svg>
-            </button>
+            <div class="list-item-actions">
+              <button
+                class="btn btn-sm btn-outline-primary action-btn"
+                @click.stop="addToAttachments(resource)"
+                title="Add to message attachments"
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z"/>
+                </svg>
+              </button>
+              <a
+                :href="getDownloadUrl(resource.resource_id)"
+                class="btn btn-sm btn-outline-secondary action-btn"
+                :download="resource.original_filename || resource.title || 'download'"
+                title="Download"
+                @click.stop
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
+                  <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/>
+                </svg>
+              </a>
+              <button
+                class="btn btn-sm btn-outline-danger action-btn"
+                @click.stop="removeResource(resource.resource_id)"
+                title="Remove from panel"
+              >
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
+                </svg>
+              </button>
+            </div>
           </div>
-        </div>
+
+          <!-- Expanded version history (Issue #1680) -->
+          <div
+            v-if="resource.version_count > 1 && isGroupExpanded(resource)"
+            class="version-history version-history-list"
+            data-testid="version-history"
+          >
+            <div
+              v-for="version in resource.versions"
+              :key="version.resource_id"
+              class="version-row"
+            >
+              <span class="version-number">v{{ version.version_number }}</span>
+              <span class="version-time">{{ formatVersionTime(version.timestamp) }}</span>
+              <div class="version-actions">
+                <a
+                  :href="getDownloadUrl(version.resource_id)"
+                  class="btn btn-sm btn-outline-secondary action-btn"
+                  :download="version.original_filename || version.title || 'download'"
+                  title="Download this version"
+                  @click.stop
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
+                    <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/>
+                  </svg>
+                </a>
+                <button
+                  class="btn btn-sm btn-outline-danger action-btn"
+                  @click.stop="removeResource(version.resource_id)"
+                  title="Remove this version"
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </template>
       </div>
 
       <!-- Load More button (Issue #972) -->
@@ -336,6 +441,23 @@ function handleImageError(event) {
 
 function removeResource(resourceId) {
   resourceStore.removeResource(sessionStore.currentSessionId, resourceId)
+}
+
+// Issue #1680: version group expand/collapse
+function isGroupExpanded(resource) {
+  const key = resourceStore.getResourceGroupKey(resource)
+  return resourceStore.isResourceGroupExpanded(sessionStore.currentSessionId, key)
+}
+
+function toggleGroup(resource) {
+  const key = resourceStore.getResourceGroupKey(resource)
+  resourceStore.toggleResourceGroup(sessionStore.currentSessionId, key)
+}
+
+function formatVersionTime(timestamp) {
+  if (!timestamp) return ''
+  const date = new Date(timestamp * 1000)
+  return date.toLocaleString()
 }
 
 function addToAttachments(resource) {
@@ -515,6 +637,84 @@ function loadMoreResources() {
 
 .action-btn svg {
   display: block;
+}
+
+/* Issue #1680: version badge + history */
+.version-badge {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border: none;
+  border-radius: 10px;
+  background-color: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 600;
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.version-badge:hover {
+  background-color: rgba(0, 0, 0, 0.75);
+}
+
+.version-badge svg {
+  transition: transform 0.15s ease;
+}
+
+.version-badge svg.is-expanded {
+  transform: rotate(180deg);
+}
+
+.resource-list-item .version-badge {
+  position: static;
+  flex-shrink: 0;
+}
+
+.version-history {
+  padding: 4px 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px dashed var(--bs-border-color);
+}
+
+.version-history-list {
+  padding: 4px 8px 6px 40px;
+  border-bottom: 1px solid var(--bs-border-color);
+}
+
+.version-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.7rem;
+}
+
+.version-number {
+  font-weight: 600;
+  color: var(--bs-body-color);
+  flex-shrink: 0;
+}
+
+.version-time {
+  flex: 1;
+  min-width: 0;
+  color: var(--bs-secondary-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.version-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 /* Controls bar: search + type filter + sort + view toggle */
