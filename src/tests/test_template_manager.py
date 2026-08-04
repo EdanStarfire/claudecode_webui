@@ -58,6 +58,7 @@ class TestMinionTemplateRoundTrip:
                 "sandbox_enabled": True,
                 "sandbox_config": {"network": False},
                 "cli_path": "/usr/bin/claude",
+                "process_wrapper": "/opt/launcher/wrapper.sh",
                 "docker_enabled": True,
                 "docker_image": "claude-code:local",
                 "docker_extra_mounts": ["/data:/data:ro"],
@@ -84,6 +85,7 @@ class TestMinionTemplateRoundTrip:
         assert restored.config.get("sandbox_enabled") is True
         assert restored.config.get("sandbox_config") == {"network": False}
         assert restored.config.get("cli_path") == "/usr/bin/claude"
+        assert restored.config.get("process_wrapper") == "/opt/launcher/wrapper.sh"
         assert restored.config.get("docker_enabled") is True
         assert restored.config.get("docker_image") == "claude-code:local"
         assert restored.config.get("docker_extra_mounts") == ["/data:/data:ro"]
@@ -130,6 +132,7 @@ class TestMinionTemplateRoundTrip:
         assert restored.config.get("thinking_budget_tokens") is None
         assert restored.config.get("effort") is None
         assert restored.config.get("cli_path") is None
+        assert restored.config.get("process_wrapper") is None
         assert restored.config.get("docker_enabled", False) is False
         assert restored.config.get("docker_image") is None
 
@@ -153,6 +156,7 @@ class TestCreateTemplate:
                 sandbox_enabled=True,
                 sandbox_config={"network": False},
                 cli_path="/usr/bin/claude",
+                process_wrapper="/opt/launcher/wrapper.sh",
                 docker_enabled=True,
                 docker_image="claude-code:local",
                 docker_extra_mounts=["/data:/data:ro"],
@@ -172,6 +176,7 @@ class TestCreateTemplate:
         assert template.config.get("effort") == "high"
         assert template.config.get("docker_enabled") is True
         assert template.config.get("cli_path") == "/usr/bin/claude"
+        assert template.config.get("process_wrapper") == "/opt/launcher/wrapper.sh"
 
     @pytest.mark.asyncio
     async def test_create_persists_to_disk(self, manager):
@@ -299,6 +304,7 @@ class TestUpdateTemplate:
             sandbox_enabled=True,
             sandbox_config={"network": True},
             cli_path="/opt/claude",
+            process_wrapper="/opt/launcher/wrapper.sh",
             docker_enabled=True,
             docker_image="custom:latest",
             docker_extra_mounts=["/vol:/vol"],
@@ -313,6 +319,7 @@ class TestUpdateTemplate:
         assert updated.config.get("effort") == "high"
         assert updated.config.get("docker_enabled") is True
         assert updated.config.get("cli_path") == "/opt/claude"
+        assert updated.config.get("process_wrapper") == "/opt/launcher/wrapper.sh"
 
     @pytest.mark.asyncio
     async def test_issue_1116_update_docker_proxy_fields(self, manager):
@@ -651,6 +658,7 @@ class TestImportFieldPreservation:
             effort="high",
             additional_directories=["/extra"],
             cli_path="/usr/local/bin/claude",
+            process_wrapper="/opt/launcher/wrapper.sh",
             sandbox_enabled=True,
             sandbox_config={"network": False},
             docker_enabled=True,

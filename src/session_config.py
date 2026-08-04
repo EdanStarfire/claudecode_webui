@@ -42,6 +42,7 @@ class SessionConfig(BaseModel):
     working_directory: str | None = None
     additional_directories: list[str] | None = None
     cli_path: str | None = None
+    process_wrapper: str | None = None
     setting_sources: list[str] | None = None
 
     # Sandbox
@@ -108,7 +109,7 @@ CONFIG_FIELDS: set[str] = {
     "permission_mode", "system_prompt", "override_system_prompt",
     "allowed_tools", "disallowed_tools", "model",
     "thinking_mode", "thinking_budget_tokens", "effort",
-    "additional_directories", "cli_path", "setting_sources",
+    "additional_directories", "cli_path", "process_wrapper", "setting_sources",
     "sandbox_enabled", "sandbox_config",
     "docker_enabled", "docker_image", "docker_extra_mounts",
     "docker_home_directory", "docker_proxy_enabled", "docker_proxy_image",

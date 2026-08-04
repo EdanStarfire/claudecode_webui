@@ -520,3 +520,49 @@ async def test_docker_catalog_attribution_header_in_extra_env_json(coordinator):
     raw = extra_env.get("CLAUDE_DOCKER_EXTRA_ENV", "{}")
     container_env = json.loads(raw)
     assert container_env.get("CLAUDE_CODE_ATTRIBUTION_HEADER") == "0"
+
+
+# ── Issue #1672: process_wrapper forced off under Docker isolation ───────────
+
+
+@pytest.mark.asyncio
+async def test_process_wrapper_forced_none_when_docker_enabled(coordinator):
+    """A stored process_wrapper never reaches the SDK config while Docker isolation is on.
+
+    Mirrors the cli_path-bypasses-Docker-auto-resolve tests above: cli_path is set to
+    bypass the docker-resolve block so start_session completes without a live Docker
+    dependency, while process_wrapper is asserted forced to None regardless of the
+    stored value.
+    """
+    config = SessionConfig(
+        docker_enabled=True,
+        cli_path="/usr/bin/claude",
+        process_wrapper="/opt/launcher/wrapper.sh",
+    )
+    session_id = await _create_session(coordinator, config)
+
+    factory, _ = _make_sdk_factory()
+    coordinator.set_sdk_factory(factory)
+
+    await coordinator.start_session(session_id)
+
+    sdk_config = factory.call_args.kwargs["config"]
+    assert sdk_config.process_wrapper is None
+
+
+@pytest.mark.asyncio
+async def test_process_wrapper_passed_through_when_docker_disabled(coordinator):
+    """process_wrapper reaches the SDK config unchanged when Docker isolation is off."""
+    config = SessionConfig(
+        docker_enabled=False,
+        process_wrapper="/opt/launcher/wrapper.sh",
+    )
+    session_id = await _create_session(coordinator, config)
+
+    factory, _ = _make_sdk_factory()
+    coordinator.set_sdk_factory(factory)
+
+    await coordinator.start_session(session_id)
+
+    sdk_config = factory.call_args.kwargs["config"]
+    assert sdk_config.process_wrapper == "/opt/launcher/wrapper.sh"

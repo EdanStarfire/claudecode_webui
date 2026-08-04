@@ -207,6 +207,66 @@ async def test_spawn_minion_with_template(legion_test_env):
 
 
 @pytest.mark.asyncio
+async def test_spawn_minion_with_template_process_wrapper(legion_test_env):
+    """
+    Issue #1672: process_wrapper must propagate from template to spawned child,
+    mirroring the existing cli_path propagation path (issue #489).
+    """
+    from src.session_config import SessionConfig
+
+    env = legion_test_env
+    legion_system = env["legion_system"]
+    template_manager = env["template_manager"]
+
+    parent = await env["create_minion"]("parent", role="Parent")
+
+    template = await template_manager.create_template(
+        name="Process Wrapper Template",
+        config=SessionConfig(
+            permission_mode="default",
+            process_wrapper="/opt/launcher/wrapper.sh",
+        ),
+        role="Wrapped Worker",
+    )
+
+    result = await legion_system.mcp_tools._handle_spawn_minion({
+        "_parent_overseer_id": parent.session_id,
+        "name": "wrapped-child",
+        "role": "Wrapped Worker",
+        "system_prompt": "Test child with process_wrapper template.",
+        "template_name": template.name,
+    })
+
+    assert result.get("is_error") is not True, f"Unexpected error: {result['content'][0]['text']}"
+
+    response_text = result["content"][0]["text"]
+    import re
+    minion_id_match = re.search(r'Minion ID:\s+([a-f0-9-]+)', response_text)
+    assert minion_id_match is not None, f"Response should contain Minion ID. Got: {response_text}"
+    child_id = minion_id_match.group(1)
+
+    import asyncio
+    import time
+    max_wait = 50.0
+    poll_interval = 0.1
+    start_time = time.time()
+
+    while True:
+        elapsed = time.time() - start_time
+        if elapsed >= max_wait:
+            raise TimeoutError(f"Child session did not become ACTIVE within {max_wait}s")
+
+        child_info = await env["session_coordinator"].session_manager.get_session_info(child_id)
+        if child_info.state == SessionState.ACTIVE:
+            break
+
+        await asyncio.sleep(poll_interval)
+
+    effective = await resolve_effective_config(child_info, template_manager)
+    assert effective.process_wrapper == "/opt/launcher/wrapper.sh"
+
+
+@pytest.mark.asyncio
 async def test_spawn_minion_with_capabilities(legion_test_env):
     """
     Test spawn_minion with capabilities.

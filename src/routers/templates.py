@@ -67,6 +67,7 @@ def build_router(webui) -> APIRouter:
             sandbox_enabled=request.sandbox_enabled,
             sandbox_config=request.sandbox_config,
             cli_path=request.cli_path,
+            process_wrapper=request.process_wrapper,
             additional_directories=request.additional_directories,
             # Docker session isolation (issue #496)
             docker_enabled=request.docker_enabled,

@@ -269,6 +269,13 @@ def build_router(webui) -> APIRouter:
         if request.cli_path is not None:
             updates["cli_path"] = request.cli_path if request.cli_path.strip() else None
 
+        # Handle process_wrapper update (issue #1672)
+        # Empty string means clear the process wrapper
+        if request.process_wrapper is not None:
+            updates["process_wrapper"] = (
+                request.process_wrapper if request.process_wrapper.strip() else None
+            )
+
         # Handle additional_directories update (issue #630)
         if request.additional_directories is not None:
             session_wd = await webui.service.get_session_working_directory(session_id)

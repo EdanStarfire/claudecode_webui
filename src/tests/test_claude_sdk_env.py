@@ -155,3 +155,33 @@ class TestMaxSubagentSpawnDepth:
         with patch("src.config_manager.load_config", return_value=_suppression_off_config()):
             env = sdk._resolve_env_vars()
         assert env["CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"] == "2"
+
+
+class TestProcessWrapper:
+    """Issue #1672 — CLAUDE_CODE_PROCESS_WRAPPER is set only when process_wrapper is configured."""
+
+    def test_unset_by_default(self):
+        sdk = _make_sdk()
+        with patch("src.config_manager.load_config", return_value=_suppression_off_config()):
+            env = sdk._resolve_env_vars()
+        assert "CLAUDE_CODE_PROCESS_WRAPPER" not in env
+
+    def test_configured_value_reflected_in_env(self):
+        config = SessionConfig(process_wrapper="/opt/launcher/wrapper.sh")
+        sdk = _make_sdk(config=config)
+        with patch("src.config_manager.load_config", return_value=_suppression_off_config()):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_PROCESS_WRAPPER"] == "/opt/launcher/wrapper.sh"
+
+    def test_absent_under_full_suppression_when_unset(self):
+        sdk = _make_sdk()
+        with patch("src.config_manager.load_config", return_value=_all_suppressed_config()):
+            env = sdk._resolve_env_vars()
+        assert "CLAUDE_CODE_PROCESS_WRAPPER" not in env
+
+    def test_extra_env_can_override(self):
+        config = SessionConfig(process_wrapper="/opt/launcher/wrapper.sh")
+        sdk = _make_sdk(config=config, extra_env={"CLAUDE_CODE_PROCESS_WRAPPER": "/other/wrapper"})
+        with patch("src.config_manager.load_config", return_value=_suppression_off_config()):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_PROCESS_WRAPPER"] == "/other/wrapper"
