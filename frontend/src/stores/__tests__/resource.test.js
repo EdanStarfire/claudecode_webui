@@ -145,6 +145,73 @@ describe('resource store — versioning/grouping (issue #1680)', () => {
       store.addResource('sess-1', makeResource({ resource_id: 'r1', timestamp: 100 }))
       expect(store.paginationForSession('sess-1').total).toBe(1)
     })
+
+    it('keeps the full-screen preview anchored to the viewed resource when a brand-new group is unshifted (issue #1691)', async () => {
+      const { useResourceStore } = await import('@/stores/resource')
+      const store = useResourceStore()
+
+      store.addResource('sess-1', makeResource({ resource_id: 'r1', original_name: 'viewed.txt' }))
+      store.openFullView('sess-1', 0)
+      expect(store.currentFullViewResource.resource_id).toBe('r1')
+
+      store.addResource('sess-1', makeResource({ resource_id: 'r2', original_name: 'unrelated.txt' }))
+
+      const resources = store.resourcesForSession('sess-1')
+      expect(resources).toHaveLength(2)
+      expect(resources[0].resource_id).toBe('r2')
+      expect(store.currentFullViewResource.resource_id).toBe('r1')
+      expect(store.currentResourceIndex).toBe(1)
+    })
+
+    it('keeps the full-screen preview anchored when a version merges into a different, already-visible group (issue #1691)', async () => {
+      const { useResourceStore } = await import('@/stores/resource')
+      const store = useResourceStore()
+
+      store.addResource('sess-1', makeResource({ resource_id: 'r1', original_name: 'viewed.txt', timestamp: 100 }))
+      store.addResource('sess-1', makeResource({ resource_id: 'r2', original_name: 'other.txt', timestamp: 100 }))
+      store.openFullViewById('r1', 'sess-1')
+      expect(store.currentFullViewResource.resource_id).toBe('r1')
+
+      // New version registered for the *other* group — merges in place and moves to front.
+      store.addResource('sess-1', makeResource({ resource_id: 'r3', original_name: 'other.txt', timestamp: 200 }))
+
+      const resources = store.resourcesForSession('sess-1')
+      expect(resources[0].resource_id).toBe('r3')
+      expect(store.currentFullViewResource.resource_id).toBe('r1')
+      expect(store.currentResourceIndex).toBe(1)
+    })
+
+    it('does not touch currentResourceIndex when no full view is open (control, issue #1691)', async () => {
+      const { useResourceStore } = await import('@/stores/resource')
+      const store = useResourceStore()
+
+      store.addResource('sess-1', makeResource({ resource_id: 'r1', original_name: 'a.txt' }))
+      expect(store.fullViewOpen).toBe(false)
+
+      store.addResource('sess-1', makeResource({ resource_id: 'r2', original_name: 'b.txt' }))
+
+      expect(store.currentResourceIndex).toBe(0)
+      const resources = store.resourcesForSession('sess-1')
+      expect(resources).toHaveLength(2)
+      expect(resources[0].resource_id).toBe('r2')
+    })
+
+    it('does not reindex a pinned (nested-version) preview, since it is addressed by identity not index (issue #1691)', async () => {
+      const { useResourceStore } = await import('@/stores/resource')
+      const store = useResourceStore()
+
+      store.addResource('sess-1', makeResource({ resource_id: 'r1', original_name: 'viewed.txt', timestamp: 100 }))
+      store.addResource('sess-1', makeResource({ resource_id: 'r2', original_name: 'viewed.txt', timestamp: 200 }))
+      // Pin the superseded nested version r1.
+      store.openFullViewById('r1', 'sess-1')
+      expect(store.currentFullViewResource?.resource_id).toBe('r1')
+      const indexBefore = store.currentResourceIndex
+
+      store.addResource('sess-1', makeResource({ resource_id: 'r3', original_name: 'unrelated.txt' }))
+
+      expect(store.currentResourceIndex).toBe(indexBefore)
+      expect(store.currentFullViewResource.resource_id).toBe('r1')
+    })
   })
 
   describe('handleResourceRemoved (delete/splice)', () => {
