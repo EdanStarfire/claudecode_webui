@@ -1804,11 +1804,13 @@ class SessionCoordinator:
                 coord_logger.debug(f"Custom auto-memory directory for session {session_id}: {custom_memory_dir}")
 
             # Issue #707: Build PreToolUse handler for internal tool access control
+            from src.config_manager import load_config as load_app_config
             permission_handler = self._build_permission_handler(
                 session_dir, effective_config.history_distillation_enabled, effective_config.auto_memory_mode,
                 skill_creating_enabled=effective_config.skill_creating_enabled,
                 working_directory=Path(session_info.working_directory),
                 is_legion=("legion" in mcp_servers),
+                allow_background_agent=load_app_config().features.allow_background_agent,
             )
 
             # extra_env merge order: user-set < docker wrapper vars < litellm routing.
@@ -4530,6 +4532,7 @@ class SessionCoordinator:
         skill_creating_enabled: bool = False,
         working_directory: Path | None = None,
         is_legion: bool = False,
+        allow_background_agent: bool = False,
     ) -> InternalPermissionHandler:
         """Build internal permission handler with consistent path configuration (issue #707)."""
         memory_dir = session_dir / "memory" if auto_memory_mode == "session" else None
@@ -4541,6 +4544,7 @@ class SessionCoordinator:
             skill_creating_enabled=skill_creating_enabled,
             working_directory=working_directory,
             is_legion=is_legion,
+            allow_background_agent=allow_background_agent,
         )
 
     def _resolve_default_proxy_image(self) -> str:

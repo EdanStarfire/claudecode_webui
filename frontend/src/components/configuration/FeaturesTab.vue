@@ -111,6 +111,24 @@
       </small>
     </div>
 
+    <div class="form-check form-switch mb-3">
+      <input
+        class="form-check-input"
+        type="checkbox"
+        id="allowBackgroundAgent"
+        :checked="config?.allow_background_agent"
+        @change="toggleAllowBackgroundAgent"
+      >
+      <label class="form-check-label" for="allowBackgroundAgent">
+        Allow background Agent execution in Legion sessions
+      </label>
+      <small class="form-text text-muted d-block">
+        Permits <code>Agent(run_in_background=true)</code> calls in Legion sessions instead of
+        denying them and redirecting to <code>mcp__legion__spawn_minion</code> (default: off).
+        Takes effect on the next session start, not mid-session.
+      </small>
+    </div>
+
     <hr class="my-3">
 
     <h6 class="mb-2">Legion</h6>
@@ -199,6 +217,13 @@ function toggleForwardSubagentText(event) {
   emit('update:config', {
     ...props.config,
     forward_subagent_text: event.target.checked
+  })
+}
+
+function toggleAllowBackgroundAgent(event) {
+  emit('update:config', {
+    ...props.config,
+    allow_background_agent: event.target.checked
   })
 }
 
