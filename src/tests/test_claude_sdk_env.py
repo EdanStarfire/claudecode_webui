@@ -241,3 +241,47 @@ class TestForwardSubagentText:
         with patch("src.config_manager.load_config", return_value=config):
             env = sdk._resolve_env_vars()
         assert env["CLAUDE_CODE_FORWARD_SUBAGENT_TEXT"] == "0"
+
+
+class TestAllowBackgroundAgentOverridesDisableBackgroundTasks:
+    """Issue #1690 — allow_background_agent must win over disable_background_tasks."""
+
+    def test_default_off_unchanged(self):
+        sdk = _make_sdk()
+        config = AppConfig(
+            background_calls=BackgroundCallsConfig(disable_background_tasks=True),
+            features=FeaturesConfig(allow_background_agent=False),
+        )
+        with patch("src.config_manager.load_config", return_value=config):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+
+    def test_allow_background_agent_overrides_suppression_on(self):
+        sdk = _make_sdk()
+        config = AppConfig(
+            background_calls=BackgroundCallsConfig(disable_background_tasks=True),
+            features=FeaturesConfig(allow_background_agent=True),
+        )
+        with patch("src.config_manager.load_config", return_value=config):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "0"
+
+    def test_allow_background_agent_overrides_suppression_off(self):
+        sdk = _make_sdk()
+        config = AppConfig(
+            background_calls=BackgroundCallsConfig(disable_background_tasks=False),
+            features=FeaturesConfig(allow_background_agent=True),
+        )
+        with patch("src.config_manager.load_config", return_value=config):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "0"
+
+    def test_extra_env_still_overrides(self):
+        sdk = _make_sdk(extra_env={"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"})
+        config = AppConfig(
+            background_calls=BackgroundCallsConfig(disable_background_tasks=True),
+            features=FeaturesConfig(allow_background_agent=True),
+        )
+        with patch("src.config_manager.load_config", return_value=config):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"

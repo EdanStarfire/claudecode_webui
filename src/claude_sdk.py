@@ -1133,7 +1133,8 @@ class ClaudeSDK:
         """Build the env dict for ClaudeAgentOptions.
 
         Merge order (highest priority wins):
-          global BackgroundCallsConfig → per-session opt-back-in → always-set → extra_env
+          global BackgroundCallsConfig → allow_background_agent override → per-session
+          opt-back-in → always-set → extra_env
 
         Note: most categories here are additive/opt-in (a var is only added when a
         flag is true, or removed to opt back in to CC's own default). The
@@ -1157,6 +1158,12 @@ class ClaudeSDK:
         for attr, (var, value) in _BACKGROUND_CALL_ENV_MAP.items():
             if getattr(bg_cfg, attr):
                 env_vars[var] = value
+
+        # Issue #1690: allow_background_agent (#1688) must win over disable_background_tasks —
+        # otherwise the tool-block gate permits Agent(run_in_background=True) but the CLI env
+        # flag still forces it to run synchronously, silently nullifying the toggle.
+        if app_cfg.features.allow_background_agent:
+            env_vars["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "0"
 
         # Per-session opt-back-in: remove suppression keys when session expresses preference
         # Issues #709, #906: auto-memory
