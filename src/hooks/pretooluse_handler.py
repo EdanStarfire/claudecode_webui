@@ -141,9 +141,11 @@ class InternalPermissionHandler:
         skill_creating_enabled: bool = False,
         working_directory: Path | None = None,
         is_legion: bool = False,
+        allow_background_agent: bool = False,
     ):
         self._skill_creating_enabled = skill_creating_enabled
         self._is_legion = is_legion
+        self._allow_background_agent = allow_background_agent
         self._rules = self._build_rules(
             session_data_dir, plans_dir, knowledge_mgmt_enabled, memory_dir,
             skill_creating_enabled, working_directory,
@@ -348,10 +350,14 @@ class InternalPermissionHandler:
         tool_name: str,
         tool_input: dict[str, Any] | None,
     ) -> tuple[PermissionDecision, str] | None:
-        """Block specific tools unconditionally in Legion sessions (issue #1133).
+        """Block specific tools in Legion sessions (issue #1133).
 
         Returns (decision, reason) if the tool is blocked, None otherwise.
         Only active when is_legion=True — non-Legion sessions are unaffected.
+
+        The SendMessage block is unconditional. The background-Agent block is
+        conditional on the app-level `allow_background_agent` toggle (issue #1688):
+        when enabled, run_in_background=True Agent calls are allowed through.
 
         Checks run_in_background with `is True` (not truthiness) to avoid blocking
         foreground Agent calls that pass False, 0, or a truthy string.
@@ -361,6 +367,8 @@ class InternalPermissionHandler:
         if tool_name == "SendMessage":
             return ("deny", _SENDMESSAGE_REDIRECT_REASON)
         if tool_name == "Agent" and tool_input and tool_input.get("run_in_background") is True:
+            if self._allow_background_agent:
+                return None
             return ("deny", _BACKGROUND_AGENT_REDIRECT_REASON)
         return None
 

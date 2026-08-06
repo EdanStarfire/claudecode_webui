@@ -172,6 +172,7 @@ class FeaturesConfig:
     max_peek_cards: int = 100  # Issue #1587 — cap for collapsed chip peek stack
     max_subagents_per_session: int = 200  # Issue #1670 — global cap on concurrent subagent spawns
     forward_subagent_text: bool = True  # Issue #1671 — forward subagent assistant text/thinking to parent stream
+    allow_background_agent: bool = False  # Issue #1688 — permit Agent(run_in_background=True) in Legion sessions instead of denying (default: off, preserves #1133 behavior)
 
 
 @dataclass
@@ -273,6 +274,7 @@ class AppConfig:
             max_peek_cards=features_data.get("max_peek_cards", 100),
             max_subagents_per_session=features_data.get("max_subagents_per_session", 200),
             forward_subagent_text=features_data.get("forward_subagent_text", True),
+            allow_background_agent=features_data.get("allow_background_agent", False),
         )
         proxy_data = data.get("proxy", {})
         proxy = ProxyConfig(
@@ -361,6 +363,7 @@ class AppConfig:
                 "max_peek_cards": self.features.max_peek_cards,
                 "max_subagents_per_session": self.features.max_subagents_per_session,
                 "forward_subagent_text": self.features.forward_subagent_text,
+                "allow_background_agent": self.features.allow_background_agent,
             },
             "proxy": {
                 "proxy_image": self.proxy.proxy_image,

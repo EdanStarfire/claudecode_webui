@@ -50,6 +50,11 @@ def build_router(webui) -> APIRouter:
                 if not isinstance(val, bool):
                     raise ValueError("forward_subagent_text must be a boolean")
                 config.features.forward_subagent_text = val
+            if "allow_background_agent" in features:
+                val = features["allow_background_agent"]
+                if not isinstance(val, bool):
+                    raise ValueError("allow_background_agent must be a boolean")
+                config.features.allow_background_agent = val
 
         # Merge networking section
         if "networking" in body:

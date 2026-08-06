@@ -596,6 +596,18 @@ def handler_non_legion(tmp_dirs):
     )
 
 
+@pytest.fixture
+def handler_legion_allow_background(tmp_dirs):
+    """Handler for a Legion session with allow_background_agent=True (issue #1688)."""
+    return InternalPermissionHandler(
+        session_data_dir=tmp_dirs["session_dir"],
+        plans_dir=tmp_dirs["plans_dir"],
+        knowledge_mgmt_enabled=False,
+        is_legion=True,
+        allow_background_agent=True,
+    )
+
+
 class TestToolBlock:
     """Tests for evaluate_tool_block — the Legion-scoped tool deny list (issue #1133)."""
 
@@ -645,3 +657,38 @@ class TestToolBlock:
         assert handler_legion.evaluate_tool_block("Read", {"file_path": "/some/file"}) is None
         assert handler_legion.evaluate_tool_block("Write", {"file_path": "/out", "content": "x"}) is None
         assert handler_legion.evaluate_tool_block("Bash", {"command": "ls"}) is None
+
+    def test_agent_background_true_allowed_when_toggle_on(self, handler_legion_allow_background):
+        """Agent with run_in_background=True is NOT blocked when allow_background_agent=True (issue #1688)."""
+        result = handler_legion_allow_background.evaluate_tool_block(
+            "Agent", {"run_in_background": True}
+        )
+        assert result is None
+
+    def test_agent_background_true_still_denied_when_toggle_off(self, handler_legion):
+        """Default fixture (allow_background_agent=False) retains #1133 deny behavior."""
+        result = handler_legion.evaluate_tool_block("Agent", {"run_in_background": True})
+        assert result is not None
+        decision, reason = result
+        assert decision == "deny"
+        assert "mcp__legion__spawn_minion" in reason
+
+    def test_sendmessage_still_denied_when_toggle_on(self, handler_legion_allow_background):
+        """allow_background_agent=True does not affect the unrelated SendMessage block."""
+        result = handler_legion_allow_background.evaluate_tool_block("SendMessage", {})
+        assert result is not None
+        decision, reason = result
+        assert decision == "deny"
+        assert "mcp__legion__send_comm" in reason
+
+    def test_agent_not_blocked_outside_legion_with_toggle_on(self, tmp_dirs):
+        """Non-Legion sessions are unaffected by allow_background_agent regardless of value."""
+        handler = InternalPermissionHandler(
+            session_data_dir=tmp_dirs["session_dir"],
+            plans_dir=tmp_dirs["plans_dir"],
+            knowledge_mgmt_enabled=False,
+            is_legion=False,
+            allow_background_agent=True,
+        )
+        result = handler.evaluate_tool_block("Agent", {"run_in_background": True})
+        assert result is None
