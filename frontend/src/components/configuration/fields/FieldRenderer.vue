@@ -152,6 +152,13 @@
         @update:value="$emit('update:value', $event)"
       />
 
+      <KeyValueListWidget
+        v-else-if="field.widget === 'key-value-list'"
+        :value="value"
+        :disabled="isDisabled"
+        @update:value="$emit('update:value', $event)"
+      />
+
       <ProviderSelectWidget
         v-else-if="field.widget === 'provider-select'"
         :value="value"
@@ -188,6 +195,7 @@ import DirListWidget from './DirListWidget.vue'
 import SandboxSubSectionWidget from './SandboxSubSectionWidget.vue'
 import TagListField from './TagListField.vue'
 import MultiSelectField from './MultiSelectField.vue'
+import KeyValueListWidget from './KeyValueListWidget.vue'
 import ProviderSelectWidget from './ProviderSelectWidget.vue'
 import ProviderModelSelectWidget from './ProviderModelSelectWidget.vue'
 import SourceMarker from '../../settings/SourceMarker.vue'

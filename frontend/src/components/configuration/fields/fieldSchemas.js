@@ -322,6 +322,12 @@ export const FIELD_SCHEMAS = {
       defaultValue: 1,
       description: 'How many levels deep subagents may spawn nested subagents. WebUI restores the pre-2.1.220 default of 1.',
     },
+    {
+      key: 'extra_env',
+      label: 'Extra Environment Variables',
+      widget: 'key-value-list',
+      description: 'Custom environment variables passed directly to the session. Highest-priority override — takes precedence over app defaults. Do not use for secrets; use the Secrets vault instead.',
+    },
   ],
 
   features: [
