@@ -434,6 +434,19 @@ export const useResourceStore = defineStore('resource', () => {
   }
 
   /**
+   * Issue #1691: after addResource() reorders the top-level array, re-derive
+   * currentResourceIndex from the resource_id that was being previewed so a
+   * full-screen preview doesn't silently shift to a neighboring resource.
+   */
+  function _resyncViewedIndex(mutatedArray, viewedResourceId) {
+    if (viewedResourceId === undefined) return
+    const newIndex = mutatedArray.findIndex(r => r.resource_id === viewedResourceId)
+    if (newIndex >= 0 && newIndex !== currentResourceIndex.value) {
+      currentResourceIndex.value = newIndex
+    }
+  }
+
+  /**
    * Add a new resource from WebSocket resource_registered event.
    * Issue #972: Increments total; only prepends if no active filter (or resource matches filter).
    * Issue #1680: A resource re-registered under an existing filename merges into that
@@ -444,6 +457,13 @@ export const useResourceStore = defineStore('resource', () => {
     if (!sessionId || !resourceMetadata) return
 
     const existing = resourcesBySession.value.get(sessionId) || []
+
+    // Issue #1691: if a full-screen preview is open on this session (and not pinned
+    // to a nested version), remember which resource it's showing so the two reordering
+    // branches below can keep currentResourceIndex pointed at it instead of letting it
+    // silently slide to whatever resource lands at that fixed index after the unshift.
+    const viewingSession = fullViewOpen.value && fullViewSessionId.value === sessionId && !fullViewPinnedResource.value
+    const viewedResourceId = viewingSession ? existing[currentResourceIndex.value]?.resource_id : undefined
 
     // Already tracked as a group's current representative — update in place.
     const topIndex = existing.findIndex(r => r.resource_id === resourceMetadata.resource_id)
@@ -473,6 +493,7 @@ export const useResourceStore = defineStore('resource', () => {
       existing.splice(groupIndex, 1)
       existing.unshift({ ...resourceMetadata, version_count: versionNumber, versions })
       resourcesBySession.value = new Map(resourcesBySession.value)
+      _resyncViewedIndex(existing, viewedResourceId)
       console.log(`Added resource ${resourceMetadata.resource_id} to session ${sessionId}`)
       return
     }
@@ -494,6 +515,7 @@ export const useResourceStore = defineStore('resource', () => {
     // No active filter, no existing group: brand-new distinct filename group.
     resourcesBySession.value.set(sessionId, [{ ...resourceMetadata, version_count: 1 }, ...existing])
     resourcesBySession.value = new Map(resourcesBySession.value)
+    _resyncViewedIndex(resourcesBySession.value.get(sessionId), viewedResourceId)
 
     const pagination = paginationBySession.value.get(sessionId)
     if (pagination) {
