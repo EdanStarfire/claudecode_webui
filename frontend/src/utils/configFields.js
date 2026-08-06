@@ -41,6 +41,7 @@ export const CONFIG_FIELDS_LIST = Object.freeze([
   'bare_mode',
   'env_scrub_enabled',
   'max_subagent_spawn_depth',
+  'extra_env',
   // features area
   'history_distillation_enabled',
   'auto_memory_mode',
@@ -83,6 +84,7 @@ export const FIELD_DEFAULTS = Object.freeze({
   bare_mode: false,
   env_scrub_enabled: false,
   max_subagent_spawn_depth: 1,
+  extra_env: null,
 })
 
 /** Reverse lookup: field name → profile area key. */
@@ -121,6 +123,7 @@ const _FIELD_TO_AREA = Object.freeze({
   bare_mode: 'isolation',
   env_scrub_enabled: 'isolation',
   max_subagent_spawn_depth: 'isolation',
+  extra_env: 'isolation',
   // features
   history_distillation_enabled: 'features',
   auto_memory_mode: 'features',
