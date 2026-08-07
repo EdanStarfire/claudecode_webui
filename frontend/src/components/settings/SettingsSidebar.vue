@@ -20,7 +20,7 @@
 
       <!-- Edit group: "Editing Session" (shown when on a session edit route) -->
       <SettingsSidebarGroup
-        v-if="isSessionEdit && (filteredSessionItems.length > 0 || !settingsStore.searchQuery)"
+        v-if="isSessionEdit"
         title="Editing Session"
         short-title="Sess"
         :subtitle="sessionEntityName"
@@ -42,7 +42,7 @@
 
       <!-- Edit group: "Editing Template" or "Editing Profile" (shown when on an edit route) -->
       <SettingsSidebarGroup
-        v-if="isEditMode && (filteredEditItems.length > 0 || !settingsStore.searchQuery)"
+        v-if="isEditMode"
         :title="editGroupTitle"
         :short-title="editGroupShort"
         :subtitle="editEntityName"
@@ -64,7 +64,7 @@
 
       <!-- Edit group: "Editing Schedule" (shown when on a schedule edit route) -->
       <SettingsSidebarGroup
-        v-if="isScheduleEdit && (filteredScheduleItems.length > 0 || !settingsStore.searchQuery)"
+        v-if="isScheduleEdit"
         title="Editing Schedule"
         short-title="Sched"
         :subtitle="scheduleEntityName"
@@ -118,7 +118,7 @@
       </SettingsSidebarGroup>
 
       <!-- Library group -->
-      <SettingsSidebarGroup v-if="filteredLibItems.length > 0 || !settingsStore.searchQuery" title="Library" short-title="Lib">
+      <SettingsSidebarGroup title="Library" short-title="Lib">
         <SettingsSidebarItem
           v-for="item in filteredLibItems"
           :key="item.to"
