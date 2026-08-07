@@ -27,7 +27,16 @@
             :aria-label="isCollapsed ? 'Expand branch' : 'Collapse branch'"
             @click.stop="uiStore.toggleMinionCollapse(minionData.id)"
           >
-            <i class="bi" :class="isCollapsed ? 'bi-chevron-right' : 'bi-chevron-down'"></i>
+            <svg
+              class="tree-chevron"
+              :class="{ 'tree-chevron-open': !isCollapsed }"
+              width="10"
+              height="10"
+              viewBox="0 0 12 12"
+              aria-hidden="true"
+            >
+              <path d="M4.5 2L8.5 6L4.5 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+            </svg>
           </button>
         </div>
 
@@ -120,7 +129,16 @@
                 :aria-label="isCollapsed ? 'Expand branch' : 'Collapse branch'"
                 @click.stop="uiStore.toggleMinionCollapse(minionData.id)"
               >
-                <i class="bi" :class="isCollapsed ? 'bi-chevron-right' : 'bi-chevron-down'"></i>
+                <svg
+                  class="tree-chevron"
+                  :class="{ 'tree-chevron-open': !isCollapsed }"
+                  width="10"
+                  height="10"
+                  viewBox="0 0 12 12"
+                  aria-hidden="true"
+                >
+                  <path d="M4.5 2L8.5 6L4.5 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+                </svg>
               </button>
             </div>
             <div v-if="roleSubtitle" class="node-role text-muted" :title="roleSubtitle">
@@ -597,6 +615,16 @@ async function handleMarkRead() {
 .collapse-toggle:focus {
   color: inherit;
   opacity: 0.7;
+}
+
+.tree-chevron {
+  flex-shrink: 0;
+  color: inherit;
+  transition: transform 0.15s ease;
+}
+
+.tree-chevron-open {
+  transform: rotate(90deg);
 }
 
 /* Sidebar Layout Styles */
