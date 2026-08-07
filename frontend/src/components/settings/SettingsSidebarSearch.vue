@@ -6,6 +6,7 @@
       type="text"
       class="search-input"
       placeholder="Search settings…"
+      autocomplete="off"
       :value="modelValue"
       @input="$emit('update:modelValue', $event.target.value)"
       @keydown.escape="$emit('update:modelValue', '')"

@@ -111,6 +111,14 @@ describe('settings store', () => {
     expect(store.pendingNavigation).toBeNull()
   })
 
+  it('setSearchQuery clears a previously-set value', async () => {
+    const store = await getStore()
+    store.setSearchQuery('zzzz')
+    expect(store.searchQuery).toBe('zzzz')
+    store.setSearchQuery('')
+    expect(store.searchQuery).toBe('')
+  })
+
   it('registers beforeunload when dirty areas exist', async () => {
     const addSpy = vi.spyOn(window, 'addEventListener')
     const store = await getStore()

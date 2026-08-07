@@ -249,10 +249,12 @@ function handleKeydown(e) {
 }
 
 onMounted(() => {
+  settingsStore.setSearchQuery('')
   document.addEventListener('keydown', handleKeydown)
 })
 
 onUnmounted(() => {
+  settingsStore.setSearchQuery('')
   document.removeEventListener('keydown', handleKeydown)
 })
 </script>
