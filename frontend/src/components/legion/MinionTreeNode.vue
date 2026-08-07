@@ -1,110 +1,7 @@
 <template>
   <div v-if="minionData" class="minion-tree-node" :style="{ marginLeft: `${indent}px` }">
-    <!-- Sidebar Layout (vertical, single column) -->
-    <div v-if="layout === 'sidebar'" class="minion-card minion-card-clickable border-start border-2 mb-2 d-flex align-items-center p-2" :class="[statusTintClass, { active: isSelected, unread: isUnreviewed }]" @click="handleClick">
-      <!-- Status Indicator Dot -->
-      <div class="status-dot me-2" :class="statusDotClass"></div>
-
-      <!-- Minion Info (Name + Latest Activity) -->
-      <div class="minion-info flex-grow-1">
-        <div class="minion-name">
-          <!-- Overseer Icon -->
-          <span v-if="isOverseerWithChildren" class="me-1">👑</span>
-
-          <!-- Minion Name -->
-          <strong>{{ minionWithLiveData?.name || minionData.name }}</strong>
-
-          <!-- Children Count Badge -->
-          <span v-if="isOverseerWithChildren" class="badge bg-secondary ms-2">
-            {{ minionData.children.length }} {{ minionData.children.length === 1 ? 'child' : 'children' }}
-          </span>
-
-          <!-- Issue #1696: Collapse/Expand Chevron -->
-          <button
-            v-if="hasChildren"
-            class="btn btn-sm btn-link p-0 ms-2 collapse-toggle"
-            :aria-expanded="String(!isCollapsed)"
-            :aria-label="isCollapsed ? 'Expand branch' : 'Collapse branch'"
-            @click.stop="uiStore.toggleMinionCollapse(minionData.id)"
-          >
-            <svg
-              class="tree-chevron"
-              :class="{ 'tree-chevron-open': !isCollapsed }"
-              width="10"
-              height="10"
-              viewBox="0 0 12 12"
-              aria-hidden="true"
-            >
-              <path d="M4.5 2L8.5 6L4.5 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
-            </svg>
-          </button>
-        </div>
-
-        <!-- Role subtitle for sidebar layout -->
-        <div v-if="roleSubtitle" class="node-role text-muted" :title="roleSubtitle">
-          {{ roleSubtitle }}
-        </div>
-
-        <!-- Latest Activity below name - Issue #291, #340: use live data for real-time updates -->
-        <div v-if="minionWithLiveData?.latest_message" class="latest-activity text-muted">
-          <span v-if="messagePrefix" class="activity-prefix">{{ messagePrefix }} </span>
-          <span class="activity-content" :title="minionWithLiveData.latest_message">{{ truncatedMessage }}</span>
-          <span v-if="relativeTime" class="activity-time ms-1">({{ relativeTime }})</span>
-        </div>
-        <!-- Fallback to last_comm if no latest_message -->
-        <div v-else-if="minionData?.last_comm" class="latest-activity text-muted">
-          <span class="activity-prefix">→ <strong>{{ getCommRecipient(minionData.last_comm) }}</strong>: </span>
-          <span class="activity-content" :title="minionData.last_comm.content || ''">{{ getCommSummary(minionData.last_comm) }}</span>
-        </div>
-        <!-- Empty state -->
-        <div v-else class="latest-activity text-muted fst-italic small">
-          No activity yet
-        </div>
-      </div>
-
-      <!-- Action Buttons (Issue #296) -->
-      <button
-        v-if="canMarkRead"
-        class="btn btn-sm btn-outline-secondary me-1"
-        :class="{ unread: isUnreviewed }"
-        title="Mark read"
-        aria-label="Mark read"
-        :disabled="liveSession?.is_processing"
-        @click.stop="handleMarkRead"
-      >
-        <i class="bi bi-envelope-open"></i>
-      </button>
-      <button
-        v-if="canMarkUnread"
-        class="btn btn-sm btn-outline-secondary me-1"
-        :class="{ unread: isUnreviewed }"
-        title="Mark unread"
-        aria-label="Mark unread"
-        :disabled="liveSession?.is_processing"
-        @click.stop="handleMarkUnread"
-      >
-        <i class="bi bi-envelope-exclamation"></i>
-      </button>
-      <button
-        class="btn btn-sm btn-outline-secondary me-1"
-        title="Edit minion"
-        aria-label="Edit minion"
-        @click.stop="showEditModal"
-      >
-        ⚙️
-      </button>
-      <button
-        class="btn btn-sm btn-outline-secondary"
-        title="Manage minion"
-        aria-label="Manage minion"
-        @click.stop="showManageModal"
-      >
-        🛠
-      </button>
-    </div>
-
     <!-- Two-Column Layout (for HierarchyView) -->
-    <div v-else class="minion-card minion-card-clickable border-start border-2 mb-2" :class="[statusTintClass, { active: isSelected, unread: isUnreviewed }]" @click="handleClick">
+    <div class="minion-card minion-card-clickable border-start border-2 mb-2" :class="[statusTintClass, { active: isSelected, unread: isUnreviewed }]" @click="handleClick">
       <div class="node-row">
         <!-- Left Column: Status + Name (30%) -->
         <div class="node-left">
@@ -217,7 +114,6 @@
         :key="child.id"
         :minion-data="child"
         :level="level + 1"
-        :layout="layout"
         @minion-click="$emit('minion-click', $event)"
       />
     </div>
@@ -247,11 +143,6 @@ const props = defineProps({
   level: {
     type: Number,
     default: 0
-  },
-  layout: {
-    type: String,
-    default: 'two-column', // 'two-column' for HierarchyView, 'sidebar' for ProjectItem sidebar
-    validator: (value) => ['two-column', 'sidebar'].includes(value)
   }
 })
 
@@ -627,44 +518,6 @@ async function handleMarkRead() {
   transform: rotate(90deg);
 }
 
-/* Sidebar Layout Styles */
-.minion-info {
-  min-width: 0; /* Allow text truncation */
-  overflow: hidden;
-}
-
-.minion-name {
-  font-size: 0.95rem;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.latest-activity {
-  font-size: 0.85rem;
-  line-height: 1.3;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-top: 0.25rem;
-}
-
-.activity-prefix {
-  color: var(--bs-secondary-color);
-  font-size: 0.8rem;
-}
-
-.activity-content {
-  font-style: italic;
-}
-
-.activity-time {
-  color: var(--bs-secondary-color);
-  font-size: 0.75rem;
-  opacity: 0.8;
-}
-
 /* Two-Column Layout Styles (for HierarchyView) */
 .node-row {
   display: flex;
@@ -853,22 +706,13 @@ async function handleMarkRead() {
   color: white;
 }
 
-.minion-card-clickable.active .activity-prefix,
-.minion-card-clickable.active .activity-time,
 .minion-card-clickable.active .message-prefix,
 .minion-card-clickable.active .message-time {
   color: rgba(255, 255, 255, 0.8);
 }
 
-.minion-card-clickable.active .activity-content,
 .minion-card-clickable.active .message-content {
   color: white;
-}
-
-/* Sidebar layout: compact fixed height */
-.minion-card.minion-card-clickable.d-flex {
-  min-height: 44px;
-  padding: 0.35rem 0.5rem !important;
 }
 
 /* Per-status subtle background tint (issue #1501).
