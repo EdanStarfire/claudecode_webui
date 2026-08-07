@@ -667,8 +667,10 @@ class SessionCoordinator:
             await self.template_manager.create_default_templates()
             coord_logger.info("Loaded minion templates")
 
-            # Load configuration profiles from disk (issue #1062)
-            await self.profile_manager.load_profiles()
+            # Load configuration profiles from disk (issue #1062).
+            # Pass template_manager so the isolation->features field migration
+            # (issue #1707) can scan already-loaded templates for references.
+            await self.profile_manager.load_profiles(template_manager=self.template_manager)
             coord_logger.info("Loaded configuration profiles")
             await self._migrate_stale_mcp_snapshots()  # issue #1660
 

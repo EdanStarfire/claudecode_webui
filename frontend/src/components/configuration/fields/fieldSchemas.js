@@ -312,22 +312,6 @@ export const FIELD_SCHEMAS = {
       defaultValue: false,
       description: 'Strips API keys and cloud credentials from subprocess environments.',
     },
-    {
-      key: 'max_subagent_spawn_depth',
-      label: 'Max Subagent Spawn Depth',
-      widget: 'range-slider',
-      min: 1,
-      max: 3,
-      step: 1,
-      defaultValue: 1,
-      description: 'How many levels deep subagents may spawn nested subagents. WebUI restores the pre-2.1.220 default of 1.',
-    },
-    {
-      key: 'extra_env',
-      label: 'Extra Environment Variables',
-      widget: 'key-value-list',
-      description: 'Custom environment variables passed directly to the session. Highest-priority override — takes precedence over app defaults. Do not use for secrets; use the Secrets vault instead.',
-    },
   ],
 
   features: [
@@ -370,6 +354,22 @@ export const FIELD_SCHEMAS = {
       widget: 'toggle',
       defaultValue: false,
       description: 'Render assistant responses incrementally as they are generated. Requires server feature flag.',
+    },
+    {
+      key: 'max_subagent_spawn_depth',
+      label: 'Max Subagent Spawn Depth',
+      widget: 'range-slider',
+      min: 1,
+      max: 3,
+      step: 1,
+      defaultValue: 1,
+      description: 'How many levels deep subagents may spawn nested subagents. WebUI restores the pre-2.1.220 default of 1.',
+    },
+    {
+      key: 'extra_env',
+      label: 'Extra Environment Variables',
+      widget: 'key-value-list',
+      description: 'Custom environment variables passed directly to the session. Highest-priority override — takes precedence over app defaults. Do not use for secrets; use the Secrets vault instead.',
     },
   ],
 }

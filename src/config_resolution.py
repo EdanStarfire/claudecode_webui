@@ -45,12 +45,13 @@ PROFILE_AREAS: dict[str, set[str]] = {
         "docker_enabled", "docker_image", "docker_extra_mounts",
         "docker_home_directory", "docker_proxy_enabled", "docker_proxy_image",
         "docker_proxy_allowlist_domains",
-        "bare_mode", "env_scrub_enabled", "max_subagent_spawn_depth",
-        "assigned_secrets", "extra_env",
+        "bare_mode", "env_scrub_enabled",
+        "assigned_secrets",
     },
     "features": {
         "history_distillation_enabled", "auto_memory_mode", "auto_memory_directory",
         "skill_creating_enabled", "enable_streaming_text",
+        "max_subagent_spawn_depth", "extra_env",
     },
 }
 
