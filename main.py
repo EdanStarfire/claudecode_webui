@@ -82,6 +82,7 @@ def main():
     debug_group.add_argument('--debug-queue-processor', action='store_true', help='Enable queue processor debugging')
     debug_group.add_argument('--debug-archive', action='store_true', help='Enable archive manager debugging')
     debug_group.add_argument('--debug-project-manager', action='store_true', help='Enable project manager debugging')
+    debug_group.add_argument('--debug-profile-manager', action='store_true', help='Enable profile manager debugging')
     debug_group.add_argument('--debug-all', action='store_true', help='Enable all debug logging (excludes --debug-all-polling)')
 
     args = parser.parse_args()
@@ -123,6 +124,7 @@ def main():
         debug_queue_processor=args.debug_queue_processor,
         debug_archive=args.debug_archive,
         debug_project_manager=args.debug_project_manager,
+        debug_profile_manager=args.debug_profile_manager,
         debug_all=args.debug_all,
         log_dir=str(data_dir_path / "logs")
     )

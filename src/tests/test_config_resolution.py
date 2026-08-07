@@ -929,10 +929,10 @@ class TestIssue1396ExtraEnvResolution:
 class TestIssue1669MaxSubagentSpawnDepth:
     """Tests for max_subagent_spawn_depth cascade resolution (issue #1669)."""
 
-    def test_field_registered_in_isolation_area(self):
-        """max_subagent_spawn_depth belongs to the isolation profile area."""
-        assert FIELD_TO_AREA.get("max_subagent_spawn_depth") == "isolation"
-        assert "max_subagent_spawn_depth" in PROFILE_AREAS["isolation"]
+    def test_field_registered_in_features_area(self):
+        """max_subagent_spawn_depth belongs to the features profile area (issue #1707)."""
+        assert FIELD_TO_AREA.get("max_subagent_spawn_depth") == "features"
+        assert "max_subagent_spawn_depth" in PROFILE_AREAS["features"]
 
     @pytest.mark.asyncio
     async def test_profile_only_override(self):

@@ -40,13 +40,13 @@ export const CONFIG_FIELDS_LIST = Object.freeze([
   'assigned_secrets',
   'bare_mode',
   'env_scrub_enabled',
-  'max_subagent_spawn_depth',
-  'extra_env',
   // features area
   'history_distillation_enabled',
   'auto_memory_mode',
   'auto_memory_directory',
   'skill_creating_enabled',
+  'max_subagent_spawn_depth',
+  'extra_env',
 ])
 
 /** Default value for each CONFIG_FIELD — mirrors SessionConfig defaults. */
@@ -122,13 +122,13 @@ const _FIELD_TO_AREA = Object.freeze({
   assigned_secrets: 'isolation',
   bare_mode: 'isolation',
   env_scrub_enabled: 'isolation',
-  max_subagent_spawn_depth: 'isolation',
-  extra_env: 'isolation',
   // features
   history_distillation_enabled: 'features',
   auto_memory_mode: 'features',
   auto_memory_directory: 'features',
   skill_creating_enabled: 'features',
+  max_subagent_spawn_depth: 'features',
+  extra_env: 'features',
 })
 
 /** Return the profile area for a CONFIG_FIELD, or null if unknown. */

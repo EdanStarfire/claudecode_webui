@@ -156,6 +156,7 @@ def configure_logging(
     debug_queue_processor: bool = False,
     debug_archive: bool = False,
     debug_project_manager: bool = False,
+    debug_profile_manager: bool = False,
     debug_all: bool = False,
     log_dir: str = "data/logs"
 ) -> None:
@@ -177,6 +178,7 @@ def configure_logging(
         debug_queue_processor: Enable queue processor debugging
         debug_archive: Enable archive manager debugging
         debug_project_manager: Enable project manager debugging
+        debug_profile_manager: Enable profile manager debugging
         debug_all: Enable all debug logging (excludes debug_all_polling due to excessive noise)
         log_dir: Directory for log files
 
@@ -215,6 +217,7 @@ def configure_logging(
         'debug_queue_processor': debug_queue_processor or debug_all,
         'debug_archive': debug_archive or debug_all,
         'debug_project_manager': debug_project_manager or debug_all,
+        'debug_profile_manager': debug_profile_manager or debug_all,
         'log_dir': log_dir
     }
 
@@ -328,6 +331,12 @@ def configure_logging(
             'file': f"{log_dir}/project_manager.log",
             'enabled': _log_config['debug_project_manager'],
             'console': _log_config['debug_project_manager'],
+            'level': logging.DEBUG
+        },
+        'profile_manager': {
+            'file': f"{log_dir}/profile_manager.log",
+            'enabled': _log_config['debug_profile_manager'],
+            'console': _log_config['debug_profile_manager'],
             'level': logging.DEBUG
         }
     }
