@@ -18,6 +18,17 @@
           <span v-if="isOverseerWithChildren" class="badge bg-secondary ms-2">
             {{ minionData.children.length }} {{ minionData.children.length === 1 ? 'child' : 'children' }}
           </span>
+
+          <!-- Issue #1696: Collapse/Expand Chevron -->
+          <button
+            v-if="hasChildren"
+            class="btn btn-sm btn-link p-0 ms-2 collapse-toggle"
+            :aria-expanded="String(!isCollapsed)"
+            :aria-label="isCollapsed ? 'Expand branch' : 'Collapse branch'"
+            @click.stop="uiStore.toggleMinionCollapse(minionData.id)"
+          >
+            <i class="bi" :class="isCollapsed ? 'bi-chevron-right' : 'bi-chevron-down'"></i>
+          </button>
         </div>
 
         <!-- Role subtitle for sidebar layout -->
@@ -98,6 +109,17 @@
               <span v-if="isOverseerWithChildren" class="badge bg-secondary ms-2">
                 {{ minionData.children.length }} {{ minionData.children.length === 1 ? 'child' : 'children' }}
               </span>
+
+              <!-- Issue #1696: Collapse/Expand Chevron -->
+              <button
+                v-if="hasChildren"
+                class="btn btn-sm btn-link p-0 ms-2 collapse-toggle"
+                :aria-expanded="String(!isCollapsed)"
+                :aria-label="isCollapsed ? 'Expand branch' : 'Collapse branch'"
+                @click.stop="uiStore.toggleMinionCollapse(minionData.id)"
+              >
+                <i class="bi" :class="isCollapsed ? 'bi-chevron-right' : 'bi-chevron-down'"></i>
+              </button>
             </div>
             <div v-if="roleSubtitle" class="node-role text-muted" :title="roleSubtitle">
               {{ roleSubtitle }}
@@ -167,7 +189,7 @@
     </div>
 
     <!-- Recursively Render Children -->
-    <div v-if="hasChildren" class="minion-children">
+    <div v-if="hasChildren && shouldShowChildren" class="minion-children">
       <MinionTreeNode
         v-for="child in sortedChildren"
         :key="child.id"
@@ -193,6 +215,7 @@ import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
 import { compareAgents } from '@/utils/agentSort'
 import { getDisplayState } from '@/composables/useSessionState'
+import { findInHierarchy } from '@/utils/hierarchyUtils'
 
 const props = defineProps({
   minionData: {
@@ -354,6 +377,20 @@ const hasChildren = computed(() => {
     props.minionData.children.length > 0
   )
 })
+
+// Issue #1696: Collapse state for this node's children
+const isCollapsed = computed(() => uiStore.isMinionCollapsed(props.minionData.id))
+
+// Auto-expand override: if the currently selected session is a descendant of this
+// node, show children even when collapsed, so deep-links/navigation stay visible.
+const hasActiveDescendant = computed(() => {
+  if (!hasChildren.value || !sessionStore.currentSessionId) return false
+  return props.minionData.children.some(child =>
+    findInHierarchy(child, node => node.id === sessionStore.currentSessionId) !== null
+  )
+})
+
+const shouldShowChildren = computed(() => !isCollapsed.value || hasActiveDescendant.value)
 
 const sortedChildren = computed(() => {
   const children = props.minionData?.children || []
@@ -543,6 +580,19 @@ async function handleMarkRead() {
 
 .minion-tree-node {
   transition: margin-left 0.2s ease;
+}
+
+.collapse-toggle {
+  color: inherit;
+  text-decoration: none;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.collapse-toggle:hover,
+.collapse-toggle:focus {
+  color: inherit;
+  opacity: 0.7;
 }
 
 /* Sidebar Layout Styles */
