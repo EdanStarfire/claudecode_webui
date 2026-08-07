@@ -292,7 +292,6 @@
                     :key="minion.id"
                     :minion-data="minion"
                     :level="1"
-                    layout="two-column"
                     @minion-click="navigateToSession"
                   />
                 </div>
@@ -308,7 +307,6 @@
                   :key="node.id"
                   :minion-data="node"
                   :level="0"
-                  layout="two-column"
                   @minion-click="navigateToSession"
                 />
               </div>
@@ -325,7 +323,6 @@
                     :key="node.id"
                     :minion-data="node"
                     :level="0"
-                    layout="two-column"
                     @minion-click="navigateToSession"
                   />
                 </div>
