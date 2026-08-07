@@ -57,6 +57,7 @@
       <button
         v-if="canMarkRead"
         class="btn btn-sm btn-outline-secondary me-1"
+        :class="{ unread: isUnreviewed }"
         title="Mark read"
         aria-label="Mark read"
         :disabled="liveSession?.is_processing"
@@ -67,6 +68,7 @@
       <button
         v-if="canMarkUnread"
         class="btn btn-sm btn-outline-secondary me-1"
+        :class="{ unread: isUnreviewed }"
         title="Mark unread"
         aria-label="Mark unread"
         :disabled="liveSession?.is_processing"
@@ -151,6 +153,7 @@
           <button
             v-if="canMarkRead"
             class="btn btn-sm btn-outline-secondary me-1"
+            :class="{ unread: isUnreviewed }"
             title="Mark read"
             aria-label="Mark read"
             :disabled="liveSession?.is_processing"
@@ -161,6 +164,7 @@
           <button
             v-if="canMarkUnread"
             class="btn btn-sm btn-outline-secondary me-1"
+            :class="{ unread: isUnreviewed }"
             title="Mark unread"
             aria-label="Mark unread"
             :disabled="liveSession?.is_processing"
@@ -901,5 +905,15 @@ async function handleMarkRead() {
 .minion-card.unread .status-dot-grey {
   background-color: color-mix(in oklab, var(--color-unread) 35%, var(--bs-body-bg, #fff));
   border-color: var(--color-unread);
+}
+
+/* Issue #1697: persistent read/unread fill on the mark-read/mark-unread action button,
+   distinguishable from the card's own unread tint above via a distinct treatment. */
+.btn.unread {
+  background-color: color-mix(in oklab, var(--color-unread) 25%, transparent);
+}
+
+.btn.unread:hover {
+  background-color: color-mix(in oklab, var(--color-unread) 40%, transparent);
 }
 </style>
