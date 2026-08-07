@@ -78,6 +78,11 @@ export const useUIStore = defineStore('ui', () => {
   // Expanded stacked chips (Set of parent session IDs whose children are expanded)
   const expandedStacks = ref(new Set())
 
+  // Issue #1696: Collapsed minion tree nodes (Set of minion IDs whose children are hidden).
+  // Empty Set = fully expanded (backward-compatible default), inverted from expandedStacks'
+  // own convention. Not persisted — collapse state resets on reload by design.
+  const collapsedMinionNodes = ref(new Set())
+
   // Mobile detection (reactive to window size)
   const windowWidth = ref(window.innerWidth)
   const isMobile = computed(() => windowWidth.value < 768)
@@ -374,6 +379,17 @@ export const useUIStore = defineStore('ui', () => {
     }
   }
 
+  // Minion tree node collapse management (issue #1696)
+  function toggleMinionCollapse(minionId) {
+    const next = new Set(collapsedMinionNodes.value)
+    if (next.has(minionId)) next.delete(minionId); else next.add(minionId)
+    collapsedMinionNodes.value = next
+  }
+
+  function isMinionCollapsed(minionId) {
+    return collapsedMinionNodes.value.has(minionId)
+  }
+
   // Right panel responsive toggle
   function toggleRightPanel() {
     rightPanelVisible.value = !rightPanelVisible.value
@@ -408,6 +424,7 @@ export const useUIStore = defineStore('ui', () => {
     rightPanelVisible,
     browsingProjectId,
     expandedStacks,
+    collapsedMinionNodes,
     windowWidth,
     isMobile,
     autoScrollEnabled,
@@ -443,6 +460,8 @@ export const useUIStore = defineStore('ui', () => {
     setBrowsingProject,
     toggleStack,
     collapseAllStacks,
+    toggleMinionCollapse,
+    isMinionCollapsed,
     toggleRightPanel,
     setRightPanelVisible,
     setAutoScroll,
