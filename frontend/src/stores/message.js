@@ -636,6 +636,11 @@ export const useMessageStore = defineStore('message', () => {
         existing.input = toolCall.input
       }
 
+      // Issue #1694: owning assistant message id, for permission-prompt anchoring
+      if (toolCall.message_id) {
+        existing.messageId = toolCall.message_id
+      }
+
       // Update permission fields
       if (toolCall.permission) {
         existing.suggestions = toolCall.permission.suggestions || []
@@ -737,6 +742,8 @@ export const useMessageStore = defineStore('message', () => {
         agentId: toolCall.agent_id || null,
         // Issue #1593: Sender attachment resource IDs for outbound comm chips
         senderAttachments: toolCall.sender_attachments || null,
+        // Issue #1694: owning assistant message id, for permission-prompt anchoring
+        messageId: toolCall.message_id || null,
       }
 
       if (toolCall.error) {

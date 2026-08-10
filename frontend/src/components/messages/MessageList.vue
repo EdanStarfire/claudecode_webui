@@ -584,9 +584,16 @@ watch(
 
 /**
  * Issue #1626 Fix B: Attach any permission_required tools from toolCallsBySession that are
- * not yet referenced by any displayed bubble to the last assistant item. This ensures the
- * permission prompt renders even when the bubble's metadata.tool_uses is empty due to the
- * streaming dedup race (before Fix A fully resolves the issue across all SDK variants).
+ * not yet referenced by any displayed bubble. This ensures the permission prompt renders
+ * even when the bubble's metadata.tool_uses is empty due to the streaming dedup race
+ * (before Fix A fully resolves the issue across all SDK variants).
+ *
+ * Issue #1694: Anchor each orphan to the assistant bubble that produced it by matching
+ * tc.messageId against item.message.message_id, searching the whole displayed list —
+ * not just the last bubble. This is correct regardless of realtime emission timing
+ * because it matches on identity, not recency/position. Falls back to the pre-#1694
+ * last-assistant-bubble heuristic only when messageId is absent (legacy stored data) or
+ * unresolved (owning bubble not currently displayed/paginated in).
  */
 function attachOrphanedPermissionTools(items, sessionId) {
   if (!sessionId) return items
@@ -608,14 +615,33 @@ function attachOrphanedPermissionTools(items, sessionId) {
   for (const tc of liveTools) {
     if (referenced.has(tc.id)) continue
     if (getEffectiveStatusForTool(tc) !== 'permission_required') continue
-    orphans.push({ id: tc.id, name: tc.name, input: tc.input })
+    orphans.push({ id: tc.id, name: tc.name, input: tc.input, messageId: tc.messageId || null })
   }
   if (orphans.length === 0) return items
 
-  // Attach to the last assistant item.
+  // Anchor by message_id first; collect anything that can't be resolved that way.
+  const unanchored = []
+  for (const orphan of orphans) {
+    if (!orphan.messageId) {
+      unanchored.push(orphan)
+      continue
+    }
+    const targetIndex = items.findIndex(
+      it => it.type === 'message' && it.message?.type === 'assistant' && it.message.message_id === orphan.messageId
+    )
+    if (targetIndex === -1) {
+      unanchored.push(orphan)
+      continue
+    }
+    items[targetIndex].orphanedPermissionTools = [...(items[targetIndex].orphanedPermissionTools || []), orphan]
+  }
+
+  if (unanchored.length === 0) return items
+
+  // Fallback: attach to the last assistant item.
   for (let i = items.length - 1; i >= 0; i--) {
     if (items[i].type === 'message' && items[i].message?.type === 'assistant') {
-      items[i].orphanedPermissionTools = [...(items[i].orphanedPermissionTools || []), ...orphans]
+      items[i].orphanedPermissionTools = [...(items[i].orphanedPermissionTools || []), ...unanchored]
       return items
     }
   }
@@ -628,7 +654,7 @@ function attachOrphanedPermissionTools(items, sessionId) {
     type: 'message',
     message: { type: 'assistant', content: '', metadata: { tool_uses: [] }, timestamp: Date.now() / 1000 },
     attachedTools: [],
-    orphanedPermissionTools: orphans,
+    orphanedPermissionTools: unanchored,
   })
   return items
 }

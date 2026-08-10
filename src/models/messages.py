@@ -171,6 +171,10 @@ class ToolCall:
     # Issue #195: Parent Task tool that spawned this subagent tool
     parent_tool_use_id: str | None = None
 
+    # Issue #1694: id of the assistant message that produced this tool_use, for
+    # frontend anchoring of permission prompts to their owning bubble.
+    message_id: str | None = None
+
     # Issue #707: Auto-approval reason (set when suggestion-based auto-approval fires)
     auto_approved_reason: str | None = None
 
@@ -219,6 +223,10 @@ class ToolCall:
         # Issue #195: Parent tool reference
         if self.parent_tool_use_id is not None:
             result["parent_tool_use_id"] = self.parent_tool_use_id
+
+        # Issue #1694: Owning assistant message id
+        if self.message_id is not None:
+            result["message_id"] = self.message_id
 
         # Issue #707: Auto-approval reason
         if self.auto_approved_reason is not None:
@@ -274,6 +282,7 @@ class ToolCall:
             auto_approved_reason=data.get("auto_approved_reason"),
             display=display,
             sender_attachments=data.get("sender_attachments"),
+            message_id=data.get("message_id"),
         )
 
     def with_status_update(self, **updates: Any) -> "ToolCall":
