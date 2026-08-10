@@ -20,6 +20,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -392,7 +393,12 @@ async def test_permission_barrier_fails_open_on_timeout(caplog):
         patch("src.permission_service.PermissionInfo"),
         # Make wait_for immediately time out so the test runs in well under 2s
         patch("src.permission_service.asyncio.wait_for", side_effect=asyncio.TimeoutError),
-        caplog.at_level("WARNING", logger="src.permission_service"),
+        # configure_logging() (run by other test modules earlier in the same session)
+        # unconditionally sets propagate=False on every category logger it manages,
+        # including 'sdk_debug' — caplog's handler is only attached to the root
+        # logger, so propagation must be forced on for it to see these records.
+        patch.object(logging.getLogger("sdk_debug"), "propagate", True),
+        caplog.at_level("WARNING", logger="sdk_debug"),
     ):
         mock_pr.return_value = MagicMock()
         mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
