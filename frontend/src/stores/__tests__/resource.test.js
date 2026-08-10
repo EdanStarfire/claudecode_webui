@@ -212,6 +212,81 @@ describe('resource store — versioning/grouping (issue #1680)', () => {
       expect(store.currentResourceIndex).toBe(indexBefore)
       expect(store.currentFullViewResource.resource_id).toBe('r1')
     })
+
+    it('auto-refreshes the full-screen preview to a new version of the exact group being viewed, when not at the front of the list (issue #1708)', async () => {
+      const { useResourceStore } = await import('@/stores/resource')
+      const store = useResourceStore()
+
+      // Two groups: "other.txt" ends up at the front, "viewed.txt" behind it.
+      store.addResource('sess-1', makeResource({ resource_id: 'r1', original_name: 'viewed.txt', timestamp: 100 }))
+      store.addResource('sess-1', makeResource({ resource_id: 'r2', original_name: 'other.txt', timestamp: 200 }))
+
+      store.openFullViewById('r1', 'sess-1')
+      expect(store.currentFullViewResource?.resource_id).toBe('r1')
+      expect(store.currentResourceIndex).toBe(1)
+
+      // A new version of the group currently being viewed (viewed.txt) arrives.
+      store.addResource('sess-1', makeResource({ resource_id: 'r3', original_name: 'viewed.txt', timestamp: 300 }))
+
+      const resources = store.resourcesForSession('sess-1')
+      expect(resources[0].resource_id).toBe('r3')
+      expect(store.currentFullViewResource.resource_id).toBe('r3')
+      expect(store.currentResourceIndex).toBe(0)
+    })
+
+    it('auto-refreshes the full-screen preview to a new version of the exact group being viewed, when already at the front (issue #1708)', async () => {
+      const { useResourceStore } = await import('@/stores/resource')
+      const store = useResourceStore()
+
+      store.addResource('sess-1', makeResource({ resource_id: 'r1', original_name: 'viewed.txt', timestamp: 100 }))
+      store.openFullView('sess-1', 0)
+      expect(store.currentFullViewResource?.resource_id).toBe('r1')
+      expect(store.currentResourceIndex).toBe(0)
+
+      store.addResource('sess-1', makeResource({ resource_id: 'r2', original_name: 'viewed.txt', timestamp: 200 }))
+
+      expect(store.currentFullViewResource.resource_id).toBe('r2')
+      expect(store.currentResourceIndex).toBe(0)
+    })
+
+    it('does not disturb a pinned older-version view when a newer version of that same group is registered, and surfaces fullViewNewerVersionAvailable (issue #1708)', async () => {
+      const { useResourceStore } = await import('@/stores/resource')
+      const store = useResourceStore()
+
+      store.addResource('sess-1', makeResource({ resource_id: 'r1', original_name: 'viewed.txt', timestamp: 100 }))
+      store.addResource('sess-1', makeResource({ resource_id: 'r2', original_name: 'viewed.txt', timestamp: 200 }))
+      // Pin the older version r1 via version history.
+      store.openFullViewById('r1', 'sess-1')
+      expect(store.currentFullViewResource?.resource_id).toBe('r1')
+      expect(store.fullViewNewerVersionAvailable).toBeNull()
+
+      store.addResource('sess-1', makeResource({ resource_id: 'r3', original_name: 'viewed.txt', timestamp: 300 }))
+
+      // Pinned view untouched.
+      expect(store.currentFullViewResource.resource_id).toBe('r1')
+      // Newer-version signal surfaced.
+      expect(store.fullViewNewerVersionAvailable?.resource_id).toBe('r3')
+    })
+
+    it('handles multiple new versions registered in quick succession while viewing, always landing on the latest (issue #1708)', async () => {
+      const { useResourceStore } = await import('@/stores/resource')
+      const store = useResourceStore()
+
+      store.addResource('sess-1', makeResource({ resource_id: 'r1', original_name: 'viewed.txt', timestamp: 100 }))
+      store.addResource('sess-1', makeResource({ resource_id: 'r2', original_name: 'other.txt', timestamp: 100 }))
+      store.openFullViewById('r1', 'sess-1')
+      expect(store.currentFullViewResource?.resource_id).toBe('r1')
+
+      store.addResource('sess-1', makeResource({ resource_id: 'r3', original_name: 'viewed.txt', timestamp: 200 }))
+      expect(store.currentFullViewResource.resource_id).toBe('r3')
+
+      store.addResource('sess-1', makeResource({ resource_id: 'r4', original_name: 'viewed.txt', timestamp: 300 }))
+      expect(store.currentFullViewResource.resource_id).toBe('r4')
+
+      store.addResource('sess-1', makeResource({ resource_id: 'r5', original_name: 'viewed.txt', timestamp: 400 }))
+      expect(store.currentFullViewResource.resource_id).toBe('r5')
+      expect(store.currentResourceIndex).toBe(0)
+    })
   })
 
   describe('handleResourceRemoved (delete/splice)', () => {

@@ -22,6 +22,15 @@
           </svg>
         </button>
 
+        <!-- Newer Version Banner (pinned older-version view, issue #1708) -->
+        <button
+          v-if="resourceStore.fullViewNewerVersionAvailable"
+          class="newer-version-banner"
+          @click.stop="jumpToNewerVersion"
+        >
+          A newer version is available &mdash; click to view
+        </button>
+
         <!-- Navigation - Previous -->
         <button
           v-if="!isDirectContent && !isDirectImage && totalResources > 1"
@@ -353,6 +362,7 @@ let printIframe = null
 // Computed properties
 const isOpen = computed(() => resourceStore.fullViewOpen)
 const currentResource = computed(() => resourceStore.currentFullViewResource)
+const currentResourceId = computed(() => currentResource.value?.resource_id || null)
 const currentIndex = computed(() => resourceStore.currentResourceIndex)
 const totalResources = computed(() => resourceStore.fullViewTotalResources)
 const resources = computed(() => {
@@ -425,8 +435,10 @@ watch(currentIndex, () => {
   displayMode.value = isCurrentHtml.value ? 'rendered' : 'raw'
 })
 
-// Fetch text content when navigating to a text resource
-watch([currentIndex, isOpen], () => {
+// Fetch text content when navigating to a text resource. Depends on currentResourceId
+// (not just currentIndex) so an in-place identity swap — e.g. a new version superseding
+// the resource shown at an unchanged index (issue #1708) — still triggers a refetch.
+watch([currentIndex, isOpen, currentResourceId], () => {
   if (isOpen.value && currentResource.value && !isCurrentImage.value && !isCurrentVideo.value) {
     const rid = currentResource.value.resource_id
     const cached = resourceStore.getTextContent(rid)
@@ -464,6 +476,12 @@ function prevResource() {
 
 function goToResource(index) {
   resourceStore.goToResource(index)
+}
+
+function jumpToNewerVersion() {
+  const newer = resourceStore.fullViewNewerVersionAvailable
+  if (!newer) return
+  resourceStore.openFullViewById(newer.resource_id, resourceStore.fullViewSessionId)
 }
 
 function handleOverlayClick(event) {
@@ -704,6 +722,28 @@ function handleImageError(event) {
 
 .close-btn:hover {
   background: rgba(255, 255, 255, 0.2);
+}
+
+.newer-version-banner {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bs-primary, #0d6efd);
+  color: #fff;
+  border: none;
+  padding: 8px 18px;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transition: background-color 0.2s;
+}
+
+.newer-version-banner:hover {
+  background: var(--bs-primary-text-emphasis, #0b5ed7);
 }
 
 .nav-btn {

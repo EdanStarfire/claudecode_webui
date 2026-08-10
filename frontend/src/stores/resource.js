@@ -58,6 +58,12 @@ export const useResourceStore = defineStore('resource', () => {
   // addressed by index into the top-level (grouped) resources array.
   const fullViewPinnedResource = ref(null)
 
+  // Issue #1708: set to the new top-level resource metadata when a newer version
+  // is registered for the group currently pinned (fullViewPinnedResource) as an
+  // older version, so the pinned view can surface a "newer version available"
+  // signal without being disturbed itself.
+  const fullViewNewerVersionAvailable = ref(null)
+
   // ========== HELPER FUNCTIONS ==========
 
   /**
@@ -437,10 +443,18 @@ export const useResourceStore = defineStore('resource', () => {
    * Issue #1691: after addResource() reorders the top-level array, re-derive
    * currentResourceIndex from the resource_id that was being previewed so a
    * full-screen preview doesn't silently shift to a neighboring resource.
+   *
+   * Issue #1708: when the previewed resource's own identity changed (a new version
+   * of the group being viewed superseded it), viewedResourceId can no longer be found
+   * at the top level — fallbackResourceId (the new version's id) is tried next so the
+   * preview auto-refreshes to it instead of leaving currentResourceIndex stale.
    */
-  function _resyncViewedIndex(mutatedArray, viewedResourceId) {
+  function _resyncViewedIndex(mutatedArray, viewedResourceId, fallbackResourceId) {
     if (viewedResourceId === undefined) return
-    const newIndex = mutatedArray.findIndex(r => r.resource_id === viewedResourceId)
+    let newIndex = mutatedArray.findIndex(r => r.resource_id === viewedResourceId)
+    if (newIndex < 0 && fallbackResourceId !== undefined) {
+      newIndex = mutatedArray.findIndex(r => r.resource_id === fallbackResourceId)
+    }
     if (newIndex >= 0 && newIndex !== currentResourceIndex.value) {
       currentResourceIndex.value = newIndex
     }
@@ -464,6 +478,13 @@ export const useResourceStore = defineStore('resource', () => {
     // silently slide to whatever resource lands at that fixed index after the unshift.
     const viewingSession = fullViewOpen.value && fullViewSessionId.value === sessionId && !fullViewPinnedResource.value
     const viewedResourceId = viewingSession ? existing[currentResourceIndex.value]?.resource_id : undefined
+
+    // Issue #1708: track a pinned older-version view in this same session so the
+    // group-merge branch below can surface fullViewNewerVersionAvailable without
+    // disturbing the pinned view itself.
+    const pinnedInThisSession = (fullViewOpen.value && fullViewSessionId.value === sessionId)
+      ? fullViewPinnedResource.value
+      : null
 
     // Already tracked as a group's current representative — update in place.
     const topIndex = existing.findIndex(r => r.resource_id === resourceMetadata.resource_id)
@@ -490,10 +511,21 @@ export const useResourceStore = defineStore('resource', () => {
       const versionNumber = (group.version_count || 1) + 1
       const versions = [{ ...resourceMetadata, version_number: versionNumber }, ...priorVersions]
 
+      // Issue #1708: the group's top-level identity is about to change (old id demoted
+      // into versions[], new id takes its place) — if that's the exact group being
+      // previewed, viewedResourceId can no longer resolve after the mutation, so pass
+      // the new version's id as a fallback for _resyncViewedIndex to auto-refresh to.
+      const wasViewingThisGroup = viewedResourceId !== undefined && group.resource_id === viewedResourceId
+
       existing.splice(groupIndex, 1)
       existing.unshift({ ...resourceMetadata, version_count: versionNumber, versions })
       resourcesBySession.value = new Map(resourcesBySession.value)
-      _resyncViewedIndex(existing, viewedResourceId)
+      _resyncViewedIndex(existing, viewedResourceId, wasViewingThisGroup ? resourceMetadata.resource_id : undefined)
+
+      if (pinnedInThisSession && _groupKey(pinnedInThisSession) === groupKey) {
+        fullViewNewerVersionAvailable.value = { ...resourceMetadata, version_count: versionNumber, versions }
+      }
+
       console.log(`Added resource ${resourceMetadata.resource_id} to session ${sessionId}`)
       return
     }
@@ -568,6 +600,7 @@ export const useResourceStore = defineStore('resource', () => {
    */
   function openFullView(sessionId, index = 0) {
     fullViewPinnedResource.value = null
+    fullViewNewerVersionAvailable.value = null
     fullViewSessionId.value = sessionId
     currentResourceIndex.value = Math.max(0, Math.min(index, resourceCount(sessionId) - 1))
     fullViewOpen.value = true
@@ -579,6 +612,7 @@ export const useResourceStore = defineStore('resource', () => {
   function closeFullView() {
     fullViewOpen.value = false
     fullViewPinnedResource.value = null
+    fullViewNewerVersionAvailable.value = null
     directContent.value = null
     directTitle.value = null
     directImageData.value = null
@@ -880,6 +914,7 @@ export const useResourceStore = defineStore('resource', () => {
       if (nested) {
         fullViewSessionId.value = sid
         fullViewPinnedResource.value = nested
+        fullViewNewerVersionAvailable.value = null
         currentResourceIndex.value = 0
         fullViewOpen.value = true
         return
@@ -923,6 +958,7 @@ export const useResourceStore = defineStore('resource', () => {
     directImageData,
     directImageMime,
     expandedResourceGroups,
+    fullViewNewerVersionAvailable,
 
     // Computed - Resources
     currentResources,
