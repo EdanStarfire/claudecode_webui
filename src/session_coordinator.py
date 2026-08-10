@@ -412,6 +412,15 @@ class SessionCoordinator:
         # permission callbacks to wait efficiently instead of polling.
         self._tool_call_events: dict[str, asyncio.Event] = {}
 
+        # Issue #1694: Per-session event + set of emitted message_ids, notified whenever
+        # an assistant message envelope is appended to the session queue. Lets the
+        # permission callback wait for "this tool's owning message was queued" before
+        # appending the awaiting_permission update, so the frontend always sees the
+        # assistant bubble ahead of its permission prompt. A dedicated primitive (not a
+        # reuse of _tool_call_events) to avoid coupling two unrelated signals.
+        self._message_emitted_events: dict[str, asyncio.Event] = {}
+        self._emitted_message_ids: dict[str, set[str]] = {}
+
         # Issue #403: Uploaded file paths per session for auto-approve Read permissions
         # Maps session_id -> set of absolute file paths
         self._uploaded_file_paths: dict[str, set[str]] = {}
@@ -1985,6 +1994,9 @@ class SessionCoordinator:
                 del self._display_projections[session_id]
             # Issue #858: Cleanup per-session tool-call event
             self._tool_call_events.pop(session_id, None)
+            # Issue #1694: Cleanup per-session message-emitted barrier state
+            self._message_emitted_events.pop(session_id, None)
+            self._emitted_message_ids.pop(session_id, None)
             # Issue #894: Cleanup retry sequence tracking
             self._retry_sequences.pop(session_id, None)
 
@@ -2296,6 +2308,9 @@ class SessionCoordinator:
                 del self._error_callbacks[session_id]
             # Issue #858: Cleanup per-session tool-call event
             self._tool_call_events.pop(session_id, None)
+            # Issue #1694: Cleanup per-session message-emitted barrier state
+            self._message_emitted_events.pop(session_id, None)
+            self._emitted_message_ids.pop(session_id, None)
 
             # Step 4: Force multiple garbage collections to ensure all handles are released
             gc.collect()
@@ -2864,6 +2879,11 @@ class SessionCoordinator:
             # Issue #858: Clear event so stale set() signals don't skip the next wait.
             if session_id in self._tool_call_events:
                 self._tool_call_events[session_id].clear()
+            # Issue #1694: Clear barrier state so stale set() signals / emitted message_ids
+            # from the prior conversation don't leak into the reset session.
+            if session_id in self._message_emitted_events:
+                self._message_emitted_events[session_id].clear()
+            self._emitted_message_ids.pop(session_id, None)
             # Issue #894: Cleanup retry sequence tracking on reset
             self._retry_sequences.pop(session_id, None)
 
@@ -4082,6 +4102,7 @@ class SessionCoordinator:
         input_params: dict[str, Any],
         requires_permission: bool = False,
         parent_tool_use_id: str | None = None,
+        message_id: str | None = None,
     ) -> ToolCall:
         """
         Create a new ToolCall when tool_use is detected (Issue #324).
@@ -4100,6 +4121,7 @@ class SessionCoordinator:
             created_at=time.time(),
             requires_permission=requires_permission,
             parent_tool_use_id=parent_tool_use_id,
+            message_id=message_id,
             display=ToolDisplayInfo(
                 state=ToolState.PENDING,
                 visible=True,
@@ -4419,6 +4441,27 @@ class SessionCoordinator:
         if session_id not in self._tool_call_events:
             self._tool_call_events[session_id] = asyncio.Event()
         return self._tool_call_events[session_id]
+
+    def mark_assistant_message_emitted(self, session_id: str, message_id: str) -> None:
+        """Issue #1694: Record that the assistant message envelope for message_id has
+        been appended to the session queue, and wake any permission callbacks waiting
+        on the barrier for it."""
+        if session_id not in self._emitted_message_ids:
+            self._emitted_message_ids[session_id] = set()
+        self._emitted_message_ids[session_id].add(message_id)
+        if session_id in self._message_emitted_events:
+            self._message_emitted_events[session_id].set()
+
+    def is_assistant_message_emitted(self, session_id: str, message_id: str) -> bool:
+        """Issue #1694: Check whether the assistant message envelope for message_id has
+        already been appended to the session queue."""
+        return message_id in self._emitted_message_ids.get(session_id, set())
+
+    def get_message_emitted_event(self, session_id: str) -> asyncio.Event:
+        """Return (creating if necessary) the per-session message-emitted notification event."""
+        if session_id not in self._message_emitted_events:
+            self._message_emitted_events[session_id] = asyncio.Event()
+        return self._message_emitted_events[session_id]
 
     def get_tool_call_by_id(self, session_id: str, tool_use_id: str) -> ToolCall | None:
         """O(1) lookup of an active tool call by its tool_use_id (Issue #953)."""

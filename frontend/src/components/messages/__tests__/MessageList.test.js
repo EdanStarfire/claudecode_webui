@@ -376,4 +376,100 @@ describe('attachOrphanedPermissionTools — Fix B (#1626)', () => {
     // Running tool must NOT be attached as orphaned permission tool
     expect(capturedOrphans.filter(t => t.id === 'tool-running-1').length).toBe(0)
   })
+
+  it('anchors by messageId to an earlier bubble, not the last one (#1694)', async () => {
+    const capturedOrphans = []
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: {
+        MessageItem: makeMessageItemStub(capturedOrphans),
+        TruncationBanner: true,
+        SubagentTimeline: true
+      }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    // Two assistant bubbles; the orphaned tool's messageId matches the EARLIER one.
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({
+        type: 'assistant',
+        content: 'First turn — requests permission',
+        message_id: 'msg-early',
+        metadata: { has_tool_uses: false, tool_uses: [] }
+      }),
+      makeMessage({
+        type: 'assistant',
+        content: 'Second, unrelated turn',
+        message_id: 'msg-late',
+        metadata: { has_tool_uses: false, tool_uses: [] }
+      })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    messageStore.toolCallsBySession.set(SESSION_ID, [{
+      id: 'tool-perm-early',
+      name: 'Edit',
+      input: { file_path: '/tmp/foo.txt' },
+      status: 'permission_required',
+      backendStatus: 'awaiting_permission',
+      messageId: 'msg-early'
+    }])
+    messageStore.toolCallsBySession = new Map(messageStore.toolCallsBySession)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    const items = screen.getAllByRole('article')
+    // Recency-based fallback would have attached to the LAST bubble (index 1).
+    expect(items[0].getAttribute('data-orphaned-ids')).toBe('tool-perm-early')
+    expect(items[1].getAttribute('data-orphaned-ids')).toBe('')
+  })
+
+  it('falls back to the last-bubble heuristic when messageId is absent (#1694)', async () => {
+    const capturedOrphans = []
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: {
+        MessageItem: makeMessageItemStub(capturedOrphans),
+        TruncationBanner: true,
+        SubagentTimeline: true
+      }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({
+        type: 'assistant',
+        content: 'First turn',
+        message_id: 'msg-early',
+        metadata: { has_tool_uses: false, tool_uses: [] }
+      }),
+      makeMessage({
+        type: 'assistant',
+        content: 'Second turn — the one requesting permission',
+        message_id: 'msg-late',
+        metadata: { has_tool_uses: false, tool_uses: [] }
+      })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    // No messageId on the tool — legacy stored data.
+    messageStore.toolCallsBySession.set(SESSION_ID, [{
+      id: 'tool-perm-legacy',
+      name: 'Edit',
+      input: { file_path: '/tmp/foo.txt' },
+      status: 'permission_required',
+      backendStatus: 'awaiting_permission'
+    }])
+    messageStore.toolCallsBySession = new Map(messageStore.toolCallsBySession)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    const items = screen.getAllByRole('article')
+    expect(items[0].getAttribute('data-orphaned-ids')).toBe('')
+    expect(items[1].getAttribute('data-orphaned-ids')).toBe('tool-perm-legacy')
+  })
 })

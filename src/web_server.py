@@ -670,9 +670,6 @@ class ClaudeWebUI:
                     parsed_message = self._message_processor.process_message(message_data, source="websocket")
                     websocket_data = self._message_processor.prepare_for_websocket(parsed_message)
 
-                # Issue #324: Emit tool_call messages for tool lifecycle events
-                await self._emit_tool_call_updates(session_id, parsed_message)
-
                 # Issue #1000/#1486: Propagate message_id for frontend streaming dedup.
                 # parsed_message.metadata is the most reliable source — MessageProcessor
                 # extracts sdk_msg.message_id into metadata['message_id'] for AssistantMessages.
@@ -693,9 +690,22 @@ class ClaudeWebUI:
                     "timestamp": datetime.now(UTC).isoformat()
                 }
 
+                # Issue #1694: Append the assistant envelope — and mark it on the message-
+                # emitted barrier — BEFORE emitting tool_call updates below. This guarantees
+                # the assistant bubble is always queued ahead of any tool_call event derived
+                # from it, both for same-coroutine emission and for the permission callback's
+                # separate asyncio Task, which waits on this barrier before appending its
+                # awaiting_permission update.
                 if session_id in self.session_queues:
                     self.session_queues[session_id].append(serialized)
                     logger.info(f"Appended message to session queue for {session_id}")
+
+                message_id_for_barrier = websocket_data.get('message_id')
+                if message_id_for_barrier:
+                    self.coordinator.mark_assistant_message_emitted(session_id, message_id_for_barrier)
+
+                # Issue #324: Emit tool_call messages for tool lifecycle events
+                await self._emit_tool_call_updates(session_id, parsed_message)
 
                 # Issue #952: Emit context_update after result messages using SDK API
                 msg_type = getattr(parsed_message, 'type', None)
@@ -747,6 +757,8 @@ class ClaudeWebUI:
                     if tool_id and tool_name:
                         # Create new ToolCall with PENDING status
                         # Issue #195: Pass parent_tool_use_id so it's stored in the ToolCall object
+                        # Issue #1694: Pass message_id so permission_service can wait on the
+                        # owning assistant message's emission barrier.
                         tool_call = self.coordinator.create_tool_call(
                             session_id=session_id,
                             tool_use_id=tool_id,
@@ -754,6 +766,7 @@ class ClaudeWebUI:
                             input_params=input_params,
                             requires_permission=False,  # Will be updated if permission is requested
                             parent_tool_use_id=parent_tool_use_id,
+                            message_id=metadata.get('message_id'),
                         )
 
                         # Emit tool_call message (parent_tool_use_id included via to_dict())
