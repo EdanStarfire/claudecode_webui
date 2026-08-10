@@ -27,6 +27,7 @@ const props = defineProps({
   content: { type: String, default: '' },
   streaming: { type: Boolean, default: false },         // Issue #1486 — forwards to comark
   caret: { type: [Boolean, Object], default: false },   // Issue #1486 — forwards to comark
+  selfAgentId: { type: String, default: null },         // Issue #1714 — skip self-mentions in agentMentionPlugin
 })
 
 const safeContent = computed(() => preprocessPortColons(preprocessLeadingThematicBreak(props.content)))
@@ -35,7 +36,7 @@ const safeContent = computed(() => preprocessPortColons(preprocessLeadingThemati
 provide('comark-streaming', computed(() => props.streaming))
 
 const wrapEl = ref(null)
-const plugins = useMarkdownPlugins()
+const plugins = useMarkdownPlugins({ selfAgentId: props.selfAgentId })
 const components = useMarkdownComponents()
 
 // Listeners registered before Suspense resolves are buffered and re-attached

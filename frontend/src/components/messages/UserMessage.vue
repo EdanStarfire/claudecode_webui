@@ -1,7 +1,10 @@
 <template>
   <div class="msg-wrapper msg-user" data-testid="user-message">
     <div class="msg-meta">
-      <span class="msg-role" :style="isComm ? { color: commColor.accent } : {}">{{ isComm ? commSenderName : 'user' }}</span>
+      <span class="msg-role" :style="isComm ? { color: commColor.accent } : {}">
+        <a v-if="commSenderSessionId" :href="`#/session/${commSenderSessionId}`" class="msg-role-link">{{ commSenderName }}</a>
+        <template v-else>{{ isComm ? commSenderName : 'user' }}</template>
+      </span>
       <span class="msg-time">{{ formattedTimestamp }}</span>
     </div>
     <div
@@ -25,7 +28,7 @@
       </button>
       <!-- Content (attachment section stripped from rendered markdown) -->
       <div class="msg-content-row">
-        <MarkdownView class="msg-text" ref="contentRef" :content="cleanContent" />
+        <MarkdownView class="msg-text" ref="contentRef" :content="cleanContent" :self-agent-id="commSenderId" />
         <button
           class="copy-markdown-btn"
           @click.stop="copyMarkdown"
@@ -113,6 +116,15 @@ const commColor = computed(() => isComm.value ? getAgentColor(props.message.meta
 const commSenderName = computed(() => props.message.metadata?.comm?.from_display_name || 'agent')
 
 const sessionStore = useSessionStore()
+
+// Issue #1714: jump-link to the sender's session when it still exists (from_minion_id
+// added in comm_router.py). No fallback to name-based lookup — avoids drift if the
+// sender was since renamed.
+const commSenderId = computed(() => props.message.metadata?.comm?.from_minion_id || null)
+const commSenderSessionId = computed(() => {
+  const id = commSenderId.value
+  return id && sessionStore.sessions.has(id) ? id : null
+})
 const resourceStore = useResourceStore()
 const messageStore = useMessageStore()
 
@@ -275,6 +287,17 @@ function truncate(text, maxLength) {
   font-size: 12px;
   font-weight: 600;
   color: var(--agent-color-user-accent);
+}
+
+.msg-role-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+.msg-role-link:hover {
+  text-decoration-style: solid;
 }
 
 .msg-time {

@@ -2,7 +2,9 @@
   <div class="outbound-comm-wrapper">
     <div class="outbound-comm-meta">
       <span class="outbound-comm-recipient" :style="{ color: recipientColor.accent }">
-        → {{ recipientName }}
+        →
+        <a v-if="recipientSessionId" :href="`#/session/${recipientSessionId}`" class="outbound-comm-recipient-link">{{ recipientName }}</a>
+        <template v-else>{{ recipientName }}</template>
       </span>
       <span v-if="commType" class="badge outbound-comm-type-badge" :class="commTypeBadgeClass">
         {{ commType }}
@@ -23,7 +25,7 @@
         borderLeftStyle: 'solid',
       }"
     >
-      <MarkdownView class="outbound-comm-content" ref="contentRef" :content="contentForRender" />
+      <MarkdownView class="outbound-comm-content" ref="contentRef" :content="contentForRender" :self-agent-id="senderSessionId" />
       <div v-if="attachments.length > 0" class="outbound-comm-attachments">
         <AttachmentChip
           v-for="(att, idx) in attachments"
@@ -49,6 +51,7 @@ import { computed, ref, toRef } from 'vue'
 import { useResourceImages } from '@/composables/useResourceImages'
 import { useToolResult } from '@/composables/useToolResult'
 import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
+import { resolveAgentByIdentifier } from '@/utils/agentMentions'
 import { useSessionStore } from '@/stores/session'
 import { useResourceStore } from '@/stores/resource'
 import AttachmentChip from '@/components/common/AttachmentChip.vue'
@@ -136,6 +139,21 @@ const contentRef = ref(null)
 const currentSessionId = computed(() => sessionStore.currentSessionId)
 useResourceImages(contentRef, currentSessionId)
 
+// Issue #1714: resolve the recipient's session id (slug-first, then display-name
+// fallback) scoped to the sender's project, so the recipient name can jump-link.
+const senderSessionId = computed(() => props.toolCall.session_id || sessionStore.currentSessionId)
+const projectAgents = computed(() => {
+  const sender = senderSessionId.value ? sessionStore.sessions.get(senderSessionId.value) : null
+  const projectId = sender?.project_id
+  if (!projectId) return []
+  return sessionStore.sessionsInProject(projectId).value.map(s => ({
+    id: s.session_id,
+    slug: s.slug,
+    name: s.name,
+  }))
+})
+const recipientSessionId = computed(() => resolveAgentByIdentifier(recipientName.value, projectAgents.value)?.id || null)
+
 // Result handling
 const { hasResult, isError, resultContent } = useToolResult(toRef(props, 'toolCall'))
 
@@ -166,6 +184,17 @@ defineExpose({ summary, params, result })
 .outbound-comm-recipient {
   font-size: 12px;
   font-weight: 600;
+}
+
+.outbound-comm-recipient-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+.outbound-comm-recipient-link:hover {
+  text-decoration-style: solid;
 }
 
 .outbound-comm-type-badge {
