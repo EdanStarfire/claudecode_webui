@@ -7,6 +7,8 @@
  */
 
 const STORAGE_KEY = 'webui-notification-settings'
+const CROSS_TAB_STORAGE_KEY = 'webui-native-notif-lastfired'
+const CROSS_TAB_SUPPRESS_WINDOW_MS = 2000
 
 const DEFAULT_SETTINGS = {
   soundEnabled: false,
@@ -20,7 +22,24 @@ const DEFAULT_SETTINGS = {
     session_error: true,
     minion_comm: false,
     session_restart_error: true,
+  },
+  nativeEnabled: false,
+  nativeEvents: {
+    permission_prompt: true,
+    task_complete: true,
+    session_error: true,
+    minion_comm: false,
+    session_restart_error: true,
   }
+}
+
+// Short titles for native notifications per event type
+const NATIVE_TITLES = {
+  permission_prompt: 'Permission Required',
+  task_complete: 'Task Complete',
+  session_error: 'Session Error',
+  minion_comm: 'Minion Communication',
+  session_restart_error: 'Session Restart Error'
 }
 
 // Event-specific TTS message templates
@@ -167,13 +186,18 @@ export function getSettings() {
       return {
         ...DEFAULT_SETTINGS,
         ...saved,
-        events: { ...DEFAULT_SETTINGS.events, ...(saved.events || {}) }
+        events: { ...DEFAULT_SETTINGS.events, ...(saved.events || {}) },
+        nativeEvents: { ...DEFAULT_SETTINGS.nativeEvents, ...(saved.nativeEvents || {}) }
       }
     }
   } catch {
     // Corrupted data, return defaults
   }
-  return { ...DEFAULT_SETTINGS, events: { ...DEFAULT_SETTINGS.events } }
+  return {
+    ...DEFAULT_SETTINGS,
+    events: { ...DEFAULT_SETTINGS.events },
+    nativeEvents: { ...DEFAULT_SETTINGS.nativeEvents }
+  }
 }
 
 /**
@@ -184,7 +208,8 @@ export function updateSettings(partial) {
   const updated = {
     ...current,
     ...partial,
-    events: { ...current.events, ...(partial.events || {}) }
+    events: { ...current.events, ...(partial.events || {}) },
+    nativeEvents: { ...current.nativeEvents, ...(partial.nativeEvents || {}) }
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify(updated))
   return updated
@@ -199,6 +224,71 @@ function shouldDebounce(eventType) {
   if (now - last < 500) return true
   debounceMap.set(eventType, now)
   return false
+}
+
+/**
+ * Check if the Notification API is available in this browser.
+ */
+export function isNativeNotificationAvailable() {
+  return typeof Notification !== 'undefined'
+}
+
+/**
+ * Get the current native notification permission state.
+ * @returns {'unsupported' | 'default' | 'granted' | 'denied'}
+ */
+export function getNativePermission() {
+  if (!isNativeNotificationAvailable()) return 'unsupported'
+  return Notification.permission
+}
+
+/**
+ * Request native notification permission. Must be called synchronously
+ * from a UI click handler (no await before it) to satisfy browser
+ * user-gesture requirements.
+ */
+export async function requestNativePermission() {
+  if (!isNativeNotificationAvailable()) return 'unsupported'
+  return Notification.requestPermission()
+}
+
+/**
+ * Best-effort cross-tab dedup: returns true if this event fired in another
+ * tab within the suppression window. Read-then-write, so there's a small
+ * race window between tabs.
+ */
+function shouldSuppressCrossTab(eventType) {
+  const now = Date.now()
+  try {
+    const raw = localStorage.getItem(CROSS_TAB_STORAGE_KEY)
+    const lastFired = raw ? JSON.parse(raw) : {}
+    const last = lastFired[eventType] || 0
+    const suppress = now - last < CROSS_TAB_SUPPRESS_WINDOW_MS
+    lastFired[eventType] = now
+    localStorage.setItem(CROSS_TAB_STORAGE_KEY, JSON.stringify(lastFired))
+    return suppress
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Fire a native browser/OS notification for an event type.
+ */
+function fireNativeNotification(eventType, context) {
+  if (!isNativeNotificationAvailable()) return
+  if (Notification.permission !== 'granted') return
+  if (shouldSuppressCrossTab(eventType)) return
+
+  const title = NATIVE_TITLES[eventType] || 'Claude WebUI'
+  const templateFn = TTS_TEMPLATES[eventType]
+  const body = templateFn ? templateFn(context) : ''
+
+  try {
+    new Notification(title, { body, tag: eventType })
+  } catch (e) {
+    console.warn('Failed to fire native notification:', e)
+  }
 }
 
 /**
@@ -268,33 +358,42 @@ function processTTSQueue() {
 export function notify(eventType, context = {}) {
   const settings = getSettings()
 
-  // Early return if sounds disabled or event disabled
-  if (!settings.soundEnabled && !settings.ttsEnabled) return
-  if (!settings.events[eventType]) return
+  const soundChannelActive = (settings.soundEnabled || settings.ttsEnabled) && settings.events[eventType]
+  const nativeChannelActive = settings.nativeEnabled && settings.nativeEvents[eventType]
 
-  // Debounce
+  // Early return if neither channel applies to this event
+  if (!soundChannelActive && !nativeChannelActive) return
+
+  // Debounce (shared between sound/TTS and native)
   if (shouldDebounce(eventType)) return
 
-  // Play sound
-  if (settings.soundEnabled) {
-    const gain = settings.volume / 100
-    const toneFn = TONE_DEFS[eventType]
-    if (toneFn) {
-      try {
-        toneFn(gain)
-      } catch (e) {
-        console.warn('Failed to play notification sound:', e)
+  if (soundChannelActive) {
+    // Play sound
+    if (settings.soundEnabled) {
+      const gain = settings.volume / 100
+      const toneFn = TONE_DEFS[eventType]
+      if (toneFn) {
+        try {
+          toneFn(gain)
+        } catch (e) {
+          console.warn('Failed to play notification sound:', e)
+        }
+      }
+    }
+
+    // TTS
+    if (settings.ttsEnabled && window.speechSynthesis) {
+      const templateFn = TTS_TEMPLATES[eventType]
+      if (templateFn) {
+        const text = templateFn(context)
+        queueTTS(text, settings.ttsVoice, settings.ttsSpeed)
       }
     }
   }
 
-  // TTS
-  if (settings.ttsEnabled && window.speechSynthesis) {
-    const templateFn = TTS_TEMPLATES[eventType]
-    if (templateFn) {
-      const text = templateFn(context)
-      queueTTS(text, settings.ttsVoice, settings.ttsSpeed)
-    }
+  // Native browser/OS notification channel (independent of sound/TTS)
+  if (nativeChannelActive) {
+    fireNativeNotification(eventType, context)
   }
 }
 
@@ -318,6 +417,18 @@ export function testSound(eventType = 'task_complete') {
 export function testTTS(text = 'This is a test notification') {
   const settings = getSettings()
   speak(text, settings.ttsVoice, settings.ttsSpeed)
+}
+
+/**
+ * Fire a test native notification. Only fires if permission is currently granted.
+ */
+export function testNativeNotification() {
+  if (getNativePermission() !== 'granted') return
+  try {
+    new Notification('Claude WebUI', { body: 'This is a test notification', tag: 'test' })
+  } catch (e) {
+    console.warn('Failed to fire test native notification:', e)
+  }
 }
 
 /**
@@ -346,6 +457,10 @@ export function useNotifications() {
     getVoices,
     getSettings,
     updateSettings,
-    isTTSAvailable
+    isTTSAvailable,
+    isNativeNotificationAvailable,
+    getNativePermission,
+    requestNativePermission,
+    testNativeNotification
   }
 }
