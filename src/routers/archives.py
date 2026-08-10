@@ -1,10 +1,10 @@
 """Archive endpoints: /api/projects/{id}/archives/*, /api/projects/{id}/deleted-agents,
 /api/sessions/{id}/archives, /api/sessions/{id}/history-archives-status"""
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response
+from fastapi import APIRouter, HTTPException, Request
 
 from ..exception_handlers import handle_exceptions
+from ..http_range import build_resource_response
 
 
 def build_router(webui) -> APIRouter:
@@ -78,7 +78,7 @@ def build_router(webui) -> APIRouter:
     )
     @handle_exceptions("get archive resource file")
     async def get_archive_resource_file(
-        project_id: str, session_id: str, archive_id: str, resource_id: str
+        project_id: str, session_id: str, archive_id: str, resource_id: str, request: Request
     ):
         """Get raw file data for a resource in an archive."""
         if not await webui.service.validate_project_exists(project_id):
@@ -105,12 +105,12 @@ def build_router(webui) -> APIRouter:
             "original_name", f"{resource_id}.bin"
         )
 
-        return Response(
+        return build_resource_response(
+            request,
             content=resource_bytes,
             media_type=content_type,
-            headers={
-                "Content-Disposition": f'inline; filename="{original_name}"'
-            },
+            filename=original_name,
+            disposition="inline",
         )
 
     @router.get("/api/projects/{project_id}/deleted-agents")

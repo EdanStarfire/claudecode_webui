@@ -194,6 +194,158 @@ class TestDownloadResource:
             assert resp.status_code == 200
             assert "attachment" in resp.headers.get("content-disposition", "")
 
+    async def test_download_resource_with_range_returns_206(self, api_integration_env):
+        """Download endpoint shares the Range helper — 206 with correct slice (Issue #1716)."""
+        client = api_integration_env["client"]
+        session = await _create_session_with_project(api_integration_env)
+        sid = session["session_id"]
+
+        await client.post(
+            f"/api/sessions/{sid}/files",
+            files={"file": ("dl-range.txt", b"download content here", "text/plain")},
+        )
+
+        res_resp = await client.get(f"/api/sessions/{sid}/resources")
+        resources = res_resp.json()["resources"]
+        if resources:
+            rid = resources[0]["resource_id"]
+            resp = await client.get(
+                f"/api/sessions/{sid}/resources/{rid}/download",
+                headers={"Range": "bytes=0-3"},
+            )
+            assert resp.status_code == 206
+            assert resp.content == b"down"
+            assert "attachment" in resp.headers.get("content-disposition", "")
+
+
+class TestResourceRangeRequests:
+    """Tests for HTTP Range support on GET /api/sessions/{session_id}/resources/{resource_id} (Issue #1716)."""
+
+    async def _upload_and_get_resource_id(self, env, client, sid, filename, content, content_type):
+        await client.post(
+            f"/api/sessions/{sid}/files",
+            files={"file": (filename, content, content_type)},
+        )
+        res_resp = await client.get(f"/api/sessions/{sid}/resources")
+        resources = res_resp.json()["resources"]
+        assert resources
+        return resources[0]["resource_id"]
+
+    async def test_no_range_header_returns_200_full_body(self, api_integration_env):
+        client = api_integration_env["client"]
+        session = await _create_session_with_project(api_integration_env)
+        sid = session["session_id"]
+        content = b"0123456789" * 10  # 100 bytes
+
+        rid = await self._upload_and_get_resource_id(
+            api_integration_env, client, sid, "range-content.txt", content, "text/plain"
+        )
+
+        resp = await client.get(f"/api/sessions/{sid}/resources/{rid}")
+        assert resp.status_code == 200
+        assert resp.content == content
+        assert resp.headers.get("accept-ranges") == "bytes"
+
+    async def test_mid_range_returns_206_correct_slice(self, api_integration_env):
+        client = api_integration_env["client"]
+        session = await _create_session_with_project(api_integration_env)
+        sid = session["session_id"]
+        content = b"0123456789" * 10  # 100 bytes
+
+        rid = await self._upload_and_get_resource_id(
+            api_integration_env, client, sid, "range-content.txt", content, "text/plain"
+        )
+
+        resp = await client.get(
+            f"/api/sessions/{sid}/resources/{rid}", headers={"Range": "bytes=10-19"}
+        )
+        assert resp.status_code == 206
+        assert resp.content == content[10:20]
+        assert resp.headers.get("content-range") == "bytes 10-19/100"
+        assert resp.headers.get("content-length") == "10"
+        assert resp.headers.get("accept-ranges") == "bytes"
+
+    async def test_open_ended_range_returns_206_to_eof(self, api_integration_env):
+        client = api_integration_env["client"]
+        session = await _create_session_with_project(api_integration_env)
+        sid = session["session_id"]
+        content = b"0123456789" * 10  # 100 bytes
+
+        rid = await self._upload_and_get_resource_id(
+            api_integration_env, client, sid, "range-content.txt", content, "text/plain"
+        )
+
+        resp = await client.get(
+            f"/api/sessions/{sid}/resources/{rid}", headers={"Range": "bytes=90-"}
+        )
+        assert resp.status_code == 206
+        assert resp.content == content[90:]
+        assert resp.headers.get("content-range") == "bytes 90-99/100"
+
+    async def test_suffix_range_returns_206(self, api_integration_env):
+        client = api_integration_env["client"]
+        session = await _create_session_with_project(api_integration_env)
+        sid = session["session_id"]
+        content = b"0123456789" * 10  # 100 bytes
+
+        rid = await self._upload_and_get_resource_id(
+            api_integration_env, client, sid, "range-content.txt", content, "text/plain"
+        )
+
+        resp = await client.get(
+            f"/api/sessions/{sid}/resources/{rid}", headers={"Range": "bytes=-10"}
+        )
+        assert resp.status_code == 206
+        assert resp.content == content[-10:]
+        assert resp.headers.get("content-range") == "bytes 90-99/100"
+
+    async def test_malformed_range_returns_416(self, api_integration_env):
+        client = api_integration_env["client"]
+        session = await _create_session_with_project(api_integration_env)
+        sid = session["session_id"]
+        content = b"0123456789" * 10  # 100 bytes
+
+        rid = await self._upload_and_get_resource_id(
+            api_integration_env, client, sid, "range-content.txt", content, "text/plain"
+        )
+
+        resp = await client.get(
+            f"/api/sessions/{sid}/resources/{rid}", headers={"Range": "bytes=abc-def"}
+        )
+        assert resp.status_code == 416
+        assert resp.headers.get("content-range") == "bytes */100"
+
+    async def test_out_of_bounds_range_returns_416(self, api_integration_env):
+        client = api_integration_env["client"]
+        session = await _create_session_with_project(api_integration_env)
+        sid = session["session_id"]
+        content = b"0123456789" * 10  # 100 bytes
+
+        rid = await self._upload_and_get_resource_id(
+            api_integration_env, client, sid, "range-content.txt", content, "text/plain"
+        )
+
+        resp = await client.get(
+            f"/api/sessions/{sid}/resources/{rid}", headers={"Range": "bytes=200-300"}
+        )
+        assert resp.status_code == 416
+        assert resp.headers.get("content-range") == "bytes */100"
+
+    async def test_non_video_resource_unaffected_without_range_header(self, api_integration_env):
+        """Regression: an image resource still gets a full 200 response when no Range header is sent."""
+        client = api_integration_env["client"]
+        session = await _create_session_with_project(api_integration_env)
+        sid = session["session_id"]
+        png_data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+
+        rid = await self._upload_and_get_resource_id(
+            api_integration_env, client, sid, "image.png", png_data, "image/png"
+        )
+
+        resp = await client.get(f"/api/sessions/{sid}/resources/{rid}")
+        assert resp.status_code == 200
+        assert resp.content == png_data
+
 
 class TestRemoveResource:
     async def test_soft_remove_resource(self, api_integration_env):
