@@ -383,6 +383,7 @@ class CommRouter:
                 "comm": {
                     "from_name": from_name_slug,
                     "from_display_name": from_display,
+                    "from_minion_id": comm.from_minion_id,
                     "comm_type": comm.comm_type.value if hasattr(comm.comm_type, 'value') else str(comm.comm_type),
                 }
             }
