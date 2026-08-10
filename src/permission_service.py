@@ -19,6 +19,7 @@ from claude_agent_sdk import PermissionUpdate
 from claude_agent_sdk.types import PermissionRuleValue
 
 from .event_queue import EventQueue
+from .logging_config import get_logger
 from .models.messages import (
     PermissionInfo,
     PermissionRequestMessage,
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
     from .session_coordinator import SessionCoordinator
 
 logger = logging.getLogger(__name__)
+debug_logger = get_logger('sdk_debug', category='PERMISSION_CALLBACK')
 
 
 class PermissionService:
@@ -64,17 +66,17 @@ class PermissionService:
             display_name    = getattr(context, 'display_name', None) if context else None
             description     = getattr(context, 'description', None) if context else None
 
-            logger.info(
+            debug_logger.info(
                 f"PERMISSION CALLBACK TRIGGERED: tool={tool_name}, session={session_id}, "
                 f"request_id={request_id}, tool_use_id={tool_use_id}, agent_id={agent_id}"
             )
-            logger.info(f"Permission requested for tool: {tool_name} (request_id: {request_id})")
+            debug_logger.info(f"Permission requested for tool: {tool_name} (request_id: {request_id})")
 
             # Issue #403: Auto-approve Read tool for user-uploaded files
             if tool_name == 'Read':
                 file_path = input_params.get('file_path', '')
                 if file_path and self.coordinator.is_uploaded_file(session_id, file_path):
-                    logger.info(f"Auto-approving Read for uploaded file: {file_path}")
+                    debug_logger.info(f"Auto-approving Read for uploaded file: {file_path}")
                     return {"behavior": "allow"}
 
             # Extract suggestions from context
@@ -85,7 +87,7 @@ class PermissionService:
                         suggestions.append(s.to_dict())
                     else:
                         suggestions.append(s)
-                logger.info(f"Permission context has {len(suggestions)} suggestions")
+                debug_logger.info(f"Permission context has {len(suggestions)} suggestions")
 
             # Store permission request message using dataclass (Phase 0, Issue #310)
             try:
@@ -168,7 +170,7 @@ class PermissionService:
                                 if tool_call:
                                     break
                         if not tool_call:
-                            logger.warning(
+                            debug_logger.warning(
                                 f"[PERMISSIONS] Race condition NOT resolved after 5.0s "
                                 f"for {tool_name} in session {session_id}. "
                                 f"Auto-denying permission to prevent deadlock."
@@ -214,7 +216,7 @@ class PermissionService:
                             if not self.coordinator.is_assistant_message_emitted(
                                 session_id, tool_call.message_id
                             ):
-                                logger.warning(
+                                debug_logger.warning(
                                     f"[PERMISSIONS] Assistant message envelope for "
                                     f"message_id {tool_call.message_id} not emitted after "
                                     f"2.0s in session {session_id}. Proceeding anyway "
@@ -255,10 +257,10 @@ class PermissionService:
                             }
                             if session_id in self.session_queues:
                                 self.session_queues[session_id].append(websocket_message)
-                            logger.info(f"Appended tool_call awaiting_permission for {tool_name} in session {session_id}")
+                            debug_logger.info(f"Appended tool_call awaiting_permission for {tool_name} in session {session_id}")
                     else:
                         # Issue #616: No ToolCall found after retries — auto-deny to prevent deadlock
-                        logger.warning(
+                        debug_logger.warning(
                             f"Could not find matching ToolCall for permission request: "
                             f"{tool_name} in session {session_id}. Auto-denying."
                         )
@@ -283,12 +285,12 @@ class PermissionService:
             # This provides visual feedback that the session is blocked on user input
             try:
                 await self.coordinator.session_manager.pause_session(session_id)
-                logger.info(f"Set session {session_id} to PAUSED state while waiting for permission")
+                debug_logger.info(f"Set session {session_id} to PAUSED state while waiting for permission")
             except Exception:
                 logger.exception(f"Failed to pause session {session_id} for permission wait")
 
             # Wait for user permission decision via WebSocket
-            logger.info(f"PERMISSION CALLBACK: Creating Future for request_id {request_id}")
+            debug_logger.info(f"PERMISSION CALLBACK: Creating Future for request_id {request_id}")
 
             # Create a Future to wait for user response
             permission_future = asyncio.Future()
@@ -296,9 +298,9 @@ class PermissionService:
 
             try:
                 # Wait for user decision (no timeout - wait indefinitely)
-                logger.info(f"PERMISSION CALLBACK: Waiting for user decision on request_id {request_id}")
+                debug_logger.info(f"PERMISSION CALLBACK: Waiting for user decision on request_id {request_id}")
                 response = await permission_future
-                logger.info(f"PERMISSION CALLBACK: Received user decision for request_id {request_id}: {response}")
+                debug_logger.info(f"PERMISSION CALLBACK: Received user decision for request_id {request_id}: {response}")
 
                 # Restore session to ACTIVE state after permission decision
                 # The session will continue processing, which will show as ACTIVE+processing (purple)
@@ -307,7 +309,7 @@ class PermissionService:
                     if session_info and session_info.state == SessionState.PAUSED:
                         # Use update_session_state instead of start_session to avoid re-initializing SDK
                         await self.coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
-                        logger.info(f"Restored session {session_id} to ACTIVE state after permission decision")
+                        debug_logger.info(f"Restored session {session_id} to ACTIVE state after permission decision")
                 except Exception:
                     logger.exception(f"Failed to restore session {session_id} to ACTIVE after permission")
 
@@ -357,7 +359,7 @@ class PermissionService:
                                 await self.coordinator.session_manager.update_additional_directories(
                                     session_id, suggestion_dict['directories']
                                 )
-                                logger.info(
+                                debug_logger.info(
                                     f"Updated session {session_id} additional_directories "
                                     f"with {len(suggestion_dict['directories'])} dirs"
                                 )
@@ -366,7 +368,7 @@ class PermissionService:
 
                     response['updated_permissions'] = updated_permissions
                     response['applied_updates_for_storage'] = applied_updates_for_storage
-                    logger.info(f"Built {len(updated_permissions)} permission updates from suggestions")
+                    debug_logger.info(f"Built {len(updated_permissions)} permission updates from suggestions")
 
                     # Issue #631: Audit log when user edits permission suggestion text
                     if response.get("selected_suggestions"):
@@ -392,7 +394,7 @@ class PermissionService:
                                             if orig_content else orig_tool
                                         )
                                         if orig_tool == tool_name_applied and orig_text != applied_text:
-                                            logger.info(
+                                            debug_logger.info(
                                                 f"Permission edited by user: "
                                                 f"original='{orig_text}' → edited='{applied_text}' "
                                                 f"in session {session_id}"
@@ -422,7 +424,7 @@ class PermissionService:
                             await self.coordinator.session_manager.update_allowed_tools(
                                 session_id, list(tools_to_persist)
                             )
-                            logger.info(
+                            debug_logger.info(
                                 f"Persisted {len(tools_to_persist)} approved tools to session "
                                 f"{session_id} allowed_tools: {tools_to_persist}"
                             )
@@ -519,7 +521,7 @@ class PermissionService:
                             }
                             if session_id in self.session_queues:
                                 self.session_queues[session_id].append(websocket_message)
-                            logger.info(
+                            debug_logger.info(
                                 f"Appended tool_call {'running' if granted else 'denied'} "
                                 f"for {tool_name} in session {session_id}"
                             )
@@ -532,7 +534,7 @@ class PermissionService:
             except Exception:
                 logger.exception("Failed to store permission response message")
 
-            logger.info(f"Permission {decision} for tool: {tool_name} (request_id: {request_id})")
+            debug_logger.info(f"Permission {decision} for tool: {tool_name} (request_id: {request_id})")
             return response
 
         return permission_callback
@@ -559,10 +561,10 @@ class PermissionService:
                         "message": f"Session {session_id} terminated - auto-denying pending permission"
                     }
                     future.set_result(response)
-                    logger.info(f"Auto-denied pending permission {request_id} due to session {session_id} termination")
+                    debug_logger.info(f"Auto-denied pending permission {request_id} due to session {session_id} termination")
 
             if permissions_to_cleanup:
-                logger.info(f"Cleaned up {len(permissions_to_cleanup)} pending permissions for session {session_id}")
+                debug_logger.info(f"Cleaned up {len(permissions_to_cleanup)} pending permissions for session {session_id}")
 
         except Exception:
             logger.exception(f"Error cleaning up pending permissions for session {session_id}")
