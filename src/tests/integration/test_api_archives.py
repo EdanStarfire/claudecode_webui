@@ -129,6 +129,29 @@ class TestArchiveResources:
                 )
                 assert resp.status_code == 200
 
+    async def test_get_archive_resource_file_range_request_returns_206(self, api_integration_env):
+        """GET .../resources/{rid} with a Range header — 206 with correct slice (Issue #1716)."""
+        client = api_integration_env["client"]
+        pid, sid = await _create_and_delete_session(api_integration_env)
+
+        resp = await client.get(f"/api/projects/{pid}/archives/{sid}")
+        archives = resp.json().get("archives", [])
+
+        if archives:
+            archive_id = archives[0]["archive_id"]
+            res_resp = await client.get(
+                f"/api/projects/{pid}/archives/{sid}/{archive_id}/resources"
+            )
+            resources = res_resp.json().get("resources", [])
+            if resources:
+                rid = resources[0]["resource_id"]
+                resp = await client.get(
+                    f"/api/projects/{pid}/archives/{sid}/{archive_id}/resources/{rid}",
+                    headers={"Range": "bytes=0-3"},
+                )
+                assert resp.status_code == 206
+                assert resp.headers.get("content-range", "").startswith("bytes 0-3/")
+
     async def test_get_archive_resource_file_nonexistent(self, api_integration_env):
         client = api_integration_env["client"]
         pid, sid = await _create_and_delete_session(api_integration_env)

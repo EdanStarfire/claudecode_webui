@@ -5,10 +5,11 @@ import os
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
 from ..exception_handlers import handle_exceptions
 from ..file_upload import FileUploadError, FileUploadManager
+from ..http_range import build_resource_response
 
 logger = logging.getLogger(__name__)
 
@@ -149,10 +150,8 @@ def build_router(webui) -> APIRouter:
 
     @router.get("/api/sessions/{session_id}/resources/{resource_id}")
     @handle_exceptions("get session resource")
-    async def get_session_resource(session_id: str, resource_id: str):
+    async def get_session_resource(session_id: str, resource_id: str, request: Request):
         """Get raw file data for a specific resource"""
-        from fastapi.responses import Response
-
         # Get resource metadata to determine content type
         resource_meta = await webui.coordinator.get_session_resource_by_id(session_id, resource_id)
 
@@ -168,20 +167,18 @@ def build_router(webui) -> APIRouter:
         content_type = resource_meta.get("mime_type", "application/octet-stream")
         original_name = resource_meta.get("original_name", f"{resource_id}.bin")
 
-        return Response(
+        return build_resource_response(
+            request,
             content=resource_bytes,
             media_type=content_type,
-            headers={
-                "Content-Disposition": f'inline; filename="{original_name}"'
-            }
+            filename=original_name,
+            disposition="inline",
         )
 
     @router.get("/api/sessions/{session_id}/resources/{resource_id}/download")
     @handle_exceptions("download session resource")
-    async def download_session_resource(session_id: str, resource_id: str):
+    async def download_session_resource(session_id: str, resource_id: str, request: Request):
         """Download a resource file"""
-        from fastapi.responses import Response
-
         # Get resource metadata
         resource_meta = await webui.coordinator.get_session_resource_by_id(session_id, resource_id)
 
@@ -196,12 +193,12 @@ def build_router(webui) -> APIRouter:
         content_type = resource_meta.get("mime_type", "application/octet-stream")
         original_name = resource_meta.get("original_name", f"{resource_id}.bin")
 
-        return Response(
+        return build_resource_response(
+            request,
             content=resource_bytes,
             media_type=content_type,
-            headers={
-                "Content-Disposition": f'attachment; filename="{original_name}"'
-            }
+            filename=original_name,
+            disposition="attachment",
         )
 
     # Issue #820: Serve session /tmp files directly (for containerized agents)
