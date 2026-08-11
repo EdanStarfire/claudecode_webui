@@ -30,6 +30,15 @@ const DEFAULT_SETTINGS = {
     session_error: true,
     minion_comm: false,
     session_restart_error: true,
+  },
+  // Issue #1725: tray defaults to ON — passive/non-intrusive, unlike sound/native which opt-in
+  trayEnabled: true,
+  trayEvents: {
+    permission_prompt: true,
+    task_complete: true,
+    session_error: true,
+    minion_comm: false,
+    session_restart_error: true,
   }
 }
 
@@ -65,6 +74,18 @@ const TTS_TEMPLATES = {
     const id = ctx?.sessionId || 'Session'
     return `Restart error for ${id}: ${ctx?.error || 'unknown error'}`
   }
+}
+
+/**
+ * Resolve the tray entry title/body for an event type, reusing the same
+ * copy already shown in native notifications for consistent messaging
+ * across all three channels (Issue #1725).
+ */
+export function getEventLabel(eventType, context = {}) {
+  const title = NATIVE_TITLES[eventType] || 'Claude WebUI'
+  const templateFn = TTS_TEMPLATES[eventType]
+  const body = templateFn ? templateFn(context) : ''
+  return { title, body }
 }
 
 // Singleton state
@@ -187,7 +208,8 @@ export function getSettings() {
         ...DEFAULT_SETTINGS,
         ...saved,
         events: { ...DEFAULT_SETTINGS.events, ...(saved.events || {}) },
-        nativeEvents: { ...DEFAULT_SETTINGS.nativeEvents, ...(saved.nativeEvents || {}) }
+        nativeEvents: { ...DEFAULT_SETTINGS.nativeEvents, ...(saved.nativeEvents || {}) },
+        trayEvents: { ...DEFAULT_SETTINGS.trayEvents, ...(saved.trayEvents || {}) }
       }
     }
   } catch {
@@ -196,7 +218,8 @@ export function getSettings() {
   return {
     ...DEFAULT_SETTINGS,
     events: { ...DEFAULT_SETTINGS.events },
-    nativeEvents: { ...DEFAULT_SETTINGS.nativeEvents }
+    nativeEvents: { ...DEFAULT_SETTINGS.nativeEvents },
+    trayEvents: { ...DEFAULT_SETTINGS.trayEvents }
   }
 }
 
@@ -209,7 +232,8 @@ export function updateSettings(partial) {
     ...current,
     ...partial,
     events: { ...current.events, ...(partial.events || {}) },
-    nativeEvents: { ...current.nativeEvents, ...(partial.nativeEvents || {}) }
+    nativeEvents: { ...current.nativeEvents, ...(partial.nativeEvents || {}) },
+    trayEvents: { ...current.trayEvents, ...(partial.trayEvents || {}) }
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify(updated))
   return updated
@@ -360,9 +384,10 @@ export function notify(eventType, context = {}) {
 
   const soundChannelActive = (settings.soundEnabled || settings.ttsEnabled) && settings.events[eventType]
   const nativeChannelActive = settings.nativeEnabled && settings.nativeEvents[eventType]
+  const trayChannelActive = settings.trayEnabled && settings.trayEvents[eventType]
 
-  // Early return if neither channel applies to this event
-  if (!soundChannelActive && !nativeChannelActive) return
+  // Early return if no channel applies to this event
+  if (!soundChannelActive && !nativeChannelActive && !trayChannelActive) return
 
   // Debounce (shared between sound/TTS and native)
   if (shouldDebounce(eventType)) return
@@ -394,6 +419,14 @@ export function notify(eventType, context = {}) {
   // Native browser/OS notification channel (independent of sound/TTS)
   if (nativeChannelActive) {
     fireNativeNotification(eventType, context)
+  }
+
+  // Tray channel (independent of sound/TTS and native) — lazy import avoids a
+  // static cycle with the Pinia store, which isn't needed by non-tray callers.
+  if (trayChannelActive) {
+    import('@/stores/notificationTray').then(({ useNotificationTrayStore }) => {
+      useNotificationTrayStore().addEntry(eventType, context)
+    }).catch(e => console.warn('Failed to add tray entry:', e))
   }
 }
 
@@ -461,6 +494,7 @@ export function useNotifications() {
     isNativeNotificationAvailable,
     getNativePermission,
     requestNativePermission,
-    testNativeNotification
+    testNativeNotification,
+    getEventLabel
   }
 }

@@ -19,6 +19,8 @@ export const settingsIndex = [
   { section: 'notifications', fieldKey: 'notifyOnCompletion',   label: 'Notify on Completion' },
   { section: 'notifications', fieldKey: 'notifyOnPermission',   label: 'Notify on Permission' },
   { section: 'notifications', fieldKey: 'notifyOnError',        label: 'Notify on Error' },
+  { section: 'notifications', fieldKey: 'trayEnabled',          label: 'Enable Notification Tray' },
+  { section: 'notifications', fieldKey: 'trayEvents',           label: 'Notification Tray Events' },
 
   // Read Aloud section (ReadAloudTab)
   { section: 'read-aloud', fieldKey: 'tts_enabled', label: 'Read Aloud' },

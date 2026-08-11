@@ -14,6 +14,7 @@
       >
         <span class="indicator-dot"></span>
       </div>
+      <TrayDropdown />
       <button
         class="header-btn theme-toggle-btn"
         :class="`theme-btn-${uiStore.theme}`"
@@ -57,6 +58,7 @@ import { useUIStore } from '@/stores/ui'
 import { usePollingStore } from '@/stores/polling'
 import { useSessionStore } from '@/stores/session'
 import { useRoute, useRouter } from 'vue-router'
+import TrayDropdown from './TrayDropdown.vue'
 
 const uiStore = useUIStore()
 const wsStore = usePollingStore()

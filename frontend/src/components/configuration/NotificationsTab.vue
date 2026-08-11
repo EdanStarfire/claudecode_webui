@@ -197,6 +197,54 @@
         Native notifications are not available in this browser.
       </p>
     </template>
+
+    <hr class="my-3">
+
+    <!-- Notification Tray Section -->
+    <h6 class="mb-2">Notification Tray</h6>
+    <p class="text-muted small mb-3">
+      Keep a persistent, in-app list of events accessible from the bell icon in the
+      header. Independent of the sound, text-to-speech, and native notification
+      settings above.
+    </p>
+
+    <div class="form-check form-switch mb-3">
+      <input
+        class="form-check-input"
+        type="checkbox"
+        id="trayEnabled"
+        :checked="config.trayEnabled"
+        @change="toggle('trayEnabled', $event)"
+      >
+      <label class="form-check-label" for="trayEnabled">
+        Enable Notification Tray
+      </label>
+    </div>
+
+    <div v-if="config.trayEnabled" class="ms-3 mb-3">
+      <div class="mt-2 mb-2">
+        <label class="form-label small mb-1">Events</label>
+        <div v-for="evt in trayEventOptions" :key="evt.key" class="form-check mb-1">
+          <input
+            class="form-check-input"
+            type="checkbox"
+            :id="'tray-evt-' + evt.key"
+            :checked="config.trayEvents[evt.key]"
+            @change="toggleTrayEvent(evt.key, $event)"
+          >
+          <label class="form-check-label small" :for="'tray-evt-' + evt.key">
+            {{ evt.label }}
+          </label>
+        </div>
+      </div>
+
+      <button
+        class="btn btn-outline-secondary btn-sm"
+        @click="onTestTrayEntry"
+      >
+        Add Test Entry
+      </button>
+    </div>
   </div>
 </template>
 
@@ -212,6 +260,7 @@ import {
   requestNativePermission,
   testNativeNotification
 } from '@/composables/useNotifications'
+import { useNotificationTrayStore } from '@/stores/notificationTray'
 
 const props = defineProps({
   config: { type: Object, default: () => ({}) }
@@ -273,6 +322,15 @@ function onTestNativeNotification() {
   testNativeNotification()
 }
 
+function toggleTrayEvent(key, event) {
+  const trayEvents = { ...props.config.trayEvents, [key]: event.target.checked }
+  emit('update:config', { ...props.config, trayEvents })
+}
+
+function onTestTrayEntry() {
+  useNotificationTrayStore().addEntry('task_complete', { sessionName: 'Test Session' })
+}
+
 function loadVoices() {
   voices.value = getVoices()
 }
@@ -285,6 +343,14 @@ const eventOptions = [
 ]
 
 const nativeEventOptions = [
+  { key: 'permission_prompt', label: 'Permission prompts' },
+  { key: 'task_complete', label: 'Agent task completion' },
+  { key: 'session_error', label: 'Session errors' },
+  { key: 'minion_comm', label: 'Minion communications (Legion)' },
+  { key: 'session_restart_error', label: 'Session restart errors' }
+]
+
+const trayEventOptions = [
   { key: 'permission_prompt', label: 'Permission prompts' },
   { key: 'task_complete', label: 'Agent task completion' },
   { key: 'session_error', label: 'Session errors' },
