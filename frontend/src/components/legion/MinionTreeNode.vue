@@ -197,6 +197,7 @@ const latestMessageFromStore = computed(() => {
       const content = msg.content || ''
       if (content.includes('<command-message>') && content.includes('skill is running')) continue
       if (content.startsWith('Base directory for this skill:')) continue
+      if (content.startsWith('(Re-invocation of /') && content.includes('previously loaded')) continue
     }
 
     // Skip slash command user messages (synced with MessageList.vue)

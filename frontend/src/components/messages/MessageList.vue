@@ -717,6 +717,11 @@ function shouldDisplayMessage(message) {
     if (content.startsWith('Base directory for this skill:')) {
       return false
     }
+    // Issue #1724: Hide skill re-invocation notice (synthetic bookkeeping shown when
+    // a skill's instructions were already loaded earlier in the conversation)
+    if (content.startsWith('(Re-invocation of /') && content.includes('previously loaded')) {
+      return false
+    }
   }
 
   // Hide slash command-related user messages (command running notification and command content)
