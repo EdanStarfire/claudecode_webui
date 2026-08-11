@@ -377,6 +377,7 @@ class ClaudeWebUI:
                     "comm_type": comm.comm_type.value if hasattr(comm.comm_type, 'value') else str(comm.comm_type),
                     "from_minion_name": comm.from_minion_name or "Minion",
                     "comm_id": comm.comm_id,
+                    "session_id": comm.from_minion_id,
                 }
             })
             logger.debug(f"Appended UI notification for comm {comm.comm_id}")

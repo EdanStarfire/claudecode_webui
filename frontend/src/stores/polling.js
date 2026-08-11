@@ -413,13 +413,13 @@ export const usePollingStore = defineStore('polling', () => {
           }
 
           if (newState === 'error') {
-            notify('session_error', { sessionName: payload.data.session.name || 'Session' })
+            notify('session_error', { sessionName: payload.data.session.name || 'Session', sessionId: changedSessionId })
           }
           if (wasProcessing && !payload.data.session.is_processing) {
-            notify('task_complete', { sessionName: payload.data.session.name || 'Session' })
+            notify('task_complete', { sessionName: payload.data.session.name || 'Session', sessionId: changedSessionId })
           }
           if (newState === 'paused' && priorSession?.state !== 'paused') {
-            notify('permission_prompt', { sessionName: payload.data.session.name || 'Session' })
+            notify('permission_prompt', { sessionName: payload.data.session.name || 'Session', sessionId: changedSessionId })
           }
         }
         break
@@ -460,7 +460,8 @@ export const usePollingStore = defineStore('polling', () => {
         if (payload.data?.event_type === 'minion_comm') {
           notify('minion_comm', {
             commType: payload.data.comm_type,
-            fromMinion: payload.data.from_minion_name || 'Minion'
+            fromMinion: payload.data.from_minion_name || 'Minion',
+            sessionId: payload.data.session_id
           })
         }
         break
@@ -559,7 +560,7 @@ export const usePollingStore = defineStore('polling', () => {
       case 'session_watchdog_alert': {
         const uiStore = useUIStore()
         uiStore.pushAlert(payload)
-        notify('session_error', { sessionName: payload.session_name || 'Session' })
+        notify('session_error', { sessionName: payload.session_name || 'Session', sessionId: payload.session_id })
         break
       }
 
