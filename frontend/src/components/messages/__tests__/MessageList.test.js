@@ -240,6 +240,35 @@ describe('MessageList', () => {
     // Three consecutive tool-only messages consolidate into a single bubble (pre-fix behaviour preserved)
     expect(screen.getAllByRole('article').length).toBe(1)
   })
+
+  it('hides skill re-invocation notice from the timeline (#1724)', async () => {
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: {
+        MessageItem: { template: '<div role="article" data-testid="msg-item">{{ message.content }}</div>', props: ['message', 'attachedTools'] },
+        TruncationBanner: true,
+        SubagentTimeline: true
+      }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({
+        type: 'user',
+        content: '(Re-invocation of /my-skill — the skill instructions were previously loaded; the arguments or dynamic output below are new.)\nsome new args'
+      }),
+      makeMessage({ type: 'assistant', content: 'Real assistant reply' })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    const items = screen.getAllByRole('article')
+    expect(items.length).toBe(1)
+    expect(items[0].textContent).toBe('Real assistant reply')
+  })
 })
 
 // Helper stub that exposes orphanedPermissionTools count as a data attribute

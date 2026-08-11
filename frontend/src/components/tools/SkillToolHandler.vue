@@ -122,8 +122,12 @@ const skillMessages = computed(() => {
     if (content.includes('<command-message>') && content.includes('skill is running')) {
       runningMessage = msg
     }
-    // Second skill message: contains skill content
-    else if (content.startsWith('Base directory for this skill:')) {
+    // Second skill message: contains skill content, or a re-invocation notice
+    // (Issue #1724) for a skill whose instructions were already loaded earlier
+    else if (
+      content.startsWith('Base directory for this skill:') ||
+      (content.startsWith('(Re-invocation of /') && content.includes('previously loaded'))
+    ) {
       contentMessage = msg
     }
   }
