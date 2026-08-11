@@ -5,9 +5,14 @@
       <h1 class="header-title">ccWebUI</h1>
     </div>
     <div class="header-right">
-      <div class="header-indicator" :class="uiConnected ? 'connected' : 'disconnected'" data-testid="connection-indicator">
+      <div
+        class="header-indicator"
+        :class="uiConnected ? 'connected' : 'disconnected'"
+        data-testid="connection-indicator"
+        role="status"
+        :aria-label="connectionAriaLabel"
+      >
         <span class="indicator-dot"></span>
-        {{ uiConnected ? 'Connected' : 'Disconnected' }}
       </div>
       <button
         class="header-btn theme-toggle-btn"
@@ -60,6 +65,7 @@ const route = useRoute()
 const router = useRouter()
 
 const uiConnected = computed(() => wsStore.uiConnected)
+const connectionAriaLabel = computed(() => `Connection status: ${uiConnected.value ? 'Connected' : 'Disconnected'}`)
 
 const THEME_LABELS = {
   'light':           'Light',
