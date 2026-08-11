@@ -141,6 +141,30 @@ class ApplicationService:
         project = await self.coordinator.project_manager.get_project(project_id)
         return project.to_dict() if project else None
 
+    async def create_kanban_group(self, project_id: str, name: str) -> dict | None:
+        project = await self.coordinator.project_manager.create_kanban_group(project_id, name)
+        return project.to_dict() if project else None
+
+    async def rename_kanban_group(self, project_id: str, group_id: str, name: str) -> dict | None:
+        project = await self.coordinator.project_manager.rename_kanban_group(project_id, group_id, name)
+        return project.to_dict() if project else None
+
+    async def delete_kanban_group(self, project_id: str, group_id: str) -> dict | None:
+        project = await self.coordinator.project_manager.delete_kanban_group(project_id, group_id)
+        return project.to_dict() if project else None
+
+    async def reorder_kanban_groups(self, project_id: str, group_ids: list[str]) -> dict | None:
+        project = await self.coordinator.project_manager.reorder_kanban_groups(project_id, group_ids)
+        return project.to_dict() if project else None
+
+    async def assign_session_kanban_group(
+        self, project_id: str, session_id: str, group_id: str | None
+    ) -> dict | None:
+        project = await self.coordinator.project_manager.assign_session_to_group(
+            project_id, session_id, group_id
+        )
+        return project.to_dict() if project else None
+
     async def validate_project_exists(self, project_id: str) -> bool:
         project = await self.coordinator.project_manager.get_project(project_id)
         return project is not None

@@ -46,6 +46,12 @@ class ProjectInfo:
     max_concurrent_minions: int = 20  # Max concurrent minions per project
     active_minion_count: int = 0  # Currently active minions
 
+    # Kanban priority groups (issue #1722): user-managed custom grouping in Flat mode.
+    # kanban_groups: ordered list of {"group_id": str, "name": str}
+    # kanban_group_assignments: session_id -> group_id; absence means Unassigned
+    kanban_groups: list[dict] = None
+    kanban_group_assignments: dict[str, str] = None
+
     def __post_init__(self):
         if self.created_at is None:
             self.created_at = datetime.now(UTC)
@@ -56,6 +62,10 @@ class ProjectInfo:
         # Initialize legion-specific fields
         if self.minion_ids is None:
             self.minion_ids = []
+        if self.kanban_groups is None:
+            self.kanban_groups = []
+        if self.kanban_group_assignments is None:
+            self.kanban_group_assignments = {}
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization"""
@@ -80,6 +90,11 @@ class ProjectInfo:
             data['max_concurrent_minions'] = 20
         if 'active_minion_count' not in data:
             data['active_minion_count'] = 0
+        # Migration: Add kanban group fields if missing (issue #1722)
+        if 'kanban_groups' not in data:
+            data['kanban_groups'] = []
+        if 'kanban_group_assignments' not in data:
+            data['kanban_group_assignments'] = {}
         return cls(**data)
 
 
@@ -434,6 +449,156 @@ class ProjectManager:
 
             except Exception as e:
                 logger.error(f"Failed to reorder sessions in project: {e}")
+                return False
+
+    async def create_kanban_group(self, project_id: str, name: str) -> ProjectInfo | None:
+        """Create a new kanban group, appended to the end of the ordered list."""
+        async with self._get_project_lock(project_id):
+            try:
+                project = self._active_projects.get(project_id)
+                if not project:
+                    logger.error(f"Project {project_id} not found")
+                    return None
+
+                group = {"group_id": str(uuid.uuid4()), "name": name}
+                project.kanban_groups.append(group)
+                project.updated_at = datetime.now(UTC)
+                await self._persist_project_state(project_id)
+                project_logger.info(f"Created kanban group {group['group_id']} in project {project_id}")
+                return project
+
+            except Exception as e:
+                logger.error(f"Failed to create kanban group in project {project_id}: {e}")
+                return None
+
+    async def rename_kanban_group(self, project_id: str, group_id: str, name: str) -> ProjectInfo | None:
+        """Rename an existing kanban group."""
+        async with self._get_project_lock(project_id):
+            try:
+                project = self._active_projects.get(project_id)
+                if not project:
+                    logger.error(f"Project {project_id} not found")
+                    return None
+
+                group = next((g for g in project.kanban_groups if g["group_id"] == group_id), None)
+                if not group:
+                    logger.error(f"Kanban group {group_id} not found in project {project_id}")
+                    return None
+
+                group["name"] = name
+                project.updated_at = datetime.now(UTC)
+                await self._persist_project_state(project_id)
+                project_logger.info(f"Renamed kanban group {group_id} in project {project_id}")
+                return project
+
+            except Exception as e:
+                logger.error(f"Failed to rename kanban group in project {project_id}: {e}")
+                return None
+
+    async def delete_kanban_group(self, project_id: str, group_id: str) -> ProjectInfo | None:
+        """Delete a kanban group. Sessions assigned to it implicitly fall back to Unassigned
+        (map entries are stripped, never rewritten to an explicit 'unassigned' value)."""
+        async with self._get_project_lock(project_id):
+            try:
+                project = self._active_projects.get(project_id)
+                if not project:
+                    logger.error(f"Project {project_id} not found")
+                    return None
+
+                remaining = [g for g in project.kanban_groups if g["group_id"] != group_id]
+                if len(remaining) == len(project.kanban_groups):
+                    logger.error(f"Kanban group {group_id} not found in project {project_id}")
+                    return None
+                project.kanban_groups = remaining
+
+                for session_id in [
+                    sid for sid, gid in project.kanban_group_assignments.items() if gid == group_id
+                ]:
+                    del project.kanban_group_assignments[session_id]
+
+                project.updated_at = datetime.now(UTC)
+                await self._persist_project_state(project_id)
+                project_logger.info(f"Deleted kanban group {group_id} in project {project_id}")
+                return project
+
+            except Exception as e:
+                logger.error(f"Failed to delete kanban group in project {project_id}: {e}")
+                return None
+
+    async def reorder_kanban_groups(self, project_id: str, group_ids: list[str]) -> ProjectInfo | None:
+        """Reorder kanban groups by the given id sequence."""
+        async with self._get_project_lock(project_id):
+            try:
+                project = self._active_projects.get(project_id)
+                if not project:
+                    logger.error(f"Project {project_id} not found")
+                    return None
+
+                current_id_set = {g["group_id"] for g in project.kanban_groups}
+                new_id_set = set(group_ids)
+                if current_id_set != new_id_set:
+                    logger.error(f"Kanban group ID mismatch for project {project_id}")
+                    return None
+
+                groups_by_id = {g["group_id"]: g for g in project.kanban_groups}
+                project.kanban_groups = [groups_by_id[gid] for gid in group_ids]
+                project.updated_at = datetime.now(UTC)
+                await self._persist_project_state(project_id)
+                project_logger.info(f"Reordered kanban groups in project {project_id}")
+                return project
+
+            except Exception as e:
+                logger.error(f"Failed to reorder kanban groups in project {project_id}: {e}")
+                return None
+
+    async def assign_session_to_group(
+        self, project_id: str, session_id: str, group_id: str | None
+    ) -> ProjectInfo | None:
+        """Assign a session to a kanban group. group_id of None/'unassigned' clears the
+        assignment (falls back to the implicit Unassigned bucket)."""
+        async with self._get_project_lock(project_id):
+            try:
+                project = self._active_projects.get(project_id)
+                if not project:
+                    logger.error(f"Project {project_id} not found")
+                    return None
+
+                if group_id is None or group_id == "unassigned":
+                    project.kanban_group_assignments.pop(session_id, None)
+                else:
+                    if not any(g["group_id"] == group_id for g in project.kanban_groups):
+                        logger.error(f"Kanban group {group_id} not found in project {project_id}")
+                        return None
+                    project.kanban_group_assignments[session_id] = group_id
+
+                project.updated_at = datetime.now(UTC)
+                await self._persist_project_state(project_id)
+                project_logger.info(f"Assigned session {session_id} to group {group_id} in project {project_id}")
+                return project
+
+            except Exception as e:
+                logger.error(f"Failed to assign session to kanban group in project {project_id}: {e}")
+                return None
+
+    async def cleanup_session_group_assignment(self, project_id: str, session_id: str) -> bool:
+        """Strip a deleted session's kanban group assignment, if any (proactive cleanup)."""
+        async with self._get_project_lock(project_id):
+            try:
+                project = self._active_projects.get(project_id)
+                if not project:
+                    return False
+
+                if session_id in project.kanban_group_assignments:
+                    del project.kanban_group_assignments[session_id]
+                    project.updated_at = datetime.now(UTC)
+                    await self._persist_project_state(project_id)
+                    project_logger.info(
+                        f"Cleaned up kanban group assignment for session {session_id} in project {project_id}"
+                    )
+                return True
+
+            except Exception as e:
+                logger.error(f"Failed to cleanup kanban group assignment in project {project_id}: {e}")
                 return False
 
     async def reorder_projects(self, project_ids: list[str]) -> bool:

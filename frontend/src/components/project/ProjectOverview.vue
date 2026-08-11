@@ -186,6 +186,13 @@
                   @click="uiStore.setAgentSort('creation')"
                   title="Sort by creation order"
                 >Created</button>
+                <button
+                  type="button"
+                  class="btn"
+                  :class="uiStore.agentSort === 'last_active' ? 'btn-primary' : 'btn-outline-secondary'"
+                  @click="uiStore.setAgentSort('last_active')"
+                  title="Sort by most recent completion"
+                >Last Active</button>
               </div>
 
               <!-- Flat sort toggle (visible only in flat mode) -->
@@ -218,17 +225,34 @@
                 >Last Active</button>
               </div>
 
-              <!-- Group by state (flat mode only) -->
-              <div v-if="uiStore.projectViewMode === 'flat'" class="form-check form-switch d-flex align-items-center mb-0 ms-2">
-                <input
-                  id="group-by-state-toggle"
-                  type="checkbox"
-                  role="switch"
-                  class="form-check-input me-2"
-                  :checked="uiStore.groupByState"
-                  @change="uiStore.setGroupByState($event.target.checked)"
-                >
-                <label for="group-by-state-toggle" class="form-check-label small">Group by state</label>
+              <!-- Grouping mode (flat mode only) -->
+              <div
+                v-if="uiStore.projectViewMode === 'flat'"
+                class="btn-group btn-group-sm ms-2"
+                role="group"
+                aria-label="Grouping mode"
+              >
+                <button
+                  type="button"
+                  class="btn"
+                  :class="uiStore.flatGroupMode === 'none' ? 'btn-primary' : 'btn-outline-secondary'"
+                  @click="uiStore.setFlatGroupMode('none')"
+                  title="Ungrouped"
+                >Ungrouped</button>
+                <button
+                  type="button"
+                  class="btn"
+                  :class="uiStore.flatGroupMode === 'status' ? 'btn-primary' : 'btn-outline-secondary'"
+                  @click="uiStore.setFlatGroupMode('status')"
+                  title="Group by status"
+                >By Status</button>
+                <button
+                  type="button"
+                  class="btn"
+                  :class="uiStore.flatGroupMode === 'custom' ? 'btn-primary' : 'btn-outline-secondary'"
+                  @click="uiStore.setFlatGroupMode('custom')"
+                  title="Group by custom priority groups"
+                >Custom</button>
               </div>
             </div>
 
@@ -301,7 +325,7 @@
             <!-- Flat list view -->
             <div v-else class="flat-list">
               <!-- Ungrouped -->
-              <div v-if="!uiStore.groupByState" class="flat-list-nodes">
+              <div v-if="uiStore.flatGroupMode === 'none'" class="flat-list-nodes">
                 <MinionTreeNode
                   v-for="node in sortedFlatNodes"
                   :key="node.id"
@@ -311,8 +335,8 @@
                 />
               </div>
 
-              <!-- Grouped (action-priority: unread → prompting → error → active → idle → terminated) -->
-              <div v-else>
+              <!-- By Status (action-priority: unread → prompting → error → active → idle → terminated) -->
+              <div v-else-if="uiStore.flatGroupMode === 'status'">
                 <div v-for="group in groupedFlatNodes" :key="group.key" class="flat-group mb-3">
                   <h6 class="flat-group-heading text-muted">
                     {{ group.label }}
@@ -325,6 +349,105 @@
                     :level="0"
                     @minion-click="navigateToSession"
                   />
+                </div>
+              </div>
+
+              <!-- Custom (user-managed priority groups, issue #1722) -->
+              <div v-else>
+                <div v-for="group in customGroupedFlatNodes" :key="group.key" class="flat-group mb-3">
+                  <h6 class="flat-group-heading text-muted d-flex align-items-center justify-content-between">
+                    <span class="d-flex align-items-center gap-2 flex-grow-1 min-w-0">
+                      <input
+                        v-if="editingGroupId === group.groupId"
+                        type="text"
+                        class="form-control form-control-sm w-auto group-name-input"
+                        v-model="editingGroupName"
+                        @keyup.enter="commitRenameGroup"
+                        @keyup.esc="cancelRenameGroup"
+                        @blur="commitRenameGroup"
+                        @click.stop
+                      >
+                      <span
+                        v-else
+                        :class="{ 'group-name-clickable': group.groupId }"
+                        :title="group.groupId ? 'Click to rename' : ''"
+                        @click.stop="group.groupId && startRenameGroup(group)"
+                      >{{ group.label }}</span>
+                      <span class="badge bg-secondary">{{ group.nodes.length }}</span>
+                    </span>
+
+                    <!-- Per-group actions menu (custom groups only, not Unassigned) -->
+                    <span v-if="group.groupId" class="position-relative">
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-link text-muted p-0 px-1 group-menu-toggle"
+                        title="Group actions"
+                        aria-label="Group actions"
+                        @click.stop="toggleGroupMenu(group.groupId)"
+                      >⋯</button>
+                      <div
+                        v-if="groupMenuOpenId === group.groupId"
+                        class="group-menu card shadow"
+                        role="menu"
+                        @click.stop
+                      >
+                        <button type="button" class="group-menu-item" role="menuitem" @click="startRenameGroup(group)">Rename</button>
+                        <button
+                          type="button"
+                          class="group-menu-item"
+                          role="menuitem"
+                          :disabled="!canMoveGroupUp(group.groupId)"
+                          @click="moveGroup(group.groupId, -1)"
+                        >Move Up</button>
+                        <button
+                          type="button"
+                          class="group-menu-item"
+                          role="menuitem"
+                          :disabled="!canMoveGroupDown(group.groupId)"
+                          @click="moveGroup(group.groupId, 1)"
+                        >Move Down</button>
+                        <button type="button" class="group-menu-item text-danger" role="menuitem" @click="beginDeleteGroup(group.groupId)">Delete</button>
+                      </div>
+                    </span>
+                  </h6>
+
+                  <!-- Inline delete confirmation (no modal, per explicit user feedback) -->
+                  <div
+                    v-if="confirmingDeleteGroupId === group.groupId"
+                    class="alert alert-danger py-1 px-2 mb-2 d-flex align-items-center gap-2"
+                  >
+                    <span class="small flex-grow-1">Delete "{{ group.label }}"? Its sessions will move to Unassigned.</span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary py-0" @click="confirmingDeleteGroupId = undefined">Cancel</button>
+                    <button type="button" class="btn btn-sm btn-danger py-0" @click="confirmDeleteGroup(group.groupId)">Delete</button>
+                  </div>
+
+                  <MinionTreeNode
+                    v-for="node in group.nodes"
+                    :key="node.id"
+                    :minion-data="node"
+                    :level="0"
+                    @minion-click="navigateToSession"
+                  />
+                  <!-- Custom groups (unlike status buckets) still render empty, since they're user-managed -->
+                  <div v-if="group.nodes.length === 0" class="text-muted small fst-italic px-2 py-1">
+                    No sessions in this group
+                  </div>
+                </div>
+
+                <!-- Add group -->
+                <div class="mt-2">
+                  <input
+                    v-if="addingGroup"
+                    type="text"
+                    class="form-control form-control-sm w-auto group-name-input"
+                    v-model="newGroupName"
+                    placeholder="Group name"
+                    @keyup.enter="commitAddGroup"
+                    @keyup.esc="cancelAddGroup"
+                    @blur="commitAddGroup"
+                    @click.stop
+                  >
+                  <button v-else type="button" class="btn btn-sm btn-outline-secondary" @click="beginAddGroup">+ New Group</button>
                 </div>
               </div>
 
@@ -606,7 +729,8 @@ const sortedRootMinions = computed(() => {
   return [...children].sort((a, b) => compareAgents(mode, a, b, {
     nameOf: n => n.name,
     orderOf: n => sessionStore.getSession(n.id)?.order,
-    idOf: n => n.id
+    idOf: n => n.id,
+    lastActiveOf: n => normalizeLastActive(sessionStore.getSession(n.id)?.last_completion_at)
   }))
 })
 
@@ -665,6 +789,132 @@ const groupedFlatNodes = computed(() => {
   }
   return buckets.filter(b => b.nodes.length > 0)
 })
+
+// Custom priority groups (issue #1722): buckets sortedFlatNodes by the project's
+// kanban_group_assignments map, falling back to the implicit Unassigned bucket.
+// Unlike groupedFlatNodes above, buckets are never filtered out when empty — custom
+// groups are user-managed, so the user needs to see/manage them even at zero members.
+const customGroupedFlatNodes = computed(() => {
+  const sorted = sortedFlatNodes.value
+  const buckets = [{ key: 'unassigned', groupId: null, label: 'Unassigned', nodes: [] }]
+  for (const group of project.value?.kanban_groups || []) {
+    buckets.push({ key: group.group_id, groupId: group.group_id, label: group.name, nodes: [] })
+  }
+  const byKey = Object.fromEntries(buckets.map(b => [b.key, b]))
+  for (const node of sorted) {
+    const groupId = project.value?.kanban_group_assignments?.[node.id] || 'unassigned'
+    ;(byKey[groupId] || byKey.unassigned).nodes.push(node)
+  }
+  return buckets
+})
+
+// --- Custom group management (issue #1722): rename, reorder, delete, create ---
+
+// editingGroupId/confirmingDeleteGroupId default to undefined (NOT null): the
+// Unassigned bucket's groupId is null, so a null default would make its v-if
+// checks (`=== group.groupId`) match on initial render, before any click.
+const editingGroupId = ref(undefined)
+const editingGroupName = ref('')
+const groupMenuOpenId = ref(null)
+const confirmingDeleteGroupId = ref(undefined)
+const addingGroup = ref(false)
+const newGroupName = ref('')
+
+function startRenameGroup(group) {
+  groupMenuOpenId.value = null
+  editingGroupId.value = group.groupId
+  editingGroupName.value = group.label
+}
+
+function cancelRenameGroup() {
+  editingGroupId.value = undefined
+}
+
+async function commitRenameGroup() {
+  const groupId = editingGroupId.value
+  if (!groupId) return
+  const name = editingGroupName.value.trim()
+  editingGroupId.value = undefined
+  if (!name || !project.value) return
+  const current = project.value.kanban_groups?.find(g => g.group_id === groupId)
+  if (current && current.name === name) return
+  try {
+    await projectStore.renameKanbanGroup(project.value.project_id, groupId, name)
+  } catch (e) {
+    console.error('Failed to rename kanban group:', e)
+  }
+}
+
+function toggleGroupMenu(groupId) {
+  groupMenuOpenId.value = groupMenuOpenId.value === groupId ? null : groupId
+}
+
+function closeGroupMenu() {
+  groupMenuOpenId.value = null
+}
+
+function canMoveGroupUp(groupId) {
+  const groups = project.value?.kanban_groups || []
+  return groups.findIndex(g => g.group_id === groupId) > 0
+}
+
+function canMoveGroupDown(groupId) {
+  const groups = project.value?.kanban_groups || []
+  const idx = groups.findIndex(g => g.group_id === groupId)
+  return idx >= 0 && idx < groups.length - 1
+}
+
+async function moveGroup(groupId, direction) {
+  groupMenuOpenId.value = null
+  if (!project.value) return
+  const groups = [...(project.value.kanban_groups || [])]
+  const idx = groups.findIndex(g => g.group_id === groupId)
+  const target = idx + direction
+  if (idx < 0 || target < 0 || target >= groups.length) return
+  ;[groups[idx], groups[target]] = [groups[target], groups[idx]]
+  try {
+    await projectStore.reorderKanbanGroups(project.value.project_id, groups.map(g => g.group_id))
+  } catch (e) {
+    console.error('Failed to reorder kanban groups:', e)
+  }
+}
+
+function beginDeleteGroup(groupId) {
+  groupMenuOpenId.value = null
+  confirmingDeleteGroupId.value = groupId
+}
+
+async function confirmDeleteGroup(groupId) {
+  confirmingDeleteGroupId.value = undefined
+  if (!project.value) return
+  try {
+    await projectStore.deleteKanbanGroup(project.value.project_id, groupId)
+  } catch (e) {
+    console.error('Failed to delete kanban group:', e)
+  }
+}
+
+function beginAddGroup() {
+  addingGroup.value = true
+  newGroupName.value = ''
+}
+
+function cancelAddGroup() {
+  addingGroup.value = false
+}
+
+async function commitAddGroup() {
+  if (!addingGroup.value) return
+  const name = newGroupName.value.trim()
+  addingGroup.value = false
+  newGroupName.value = ''
+  if (!name || !project.value) return
+  try {
+    await projectStore.createKanbanGroup(project.value.project_id, name)
+  } catch (e) {
+    console.error('Failed to create kanban group:', e)
+  }
+}
 
 // Helper: Get comm recipient name
 function getCommRecipient(comm) {
@@ -785,12 +1035,18 @@ watch(() => props.projectId, (newId) => {
   loadMinionHierarchy()
 })
 
+// Close the per-group "⋯" actions menu on any click outside it (issue #1722)
+onMounted(() => {
+  document.addEventListener('click', closeGroupMenu)
+})
+
 // Cleanup on unmount
 onUnmounted(() => {
   if (sessionWatchStop) {
     sessionWatchStop()
   }
   clearTimeout(fleetToastTimer)
+  document.removeEventListener('click', closeGroupMenu)
 })
 </script>
 
@@ -930,5 +1186,57 @@ onUnmounted(() => {
   padding: 0.25rem 0.5rem;
   margin-bottom: 0.5rem;
   border-bottom: 1px solid var(--bs-border-color);
+}
+
+.group-name-clickable {
+  cursor: pointer;
+}
+
+.group-name-clickable:hover {
+  text-decoration: underline;
+}
+
+.group-name-input {
+  font-size: 0.85rem;
+  padding: 0.1rem 0.4rem;
+  height: auto;
+}
+
+.group-menu-toggle {
+  font-size: 1rem;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.group-menu {
+  position: absolute;
+  top: calc(100% + 2px);
+  right: 0;
+  z-index: 1060;
+  width: 140px;
+  padding: 0.25rem 0;
+}
+
+.group-menu-item {
+  display: block;
+  width: 100%;
+  padding: 0.35rem 0.75rem;
+  background: none;
+  border: none;
+  text-align: left;
+  font-size: 0.8rem;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--bs-body-color);
+  cursor: pointer;
+}
+
+.group-menu-item:hover:not(:disabled) {
+  background-color: var(--bs-secondary-bg);
+}
+
+.group-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

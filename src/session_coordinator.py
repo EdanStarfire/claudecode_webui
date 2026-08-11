@@ -2194,6 +2194,9 @@ class SessionCoordinator:
                         coord_logger.info(f"Removed session {session_id} from project {project.project_id} - project was empty and has been deleted")
                     else:
                         coord_logger.info(f"Removed session {session_id} from project {project.project_id}")
+                        # Issue #1722: strip the deleted session's kanban group assignment,
+                        # if any (no-op if the project itself was just deleted above)
+                        await self.project_manager.cleanup_session_group_assignment(project.project_id, session_id)
                 else:
                     logger.warning(f"Failed to remove session {session_id} from project {project.project_id}")
 

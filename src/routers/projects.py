@@ -4,9 +4,13 @@ from fastapi import APIRouter, HTTPException
 
 from ..exception_handlers import handle_exceptions
 from ._models import (
+    KanbanGroupCreateRequest,
+    KanbanGroupReorderRequest,
+    KanbanGroupUpdateRequest,
     ProjectCreateRequest,
     ProjectReorderRequest,
     ProjectUpdateRequest,
+    SessionKanbanGroupAssignRequest,
     SessionReorderRequest,
 )
 
@@ -119,6 +123,80 @@ def build_router(webui) -> APIRouter:
         result = await webui.service.reorder_project_sessions(project_id, request.session_ids)
         if not result:
             raise HTTPException(status_code=400, detail="Failed to reorder sessions")
+
+        webui._broadcast_project_updated(result)
+
+        return {"success": True}
+
+    # ==================== KANBAN GROUP ENDPOINTS (issue #1722) ====================
+
+    @router.post("/api/projects/{project_id}/kanban-groups")
+    @handle_exceptions("create kanban group")
+    async def create_kanban_group(project_id: str, request: KanbanGroupCreateRequest):
+        """Create a new kanban priority group in a project.
+
+        Returns the full project (unlike the other kanban-group endpoints) so the
+        caller has the server-generated group_id immediately, without waiting on the
+        broadcast poll event, for use by any immediate follow-up action (e.g. assign).
+        """
+        result = await webui.service.create_kanban_group(project_id, request.name)
+        if not result:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        webui._broadcast_project_updated(result)
+
+        return {"success": True, "project": result}
+
+    # Registered before the /{group_id} routes below: FastAPI matches path routes in
+    # registration order, and "/kanban-groups/reorder" would otherwise be swallowed by
+    # the "/kanban-groups/{group_id}" pattern (treating "reorder" as a group_id).
+    @router.put("/api/projects/{project_id}/kanban-groups/reorder")
+    @handle_exceptions("reorder kanban groups")
+    async def reorder_kanban_groups(project_id: str, request: KanbanGroupReorderRequest):
+        """Reorder kanban priority groups"""
+        result = await webui.service.reorder_kanban_groups(project_id, request.group_ids)
+        if not result:
+            raise HTTPException(status_code=400, detail="Failed to reorder kanban groups")
+
+        webui._broadcast_project_updated(result)
+
+        return {"success": True}
+
+    @router.put("/api/projects/{project_id}/kanban-groups/{group_id}")
+    @handle_exceptions("rename kanban group")
+    async def rename_kanban_group(project_id: str, group_id: str, request: KanbanGroupUpdateRequest):
+        """Rename a kanban priority group"""
+        result = await webui.service.rename_kanban_group(project_id, group_id, request.name)
+        if not result:
+            raise HTTPException(status_code=404, detail="Project or kanban group not found")
+
+        webui._broadcast_project_updated(result)
+
+        return {"success": True}
+
+    @router.delete("/api/projects/{project_id}/kanban-groups/{group_id}")
+    @handle_exceptions("delete kanban group")
+    async def delete_kanban_group(project_id: str, group_id: str):
+        """Delete a kanban priority group; assigned sessions fall back to Unassigned"""
+        result = await webui.service.delete_kanban_group(project_id, group_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Project or kanban group not found")
+
+        webui._broadcast_project_updated(result)
+
+        return {"success": True}
+
+    @router.put("/api/projects/{project_id}/sessions/{session_id}/kanban-group")
+    @handle_exceptions("assign session kanban group")
+    async def assign_session_kanban_group(
+        project_id: str, session_id: str, request: SessionKanbanGroupAssignRequest
+    ):
+        """Move a session into a kanban group, or clear its assignment (Unassigned)"""
+        result = await webui.service.assign_session_kanban_group(
+            project_id, session_id, request.group_id
+        )
+        if not result:
+            raise HTTPException(status_code=404, detail="Project or kanban group not found")
 
         webui._broadcast_project_updated(result)
 

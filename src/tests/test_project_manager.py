@@ -416,3 +416,195 @@ async def test_project_info_serialization():
     assert restored.session_ids == project.session_ids
     assert restored.is_expanded == project.is_expanded
     assert restored.order == project.order
+
+
+@pytest.mark.asyncio
+async def test_project_info_kanban_fields_default():
+    """New ProjectInfo defaults kanban fields to empty list/dict"""
+    project = ProjectInfo(
+        project_id="test-kanban-defaults",
+        name="Test",
+        working_directory="/absolute/path",
+        session_ids=[],
+    )
+    assert project.kanban_groups == []
+    assert project.kanban_group_assignments == {}
+
+
+@pytest.mark.asyncio
+async def test_project_info_kanban_round_trip():
+    """kanban_groups/kanban_group_assignments survive to_dict/from_dict"""
+    project = ProjectInfo(
+        project_id="test-kanban-roundtrip",
+        name="Test",
+        working_directory="/absolute/path",
+        session_ids=["s1"],
+        kanban_groups=[{"group_id": "g1", "name": "Urgent"}],
+        kanban_group_assignments={"s1": "g1"},
+    )
+
+    data = project.to_dict()
+    restored = ProjectInfo.from_dict(data)
+
+    assert restored.kanban_groups == [{"group_id": "g1", "name": "Urgent"}]
+    assert restored.kanban_group_assignments == {"s1": "g1"}
+
+
+@pytest.mark.asyncio
+async def test_project_info_kanban_legacy_migration():
+    """from_dict defaults missing kanban fields for pre-feature state.json data"""
+    legacy_data = {
+        "project_id": "legacy-project",
+        "name": "Legacy",
+        "working_directory": "/absolute/path",
+        "session_ids": ["s1"],
+        "is_expanded": True,
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat(),
+        "order": 0,
+    }
+
+    restored = ProjectInfo.from_dict(dict(legacy_data))
+
+    assert restored.kanban_groups == []
+    assert restored.kanban_group_assignments == {}
+
+
+@pytest.mark.asyncio
+async def test_create_kanban_group(project_manager, temp_data_dir):
+    """Creating a kanban group appends it to the ordered list"""
+    project = await project_manager.create_project(
+        name="Kanban Create Test",
+        working_directory=str(temp_data_dir / "kanban_create")
+    )
+
+    updated = await project_manager.create_kanban_group(project.project_id, "Urgent")
+
+    assert updated is not None
+    assert len(updated.kanban_groups) == 1
+    assert updated.kanban_groups[0]["name"] == "Urgent"
+    assert "group_id" in updated.kanban_groups[0]
+
+
+@pytest.mark.asyncio
+async def test_rename_kanban_group(project_manager, temp_data_dir):
+    """Renaming a kanban group updates its name only"""
+    project = await project_manager.create_project(
+        name="Kanban Rename Test",
+        working_directory=str(temp_data_dir / "kanban_rename")
+    )
+    project = await project_manager.create_kanban_group(project.project_id, "Urgent")
+    group_id = project.kanban_groups[0]["group_id"]
+
+    updated = await project_manager.rename_kanban_group(project.project_id, group_id, "Renamed")
+
+    assert updated is not None
+    assert updated.kanban_groups[0]["name"] == "Renamed"
+    assert updated.kanban_groups[0]["group_id"] == group_id
+
+
+@pytest.mark.asyncio
+async def test_rename_kanban_group_unknown_id(project_manager, temp_data_dir):
+    """Renaming an unknown group id fails"""
+    project = await project_manager.create_project(
+        name="Kanban Rename Unknown Test",
+        working_directory=str(temp_data_dir / "kanban_rename_unknown")
+    )
+
+    result = await project_manager.rename_kanban_group(project.project_id, "nonexistent", "X")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_delete_kanban_group_reassigns_to_unassigned(project_manager, temp_data_dir):
+    """Deleting a group strips matching assignment map entries, falling back to Unassigned"""
+    project = await project_manager.create_project(
+        name="Kanban Delete Test",
+        working_directory=str(temp_data_dir / "kanban_delete")
+    )
+    await project_manager.add_session_to_project(project.project_id, "session-1")
+    project = await project_manager.create_kanban_group(project.project_id, "Urgent")
+    group_id = project.kanban_groups[0]["group_id"]
+    project = await project_manager.assign_session_to_group(project.project_id, "session-1", group_id)
+    assert project.kanban_group_assignments == {"session-1": group_id}
+
+    updated = await project_manager.delete_kanban_group(project.project_id, group_id)
+
+    assert updated is not None
+    assert updated.kanban_groups == []
+    assert "session-1" not in updated.kanban_group_assignments
+
+
+@pytest.mark.asyncio
+async def test_reorder_kanban_groups(project_manager, temp_data_dir):
+    """Reordering kanban groups by id sequence works and rejects mismatched id sets"""
+    project = await project_manager.create_project(
+        name="Kanban Reorder Test",
+        working_directory=str(temp_data_dir / "kanban_reorder")
+    )
+    project = await project_manager.create_kanban_group(project.project_id, "First")
+    project = await project_manager.create_kanban_group(project.project_id, "Second")
+    g1, g2 = project.kanban_groups[0]["group_id"], project.kanban_groups[1]["group_id"]
+
+    updated = await project_manager.reorder_kanban_groups(project.project_id, [g2, g1])
+    assert updated is not None
+    assert [g["group_id"] for g in updated.kanban_groups] == [g2, g1]
+
+    # Mismatched id-set rejected
+    result = await project_manager.reorder_kanban_groups(project.project_id, [g1])
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_assign_session_to_group_and_clear(project_manager, temp_data_dir):
+    """Assigning writes a map entry; assigning None/'unassigned' clears it"""
+    project = await project_manager.create_project(
+        name="Kanban Assign Test",
+        working_directory=str(temp_data_dir / "kanban_assign")
+    )
+    await project_manager.add_session_to_project(project.project_id, "session-1")
+    project = await project_manager.create_kanban_group(project.project_id, "Urgent")
+    group_id = project.kanban_groups[0]["group_id"]
+
+    updated = await project_manager.assign_session_to_group(project.project_id, "session-1", group_id)
+    assert updated.kanban_group_assignments == {"session-1": group_id}
+
+    cleared = await project_manager.assign_session_to_group(project.project_id, "session-1", None)
+    assert cleared.kanban_group_assignments == {}
+
+    # Assigning to unknown group fails
+    result = await project_manager.assign_session_to_group(project.project_id, "session-1", "nonexistent")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_session_group_assignment(project_manager, temp_data_dir):
+    """cleanup_session_group_assignment removes a session's map entry (proactive cleanup)"""
+    project = await project_manager.create_project(
+        name="Kanban Cleanup Test",
+        working_directory=str(temp_data_dir / "kanban_cleanup")
+    )
+    await project_manager.add_session_to_project(project.project_id, "session-1")
+    project = await project_manager.create_kanban_group(project.project_id, "Urgent")
+    group_id = project.kanban_groups[0]["group_id"]
+    await project_manager.assign_session_to_group(project.project_id, "session-1", group_id)
+
+    success = await project_manager.cleanup_session_group_assignment(project.project_id, "session-1")
+    assert success is True
+
+    updated = await project_manager.get_project(project.project_id)
+    assert "session-1" not in updated.kanban_group_assignments
+
+
+@pytest.mark.asyncio
+async def test_cleanup_session_group_assignment_noop_when_unassigned(project_manager, temp_data_dir):
+    """cleanup_session_group_assignment doesn't raise when the session had no assignment"""
+    project = await project_manager.create_project(
+        name="Kanban Cleanup Noop Test",
+        working_directory=str(temp_data_dir / "kanban_cleanup_noop")
+    )
+    await project_manager.add_session_to_project(project.project_id, "session-1")
+
+    success = await project_manager.cleanup_session_group_assignment(project.project_id, "session-1")
+    assert success is True

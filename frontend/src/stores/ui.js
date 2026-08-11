@@ -146,7 +146,7 @@ export const useUIStore = defineStore('ui', () => {
   const agentSort = ref(readStorage('agentSort', 'alpha'))
 
   function setAgentSort(mode) {
-    if (mode !== 'alpha' && mode !== 'creation') return
+    if (mode !== 'alpha' && mode !== 'creation' && mode !== 'last_active') return
     agentSort.value = mode
     writeStorage('agentSort', mode)
   }
@@ -169,12 +169,29 @@ export const useUIStore = defineStore('ui', () => {
     writeStorage('flatSort', mode)
   }
 
-  // Flat-list state grouping toggle — persisted
-  const groupByState = ref(readStorage('groupByState', false))
+  // Flat-list grouping mode ('none' | 'status' | 'custom') — persisted.
+  // Issue #1722: replaces the old boolean groupByState. One-time migration below reads
+  // the legacy key (true -> 'status', false -> 'none') so existing preferences carry over.
+  function loadFlatGroupMode() {
+    const stored = readStorage('flatGroupMode', null)
+    if (stored === 'none' || stored === 'status' || stored === 'custom') return stored
 
-  function setGroupByState(value) {
-    groupByState.value = !!value
-    writeStorage('groupByState', groupByState.value)
+    const legacy = readStorage('groupByState', null)
+    if (legacy !== null) {
+      const migrated = legacy ? 'status' : 'none'
+      writeStorage('flatGroupMode', migrated)
+      return migrated
+    }
+
+    return 'none'
+  }
+
+  const flatGroupMode = ref(loadFlatGroupMode())
+
+  function setFlatGroupMode(mode) {
+    if (mode !== 'none' && mode !== 'status' && mode !== 'custom') return
+    flatGroupMode.value = mode
+    writeStorage('flatGroupMode', mode)
   }
 
   // Issue #1587: Max peek cards in collapsed chip stack — synced from /api/config via settings page
@@ -446,7 +463,7 @@ export const useUIStore = defineStore('ui', () => {
     agentSort,
     projectViewMode,
     flatSort,
-    groupByState,
+    flatGroupMode,
     maxPeekCards,
 
     // Actions
@@ -483,7 +500,7 @@ export const useUIStore = defineStore('ui', () => {
     setAgentSort,
     setProjectViewMode,
     setFlatSort,
-    setGroupByState,
+    setFlatGroupMode,
     setMaxPeekCards,
     schedulesGroupBy,
     schedulesCollapsedGroups,

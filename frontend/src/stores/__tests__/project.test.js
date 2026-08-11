@@ -175,4 +175,101 @@ describe('project store', () => {
       expect(barOrder).toEqual(stripOrder)
     }
   })
+
+  describe('kanban groups (issue #1722)', () => {
+    it('createKanbanGroup patches local project from the response (server-generated group_id)', async () => {
+      const { useProjectStore } = await import('@/stores/project')
+      const store = useProjectStore()
+
+      const project = makeProject({ project_id: 'p1', kanban_groups: [] })
+      store.projects.set('p1', project)
+
+      const updatedProject = makeProject({
+        project_id: 'p1',
+        kanban_groups: [{ group_id: 'g1', name: 'Urgent' }]
+      })
+      apiMock.post.mockResolvedValue({ success: true, project: updatedProject })
+
+      const result = await store.createKanbanGroup('p1', 'Urgent')
+
+      expect(apiMock.post).toHaveBeenCalledWith('/api/projects/p1/kanban-groups', { name: 'Urgent' })
+      expect(store.projects.get('p1').kanban_groups).toEqual([{ group_id: 'g1', name: 'Urgent' }])
+      expect(result.kanban_groups).toEqual([{ group_id: 'g1', name: 'Urgent' }])
+    })
+
+    it('renameKanbanGroup patches only the matching group name locally', async () => {
+      const { useProjectStore } = await import('@/stores/project')
+      const store = useProjectStore()
+
+      const project = makeProject({
+        project_id: 'p1',
+        kanban_groups: [{ group_id: 'g1', name: 'Urgent' }, { group_id: 'g2', name: 'Later' }]
+      })
+      store.projects.set('p1', project)
+      apiMock.put.mockResolvedValue({ success: true })
+
+      await store.renameKanbanGroup('p1', 'g1', 'Renamed')
+
+      expect(apiMock.put).toHaveBeenCalledWith('/api/projects/p1/kanban-groups/g1', { name: 'Renamed' })
+      expect(store.projects.get('p1').kanban_groups).toEqual([
+        { group_id: 'g1', name: 'Renamed' },
+        { group_id: 'g2', name: 'Later' }
+      ])
+    })
+
+    it('deleteKanbanGroup removes the group and strips matching assignments locally', async () => {
+      const { useProjectStore } = await import('@/stores/project')
+      const store = useProjectStore()
+
+      const project = makeProject({
+        project_id: 'p1',
+        kanban_groups: [{ group_id: 'g1', name: 'Urgent' }],
+        kanban_group_assignments: { 'sess-1': 'g1', 'sess-2': 'g1' }
+      })
+      store.projects.set('p1', project)
+      apiMock.delete.mockResolvedValue({ success: true })
+
+      await store.deleteKanbanGroup('p1', 'g1')
+
+      expect(apiMock.delete).toHaveBeenCalledWith('/api/projects/p1/kanban-groups/g1')
+      const updated = store.projects.get('p1')
+      expect(updated.kanban_groups).toEqual([])
+      expect(updated.kanban_group_assignments).toEqual({})
+    })
+
+    it('reorderKanbanGroups reorders local groups by the given id sequence', async () => {
+      const { useProjectStore } = await import('@/stores/project')
+      const store = useProjectStore()
+
+      const project = makeProject({
+        project_id: 'p1',
+        kanban_groups: [{ group_id: 'g1', name: 'First' }, { group_id: 'g2', name: 'Second' }]
+      })
+      store.projects.set('p1', project)
+      apiMock.put.mockResolvedValue({ success: true })
+
+      await store.reorderKanbanGroups('p1', ['g2', 'g1'])
+
+      expect(apiMock.put).toHaveBeenCalledWith('/api/projects/p1/kanban-groups/reorder', { group_ids: ['g2', 'g1'] })
+      expect(store.projects.get('p1').kanban_groups.map(g => g.group_id)).toEqual(['g2', 'g1'])
+    })
+
+    it('assignSessionKanbanGroup writes and clears assignment map entries locally', async () => {
+      const { useProjectStore } = await import('@/stores/project')
+      const store = useProjectStore()
+
+      const project = makeProject({ project_id: 'p1', kanban_group_assignments: {} })
+      store.projects.set('p1', project)
+      apiMock.put.mockResolvedValue({ success: true })
+
+      await store.assignSessionKanbanGroup('p1', 'sess-1', 'g1')
+      expect(apiMock.put).toHaveBeenCalledWith(
+        '/api/projects/p1/sessions/sess-1/kanban-group', { group_id: 'g1' }
+      )
+      expect(store.projects.get('p1').kanban_group_assignments).toEqual({ 'sess-1': 'g1' })
+
+      await store.assignSessionKanbanGroup('p1', 'sess-1', null)
+      expect(store.projects.get('p1').kanban_group_assignments).toEqual({})
+    })
+  })
 })
