@@ -112,6 +112,43 @@ class SessionReorderRequest(BaseModel):
     session_ids: list[str]
 
 
+def _validate_kanban_group_name(name: str) -> str:
+    name = name.strip()
+    if not name:
+        raise ValueError("Group name cannot be empty")
+    return name
+
+
+class KanbanGroupCreateRequest(BaseModel):
+    """Request to create a kanban priority group (issue #1722)."""
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v):
+        return _validate_kanban_group_name(v)
+
+
+class KanbanGroupUpdateRequest(BaseModel):
+    """Request to rename a kanban priority group (issue #1722)."""
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v):
+        return _validate_kanban_group_name(v)
+
+
+class KanbanGroupReorderRequest(BaseModel):
+    """Request to reorder kanban priority groups (issue #1722)."""
+    group_ids: list[str]
+
+
+class SessionKanbanGroupAssignRequest(BaseModel):
+    """Request to move a session into a kanban group, or None/'unassigned' to clear (issue #1722)."""
+    group_id: str | None = None
+
+
 class PermissionModeRequest(BaseModel):
     mode: str
 

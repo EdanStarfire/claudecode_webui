@@ -64,45 +64,8 @@
         </div>
 
         <!-- Action Buttons -->
-        <div class="node-actions">
-          <button
-            v-if="canMarkRead"
-            class="btn btn-sm btn-outline-secondary me-1"
-            :class="{ unread: isUnreviewed }"
-            title="Mark read"
-            aria-label="Mark read"
-            :disabled="liveSession?.is_processing"
-            @click.stop="handleMarkRead"
-          >
-            <i class="bi bi-envelope-open"></i>
-          </button>
-          <button
-            v-if="canMarkUnread"
-            class="btn btn-sm btn-outline-secondary me-1"
-            :class="{ unread: isUnreviewed }"
-            title="Mark unread"
-            aria-label="Mark unread"
-            :disabled="liveSession?.is_processing"
-            @click.stop="handleMarkUnread"
-          >
-            <i class="bi bi-envelope-exclamation"></i>
-          </button>
-          <button
-            class="btn btn-sm btn-outline-secondary me-1"
-            title="Edit minion"
-            aria-label="Edit minion"
-            @click.stop="showEditModal"
-          >
-            ⚙️
-          </button>
-          <button
-            class="btn btn-sm btn-outline-secondary"
-            title="Manage minion"
-            aria-label="Manage minion"
-            @click.stop="showManageModal"
-          >
-            🛠
-          </button>
+        <div class="node-actions" @click.stop>
+          <SessionActionsMenu :session-id="minionData.id" :project-id="liveSession?.project_id" />
         </div>
       </div>
     </div>
@@ -127,13 +90,13 @@
 
 <script setup>
 import { computed } from 'vue'
-import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
-import { compareAgents } from '@/utils/agentSort'
+import { compareAgents, normalizeLastActive } from '@/utils/agentSort'
 import { getDisplayState } from '@/composables/useSessionState'
 import { findInHierarchy } from '@/utils/hierarchyUtils'
+import SessionActionsMenu from './SessionActionsMenu.vue'
 
 const props = defineProps({
   minionData: {
@@ -148,7 +111,6 @@ const props = defineProps({
 
 const emit = defineEmits(['minion-click'])
 
-const router = useRouter()
 const sessionStore = useSessionStore()
 const messageStore = useMessageStore()
 const uiStore = useUIStore()
@@ -273,16 +235,6 @@ const isUnreviewed = computed(() =>
   props.minionData?.id ? sessionStore.isUnreviewed(props.minionData.id) : false
 )
 
-// Issue #1597: show Mark Unread button only when session has completed work and isn't already unread
-const canMarkUnread = computed(() =>
-  !!liveSession.value?.last_completion_at && !isUnreviewed.value
-)
-
-// Issue #1646: show Mark Read button only when session is currently unread (inverse of canMarkUnread)
-const canMarkRead = computed(() =>
-  !!liveSession.value?.last_completion_at && isUnreviewed.value
-)
-
 // Check if minion has children
 const hasChildren = computed(() => {
   return (
@@ -312,7 +264,8 @@ const sortedChildren = computed(() => {
   return [...children].sort((a, b) => compareAgents(mode, a, b, {
     nameOf: n => n.name,
     orderOf: n => sessionStore.getSession(n.id)?.order,
-    idOf: n => n.id
+    idOf: n => n.id,
+    lastActiveOf: n => normalizeLastActive(sessionStore.getSession(n.id)?.last_completion_at)
   }))
 })
 
@@ -452,36 +405,6 @@ function getCommSummary(comm) {
 // Handle minion card click - emit event to parent
 function handleClick() {
   emit('minion-click', props.minionData.id)
-}
-
-// Action button handlers (Issue #296)
-function showEditModal() {
-  router.push(`/settings/session/${props.minionData.id}/general`)
-}
-
-function showManageModal() {
-  const session = sessionStore.sessions.get(props.minionData.id)
-  if (session) {
-    uiStore.showModal('manage-session', { session })
-  }
-}
-
-// Issue #1597: Mark session unread from the tree node (no navigation — already on project view)
-async function handleMarkUnread() {
-  try {
-    await sessionStore.markUnread(props.minionData.id)
-  } catch (e) {
-    console.error('Failed to mark unread:', e)
-  }
-}
-
-// Issue #1646: Mark session read from the tree node (no navigation — already on project view)
-async function handleMarkRead() {
-  try {
-    await sessionStore.markRead(props.minionData.id)
-  } catch (e) {
-    console.error('Failed to mark read:', e)
-  }
 }
 </script>
 

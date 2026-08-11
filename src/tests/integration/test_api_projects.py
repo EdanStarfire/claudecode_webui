@@ -281,3 +281,244 @@ class TestReorderSessions:
             json={"session_ids": []},
         )
         assert resp.status_code in (400, 404)
+
+
+class TestKanbanGroupCreate:
+    """POST /api/projects/{project_id}/kanban-groups (issue #1722)"""
+
+    async def test_create_kanban_group(self, api_integration_env):
+        create_project = api_integration_env["create_test_project"]
+        client = api_integration_env["client"]
+
+        project = await create_project("Kanban Create")
+        pid = project["project_id"]
+
+        resp = await client.post(f"/api/projects/{pid}/kanban-groups", json={"name": "Urgent"})
+        assert resp.status_code == 200
+        # Create response includes the full project so callers have the
+        # server-generated group_id immediately, without waiting for the poll broadcast.
+        created_groups = resp.json()["project"]["kanban_groups"]
+        assert len(created_groups) == 1
+        assert created_groups[0]["name"] == "Urgent"
+        assert created_groups[0]["group_id"]
+
+        resp = await client.get(f"/api/projects/{pid}")
+        groups = resp.json()["project"]["kanban_groups"]
+        assert len(groups) == 1
+        assert groups[0]["name"] == "Urgent"
+
+    async def test_create_kanban_group_nonexistent_project(self, api_integration_env):
+        client = api_integration_env["client"]
+        fake_id = str(uuid.uuid4())
+        resp = await client.post(f"/api/projects/{fake_id}/kanban-groups", json={"name": "Urgent"})
+        assert resp.status_code == 404
+
+    async def test_create_kanban_group_empty_name_rejected(self, api_integration_env):
+        create_project = api_integration_env["create_test_project"]
+        client = api_integration_env["client"]
+
+        project = await create_project("Kanban Empty Name")
+        pid = project["project_id"]
+
+        resp = await client.post(f"/api/projects/{pid}/kanban-groups", json={"name": "   "})
+        assert resp.status_code == 422
+
+
+class TestKanbanGroupRename:
+    """PUT /api/projects/{project_id}/kanban-groups/{group_id} (issue #1722)"""
+
+    async def test_rename_kanban_group(self, api_integration_env):
+        create_project = api_integration_env["create_test_project"]
+        client = api_integration_env["client"]
+
+        project = await create_project("Kanban Rename")
+        pid = project["project_id"]
+        await client.post(f"/api/projects/{pid}/kanban-groups", json={"name": "Urgent"})
+        resp = await client.get(f"/api/projects/{pid}")
+        group_id = resp.json()["project"]["kanban_groups"][0]["group_id"]
+
+        resp = await client.put(
+            f"/api/projects/{pid}/kanban-groups/{group_id}", json={"name": "Renamed"}
+        )
+        assert resp.status_code == 200
+
+        resp = await client.get(f"/api/projects/{pid}")
+        assert resp.json()["project"]["kanban_groups"][0]["name"] == "Renamed"
+
+    async def test_rename_invalid_group_id(self, api_integration_env):
+        create_project = api_integration_env["create_test_project"]
+        client = api_integration_env["client"]
+
+        project = await create_project("Kanban Rename Invalid")
+        pid = project["project_id"]
+
+        resp = await client.put(
+            f"/api/projects/{pid}/kanban-groups/nonexistent", json={"name": "X"}
+        )
+        assert resp.status_code == 404
+
+    async def test_rename_nonexistent_project(self, api_integration_env):
+        client = api_integration_env["client"]
+        fake_id = str(uuid.uuid4())
+        resp = await client.put(
+            f"/api/projects/{fake_id}/kanban-groups/some-group", json={"name": "X"}
+        )
+        assert resp.status_code == 404
+
+
+class TestKanbanGroupDelete:
+    """DELETE /api/projects/{project_id}/kanban-groups/{group_id} (issue #1722)"""
+
+    async def test_delete_kanban_group_reassigns_to_unassigned(self, api_integration_env):
+        create_project = api_integration_env["create_test_project"]
+        create_session = api_integration_env["create_test_session"]
+        client = api_integration_env["client"]
+
+        project = await create_project("Kanban Delete")
+        pid = project["project_id"]
+        session = await create_session(pid, "S1")
+        sid = session["session_id"]
+
+        await client.post(f"/api/projects/{pid}/kanban-groups", json={"name": "Urgent"})
+        resp = await client.get(f"/api/projects/{pid}")
+        group_id = resp.json()["project"]["kanban_groups"][0]["group_id"]
+
+        await client.put(
+            f"/api/projects/{pid}/sessions/{sid}/kanban-group", json={"group_id": group_id}
+        )
+
+        resp = await client.delete(f"/api/projects/{pid}/kanban-groups/{group_id}")
+        assert resp.status_code == 200
+
+        resp = await client.get(f"/api/projects/{pid}")
+        project_data = resp.json()["project"]
+        assert project_data["kanban_groups"] == []
+        assert sid not in project_data["kanban_group_assignments"]
+
+    async def test_delete_invalid_group_id(self, api_integration_env):
+        create_project = api_integration_env["create_test_project"]
+        client = api_integration_env["client"]
+
+        project = await create_project("Kanban Delete Invalid")
+        pid = project["project_id"]
+
+        resp = await client.delete(f"/api/projects/{pid}/kanban-groups/nonexistent")
+        assert resp.status_code == 404
+
+    async def test_delete_nonexistent_project(self, api_integration_env):
+        client = api_integration_env["client"]
+        fake_id = str(uuid.uuid4())
+        resp = await client.delete(f"/api/projects/{fake_id}/kanban-groups/some-group")
+        assert resp.status_code == 404
+
+
+class TestKanbanGroupReorder:
+    """PUT /api/projects/{project_id}/kanban-groups/reorder (issue #1722)"""
+
+    async def test_reorder_kanban_groups(self, api_integration_env):
+        create_project = api_integration_env["create_test_project"]
+        client = api_integration_env["client"]
+
+        project = await create_project("Kanban Reorder")
+        pid = project["project_id"]
+        await client.post(f"/api/projects/{pid}/kanban-groups", json={"name": "First"})
+        await client.post(f"/api/projects/{pid}/kanban-groups", json={"name": "Second"})
+
+        resp = await client.get(f"/api/projects/{pid}")
+        groups = resp.json()["project"]["kanban_groups"]
+        g1, g2 = groups[0]["group_id"], groups[1]["group_id"]
+
+        resp = await client.put(
+            f"/api/projects/{pid}/kanban-groups/reorder", json={"group_ids": [g2, g1]}
+        )
+        assert resp.status_code == 200
+
+        resp = await client.get(f"/api/projects/{pid}")
+        result_ids = [g["group_id"] for g in resp.json()["project"]["kanban_groups"]]
+        assert result_ids == [g2, g1]
+
+    async def test_reorder_invalid_id_set(self, api_integration_env):
+        create_project = api_integration_env["create_test_project"]
+        client = api_integration_env["client"]
+
+        project = await create_project("Kanban Reorder Invalid")
+        pid = project["project_id"]
+        await client.post(f"/api/projects/{pid}/kanban-groups", json={"name": "First"})
+
+        resp = await client.put(
+            f"/api/projects/{pid}/kanban-groups/reorder", json={"group_ids": ["bogus"]}
+        )
+        assert resp.status_code == 400
+
+
+class TestSessionKanbanGroupAssign:
+    """PUT /api/projects/{project_id}/sessions/{session_id}/kanban-group (issue #1722)"""
+
+    async def test_assign_session_to_group(self, api_integration_env):
+        create_project = api_integration_env["create_test_project"]
+        create_session = api_integration_env["create_test_session"]
+        client = api_integration_env["client"]
+
+        project = await create_project("Kanban Assign")
+        pid = project["project_id"]
+        session = await create_session(pid, "S1")
+        sid = session["session_id"]
+        await client.post(f"/api/projects/{pid}/kanban-groups", json={"name": "Urgent"})
+        resp = await client.get(f"/api/projects/{pid}")
+        group_id = resp.json()["project"]["kanban_groups"][0]["group_id"]
+
+        resp = await client.put(
+            f"/api/projects/{pid}/sessions/{sid}/kanban-group", json={"group_id": group_id}
+        )
+        assert resp.status_code == 200
+
+        resp = await client.get(f"/api/projects/{pid}")
+        assert resp.json()["project"]["kanban_group_assignments"][sid] == group_id
+
+    async def test_clear_session_group_assignment(self, api_integration_env):
+        create_project = api_integration_env["create_test_project"]
+        create_session = api_integration_env["create_test_session"]
+        client = api_integration_env["client"]
+
+        project = await create_project("Kanban Clear Assign")
+        pid = project["project_id"]
+        session = await create_session(pid, "S1")
+        sid = session["session_id"]
+        await client.post(f"/api/projects/{pid}/kanban-groups", json={"name": "Urgent"})
+        resp = await client.get(f"/api/projects/{pid}")
+        group_id = resp.json()["project"]["kanban_groups"][0]["group_id"]
+        await client.put(
+            f"/api/projects/{pid}/sessions/{sid}/kanban-group", json={"group_id": group_id}
+        )
+
+        resp = await client.put(
+            f"/api/projects/{pid}/sessions/{sid}/kanban-group", json={"group_id": None}
+        )
+        assert resp.status_code == 200
+
+        resp = await client.get(f"/api/projects/{pid}")
+        assert sid not in resp.json()["project"]["kanban_group_assignments"]
+
+    async def test_assign_invalid_group_id(self, api_integration_env):
+        create_project = api_integration_env["create_test_project"]
+        create_session = api_integration_env["create_test_session"]
+        client = api_integration_env["client"]
+
+        project = await create_project("Kanban Assign Invalid")
+        pid = project["project_id"]
+        session = await create_session(pid, "S1")
+        sid = session["session_id"]
+
+        resp = await client.put(
+            f"/api/projects/{pid}/sessions/{sid}/kanban-group", json={"group_id": "nonexistent"}
+        )
+        assert resp.status_code == 404
+
+    async def test_assign_nonexistent_project(self, api_integration_env):
+        client = api_integration_env["client"]
+        fake_id = str(uuid.uuid4())
+        resp = await client.put(
+            f"/api/projects/{fake_id}/sessions/some-session/kanban-group",
+            json={"group_id": None},
+        )
+        assert resp.status_code == 404

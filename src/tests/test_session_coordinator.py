@@ -697,6 +697,92 @@ class TestDeleteSessionScheduleCancellation:
         assert result["success"] is True
 
 
+class TestIssue1722DeleteSessionKanbanCleanup:
+    """delete_session() strips the deleted session's kanban group assignment (issue #1722)."""
+
+    @pytest.mark.asyncio
+    async def test_delete_session_strips_own_group_assignment(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Deleting a single assigned session removes its map entry."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        project_id = sample_session_config["project_id"]
+
+        project = await coordinator.project_manager.create_kanban_group(project_id, "Urgent")
+        group_id = project.kanban_groups[0]["group_id"]
+        await coordinator.project_manager.assign_session_to_group(project_id, session_id, group_id)
+
+        # Create a second session so the project doesn't become empty (and get deleted)
+        # when the first is removed.
+        import uuid
+        other_config = dict(sample_session_config)
+        other_config["session_id"] = str(uuid.uuid4())
+        await coordinator.create_session(**other_config)
+
+        project = await coordinator.project_manager.get_project(project_id)
+        assert project.kanban_group_assignments == {session_id: group_id}
+
+        result = await coordinator.delete_session(session_id)
+        assert result["success"] is True
+
+        project = await coordinator.project_manager.get_project(project_id)
+        assert session_id not in project.kanban_group_assignments
+
+    @pytest.mark.asyncio
+    async def test_delete_session_noop_when_no_assignment(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Deleting an unassigned session does not raise."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        result = await coordinator.delete_session(session_id)
+        assert result["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_cascading_child_deletion_strips_all_group_assignments(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Deleting a parent with children strips the group assignment of every
+        cascaded child, since Step 1's cleanup call runs once per session via the
+        existing delete_session recursion."""
+        import uuid
+
+        coordinator = temp_coordinator
+        project_id = sample_session_config["project_id"]
+
+        parent_id = await coordinator.create_session(**sample_session_config)
+
+        child_config = dict(sample_session_config)
+        child_config["session_id"] = str(uuid.uuid4())
+        child_config["parent_overseer_id"] = parent_id
+        child_id = await coordinator.create_session(**child_config)
+
+        # Wire up the parent/child relationship the way spawn_minion would.
+        parent_info = await coordinator.session_manager.get_session_info(parent_id)
+        parent_info.child_minion_ids = [child_id]
+
+        project = await coordinator.project_manager.create_kanban_group(project_id, "Urgent")
+        group_id = project.kanban_groups[0]["group_id"]
+        await coordinator.project_manager.assign_session_to_group(project_id, parent_id, group_id)
+        await coordinator.project_manager.assign_session_to_group(project_id, child_id, group_id)
+
+        project = await coordinator.project_manager.get_project(project_id)
+        assert project.kanban_group_assignments == {parent_id: group_id, child_id: group_id}
+
+        result = await coordinator.delete_session(parent_id)
+        assert result["success"] is True
+        assert child_id in result["deleted_session_ids"]
+
+        # Project itself is gone (both sessions removed, project became empty and was
+        # deleted) — nothing left to assert on. Re-fetch defensively either way.
+        project = await coordinator.project_manager.get_project(project_id)
+        if project is not None:
+            assert parent_id not in project.kanban_group_assignments
+            assert child_id not in project.kanban_group_assignments
+
+
 class TestIssue1375SecretRefs:
     """Tests for ${secret:<name>} substitution in MCP server header values (issue #1375)."""
 

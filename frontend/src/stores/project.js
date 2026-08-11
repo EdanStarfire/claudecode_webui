@@ -206,6 +206,122 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   /**
+   * Create a new kanban priority group in a project (issue #1722).
+   * The endpoint returns the full project (unlike other kanban-group actions) so we can
+   * patch in the server-generated group_id immediately rather than guessing it locally.
+   */
+  async function createKanbanGroup(projectId, name) {
+    try {
+      const response = await api.post(`/api/projects/${projectId}/kanban-groups`, { name })
+
+      if (response.project) {
+        updateProjectLocal(projectId, response.project)
+      }
+
+      console.log(`Created kanban group in project ${projectId}`, name)
+      return response.project
+    } catch (error) {
+      console.error('Failed to create kanban group:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Rename a kanban priority group (issue #1722)
+   */
+  async function renameKanbanGroup(projectId, groupId, name) {
+    try {
+      await api.put(`/api/projects/${projectId}/kanban-groups/${groupId}`, { name })
+
+      const project = projects.value.get(projectId)
+      if (project) {
+        const group = (project.kanban_groups || []).find(g => g.group_id === groupId)
+        if (group) group.name = name
+        projects.value = new Map(projects.value)
+      }
+
+      console.log(`Renamed kanban group ${groupId} in project ${projectId}`, name)
+    } catch (error) {
+      console.error('Failed to rename kanban group:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Delete a kanban priority group; assigned sessions fall back to Unassigned (issue #1722)
+   */
+  async function deleteKanbanGroup(projectId, groupId) {
+    try {
+      await api.delete(`/api/projects/${projectId}/kanban-groups/${groupId}`)
+
+      const project = projects.value.get(projectId)
+      if (project) {
+        project.kanban_groups = (project.kanban_groups || []).filter(g => g.group_id !== groupId)
+        const assignments = { ...(project.kanban_group_assignments || {}) }
+        for (const [sessionId, gid] of Object.entries(assignments)) {
+          if (gid === groupId) delete assignments[sessionId]
+        }
+        project.kanban_group_assignments = assignments
+        projects.value = new Map(projects.value)
+      }
+
+      console.log(`Deleted kanban group ${groupId} in project ${projectId}`)
+    } catch (error) {
+      console.error('Failed to delete kanban group:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Reorder kanban priority groups (issue #1722)
+   */
+  async function reorderKanbanGroups(projectId, groupIds) {
+    try {
+      await api.put(`/api/projects/${projectId}/kanban-groups/reorder`, { group_ids: groupIds })
+
+      const project = projects.value.get(projectId)
+      if (project) {
+        const groupsById = new Map((project.kanban_groups || []).map(g => [g.group_id, g]))
+        project.kanban_groups = groupIds.map(id => groupsById.get(id)).filter(Boolean)
+        projects.value = new Map(projects.value)
+      }
+
+      console.log(`Reordered kanban groups in project ${projectId}`, groupIds)
+    } catch (error) {
+      console.error('Failed to reorder kanban groups:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Move a session into a kanban group, or clear its assignment (null/'unassigned') (issue #1722)
+   */
+  async function assignSessionKanbanGroup(projectId, sessionId, groupId) {
+    try {
+      await api.put(`/api/projects/${projectId}/sessions/${sessionId}/kanban-group`, {
+        group_id: groupId
+      })
+
+      const project = projects.value.get(projectId)
+      if (project) {
+        const assignments = { ...(project.kanban_group_assignments || {}) }
+        if (groupId === null || groupId === undefined || groupId === 'unassigned') {
+          delete assignments[sessionId]
+        } else {
+          assignments[sessionId] = groupId
+        }
+        project.kanban_group_assignments = assignments
+        projects.value = new Map(projects.value)
+      }
+
+      console.log(`Assigned session ${sessionId} to kanban group ${groupId} in project ${projectId}`)
+    } catch (error) {
+      console.error('Failed to assign session to kanban group:', error)
+      throw error
+    }
+  }
+
+  /**
    * Get status bar segments for a project's sessions (for ProjectPill status bar)
    * Returns array of { status: 'active'|'idle'|'waiting'|'error'|'none', flex: number }
    */
@@ -348,6 +464,11 @@ export const useProjectStore = defineStore('project', () => {
     toggleExpansion,
     reorderProjects,
     reorderSessionsInProject,
+    createKanbanGroup,
+    renameKanbanGroup,
+    deleteKanbanGroup,
+    reorderKanbanGroups,
+    assignSessionKanbanGroup,
     getProject,
     getStatusBarSegments,
     projectHasUnreviewed,
