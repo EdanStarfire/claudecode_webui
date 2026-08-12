@@ -390,6 +390,7 @@ export const usePollingStore = defineStore('polling', () => {
         if (payload.data && payload.data.session_id && payload.data.session) {
           const priorSession = sessionStore.sessions.get(payload.data.session_id)
           const wasProcessing = priorSession?.is_processing
+          const priorState = priorSession?.state
 
           sessionStore.updateSession(payload.data.session_id, payload.data.session)
 
@@ -412,13 +413,13 @@ export const usePollingStore = defineStore('polling', () => {
             })
           }
 
-          if (newState === 'error') {
+          if (newState === 'error' && priorState !== 'error') {
             notify('session_error', { sessionName: payload.data.session.name || 'Session', sessionId: changedSessionId })
           }
           if (wasProcessing && !payload.data.session.is_processing) {
             notify('task_complete', { sessionName: payload.data.session.name || 'Session', sessionId: changedSessionId })
           }
-          if (newState === 'paused' && priorSession?.state !== 'paused') {
+          if (newState === 'paused' && priorState !== 'paused') {
             notify('permission_prompt', { sessionName: payload.data.session.name || 'Session', sessionId: changedSessionId })
           }
         }
