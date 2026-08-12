@@ -203,6 +203,15 @@ export const useUIStore = defineStore('ui', () => {
     writeStorage('maxPeekCards', value)
   }
 
+  // Issue #1733: Default batch size for throttled "Resume Sessions" — synced from /api/config via settings page
+  const resumeBatchSize = ref(readStorage('resumeBatchSize', 10))
+
+  function setResumeBatchSize(n) {
+    const value = Math.max(1, parseInt(n, 10) || 10)
+    resumeBatchSize.value = value
+    writeStorage('resumeBatchSize', value)
+  }
+
   // Issue #1625: Schedules library grouping mode — persisted
   const schedulesGroupBy = ref(readStorage('schedulesGroupBy', 'legion'))
 
@@ -465,6 +474,7 @@ export const useUIStore = defineStore('ui', () => {
     flatSort,
     flatGroupMode,
     maxPeekCards,
+    resumeBatchSize,
 
     // Actions
     toggleRightSidebar,
@@ -502,6 +512,7 @@ export const useUIStore = defineStore('ui', () => {
     setFlatSort,
     setFlatGroupMode,
     setMaxPeekCards,
+    setResumeBatchSize,
     schedulesGroupBy,
     schedulesCollapsedGroups,
     setSchedulesGroupBy,

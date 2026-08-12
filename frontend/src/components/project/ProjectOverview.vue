@@ -62,20 +62,50 @@
             Stopping…
           </button>
 
-          <!-- Resume Sessions -->
+          <!-- Resume Sessions: default state -->
           <button
+            v-if="resumeState === 'default'"
             class="btn btn-sm btn-outline-warning"
-            :disabled="stoppedCount === 0 || stopState === 'stopping' || resuming"
+            :disabled="stoppedCount === 0 || stopState === 'stopping'"
             :title="stoppedCount === 0 ? 'No stopped sessions to resume' : `Resume ${stoppedCount} stopped session${stoppedCount !== 1 ? 's' : ''}`"
-            @click="resumeSessions"
+            @click="beginResumeConfirm"
           >
-            <span v-if="resuming" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
-            <span v-else>↻</span>
-            {{ resuming ? 'Resuming…' : 'Resume Sessions' }}
+            ↻ Resume Sessions
             <span
-              v-if="stoppedCount > 0 && !resuming"
+              v-if="stoppedCount > 0"
               class="badge bg-warning text-dark ms-1"
             >{{ stoppedCount }}</span>
+          </button>
+
+          <!-- Resume Sessions: inline confirmation with editable batch size -->
+          <div
+            v-else-if="resumeState === 'confirming'"
+            class="d-inline-flex align-items-center gap-1 border border-warning rounded px-2 py-1"
+            style="background: rgba(var(--bs-warning-rgb), 0.12);"
+          >
+            <span class="text-warning-emphasis small">Resume {{ stoppedCount }} session{{ stoppedCount !== 1 ? 's' : '' }} in batches of</span>
+            <input
+              type="number"
+              class="form-control form-control-sm py-0"
+              style="width: 4.5rem;"
+              min="1"
+              step="1"
+              v-model.number="resumeBatchSizeInput"
+              @click.stop
+              aria-label="Resume batch size"
+            >
+            <button class="btn btn-sm btn-outline-secondary py-0" @click="cancelResume">Cancel</button>
+            <button class="btn btn-sm btn-warning py-0" @click="confirmResume">Confirm Resume</button>
+          </div>
+
+          <!-- Resume Sessions: resuming in progress -->
+          <button
+            v-else
+            class="btn btn-sm btn-warning"
+            disabled
+          >
+            <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+            Resuming…
           </button>
         </div>
       </div>
@@ -531,7 +561,8 @@ let sessionWatchStop = null
 
 // Fleet control state
 const stopState = ref('default') // 'default' | 'confirming' | 'stopping'
-const resuming = ref(false)
+const resumeState = ref('default') // 'default' | 'confirming' | 'resuming'
+const resumeBatchSizeInput = ref(uiStore.resumeBatchSize)
 const stoppedCount = ref(0)
 const fleetToast = ref(null)
 let fleetToastTimer = null
@@ -604,9 +635,20 @@ async function confirmStop() {
   }
 }
 
-async function resumeSessions() {
-  if (resuming.value || stoppedCount.value === 0) return
-  resuming.value = true
+function beginResumeConfirm() {
+  if (resumeState.value !== 'default' || stoppedCount.value === 0 || stopState.value === 'stopping') return
+  resumeBatchSizeInput.value = uiStore.resumeBatchSize
+  resumeState.value = 'confirming'
+  fleetToast.value = null
+}
+
+function cancelResume() {
+  resumeState.value = 'default'
+}
+
+async function confirmResume() {
+  const batchSize = Math.max(1, parseInt(resumeBatchSizeInput.value, 10) || uiStore.resumeBatchSize)
+  resumeState.value = 'resuming'
   fleetToast.value = null
   try {
     const allIds = projectSessions.value.map(s => s.session_id)
@@ -619,13 +661,20 @@ async function resumeSessions() {
 
     const processingSet = getProcessingSet(props.projectId)
 
-    const settled = await Promise.allSettled(
-      toResume.map(id =>
-        processingSet.has(id)
-          ? queueStore.enqueueMessage(id, RESUME_MESSAGE, false)
-          : sessionStore.startSession(id)
+    // Throttle: resume in sequential batches of `batchSize` so we don't fire every
+    // stopped session's start/enqueue concurrently (issue #1733).
+    const settled = []
+    for (let i = 0; i < toResume.length; i += batchSize) {
+      const chunk = toResume.slice(i, i + batchSize)
+      const chunkSettled = await Promise.allSettled(
+        chunk.map(id =>
+          processingSet.has(id)
+            ? queueStore.enqueueMessage(id, RESUME_MESSAGE, false)
+            : sessionStore.startSession(id)
+        )
       )
-    )
+      settled.push(...chunkSettled)
+    }
 
     const succeeded = toResume.filter((_, i) => settled[i].status === 'fulfilled')
     const failed = toResume.filter((_, i) => settled[i].status === 'rejected')
@@ -649,7 +698,7 @@ async function resumeSessions() {
   } catch (err) {
     setFleetToast('danger', `✗ Resume failed: ${err.message || err}`, 0)
   } finally {
-    resuming.value = false
+    resumeState.value = 'default'
   }
 }
 
@@ -1023,7 +1072,7 @@ watch(() => props.projectId, (newId) => {
   projectStore.selectProject(newId)
   sessionStore.currentSessionId = null
   stopState.value = 'default'
-  resuming.value = false
+  resumeState.value = 'default'
   fleetToast.value = null
   clearTimeout(fleetToastTimer)
   const restored = getStoppedSet(newId)
