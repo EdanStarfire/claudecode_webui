@@ -348,6 +348,9 @@ class TestCommRouter:
             ],
         )
 
+        # Attachment delivery now happens in _deliver_attachments(), called by
+        # route_comm() before _send_to_minion() (issue #1730)
+        await comm_router._deliver_attachments(comm)
         result = await comm_router._send_to_minion(comm)
         assert result is True
 
@@ -364,3 +367,90 @@ class TestCommRouter:
         assert attachments[0]["filename"] == "report.txt"
         assert attachments[0]["stored_path"] != "", "stored_path must be set after delivery"
         assert attachments[0]["resource_id"] == "res-abc123"
+
+    @pytest.mark.asyncio
+    async def test_issue_1730_route_comm_persists_non_null_resource_id(self, comm_router, tmp_path):
+        """Regression test: route_comm() delivers attachments (resolving
+        resource_id) before persisting the Comm, so timeline.jsonl carries the
+        correct resource_id from the start instead of a null placeholder that
+        gets mutated in place afterward (append-only log, so the persisted
+        record previously stayed null forever)."""
+        comm_router.system.session_coordinator.data_dir = tmp_path
+
+        source_file = tmp_path / "notes.txt"
+        source_file.write_bytes(b"attachment contents")
+
+        comm_router.system.session_coordinator.register_uploaded_resource = AsyncMock(
+            return_value={"resource_id": "res-persisted-1"}
+        )
+        comm_router.system.session_coordinator.register_uploaded_file = AsyncMock()
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_user=True,
+            to_minion_id="test-minion-123",
+            content="Here is a file",
+            comm_type=CommType.TASK,
+            attachments=[
+                {
+                    "name": "notes.txt",
+                    "size": 20,
+                    "mime_type": "text/plain",
+                    "source_path": str(source_file),
+                }
+            ],
+        )
+
+        with patch.object(comm_router, '_append_to_timeline', new=AsyncMock()) as mock_append_timeline:
+            result = await comm_router.route_comm(comm)
+
+        assert result is True
+        mock_append_timeline.assert_called_once()
+        persisted_comm = mock_append_timeline.call_args.args[1]
+        assert persisted_comm.attachments[0]["resource_id"] == "res-persisted-1", (
+            "Comm persisted to timeline.jsonl must already carry the resolved "
+            "resource_id, not null"
+        )
+
+    @pytest.mark.asyncio
+    async def test_issue_1730_deliver_attachments_skips_when_target_missing(self, comm_router, tmp_path):
+        """Regression test: _deliver_attachments() must not write files or
+        register resources for a to_minion_id that doesn't exist. Delivery now
+        runs before _send_to_minion()'s own "target minion not found" check
+        (moved there by issue #1730), so it must re-check existence itself —
+        otherwise a comm to a missing/disposed minion would silently create
+        orphaned files/resources under a session directory that was never
+        wired into session_manager."""
+        comm_router.system.session_coordinator.data_dir = tmp_path
+        comm_router.system.session_coordinator.session_manager.get_session_info = AsyncMock(
+            return_value=None
+        )
+        register_resource_mock = AsyncMock(return_value={"resource_id": "should-not-be-called"})
+        comm_router.system.session_coordinator.register_uploaded_resource = register_resource_mock
+
+        source_file = tmp_path / "notes.txt"
+        source_file.write_bytes(b"attachment contents")
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_user=True,
+            to_minion_id="nonexistent-minion",
+            content="Here is a file",
+            comm_type=CommType.TASK,
+            attachments=[
+                {
+                    "name": "notes.txt",
+                    "size": 20,
+                    "mime_type": "text/plain",
+                    "source_path": str(source_file),
+                }
+            ],
+        )
+
+        await comm_router._deliver_attachments(comm)
+
+        register_resource_mock.assert_not_called()
+        assert comm.attachments[0].get("resource_id") is None
+        assert not (tmp_path / "sessions" / "nonexistent-minion").exists(), (
+            "No attachment directory should be created for a nonexistent target minion"
+        )

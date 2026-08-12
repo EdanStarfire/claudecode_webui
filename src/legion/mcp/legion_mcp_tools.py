@@ -724,10 +724,23 @@ class LegionMCPTools:
                 comm, attachment_data=attachment_file_data or None
             )
             if success:
+                text = f"Message sent to {to_minion_name}"
+                if attachment_metadata:
+                    import json as _json
+                    footer_payload = [
+                        {
+                            "name": att["name"],
+                            "resource_id": att.get("sender_resource_id"),
+                            "size": att["size"],
+                            "mime_type": att["mime_type"],
+                        }
+                        for att in attachment_metadata
+                    ]
+                    text += f"\n\n<!-- sender_attachments: {_json.dumps(footer_payload)} -->"
                 return {
                     "content": [{
                         "type": "text",
-                        "text": f"Message sent to {to_minion_name}"
+                        "text": text
                     }],
                     "is_error": False
                 }

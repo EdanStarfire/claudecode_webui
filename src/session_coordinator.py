@@ -3824,12 +3824,10 @@ class SessionCoordinator:
                                     if matched_tool.display:
                                         matched_tool.display.state = ToolState.COMPLETED
                                         matched_tool.display.style = "success"
-                                    # Issue #1593: resolve sender attachment resource IDs
+                                    # Issue #1593/#1730: resolve sender attachment resource IDs
                                     if matched_tool.name == "mcp__legion__send_comm":
                                         matched_tool.sender_attachments = (
-                                            await self._resolve_send_comm_sender_attachments(
-                                                session_id, matched_tool.input
-                                            )
+                                            self._parse_send_comm_sender_attachments(result_content)
                                         )
                                 tc_data = matched_tool.to_dict()
                                 tc_data["type"] = "tool_call"
@@ -4339,57 +4337,35 @@ class SessionCoordinator:
 
         return tool_call
 
-    async def _resolve_send_comm_sender_attachments(
+    def _parse_send_comm_sender_attachments(
         self,
-        session_id: str,
-        tool_input: dict,
+        result_content: str,
     ) -> list[dict] | None:
-        """Issue #1593: Resolve sender resource IDs for mcp__legion__send_comm attachments.
+        """Issue #1593/#1730: Parse sender resource IDs for mcp__legion__send_comm attachments.
 
-        Looks up each attachment filename in the session's resource storage to find
-        the resource_id registered when send_comm ran. Returns a list of dicts with
-        {name, resource_id, size, mime_type} for use by SendCommToolHandler.
+        Extracts the JSON footer embedded by `_handle_send_comm` in the tool
+        result text (format: `<!-- sender_attachments: [...] -->`). The footer
+        is captured immutably at the moment of that specific send_comm call, so
+        this parser returns the exact version delivered — unlike a filename
+        search against the resource log, which always resolves to the oldest
+        matching version regardless of which send_comm call is being displayed.
         """
         import json as _json
-        from pathlib import Path
+        import re
 
-        raw = tool_input.get("attachments")
-        if not raw:
+        if not isinstance(result_content, str):
+            return None
+
+        match = re.search(r"<!-- sender_attachments: (.*?) -->", result_content, re.DOTALL)
+        if not match:
             return None
 
         try:
-            paths = _json.loads(raw) if isinstance(raw, str) else raw
-            paths = paths if isinstance(paths, list) else [str(raw)]
-        except Exception:
+            parsed = _json.loads(match.group(1))
+        except _json.JSONDecodeError:
             return None
 
-        storage = self._storage_managers.get(session_id)
-        if not storage:
-            return None
-
-        try:
-            resources = await storage.read_resources()
-        except Exception:
-            return None
-
-        result = []
-        for p in paths:
-            filename = Path(p).name
-            resource = next(
-                (
-                    r
-                    for r in resources
-                    if r.get("title") == filename or r.get("original_name") == filename
-                ),
-                None,
-            )
-            result.append({
-                "name": filename,
-                "resource_id": resource["resource_id"] if resource else None,
-                "size": resource.get("size_bytes") if resource else None,
-                "mime_type": resource.get("mime_type") if resource else None,
-            })
-        return result if result else None
+        return parsed if isinstance(parsed, list) and parsed else None
 
     def mark_session_tools_interrupted(self, session_id: str) -> list[ToolCall]:
         """

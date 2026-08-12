@@ -793,13 +793,13 @@ class ClaudeWebUI:
                     is_error = tool_result.get('is_error', False)
 
                     if tool_use_id:
-                        # Issue #1593: resolve sender attachment resource IDs for send_comm
+                        # Issue #1593/#1730: resolve sender attachment resource IDs for send_comm
                         sender_attachments = None
                         if not is_error:
                             active_tc = self.coordinator._get_active_tool_call(session_id, tool_use_id)
                             if active_tc and active_tc.name == "mcp__legion__send_comm":
-                                sender_attachments = await self.coordinator._resolve_send_comm_sender_attachments(
-                                    session_id, active_tc.input
+                                sender_attachments = self.coordinator._parse_send_comm_sender_attachments(
+                                    result_content
                                 )
 
                         # Update ToolCall with result
