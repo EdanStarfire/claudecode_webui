@@ -142,7 +142,25 @@ const sortedChildIds = computed(() => {
   })
 })
 
-const isExpanded = computed(() => uiStore.expandedStacks.has(props.session.session_id))
+// Auto-expand when the active session is a descendant, even if not manually expanded —
+// mirrors StackedChip's hasActiveDescendant fallback so the current session is never hidden.
+const hasActiveDescendant = computed(() => {
+  const activeId = sessionStore.currentSessionId
+  if (!activeId) return false
+  function checkDescendants(ids) {
+    for (const id of ids) {
+      if (id === activeId) return true
+      const child = sessionStore.getSession(id)
+      if (child?.child_minion_ids && checkDescendants(child.child_minion_ids)) return true
+    }
+    return false
+  }
+  return checkDescendants(childIds.value)
+})
+
+const isExpanded = computed(() =>
+  uiStore.expandedStacks.has(props.session.session_id) || hasActiveDescendant.value
+)
 
 function toggleExpand() {
   uiStore.toggleStack(props.session.session_id)
