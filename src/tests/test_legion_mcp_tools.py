@@ -473,6 +473,144 @@ async def test_issue_824_non_tmp_path_not_translated(tmp_path):
     assert result.get("is_error") is True
 
 
+# Regression tests for issue #1730: sender-side attachment chip resolves to the
+# wrong (oldest) version when the same filename is sent across multiple send_comm
+# calls. Fix: _handle_send_comm embeds the resolved resource_id as an immutable
+# footer on the tool result, instead of re-searching resources by filename later.
+
+
+def _make_send_comm_system_with_router(session_id: str, data_dir, resource_ids):
+    """Helper: build a mock system for send_comm attachment-footer tests.
+
+    `resource_ids` is consumed in order, one per attachment registered via
+    register_uploaded_resource, so tests can assert distinct resource_ids are
+    embedded per attachment/call.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_system = _make_send_comm_system(session_id, docker_enabled=False, data_dir=data_dir)
+    mock_system.session_coordinator.register_uploaded_resource = AsyncMock(
+        side_effect=[{"resource_id": rid} for rid in resource_ids]
+    )
+    mock_system.comm_router = MagicMock()
+    mock_system.comm_router.route_comm = AsyncMock(return_value=True)
+    return mock_system
+
+
+def _extract_sender_attachments_footer(text):
+    import json
+    import re
+
+    match = re.search(r"<!-- sender_attachments: (.*?) -->", text, re.DOTALL)
+    assert match, f"sender_attachments footer not found in tool result text: {text!r}"
+    return json.loads(match.group(1))
+
+
+@pytest.mark.asyncio
+async def test_issue_1730_send_comm_embeds_resolved_resource_id_per_attachment(tmp_path):
+    """_handle_send_comm embeds the resolved resource_id for each of multiple
+    attachments sent in a single call, not just the first."""
+    from src.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    session_id = "sender-session-multi"
+    file_a = tmp_path / "a.txt"
+    file_a.write_text("version a")
+    file_b = tmp_path / "b.txt"
+    file_b.write_text("version bb")
+
+    mock_system = _make_send_comm_system_with_router(
+        session_id, tmp_path, resource_ids=["res-a", "res-b"]
+    )
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_send_comm({
+        "_from_minion_id": session_id,
+        "to_minion_name": "user",
+        "summary": "test",
+        "content": "body",
+        "comm_type": "report",
+        "attachments": [str(file_a), str(file_b)],
+    })
+
+    assert result["is_error"] is False
+    footer = _extract_sender_attachments_footer(result["content"][0]["text"])
+    assert footer == [
+        {"name": "a.txt", "resource_id": "res-a", "size": 9, "mime_type": "text/plain"},
+        {"name": "b.txt", "resource_id": "res-b", "size": 10, "mime_type": "text/plain"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_issue_1730_footer_parser_round_trips(tmp_path):
+    """session_coordinator._parse_send_comm_sender_attachments correctly decodes
+    the footer embedded by _handle_send_comm."""
+    from src.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from src.session_coordinator import SessionCoordinator
+
+    session_id = "sender-session-roundtrip"
+    file_a = tmp_path / "report.md"
+    file_a.write_text("contents")
+
+    mock_system = _make_send_comm_system_with_router(
+        session_id, tmp_path, resource_ids=["res-xyz"]
+    )
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_send_comm({
+        "_from_minion_id": session_id,
+        "to_minion_name": "user",
+        "summary": "test",
+        "content": "body",
+        "comm_type": "report",
+        "attachments": [str(file_a)],
+    })
+
+    text = result["content"][0]["text"]
+    parsed = SessionCoordinator._parse_send_comm_sender_attachments(None, text)
+    assert parsed == [
+        {"name": "report.md", "resource_id": "res-xyz", "size": 8, "mime_type": "text/markdown"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_issue_1730_same_filename_resolves_distinct_resource_ids_across_calls(tmp_path):
+    """Sending the same-named file across 3 separate send_comm calls resolves 3
+    distinct resource_ids — not the same (oldest) one each time, which was the
+    bug: the old resolver re-searched the resource log by filename and always
+    matched the first (oldest) registered version."""
+    from src.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from src.session_coordinator import SessionCoordinator
+
+    session_id = "sender-session-versions"
+    mock_system = _make_send_comm_system_with_router(
+        session_id, tmp_path, resource_ids=["res-v1", "res-v2", "res-v3"]
+    )
+    mcp_tools = LegionMCPTools(mock_system)
+
+    resolved_ids = []
+    for version_text in ["v1 contents", "v2 contents", "v3 contents"]:
+        # Same filename each time, overwriting the previous version on disk —
+        # mirrors an agent re-registering an updated version of the same file.
+        shared_path = tmp_path / "same_name.txt"
+        shared_path.write_text(version_text)
+
+        result = await mcp_tools._handle_send_comm({
+            "_from_minion_id": session_id,
+            "to_minion_name": "user",
+            "summary": "test",
+            "content": "body",
+            "comm_type": "report",
+            "attachments": [str(shared_path)],
+        })
+
+        footer = SessionCoordinator._parse_send_comm_sender_attachments(
+            None, result["content"][0]["text"]
+        )
+        resolved_ids.append(footer[0]["resource_id"])
+
+    assert resolved_ids == ["res-v1", "res-v2", "res-v3"]
+
+
 # ── queue_task handler tests (Issue #1114) ──
 
 

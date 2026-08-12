@@ -166,13 +166,19 @@ class CommRouter:
         # Validate comm has proper routing
         comm.validate()
 
+        # Deliver attachments before persisting (issue #1730) so timeline.jsonl
+        # captures the resolved resource_id from the start, instead of null
+        # placeholders mutated in place afterward.
+        if comm.to_minion_id:
+            await self._deliver_attachments(comm, attachment_data)
+
         # Normal routing - persist and route
         await self._persist_comm(comm)
         legion_logger.debug(f"Comm {comm.comm_id} persisted successfully")
 
         # Route to destination
         if comm.to_minion_id:
-            result = await self._send_to_minion(comm, attachment_data=attachment_data)
+            result = await self._send_to_minion(comm)
             legion_logger.info(f"Comm {comm.comm_id} routed to minion {comm.to_minion_id}: {'success' if result else 'failed'}")
             return result
         elif comm.to_user:
@@ -183,18 +189,108 @@ class CommRouter:
         legion_logger.warning(f"Comm {comm.comm_id} has no valid destination")
         return False
 
-    async def _send_to_minion(
+    async def _deliver_attachments(
         self,
         comm: Comm,
         attachment_data: dict[str, bytes] | None = None,
+    ) -> None:
+        """
+        Write and register a Comm's file attachments in the recipient's session.
+
+        Called from route_comm() before _persist_comm() (issue #1730) so that
+        timeline.jsonl captures each attachment's resolved resource_id from the
+        start, instead of a null placeholder mutated in place afterward.
+
+        Files go to the session's attachments/ dir — same location as user
+        uploads via InputArea. To the agent, a comm is just an enhanced user
+        message from another agent, so the file paths should be consistent.
+        For Docker sessions, attachments/ is mounted read-only at its host
+        path (see session_coordinator.py).
+
+        Mutates each dict in comm.attachments in place with resource_id,
+        session_id, and stored_path on success. On failure to locate or
+        deliver a given attachment, it's left with resource_id=None — no
+        worse than before this fix — and logged.
+        """
+        if not (comm.attachments and comm.to_minion_id):
+            return
+
+        # Skip delivery if the target minion doesn't exist — mirrors the check
+        # _send_to_minion() does before it would otherwise have reached the
+        # (now-removed) delivery block. Without this, a comm to a missing/
+        # disposed minion would write files and register orphaned resources
+        # under a session directory that isn't wired into session_manager,
+        # before _send_to_minion() catches the missing target and errors out.
+        target_minion = await self.system.session_coordinator.session_manager.get_session_info(comm.to_minion_id)
+        if not target_minion:
+            legion_logger.warning(f"Skipping attachment delivery: target minion {comm.to_minion_id} not found")
+            return
+
+        attachment_data = attachment_data or {}
+        data_dir = self.system.session_coordinator.data_dir
+        attachments_dir = data_dir / "sessions" / comm.to_minion_id / "attachments"
+        attachments_dir.mkdir(parents=True, exist_ok=True)
+
+        # Sender name for the registered resource's description only
+        from_name = "Minion #user"
+        if comm.from_minion_id:
+            from_minion = await self.system.legion_coordinator.get_minion_info(comm.from_minion_id)
+            if from_minion and from_minion.name:
+                from_name = f"Minion #{from_minion.name}"
+
+        for att in comm.attachments:
+            file_bytes = attachment_data.get(att["name"])
+            if not file_bytes:
+                # Fallback: try reading from source path
+                source = Path(att.get("source_path", ""))
+                if source.exists():
+                    file_bytes = source.read_bytes()
+            if not file_bytes:
+                legion_logger.error(f"Failed to deliver attachment {att['name']}: no data or source found")
+                continue
+
+            try:
+                dest_path = attachments_dir / att["name"]
+                # Avoid name collisions
+                if dest_path.exists():
+                    dest_path = attachments_dir / f"{dest_path.stem}_{uuid.uuid4().hex[:8]}{dest_path.suffix}"
+                dest_path.write_bytes(file_bytes)
+
+                # Register as resource in recipient session (for UI gallery)
+                resource_result = await self.system.session_coordinator.register_uploaded_resource(
+                    session_id=comm.to_minion_id,
+                    file_path=str(dest_path),
+                    title=att["name"],
+                    description=f"File attachment from {from_name}"
+                )
+
+                # Register for auto-approve Read
+                await self.system.session_coordinator.register_uploaded_file(
+                    session_id=comm.to_minion_id,
+                    file_path=str(dest_path)
+                )
+
+                # Update attachment metadata with resource info
+                if resource_result:
+                    att["resource_id"] = resource_result.get("resource_id")
+                    att["session_id"] = comm.to_minion_id
+                    att["stored_path"] = str(dest_path)
+            except Exception as e:
+                legion_logger.error(f"Failed to deliver attachment {att['name']}: {e}")
+
+    async def _send_to_minion(
+        self,
+        comm: Comm,
     ) -> bool:
         """
         Send Comm to a specific minion by injecting message into SDK session.
         Auto-starts the minion session if it's not active.
 
+        Attachments (if any) must already be delivered via _deliver_attachments()
+        before this is called — this only formats comm.attachments for display.
+
         Args:
             comm: Comm with to_minion_id set
-            attachment_data: Optional dict mapping filename -> bytes for file attachments
 
         Returns:
             bool: True if sent successfully
@@ -308,67 +404,25 @@ class CommRouter:
 
             formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}"
 
-            # Deliver file attachments to recipient session (issue #773)
-            # Files go to the session's attachments/ dir — same location as
-            # user uploads via InputArea. To the agent, a comm is just an
-            # enhanced user message from another agent, so the file paths
-            # should be consistent. For Docker sessions, attachments/ is
-            # mounted read-only at its host path (see session_coordinator.py).
+            # Format file attachments for the recipient message (issue #773).
+            # Delivery (file write + resource registration) already happened in
+            # route_comm() via _deliver_attachments() (issue #1730), before
+            # _persist_comm() ran, so this only builds display lines from the
+            # already-resolved comm.attachments.
             if comm.attachments and comm.to_minion_id:
-                attachment_data = attachment_data or {}
                 attachment_lines = []
-                data_dir = self.system.session_coordinator.data_dir
-                attachments_dir = data_dir / "sessions" / comm.to_minion_id / "attachments"
-                attachments_dir.mkdir(parents=True, exist_ok=True)
-
                 for att in comm.attachments:
-                    file_bytes = attachment_data.get(att["name"])
-                    if not file_bytes:
-                        # Fallback: try reading from source path
-                        source = Path(att.get("source_path", ""))
-                        if source.exists():
-                            file_bytes = source.read_bytes()
-                    if file_bytes:
-                        try:
-                            dest_path = attachments_dir / att["name"]
-                            # Avoid name collisions
-                            if dest_path.exists():
-                                dest_path = attachments_dir / f"{dest_path.stem}_{uuid.uuid4().hex[:8]}{dest_path.suffix}"
-                            dest_path.write_bytes(file_bytes)
-
-                            # Register as resource in recipient session (for UI gallery)
-                            resource_result = await self.system.session_coordinator.register_uploaded_resource(
-                                session_id=comm.to_minion_id,
-                                file_path=str(dest_path),
-                                title=att["name"],
-                                description=f"File attachment from {from_name}"
-                            )
-
-                            # Register for auto-approve Read
-                            await self.system.session_coordinator.register_uploaded_file(
-                                session_id=comm.to_minion_id,
-                                file_path=str(dest_path)
-                            )
-
-                            # Update attachment metadata with resource info
-                            if resource_result:
-                                att["resource_id"] = resource_result.get("resource_id")
-                                att["session_id"] = comm.to_minion_id
-                                att["stored_path"] = str(dest_path)
-
-                            # Format size for display
-                            size_kb = att["size"] / 1024
-                            if size_kb >= 1024:
-                                size_str = f"{size_kb / 1024:.1f} MB"
-                            else:
-                                size_str = f"{size_kb:.1f} KB"
-
-                            attachment_lines.append(
-                                f"- {att['name']} ({size_str}): {dest_path}"
-                            )
-                        except Exception as e:
-                            legion_logger.error(f"Failed to deliver attachment {att['name']}: {e}")
-                            attachment_lines.append(f"- {att['name']}: [delivery failed]")
+                    if att.get("stored_path"):
+                        size_kb = att["size"] / 1024
+                        if size_kb >= 1024:
+                            size_str = f"{size_kb / 1024:.1f} MB"
+                        else:
+                            size_str = f"{size_kb:.1f} KB"
+                        attachment_lines.append(
+                            f"- {att['name']} ({size_str}): {att['stored_path']}"
+                        )
+                    else:
+                        attachment_lines.append(f"- {att['name']}: [delivery failed]")
 
                 if attachment_lines:
                     formatted_message += "\n\n---\nAttached files (use Read tool to access, or embed via markdown URL):\n"
