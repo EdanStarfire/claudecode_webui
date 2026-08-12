@@ -149,6 +149,25 @@
       </small>
     </div>
 
+    <div class="form-check form-switch mb-3">
+      <input
+        class="form-check-input"
+        type="checkbox"
+        id="enableExperimentalNavHeader"
+        :checked="config?.enable_experimental_nav_header"
+        @change="toggleExperimentalNavHeader"
+      >
+      <label class="form-check-label" for="enableExperimentalNavHeader">
+        Experimental breadcrumb nav header
+      </label>
+      <small class="form-text text-muted d-block">
+        Replaces the project pill bar and agent strip with a single-row breadcrumb nav
+        (project › session), reclaiming vertical space. Project and session details move into
+        click-to-open dropdowns. Experimental — behavior may change. Applies immediately, no
+        reload needed.
+      </small>
+    </div>
+
     <hr class="my-3">
 
     <h6 class="mb-2">Legion</h6>
@@ -255,6 +274,13 @@ function toggleAllowBackgroundAgent(event) {
   emit('update:config', {
     ...props.config,
     allow_background_agent: event.target.checked
+  })
+}
+
+function toggleExperimentalNavHeader(event) {
+  emit('update:config', {
+    ...props.config,
+    enable_experimental_nav_header: event.target.checked
   })
 }
 

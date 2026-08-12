@@ -212,6 +212,15 @@ export const useUIStore = defineStore('ui', () => {
     writeStorage('resumeBatchSize', value)
   }
 
+  // Issue #1723: Experimental compact breadcrumb nav header — synced from /api/config via settings page,
+  // must apply live (unlike most Features flags, which are read once at SDK session start)
+  const experimentalNavHeader = ref(readStorage('experimentalNavHeader', false))
+
+  function setExperimentalNavHeader(value) {
+    experimentalNavHeader.value = !!value
+    writeStorage('experimentalNavHeader', experimentalNavHeader.value)
+  }
+
   // Issue #1625: Schedules library grouping mode — persisted
   const schedulesGroupBy = ref(readStorage('schedulesGroupBy', 'legion'))
 
@@ -475,6 +484,7 @@ export const useUIStore = defineStore('ui', () => {
     flatGroupMode,
     maxPeekCards,
     resumeBatchSize,
+    experimentalNavHeader,
 
     // Actions
     toggleRightSidebar,
@@ -513,6 +523,7 @@ export const useUIStore = defineStore('ui', () => {
     setFlatGroupMode,
     setMaxPeekCards,
     setResumeBatchSize,
+    setExperimentalNavHeader,
     schedulesGroupBy,
     schedulesCollapsedGroups,
     setSchedulesGroupBy,

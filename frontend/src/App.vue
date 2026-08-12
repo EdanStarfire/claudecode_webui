@@ -3,11 +3,12 @@
     <!-- Row 1: Dark app chrome bar -->
     <HeaderRow1 />
 
-    <!-- Row 2: Project pills (hidden in settings routes) -->
-    <ProjectPillBar v-show="!isSettingsRoute" />
-
-    <!-- Row 3: Agent strip (hidden in settings routes) -->
-    <AgentStrip v-show="!isSettingsRoute" />
+    <!-- Row 2+3: Legacy project pills + agent strip, or experimental breadcrumb nav header (#1723) -->
+    <template v-if="!uiStore.experimentalNavHeader">
+      <ProjectPillBar v-show="!isSettingsRoute" />
+      <AgentStrip v-show="!isSettingsRoute" />
+    </template>
+    <BreadcrumbNavHeader v-else v-show="!isSettingsRoute" />
 
     <!-- Main Content (chat + right panel) -->
     <div class="main-layout">
@@ -60,6 +61,7 @@ import { useRouter, useRoute } from 'vue-router'
 import HeaderRow1 from './components/layout/HeaderRow1.vue'
 import ProjectPillBar from './components/layout/ProjectPillBar.vue'
 import AgentStrip from './components/layout/AgentStrip.vue'
+import BreadcrumbNavHeader from './components/layout/BreadcrumbNavHeader.vue'
 import RightSidebar from './components/layout/RightSidebar.vue'
 import FolderBrowserModal from './components/common/FolderBrowserModal.vue'
 import ProjectCreateModal from './components/project/ProjectCreateModal.vue'

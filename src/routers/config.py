@@ -60,6 +60,11 @@ def build_router(webui) -> APIRouter:
                 if not isinstance(val, int) or val < 1:
                     raise ValueError("resume_batch_size must be a positive integer")
                 config.features.resume_batch_size = val
+            if "enable_experimental_nav_header" in features:
+                val = features["enable_experimental_nav_header"]
+                if not isinstance(val, bool):
+                    raise ValueError("enable_experimental_nav_header must be a boolean")
+                config.features.enable_experimental_nav_header = val
 
         # Merge networking section
         if "networking" in body:
