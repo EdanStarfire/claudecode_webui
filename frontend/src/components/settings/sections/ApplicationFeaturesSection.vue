@@ -48,6 +48,7 @@ async function load() {
     config.value = data.config
     originalConfig.value = JSON.parse(JSON.stringify(data.config))
     uiStore.setMaxPeekCards(config.value.features?.max_peek_cards ?? 100)
+    uiStore.setResumeBatchSize(config.value.features?.resume_batch_size ?? 10)
   } catch (e) {
     error.value = e.message || 'Failed to load configuration'
   } finally {
@@ -71,6 +72,7 @@ async function save() {
     config.value = data.config
     originalConfig.value = JSON.parse(JSON.stringify(data.config))
     uiStore.setMaxPeekCards(config.value.features?.max_peek_cards ?? 100)
+    uiStore.setResumeBatchSize(config.value.features?.resume_batch_size ?? 10)
   } catch (e) {
     error.value = e.message || 'Failed to save'
   } finally {

@@ -129,6 +129,26 @@
       </small>
     </div>
 
+    <div class="mb-3">
+      <label class="form-label" for="resumeBatchSize">Resume batch size</label>
+      <input
+        id="resumeBatchSize"
+        type="number"
+        class="form-control form-control-sm"
+        :class="{ 'is-invalid': resumeBatchSizeError }"
+        min="1"
+        step="1"
+        :value="config?.resume_batch_size ?? 10"
+        @input="onResumeBatchSizeInput($event.target.value)"
+      >
+      <div v-if="resumeBatchSizeError" class="invalid-feedback">{{ resumeBatchSizeError }}</div>
+      <small class="form-text text-muted">
+        Default number of stopped sessions started concurrently by "Resume Sessions" on a
+        project's overview page (default: 10, minimum: 1). Can be overridden per-operation
+        at the confirm step.
+      </small>
+    </div>
+
     <hr class="my-3">
 
     <h6 class="mb-2">Legion</h6>
@@ -166,6 +186,7 @@ const emit = defineEmits(['update:config', 'update:legionConfig'])
 const maxMinionsError = ref(null)
 const maxPeekCardsError = ref(null)
 const maxSubagentsError = ref(null)
+const resumeBatchSizeError = ref(null)
 
 function onMaxPeekCardsInput(value) {
   const parsed = parseInt(value, 10)
@@ -185,6 +206,16 @@ function onMaxSubagentsInput(value) {
   }
   maxSubagentsError.value = null
   emit('update:config', { ...props.config, max_subagents_per_session: parsed })
+}
+
+function onResumeBatchSizeInput(value) {
+  const parsed = parseInt(value, 10)
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    resumeBatchSizeError.value = 'Must be a positive integer'
+    return
+  }
+  resumeBatchSizeError.value = null
+  emit('update:config', { ...props.config, resume_batch_size: parsed })
 }
 
 function onMaxMinionsInput(value) {

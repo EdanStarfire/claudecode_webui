@@ -55,6 +55,11 @@ def build_router(webui) -> APIRouter:
                 if not isinstance(val, bool):
                     raise ValueError("allow_background_agent must be a boolean")
                 config.features.allow_background_agent = val
+            if "resume_batch_size" in features:
+                val = features["resume_batch_size"]
+                if not isinstance(val, int) or val < 1:
+                    raise ValueError("resume_batch_size must be a positive integer")
+                config.features.resume_batch_size = val
 
         # Merge networking section
         if "networking" in body:
