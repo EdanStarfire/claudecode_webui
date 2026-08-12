@@ -251,6 +251,8 @@ function handleGhostDismiss(agentId) {
 
 <style scoped>
 .agent-strip {
+  position: relative;
+  z-index: 1;
   min-height: 56px;
   background: var(--bs-secondary-bg);
   border-bottom: 1px solid var(--bs-border-color);
