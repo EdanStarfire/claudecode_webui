@@ -22,6 +22,7 @@ Tests:
 14. addon.py: graceful no-op when session token files are absent
 """
 
+import base64
 import json
 import sys
 import types
@@ -414,6 +415,36 @@ def test_addon_access_log_credential_name_not_value(tmp_path):
     entry = json.loads(log_content.strip())
     assert entry["credential_used"] == "github_token"
     assert real_secret not in log_content
+
+
+# ---------------------------------------------------------------------------
+# 15. _inject_basic_auth() — username/password presence combinations (issue #1740)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("username", "password", "expect_result", "expect_credentials"),
+    [
+        pytest.param("user", "", True, b"user:", id="username_only"),
+        pytest.param("", "pass", True, b":pass", id="password_only_regression_guard"),
+        pytest.param("user", "pass", True, b"user:pass", id="both_regression_guard"),
+        pytest.param("", "", False, None, id="neither"),
+    ],
+)
+def test_inject_basic_auth(username, password, expect_result, expect_credentials):
+    """Header is set whenever username or password is present; untouched when both are empty."""
+    _ensure_mitmproxy_stubs()
+    from src.docker.proxy import addon as addon_mod
+
+    placeholder = "CC_SECRET_basic_auth_abcd1234"
+    flow = _flow("api.example.com", {"Authorization": placeholder})
+    record = {"username": username, "value": password}
+    result = addon_mod._inject_basic_auth(flow, record, placeholder)
+    assert result is expect_result
+    if expect_result:
+        expected = "Basic " + base64.b64encode(expect_credentials).decode()
+        assert flow.request.headers["Authorization"] == expected
+    else:
+        assert flow.request.headers["Authorization"] == placeholder
 
 
 # ---------------------------------------------------------------------------
