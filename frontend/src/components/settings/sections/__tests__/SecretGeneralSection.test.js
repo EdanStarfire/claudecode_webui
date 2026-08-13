@@ -78,3 +78,18 @@ describe('SecretGeneralSection canSave — other types unaffected', () => {
     expect(saveDisabled(wrapper)).toBe(true)
   })
 })
+
+describe('SecretGeneralSection save payload — basic_auth', () => {
+  it('sends value="" (not omitted) when creating a username-only secret', async () => {
+    apiMock.post.mockResolvedValue({ name: 'my-secret', type: 'basic_auth' })
+    const { wrapper } = await mountNew('basic_auth', { username: 'alice' })
+
+    await wrapper.vm.save()
+    await flush()
+
+    expect(apiMock.post).toHaveBeenCalledWith('/api/secrets', expect.objectContaining({
+      username: 'alice',
+      value: '',
+    }))
+  })
+})

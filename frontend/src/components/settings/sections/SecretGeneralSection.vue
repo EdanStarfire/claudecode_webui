@@ -573,9 +573,12 @@ function buildPayload() {
     if ('target_hosts_raw' in d) payload.target_hosts = hosts
   }
 
-  // Value: only include if non-empty
+  // Value: required by the backend on create (SecretCreateRequest.value has no default),
+  // so always send it even when empty (e.g. a basic_auth secret with only a username).
+  // On edit, only include it when changed — omitting it means "leave value unchanged".
   const valueVal = draftField('value') ?? ''
-  if (valueVal) payload.value = valueVal
+  if (isNew.value) payload.value = valueVal
+  else if (valueVal) payload.value = valueVal
 
   // inject_env
   const injectEnvVal = draftField('inject_env') ?? entity.value?.inject_env ?? ''
