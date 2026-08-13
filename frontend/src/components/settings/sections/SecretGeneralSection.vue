@@ -463,8 +463,11 @@ const canSave = computed(() => {
       if (!hosts) return false
     }
     const val = draftField('value') ?? ''
-    if (!val) return false
-    if (typeValue.value === 'basic_auth' && !(draftField('username') ?? '').trim()) return false
+    if (typeValue.value === 'basic_auth') {
+      if (!val && !(draftField('username') ?? '').trim()) return false
+    } else if (!val) {
+      return false
+    }
     if (typeValue.value === 'api_key' && injectionLocation.value === 'query_param') {
       if (!(draftField('injection_param_name') ?? '').trim()) return false
     }

@@ -117,7 +117,7 @@ def _inject_basic_auth(flow: http.HTTPFlow, record: dict, placeholder: str) -> b
     """Replace header containing placeholder with 'Basic base64(username:password)'."""
     username = record.get("username") or ""
     password = record.get("value", "")
-    if not password:
+    if not username and not password:
         return False
     encoded = base64.b64encode(f"{username}:{password}".encode()).decode()
     basic = f"Basic {encoded}"

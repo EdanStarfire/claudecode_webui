@@ -20,7 +20,7 @@ class BasicAuthHandler(SecretTypeHandler):
     def inject(self, flow: Any, record: dict, placeholder: str) -> bool:
         password = record.get("value", "")
         username = record.get("username") or ""
-        if not password:
+        if not username and not password:
             return False
 
         credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
