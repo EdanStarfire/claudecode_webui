@@ -53,7 +53,7 @@
 
       <span class="pill-sep">&middot;</span>
       <span class="pill-time">{{ formattedTimestamp }}</span>
-      <span v-if="isHook || (isSessionFailed && sessionFailedDetails)" class="pill-chevron" :class="{ 'chevron-open': expanded }">&#x25B6;</span>
+      <span class="pill-chevron" :class="{ 'chevron-open': expanded }">&#x25B6;</span>
     </div>
     <div v-if="isHook && expanded" class="hook-detail">
       <pre class="hook-json">{{ hookJson }}</pre>
@@ -65,6 +65,9 @@
     </div>
     <div v-if="isSessionFailed && expanded && sessionFailedDetails" class="session-failed-detail">
       <pre class="error-detail-pre">{{ sessionFailedDetails }}</pre>
+    </div>
+    <div v-if="isGenericDetail && expanded" class="raw-detail">
+      <pre class="raw-json">{{ rawJson }}</pre>
     </div>
     <div v-if="resultErrors.length" class="result-errors">
       <div v-for="(err, i) in resultErrors" :key="i" class="result-error-item">
@@ -156,7 +159,7 @@ const pillClass = computed(() => ({
   'pill-session-failed': isSessionFailed.value,
   'pill-hook': isHook.value && !isHookError.value,
   'pill-hook-error': isHookError.value,
-  'pill-expandable': isHook.value || (isSessionFailed.value && !!sessionFailedDetails.value),
+  'pill-expandable': true,
   'pill-retry': isApiRetry.value,
   'pill-task-started': subtype.value === 'task_started',
   'pill-task-progress': subtype.value === 'task_progress',
@@ -224,10 +227,27 @@ const resultErrors = computed(() => {
   return props.message.metadata?.errors || []
 })
 
-function toggleExpand() {
-  if (isHook.value || isSessionFailed.value) {
-    expanded.value = !expanded.value
+// Generic raw-JSON detail for subtypes without a dedicated detail view.
+// session_failed messages with no error_details fall through here too,
+// so the chevron/expand affordance never opens onto an empty panel.
+const isGenericDetail = computed(() => {
+  if (isHook.value) return false
+  if (isSessionFailed.value) return !sessionFailedDetails.value
+  return true
+})
+
+const rawJson = computed(() => {
+  const data = props.message.metadata
+  if (!data || Object.keys(data).length === 0) return '{}'
+  try {
+    return JSON.stringify(data, null, 2)
+  } catch {
+    return String(data)
   }
+})
+
+function toggleExpand() {
+  expanded.value = !expanded.value
 }
 </script>
 
@@ -450,6 +470,28 @@ function toggleExpand() {
 .hook-json {
   background: #1e293b;
   color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+  margin: 0;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.raw-detail {
+  margin-top: 4px;
+  max-width: 80%;
+  width: 100%;
+}
+
+.raw-json {
+  background: #1e293b;
+  color: #cbd5e1;
   border: 1px solid #334155;
   border-radius: 8px;
   padding: 10px 14px;
