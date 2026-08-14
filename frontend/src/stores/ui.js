@@ -221,6 +221,14 @@ export const useUIStore = defineStore('ui', () => {
     writeStorage('experimentalNavHeader', experimentalNavHeader.value)
   }
 
+  // Issue #1744: Last non-settings/analytics/audit route — shared between HeaderRow1's
+  // gear-icon toggle and SettingsLayout's Escape handler so both agree on "exit Settings" target
+  const lastContentRoute = ref('/')
+
+  function setLastContentRoute(path) {
+    lastContentRoute.value = path
+  }
+
   // Issue #1625: Schedules library grouping mode — persisted
   const schedulesGroupBy = ref(readStorage('schedulesGroupBy', 'legion'))
 
@@ -485,6 +493,7 @@ export const useUIStore = defineStore('ui', () => {
     maxPeekCards,
     resumeBatchSize,
     experimentalNavHeader,
+    lastContentRoute,
 
     // Actions
     toggleRightSidebar,
@@ -524,6 +533,7 @@ export const useUIStore = defineStore('ui', () => {
     setMaxPeekCards,
     setResumeBatchSize,
     setExperimentalNavHeader,
+    setLastContentRoute,
     schedulesGroupBy,
     schedulesCollapsedGroups,
     setSchedulesGroupBy,

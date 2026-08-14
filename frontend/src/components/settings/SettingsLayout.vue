@@ -47,6 +47,7 @@
 import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
+import { useUIStore } from '@/stores/ui'
 import SettingsSidebar from './SettingsSidebar.vue'
 import SettingsBreadcrumb from './SettingsBreadcrumb.vue'
 import DirtyGuardModal from './DirtyGuardModal.vue'
@@ -73,6 +74,7 @@ import IsolationSection from './sections/IsolationSection.vue'
 const route = useRoute()
 const router = useRouter()
 const settingsStore = useSettingsStore()
+const uiStore = useUIStore()
 
 const modeTintVars = computed(() => {
   const p = route.path
@@ -212,10 +214,20 @@ function handleKeydown(e) {
   const tag = document.activeElement?.tagName?.toLowerCase()
   const isMeta = e.metaKey || e.ctrlKey
 
-  // Escape: cancel current section (unless focused in input where Escape clears it)
+  // Escape: exit Settings (unless focused in input where Escape clears it)
   if (e.key === 'Escape' && !['input', 'textarea', 'select'].includes(tag)) {
+    if (settingsStore.pendingNavigation !== null) {
+      e.preventDefault()
+      onGuardCancel()
+      return
+    }
+    if (uiStore.activeModal) {
+      // A foreign modal (e.g. folder browser) is open on top of Settings —
+      // don't intercept; let it handle its own Escape.
+      return
+    }
     e.preventDefault()
-    sectionHostRef.value?.cancel?.()
+    router.push(uiStore.lastContentRoute)
     return
   }
 
