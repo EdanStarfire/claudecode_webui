@@ -375,6 +375,42 @@ class TestSessionCoordinator:
         assert len(result["messages"]) == 0
         assert result["total_count"] == 0
 
+    @pytest.mark.asyncio
+    async def test_issue_1747_get_session_messages_has_more_pagination(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Regression test for #1747: has_more must transition True -> True -> False
+        across sequential small-limit calls, with no messages skipped or duplicated
+        across page boundaries. The frontend now pages through an entire session's
+        history relying on this contract instead of truncating at a single page.
+        """
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        storage = coordinator._storage_managers[session_id]
+        for i in range(5):
+            await storage.append_message({"type": "user", "content": f"message-{i}", "metadata": {}})
+
+        # Page through with limit=2: pages of 2, 2, 1 messages over 5 total.
+        page1 = await coordinator.get_session_messages(session_id, limit=2, offset=0)
+        assert page1["total_count"] == 5
+        assert page1["has_more"] is True
+        assert [m["content"] for m in page1["messages"]] == ["message-0", "message-1"]
+
+        page2 = await coordinator.get_session_messages(session_id, limit=2, offset=2)
+        assert page2["total_count"] == 5
+        assert page2["has_more"] is True
+        assert [m["content"] for m in page2["messages"]] == ["message-2", "message-3"]
+
+        page3 = await coordinator.get_session_messages(session_id, limit=2, offset=4)
+        assert page3["total_count"] == 5
+        assert page3["has_more"] is False
+        assert [m["content"] for m in page3["messages"]] == ["message-4"]
+
+        # No message skipped or duplicated across the accumulated pages.
+        all_contents = [m["content"] for page in (page1, page2, page3) for m in page["messages"]]
+        assert all_contents == [f"message-{i}" for i in range(5)]
+
     def test_add_message_callback(self, temp_coordinator):
         """Test adding message callback."""
         coordinator = temp_coordinator
