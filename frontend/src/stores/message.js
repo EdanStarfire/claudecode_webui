@@ -86,26 +86,84 @@ export const useMessageStore = defineStore('message', () => {
 
   // ========== ACTIONS ==========
 
+  // Issue #1747: defensive ceiling on fetchAllMessagePages() looping — order of
+  // hundreds of pages, purely to prevent a runaway request storm if the backend
+  // ever violates its has_more contract. Not expected to trigger under real usage.
+  const MAX_PAGINATION_ITERATIONS = 500
+
+  /**
+   * Issue #1747: page through GET /api/sessions/{id}/messages, accumulating
+   * results until the backend reports has_more === false, so callers never
+   * silently truncate history at a single page's size.
+   */
+  async function fetchAllMessagePages(sessionId, pageSize, startOffset = 0) {
+    const messages = []
+    let offset = startOffset
+    let totalCount = 0
+    let eventCursor
+
+    for (let iteration = 0; iteration < MAX_PAGINATION_ITERATIONS; iteration++) {
+      const data = await api.get(
+        `/api/sessions/${sessionId}/messages?limit=${pageSize}&offset=${offset}`
+      )
+
+      const pageMessages = data.messages || []
+      totalCount = data.total_count || (offset + pageMessages.length)
+      if (data.event_cursor !== undefined) {
+        eventCursor = data.event_cursor
+      }
+      messages.push(...pageMessages)
+
+      const hasMore = data.has_more || false
+      if (!hasMore) {
+        return { messages, totalCount, hasMore: false, eventCursor }
+      }
+
+      // Advance by the requested page size, not pageMessages.length: the backend's
+      // offset/limit pagination applies to raw stored lines, but the returned
+      // `messages` array can contain more entries than raw lines consumed (synthetic
+      // tool_call messages are interleaved). Advancing by the response length would
+      // desync from the backend's raw-line cursor and skip messages.
+      offset += pageSize
+    }
+
+    console.error(
+      `fetchAllMessagePages: exceeded ${MAX_PAGINATION_ITERATIONS} pages for session ${sessionId} ` +
+      `(${messages.length} messages loaded so far). Stopping to avoid a runaway request storm — ` +
+      `this indicates the backend has_more contract was violated.`
+    )
+    return { messages, totalCount, hasMore: true, eventCursor }
+  }
+
   /**
    * Load messages for a session from backend
    */
   async function loadMessages(sessionId, limit = null, offset = 0) {
     try {
-      // If no limit specified, request all messages
-      // Use a very high limit to get all messages in one request
-      const effectiveLimit = limit || 10000
+      let messages, totalCount, hasMore, eventCursor
 
-      const data = await api.get(
-        `/api/sessions/${sessionId}/messages?limit=${effectiveLimit}&offset=${offset}`
-      )
-
-      const messages = data.messages || []
-      const totalCount = data.total_count || messages.length
-      const hasMore = data.has_more || false
+      if (limit) {
+        // Explicit limit requested: preserve today's single-shot-fetch behavior.
+        const data = await api.get(
+          `/api/sessions/${sessionId}/messages?limit=${limit}&offset=${offset}`
+        )
+        messages = data.messages || []
+        totalCount = data.total_count || messages.length
+        hasMore = data.has_more || false
+        eventCursor = data.event_cursor
+      } else {
+        // Issue #1747: no limit specified — page until has_more is false so the
+        // full history loads, instead of silently truncating at one page.
+        const result = await fetchAllMessagePages(sessionId, 10000, offset)
+        messages = result.messages
+        totalCount = result.totalCount
+        hasMore = result.hasMore
+        eventCursor = result.eventCursor
+      }
 
       // Issue #1000: Store event cursor from REST response for poll alignment
-      if (data.event_cursor !== undefined) {
-        loadedEventCursors.set(sessionId, data.event_cursor)
+      if (eventCursor !== undefined) {
+        loadedEventCursors.set(sessionId, eventCursor)
       }
 
       console.log(`Loaded ${messages.length} of ${totalCount} messages for session ${sessionId}`)
@@ -1015,13 +1073,10 @@ export const useMessageStore = defineStore('message', () => {
       console.log(`Syncing messages for session ${sessionId} since ${lastTimestamp}`)
 
       // Fetch all messages and filter client-side by timestamp
-      // Backend doesn't have 'since' parameter yet, so we load recent messages and filter
-      const data = await api.get(
-        `/api/sessions/${sessionId}/messages?limit=1000&offset=0`
-      )
-
-      const allMessages = data.messages || []
-      const hasMore = data.has_more || false
+      // Backend doesn't have 'since' parameter yet, so we load messages and filter.
+      // Issue #1747: page until has_more is false so a stall-recovery resync can't
+      // silently miss a real gap in a large session either.
+      const { messages: allMessages, hasMore } = await fetchAllMessagePages(sessionId, 1000, 0)
 
       // Filter messages newer than last received timestamp
       // Handle both Unix timestamp (float seconds) and ISO 8601 string formats

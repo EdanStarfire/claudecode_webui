@@ -46,6 +46,65 @@ describe('message store', () => {
     expect(result.totalCount).toBe(2)
   })
 
+  it('loadMessages single-page response makes exactly one request (#1747 regression guard)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    apiMock.get.mockResolvedValueOnce({
+      messages: [makeMessage({ content: 'only' })],
+      total_count: 1,
+      has_more: false,
+      event_cursor: 5
+    })
+
+    const result = await store.loadMessages('sess-1')
+
+    expect(apiMock.get).toHaveBeenCalledTimes(1)
+    expect(result.messages.length).toBe(1)
+    expect(result.hasMore).toBe(false)
+  })
+
+  it('loadMessages pages through multiple has_more:true responses until has_more:false (#1747)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    apiMock.get
+      .mockResolvedValueOnce({
+        messages: [makeMessage({ content: 'page1-a' }), makeMessage({ content: 'page1-b' })],
+        total_count: 5,
+        has_more: true,
+        event_cursor: 1
+      })
+      .mockResolvedValueOnce({
+        messages: [makeMessage({ content: 'page2-a' }), makeMessage({ content: 'page2-b' })],
+        total_count: 5,
+        has_more: true,
+        event_cursor: 2
+      })
+      .mockResolvedValueOnce({
+        messages: [makeMessage({ content: 'page3-a' })],
+        total_count: 5,
+        has_more: false,
+        event_cursor: 3
+      })
+
+    const result = await store.loadMessages('sess-1')
+
+    expect(apiMock.get).toHaveBeenCalledTimes(3)
+    expect(result.messages.map(m => m.content)).toEqual([
+      'page1-a', 'page1-b', 'page2-a', 'page2-b', 'page3-a'
+    ])
+    expect(store.messagesBySession.get('sess-1').length).toBe(5)
+    // Issue #1747: offset must advance by the requested page size (10000, loadMessages'
+    // default), NOT by the response's messages.length — the backend's offset/limit
+    // pagination applies to raw stored lines, while the response can contain more
+    // entries than raw lines consumed (synthetic tool_call messages are interleaved).
+    // Advancing by response length would desync from the backend's cursor and skip messages.
+    expect(apiMock.get.mock.calls[0][0]).toContain('offset=0')
+    expect(apiMock.get.mock.calls[1][0]).toContain('offset=10000')
+    expect(apiMock.get.mock.calls[2][0]).toContain('offset=20000')
+  })
+
   it('handleToolCall creates new entry then updates on second call', async () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
@@ -159,6 +218,56 @@ describe('message store', () => {
     const tc = store.toolCallsBySession.get('sess-1')[0]
     expect(tc._isOrphaned).toBe(true)
     expect(store.isToolUseOrphaned('sess-1', 'use-1')).toBe(true)
+  })
+
+  it('syncMessages single-page response makes exactly one request (#1747 regression guard)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    // Seed an existing message so lastReceivedTimestamp is set (sync requires a prior baseline)
+    store.addMessage('sess-1', makeMessage({ content: 'seed', timestamp: 1700000000 }))
+    apiMock.get.mockReset()
+
+    apiMock.get.mockResolvedValueOnce({
+      messages: [makeMessage({ content: 'new', timestamp: 1700000100 })],
+      total_count: 2,
+      has_more: false
+    })
+
+    const result = await store.syncMessages('sess-1')
+
+    expect(apiMock.get).toHaveBeenCalledTimes(1)
+    expect(result.syncedCount).toBe(1)
+    expect(result.hasMore).toBe(false)
+  })
+
+  it('syncMessages pages through multiple responses before applying its timestamp filter (#1747)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    // Seed an existing message so lastReceivedTimestamp is set (sync requires a prior baseline)
+    store.addMessage('sess-1', makeMessage({ content: 'seed', timestamp: 1700000000 }))
+    apiMock.get.mockReset()
+
+    apiMock.get
+      .mockResolvedValueOnce({
+        messages: [makeMessage({ content: 'page1', timestamp: 1700000100 })],
+        total_count: 3,
+        has_more: true
+      })
+      .mockResolvedValueOnce({
+        messages: [makeMessage({ content: 'page2', timestamp: 1700000200 })],
+        total_count: 3,
+        has_more: false
+      })
+
+    const result = await store.syncMessages('sess-1')
+
+    expect(apiMock.get).toHaveBeenCalledTimes(2)
+    expect(result.syncedCount).toBe(2)
+    expect(result.hasMore).toBe(false)
+    const contents = store.messagesBySession.get('sess-1').map(m => m.content)
+    expect(contents).toEqual(['seed', 'page1', 'page2'])
   })
 })
 
