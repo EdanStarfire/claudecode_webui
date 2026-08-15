@@ -53,7 +53,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, watch } from 'vue'
 import { useUIStore } from '@/stores/ui'
 import { usePollingStore } from '@/stores/polling'
 import { useSessionStore } from '@/stores/session'
@@ -84,14 +84,13 @@ function isSpecialRoute(path) {
   return path.startsWith('/settings/') || path === '/analytics' || path === '/audit'
 }
 
-const lastContentRoute = ref('/')
 watch(() => route.path, (path) => {
-  if (!isSpecialRoute(path)) lastContentRoute.value = path
+  if (!isSpecialRoute(path)) uiStore.setLastContentRoute(path)
 }, { immediate: true })
 
 function toggleSettings() {
   if (isSettingsRoute.value) {
-    router.push(lastContentRoute.value)
+    router.push(uiStore.lastContentRoute)
     return
   }
   const sessionId = sessionStore.currentSessionId
@@ -99,11 +98,11 @@ function toggleSettings() {
 }
 
 function toggleAnalytics() {
-  router.push(isAnalyticsRoute.value ? lastContentRoute.value : '/analytics')
+  router.push(isAnalyticsRoute.value ? uiStore.lastContentRoute : '/analytics')
 }
 
 function toggleAudit() {
-  router.push(isAuditRoute.value ? lastContentRoute.value : '/audit')
+  router.push(isAuditRoute.value ? uiStore.lastContentRoute : '/audit')
 }
 </script>
 
