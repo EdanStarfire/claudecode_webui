@@ -3413,6 +3413,34 @@ class SessionCoordinator:
                             if exit_code is not None:
                                 metadata["exit_code"] = exit_code
 
+                # Issue #1756: Synthesize content for permission-mode-change status messages
+                elif subtype == "status":
+                    status_data = data.get("data") or {}
+                    permission_mode = status_data.get("permissionMode")
+                    if permission_mode:
+                        metadata["subtype"] = "permission_mode_change"
+                        metadata["permission_mode"] = permission_mode
+                        content = f"Permission mode changed to {permission_mode}"
+
+                # Issue #1756: Synthesize content for api_retry messages (mirrors
+                # message_parser.py SystemMessageHandler's live-path logic, lines 453-465)
+                elif subtype in ("api_retry", "tengu_api_retry"):
+                    retry_data = data.get("data") or {}
+                    attempt = retry_data.get("attempt") or retry_data.get("attemptNumber")
+                    max_retries = retry_data.get("max_retries") or retry_data.get("maxRetries")
+                    wait_ms = (
+                        retry_data.get("wait_ms")
+                        or retry_data.get("waitMs")
+                        or retry_data.get("retryAfterMs")
+                    )
+                    metadata["attempt"] = attempt
+                    metadata["max_retries"] = max_retries
+                    metadata["wait_sec"] = round(wait_ms / 1000) if wait_ms else None
+                    metadata["subtype"] = "api_retry"
+                    attempt_str = f"{attempt}/{max_retries}" if attempt and max_retries else str(attempt or "?")
+                    wait_str = f" (~{round(wait_ms / 1000)}s)" if wait_ms else ""
+                    content = f"API retry {attempt_str}{wait_str}"
+
             # Handle ResultMessage
             if _type == "ResultMessage":
                 subtype = data.get("subtype")

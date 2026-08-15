@@ -2226,6 +2226,97 @@ class TestConvertStoredMessageToWebsocket:
         assert result["type"] == "system"
         assert result["metadata"]["subtype"] == "task_notification"
 
+    def test_issue_1756_permission_mode_change_synthesizes_content(self, coordinator):
+        stored = {
+            "_type": "SystemMessage",
+            "timestamp": 1700000000.0,
+            "data": {
+                "subtype": "status",
+                "data": {"permissionMode": "plan"},
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        assert result["type"] == "system"
+        assert result["content"] == "Permission mode changed to plan"
+        assert result["metadata"]["subtype"] == "permission_mode_change"
+        assert result["metadata"]["permission_mode"] == "plan"
+
+    def test_issue_1756_status_without_permission_mode_unaffected(self, coordinator):
+        stored = {
+            "_type": "SystemMessage",
+            "timestamp": 1700000000.0,
+            "data": {
+                "subtype": "status",
+                "data": {},
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        assert result["content"] == ""
+        assert result["metadata"]["subtype"] == "status"
+
+    def test_issue_1756_api_retry_synthesizes_content(self, coordinator):
+        stored = {
+            "_type": "SystemMessage",
+            "timestamp": 1700000000.0,
+            "data": {
+                "subtype": "api_retry",
+                "data": {"attempt": 2, "max_retries": 5, "wait_ms": 3000},
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        assert result["content"] == "API retry 2/5 (~3s)"
+        meta = result["metadata"]
+        assert meta["subtype"] == "api_retry"
+        assert meta["attempt"] == 2
+        assert meta["max_retries"] == 5
+        assert meta["wait_sec"] == 3
+
+    def test_issue_1756_tengu_api_retry_normalized_to_api_retry(self, coordinator):
+        stored = {
+            "_type": "SystemMessage",
+            "timestamp": 1700000000.0,
+            "data": {
+                "subtype": "tengu_api_retry",
+                "data": {"attempt": 1, "max_retries": 3},
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        assert result["content"] == "API retry 1/3"
+        assert result["metadata"]["subtype"] == "api_retry"
+
+    @pytest.mark.asyncio
+    async def test_issue_1756_client_launched_content_unaffected(
+        self, temp_coordinator, sample_session_config
+    ):
+        """client_launched is stored via _send_client_launched_message in the legacy
+        {type, content, metadata} format (no _type discriminator), so it never reaches
+        _convert_stored_message_to_websocket — it's handled by the already-processed
+        branch in get_session_messages() instead. Confirm the new elif branches don't
+        change that."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        mock_storage = AsyncMock()
+        mock_storage.read_messages.return_value = [
+            {
+                "type": "system",
+                "content": "Claude Code Launched",
+                "timestamp": 1700000000.0,
+                "metadata": {"subtype": "client_launched"},
+            }
+        ]
+        mock_storage.get_message_count.return_value = 1
+        coordinator._storage_managers[session_id] = mock_storage
+
+        result = await coordinator.get_session_messages(session_id, limit=10, offset=0)
+        assert len(result["messages"]) == 1
+        assert result["messages"][0]["content"] == "Claude Code Launched"
+        assert result["messages"][0]["metadata"]["subtype"] == "client_launched"
+
 
 class TestIssue1676AgentNotification:
     """Tests for background subagent Notification hook tagging (issue #1676)."""
