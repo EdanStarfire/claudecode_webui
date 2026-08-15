@@ -46,6 +46,7 @@ from .queue_manager import QueueManager
 from .queue_processor import QueueProcessor
 from .session_config import SessionConfig
 from .session_manager import STOPPED_STATES, VALID_MODELS, SessionManager, SessionState
+from .task_registry import TASK_LIFECYCLE_SUBTYPES, TaskLegRegistry
 from .task_utils import task_done_log_exception
 from .timestamp_utils import get_unix_timestamp
 
@@ -60,6 +61,14 @@ _DOCKER_ERROR_KEYWORDS = ('exited with code', 'was killed', 'crashed')
 
 # Issue #1375: Regex for ${secret:<name>} references in MCP server header values.
 _SECRET_REF_RE = re.compile(r"\$\{secret:([^}]+)\}")
+
+# Issue #1746: stored "_type" discriminator (reload path, via StoredMessage)
+# for the four SDK Task lifecycle frame types — feeding TaskLegRegistry.
+# The parsed-"subtype" form (live path) is TASK_LIFECYCLE_SUBTYPES, imported
+# from task_registry so the two modules share one definition.
+_TASK_LIFECYCLE_STORED_TYPES = frozenset(
+    {"TaskStartedMessage", "TaskProgressMessage", "TaskNotificationMessage", "TaskUpdatedMessage"}
+)
 
 # Resource format groups for filtering
 _TEXT_RESOURCE_FORMATS = {
@@ -407,6 +416,11 @@ class SessionCoordinator:
         # Issue #324: Active tool calls per session for unified ToolCall lifecycle
         # Maps session_id -> {tool_use_id: ToolCall}
         self._active_tool_calls: dict[str, dict[str, ToolCall]] = {}
+
+        # Issue #1746: Per-session background-agent (Task) leg registry.
+        # Lazily hydrated from stored messages on first access, then kept live
+        # via the four Task lifecycle frames as they stream in.
+        self._task_leg_registries: dict[str, TaskLegRegistry] = {}
 
         # Issue #858: Per-session event notified on every create_tool_call(), allowing
         # permission callbacks to wait efficiently instead of polling.
@@ -2120,6 +2134,9 @@ class SessionCoordinator:
 
             # Reset display projection state
             self._reset_display_projection(session_id)
+            # Issue #1746: Drop cached task leg registry — it would otherwise
+            # keep serving stale legs from before the message history wipe.
+            self._task_leg_registries.pop(session_id, None)
 
             # Notify frontend to clear messages
             await self._notify_session_reset(session_id)
@@ -2861,6 +2878,9 @@ class SessionCoordinator:
                 coord_logger.info(f"Cleared queue for session {session_id}")
                 await storage.clear_attachments()
                 coord_logger.info(f"Cleared attachments for session {session_id}")
+                # Issue #1746: Drop cached task leg registry along with the
+                # cleared message history it was built from.
+                self._task_leg_registries.pop(session_id, None)
 
             # Issue #1244: rotate proxy logs then clear non-proxy docker_claude_data and tmp
             await self._rotate_proxy_logs(session_id)
@@ -3355,6 +3375,10 @@ class SessionCoordinator:
                     metadata["subtype"] = "task_updated"
                     metadata["task_id"] = data.get("task_id")
                     metadata["status"] = data.get("status")
+                    # Issue #1746: patch carries the changed fields (e.g. status,
+                    # end_time) — status is sometimes only reported inside patch,
+                    # not the top-level field.
+                    metadata["patch"] = data.get("patch")
                     metadata["tool_use_id"] = data.get("tool_use_id")
                     metadata["uuid"] = data.get("uuid")
                     content = "Agent task updated"
@@ -3451,6 +3475,46 @@ class SessionCoordinator:
         except Exception as e:
             coord_logger.warning(f"Failed to convert StoredMessage to WebSocket format: {e}")
             return None
+
+    # ==================== TASK LEG REGISTRY (Issue #1746) ====================
+
+    async def _get_task_leg_registry(self, session_id: str) -> TaskLegRegistry:
+        """Get (lazily hydrating) the per-session TaskLegRegistry.
+
+        Hydration replays every stored Task lifecycle message once via
+        _convert_stored_message_to_websocket — the same reconstruction the
+        reload/history path already uses — so a page refresh and a
+        live-streamed session converge on identical state. Only cached once
+        a storage manager is available; if the session hasn't been started
+        yet in this process, an ephemeral empty registry is returned so a
+        later call (once storage exists) can still hydrate properly.
+        """
+        registry = self._task_leg_registries.get(session_id)
+        if registry is not None:
+            return registry
+
+        registry = TaskLegRegistry()
+        storage = self._storage_managers.get(session_id)
+        if storage:
+            raw_messages = await storage.read_messages()
+            for raw_message in raw_messages:
+                if raw_message.get("_type") not in _TASK_LIFECYCLE_STORED_TYPES:
+                    continue
+                ws_data = self._convert_stored_message_to_websocket(raw_message)
+                if not ws_data:
+                    continue
+                metadata = ws_data.get("metadata") or {}
+                subtype = metadata.get("subtype")
+                if subtype:
+                    registry.apply_frame(subtype, metadata, ws_data.get("timestamp"))
+            self._task_leg_registries[session_id] = registry
+
+        return registry
+
+    async def get_background_agents(self, session_id: str) -> dict[str, Any]:
+        """Snapshot of background-agent (Task) leg history for reload/reconnect."""
+        registry = await self._get_task_leg_registry(session_id)
+        return {"session_id": session_id, "agents": registry.snapshot()}
 
     # ==================== ARCHIVE METHODS ====================
 
@@ -4663,6 +4727,27 @@ class SessionCoordinator:
                                 coord_logger.info(f"Permission mode updated to '{new_mode}' for session {session_id} via SDK status event")
                             except Exception:
                                 logger.exception(f"Failed to update permission mode from SDK status event for session {session_id}")
+
+                    # Issue #1746: Feed Task lifecycle frames into the per-session
+                    # TaskLegRegistry — a task_id-keyed source of truth for
+                    # background-agent status, independent of the Agent tool
+                    # call's own dispatch-ack status.
+                    task_subtype = parsed_message.metadata.get('subtype')
+                    if task_subtype in TASK_LIFECYCLE_SUBTYPES:
+                        try:
+                            # Storage always persists this message before this
+                            # callback fires (see ClaudeSDK._process_sdk_message),
+                            # so a *cold* hydration below already replays this
+                            # exact frame from messages.jsonl. Only apply it here
+                            # when the registry was already warm — otherwise this
+                            # frame would be double-counted (e.g. two legs for one
+                            # task_started).
+                            registry_already_cached = session_id in self._task_leg_registries
+                            registry = await self._get_task_leg_registry(session_id)
+                            if registry_already_cached:
+                                registry.apply_frame(task_subtype, parsed_message.metadata, parsed_message.timestamp)
+                        except Exception:
+                            logger.exception(f"Failed to update task leg registry for session {session_id}")
 
                 # Track permission responses with applied updates (for historical/display purposes)
                 if parsed_message.type.value == 'permission_response' and parsed_message.metadata:

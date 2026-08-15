@@ -2186,6 +2186,27 @@ class TestConvertStoredMessageToWebsocket:
         assert result["metadata"]["subtype"] == "task_started"
         assert result["metadata"]["task_id"] == "task-start"
 
+    def test_issue_1746_task_updated_copies_patch(self, coordinator):
+        """Issue #1746: patch carries the changed fields (e.g. status, end_time) —
+        status is sometimes only reported inside patch, not the top-level field."""
+        stored = {
+            "_type": "TaskUpdatedMessage",
+            "timestamp": 1700000000.0,
+            "data": {
+                "subtype": "task_updated",
+                "task_id": "task-patch-only",
+                "status": None,
+                "patch": {"status": "failed", "end_time": 1700000001.0},
+                "tool_use_id": None,
+                "uuid": "uuid-patch",
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        meta = result["metadata"]
+        assert meta["patch"] == {"status": "failed", "end_time": 1700000001.0}
+        assert meta["status"] is None
+
     def test_issue_1657_task_notification_unchanged(self, coordinator):
         stored = {
             "_type": "TaskNotificationMessage",

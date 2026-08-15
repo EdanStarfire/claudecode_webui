@@ -47,6 +47,10 @@ class PermissionService:
         self.coordinator = coordinator
         self.session_queues = session_queues
         self.pending_permissions: dict[str, asyncio.Future] = {}
+        # Issue #1746: request_ids currently open per session, so resolving one
+        # agent's permission doesn't clear another still-open agent's PAUSED
+        # state on the same session.
+        self.pending_by_session: dict[str, set[str]] = {}
 
     def create_permission_callback(self, session_id: str) -> Callable:
         """Create permission callback for tool usage"""
@@ -281,11 +285,20 @@ class PermissionService:
             # successful tool_call path. We only reach here if the permission prompt was
             # successfully broadcast to the frontend.
 
+            # Issue #1746: Track this request in the per-session open set before
+            # pausing, so concurrent requests on the same session only pause
+            # once and only resume the session once every sibling request has
+            # resolved.
+            session_pending = self.pending_by_session.setdefault(session_id, set())
+            is_first_pending_for_session = not session_pending
+            session_pending.add(request_id)
+
             # Set session state to PAUSED while waiting for permission response
             # This provides visual feedback that the session is blocked on user input
             try:
-                await self.coordinator.session_manager.pause_session(session_id)
-                debug_logger.info(f"Set session {session_id} to PAUSED state while waiting for permission")
+                if is_first_pending_for_session:
+                    await self.coordinator.session_manager.pause_session(session_id)
+                    debug_logger.info(f"Set session {session_id} to PAUSED state while waiting for permission")
             except Exception:
                 logger.exception(f"Failed to pause session {session_id} for permission wait")
 
@@ -302,16 +315,11 @@ class PermissionService:
                 response = await permission_future
                 debug_logger.info(f"PERMISSION CALLBACK: Received user decision for request_id {request_id}: {response}")
 
-                # Restore session to ACTIVE state after permission decision
-                # The session will continue processing, which will show as ACTIVE+processing (purple)
-                try:
-                    session_info = await self.coordinator.session_manager.get_session_info(session_id)
-                    if session_info and session_info.state == SessionState.PAUSED:
-                        # Use update_session_state instead of start_session to avoid re-initializing SDK
-                        await self.coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
-                        debug_logger.info(f"Restored session {session_id} to ACTIVE state after permission decision")
-                except Exception:
-                    logger.exception(f"Failed to restore session {session_id} to ACTIVE after permission")
+                # Issue #1746: Only restore ACTIVE once no sibling request is
+                # still open for this session — resolving one agent's request
+                # must not clear another agent's still-open PAUSED state.
+                self._discard_pending(session_id, request_id)
+                await self._maybe_resume_session(session_id)
 
                 decision = response.get("behavior")
                 reasoning = f"User {decision}ed permission"
@@ -443,6 +451,21 @@ class PermissionService:
 
                 # Clean up the pending permission
                 self.pending_permissions.pop(request_id, None)
+                # Issue #1746: This path bypasses resolve() entirely (e.g. session
+                # termination while awaiting), so the per-session open set must be
+                # cleaned up here too — otherwise a session can be left stuck PAUSED
+                # forever if this was its last outstanding request.
+                self._discard_pending(session_id, request_id)
+                await self._maybe_resume_session(session_id)
+
+            finally:
+                # Issue #1746: asyncio.CancelledError is a BaseException, not caught
+                # by `except Exception` above — without this, a coroutine cancelled
+                # while awaiting permission_future (e.g. abrupt shutdown) would leak
+                # its entry in pending_by_session and could leave the session stuck
+                # PAUSED forever. Idempotent with the explicit calls above.
+                self._discard_pending(session_id, request_id)
+                await self._maybe_resume_session(session_id)
 
             # Store permission response message using dataclass (Phase 0, Issue #310)
             decision_time = time.time()
@@ -539,6 +562,37 @@ class PermissionService:
 
         return permission_callback
 
+    def _discard_pending(self, session_id: str, request_id: str) -> None:
+        """Remove request_id from the per-session open-request set (issue #1746)."""
+        session_pending = self.pending_by_session.get(session_id)
+        if session_pending is None:
+            return
+        session_pending.discard(request_id)
+        if not session_pending:
+            self.pending_by_session.pop(session_id, None)
+
+    def open_permission_count(self, session_id: str) -> int:
+        """Number of currently-open permission requests for a session (issue #1746)."""
+        return len(self.pending_by_session.get(session_id, ()))
+
+    async def _maybe_resume_session(self, session_id: str) -> None:
+        """Restore session to ACTIVE only if no permission requests remain open.
+
+        Issue #1746: previously this ran unconditionally whenever *any* request
+        resolved, so resolving one agent's permission could clear another
+        agent's still-open "needs attention" PAUSED state on the same session.
+        """
+        if self.open_permission_count(session_id) != 0:
+            return
+        try:
+            session_info = await self.coordinator.session_manager.get_session_info(session_id)
+            if session_info and session_info.state == SessionState.PAUSED:
+                # Use update_session_state instead of start_session to avoid re-initializing SDK
+                await self.coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+                debug_logger.info(f"Restored session {session_id} to ACTIVE state after permission decision")
+        except Exception:
+            logger.exception(f"Failed to restore session {session_id} to ACTIVE after permission")
+
     def cleanup_pending_for_session(self, session_id: str) -> None:
         """Clean up pending permissions for a specific session by auto-denying them"""
         try:
@@ -566,6 +620,11 @@ class PermissionService:
             if permissions_to_cleanup:
                 debug_logger.info(f"Cleaned up {len(permissions_to_cleanup)} pending permissions for session {session_id}")
 
+            # Issue #1746: This session's own pending-request bookkeeping is
+            # fully retired here regardless of the (pre-existing, unchanged)
+            # cross-session sweep above — every request it held is now denied.
+            self.pending_by_session.pop(session_id, None)
+
         except Exception:
             logger.exception(f"Error cleaning up pending permissions for session {session_id}")
 
@@ -579,6 +638,9 @@ class PermissionService:
                     "interrupt": True
                 })
                 self.pending_permissions.pop(request_id, None)
+        # Issue #1746: This denies every pending request service-wide, so
+        # every session's open-request set is now empty.
+        self.pending_by_session.clear()
 
     def resolve(self, request_id: str, response: dict) -> bool:
         """Resolve a pending permission request.

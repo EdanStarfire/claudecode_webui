@@ -17,6 +17,7 @@ from claude_agent_sdk import (
     TaskNotificationMessage,
     TaskProgressMessage,
     TaskStartedMessage,
+    TaskUpdatedMessage,
     TextBlock,
     ThinkingBlock,
     ToolResultBlock,
@@ -266,6 +267,65 @@ class TaskNotificationHandler(MessageHandler):
                 "usage": stored_meta.get("usage"),
             })
             content = message_data.get("content", "Task notification")
+
+        return {"content": content, "metadata": metadata}
+
+    def parse(self, message_data: dict[str, Any]) -> ParsedMessage:
+        business_data = self._extract_business_data(message_data)
+        return ParsedMessage(
+            type=MessageType.SYSTEM,
+            timestamp=message_data.get("timestamp", time.time()),
+            session_id=message_data.get("session_id"),
+            content=business_data["content"],
+            raw_data=message_data,
+            metadata=self._standardize_metadata_fields(business_data["metadata"], message_data),
+        )
+
+
+class TaskUpdatedHandler(MessageHandler):
+    """Handler for SDK TaskUpdatedMessage (SystemMessage subclass).
+
+    Issue #1746: a task stopped via TaskStop reports status="killed" *only*
+    via this message type — the matching TaskNotificationMessage is
+    sometimes suppressed entirely. Without this handler, TaskUpdatedMessage
+    falls through to SystemMessageHandler in the live path and its
+    task_id/status/patch fields are lost from the live event stream (the
+    storage-replay path already handled this correctly, per issue #1657).
+    Note TaskUpdatedMessage carries no tool_use_id field (unlike the other
+    three Task* messages) — the SDK does not expose one for this frame type.
+    """
+
+    def can_handle(self, message_data: dict[str, Any]) -> bool:
+        if "sdk_message" in message_data:
+            return isinstance(message_data["sdk_message"], TaskUpdatedMessage)
+        return (message_data.get("type") == "system"
+                and (message_data.get("metadata") or {}).get("subtype") == "task_updated")
+
+    def _extract_business_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
+        metadata = {
+            "subtype": "task_updated",
+            "session_id": message_data.get("session_id"),
+        }
+        content = ""
+
+        if "sdk_message" in message_data and isinstance(message_data["sdk_message"], TaskUpdatedMessage):
+            sdk_msg = message_data["sdk_message"]
+            metadata["task_id"] = sdk_msg.task_id
+            metadata["patch"] = sdk_msg.patch
+            metadata["status"] = sdk_msg.status
+            metadata["task_session_id"] = sdk_msg.session_id
+            metadata["uuid"] = sdk_msg.uuid
+            content = "Agent task updated"
+        else:
+            stored_meta = message_data.get("metadata") or {}
+            metadata.update({
+                "task_id": stored_meta.get("task_id"),
+                "patch": stored_meta.get("patch"),
+                "status": stored_meta.get("status"),
+                "task_session_id": stored_meta.get("task_session_id"),
+                "uuid": stored_meta.get("uuid"),
+            })
+            content = message_data.get("content", "Task updated")
 
         return {"content": content, "metadata": metadata}
 
@@ -1578,6 +1638,7 @@ class MessageParser:
             TaskStartedHandler(),
             TaskProgressHandler(),
             TaskNotificationHandler(),
+            TaskUpdatedHandler(),
             # SDK specific handlers
             SystemMessageHandler(),
             AssistantMessageHandler(),
