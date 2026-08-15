@@ -1,7 +1,8 @@
 <template>
   <div
-    class="timeline-node"
-    :class="[nodeClasses, { 'node-compact': compact }]"
+    class="tool-row"
+    :class="[rowClasses, { 'row-compact': compact }]"
+    :style="{ borderLeftColor: statusColor }"
     :title="tooltip"
     role="button"
     :aria-label="tooltip"
@@ -10,17 +11,16 @@
     @mouseenter="showTooltip = true"
     @mouseleave="showTooltip = false"
   >
-    <div class="node-dot" :class="dotClasses"></div>
-    <span class="node-label">
-      {{ toolLabel }}
-      <span
-        v-if="approvalIndicator"
-        class="approval-icon"
-        :style="{ color: approvalIndicator.color }"
-        :aria-label="approvalIndicator.ariaLabel"
-        role="img"
-      >{{ approvalIndicator.icon }}</span>
-    </span>
+    <span class="row-dot" :class="dotClasses"></span>
+    <span class="row-name">{{ toolLabel }}</span>
+    <code v-if="targetText" class="row-target">{{ targetText }}</code>
+    <span
+      v-if="approvalIndicator"
+      class="approval-icon"
+      :style="{ color: approvalIndicator.color }"
+      :aria-label="approvalIndicator.ariaLabel"
+      role="img"
+    >{{ approvalIndicator.icon }}</span>
     <span
       v-if="hookSummary.count > 0"
       class="hook-count-badge"
@@ -65,10 +65,10 @@ const approvalIndicator = computed(() => {
   return null
 })
 
-const nodeClasses = computed(() => ({
-  'node-expanded': props.isExpanded,
-  'node-running': effectiveStatus.value === 'executing',
-  'node-permission': effectiveStatus.value === 'permission_required'
+const rowClasses = computed(() => ({
+  'row-expanded': props.isExpanded,
+  'row-running': effectiveStatus.value === 'executing',
+  'row-permission': effectiveStatus.value === 'permission_required'
 }))
 
 const dotClasses = computed(() => ({
@@ -100,6 +100,17 @@ const toolLabel = computed(() => {
   return name.replace(/Tool$/, '')
 })
 
+// Target chip: the part of the short summary after "ToolName: " (file path, pattern,
+// command, etc). Falls back to null when the summary has no such suffix (e.g. TodoWrite).
+const targetText = computed(() => {
+  const summary = generateShortToolSummary(props.tool)
+  const displayPrefix = `${toolLabel.value}: `
+  if (summary.startsWith(displayPrefix)) return summary.slice(displayPrefix.length)
+  const rawPrefix = `${props.tool.name || ''}: `
+  if (summary.startsWith(rawPrefix)) return summary.slice(rawPrefix.length)
+  return null
+})
+
 const hookSummary = computed(() => ({
   count: props.hooks.length,
   aggregateStatus: aggregateHookStatus(props.hooks) || 'success',
@@ -110,37 +121,38 @@ defineExpose({ statusColor, effectiveStatus })
 </script>
 
 <style scoped>
-.timeline-node {
-  flex-shrink: 0;
+.tool-row {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  min-width: 20px;
+  gap: 7px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  max-width: 100%;
+  width: fit-content;
+  background: var(--tool-bg);
+  border: 1px solid var(--tool-border);
+  border-left: 3px solid transparent;
   cursor: pointer;
-  z-index: 1;
-  position: relative;
+  transition: background 0.15s, box-shadow 0.15s;
 }
 
-.node-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 2px solid white;
-  background-color: v-bind(statusColor);
-  transition: transform 0.15s, box-shadow 0.15s;
+.tool-row:hover {
+  background: var(--tool-bg-header);
 }
 
-.timeline-node:hover .node-dot {
-  transform: scale(1.5);
-}
-
-/* Expanded dot: blue ring */
-.node-expanded .node-dot {
+.row-expanded {
   box-shadow: 0 0 0 2px #3b82f6;
 }
 
-/* Running dot: amber glow pulse */
+.row-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background-color: v-bind(statusColor);
+}
+
+/* Running dot: amber/violet glow pulse */
 .dot-running {
   animation: running-pulse 1.5s ease-in-out infinite;
 }
@@ -153,12 +165,6 @@ defineExpose({ statusColor, effectiveStatus })
 /* Error dot: red pulse */
 .dot-error {
   animation: error-pulse 1.5s ease-in-out infinite;
-}
-
-/* Expanded + running: combined blue ring + amber pulse */
-.node-expanded .dot-running {
-  animation: running-pulse 1.5s ease-in-out infinite;
-  box-shadow: 0 0 0 2px #3b82f6;
 }
 
 @keyframes running-pulse {
@@ -176,55 +182,62 @@ defineExpose({ statusColor, effectiveStatus })
   50% { opacity: 0.4; }
 }
 
-.node-label {
-  font-size: 9px;
-  color: #94a3b8;
+.row-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tool-text);
   white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.row-target {
+  color: var(--tool-text-muted);
+  background: var(--tool-bg-header);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--tool-font-mono);
+  font-size: var(--tool-code-font-size);
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 60px;
-  line-height: 1;
-  margin-top: 1px;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .approval-icon {
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 700;
-  margin-left: 1px;
+  flex-shrink: 0;
 }
 
 /* Mobile compact size */
-.node-compact {
-  min-width: 16px;
+.row-compact {
+  padding: 3px 5px;
+  gap: 5px;
 }
 
-.node-compact .node-dot {
-  width: 9px;
-  height: 9px;
+.row-compact .row-dot {
+  width: 6px;
+  height: 6px;
 }
 
-.node-compact .node-label {
-  font-size: 7px;
-  max-width: 40px;
+.row-compact .row-name {
+  font-size: 11px;
 }
 
-.node-compact .approval-icon {
-  font-size: 7px;
+.row-compact .row-target {
+  font-size: 10px;
 }
 
-/* Hook count badge — positioned top-right of the node */
+/* Hook count badge */
 .hook-count-badge {
-  position: absolute;
-  top: -4px;
-  right: -6px;
-  padding: 0 3px;
+  padding: 0 4px;
   border-radius: 3px;
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 700;
-  line-height: 14px;
+  line-height: 15px;
   white-space: nowrap;
   color: var(--hook-badge-text);
-  pointer-events: none;
+  flex-shrink: 0;
 }
 
 .hook-badge-success { background: var(--hook-badge-success-bg); }

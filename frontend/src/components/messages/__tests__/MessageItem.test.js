@@ -53,4 +53,48 @@ describe('MessageItem', () => {
 
     expect(screen.getByText('Hello from assistant')).toBeTruthy()
   })
+
+  // Issue #1746 (stage: layout)
+  it('forwards mergedMessages through to AssistantMessage', async () => {
+    const merged = [makeMessage({ type: 'assistant', content: 'Second turn' })]
+
+    renderWithStores(MessageItem, {
+      props: {
+        message: makeMessage({ type: 'assistant', content: 'First turn' }),
+        attachedTools: [],
+        mergedMessages: merged
+      },
+      stubs: {
+        UserMessage: true,
+        AssistantMessage: {
+          template: '<div data-testid="assistant-stub">{{ (mergedMessages || []).map(m => m.content).join(",") }}</div>',
+          props: ['message', 'attachedTools', 'orphanedPermissionTools', 'mergedMessages']
+        },
+        SystemMessage: true,
+        ActivityTimeline: true
+      }
+    })
+
+    expect(screen.getByTestId('assistant-stub').textContent).toBe('Second turn')
+  })
+
+  it('defaults mergedMessages to an empty array when not provided', async () => {
+    renderWithStores(MessageItem, {
+      props: {
+        message: makeMessage({ type: 'assistant', content: 'Solo turn' }),
+        attachedTools: []
+      },
+      stubs: {
+        UserMessage: true,
+        AssistantMessage: {
+          template: '<div data-testid="assistant-stub">{{ (mergedMessages || []).length }}</div>',
+          props: ['message', 'attachedTools', 'orphanedPermissionTools', 'mergedMessages']
+        },
+        SystemMessage: true,
+        ActivityTimeline: true
+      }
+    })
+
+    expect(screen.getByTestId('assistant-stub').textContent).toBe('0')
+  })
 })

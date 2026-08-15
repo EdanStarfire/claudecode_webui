@@ -10,22 +10,8 @@
     <div
       class="msg-bubble"
       :class="isComm ? 'msg-bubble-comm' : 'msg-bubble-user'"
-      :style="isComm ? { background: commColor.bg, borderColor: commColor.border, borderRightWidth: '3px', borderRightStyle: 'solid' } : {}"
+      :style="isComm ? { background: commColor.bg, borderColor: commColor.border } : {}"
     >
-      <button
-        class="copy-markdown-btn"
-        @click.stop="copyMarkdown"
-        :title="copyFeedback ? 'Copied!' : 'Copy markdown'"
-        aria-label="Copy raw markdown"
-      >
-        <svg v-if="copyFeedback" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="20 6 9 17 4 12"></polyline>
-        </svg>
-        <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-        </svg>
-      </button>
       <!-- Content (attachment section stripped from rendered markdown) -->
       <div class="msg-content-row">
         <MarkdownView class="msg-text" ref="contentRef" :content="cleanContent" :self-agent-id="commSenderId" />
@@ -264,7 +250,7 @@ function truncate(text, maxLength) {
 </script>
 
 <style scoped>
-/* Right-aligned user bubble */
+/* Left-aligned, full-bleed user row */
 .msg-wrapper {
   padding: 4px 16px;
 }
@@ -272,7 +258,7 @@ function truncate(text, maxLength) {
 .msg-user {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: flex-start;
 }
 
 .msg-meta {
@@ -306,23 +292,20 @@ function truncate(text, maxLength) {
 }
 
 .msg-bubble {
-  border-radius: 12px;
-  padding: 10px 14px;
-  max-width: 85%;
-  min-width: 60px;
+  align-self: stretch;
+  padding: 9px 16px;
+  margin: 0 -16px 0 -16px;
+  border-left: 4px solid var(--agent-color-user-accent);
+  background: var(--row-user-wash);
 }
 
 .msg-bubble-user {
-  background: var(--agent-color-user-bg);
-  border: 1px solid var(--agent-color-user-accent);
-  border-right: 3px solid var(--agent-color-user-accent);
-  border-top-right-radius: 4px;
+  /* Accent/wash now come from .msg-bubble; no additional styling needed */
 }
 
-/* Comm-injected messages: right-aligned with agent-colored right border */
+/* Comm-injected messages: agent-colored left accent (background/border-color set inline) */
 .msg-bubble-comm {
-  border: 1px solid;
-  border-top-right-radius: 4px;
+  border-left-width: 4px;
 }
 
 .msg-text {
@@ -436,8 +419,8 @@ function truncate(text, maxLength) {
 
 .copy-markdown-btn {
   position: absolute;
-  left: -8px;
-  top: 6px;
+  right: 4px;
+  top: 0;
   opacity: 0;
   transition: opacity 0.15s ease;
   background: var(--bs-body-bg);
@@ -450,7 +433,6 @@ function truncate(text, maxLength) {
   align-items: center;
   justify-content: center;
   z-index: 10;
-  transform: translateX(-100%);
 }
 
 .copy-markdown-btn:hover {
@@ -463,10 +445,15 @@ function truncate(text, maxLength) {
   opacity: 1;
 }
 
-/* Mobile */
+/* Mobile: tighter row padding (16px -> 12px per spec §4.5) */
 @media (max-width: 768px) {
+  .msg-wrapper {
+    padding: 4px 12px;
+  }
+
   .msg-bubble {
-    max-width: 95%;
+    padding: 9px 12px;
+    margin: 0 -12px 0 -12px;
   }
 }
 </style>

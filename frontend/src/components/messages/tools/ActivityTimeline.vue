@@ -1,27 +1,16 @@
 <template>
   <div class="activity-timeline" :class="{ 'timeline-mobile': uiStore.isMobile }" v-if="sortedTools.length > 0" data-testid="activity-timeline">
-    <!-- Timeline Row (nodes + segments) -->
+    <!-- Timeline Row (tool chips, stacked vertically) -->
     <div class="timeline-row">
-      <!-- Timeline items (nodes + segments) -->
-      <template v-for="(tool, index) in sortedTools" :key="tool.id">
-        <!-- Segment between nodes (not before first) -->
-        <TimelineSegment
-          v-if="index > 0"
-          :leftColor="getNodeColor(sortedTools[index - 1])"
-          :rightColor="getNodeColor(tool)"
-          :compact="uiStore.isMobile"
-        />
-
-        <!-- Node -->
-        <TimelineNode
-          :ref="el => setNodeRef(tool.id, el)"
-          :tool="tool"
-          :isExpanded="expandedNodeId === tool.id"
-          :compact="uiStore.isMobile"
-          :hooks="hooksForTool(tool.id)"
-          @click="toggleDetail(tool.id)"
-        />
-      </template>
+      <TimelineNode
+        v-for="tool in sortedTools"
+        :key="tool.id"
+        :tool="tool"
+        :isExpanded="expandedNodeId === tool.id"
+        :compact="uiStore.isMobile"
+        :hooks="hooksForTool(tool.id)"
+        @click="toggleDetail(tool.id)"
+      />
     </div>
 
     <!-- Detail Panel (one at a time) -->
@@ -43,9 +32,8 @@
 import { computed, ref, watch, nextTick, inject } from 'vue'
 import { useUIStore } from '@/stores/ui'
 import { useMessageStore } from '@/stores/message'
-import { getEffectiveStatusForTool, getColorForStatus } from '@/composables/useToolStatus'
+import { getEffectiveStatusForTool } from '@/composables/useToolStatus'
 import TimelineNode from './TimelineNode.vue'
-import TimelineSegment from './TimelineSegment.vue'
 import TimelineDetail from './TimelineDetail.vue'
 import PermissionPrompt from './PermissionPrompt.vue'
 
@@ -76,12 +64,7 @@ function hooksForTool(toolId) {
 // Local state for this timeline instance
 const expandedNodeId = ref(null)
 const expandedForPermission = ref(false)
-const nodeRefs = ref({})
 const permissionRef = ref(null)
-
-function setNodeRef(id, el) {
-  if (el) nodeRefs.value[id] = el
-}
 
 // Sort tools chronologically
 const sortedTools = computed(() => {
@@ -134,16 +117,6 @@ watch(sortedTools, (tools) => {
   }
 }, { deep: true, immediate: true })
 
-// Get node color for segment gradient computation
-function getNodeColor(tool) {
-  // Read from TimelineNode's exposed statusColor if available
-  const nodeRef = nodeRefs.value[tool.id]
-  if (nodeRef?.statusColor) return nodeRef.statusColor
-  // Fallback to utility function
-  const status = getEffectiveStatusForTool(tool)
-  return getColorForStatus(status, tool)
-}
-
 // Toggle detail panel
 function toggleDetail(toolId) {
   if (expandedNodeId.value === toolId) {
@@ -163,10 +136,9 @@ function toggleDetail(toolId) {
 
 .timeline-row {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   align-items: flex-start;
-  min-height: 20px;
-  gap: 2px 0;
+  gap: 4px;
   padding: 2px 0;
 }
 </style>

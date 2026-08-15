@@ -132,26 +132,3 @@ export function getEffectiveStatusForTool(tool) {
 
   return tool.status
 }
-
-/**
- * Get color for a given status string (non-reactive).
- * For use in segment gradient computation.
- */
-export function getColorForStatus(status, tool) {
-  const hasError = tool?.result?.error || tool?.status === 'error' || tool?.permissionDecision === 'deny'
-  switch (status) {
-    case 'completed':
-      return hasError ? '#ef4444' : '#22c55e'
-    case 'error':
-      return '#ef4444'
-    case 'executing':
-      return '#8b5cf6'
-    case 'permission_required':
-      return '#ffc107'
-    case 'orphaned':
-      return '#94a3b8'
-    case 'pending':
-    default:
-      return '#e2e8f0'
-  }
-}

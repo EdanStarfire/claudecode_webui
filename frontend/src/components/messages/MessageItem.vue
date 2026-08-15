@@ -4,6 +4,7 @@
     :message="message"
     :attachedTools="attachedTools"
     :orphanedPermissionTools="orphanedPermissionTools"
+    :mergedMessages="mergedMessages"
   />
 </template>
 
@@ -23,6 +24,10 @@ const props = defineProps({
     default: () => []
   },
   orphanedPermissionTools: {
+    type: Array,
+    default: () => []
+  },
+  mergedMessages: {
     type: Array,
     default: () => []
   }
