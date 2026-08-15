@@ -2,51 +2,66 @@
   <!-- Issue #195: Hide assistant bubble entirely when nothing to render
        (e.g. content-less messages whose only tools were Task calls moved to SubagentTimeline) -->
   <div v-if="hasAnythingToShow" class="msg-wrapper msg-assistant" data-testid="assistant-message">
-    <div class="msg-meta">
-      <span class="msg-role">assistant</span>
-      <span class="msg-time">{{ formattedTimestamp }}</span>
-    </div>
-    <div class="msg-bubble msg-bubble-assistant" :class="{ 'has-permission-prompt': hasActivePermission, 'tts-playing': isTTSPlaying }">
-      <!-- Thinking Block (collapsible) -->
-      <div v-if="hasThinking" class="thinking-block mb-2">
-        <ThinkingBlock :thinking="thinkingContent" :streaming="!!message.streaming" />
+    <div ref="bubbleRef" class="msg-bubble msg-bubble-assistant" :class="{ 'has-permission-prompt': hasActivePermission, 'tts-playing': isTTSPlaying }">
+      <div class="msg-meta">
+        <span class="msg-role">assistant</span>
+        <span class="msg-time">{{ formattedTimestamp }}</span>
       </div>
 
-      <!-- Content -->
-      <div v-if="hasContent || message.streaming" class="msg-content-row">
-        <MarkdownView class="msg-text" ref="contentRef" :content="rawContent" :streaming="!!message.streaming" :caret="!!message.streaming" />
-        <button
-          v-if="tts"
-          class="tts-play-icon"
-          @click.stop="onPlayClick"
-          aria-label="Read aloud from this message"
-          title="Read aloud"
-        >&#x1F50A;</button>
-        <button
-          class="copy-markdown-btn"
-          @click.stop="copyMarkdown"
-          :title="copyFeedback ? 'Copied!' : 'Copy markdown'"
-          :style="{ right: tts ? '16px' : '-8px' }"
-          aria-label="Copy raw markdown"
-        >
-          <svg v-if="copyFeedback" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="20 6 9 17 4 12"></polyline>
-          </svg>
-          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2 2v1"></path>
-          </svg>
-        </button>
+      <!-- Issue #1746 (stage: layout): consecutive assistant turns merge into one row —
+           each entry below is either the primary message or a merged continuation. -->
+      <div
+        v-for="(sv, index) in segmentViews"
+        :key="sv.seg.id || sv.seg.message_id || index"
+        class="turn-segment"
+      >
+        <!-- Subsequent segments get a timestamp-only header + trailing rule instead of the full msg-meta -->
+        <div v-if="!sv.isFirst" class="turn-meta">
+          <span class="turn-meta-time">{{ sv.formattedTimestamp }}</span>
+          <span class="turn-meta-rule"></span>
+        </div>
+
+        <!-- Thinking Block (collapsible) -->
+        <div v-if="sv.hasThinking" class="thinking-block mb-2">
+          <ThinkingBlock :thinking="sv.thinkingContent" :streaming="!!sv.seg.streaming" />
+        </div>
+
+        <!-- Content -->
+        <div v-if="sv.hasContent || sv.seg.streaming" class="msg-content-row">
+          <MarkdownView class="msg-text" :content="sv.rawContent" :streaming="!!sv.seg.streaming" :caret="!!sv.seg.streaming" />
+          <button
+            v-if="tts"
+            class="tts-play-icon"
+            @click.stop="playSegment(sv.seg)"
+            aria-label="Read aloud from this message"
+            title="Read aloud"
+          >&#x1F50A;</button>
+          <button
+            class="copy-markdown-btn"
+            @click.stop="copySegment(sv.seg, index)"
+            :title="copiedIndex === index ? 'Copied!' : 'Copy markdown'"
+            :style="{ right: tts ? '28px' : '4px' }"
+            aria-label="Copy raw markdown"
+          >
+            <svg v-if="copiedIndex === index" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Activity Timeline (compact tool-call chips) — excludes Task tools and child tools -->
+        <ActivityTimeline
+          v-if="sv.mainTimelineTools.length > 0"
+          :tools="sv.mainTimelineTools"
+          :messageId="sv.seg.id"
+        />
       </div>
 
-      <!-- Activity Timeline (compact dot timeline) — excludes Task tools and child tools -->
-      <ActivityTimeline
-        v-if="mainTimelineTools.length > 0"
-        :tools="mainTimelineTools"
-        :messageId="message.id"
-      />
-
-      <!-- Subagent bubbles (one per Task tool call) -->
+      <!-- Subagent bubbles (one per Task tool call — only ever on the last segment of a merged run) -->
       <SubagentTimeline
         v-for="task in taskToolCalls"
         :key="task.id"
@@ -92,6 +107,10 @@ const props = defineProps({
   orphanedPermissionTools: {
     type: Array,
     default: () => []
+  },
+  mergedMessages: {
+    type: Array,
+    default: () => []
   }
 })
 
@@ -102,34 +121,35 @@ const sessionStore = useSessionStore()
 const tts = inject('ttsReadAloud', null)
 const allMessages = inject('allMessages', null)
 
-// Issue #1350: hook correlation (viewSessionId provided by MessageList)
+// All segments in this merged run: the primary message first, then any merged continuations
+// (MessageList.mergeConsecutiveAssistantTurns() attaches attachedTools/orphanedPermissionTools
+// directly onto each continuation entry since it isn't a standalone displayable item anymore).
+const segments = computed(() => [props.message, ...props.mergedMessages])
+
+// Issue #1350: hook correlation (viewSessionId provided by MessageList).
+// The Stop hook corresponds to the turn actually finishing, i.e. the last segment.
 const viewSessionId = inject('viewSessionId', null)
 const stopHooks = computed(() => {
   const sid = viewSessionId?.value
-  const msgId = props.message.message_id || props.message.id
+  const lastSeg = segments.value[segments.value.length - 1]
+  const msgId = lastSeg?.message_id || lastSeg?.id
   if (!sid || !msgId) return []
   return messageStore.hooksForMessageId(sid, msgId)
 })
 
-const isTTSPlaying = computed(() => {
-  if (!tts) return false
-  // Match by timestamp since messages lack unique IDs
-  return tts.currentMessageId.value === props.message.timestamp
-})
-
-function onPlayClick() {
+function playSegment(seg) {
   if (!tts || !allMessages) return
-  tts.playMessage(props.message, allMessages.value)
+  tts.playMessage(seg, allMessages.value)
 }
 
-const copyFeedback = ref(false)
+const copiedIndex = ref(-1)
 let copyTimer = null
 
-async function copyMarkdown() {
-  await navigator.clipboard.writeText(rawContent.value)
-  copyFeedback.value = true
+async function copySegment(seg, index) {
+  await navigator.clipboard.writeText(seg.content || '')
+  copiedIndex.value = index
   clearTimeout(copyTimer)
-  copyTimer = setTimeout(() => { copyFeedback.value = false }, 2000)
+  copyTimer = setTimeout(() => { copiedIndex.value = -1 }, 2000)
 }
 
 onUnmounted(() => clearTimeout(copyTimer))
@@ -142,145 +162,149 @@ const modelName = computed(() => {
   return props.message.metadata?.model || null
 })
 
-const hasContent = computed(() => {
-  const content = props.message.content || ''
-  return content.trim().length > 0 && content !== 'Assistant response'
-})
-
-const rawContent = computed(() => props.message.content || '')
-
-// Inline resource image click-to-open
-const contentRef = ref(null)
-const currentSessionId = computed(() => sessionStore.currentSessionId)
-useResourceImages(contentRef, currentSessionId)
-
-const hasThinking = computed(() => {
+function segHasThinking(seg) {
   // Issue #1486: message.thinking is built up by thinking_delta events during streaming.
   // After the fallback-dedup merge the field persists on the message object even though
   // streaming=false, so check it unconditionally before falling back to metadata.
-  if (props.message.thinking) return true
-  return props.message.metadata?.has_thinking && props.message.metadata?.thinking_content
-})
+  if (seg.thinking) return true
+  return !!(seg.metadata?.has_thinking && seg.metadata?.thinking_content)
+}
 
-const thinkingContent = computed(() => {
-  // Prefer the direct thinking field (populated by streaming deltas or persisted after merge)
-  // over metadata.thinking_content, which is empty for the SDK's text-only terminal message.
-  return props.message.thinking || props.message.metadata?.thinking_content || ''
-})
+function segThinkingContent(seg) {
+  return seg.thinking || seg.metadata?.thinking_content || ''
+}
 
-const hasToolUses = computed(() => {
-  const messageTools = props.message.metadata?.has_tool_uses && props.message.metadata?.tool_uses?.length > 0
-  const hasAttached = props.attachedTools && props.attachedTools.length > 0
-  return messageTools || hasAttached
-})
+function segHasContent(seg) {
+  const content = seg.content || ''
+  return content.trim().length > 0 && content !== 'Assistant response'
+}
 
-const toolUses = computed(() => {
-  const messageTools = props.message.metadata?.tool_uses || []
-  const attachedTools = props.attachedTools || []
-  // Combine message tools and attached tools, avoiding duplicates by ID
+function segToolUses(seg, attachedTools, orphanedTools) {
+  const messageTools = seg.metadata?.tool_uses || []
   const allTools = [...messageTools]
   const existingIds = new Set(messageTools.map(t => t.id))
-  for (const tool of attachedTools) {
+  for (const tool of attachedTools || []) {
     if (!existingIds.has(tool.id)) {
       allTools.push(tool)
       existingIds.add(tool.id)
     }
   }
   // Issue #1626 Fix B: append any orphaned permission tools not yet referenced above
-  for (const tool of props.orphanedPermissionTools || []) {
+  for (const tool of orphanedTools || []) {
     if (!existingIds.has(tool.id)) {
       allTools.push(tool)
       existingIds.add(tool.id)
     }
   }
   return allTools
-})
+}
 
 /**
- * Get enriched tool calls with live state from the store
- * This computed property ensures reactive updates when tool state changes
+ * Enriched tool calls (with live state from the store) for a single segment.
  */
-const enrichedToolCalls = computed(() => {
+function segEnrichedToolCalls(seg, attachedTools, orphanedTools) {
   const sessionId = sessionStore.currentSessionId
-  if (!sessionId) return []
+  const toolCalls = sessionId ? (messageStore.toolCallsBySession.get(sessionId) || []) : []
 
-  const toolCalls = messageStore.toolCallsBySession.get(sessionId) || []
-
-  return toolUses.value.map(toolUse => {
-    // Find the live tool call state from the store
+  return segToolUses(seg, attachedTools, orphanedTools).map(toolUse => {
     const liveToolCall = toolCalls.find(tc => tc.id === toolUse.id)
-
-    if (liveToolCall) {
-      // Return live state (will update reactively)
-      return liveToolCall
-    }
-
-    // Fallback: Create minimal tool call from message data
+    if (liveToolCall) return liveToolCall
     return {
       id: toolUse.id,
       name: toolUse.name,
       input: toolUse.input,
       status: 'pending',
       result: null,
-      timestamp: toolUse.timestamp || props.message.timestamp,
+      timestamp: toolUse.timestamp || seg.timestamp,
       isExpanded: true
+    }
+  })
+}
+
+/**
+ * Issue #1746 (stage: layout): per-segment view model. The first segment reads attachedTools/
+ * orphanedPermissionTools from this component's own props (unchanged from before merging
+ * existed); continuation segments read them off the segment object itself, since
+ * MessageList's merge pass stamps them there when it collapses a run into mergedMessages.
+ */
+const segmentViews = computed(() => {
+  return segments.value.map((seg, index) => {
+    const isFirst = index === 0
+    const attachedTools = isFirst ? props.attachedTools : (seg.attachedTools || [])
+    const orphanedTools = isFirst ? props.orphanedPermissionTools : (seg.orphanedPermissionTools || [])
+    const enrichedToolCalls = segEnrichedToolCalls(seg, attachedTools, orphanedTools)
+    // Issue #195: Main timeline tools — excludes Task tools and child tools (those with parent_tool_use_id)
+    const mainTimelineTools = enrichedToolCalls.filter(tc =>
+      tc.name !== 'Task' && tc.name !== 'Agent' &&
+      tc.name !== 'mcp__legion__send_comm' &&
+      !tc.parent_tool_use_id
+    )
+    return {
+      seg,
+      isFirst,
+      formattedTimestamp: formatTimestamp(seg.timestamp),
+      hasThinking: segHasThinking(seg),
+      thinkingContent: segThinkingContent(seg),
+      hasContent: segHasContent(seg),
+      rawContent: seg.content || '',
+      enrichedToolCalls,
+      mainTimelineTools
     }
   })
 })
 
-/**
- * Issue #195: Main timeline tools — excludes Task tools and child tools (those with parent_tool_use_id)
- */
-const mainTimelineTools = computed(() => {
-  return enrichedToolCalls.value.filter(tc =>
-    tc.name !== 'Task' && tc.name !== 'Agent' &&
-    tc.name !== 'mcp__legion__send_comm' &&
-    !tc.parent_tool_use_id
-  )
-})
+// Inline resource image click-to-open — one listener on the whole bubble covers every segment
+// (useResourceImages delegates on click target, so it doesn't need a ref per segment).
+const bubbleRef = ref(null)
+const currentSessionId = computed(() => sessionStore.currentSessionId)
+useResourceImages(bubbleRef, currentSessionId)
+
+const lastSegmentView = computed(() => segmentViews.value[segmentViews.value.length - 1])
 
 /**
- * Issue #652: send_comm tool calls — extracted for standalone bubble rendering
- */
-const sendCommToolCalls = computed(() => {
-  return enrichedToolCalls.value.filter(tc => tc.name === 'mcp__legion__send_comm')
-})
-
-/**
- * Issue #195: Task tool calls — only Task tools for SubagentTimeline bubbles
+ * Issue #195 / #1746: Task tool calls — only ever appear on the LAST segment of a merged run,
+ * since MessageList's merge pass treats Task/Agent/send_comm calls as a one-way boundary.
  */
 const taskToolCalls = computed(() => {
-  return enrichedToolCalls.value.filter(tc => tc.name === 'Task' || tc.name === 'Agent')
+  return (lastSegmentView.value?.enrichedToolCalls || []).filter(tc => tc.name === 'Task' || tc.name === 'Agent')
 })
 
 /**
- * Issue #195: Hide the entire assistant bubble when there's nothing to render.
- * This handles content-less messages whose only tools were Task calls
- * (now rendered as SubagentTimeline on the parent message).
+ * Issue #652: send_comm tool calls — extracted for standalone bubble rendering (last segment only)
  */
+const sendCommToolCalls = computed(() => {
+  return (lastSegmentView.value?.enrichedToolCalls || []).filter(tc => tc.name === 'mcp__legion__send_comm')
+})
+
 /**
- * Issue #716: Expand bubble to full width when a permission prompt is active
+ * Issue #716: Expand bubble to full width when a permission prompt is active on any segment
  */
 const hasActivePermission = computed(() => {
-  return enrichedToolCalls.value.some(tc =>
-    getEffectiveStatusForTool(tc) === 'permission_required'
+  return segmentViews.value.some(sv =>
+    sv.enrichedToolCalls.some(tc => getEffectiveStatusForTool(tc) === 'permission_required')
   )
 })
 
+const isTTSPlaying = computed(() => {
+  if (!tts) return false
+  // Match by timestamp since messages lack unique IDs
+  return segments.value.some(seg => tts.currentMessageId.value === seg.timestamp)
+})
+
+/**
+ * Issue #195: Hide the entire assistant bubble when there's nothing to render across any segment.
+ */
 const hasAnythingToShow = computed(() => {
   // Issue #1486: always show the streaming placeholder so the caret is visible from the first
   // token — without this guard a thinking-first response is invisible until text arrives.
-  return !!props.message.streaming ||
-    hasContent.value ||
-    hasThinking.value ||
-    mainTimelineTools.value.length > 0 ||
-    taskToolCalls.value.length > 0 ||
-    sendCommToolCalls.value.length > 0
+  return segmentViews.value.some(sv =>
+    !!sv.seg.streaming || sv.hasContent || sv.hasThinking || sv.mainTimelineTools.length > 0
+  ) || taskToolCalls.value.length > 0 || sendCommToolCalls.value.length > 0
 })
 </script>
 
 <style scoped>
-/* Left-aligned assistant bubble */
+/* Left-aligned, full-bleed assistant row */
 .msg-wrapper {
   padding: 4px 16px;
 }
@@ -295,8 +319,7 @@ const hasAnythingToShow = computed(() => {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  margin-bottom: 2px;
-  padding: 0 4px;
+  margin-bottom: 4px;
 }
 
 .msg-role {
@@ -311,17 +334,38 @@ const hasAnythingToShow = computed(() => {
 }
 
 .msg-bubble {
-  border-radius: 12px;
-  padding: 10px 14px;
-  max-width: 85%;
-  min-width: 60px;
+  align-self: stretch;
+  padding: 9px 16px;
+  margin: 0 -16px 0 -16px;
 }
 
 .msg-bubble-assistant {
-  background: var(--bs-secondary-bg);
-  border: 1px solid var(--bs-border-color);
-  border-left: 3px solid var(--bs-border-color);
-  border-top-left-radius: 4px;
+  background: var(--row-assistant-wash);
+  border-left: 4px solid var(--row-assistant-accent);
+}
+
+.turn-segment + .turn-segment {
+  margin-top: 8px;
+}
+
+/* Subsequent merged segments: timestamp-only label + trailing rule instead of the full msg-meta */
+.turn-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.turn-meta-time {
+  font-size: 10px;
+  color: var(--bs-secondary-color);
+  white-space: nowrap;
+}
+
+.turn-meta-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--bs-border-color);
 }
 
 .msg-text {
@@ -420,7 +464,7 @@ const hasAnythingToShow = computed(() => {
 }
 
 .tts-play-icon {
-  right: -8px;
+  right: 4px;
 }
 
 .msg-content-row:hover .copy-markdown-btn,
@@ -433,19 +477,15 @@ const hasAnythingToShow = computed(() => {
   opacity: 1 !important;
 }
 
-/* Issue #716: Force bubble to full allowed width when permission prompt is active */
-.msg-bubble.has-permission-prompt {
-  width: 85%;
-}
-
-/* Mobile */
+/* Mobile: tighter row padding (16px -> 12px per spec §4.5) */
 @media (max-width: 768px) {
-  .msg-bubble {
-    max-width: 95%;
+  .msg-wrapper {
+    padding: 4px 12px;
   }
 
-  .msg-bubble.has-permission-prompt {
-    width: 95%;
+  .msg-bubble {
+    padding: 9px 12px;
+    margin: 0 -12px 0 -12px;
   }
 }
 </style>

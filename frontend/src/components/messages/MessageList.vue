@@ -15,6 +15,7 @@
             :message="normalizeMessage(item.message)"
             :attachedTools="item.attachedTools || []"
             :orphanedPermissionTools="item.orphanedPermissionTools || []"
+            :mergedMessages="item.mergedMessages || []"
           />
 
           <!-- Compaction event group -->
@@ -158,9 +159,10 @@ const displayableItems = computed(() => {
 
   // Second pass: Group tools to parent assistant messages
   // Third pass: Inject date separators between items on different calendar dates
-  // Fourth pass: Attach any permission_required tools not yet anchored to a bubble
+  // Fourth pass: Merge consecutive assistant turns into one visual block (Issue #1746)
+  // Fifth pass: Attach any permission_required tools not yet anchored to a bubble
   return attachOrphanedPermissionTools(
-    injectDateSeparators(groupToolsToParentMessages(items)),
+    mergeConsecutiveAssistantTurns(injectDateSeparators(groupToolsToParentMessages(items))),
     viewSessionId.value,
   )
 })
@@ -303,6 +305,82 @@ function groupToolsToParentMessages(items) {
   }
 
   return processedItems
+}
+
+/**
+ * Issue #1746 (stage: layout): merge consecutive assistant turns into one visual block.
+ *
+ * A run starts at any 'assistant' message item and extends onto the next item only if:
+ * - the next item is also an 'assistant' message item, AND
+ * - the current run's last member is not itself a merge boundary (see isMergeBoundary below).
+ *
+ * A user item, subagent-related item, date separator, or compaction group always closes the
+ * run, since none of those satisfy isAssistantMessageItem().
+ *
+ * Runs of length 1 pass through unchanged. Runs of length >= 2 collapse into the first item,
+ * with the rest attached as `mergedMessages` (each a shallow copy of its message plus its own
+ * attachedTools) and dropped from the top-level list — mirroring how groupToolsToParentMessages()
+ * already hides consolidated items above.
+ */
+function isMergeBoundary(item) {
+  // Task/Agent/send_comm calls render SubagentTimeline/SendCommToolHandler as siblings AFTER
+  // the bubble — a message carrying one of these may be the LAST member of a run, but nothing
+  // may visually merge past it (matches AssistantMessage.vue's last-segment-only sourcing).
+  // Must check attachedTools too: groupToolsToParentMessages() (the pass just before this one)
+  // routinely moves a Task/Agent/send_comm tool_use from a content-less trailing message onto
+  // this item's attachedTools rather than leaving it in item.message.metadata.tool_uses —
+  // missing that here would silently drop the tool call from rendering (AssistantMessage.vue
+  // only sources taskToolCalls/sendCommToolCalls from a run's LAST segment).
+  const tools = [
+    ...(item.message?.metadata?.tool_uses || []),
+    ...(item.attachedTools || []),
+  ]
+  return tools.some(t => t.name === 'Task' || t.name === 'Agent' || t.name === 'mcp__legion__send_comm')
+}
+
+function isAssistantMessageItem(item) {
+  return item.type === 'message' && item.message?.type === 'assistant'
+}
+
+function mergeConsecutiveAssistantTurns(items) {
+  const result = []
+  let i = 0
+
+  while (i < items.length) {
+    const item = items[i]
+
+    if (!isAssistantMessageItem(item)) {
+      result.push(item)
+      i++
+      continue
+    }
+
+    const run = [item]
+    let j = i + 1
+    while (
+      !isMergeBoundary(run[run.length - 1]) &&
+      j < items.length &&
+      isAssistantMessageItem(items[j])
+    ) {
+      run.push(items[j])
+      j++
+    }
+
+    if (run.length === 1) {
+      result.push(item)
+    } else {
+      const [head, ...rest] = run
+      head.mergedMessages = rest.map(it => ({
+        ...it.message,
+        attachedTools: it.attachedTools || [],
+      }))
+      result.push(head)
+    }
+
+    i = j
+  }
+
+  return result
 }
 
 /**
@@ -600,14 +678,21 @@ function attachOrphanedPermissionTools(items, sessionId) {
   const liveTools = messageStore.toolCallsBySession.get(sessionId) || []
   if (liveTools.length === 0) return items
 
-  // Collect tool_use_ids already referenced by any displayed bubble.
+  // Collect tool_use_ids already referenced by any displayed bubble — including tool_uses
+  // that live on a merged-away continuation segment (Issue #1746: mergeConsecutiveAssistantTurns
+  // stamps those onto item.mergedMessages rather than leaving them as top-level items).
   const referenced = new Set()
   for (const item of items) {
     if (item.type !== 'message') continue
     const msg = item.message
-    if (msg.type !== 'assistant') continue
-    for (const t of msg.metadata?.tool_uses || []) referenced.add(t.id)
-    for (const t of item.attachedTools || []) referenced.add(t.id)
+    if (msg.type === 'assistant') {
+      for (const t of msg.metadata?.tool_uses || []) referenced.add(t.id)
+      for (const t of item.attachedTools || []) referenced.add(t.id)
+    }
+    for (const seg of item.mergedMessages || []) {
+      for (const t of seg.metadata?.tool_uses || []) referenced.add(t.id)
+      for (const t of seg.attachedTools || []) referenced.add(t.id)
+    }
   }
 
   // Find permission_required tools not yet referenced.
@@ -629,19 +714,40 @@ function attachOrphanedPermissionTools(items, sessionId) {
     const targetIndex = items.findIndex(
       it => it.type === 'message' && it.message?.type === 'assistant' && it.message.message_id === orphan.messageId
     )
-    if (targetIndex === -1) {
-      unanchored.push(orphan)
+    if (targetIndex !== -1) {
+      items[targetIndex].orphanedPermissionTools = [...(items[targetIndex].orphanedPermissionTools || []), orphan]
       continue
     }
-    items[targetIndex].orphanedPermissionTools = [...(items[targetIndex].orphanedPermissionTools || []), orphan]
+
+    // Issue #1746: the owning message may have been merged into a preceding row as a
+    // continuation segment — search item.mergedMessages before giving up on message_id anchoring.
+    let attachedToSegment = false
+    for (const it of items) {
+      if (it.type !== 'message' || !it.mergedMessages) continue
+      const seg = it.mergedMessages.find(s => s.message_id === orphan.messageId)
+      if (seg) {
+        seg.orphanedPermissionTools = [...(seg.orphanedPermissionTools || []), orphan]
+        attachedToSegment = true
+        break
+      }
+    }
+    if (!attachedToSegment) unanchored.push(orphan)
   }
 
   if (unanchored.length === 0) return items
 
-  // Fallback: attach to the last assistant item.
+  // Fallback: attach to the last assistant item — and, if it's the head of a merged run
+  // (Issue #1746), to that run's LAST segment specifically, since "last bubble" means the
+  // most recently rendered turn, not the first segment the top-level item happens to be.
   for (let i = items.length - 1; i >= 0; i--) {
     if (items[i].type === 'message' && items[i].message?.type === 'assistant') {
-      items[i].orphanedPermissionTools = [...(items[i].orphanedPermissionTools || []), ...unanchored]
+      const mergedMessages = items[i].mergedMessages
+      if (mergedMessages && mergedMessages.length > 0) {
+        const lastSeg = mergedMessages[mergedMessages.length - 1]
+        lastSeg.orphanedPermissionTools = [...(lastSeg.orphanedPermissionTools || []), ...unanchored]
+      } else {
+        items[i].orphanedPermissionTools = [...(items[i].orphanedPermissionTools || []), ...unanchored]
+      }
       return items
     }
   }

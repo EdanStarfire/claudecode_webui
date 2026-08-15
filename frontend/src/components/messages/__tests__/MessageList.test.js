@@ -47,9 +47,13 @@ describe('MessageList', () => {
     const { useMessageStore } = await import('@/stores/message')
     const messageStore = useMessageStore(pinia)
 
+    // Issue #1746 (stage: layout): second message is 'user' rather than the default
+    // 'assistant' so mergeConsecutiveAssistantTurns() doesn't fold them into one item —
+    // this test is about basic store rendering, not merge behavior (see the dedicated
+    // 'mergeConsecutiveAssistantTurns' describe block below for that).
     messageStore.messagesBySession.set(SESSION_ID, [
       makeMessage({ content: 'First message' }),
-      makeMessage({ content: 'Second message' })
+      makeMessage({ type: 'user', content: 'Second message' })
     ])
     messageStore.messagesBySession = new Map(messageStore.messagesBySession)
 
@@ -271,6 +275,183 @@ describe('MessageList', () => {
   })
 })
 
+// Issue #1746 (stage: layout): mergeConsecutiveAssistantTurns()
+function makeMergeStub(capturedRuns) {
+  return {
+    template: '<div role="article" data-testid="msg-item">{{ message.content }}</div>',
+    props: ['message', 'attachedTools', 'orphanedPermissionTools', 'mergedMessages'],
+    mounted() {
+      capturedRuns.push({
+        content: this.message.content,
+        merged: (this.mergedMessages || []).map(m => m.content)
+      })
+    }
+  }
+}
+
+describe('mergeConsecutiveAssistantTurns (#1746 stage: layout)', () => {
+  it('merges 2+ consecutive assistant messages into the first item, rest as mergedMessages', async () => {
+    const capturedRuns = []
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: makeMergeStub(capturedRuns), TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({ type: 'assistant', content: 'First turn' }),
+      makeMessage({ type: 'assistant', content: 'Second turn' }),
+      makeMessage({ type: 'assistant', content: 'Third turn' })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(screen.getAllByRole('article').length).toBe(1)
+    expect(capturedRuns[0].content).toBe('First turn')
+    expect(capturedRuns[0].merged).toEqual(['Second turn', 'Third turn'])
+  })
+
+  it('does not merge across a user message', async () => {
+    const capturedRuns = []
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: makeMergeStub(capturedRuns), TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({ type: 'assistant', content: 'First turn' }),
+      makeMessage({ type: 'user', content: 'interjection' }),
+      makeMessage({ type: 'assistant', content: 'Second turn' })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(screen.getAllByRole('article').length).toBe(3)
+    expect(capturedRuns.every(r => r.merged.length === 0)).toBe(true)
+  })
+
+  it('does not merge across a date separator', async () => {
+    const capturedRuns = []
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: makeMergeStub(capturedRuns), TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    // 2 days apart (UTC) so the date-separator boundary is unambiguous regardless of local TZ.
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({ type: 'assistant', content: 'Day one', timestamp: 1704067200 }),
+      makeMessage({ type: 'assistant', content: 'Day three', timestamp: 1704240000 })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(screen.getAllByRole('article').length).toBe(2)
+    expect(capturedRuns.every(r => r.merged.length === 0)).toBe(true)
+  })
+
+  it('does not merge past a message with a Task tool call, but that message may head/close a run', async () => {
+    const capturedRuns = []
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: makeMergeStub(capturedRuns), TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({ type: 'assistant', content: 'Leading turn' }),
+      makeMessage({
+        type: 'assistant',
+        content: 'Launching subagent',
+        metadata: { has_tool_uses: true, tool_uses: [{ id: 'task-1', name: 'Task', input: {} }] }
+      }),
+      makeMessage({ type: 'assistant', content: 'After the task' })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    // "Leading turn" + "Launching subagent" merge (the Task message may be the LAST member of
+    // a run); "After the task" starts a new run since nothing may merge past a Task boundary.
+    expect(screen.getAllByRole('article').length).toBe(2)
+    expect(capturedRuns[0].content).toBe('Leading turn')
+    expect(capturedRuns[0].merged).toEqual(['Launching subagent'])
+    expect(capturedRuns[1].content).toBe('After the task')
+    expect(capturedRuns[1].merged).toEqual([])
+  })
+
+  it('does not merge past a Task call that landed in attachedTools via groupToolsToParentMessages', async () => {
+    const capturedRuns = []
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: makeMergeStub(capturedRuns), TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    // The Task tool_use lives on a content-less trailing message, which
+    // groupToolsToParentMessages() consolidates into the PRECEDING message's attachedTools
+    // (not its own metadata.tool_uses) — the boundary check must still catch it there.
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({ type: 'assistant', content: 'Leading turn' }),
+      makeMessage({
+        type: 'assistant',
+        content: '',
+        metadata: { has_tool_uses: true, tool_uses: [{ id: 'task-1', name: 'Task', input: {} }] }
+      }),
+      makeMessage({ type: 'assistant', content: 'After the task' })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(screen.getAllByRole('article').length).toBe(2)
+    expect(capturedRuns[0].content).toBe('Leading turn')
+    expect(capturedRuns[0].merged).toEqual([])
+    expect(capturedRuns[1].content).toBe('After the task')
+    expect(capturedRuns[1].merged).toEqual([])
+  })
+
+  it('does not merge past a send_comm tool call', async () => {
+    const capturedRuns = []
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: makeMergeStub(capturedRuns), TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({
+        type: 'assistant',
+        content: 'Sending comm',
+        metadata: { has_tool_uses: true, tool_uses: [{ id: 'comm-1', name: 'mcp__legion__send_comm', input: {} }] }
+      }),
+      makeMessage({ type: 'assistant', content: 'After the comm' })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(screen.getAllByRole('article').length).toBe(2)
+    expect(capturedRuns.every(r => r.merged.length === 0)).toBe(true)
+  })
+})
+
 // Helper stub that exposes orphanedPermissionTools count as a data attribute
 function makeMessageItemStub(capturedOrphans) {
   return {
@@ -420,7 +601,9 @@ describe('attachOrphanedPermissionTools — Fix B (#1626)', () => {
     const { useMessageStore } = await import('@/stores/message')
     const messageStore = useMessageStore(pinia)
 
-    // Two assistant bubbles; the orphaned tool's messageId matches the EARLIER one.
+    // Two assistant bubbles, separated by a user interjection so mergeConsecutiveAssistantTurns()
+    // (#1746) doesn't fold them into one item — this test needs two separate top-level bubbles.
+    // The orphaned tool's messageId matches the EARLIER one.
     messageStore.messagesBySession.set(SESSION_ID, [
       makeMessage({
         type: 'assistant',
@@ -428,6 +611,7 @@ describe('attachOrphanedPermissionTools — Fix B (#1626)', () => {
         message_id: 'msg-early',
         metadata: { has_tool_uses: false, tool_uses: [] }
       }),
+      makeMessage({ type: 'user', content: 'interjection' }),
       makeMessage({
         type: 'assistant',
         content: 'Second, unrelated turn',
@@ -450,9 +634,9 @@ describe('attachOrphanedPermissionTools — Fix B (#1626)', () => {
     await new Promise(r => setTimeout(r, 50))
 
     const items = screen.getAllByRole('article')
-    // Recency-based fallback would have attached to the LAST bubble (index 1).
+    // Recency-based fallback would have attached to the LAST bubble (index 2).
     expect(items[0].getAttribute('data-orphaned-ids')).toBe('tool-perm-early')
-    expect(items[1].getAttribute('data-orphaned-ids')).toBe('')
+    expect(items[2].getAttribute('data-orphaned-ids')).toBe('')
   })
 
   it('falls back to the last-bubble heuristic when messageId is absent (#1694)', async () => {
@@ -469,6 +653,8 @@ describe('attachOrphanedPermissionTools — Fix B (#1626)', () => {
     const { useMessageStore } = await import('@/stores/message')
     const messageStore = useMessageStore(pinia)
 
+    // User interjection between the two assistant turns so mergeConsecutiveAssistantTurns()
+    // (#1746) doesn't fold them into one item — the last-bubble fallback needs two bubbles.
     messageStore.messagesBySession.set(SESSION_ID, [
       makeMessage({
         type: 'assistant',
@@ -476,6 +662,7 @@ describe('attachOrphanedPermissionTools — Fix B (#1626)', () => {
         message_id: 'msg-early',
         metadata: { has_tool_uses: false, tool_uses: [] }
       }),
+      makeMessage({ type: 'user', content: 'interjection' }),
       makeMessage({
         type: 'assistant',
         content: 'Second turn — the one requesting permission',
@@ -499,6 +686,6 @@ describe('attachOrphanedPermissionTools — Fix B (#1626)', () => {
 
     const items = screen.getAllByRole('article')
     expect(items[0].getAttribute('data-orphaned-ids')).toBe('')
-    expect(items[1].getAttribute('data-orphaned-ids')).toBe('tool-perm-legacy')
+    expect(items[2].getAttribute('data-orphaned-ids')).toBe('tool-perm-legacy')
   })
 })

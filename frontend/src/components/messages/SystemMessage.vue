@@ -43,7 +43,7 @@
         <span v-if="isStderr" class="pill-icon">&#x26A0;&#xFE0F;</span>
         <span v-else-if="isCompactionStatus" class="pill-icon">&#x1F5DC;&#xFE0F;</span>
         <span v-else-if="isHook" class="pill-icon">&#x2699;&#xFE0F;</span>
-        <span class="pill-text">{{ displayContent }}</span>
+        <span class="pill-text">{{ displayContent || fallbackLabel }}</span>
       </template>
 
       <!-- Cross-session badge -->
@@ -51,7 +51,6 @@
         {{ truncatedSessionId }}
       </span>
 
-      <span class="pill-sep">&middot;</span>
       <span class="pill-time">{{ formattedTimestamp }}</span>
       <span class="pill-chevron" :class="{ 'chevron-open': expanded }">&#x25B6;</span>
     </div>
@@ -227,6 +226,16 @@ const resultErrors = computed(() => {
   return props.message.metadata?.errors || []
 })
 
+// Issue #1746 (stage: layout) follow-up: plain "status" pings and similar generic system
+// messages sometimes carry no content at all (known pre-existing gap: loadMessages()'s
+// history replay doesn't always populate these the way the realtime stream does — tracked
+// separately). Rather than hiding the row or leaving it blank, fall back to "type: subtype"
+// so there's still something to anchor to.
+const fallbackLabel = computed(() => {
+  const type = props.message.type || 'system'
+  return subtype.value ? `${type}: ${subtype.value}` : type
+})
+
 // Generic raw-JSON detail for subtypes without a dedicated detail view.
 // session_failed messages with no error_details fall through here too,
 // so the chevron/expand affordance never opens onto an empty panel.
@@ -259,18 +268,24 @@ function toggleExpand() {
 .msg-system {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
 }
 
+/* Issue #1746 (stage: layout) follow-up: reskinned as a muted divider row, bordered
+   top and bottom (not a single line cutting left-to-right through the text) — matching
+   the "what's happening at this stage" phase-divider look from the reference mockup. */
 .msg-pill {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 14px;
-  background: var(--bs-secondary-bg);
-  border: 1px solid var(--bs-border-color);
-  border-radius: 20px;
-  max-width: 80%;
+  gap: 8px;
+  padding: 6px 16px;
+  margin: 0 -16px;
+  border-top: 1px solid var(--bs-border-color);
+  border-bottom: 1px solid var(--bs-border-color);
+}
+
+.pill-time {
+  margin-left: auto;
 }
 
 .pill-expandable {
@@ -278,62 +293,16 @@ function toggleExpand() {
   user-select: none;
 }
 
-.pill-expandable:hover {
-  filter: brightness(0.96);
-}
-
-.pill-compaction {
-  background: #fffbea;
-  border-color: #fde68a;
-}
-
-.pill-stderr {
-  background: #fef2f2;
-  border-color: #fecaca;
-}
-
-.pill-hook {
-  background: #eff6ff;
-  border-color: #bfdbfe;
+.pill-expandable:hover .pill-text {
+  color: var(--bs-body-color);
 }
 
 .pill-hook .pill-text {
   color: #1e40af;
 }
 
-.pill-hook-error {
-  background: #fef2f2;
-  border-color: #fecaca;
-}
-
 .pill-hook-error .pill-text {
   color: #991b1b;
-}
-
-/* Task message pill styles */
-.pill-task-started {
-  background: #f0fdf4;
-  border-color: #bbf7d0;
-}
-
-.pill-task-progress {
-  background: #eff6ff;
-  border-color: #bfdbfe;
-}
-
-.pill-task-completed {
-  background: #f0fdf4;
-  border-color: #bbf7d0;
-}
-
-.pill-task-failed {
-  background: #fef2f2;
-  border-color: #fecaca;
-}
-
-.pill-task-stopped {
-  background: #fffbeb;
-  border-color: #fde68a;
 }
 
 .pill-stderr .pill-text {
@@ -370,20 +339,15 @@ function toggleExpand() {
 
 .pill-text {
   font-size: 12px;
-  color: #64748b;
+  color: var(--bs-secondary-color);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.pill-sep {
-  font-size: 12px;
-  color: #94a3b8;
-}
-
 .pill-time {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   white-space: nowrap;
 }
 
@@ -410,11 +374,6 @@ function toggleExpand() {
   color: #713f12;
 }
 
-.pill-retry {
-  background: #fefce8;
-  border-color: #fde047;
-}
-
 .pill-retry .pill-text {
   color: #713f12;
 }
@@ -431,9 +390,10 @@ function toggleExpand() {
 
 .pill-chevron {
   font-size: 8px;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   transition: transform 0.15s ease;
   display: inline-block;
+  flex-shrink: 0;
 }
 
 .chevron-open {
@@ -442,7 +402,6 @@ function toggleExpand() {
 
 .result-errors {
   margin-top: 4px;
-  max-width: 80%;
   width: 100%;
   display: flex;
   flex-direction: column;
@@ -463,7 +422,6 @@ function toggleExpand() {
 
 .hook-detail {
   margin-top: 4px;
-  max-width: 80%;
   width: 100%;
 }
 
@@ -485,7 +443,6 @@ function toggleExpand() {
 
 .raw-detail {
   margin-top: 4px;
-  max-width: 80%;
   width: 100%;
 }
 
@@ -503,11 +460,6 @@ function toggleExpand() {
   margin: 0;
   max-height: 400px;
   overflow-y: auto;
-}
-
-.pill-session-failed {
-  background: #fef2f2;
-  border-color: #fecaca;
 }
 
 .pill-session-failed .pill-text {
@@ -537,7 +489,6 @@ function toggleExpand() {
 
 .session-failed-detail {
   margin-top: 4px;
-  max-width: 80%;
   width: 100%;
 }
 
