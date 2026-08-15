@@ -1,5 +1,5 @@
 <template>
-  <div v-if="hasContentToShow" class="msg-wrapper msg-system">
+  <div class="msg-wrapper msg-system">
     <div
       class="msg-pill"
       :class="pillClass"
@@ -43,7 +43,7 @@
         <span v-if="isStderr" class="pill-icon">&#x26A0;&#xFE0F;</span>
         <span v-else-if="isCompactionStatus" class="pill-icon">&#x1F5DC;&#xFE0F;</span>
         <span v-else-if="isHook" class="pill-icon">&#x2699;&#xFE0F;</span>
-        <span class="pill-text">{{ displayContent }}</span>
+        <span class="pill-text">{{ displayContent || fallbackLabel }}</span>
       </template>
 
       <!-- Cross-session badge -->
@@ -227,16 +227,13 @@ const resultErrors = computed(() => {
 })
 
 // Issue #1746 (stage: layout) follow-up: plain "status" pings and similar generic system
-// messages routinely carry no content at all — displayContent ends up empty and none of the
-// subtype-specific icon branches apply. As a small rounded pill this was easy to overlook;
-// as a full-bleed divider row it reads as a broken/empty line, so suppress the row entirely
-// when there's nothing to show (mirrors AssistantMessage.vue's hasAnythingToShow guard).
-const hasContentToShow = computed(() => {
-  if (subtype.value === 'task_started' || subtype.value === 'task_progress' || subtype.value === 'task_notification') return true
-  if (isApiRetry.value) return true
-  if (isSessionFailed.value) return true
-  if (resultErrors.value.length > 0) return true
-  return isStderr.value || isCompactionStatus.value || isHook.value || !!(displayContent.value && displayContent.value.trim())
+// messages sometimes carry no content at all (known pre-existing gap: loadMessages()'s
+// history replay doesn't always populate these the way the realtime stream does — tracked
+// separately). Rather than hiding the row or leaving it blank, fall back to "type: subtype"
+// so there's still something to anchor to.
+const fallbackLabel = computed(() => {
+  const type = props.message.type || 'system'
+  return subtype.value ? `${type}: ${subtype.value}` : type
 })
 
 // Generic raw-JSON detail for subtypes without a dedicated detail view.
@@ -274,23 +271,21 @@ function toggleExpand() {
   align-items: stretch;
 }
 
-/* Issue #1746 (stage: layout) follow-up: reskinned as a centered, muted divider —
-   flanking rules with icon/text/badge/time/chevron centered between them — matching
-   the "what's happening at this stage" phase-divider look from the reference mockup,
-   in the same spirit as MessageList.vue's .date-separator. */
+/* Issue #1746 (stage: layout) follow-up: reskinned as a muted divider row, bordered
+   top and bottom (not a single line cutting left-to-right through the text) — matching
+   the "what's happening at this stage" phase-divider look from the reference mockup. */
 .msg-pill {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 0;
+  padding: 6px 16px;
+  margin: 0 -16px;
+  border-top: 1px solid var(--bs-border-color);
+  border-bottom: 1px solid var(--bs-border-color);
 }
 
-.msg-pill::before,
-.msg-pill::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--bs-border-color);
+.pill-time {
+  margin-left: auto;
 }
 
 .pill-expandable {
