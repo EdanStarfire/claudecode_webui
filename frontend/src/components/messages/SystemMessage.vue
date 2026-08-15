@@ -51,7 +51,7 @@
         {{ truncatedSessionId }}
       </span>
 
-      <span class="pill-sep">&middot;</span>
+      <span class="pill-rule"></span>
       <span class="pill-time">{{ formattedTimestamp }}</span>
       <span class="pill-chevron" :class="{ 'chevron-open': expanded }">&#x25B6;</span>
     </div>
@@ -259,18 +259,21 @@ function toggleExpand() {
 .msg-system {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
 }
 
+/* Issue #1746 (stage: layout): reskinned from a centered rounded pill to a full-bleed
+   divider row — icon/text/badge, a trailing rule, then timestamp — matching the
+   turn-segment header treatment used for merged assistant turns. */
 .msg-pill {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 14px;
-  background: var(--bs-secondary-bg);
-  border: 1px solid var(--bs-border-color);
-  border-radius: 20px;
-  max-width: 80%;
+  gap: 8px;
+  padding: 5px 16px;
+  margin: 0 -16px;
+  border-left: 3px solid var(--bs-border-color);
+  background: transparent;
+  max-width: none;
 }
 
 .pill-expandable {
@@ -279,22 +282,22 @@ function toggleExpand() {
 }
 
 .pill-expandable:hover {
-  filter: brightness(0.96);
+  background: var(--bs-tertiary-bg);
 }
 
 .pill-compaction {
-  background: #fffbea;
-  border-color: #fde68a;
+  background: rgba(202, 138, 4, 0.08);
+  border-left-color: #ca8a04;
 }
 
 .pill-stderr {
-  background: #fef2f2;
-  border-color: #fecaca;
+  background: rgba(220, 38, 38, 0.08);
+  border-left-color: #dc2626;
 }
 
 .pill-hook {
-  background: #eff6ff;
-  border-color: #bfdbfe;
+  background: rgba(37, 99, 235, 0.07);
+  border-left-color: #2563eb;
 }
 
 .pill-hook .pill-text {
@@ -302,8 +305,8 @@ function toggleExpand() {
 }
 
 .pill-hook-error {
-  background: #fef2f2;
-  border-color: #fecaca;
+  background: rgba(220, 38, 38, 0.08);
+  border-left-color: #dc2626;
 }
 
 .pill-hook-error .pill-text {
@@ -312,28 +315,28 @@ function toggleExpand() {
 
 /* Task message pill styles */
 .pill-task-started {
-  background: #f0fdf4;
-  border-color: #bbf7d0;
+  background: rgba(22, 163, 74, 0.08);
+  border-left-color: #16a34a;
 }
 
 .pill-task-progress {
-  background: #eff6ff;
-  border-color: #bfdbfe;
+  background: rgba(37, 99, 235, 0.07);
+  border-left-color: #2563eb;
 }
 
 .pill-task-completed {
-  background: #f0fdf4;
-  border-color: #bbf7d0;
+  background: rgba(22, 163, 74, 0.08);
+  border-left-color: #16a34a;
 }
 
 .pill-task-failed {
-  background: #fef2f2;
-  border-color: #fecaca;
+  background: rgba(220, 38, 38, 0.08);
+  border-left-color: #dc2626;
 }
 
 .pill-task-stopped {
-  background: #fffbeb;
-  border-color: #fde68a;
+  background: rgba(202, 138, 4, 0.08);
+  border-left-color: #ca8a04;
 }
 
 .pill-stderr .pill-text {
@@ -370,20 +373,22 @@ function toggleExpand() {
 
 .pill-text {
   font-size: 12px;
-  color: #64748b;
+  color: var(--bs-secondary-color);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.pill-sep {
-  font-size: 12px;
-  color: #94a3b8;
+.pill-rule {
+  flex: 1;
+  height: 1px;
+  min-width: 16px;
+  background: var(--bs-border-color);
 }
 
 .pill-time {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   white-space: nowrap;
 }
 
@@ -411,8 +416,8 @@ function toggleExpand() {
 }
 
 .pill-retry {
-  background: #fefce8;
-  border-color: #fde047;
+  background: rgba(202, 138, 4, 0.08);
+  border-left-color: #ca8a04;
 }
 
 .pill-retry .pill-text {
@@ -431,9 +436,10 @@ function toggleExpand() {
 
 .pill-chevron {
   font-size: 8px;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   transition: transform 0.15s ease;
   display: inline-block;
+  flex-shrink: 0;
 }
 
 .chevron-open {
@@ -442,7 +448,6 @@ function toggleExpand() {
 
 .result-errors {
   margin-top: 4px;
-  max-width: 80%;
   width: 100%;
   display: flex;
   flex-direction: column;
@@ -463,7 +468,6 @@ function toggleExpand() {
 
 .hook-detail {
   margin-top: 4px;
-  max-width: 80%;
   width: 100%;
 }
 
@@ -485,7 +489,6 @@ function toggleExpand() {
 
 .raw-detail {
   margin-top: 4px;
-  max-width: 80%;
   width: 100%;
 }
 
@@ -506,8 +509,8 @@ function toggleExpand() {
 }
 
 .pill-session-failed {
-  background: #fef2f2;
-  border-color: #fecaca;
+  background: rgba(220, 38, 38, 0.08);
+  border-left-color: #dc2626;
 }
 
 .pill-session-failed .pill-text {
@@ -537,7 +540,6 @@ function toggleExpand() {
 
 .session-failed-detail {
   margin-top: 4px;
-  max-width: 80%;
   width: 100%;
 }
 

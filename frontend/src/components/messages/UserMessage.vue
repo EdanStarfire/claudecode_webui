@@ -1,17 +1,18 @@
 <template>
   <div class="msg-wrapper msg-user" data-testid="user-message">
-    <div class="msg-meta">
-      <span class="msg-role" :style="isComm ? { color: commColor.accent } : {}">
-        <a v-if="commSenderSessionId" :href="`#/session/${commSenderSessionId}`" class="msg-role-link">{{ commSenderName }}</a>
-        <template v-else>{{ isComm ? commSenderName : 'user' }}</template>
-      </span>
-      <span class="msg-time">{{ formattedTimestamp }}</span>
-    </div>
     <div
       class="msg-bubble"
       :class="isComm ? 'msg-bubble-comm' : 'msg-bubble-user'"
       :style="isComm ? { background: commColor.bg, borderColor: commColor.border } : {}"
     >
+      <div class="msg-meta">
+        <span class="msg-role" :style="isComm ? { color: commColor.accent } : {}">
+          <a v-if="commSenderSessionId" :href="`#/session/${commSenderSessionId}`" class="msg-role-link">{{ commSenderName }}</a>
+          <template v-else>{{ isComm ? commSenderName : 'user' }}</template>
+        </span>
+        <span class="msg-time">{{ formattedTimestamp }}</span>
+      </div>
+
       <!-- Content (attachment section stripped from rendered markdown) -->
       <div class="msg-content-row">
         <MarkdownView class="msg-text" ref="contentRef" :content="cleanContent" :self-agent-id="commSenderId" />
@@ -265,8 +266,7 @@ function truncate(text, maxLength) {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  margin-bottom: 2px;
-  padding: 0 4px;
+  margin-bottom: 4px;
 }
 
 .msg-role {

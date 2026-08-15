@@ -2,11 +2,12 @@
   <!-- Issue #195: Hide assistant bubble entirely when nothing to render
        (e.g. content-less messages whose only tools were Task calls moved to SubagentTimeline) -->
   <div v-if="hasAnythingToShow" class="msg-wrapper msg-assistant" data-testid="assistant-message">
-    <div class="msg-meta">
-      <span class="msg-role">assistant</span>
-      <span class="msg-time">{{ formattedTimestamp }}</span>
-    </div>
     <div ref="bubbleRef" class="msg-bubble msg-bubble-assistant" :class="{ 'has-permission-prompt': hasActivePermission, 'tts-playing': isTTSPlaying }">
+      <div class="msg-meta">
+        <span class="msg-role">assistant</span>
+        <span class="msg-time">{{ formattedTimestamp }}</span>
+      </div>
+
       <!-- Issue #1746 (stage: layout): consecutive assistant turns merge into one row —
            each entry below is either the primary message or a merged continuation. -->
       <div
@@ -318,8 +319,7 @@ const hasAnythingToShow = computed(() => {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  margin-bottom: 2px;
-  padding: 0 4px;
+  margin-bottom: 4px;
 }
 
 .msg-role {
