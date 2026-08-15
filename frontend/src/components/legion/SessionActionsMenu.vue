@@ -2,12 +2,16 @@
   <span class="position-relative d-inline-block" ref="menuRef">
     <button
       type="button"
-      class="btn btn-sm btn-outline-secondary session-actions-toggle"
+      class="btn btn-sm btn-link session-actions-toggle"
       title="Session actions"
       aria-label="Session actions"
       @click.stop="toggleOpen"
     >
-      <i class="bi bi-three-dots-vertical"></i>
+      <svg class="session-actions-icon" width="14" height="14" viewBox="0 0 4 16" aria-hidden="true">
+        <circle cx="2" cy="2" r="2" fill="currentColor" />
+        <circle cx="2" cy="8" r="2" fill="currentColor" />
+        <circle cx="2" cy="14" r="2" fill="currentColor" />
+      </svg>
     </button>
 
     <div
@@ -188,6 +192,20 @@ onUnmounted(() => {
 <style scoped>
 .session-actions-toggle {
   line-height: 1;
+  color: var(--bs-secondary-color);
+  border-radius: 4px;
+  padding: 0.25rem;
+}
+
+.session-actions-toggle:hover,
+.session-actions-toggle:focus-visible {
+  color: var(--bs-body-color);
+  background-color: var(--bs-secondary-bg);
+}
+
+.session-actions-icon {
+  flex-shrink: 0;
+  color: inherit;
 }
 
 .session-actions-popover {
