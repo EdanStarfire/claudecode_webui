@@ -414,4 +414,12 @@ def build_router(webui) -> APIRouter:
             result["event_cursor"] = queue.current_cursor
         return result
 
+    @router.get("/api/sessions/{session_id}/background_agents")
+    @handle_exceptions("get background agents")
+    async def get_background_agents(session_id: str):
+        """Snapshot of background-agent (Task) leg history, for reload/reconnect (issue #1746)."""
+        if not await webui.service.get_session_exists(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        return await webui.coordinator.get_background_agents(session_id)
+
     return router

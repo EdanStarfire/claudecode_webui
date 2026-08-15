@@ -3,6 +3,7 @@
 import time
 
 import pytest
+from claude_agent_sdk import TaskUpdatedMessage
 
 from ..message_parser import (
     AssistantMessageHandler,
@@ -12,6 +13,7 @@ from ..message_parser import (
     ParsedMessage,
     ResultMessageHandler,
     SystemMessageHandler,
+    TaskUpdatedHandler,
     ToolUseHandler,
     UnknownMessageHandler,
     UserMessageHandler,
@@ -292,6 +294,95 @@ class TestMessageHandlers:
         assert parsed.type == MessageType.UNKNOWN
         assert parsed.metadata["original_type"] == "custom_type"
         assert parsed.metadata["unknown_format"] is True
+
+
+class TestIssue1746TaskUpdatedHandler:
+    """Live-path coverage for TaskUpdatedHandler (issue #1746).
+
+    Before this handler existed, TaskUpdatedMessage fell through to
+    SystemMessageHandler in the live message-parsing path — its subtype
+    defaulted to "init" and task_id/status/patch were silently dropped from
+    the live event stream, even though the storage-replay path (issue #1657)
+    already handled it correctly.
+    """
+
+    def test_can_handle_sdk_message(self):
+        handler = TaskUpdatedHandler()
+        sdk_msg = TaskUpdatedMessage(
+            subtype="task_updated", data={}, task_id="t1",
+            patch={"status": "killed"}, status="killed",
+            session_id="sub-sess", uuid="u1",
+        )
+        message_data = {"type": "system", "sdk_message": sdk_msg, "session_id": "sess-1"}
+        assert handler.can_handle(message_data) is True
+
+    def test_does_not_handle_other_task_messages(self):
+        handler = TaskUpdatedHandler()
+        message_data = {"type": "system", "metadata": {"subtype": "task_started"}}
+        assert handler.can_handle(message_data) is False
+
+    def test_extracts_fields_from_sdk_message(self):
+        handler = TaskUpdatedHandler()
+        sdk_msg = TaskUpdatedMessage(
+            subtype="task_updated", data={}, task_id="task-abc",
+            patch={"status": "completed", "end_time": 123}, status="completed",
+            session_id="sub-sess-1", uuid="uuid-1",
+        )
+        message_data = {"type": "system", "sdk_message": sdk_msg, "session_id": "sess-1",
+                         "timestamp": time.time()}
+
+        assert handler.can_handle(message_data) is True
+        parsed = handler.parse(message_data)
+
+        assert parsed.type == MessageType.SYSTEM
+        assert parsed.metadata["subtype"] == "task_updated"
+        assert parsed.metadata["task_id"] == "task-abc"
+        assert parsed.metadata["status"] == "completed"
+        assert parsed.metadata["patch"] == {"status": "completed", "end_time": 123}
+        assert parsed.metadata["uuid"] == "uuid-1"
+        assert parsed.metadata["task_session_id"] == "sub-sess-1"
+
+    def test_extracts_fields_from_stored_dict_fallback(self):
+        """The reload/websocket-replay dict shape (no live sdk_message object)."""
+        handler = TaskUpdatedHandler()
+        message_data = {
+            "type": "system",
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+            "metadata": {
+                "subtype": "task_updated",
+                "task_id": "task-xyz",
+                "status": "failed",
+                "patch": {"status": "failed"},
+                "uuid": "uuid-2",
+                "task_session_id": "sub-sess-2",
+            },
+        }
+        assert handler.can_handle(message_data) is True
+        parsed = handler.parse(message_data)
+        assert parsed.metadata["task_id"] == "task-xyz"
+        assert parsed.metadata["status"] == "failed"
+        assert parsed.metadata["patch"] == {"status": "failed"}
+
+    def test_full_parser_routes_to_task_updated_handler_not_system_default(self):
+        """Regression guard: without this handler, MessageParser would route a
+        TaskUpdatedMessage to SystemMessageHandler and lose task_id/status,
+        defaulting subtype to "init"."""
+        parser = MessageParser()
+        sdk_msg = TaskUpdatedMessage(
+            subtype="task_updated", data={}, task_id="task-live",
+            patch={"status": "killed"}, status="killed",
+            session_id="sub-sess", uuid="u1",
+        )
+        message_data = {"type": "system", "sdk_message": sdk_msg, "session_id": "sess-1",
+                         "timestamp": time.time()}
+
+        parsed = parser.parse_message(message_data)
+
+        assert parsed.metadata["subtype"] == "task_updated"
+        assert parsed.metadata["subtype"] != "init"
+        assert parsed.metadata["task_id"] == "task-live"
+        assert parsed.metadata["status"] == "killed"
 
 
 class TestMessageParser:
