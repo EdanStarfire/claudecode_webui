@@ -209,6 +209,87 @@ async def test_cleanup_pending_for_session_clears_session_set():
 
 
 # ---------------------------------------------------------------------------
+# Test 3b: cleanup_pending_for_session is scoped to the terminating session
+# (issue #1754 — was iterating the global pending_permissions dict and
+# auto-denying every active session's in-flight requests)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cleanup_pending_for_session_does_not_touch_other_sessions():
+    """Terminating session A must deny only A's own pending requests, leaving
+    session B's untouched in both pending_permissions and pending_by_session."""
+    coord = _make_coordinator()
+    from src.permission_service import PermissionService
+
+    svc = PermissionService(coordinator=coord, session_queues={})
+
+    future_a = asyncio.get_running_loop().create_future()
+    future_b = asyncio.get_running_loop().create_future()
+    svc.pending_permissions["req-a"] = future_a
+    svc.pending_permissions["req-b"] = future_b
+    svc.pending_by_session["A"] = {"req-a"}
+    svc.pending_by_session["B"] = {"req-b"}
+
+    svc.cleanup_pending_for_session("A")
+
+    assert future_a.done()
+    assert future_a.result()["behavior"] == "deny"
+    assert not future_b.done()
+    assert "A" not in svc.pending_by_session
+    assert "B" in svc.pending_by_session
+    assert "req-b" in svc.pending_permissions
+
+
+@pytest.mark.asyncio
+async def test_cleanup_pending_for_session_multiple_requests_within_session():
+    """All of the terminating session's own requests are denied; an unrelated
+    session's request is untouched."""
+    coord = _make_coordinator()
+    from src.permission_service import PermissionService
+
+    svc = PermissionService(coordinator=coord, session_queues={})
+
+    future_a1 = asyncio.get_running_loop().create_future()
+    future_a2 = asyncio.get_running_loop().create_future()
+    future_c = asyncio.get_running_loop().create_future()
+    svc.pending_permissions["req-a1"] = future_a1
+    svc.pending_permissions["req-a2"] = future_a2
+    svc.pending_permissions["req-c"] = future_c
+    svc.pending_by_session["A"] = {"req-a1", "req-a2"}
+    svc.pending_by_session["C"] = {"req-c"}
+
+    svc.cleanup_pending_for_session("A")
+
+    assert future_a1.done() and future_a1.result()["behavior"] == "deny"
+    assert future_a2.done() and future_a2.result()["behavior"] == "deny"
+    assert not future_c.done()
+    assert "A" not in svc.pending_by_session
+    assert "C" in svc.pending_by_session
+    assert svc.pending_by_session["C"] == {"req-c"}
+
+
+@pytest.mark.asyncio
+async def test_cleanup_pending_for_session_no_pending_is_a_noop():
+    """Terminating a session with zero pending permissions must not raise and
+    must not affect another session's pending request."""
+    coord = _make_coordinator()
+    from src.permission_service import PermissionService
+
+    svc = PermissionService(coordinator=coord, session_queues={})
+
+    future_b = asyncio.get_running_loop().create_future()
+    svc.pending_permissions["req-b"] = future_b
+    svc.pending_by_session["B"] = {"req-b"}
+
+    svc.cleanup_pending_for_session("empty-session")
+
+    assert not future_b.done()
+    assert "B" in svc.pending_by_session
+    assert "empty-session" not in svc.pending_by_session
+
+
+# ---------------------------------------------------------------------------
 # Test 4: two different sessions never interact
 # ---------------------------------------------------------------------------
 

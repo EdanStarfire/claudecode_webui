@@ -596,17 +596,13 @@ class PermissionService:
     def cleanup_pending_for_session(self, session_id: str) -> None:
         """Clean up pending permissions for a specific session by auto-denying them"""
         try:
-            # Find all pending permissions for this session and auto-deny them
-            permissions_to_cleanup = []
-            for request_id, future in self.pending_permissions.items():
-                if not future.done():
-                    # We need to identify which permissions belong to this session
-                    # Since the permission callback stores the session_id in its closure,
-                    # we'll auto-deny all pending permissions when a session terminates
-                    # This is safe because if a session is terminated, no tools should execute
-                    permissions_to_cleanup.append(request_id)
+            # Issue #1754: Scope to this session's own open requests via
+            # pending_by_session (added in #1746) instead of walking every
+            # session's pending_permissions — otherwise terminating one session
+            # auto-denies every other active session's in-flight permission prompts.
+            request_ids = list(self.pending_by_session.get(session_id, ()))
 
-            for request_id in permissions_to_cleanup:
+            for request_id in request_ids:
                 future = self.pending_permissions.pop(request_id, None)
                 if future and not future.done():
                     # Auto-deny the permission
@@ -617,12 +613,9 @@ class PermissionService:
                     future.set_result(response)
                     debug_logger.info(f"Auto-denied pending permission {request_id} due to session {session_id} termination")
 
-            if permissions_to_cleanup:
-                debug_logger.info(f"Cleaned up {len(permissions_to_cleanup)} pending permissions for session {session_id}")
+            if request_ids:
+                debug_logger.info(f"Cleaned up {len(request_ids)} pending permissions for session {session_id}")
 
-            # Issue #1746: This session's own pending-request bookkeeping is
-            # fully retired here regardless of the (pre-existing, unchanged)
-            # cross-session sweep above — every request it held is now denied.
             self.pending_by_session.pop(session_id, None)
 
         except Exception:
