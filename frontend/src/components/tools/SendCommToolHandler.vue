@@ -19,10 +19,8 @@
     <div
       class="outbound-comm-bubble"
       :style="{
-        background: recipientColor.bg,
-        borderColor: recipientColor.border,
-        borderLeftWidth: '3px',
-        borderLeftStyle: 'solid',
+        background: gradientBg,
+        borderLeftColor: senderColor.accent,
       }"
     >
       <MarkdownView class="outbound-comm-content" ref="contentRef" :content="contentForRender" :self-agent-id="senderSessionId" />
@@ -50,7 +48,7 @@
 import { computed, ref, toRef } from 'vue'
 import { useResourceImages } from '@/composables/useResourceImages'
 import { useToolResult } from '@/composables/useToolResult'
-import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
+import { getAgentColor, getAssistantRowColor, slugifyAgentName } from '@/composables/useAgentColor'
 import { resolveAgentByIdentifier } from '@/utils/agentMentions'
 import { useSessionStore } from '@/stores/session'
 import { useResourceStore } from '@/stores/resource'
@@ -132,6 +130,10 @@ function openAttachmentPreview(att) {
 // Agent color from recipient name
 const recipientColor = computed(() => getAgentColor(slugifyAgentName(recipientName.value)))
 
+// Issue #1755: the sending side is always "this session, as assistant" in its own transcript
+const senderColor = computed(() => getAssistantRowColor())
+const gradientBg = computed(() => `linear-gradient(to right, ${senderColor.value.bg} 0%, ${recipientColor.value.bg} 30%, ${recipientColor.value.bg} 100%)`)
+
 const contentForRender = computed(() => content.value || summaryText.value)
 
 // Inline resource image click-to-open
@@ -170,6 +172,10 @@ defineExpose({ summary, params, result })
 
 <style scoped>
 .outbound-comm-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  align-self: stretch;
   padding: 4px 0;
 }
 
@@ -215,12 +221,10 @@ defineExpose({ summary, params, result })
 }
 
 .outbound-comm-bubble {
-  border: 1px solid;
-  border-radius: 12px;
-  border-top-left-radius: 4px;
-  padding: 10px 14px;
-  max-width: 85%;
-  min-width: 60px;
+  align-self: stretch;
+  margin: 0 -16px;
+  padding: 9px 16px;
+  border-left: 4px solid;
 }
 
 .outbound-comm-content {
@@ -294,5 +298,13 @@ defineExpose({ summary, params, result })
   margin-top: 0.75rem;
   padding-top: 0.5rem;
   border-top: 1px solid var(--bs-border-color-translucent);
+}
+
+/* Mobile: tighter row padding (16px -> 12px per spec §4.5), mirrors UserMessage.vue */
+@media (max-width: 768px) {
+  .outbound-comm-bubble {
+    padding: 9px 12px;
+    margin: 0 -12px;
+  }
 }
 </style>

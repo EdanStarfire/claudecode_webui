@@ -3,7 +3,7 @@
     <div
       class="msg-bubble"
       :class="isComm ? 'msg-bubble-comm' : 'msg-bubble-user'"
-      :style="isComm ? { background: commColor.bg, borderColor: commColor.border } : {}"
+      :style="isComm ? { background: gradientBg, borderLeftColor: commColor.accent } : {}"
     >
       <div class="msg-meta">
         <span class="msg-role" :style="isComm ? { color: commColor.accent } : {}">
@@ -77,7 +77,7 @@
 <script setup>
 import { computed, ref, onUnmounted, inject } from 'vue'
 import { formatTimestamp } from '@/utils/time'
-import { getAgentColor } from '@/composables/useAgentColor'
+import { getAgentColor, getAssistantRowColor } from '@/composables/useAgentColor'
 import { useResourceImages } from '@/composables/useResourceImages'
 import { useSessionStore } from '@/stores/session'
 import { useResourceStore } from '@/stores/resource'
@@ -101,6 +101,12 @@ const formattedTimestamp = computed(() => {
 const isComm = computed(() => !!props.message.metadata?.comm)
 const commColor = computed(() => isComm.value ? getAgentColor(props.message.metadata.comm.from_name) : null)
 const commSenderName = computed(() => props.message.metadata?.comm?.from_display_name || 'agent')
+
+// Issue #1755: the receiving side is always "this session, as assistant" in its own transcript
+const recipientColor = computed(() => getAssistantRowColor())
+const gradientBg = computed(() => isComm.value
+  ? `linear-gradient(to right, ${commColor.value.bg} 0%, ${recipientColor.value.bg} 30%, ${recipientColor.value.bg} 100%)`
+  : null)
 
 const sessionStore = useSessionStore()
 
