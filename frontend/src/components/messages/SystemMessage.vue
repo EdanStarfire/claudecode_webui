@@ -1,5 +1,5 @@
 <template>
-  <div class="msg-wrapper msg-system">
+  <div v-if="hasContentToShow" class="msg-wrapper msg-system">
     <div
       class="msg-pill"
       :class="pillClass"
@@ -51,7 +51,6 @@
         {{ truncatedSessionId }}
       </span>
 
-      <span class="pill-rule"></span>
       <span class="pill-time">{{ formattedTimestamp }}</span>
       <span class="pill-chevron" :class="{ 'chevron-open': expanded }">&#x25B6;</span>
     </div>
@@ -227,6 +226,19 @@ const resultErrors = computed(() => {
   return props.message.metadata?.errors || []
 })
 
+// Issue #1746 (stage: layout) follow-up: plain "status" pings and similar generic system
+// messages routinely carry no content at all — displayContent ends up empty and none of the
+// subtype-specific icon branches apply. As a small rounded pill this was easy to overlook;
+// as a full-bleed divider row it reads as a broken/empty line, so suppress the row entirely
+// when there's nothing to show (mirrors AssistantMessage.vue's hasAnythingToShow guard).
+const hasContentToShow = computed(() => {
+  if (subtype.value === 'task_started' || subtype.value === 'task_progress' || subtype.value === 'task_notification') return true
+  if (isApiRetry.value) return true
+  if (isSessionFailed.value) return true
+  if (resultErrors.value.length > 0) return true
+  return isStderr.value || isCompactionStatus.value || isHook.value || !!(displayContent.value && displayContent.value.trim())
+})
+
 // Generic raw-JSON detail for subtypes without a dedicated detail view.
 // session_failed messages with no error_details fall through here too,
 // so the chevron/expand affordance never opens onto an empty panel.
@@ -262,18 +274,23 @@ function toggleExpand() {
   align-items: stretch;
 }
 
-/* Issue #1746 (stage: layout): reskinned from a centered rounded pill to a full-bleed
-   divider row — icon/text/badge, a trailing rule, then timestamp — matching the
-   turn-segment header treatment used for merged assistant turns. */
+/* Issue #1746 (stage: layout) follow-up: reskinned as a centered, muted divider —
+   flanking rules with icon/text/badge/time/chevron centered between them — matching
+   the "what's happening at this stage" phase-divider look from the reference mockup,
+   in the same spirit as MessageList.vue's .date-separator. */
 .msg-pill {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 16px;
-  margin: 0 -16px;
-  border-left: 3px solid var(--bs-border-color);
-  background: transparent;
-  max-width: none;
+  padding: 6px 0;
+}
+
+.msg-pill::before,
+.msg-pill::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--bs-border-color);
 }
 
 .pill-expandable {
@@ -281,62 +298,16 @@ function toggleExpand() {
   user-select: none;
 }
 
-.pill-expandable:hover {
-  background: var(--bs-tertiary-bg);
-}
-
-.pill-compaction {
-  background: rgba(202, 138, 4, 0.08);
-  border-left-color: #ca8a04;
-}
-
-.pill-stderr {
-  background: rgba(220, 38, 38, 0.08);
-  border-left-color: #dc2626;
-}
-
-.pill-hook {
-  background: rgba(37, 99, 235, 0.07);
-  border-left-color: #2563eb;
+.pill-expandable:hover .pill-text {
+  color: var(--bs-body-color);
 }
 
 .pill-hook .pill-text {
   color: #1e40af;
 }
 
-.pill-hook-error {
-  background: rgba(220, 38, 38, 0.08);
-  border-left-color: #dc2626;
-}
-
 .pill-hook-error .pill-text {
   color: #991b1b;
-}
-
-/* Task message pill styles */
-.pill-task-started {
-  background: rgba(22, 163, 74, 0.08);
-  border-left-color: #16a34a;
-}
-
-.pill-task-progress {
-  background: rgba(37, 99, 235, 0.07);
-  border-left-color: #2563eb;
-}
-
-.pill-task-completed {
-  background: rgba(22, 163, 74, 0.08);
-  border-left-color: #16a34a;
-}
-
-.pill-task-failed {
-  background: rgba(220, 38, 38, 0.08);
-  border-left-color: #dc2626;
-}
-
-.pill-task-stopped {
-  background: rgba(202, 138, 4, 0.08);
-  border-left-color: #ca8a04;
 }
 
 .pill-stderr .pill-text {
@@ -379,13 +350,6 @@ function toggleExpand() {
   text-overflow: ellipsis;
 }
 
-.pill-rule {
-  flex: 1;
-  height: 1px;
-  min-width: 16px;
-  background: var(--bs-border-color);
-}
-
 .pill-time {
   font-size: 11px;
   color: var(--bs-secondary-color);
@@ -413,11 +377,6 @@ function toggleExpand() {
 .pill-badge-retry {
   background: #fef9c3;
   color: #713f12;
-}
-
-.pill-retry {
-  background: rgba(202, 138, 4, 0.08);
-  border-left-color: #ca8a04;
 }
 
 .pill-retry .pill-text {
@@ -506,11 +465,6 @@ function toggleExpand() {
   margin: 0;
   max-height: 400px;
   overflow-y: auto;
-}
-
-.pill-session-failed {
-  background: rgba(220, 38, 38, 0.08);
-  border-left-color: #dc2626;
 }
 
 .pill-session-failed .pill-text {
