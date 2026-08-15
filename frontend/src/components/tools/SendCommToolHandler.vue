@@ -19,10 +19,8 @@
     <div
       class="outbound-comm-bubble"
       :style="{
-        background: recipientColor.bg,
-        borderColor: recipientColor.border,
-        borderLeftWidth: '3px',
-        borderLeftStyle: 'solid',
+        background: gradientBg,
+        borderLeftColor: senderColor.accent,
       }"
     >
       <MarkdownView class="outbound-comm-content" ref="contentRef" :content="contentForRender" :self-agent-id="senderSessionId" />
@@ -132,6 +130,10 @@ function openAttachmentPreview(att) {
 // Agent color from recipient name
 const recipientColor = computed(() => getAgentColor(slugifyAgentName(recipientName.value)))
 
+// Outbound comms are always sent by the main session
+const senderColor = computed(() => getAgentColor('user'))
+const gradientBg = computed(() => `linear-gradient(to right, ${senderColor.value.bg}, ${recipientColor.value.bg})`)
+
 const contentForRender = computed(() => content.value || summaryText.value)
 
 // Inline resource image click-to-open
@@ -170,6 +172,10 @@ defineExpose({ summary, params, result })
 
 <style scoped>
 .outbound-comm-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  align-self: stretch;
   padding: 4px 0;
 }
 
@@ -215,12 +221,10 @@ defineExpose({ summary, params, result })
 }
 
 .outbound-comm-bubble {
-  border: 1px solid;
-  border-radius: 12px;
-  border-top-left-radius: 4px;
-  padding: 10px 14px;
-  max-width: 85%;
-  min-width: 60px;
+  align-self: stretch;
+  margin: 0 -16px;
+  padding: 9px 16px;
+  border-left: 4px solid;
 }
 
 .outbound-comm-content {
@@ -294,5 +298,13 @@ defineExpose({ summary, params, result })
   margin-top: 0.75rem;
   padding-top: 0.5rem;
   border-top: 1px solid var(--bs-border-color-translucent);
+}
+
+/* Mobile: tighter row padding (16px -> 12px per spec §4.5), mirrors UserMessage.vue */
+@media (max-width: 768px) {
+  .outbound-comm-bubble {
+    padding: 9px 12px;
+    margin: 0 -12px;
+  }
 }
 </style>
