@@ -48,7 +48,7 @@
 import { computed, ref, toRef } from 'vue'
 import { useResourceImages } from '@/composables/useResourceImages'
 import { useToolResult } from '@/composables/useToolResult'
-import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
+import { getAgentColor, getAssistantRowColor, slugifyAgentName } from '@/composables/useAgentColor'
 import { resolveAgentByIdentifier } from '@/utils/agentMentions'
 import { useSessionStore } from '@/stores/session'
 import { useResourceStore } from '@/stores/resource'
@@ -130,9 +130,9 @@ function openAttachmentPreview(att) {
 // Agent color from recipient name
 const recipientColor = computed(() => getAgentColor(slugifyAgentName(recipientName.value)))
 
-// Outbound comms are always sent by the main session
-const senderColor = computed(() => getAgentColor('user'))
-const gradientBg = computed(() => `linear-gradient(to right, ${senderColor.value.bg}, ${recipientColor.value.bg})`)
+// Issue #1755: the sending side is always "this session, as assistant" in its own transcript
+const senderColor = computed(() => getAssistantRowColor())
+const gradientBg = computed(() => `linear-gradient(to right, ${senderColor.value.bg} 0%, ${recipientColor.value.bg} 30%, ${recipientColor.value.bg} 100%)`)
 
 const contentForRender = computed(() => content.value || summaryText.value)
 

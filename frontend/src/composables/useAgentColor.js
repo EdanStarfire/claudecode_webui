@@ -28,6 +28,16 @@ export function slugifyAgentName(name) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'unknown'
 }
 
+// Issue #1755: the "self" side of a comm gradient — whichever session's transcript is
+// being viewed is always "assistant" in its own view, not the human/blue user token.
+export function getAssistantRowColor() {
+  return {
+    bg: 'var(--row-assistant-wash)',
+    border: 'var(--row-assistant-accent)',
+    accent: 'var(--row-assistant-accent)',
+  }
+}
+
 export function getAgentColor(nameSlug) {
   if (!nameSlug) return AGENT_COLORS[0]
   if (SPECIAL_COLORS[nameSlug]) return SPECIAL_COLORS[nameSlug]
