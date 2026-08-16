@@ -80,6 +80,7 @@ import SlashCommandToolHandler from '@/components/tools/SlashCommandToolHandler.
 import ExitPlanModeToolHandler from '@/components/tools/ExitPlanModeToolHandler.vue'
 import AskUserQuestionToolHandler from '@/components/tools/AskUserQuestionToolHandler.vue'
 import SendCommToolHandler from '@/components/tools/SendCommToolHandler.vue'
+import SendMessageToolHandler from '@/components/tools/SendMessageToolHandler.vue'
 
 const props = defineProps({
   toolCall: { type: Object, required: true }
@@ -159,6 +160,7 @@ const toolHandlers = {
   'ExitPlanMode': ExitPlanModeToolHandler,
   'AskUserQuestion': AskUserQuestionToolHandler,
   'mcp__legion__send_comm': SendCommToolHandler,
+  'SendMessage': SendMessageToolHandler,
 }
 
 const toolHandlerComponent = computed(() => {

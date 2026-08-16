@@ -2,6 +2,17 @@
   <div class="messages-area-wrapper flex-grow-1">
     <div class="messages-area overflow-auto" :class="{ 'theme-red': uiStore.isRedBackground }" ref="messagesArea" role="log" aria-live="polite" aria-label="Conversation messages" @scroll="onScroll" data-testid="message-list">
       <div class="messages-content" ref="messagesContent">
+        <!-- Issue #1746 (stage: subagents) follow-up: persistent gutter OUTSIDE the message
+             flow — a lane spans from a leg's launch position to wherever the conversation
+             currently is while it runs, surviving however many unrelated turns happen in
+             between. Must live here (a single instance covering the whole message list), not
+             nested inside any individual message. -->
+        <SubagentGlobalGutter
+          :sessionId="viewSessionId"
+          :contentEl="messagesContent"
+          :areaEl="messagesArea"
+        />
+
         <div v-if="displayableItems.length === 0" class="text-muted text-center py-5">
           No messages yet. Start a conversation!
         </div>
@@ -33,6 +44,22 @@
             aria-label="Date divider"
           >
             <span class="date-separator-label">{{ item.label }}</span>
+          </div>
+
+          <!-- Issue #1746 (stage: subagents) follow-up / spec §4.2: subagent signals that
+               interact with the main session (pushed a message to main, or a leg ended) render
+               inline in the MAIN timeline itself, not only inside the subagent's own nested
+               card — otherwise the main assistant's reaction to one looks unprompted. -->
+          <div v-else-if="item.type === 'subagent_signal'" class="subagent-signal-wrapper">
+            <SubagentAnchorRow
+              :id="item.domId"
+              :anchorType="item.anchorType"
+              :agentColor="item.agentColor"
+              :description="item.description"
+              :markdownBody="item.markdownBody"
+              :statusText="item.statusText"
+              :timestamp="item.timestamp"
+            />
           </div>
         </template>
 
@@ -75,9 +102,12 @@ import MessageItem from './MessageItem.vue'
 import CompactionEventGroup from './CompactionEventGroup.vue'
 import TruncationBanner from './TruncationBanner.vue'
 import DeferredToolBanner from './DeferredToolBanner.vue'
+import SubagentAnchorRow from './SubagentAnchorRow.vue'
+import SubagentGlobalGutter from './SubagentGlobalGutter.vue'
 import { useTTSReadAloud } from '@/composables/useTTSReadAloud'
 import { parseTimestamp, formatDateSeparatorLabel } from '@/utils/time'
 import { getEffectiveStatusForTool } from '@/composables/useToolStatus'
+import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
 
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
@@ -159,10 +189,15 @@ const displayableItems = computed(() => {
 
   // Second pass: Group tools to parent assistant messages
   // Third pass: Inject date separators between items on different calendar dates
-  // Fourth pass: Merge consecutive assistant turns into one visual block (Issue #1746)
-  // Fifth pass: Attach any permission_required tools not yet anchored to a bubble
+  // Fourth pass: Inject subagent-signal anchors (pushed-to-main, leg-terminal) at their own
+  //   chronological position — BEFORE merging, so a signal correctly breaks a would-be merge
+  //   between two assistant turns it causally sits between (Issue #1746 follow-up)
+  // Fifth pass: Merge consecutive assistant turns into one visual block (Issue #1746)
+  // Sixth pass: Attach any permission_required tools not yet anchored to a bubble
   return attachOrphanedPermissionTools(
-    mergeConsecutiveAssistantTurns(injectDateSeparators(groupToolsToParentMessages(items))),
+    mergeConsecutiveAssistantTurns(
+      injectSubagentSignals(injectDateSeparators(groupToolsToParentMessages(items)), viewSessionId.value)
+    ),
     viewSessionId.value,
   )
 })
@@ -174,6 +209,108 @@ function timestampForItem(item) {
 
 function localDateKey(timestamp) {
   return parseTimestamp(timestamp).toDateString()
+}
+
+/**
+ * Issue #1746 (stage: subagents) follow-up / spec §4.2: subagent events that "interact with
+ * the main session" — a message pushed to main, or a leg ending (completed/failed/stopped) —
+ * must render inline in the MAIN timeline itself, not only inside the subagent's own nested
+ * card, or the main assistant's reaction to one reads as unprompted (no visible causality).
+ *
+ * Collects these as lightweight anchor items and inserts each one at the position of the first
+ * existing item whose own timestamp is at or after the signal's — i.e. immediately before
+ * whatever main-thread item first reacts to it, chronologically. Runs BEFORE
+ * mergeConsecutiveAssistantTurns() so a signal correctly interrupts a would-be merge between
+ * two assistant turns it causally sits between.
+ */
+function collectSubagentSignals(sessionId) {
+  if (!sessionId) return []
+  const signals = []
+
+  // "Pushed to main": a subagent delivering a message to main. Not a leg boundary — the leg
+  // keeps running. Scoped to the SendMessage tool for now (the shape confirmed by real repro
+  // data); mcp__legion__send_comm targeting has different semantics and isn't wired here.
+  const toolCalls = messageStore.toolCallsBySession.get(sessionId) || []
+  for (const tc of toolCalls) {
+    if (tc.name !== 'SendMessage') continue
+    if (!tc.parent_tool_use_id) continue // only subagent-originated (main's own calls stay in ActivityTimeline)
+    if (tc.input?.to !== 'main') continue
+    if (tc.status !== 'completed') continue // only once delivery is confirmed
+    const taskId = messageStore.getTaskIdForLaunchToolUse(tc.parent_tool_use_id)
+    if (!taskId) continue
+    const ts = tc.timestamp
+    if (ts == null) continue
+    signals.push({
+      type: 'subagent_signal',
+      anchorType: 'pushed',
+      taskId,
+      agentColor: getAgentColor(slugifyAgentName(taskId)),
+      // Issue #1746 follow-up (user feedback): this content guides the main session — it must
+      // render with full markdown support, not a single truncated line. Header keeps a short
+      // static label; the actual message goes in markdownBody (SubagentAnchorRow.vue).
+      description: 'Message to main',
+      markdownBody: tc.input?.message || tc.input?.content || tc.input?.summary || 'Message sent to main',
+      statusText: '',
+      timestamp: ts,
+      _sortTs: parseTimestamp(ts).getTime(),
+      key: `subagent-signal-pushed-${tc.id}`,
+    })
+  }
+
+  // Leg-terminal: each leg that reached a terminal status (completed/failed/stopped). Uses
+  // THAT leg's own description (set at its own task_started) — entry-level plain objects here
+  // don't carry a TaskLegEntry-style "latest leg" description getter the way the backend
+  // dataclass does, and the per-leg value is more precise anyway.
+  for (const entry of messageStore.allTaskLegEntriesForSession(sessionId)) {
+    entry.legs.forEach((leg, legIndex) => {
+      if (leg.status === 'running' || leg.ended_at == null) return
+      signals.push({
+        type: 'subagent_signal',
+        anchorType: 'completed',
+        taskId: entry.task_id,
+        agentColor: getAgentColor(slugifyAgentName(entry.task_id)),
+        description: leg.description || 'Agent',
+        // Issue #1746 follow-up (user feedback): the subagent's own final report (leg.result,
+        // from task_notification's summary) must be shown, not just a bare status badge —
+        // with the same full markdown support as the header's pushed-to-main content.
+        markdownBody: leg.result || null,
+        statusText: leg.status,
+        timestamp: leg.ended_at,
+        _sortTs: parseTimestamp(leg.ended_at).getTime(),
+        key: `subagent-signal-terminal-${entry.task_id}-${legIndex}`,
+        // Issue #1746 follow-up: SubagentGlobalGutter.vue measures a leg's END position from
+        // this id — this row IS that leg's terminal anchor now (SubagentTimeline.vue no longer
+        // renders one glued to the launch position; doing so there made every historical lane's
+        // end sit right next to its start regardless of how much happened in between).
+        domId: `subagent-anchor-terminal-${entry.task_id}-${legIndex}`,
+      })
+    })
+  }
+
+  return signals
+}
+
+function injectSubagentSignals(items, sessionId) {
+  const signals = collectSubagentSignals(sessionId)
+  if (signals.length === 0) return items
+
+  const itemTimestamps = items.map(item => {
+    const ts = timestampForItem(item)
+    return ts ? parseTimestamp(ts).getTime() : null
+  })
+
+  // Insert in ascending timestamp order so multiple signals landing in the same gap keep their
+  // own relative order instead of each independently re-scanning from index 0.
+  signals.sort((a, b) => a._sortTs - b._sortTs)
+  for (const signal of signals) {
+    let insertAt = items.length
+    for (let i = 0; i < items.length; i++) {
+      if (itemTimestamps[i] != null && itemTimestamps[i] >= signal._sortTs) { insertAt = i; break }
+    }
+    items.splice(insertAt, 0, signal)
+    itemTimestamps.splice(insertAt, 0, signal._sortTs)
+  }
+  return items
 }
 
 function injectDateSeparators(items) {
@@ -947,6 +1084,12 @@ function normalizeMessage(message) {
 
 .messages-content {
   min-height: 100%;
+  /* Issue #1746 (stage: subagents) follow-up: reserve space for the persistent global gutter
+     (26px lane + 4px gap), which is absolutely positioned against this element — position:
+     relative here is what makes its height:100% resolve against this box's own
+     normal-flow-established height rather than some further ancestor's. */
+  position: relative;
+  padding-left: 30px;
 }
 
 .date-separator {
@@ -972,5 +1115,17 @@ function normalizeMessage(message) {
   text-transform: none;
   white-space: nowrap;
   user-select: none;
+}
+
+/* Issue #1746 (stage: subagents) follow-up: main-timeline subagent signals (pushed-to-main,
+   leg-terminal) — same horizontal rhythm as a regular message row. */
+.subagent-signal-wrapper {
+  padding: 2px 16px;
+}
+
+@media (max-width: 768px) {
+  .subagent-signal-wrapper {
+    padding: 2px 12px;
+  }
 }
 </style>

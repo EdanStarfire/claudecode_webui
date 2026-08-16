@@ -522,3 +522,308 @@ describe('terminal-AM after finalized placeholder — Fix A (#1626)', () => {
     expect(store.messagesBySession.get(SID).length).toBe(1)
   })
 })
+
+describe('addMessage metadata accumulation across same-message_id frames (#1765 confirmed root cause)', () => {
+  // Reproduces a real user-provided repro (messages.jsonl from a live session): a single
+  // Anthropic assistant message (one message_id) dispatching a run_in_background Task/Agent
+  // call arrives at the store as MULTIPLE separate backend frames sharing that message_id —
+  // thinking, then text, then a tool_use for agent A, then (seconds later, after agent A's own
+  // nested activity) a second tool_use for agent B. Each frame's own metadata reflects only
+  // that frame's own content blocks. The old merge (`{...existing, ...message}`) shallow-
+  // overwrote `metadata` wholesale, so agent B's frame deleted agent A's tool_use from
+  // metadata.tool_uses the instant it arrived — not a rendering/key issue, the underlying data
+  // was gone. This is what a live viewer saw as "the second subagent's card evicts the first's".
+  it('accumulates tool_uses from two later frames sharing the same message_id (both agents survive)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1765-repro'
+    const MID = 'msg_011Ce6SkEyufGbHMpijsa5ij' // real message_id from the repro
+
+    // A real stream for this message_id: thinking + text tokens, then message_stop finalizes
+    // the placeholder (matches the "terminal AM after message_stop" pattern used elsewhere in
+    // this file — see 'terminal AM with tool_uses after message_stop merges into finalized
+    // placeholder' above).
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: MID } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'thinking_delta', thinking: 'Spawning two background agents.' } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 1, delta: { type: 'text_delta', text: 'Recreating it identically.' } }))
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    let stored = store.messagesBySession.get(SID).find(m => m.message_id === MID)
+    expect(stored.streaming).toBe(false)
+    expect(stored.content).toBe('Recreating it identically.')
+
+    // Frame: tool_use for agent A (Bard-C), same message_id, arriving after message_stop.
+    store.addMessage(SID, {
+      type: 'assistant',
+      content: '',
+      metadata: { message_id: MID, tool_uses: [{ id: 'toolu_bardC', name: 'Agent', input: { name: 'Bard-C' } }], has_tool_uses: true },
+    })
+
+    stored = store.messagesBySession.get(SID).find(m => m.message_id === MID)
+    expect(stored.metadata.tool_uses.map(t => t.id)).toEqual(['toolu_bardC'])
+    expect(stored.content).toBe('Recreating it identically.') // text preserved through the tool_use-only frame
+
+    // Frame (seconds later, after agent A's own nested subagent turns — unrelated message_ids
+    // in between, not shown here): tool_use for agent B (Bard-D), SAME message_id.
+    store.addMessage(SID, {
+      type: 'assistant',
+      content: '',
+      metadata: { message_id: MID, tool_uses: [{ id: 'toolu_bardD', name: 'Agent', input: { name: 'Bard-D' } }], has_tool_uses: true },
+    })
+
+    stored = store.messagesBySession.get(SID).find(m => m.message_id === MID)
+    // Both agents' tool_uses must survive — this is the exact assertion that fails under the
+    // old `{...existing, ...message}` overwrite (it would leave only toolu_bardD).
+    expect(stored.metadata.tool_uses.map(t => t.id).sort()).toEqual(['toolu_bardC', 'toolu_bardD'])
+    expect(stored.content).toBe('Recreating it identically.')
+    expect(store.messagesBySession.get(SID)).toHaveLength(1) // still one bubble, not two
+  })
+
+  it('does not duplicate a tool_use if the same message_id/tool_use_id pair is redelivered', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1765-dup'
+    const MID = 'msg-dup-test'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: MID } }))
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    store.addMessage(SID, {
+      type: 'assistant',
+      content: '',
+      metadata: { message_id: MID, tool_uses: [{ id: 'toolu_1', name: 'Agent', input: {} }], has_tool_uses: true },
+    })
+    store.addMessage(SID, {
+      type: 'assistant',
+      content: '',
+      metadata: { message_id: MID, tool_uses: [{ id: 'toolu_1', name: 'Agent', input: {} }], has_tool_uses: true },
+    })
+
+    const stored = store.messagesBySession.get(SID).find(m => m.message_id === MID)
+    expect(stored.metadata.tool_uses).toHaveLength(1)
+  })
+})
+
+describe('applyTaskLifecycleFrame — task_id-first subagent tracking (#1746 stage: subagents / #1765)', () => {
+  it('task_started appends a new leg keyed by task_id', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', {
+      task_id: 'task-A',
+      tool_use_id: 'toolu_launch',
+      description: 'alpha: explore the repo',
+    }, 100)
+
+    const entry = store.getTaskLegEntry('task-A')
+    expect(entry.legs).toHaveLength(1)
+    expect(entry.legs[0]).toMatchObject({
+      tool_use_id: 'toolu_launch',
+      description: 'alpha: explore the repo',
+      status: 'running',
+      started_at: 100,
+    })
+    expect(store.getTaskIdForLaunchToolUse('toolu_launch')).toBe('task-A')
+  })
+
+  it('a resume (second task_started for the same task_id) appends a second leg, not overwriting the first', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-B', tool_use_id: 'toolu_1' }, 100)
+    store.applyTaskLifecycleFrame('sess-1', 'task_notification', { task_id: 'task-B', status: 'stopped' }, 150)
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-B', tool_use_id: 'toolu_2' }, 200)
+
+    const entry = store.getTaskLegEntry('task-B')
+    expect(entry.legs).toHaveLength(2)
+    expect(entry.legs[0]).toMatchObject({ tool_use_id: 'toolu_1', status: 'stopped' })
+    expect(entry.legs[1]).toMatchObject({ tool_use_id: 'toolu_2', status: 'running' })
+    // Both legs' own tool_use_ids resolve to the same task_id.
+    expect(store.getTaskIdForLaunchToolUse('toolu_1')).toBe('task-B')
+    expect(store.getTaskIdForLaunchToolUse('toolu_2')).toBe('task-B')
+  })
+
+  it('task_notification summary is captured as the leg result; task_updated never sets one', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-R', tool_use_id: 'toolu_r' }, 100)
+    store.applyTaskLifecycleFrame('sess-1', 'task_notification', {
+      task_id: 'task-R', status: 'completed', summary: 'The verses are sent, the work is through.',
+    }, 150)
+
+    expect(store.getTaskLegEntry('task-R').legs[0].result).toBe('The verses are sent, the work is through.')
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-S', tool_use_id: 'toolu_s' }, 100)
+    store.applyTaskLifecycleFrame('sess-1', 'task_updated', { task_id: 'task-S', status: 'killed' }, 150)
+
+    expect(store.getTaskLegEntry('task-S').legs[0].result).toBeUndefined()
+  })
+
+  it('task_progress bumps last_progress_at on the latest leg only, and is a no-op once terminal', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-C', tool_use_id: 'toolu_c' }, 100)
+    store.applyTaskLifecycleFrame('sess-1', 'task_progress', { task_id: 'task-C' }, 120)
+    expect(store.getTaskLegEntry('task-C').legs[0].last_progress_at).toBe(120)
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_notification', { task_id: 'task-C', status: 'completed' }, 130)
+    store.applyTaskLifecycleFrame('sess-1', 'task_progress', { task_id: 'task-C' }, 999)
+    // Progress after termination must not resurrect the leg or move its timestamp.
+    expect(store.getTaskLegEntry('task-C').legs[0].last_progress_at).toBe(120)
+    expect(store.getTaskLegEntry('task-C').legs[0].ended_at).toBe(130)
+  })
+
+  it('first-terminal-wins: a second terminal frame does not override the first', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-D', tool_use_id: 'toolu_d' }, 100)
+    store.applyTaskLifecycleFrame('sess-1', 'task_notification', { task_id: 'task-D', status: 'completed' }, 200)
+    store.applyTaskLifecycleFrame('sess-1', 'task_updated', { task_id: 'task-D', status: 'killed' }, 300)
+
+    const leg = store.getTaskLegEntry('task-D').legs[0]
+    expect(leg.status).toBe('completed')
+    expect(leg.ended_at).toBe(200)
+  })
+
+  it('task_updated with status=killed normalizes to "stopped" for display', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-E', tool_use_id: 'toolu_e' }, 100)
+    store.applyTaskLifecycleFrame('sess-1', 'task_updated', { task_id: 'task-E', status: 'killed' }, 200)
+
+    expect(store.getTaskLegEntry('task-E').legs[0].status).toBe('stopped')
+  })
+
+  it('task_updated reads status from patch when top-level status is absent', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-F', tool_use_id: 'toolu_f' }, 100)
+    store.applyTaskLifecycleFrame('sess-1', 'task_updated', { task_id: 'task-F', patch: { status: 'failed' } }, 200)
+
+    expect(store.getTaskLegEntry('task-F').legs[0].status).toBe('failed')
+  })
+
+  it('a frame with no task_id or an unrecognized subtype is ignored', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { tool_use_id: 'toolu_x' }, 100)
+    expect(store.getTaskLegEntry('task-missing')).toBeNull()
+
+    store.applyTaskLifecycleFrame('sess-1', 'not_a_real_subtype', { task_id: 'task-G' }, 100)
+    expect(store.getTaskLegEntry('task-G')).toBeNull()
+  })
+
+  it('hydrateBackgroundAgents seeds legs from the backend snapshot without replaying frames', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    apiMock.get.mockResolvedValue({
+      session_id: 'sess-1',
+      agents: [
+        {
+          task_id: 'task-H',
+          legs: [
+            { tool_use_id: 'toolu_h1', description: 'first leg', started_at: 10, last_progress_at: 20, ended_at: 30, status: 'completed' },
+            { tool_use_id: 'toolu_h2', description: 'resumed leg', started_at: 40, last_progress_at: 40, ended_at: null, status: 'running' },
+          ],
+        },
+      ],
+    })
+
+    await store.hydrateBackgroundAgents('sess-1')
+
+    const entry = store.getTaskLegEntry('task-H')
+    expect(entry.legs).toHaveLength(2)
+    expect(store.getTaskIdForLaunchToolUse('toolu_h1')).toBe('task-H')
+    expect(store.getTaskIdForLaunchToolUse('toolu_h2')).toBe('task-H')
+  })
+
+})
+
+describe('leg grouping by timestamp window — resume via SendMessage (#1746 follow-up, real repro)', () => {
+  // Reproduces the real Bard-E/F repro: a subagent is resumed not via a fresh Task/Agent call,
+  // but via the main session calling SendMessage(to: "<agent name>") — whose task_started frame
+  // reports the SendMessage call's OWN tool_use_id, not a Task/Agent call's. Confirmed from the
+  // real data: parent_tool_use_id on ALL of a subagent's child activity (original run AND every
+  // resume) stays pinned to the very first leg's own launch tool_use_id — never to the resume
+  // trigger's id — so grouping must resolve by WHEN activity happened, not by an exact
+  // parent_tool_use_id match against a specific leg.
+  const SID = 'sess-bardE'
+  const TASK_ID = 'a35b5c50d38dad9b4' // real task_id from the repro
+  const ROOT_TOOL_USE_ID = 'toolu_01BrQe3UjRSfdWZ3F4rnX5wN' // real leg-0 launch id (Task/Agent)
+  const RESUME_TOOL_USE_ID = 'toolu_01DHhviQiSYa2YH5waCU3YwH' // real resume trigger (SendMessage)
+
+  function setupTwoLegs(store) {
+    // Leg 0: original launch (Task/Agent), runs, then completes.
+    store.applyTaskLifecycleFrame(SID, 'task_started', { task_id: TASK_ID, tool_use_id: ROOT_TOOL_USE_ID, description: 'Bard-E verse sequence' }, 100)
+    store.applyTaskLifecycleFrame(SID, 'task_notification', { task_id: TASK_ID, status: 'completed' }, 150)
+    // Leg 1: resumed via SendMessage(to:"Bard-E") — a DIFFERENT tool_use_id, same task_id.
+    store.applyTaskLifecycleFrame(SID, 'task_started', { task_id: TASK_ID, tool_use_id: RESUME_TOOL_USE_ID, description: 'Bard-E verse sequence' }, 200)
+  }
+
+  it('computeSubagentAnchorsBySegment recognizes a SendMessage resume trigger once resolved via the store, not by name', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const { computeSubagentAnchorsBySegment } = await import('@/utils/subagentAnchors')
+    const store = useMessageStore()
+    setupTwoLegs(store)
+
+    const isLaunchAnchor = (tc) => tc.name === 'Task' || tc.name === 'Agent' || !!store.getTaskIdForLaunchToolUse(tc.id)
+
+    const segment = [
+      { id: RESUME_TOOL_USE_ID, name: 'SendMessage', input: { to: 'Bard-E' } }, // resolves via store
+      { id: 'toolu_unrelated_sendmessage', name: 'SendMessage', input: { to: 'Bard-F' } }, // does NOT resolve — not a real anchor
+    ]
+    const result = computeSubagentAnchorsBySegment([segment], isLaunchAnchor)
+    expect(result[0].map(a => a.id)).toEqual([RESUME_TOOL_USE_ID])
+  })
+
+  it('childToolCallsForLeg buckets child tool calls by which leg was active at the time, not by parent_tool_use_id match', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    setupTwoLegs(store)
+
+    // All child tool calls share the SAME parent_tool_use_id (the root/leg-0 launch id) —
+    // confirmed real behavior — but happen at different times relative to each leg's window.
+    store.handleToolCall(SID, { tool_use_id: 'toolu_leg0_tool', name: 'ToolSearch', input: {}, status: 'completed', parent_tool_use_id: ROOT_TOOL_USE_ID, created_at: 120 }) // during leg 0's window [100,200)
+    store.handleToolCall(SID, { tool_use_id: 'toolu_leg1_tool', name: 'SendMessage', input: { to: 'main' }, status: 'completed', parent_tool_use_id: ROOT_TOOL_USE_ID, created_at: 250 }) // during leg 1's window [200, inf)
+
+    const leg0Tools = store.childToolCallsForLeg(SID, TASK_ID, 0)
+    const leg1Tools = store.childToolCallsForLeg(SID, TASK_ID, 1)
+
+    expect(leg0Tools.map(t => t.id)).toEqual(['toolu_leg0_tool'])
+    expect(leg1Tools.map(t => t.id)).toEqual(['toolu_leg1_tool'])
+  })
+
+  it('narration (addMessage routing) attaches to the leg that was active at the narration message\'s own timestamp', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    setupTwoLegs(store)
+
+    // Narration during leg 0's window.
+    store.addMessage(SID, {
+      type: 'assistant',
+      content: 'Working on the first haiku.',
+      timestamp: 130,
+      metadata: { parent_tool_use_id: ROOT_TOOL_USE_ID },
+    })
+    // Narration during leg 1's window (after the resume) — same parent_tool_use_id as above.
+    store.addMessage(SID, {
+      type: 'assistant',
+      content: 'Working on the follow-up haiku.',
+      timestamp: 260,
+      metadata: { parent_tool_use_id: ROOT_TOOL_USE_ID },
+    })
+
+    const leg0Narration = store.narrationForLeg(TASK_ID, 0)
+    const leg1Narration = store.narrationForLeg(TASK_ID, 1)
+
+    expect(leg0Narration.map(m => m.content)).toEqual(['Working on the first haiku.'])
+    expect(leg1Narration.map(m => m.content)).toEqual(['Working on the follow-up haiku.'])
+  })
+})

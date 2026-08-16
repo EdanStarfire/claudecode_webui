@@ -403,7 +403,14 @@ export const usePollingStore = defineStore('polling', () => {
             messageStore.clearMessages(changedSessionId)
             // Fix 3: do NOT reset cursor — backend EventQueue survives error state,
             // cursor is still valid. Resetting it produced ?since=undefined (422 wedge).
-            messageStore.loadMessages(changedSessionId)
+            // Issue #1746 (stage: subagents): re-seed background-agent leg state BEFORE
+            // replaying history — clearMessages() just wiped this session's taskLegsByTaskId,
+            // and loadMessages() no longer reconstructs it from history (hydrateBackgroundAgents
+            // is the sole source now). Without this, an error-state reload permanently loses
+            // subagent leg/task_id state for the session.
+            messageStore.hydrateBackgroundAgents(changedSessionId).then(() => {
+              messageStore.loadMessages(changedSessionId)
+            })
           }
 
           if (newState === 'active') {

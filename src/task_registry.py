@@ -43,6 +43,11 @@ class TaskLeg:
     last_progress_at: float | None = None
     ended_at: float | None = None
     status: str = "running"
+    # Set from task_notification's own `summary` field (the subagent's own final
+    # report of what it did) — task_updated carries no summary, so a TaskStop-only
+    # termination (see test_task_stop_only_termination_reaches_stopped_via_task_updated)
+    # leaves this None.
+    result: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -52,6 +57,7 @@ class TaskLeg:
             "last_progress_at": self.last_progress_at,
             "ended_at": self.ended_at,
             "status": self.status,
+            "result": self.result,
         }
 
 
@@ -168,6 +174,8 @@ class TaskLegRegistry:
 
         leg.status = _normalize_status(raw_status)
         leg.ended_at = timestamp
+        if subtype == "task_notification" and metadata.get("summary"):
+            leg.result = metadata["summary"]
 
     def snapshot(self) -> list[dict[str, Any]]:
         """Ordered snapshot of every known task_id's leg history."""

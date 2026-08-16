@@ -45,8 +45,11 @@ def _progress(task_id):
     return {"task_id": task_id}
 
 
-def _notification(task_id, status):
-    return {"task_id": task_id, "status": status}
+def _notification(task_id, status, summary=None):
+    frame = {"task_id": task_id, "status": status}
+    if summary is not None:
+        frame["summary"] = summary
+    return frame
 
 
 def _updated(task_id, status=None, patch=None):
@@ -68,6 +71,33 @@ def test_single_leg_lifecycle_reaches_completed():
     assert entry["legs"][0]["tool_use_id"] == "tu-1"
     assert entry["legs"][0]["ended_at"] == 3.0
     assert registry.current_status("t1") == "completed"
+
+
+def test_task_notification_summary_captured_as_leg_result():
+    """The subagent's own final report (task_notification's `summary`) must surface
+    as the leg's `result`, so the completed-bar/leg-transcript UI has something to
+    show beyond a bare status badge."""
+    registry = TaskLegRegistry()
+    registry.apply_frame("task_started", _started("t1", "tu-1"), timestamp=1.0)
+    registry.apply_frame(
+        "task_notification",
+        _notification("t1", "completed", summary="The verses are sent, the work is through."),
+        timestamp=2.0,
+    )
+
+    leg = registry.snapshot()[0]["legs"][0]
+    assert leg["result"] == "The verses are sent, the work is through."
+
+
+def test_task_updated_termination_leaves_result_none():
+    """task_updated (TaskStop-only termination) carries no summary field at all —
+    result must stay None, not some derived placeholder."""
+    registry = TaskLegRegistry()
+    registry.apply_frame("task_started", _started("t1", "tu-1"), timestamp=1.0)
+    registry.apply_frame("task_updated", _updated("t1", status="killed"), timestamp=2.0)
+
+    leg = registry.snapshot()[0]["legs"][0]
+    assert leg["result"] is None
 
 
 def test_multi_leg_resume_shares_task_id_distinct_tool_use_ids():
@@ -358,7 +388,7 @@ async def test_reload_reconstruction_matches_live_streamed_sequence(tmp_path):
         "task_progress", {"task_id": "t1", "description": "alpha: hydrated"}, 2.0
     )
     live_registry.apply_frame(
-        "task_notification", {"task_id": "t1", "status": "completed"}, 3.0
+        "task_notification", {"task_id": "t1", "status": "completed", "summary": "done"}, 3.0
     )
 
     coordinator = SessionCoordinator(data_dir=tmp_path)

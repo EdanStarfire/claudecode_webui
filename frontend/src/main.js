@@ -13,7 +13,8 @@ import './assets/tool-theme.css'
 const app = createApp(App)
 
 // Install Pinia (state management)
-app.use(createPinia())
+const pinia = createPinia()
+app.use(pinia)
 
 // Install Vue Router
 app.use(router)
