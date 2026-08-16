@@ -727,18 +727,6 @@ describe('applyTaskLifecycleFrame — task_id-first subagent tracking (#1746 sta
     expect(store.getTaskIdForLaunchToolUse('toolu_h2')).toBe('task-H')
   })
 
-  it('claimGutterSlot assigns distinct, reusable slots dynamically (no fixed cap)', async () => {
-    const { useMessageStore } = await import('@/stores/message')
-    const store = useMessageStore()
-
-    expect(store.claimGutterSlot('task-1')).toBe(0)
-    expect(store.claimGutterSlot('task-2')).toBe(1)
-    expect(store.claimGutterSlot('task-3')).toBe(2) // no cap at 2 — several-concurrent is normal usage
-    expect(store.claimGutterSlot('task-1')).toBe(0) // idempotent for an already-claimed task_id
-
-    store.releaseGutterSlot('task-2')
-    expect(store.claimGutterSlot('task-4')).toBe(1) // freed slot index reused
-  })
 })
 
 describe('leg grouping by timestamp window — resume via SendMessage (#1746 follow-up, real repro)', () => {

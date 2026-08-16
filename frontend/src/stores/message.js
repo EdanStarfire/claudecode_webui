@@ -70,16 +70,6 @@ export const useMessageStore = defineStore('message', () => {
   // silently drop (issue #1671). Consumed by SubagentLegTranscript.vue.
   const narrationByTaskIdAndLeg = ref(new Map())
 
-  // Issue #1746 (stage: subagents): shared, dynamic sticky-offset slot registry for the
-  // gutter chip — must live here (not per-component local state) so concurrently-active legs
-  // across independent SubagentTimeline instances stagger onto distinct top offsets instead
-  // of overlapping. Map<task_id, slotIndex> — unbounded (several-concurrent is normal usage,
-  // not a rare edge case, per direct user clarification during this stage's build — every
-  // concurrently-active leg gets its own real slot, not summarized into a "+N more" fallback).
-  // Freed slot indices (leg went idle/completed) are reused by the next claim, so a long
-  // session with many sequential (not simultaneous) subagents doesn't accumulate reserved space.
-  const gutterSlotsByTaskId = ref(new Map())
-
   const TASK_LIFECYCLE_SUBTYPES = new Set(['task_started', 'task_progress', 'task_notification', 'task_updated'])
   const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'stopped', 'killed'])
   const TASK_STATUS_DISPLAY_MAP = { killed: 'stopped' }
@@ -475,32 +465,6 @@ export const useMessageStore = defineStore('message', () => {
   function narrationForLeg(taskId, legIndex) {
     if (!taskId) return []
     return narrationByTaskIdAndLeg.value.get(taskId)?.get(legIndex) || []
-  }
-
-  /**
-   * Issue #1746 (stage: subagents): claim a shared, dynamic sticky-offset slot for a
-   * currently-active leg's gutter chip. Idempotent — returns the already-claimed slot if
-   * called again for the same task_id. Unbounded: assigns the lowest currently-unused
-   * non-negative index, reusing indices freed by completed/idle legs, so every
-   * concurrently-active leg gets its own distinct stacked position (no fixed cap).
-   */
-  function claimGutterSlot(taskId) {
-    if (!taskId) return 0
-    if (gutterSlotsByTaskId.value.has(taskId)) return gutterSlotsByTaskId.value.get(taskId)
-    const used = new Set(gutterSlotsByTaskId.value.values())
-    let slot = 0
-    while (used.has(slot)) slot++
-    gutterSlotsByTaskId.value.set(taskId, slot)
-    gutterSlotsByTaskId.value = new Map(gutterSlotsByTaskId.value)
-    return slot
-  }
-
-  /** Issue #1746 (stage: subagents): release a claimed gutter slot (leg went idle/completed/unmounted). */
-  function releaseGutterSlot(taskId) {
-    if (!taskId) return
-    if (gutterSlotsByTaskId.value.delete(taskId)) {
-      gutterSlotsByTaskId.value = new Map(gutterSlotsByTaskId.value)
-    }
   }
 
   // Issue #1746 (stage: subagents) follow-up: per-leg transcript expand state, shared here
@@ -1365,7 +1329,6 @@ export const useMessageStore = defineStore('message', () => {
       if (entry.session_id !== sessionId) continue
       taskLegsByTaskId.value.delete(taskId)
       narrationByTaskIdAndLeg.value.delete(taskId)
-      gutterSlotsByTaskId.value.delete(taskId)
       for (const legIndex of entry.legs.keys()) {
         expandedLegs.value.delete(`${taskId}:${legIndex}`)
       }
@@ -1376,7 +1339,6 @@ export const useMessageStore = defineStore('message', () => {
     taskLegsByTaskId.value = new Map(taskLegsByTaskId.value)
     taskIdByLaunchToolUseId.value = new Map(taskIdByLaunchToolUseId.value)
     narrationByTaskIdAndLeg.value = new Map(narrationByTaskIdAndLeg.value)
-    gutterSlotsByTaskId.value = new Map(gutterSlotsByTaskId.value)
     expandedLegs.value = new Map(expandedLegs.value)
 
     // Trigger reactivity
@@ -1948,8 +1910,6 @@ export const useMessageStore = defineStore('message', () => {
     narrationForLeg,
     childToolCallsForLeg,
     allTaskLegEntriesForSession,
-    claimGutterSlot,
-    releaseGutterSlot,
     isLegExpanded,
     setLegExpanded,
     toggleLegExpanded,

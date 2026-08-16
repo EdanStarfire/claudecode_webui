@@ -18,16 +18,18 @@
       description="Waiting on a permission decision"
       :timestamp="null"
     />
-    <SubagentAnchorRow
-      v-else-if="leg && leg.status !== 'running'"
-      anchorType="completed"
-      :agentColor="agentColor"
-      :description="terminalDescription"
-      :statusText="leg.status"
-      :timestamp="leg.ended_at"
-    />
+    <!-- Issue #1746 follow-up: a normal terminal (completed/failed/stopped) row is NOT
+         rendered here — it's injected into the MAIN timeline at its own true chronological
+         position (MessageList.vue's collectSubagentSignals/injectSubagentSignals), which is
+         also what the global gutter measures its lane's END from. Rendering it HERE (glued to
+         the launch row) was the bug: the lane's end would always sit right next to its start
+         regardless of how much actually happened in between, making every historical lane
+         artificially short. Orphaned (interrupted, no terminal frame ever arrives — see
+         isRunning below) has no such main-timeline signal to piggyback on, so it keeps its own
+         local fallback row here. -->
     <SubagentAnchorRow
       v-else-if="isOrphaned"
+      :id="terminalAnchorId"
       anchorType="completed"
       :agentColor="agentColor"
       description="Interrupted before this leg completed"
@@ -93,6 +95,12 @@ const leg = computed(() => legIndex.value >= 0 ? legEntry.value.legs[legIndex.va
 const primaryAnchorId = computed(() =>
   taskId.value ? `subagent-anchor-primary-${taskId.value}-${legIndex.value}` : undefined
 )
+// Issue #1746 follow-up: stable id for THIS leg's own terminal (completed/failed/stopped) row —
+// the global gutter needs this leg's actual END position to keep its lane visible/pinnable for
+// as long as the user is scrolled anywhere within [launch, terminal], not just while running.
+const terminalAnchorId = computed(() =>
+  taskId.value ? `subagent-anchor-terminal-${taskId.value}-${legIndex.value}` : undefined
+)
 
 const subagentType = computed(() => props.launchToolCall.input?.subagent_type || null)
 
@@ -105,11 +113,6 @@ const description = computed(() => {
   if (fromLeg) return fromLeg
   const input = props.launchToolCall.input || {}
   return input.description || input.prompt || input.summary || input.message || 'Subagent task'
-})
-
-const terminalDescription = computed(() => {
-  const type = subagentType.value ? `${subagentType.value} ` : ''
-  return `${type}agent ${leg.value?.status || 'finished'}`
 })
 
 const primaryAnchorType = computed(() => (legIndex.value > 0 ? 'resumed' : 'launch'))

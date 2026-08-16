@@ -52,6 +52,7 @@
                card — otherwise the main assistant's reaction to one looks unprompted. -->
           <div v-else-if="item.type === 'subagent_signal'" class="subagent-signal-wrapper">
             <SubagentAnchorRow
+              :id="item.domId"
               :anchorType="item.anchorType"
               :agentColor="item.agentColor"
               :description="item.description"
@@ -268,6 +269,11 @@ function collectSubagentSignals(sessionId) {
         timestamp: leg.ended_at,
         _sortTs: parseTimestamp(leg.ended_at).getTime(),
         key: `subagent-signal-terminal-${entry.task_id}-${legIndex}`,
+        // Issue #1746 follow-up: SubagentGlobalGutter.vue measures a leg's END position from
+        // this id — this row IS that leg's terminal anchor now (SubagentTimeline.vue no longer
+        // renders one glued to the launch position; doing so there made every historical lane's
+        // end sit right next to its start regardless of how much happened in between).
+        domId: `subagent-anchor-terminal-${entry.task_id}-${legIndex}`,
       })
     })
   }
