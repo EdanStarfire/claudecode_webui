@@ -80,7 +80,6 @@ const offsets = ref(new Map()) // `${taskId}:${legIndex}` -> { top, bottom, heig
 function measure() {
   if (!props.contentEl || !props.areaEl) return
   const contentRect = props.contentEl.getBoundingClientRect()
-  const scrollTop = props.areaEl.scrollTop
   const contentHeight = props.contentEl.scrollHeight
   const next = new Map()
 
@@ -88,11 +87,17 @@ function measure() {
     const startEl = document.getElementById(`subagent-anchor-primary-${taskId}-${legIndex}`)
     if (!startEl) continue
     const startRect = startEl.getBoundingClientRect()
-    // Scroll-invariant: viewport-relative offset + current scrollTop = offset from content top,
-    // regardless of current scroll position. Recomputed only when content size or the lane set
-    // changes (see watchers below) — never on scroll itself; CSS position:sticky handles
-    // staying pinned while scrolling within [top, bottom] natively, with zero JS involved.
-    const top = (startRect.top - contentRect.top) + scrollTop
+    // Scroll-invariant: contentRect and startRect are both viewport-relative rects of elements
+    // INSIDE the same scrolled container, so they shift by the identical amount as scrollTop
+    // changes — their difference is the anchor's fixed offset from content-top on its own,
+    // with no further scrollTop adjustment needed (adding one here double-counts the scroll
+    // offset and bakes in whatever scrollTop happened to be current at THIS measure() call,
+    // corrupting the value on every later re-measurement taken at a different scroll position —
+    // this was the root cause of #1746 follow-up drift/misplacement bugs). Recomputed only when
+    // content size or the lane set changes (see watchers below) — never on scroll itself; CSS
+    // position:sticky handles staying pinned while scrolling within [top, bottom] natively, with
+    // zero JS involved.
+    const top = startRect.top - contentRect.top
 
     let bottom
     if (leg.status === 'running') {
@@ -101,7 +106,7 @@ function measure() {
     } else {
       const endEl = document.getElementById(`subagent-anchor-terminal-${taskId}-${legIndex}`)
       bottom = endEl
-        ? (endEl.getBoundingClientRect().bottom - contentRect.top) + scrollTop
+        ? (endEl.getBoundingClientRect().bottom - contentRect.top)
         : top + 26 // defensive fallback (terminal row not found) — degrade to a minimal span
     }
 
