@@ -1,9 +1,9 @@
 <template>
-  <div class="anchor-row-group">
+  <div class="anchor-row-group" :class="{ 'anchor-bubble': markdownBody }" :style="markdownBody ? bubbleStyle : null">
     <div
       class="anchor-row"
       :class="[`anchor-${anchorType}`, statusText ? `anchor-status-${statusText}` : null, clickable ? 'anchor-row-clickable' : null]"
-      :style="rowStyle"
+      :style="markdownBody ? null : rowStyle"
       :role="clickable ? 'button' : null"
       :tabindex="clickable ? 0 : null"
       @click="clickable && emit('click', $event)"
@@ -33,6 +33,7 @@
 <script setup>
 import { computed } from 'vue'
 import { formatTimestamp } from '@/utils/time'
+import { getAssistantRowColor } from '@/composables/useAgentColor'
 import MarkdownView from '@/components/common/MarkdownView.vue'
 
 const props = defineProps({
@@ -114,6 +115,18 @@ const rowStyle = computed(() => ({
   borderLeftColor: props.agentColor.border,
   '--row-accent': props.agentColor.accent,
 }))
+
+// Issue #1746 follow-up (user feedback): a row carrying markdownBody is an actual message
+// reaching main (a push, or a subagent's own completion report) — style it the same way
+// SendCommToolHandler.vue's outbound comm bubble does: a sender->recipient gradient, not the
+// flat single-color wash used for plain status markers (launch/resumed/permission-needed).
+// "Self" (main, the recipient) always uses getAssistantRowColor() per the same #1755
+// convention comm rows follow, regardless of which literal session is being viewed.
+const mainColor = getAssistantRowColor()
+const bubbleStyle = computed(() => ({
+  background: `linear-gradient(to right, ${props.agentColor.bg} 0%, ${mainColor.bg} 30%, ${mainColor.bg} 100%)`,
+  borderLeftColor: props.agentColor.accent,
+}))
 </script>
 
 <style scoped>
@@ -137,6 +150,35 @@ const rowStyle = computed(() => ({
   padding: 4px 10px 8px calc(10px + 3px);
   font-size: 13px;
   color: var(--bs-body-color);
+}
+
+/* Issue #1746 follow-up (user feedback): full-bleed sender->recipient gradient bubble — same
+   mechanics as SendCommToolHandler.vue's .outbound-comm-bubble (margin/padding/border-left
+   values matched exactly) — for rows carrying real message content (markdownBody), so the
+   header and its body read as one continuous colored bubble instead of a bare row sitting
+   above plain, unstyled text. */
+.anchor-bubble {
+  margin: 0 -16px;
+  padding: 0 16px;
+  border-left: 4px solid;
+}
+
+.anchor-bubble .anchor-row {
+  background: transparent;
+  border-left: none;
+  border-radius: 0;
+  padding: 9px 0 4px 0;
+}
+
+.anchor-bubble .anchor-body {
+  padding: 0 0 9px 0;
+}
+
+@media (max-width: 768px) {
+  .anchor-bubble {
+    margin: 0 -12px;
+    padding: 0 12px;
+  }
 }
 
 .anchor-row-clickable {
