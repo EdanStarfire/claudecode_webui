@@ -170,8 +170,19 @@ export async function getGitStatus() {
   return apiGet('/api/system/git-status')
 }
 
-export async function restartServer() {
-  return apiPost('/api/system/restart')
+export async function getGitBranches() {
+  return apiGet('/api/system/git-branches')
+}
+
+export async function getGitCommits(branch) {
+  return apiGet('/api/system/git-commits', { params: { branch } })
+}
+
+export async function restartServer(target = undefined) {
+  // Issue #1760: `target` must stay `undefined` (not `null`) for the default path — apiPost
+  // does JSON.stringify(data) unconditionally, and JSON.stringify(undefined) omits the body
+  // entirely while JSON.stringify(null) would send a literal "null" body.
+  return apiPost('/api/system/restart', target)
 }
 
 /**

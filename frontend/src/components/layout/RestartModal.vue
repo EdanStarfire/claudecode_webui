@@ -65,6 +65,74 @@
             <div v-else-if="gitError" class="alert alert-warning py-2 small">
               Could not fetch git status: {{ gitError }}
             </div>
+
+            <!-- Branch/commit picker disclosure (issue #1760) -->
+            <div v-if="gitStatus" class="mb-2">
+              <button
+                type="button"
+                class="btn btn-link btn-sm px-0 text-decoration-none"
+                @click="togglePicker"
+              >
+                {{ showPicker ? 'Hide branch/commit picker ▾' : 'Change branch or commit ▾' }}
+              </button>
+
+              <div v-if="showPicker" class="border rounded p-2 mt-1">
+                <div v-if="branchesLoading" class="text-center py-2">
+                  <div class="spinner-border spinner-border-sm" role="status"></div>
+                  <span class="ms-2 small">Loading branches...</span>
+                </div>
+                <template v-else>
+                  <div class="mb-2">
+                    <label class="form-label small mb-1" for="restart-branch-select">Branch</label>
+                    <select
+                      id="restart-branch-select"
+                      class="form-select form-select-sm"
+                      v-model="selectedBranch"
+                    >
+                      <option v-for="b in branches" :key="b.name" :value="b.name">
+                        {{ b.name }}{{ b.is_current ? ' (current)' : '' }}{{ b.is_remote_only ? ' [remote]' : '' }}
+                      </option>
+                    </select>
+                  </div>
+
+                  <div v-if="commitsLoading" class="text-center py-2">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                    <span class="ms-2 small">Loading commits...</span>
+                  </div>
+                  <template v-else>
+                    <label class="form-label small mb-1">Commit</label>
+                    <div class="list-group commit-list" style="max-height: 200px; overflow-y: auto;">
+                      <button
+                        type="button"
+                        class="list-group-item list-group-item-action py-1 px-2 small"
+                        :class="{ active: selectedCommitHash === null }"
+                        @click="selectedCommitHash = null"
+                      >
+                        <span class="font-monospace">(latest)</span>
+                      </button>
+                      <button
+                        v-for="c in commits"
+                        :key="c.hash"
+                        type="button"
+                        class="list-group-item list-group-item-action py-1 px-2 small"
+                        :class="{ active: selectedCommitHash === c.hash }"
+                        @click="selectedCommitHash = c.hash"
+                      >
+                        <span class="font-monospace">{{ c.short_hash }}</span> {{ c.subject }}
+                        <span class="text-muted">— {{ getRelativeTime(c.date) }}</span>
+                      </button>
+                    </div>
+                    <div v-if="commitsTruncated" class="text-muted small mt-1">
+                      Showing latest 50 commits
+                    </div>
+                  </template>
+
+                  <div v-if="confirmDisabled && hasCustomSelection && gitStatus.has_uncommitted_changes" class="text-danger small mt-2">
+                    Resolve uncommitted changes before switching branch or commit.
+                  </div>
+                </template>
+              </div>
+            </div>
           </div>
 
           <!-- Phase 2: Progress -->
@@ -91,8 +159,8 @@
         <div class="modal-footer">
           <template v-if="phase === 'confirm'">
             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-            <button type="button" class="btn btn-warning" @click="doRestart" :disabled="gitLoading">
-              Pull &amp; Restart
+            <button type="button" class="btn btn-warning" @click="doRestart" :disabled="confirmDisabled">
+              {{ hasCustomSelection ? 'Switch & Restart' : 'Pull & Restart' }}
             </button>
           </template>
           <template v-else-if="uiStore.restartStatus === 'error'">
@@ -105,9 +173,10 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useUIStore } from '@/stores/ui'
-import { getGitStatus, restartServer } from '@/utils/api'
+import { getGitStatus, getGitBranches, getGitCommits, restartServer } from '@/utils/api'
+import { getRelativeTime } from '@/utils/time'
 
 const uiStore = useUIStore()
 
@@ -123,6 +192,31 @@ const reconnectCountdown = ref(60)
 let healthPollInterval = null
 let countdownInterval = null
 
+// Branch/commit picker state (issue #1760)
+const showPicker = ref(false)
+const branches = ref([])
+const branchesLoading = ref(false)
+const selectedBranch = ref(null)
+const commits = ref([])
+const commitsLoading = ref(false)
+const commitsTruncated = ref(false)
+const selectedCommitHash = ref(null) // null = "latest on branch"
+let pickerLoaded = false
+// Bumped on every modal reset so in-flight fetches from a closed/reopened modal can detect
+// they're stale and avoid clobbering fresh state (or resurrecting `pickerLoaded`).
+let modalGeneration = 0
+
+const hasCustomSelection = computed(() =>
+  showPicker.value &&
+  gitStatus.value &&
+  selectedBranch.value !== null &&
+  (selectedBranch.value !== gitStatus.value.branch || selectedCommitHash.value !== null)
+)
+
+const confirmDisabled = computed(() =>
+  gitLoading.value || (hasCustomSelection.value && gitStatus.value?.has_uncommitted_changes)
+)
+
 async function fetchGitStatus() {
   gitLoading.value = true
   gitError.value = null
@@ -135,13 +229,71 @@ async function fetchGitStatus() {
   }
 }
 
+async function fetchBranches() {
+  const generation = modalGeneration
+  branchesLoading.value = true
+  try {
+    const result = await getGitBranches()
+    if (generation !== modalGeneration) return // modal was reset/closed while this was in flight
+    branches.value = result.branches || []
+    selectedBranch.value = gitStatus.value?.branch || branches.value.find(b => b.is_current)?.name || null
+    if (selectedBranch.value) {
+      await fetchCommits(selectedBranch.value)
+    }
+  } catch (e) {
+    if (generation === modalGeneration) gitError.value = e.message || 'Unknown error'
+  } finally {
+    if (generation === modalGeneration) branchesLoading.value = false
+  }
+}
+
+async function fetchCommits(branch) {
+  const generation = modalGeneration
+  commitsLoading.value = true
+  selectedCommitHash.value = null
+  try {
+    const result = await getGitCommits(branch)
+    // Stale response guard: ignore results for a branch we've since navigated away from, or a
+    // modal instance that's since been reset/closed (issue #1760).
+    if (generation !== modalGeneration || branch !== selectedBranch.value) return
+    commits.value = result.commits || []
+    commitsTruncated.value = !!result.truncated
+  } catch (e) {
+    if (generation === modalGeneration && branch === selectedBranch.value) {
+      gitError.value = e.message || 'Unknown error'
+    }
+  } finally {
+    if (generation === modalGeneration && branch === selectedBranch.value) {
+      commitsLoading.value = false
+    }
+  }
+}
+
+async function togglePicker() {
+  showPicker.value = !showPicker.value
+  if (showPicker.value && !pickerLoaded) {
+    const generation = modalGeneration
+    await fetchBranches()
+    if (generation === modalGeneration) pickerLoaded = true
+  }
+}
+
+watch(selectedBranch, (branch, oldBranch) => {
+  if (branch && branch !== oldBranch && pickerLoaded) {
+    fetchCommits(branch)
+  }
+})
+
 async function doRestart() {
   phase.value = 'progress'
   uiStore.restartInProgress = true
   uiStore.restartStatus = 'pulling'
 
   try {
-    await restartServer()
+    const target = hasCustomSelection.value
+      ? { branch: selectedBranch.value, commit: selectedCommitHash.value }
+      : undefined
+    await restartServer(target)
     uiStore.restartStatus = 'restarting'
     // Server will go down shortly, start polling for health
     startHealthPoll()
@@ -204,11 +356,19 @@ function cleanup() {
 }
 
 function resetState() {
+  modalGeneration++
   phase.value = 'confirm'
   gitStatus.value = null
   gitError.value = null
   errorMessage.value = ''
   reconnectCountdown.value = 60
+  showPicker.value = false
+  branches.value = []
+  selectedBranch.value = null
+  commits.value = []
+  commitsTruncated.value = false
+  selectedCommitHash.value = null
+  pickerLoaded = false
   cleanup()
 }
 
