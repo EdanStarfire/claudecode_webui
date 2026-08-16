@@ -8,6 +8,9 @@
       }"
     >
       <div class="outbound-comm-meta">
+        <span v-if="senderName" class="outbound-comm-sender" :style="{ color: senderColor.accent }">
+          {{ senderName }}
+        </span>
         <span class="outbound-comm-recipient" :style="{ color: recipientColor.accent }">
           → {{ recipientName }}
         </span>
@@ -26,6 +29,7 @@ import { computed, toRef } from 'vue'
 import { useToolResult } from '@/composables/useToolResult'
 import { getAgentColor, getAssistantRowColor, slugifyAgentName } from '@/composables/useAgentColor'
 import { formatTimestamp } from '@/utils/time'
+import { useMessageStore } from '@/stores/message'
 import MarkdownView from '@/components/common/MarkdownView.vue'
 
 // Issue #1746 (stage: subagents) follow-up (user feedback): the SDK's own `SendMessage` tool
@@ -36,18 +40,56 @@ import MarkdownView from '@/components/common/MarkdownView.vue'
 // same sender->recipient gradient bubble mechanics as SendCommToolHandler.vue, trimmed to
 // SendMessage's actual input shape (to/message/summary — no comm_type/interrupt_priority/
 // attachments, which are Legion-specific fields SendMessage doesn't have).
+//
+// Issue #1746 follow-up (user feedback): direction genuinely varies — main->agent (resuming a
+// subagent), agent->main (reporting back), and agent->agent (sending to a different subagent by
+// name) all use this same tool. The "sender is always self" assumption only holds when THIS
+// call has no parent_tool_use_id (main's own top-level turn); a call nested inside a subagent's
+// own transcript (parent_tool_use_id set) was actually made BY that subagent, not by main.
 const props = defineProps({
   toolCall: { type: Object, required: true }
 })
+
+const messageStore = useMessageStore()
 
 const recipientName = computed(() => props.toolCall.input?.to || props.toolCall.input?.recipient || 'unknown')
 const contentForRender = computed(() => props.toolCall.input?.message || props.toolCall.input?.summary || props.toolCall.input?.content || '')
 const formattedTimestamp = computed(() => formatTimestamp(props.toolCall.timestamp))
 
-// Issue #1755 convention: the sending side is always "this session, as assistant" in its own
-// transcript; the recipient's color comes from its hashed agent name, same as SendCommToolHandler.
-const recipientColor = computed(() => getAgentColor(slugifyAgentName(recipientName.value)))
-const senderColor = computed(() => getAssistantRowColor())
+// 'main' is a well-known special identity (the orchestrating session itself), not just another
+// named agent — resolves to the same fixed "self" color/treatment regardless of which side of
+// the gradient it's on, matching the #1755 convention comm rows already follow.
+function identityColor(name) {
+  if (!name) return getAgentColor(null)
+  if (name.toLowerCase() === 'main') return getAssistantRowColor()
+  return getAgentColor(slugifyAgentName(name))
+}
+
+const recipientColor = computed(() => identityColor(recipientName.value))
+
+// The subagent leg that owns this call, if it's nested inside one — parent_tool_use_id stays
+// pinned to the very FIRST leg's own launch tool_use_id for ALL of a subagent's activity
+// (original run and every resume), so this resolves correctly regardless of which leg is
+// currently active. Colored by task_id (not by name) to match the SAME technique the gutter/
+// main-timeline "pushed" signal already use for this exact subagent, so a given agent's color
+// is consistent across every surface it's shown on.
+const senderTaskId = computed(() => {
+  const parentId = props.toolCall.parent_tool_use_id
+  return parentId ? messageStore.getTaskIdForLaunchToolUse(parentId) : null
+})
+const senderName = computed(() => {
+  if (!senderTaskId.value) return null // main's own top-level call — no "from" label needed
+  // getTaskLegEntry() returns the plain frontend mirror {task_id, session_id, legs} — unlike
+  // the backend's TaskLegEntry dataclass, it has no top-level `.description` computed property;
+  // only each individual leg does. Use the latest leg's, matching the "latest_leg" convention
+  // used elsewhere (e.g. task_registry.py's TaskLegEntry.description).
+  const legs = messageStore.getTaskLegEntry(senderTaskId.value)?.legs
+  return legs?.[legs.length - 1]?.description || 'Agent'
+})
+const senderColor = computed(() => senderTaskId.value
+  ? getAgentColor(slugifyAgentName(senderTaskId.value))
+  : getAssistantRowColor())
+
 const gradientBg = computed(() => `linear-gradient(to right, ${senderColor.value.bg} 0%, ${recipientColor.value.bg} 30%, ${recipientColor.value.bg} 100%)`)
 
 const { hasResult, isError } = useToolResult(toRef(props, 'toolCall'))
@@ -79,6 +121,7 @@ defineExpose({ summary, params, result })
   color: var(--bs-secondary-color);
 }
 
+.outbound-comm-sender,
 .outbound-comm-recipient {
   font-size: 12px;
   font-weight: 600;
