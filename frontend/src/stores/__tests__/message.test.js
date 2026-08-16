@@ -523,6 +523,87 @@ describe('terminal-AM after finalized placeholder — Fix A (#1626)', () => {
   })
 })
 
+describe('addMessage metadata accumulation across same-message_id frames (#1765 confirmed root cause)', () => {
+  // Reproduces a real user-provided repro (messages.jsonl from a live session): a single
+  // Anthropic assistant message (one message_id) dispatching a run_in_background Task/Agent
+  // call arrives at the store as MULTIPLE separate backend frames sharing that message_id —
+  // thinking, then text, then a tool_use for agent A, then (seconds later, after agent A's own
+  // nested activity) a second tool_use for agent B. Each frame's own metadata reflects only
+  // that frame's own content blocks. The old merge (`{...existing, ...message}`) shallow-
+  // overwrote `metadata` wholesale, so agent B's frame deleted agent A's tool_use from
+  // metadata.tool_uses the instant it arrived — not a rendering/key issue, the underlying data
+  // was gone. This is what a live viewer saw as "the second subagent's card evicts the first's".
+  it('accumulates tool_uses from two later frames sharing the same message_id (both agents survive)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1765-repro'
+    const MID = 'msg_011Ce6SkEyufGbHMpijsa5ij' // real message_id from the repro
+
+    // A real stream for this message_id: thinking + text tokens, then message_stop finalizes
+    // the placeholder (matches the "terminal AM after message_stop" pattern used elsewhere in
+    // this file — see 'terminal AM with tool_uses after message_stop merges into finalized
+    // placeholder' above).
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: MID } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'thinking_delta', thinking: 'Spawning two background agents.' } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 1, delta: { type: 'text_delta', text: 'Recreating it identically.' } }))
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    let stored = store.messagesBySession.get(SID).find(m => m.message_id === MID)
+    expect(stored.streaming).toBe(false)
+    expect(stored.content).toBe('Recreating it identically.')
+
+    // Frame: tool_use for agent A (Bard-C), same message_id, arriving after message_stop.
+    store.addMessage(SID, {
+      type: 'assistant',
+      content: '',
+      metadata: { message_id: MID, tool_uses: [{ id: 'toolu_bardC', name: 'Agent', input: { name: 'Bard-C' } }], has_tool_uses: true },
+    })
+
+    stored = store.messagesBySession.get(SID).find(m => m.message_id === MID)
+    expect(stored.metadata.tool_uses.map(t => t.id)).toEqual(['toolu_bardC'])
+    expect(stored.content).toBe('Recreating it identically.') // text preserved through the tool_use-only frame
+
+    // Frame (seconds later, after agent A's own nested subagent turns — unrelated message_ids
+    // in between, not shown here): tool_use for agent B (Bard-D), SAME message_id.
+    store.addMessage(SID, {
+      type: 'assistant',
+      content: '',
+      metadata: { message_id: MID, tool_uses: [{ id: 'toolu_bardD', name: 'Agent', input: { name: 'Bard-D' } }], has_tool_uses: true },
+    })
+
+    stored = store.messagesBySession.get(SID).find(m => m.message_id === MID)
+    // Both agents' tool_uses must survive — this is the exact assertion that fails under the
+    // old `{...existing, ...message}` overwrite (it would leave only toolu_bardD).
+    expect(stored.metadata.tool_uses.map(t => t.id).sort()).toEqual(['toolu_bardC', 'toolu_bardD'])
+    expect(stored.content).toBe('Recreating it identically.')
+    expect(store.messagesBySession.get(SID)).toHaveLength(1) // still one bubble, not two
+  })
+
+  it('does not duplicate a tool_use if the same message_id/tool_use_id pair is redelivered', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1765-dup'
+    const MID = 'msg-dup-test'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: MID } }))
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    store.addMessage(SID, {
+      type: 'assistant',
+      content: '',
+      metadata: { message_id: MID, tool_uses: [{ id: 'toolu_1', name: 'Agent', input: {} }], has_tool_uses: true },
+    })
+    store.addMessage(SID, {
+      type: 'assistant',
+      content: '',
+      metadata: { message_id: MID, tool_uses: [{ id: 'toolu_1', name: 'Agent', input: {} }], has_tool_uses: true },
+    })
+
+    const stored = store.messagesBySession.get(SID).find(m => m.message_id === MID)
+    expect(stored.metadata.tool_uses).toHaveLength(1)
+  })
+})
+
 describe('applyTaskLifecycleFrame — task_id-first subagent tracking (#1746 stage: subagents / #1765)', () => {
   it('task_started appends a new leg keyed by task_id', async () => {
     const { useMessageStore } = await import('@/stores/message')

@@ -501,6 +501,52 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   /**
+   * Issue #1765 (root cause, found via live repro): a single Anthropic assistant message
+   * (one message_id) whose turn dispatches a `run_in_background: true` Task/Agent call can
+   * arrive at this store as MULTIPLE separate backend AssistantMessage frames sharing that
+   * same message_id — e.g. thinking, then text, then one tool_use block, then (seconds later,
+   * after that subagent's own nested activity) a SECOND tool_use block for a second
+   * Task/Agent launch. Each frame's own `metadata` (built by message_parser.py's
+   * AssistantMessageHandler) reflects only THAT frame's own content blocks, not everything
+   * accumulated so far. The placeholder-merge below used to do `{...existing, ...message}`,
+   * which shallow-overwrites `metadata` wholesale — so the second tool_use frame's
+   * `metadata.tool_uses` (just the second agent) replaced, rather than joined, the first
+   * frame's `metadata.tool_uses` (the first agent), silently deleting the first agent's Task
+   * tool_use from the live message the instant the second one arrived. This is what looked
+   * like "the second subagent's card evicts the first's" — the first agent's card was never
+   * evicted, its underlying tool_use had already been deleted from the data itself. Reload
+   * is unaffected because history replay reconstructs the full message from ALL of its stored
+   * frames at once, never losing an earlier frame's contribution.
+   */
+  function _mergeAssistantMetadata(existingMetadata, incomingMetadata) {
+    const existingMeta = existingMetadata || {}
+    const incomingMeta = incomingMetadata || {}
+
+    const mergedToolUses = [...(existingMeta.tool_uses || [])]
+    const seenToolUseIds = new Set(mergedToolUses.map(t => t.id))
+    for (const tu of incomingMeta.tool_uses || []) {
+      if (tu.id && seenToolUseIds.has(tu.id)) continue
+      if (tu.id) seenToolUseIds.add(tu.id)
+      mergedToolUses.push(tu)
+    }
+
+    const mergedThinkingBlocks = [
+      ...(existingMeta.thinking_blocks || []),
+      ...(incomingMeta.thinking_blocks || []),
+    ]
+
+    return {
+      ...existingMeta,
+      ...incomingMeta,
+      tool_uses: mergedToolUses,
+      has_tool_uses: mergedToolUses.length > 0,
+      thinking_blocks: mergedThinkingBlocks,
+      thinking_content: incomingMeta.thinking_content || existingMeta.thinking_content || '',
+      has_thinking: !!(incomingMeta.has_thinking || existingMeta.has_thinking),
+    }
+  }
+
+  /**
    * Add a message to a session (from WebSocket)
    * Now with deduplication to prevent duplicate messages on reconnection
    *
@@ -552,18 +598,26 @@ export const useMessageStore = defineStore('message', () => {
             return
           }
           // No buffer (page reload mid-stream) — merge directly into placeholder.
-          messages[placeholderIdx] = { ...existing, ...message, streaming: false }
+          messages[placeholderIdx] = {
+            ...existing,
+            ...message,
+            metadata: _mergeAssistantMetadata(existing.metadata, message.metadata),
+            streaming: false,
+          }
           messagesBySession.value = new Map(messagesBySession.value)
           return
         }
         // Placeholder already finalized — merge terminal's metadata in.
         // Preserve any accumulated streaming text/thinking in case the terminal
-        // arrives with empty content (some SDK paths do this).
+        // arrives with empty content (some SDK paths do this). Issue #1765: metadata must be
+        // ACCUMULATED (see _mergeAssistantMetadata), not overwritten — a later frame for the
+        // same message_id can carry a different Task/Agent tool_use than an earlier one did.
         messages[placeholderIdx] = {
           ...existing,
           ...message,
           content: message.content || existing.content,
           thinking: message.thinking || existing.thinking,
+          metadata: _mergeAssistantMetadata(existing.metadata, message.metadata),
           streaming: false,
         }
         messagesBySession.value = new Map(messagesBySession.value)
