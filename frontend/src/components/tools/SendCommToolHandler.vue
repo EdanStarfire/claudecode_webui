@@ -1,21 +1,5 @@
 <template>
   <div class="outbound-comm-wrapper">
-    <div class="outbound-comm-meta">
-      <span class="outbound-comm-recipient" :style="{ color: recipientColor.accent }">
-        →
-        <a v-if="recipientSessionId" :href="`#/session/${recipientSessionId}`" class="outbound-comm-recipient-link">{{ recipientName }}</a>
-        <template v-else>{{ recipientName }}</template>
-      </span>
-      <span v-if="commType" class="badge outbound-comm-type-badge" :class="commTypeBadgeClass">
-        {{ commType }}
-      </span>
-      <span v-if="interruptPriority && interruptPriority !== 'none'" class="badge bg-danger outbound-comm-priority">
-        {{ interruptPriority }}
-      </span>
-      <span v-if="attachments.length > 0" class="badge text-bg-info outbound-comm-attach-badge">
-        📎 {{ attachments.length }}
-      </span>
-    </div>
     <div
       class="outbound-comm-bubble"
       :style="{
@@ -23,6 +7,26 @@
         borderLeftColor: senderColor.accent,
       }"
     >
+      <div class="outbound-comm-meta">
+        <span class="outbound-comm-recipient" :style="{ color: recipientColor.accent }">
+          →
+          <a v-if="recipientSessionId" :href="`#/session/${recipientSessionId}`" class="outbound-comm-recipient-link">{{ recipientName }}</a>
+          <template v-else>{{ recipientName }}</template>
+        </span>
+        <span v-if="commType" class="badge outbound-comm-type-badge" :class="commTypeBadgeClass">
+          {{ commType }}
+        </span>
+        <span v-if="interruptPriority && interruptPriority !== 'none'" class="badge bg-danger outbound-comm-priority">
+          {{ interruptPriority }}
+        </span>
+        <span v-if="attachments.length > 0" class="badge text-bg-info outbound-comm-attach-badge">
+          📎 {{ attachments.length }}
+        </span>
+        <span class="outbound-comm-time">{{ formattedTimestamp }}</span>
+        <span v-if="hasResult" class="outbound-comm-result" :class="isError ? 'result-error' : 'result-success'">
+          {{ isError ? '✗ Failed' : '✓ Delivered' }}
+        </span>
+      </div>
       <MarkdownView class="outbound-comm-content" ref="contentRef" :content="contentForRender" :self-agent-id="senderSessionId" />
       <div v-if="attachments.length > 0" class="outbound-comm-attachments">
         <AttachmentChip
@@ -37,10 +41,6 @@
         />
       </div>
     </div>
-    <!-- Result indicator -->
-    <div v-if="hasResult" class="outbound-comm-result" :class="isError ? 'result-error' : 'result-success'">
-      <span>{{ isError ? '✗ Failed' : '✓ Delivered' }}</span>
-    </div>
   </div>
 </template>
 
@@ -50,6 +50,7 @@ import { useResourceImages } from '@/composables/useResourceImages'
 import { useToolResult } from '@/composables/useToolResult'
 import { getAgentColor, getAssistantRowColor, slugifyAgentName } from '@/composables/useAgentColor'
 import { resolveAgentByIdentifier } from '@/utils/agentMentions'
+import { formatTimestamp } from '@/utils/time'
 import { useSessionStore } from '@/stores/session'
 import { useResourceStore } from '@/stores/resource'
 import AttachmentChip from '@/components/common/AttachmentChip.vue'
@@ -65,6 +66,7 @@ const content = computed(() => props.toolCall.input?.content || '')
 const summaryText = computed(() => props.toolCall.input?.summary || '')
 const commType = computed(() => props.toolCall.input?.comm_type || '')
 const interruptPriority = computed(() => props.toolCall.input?.interrupt_priority || '')
+const formattedTimestamp = computed(() => formatTimestamp(props.toolCall.timestamp))
 
 const commTypeBadgeClass = computed(() => {
   const map = {
@@ -183,8 +185,12 @@ defineExpose({ summary, params, result })
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 3px;
-  padding: 0 4px;
+  margin-bottom: 4px;
+}
+
+.outbound-comm-time {
+  font-size: 11px;
+  color: var(--bs-secondary-color);
 }
 
 .outbound-comm-recipient {
@@ -272,8 +278,8 @@ defineExpose({ summary, params, result })
 /* Result indicator */
 .outbound-comm-result {
   font-size: 11px;
-  padding: 2px 4px;
-  margin-top: 2px;
+  font-weight: 600;
+  margin-left: auto;
 }
 
 .outbound-comm-result.result-success {
