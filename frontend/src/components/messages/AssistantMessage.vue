@@ -59,14 +59,17 @@
           :tools="sv.mainTimelineTools"
           :messageId="sv.seg.id"
         />
-      </div>
 
-      <!-- Subagent bubbles (one per Task tool call — only ever on the last segment of a merged run) -->
-      <SubagentTimeline
-        v-for="task in taskToolCalls"
-        :key="task.id"
-        :taskToolCall="task"
-      />
+        <!-- Issue #1746 (stage: subagents) / #1765: subagent anchors render at their OWN
+             segment's position (not deferred to the end of the merged run) — every segment is
+             scanned for Task/Agent calls, not just the last, so an earlier subagent's anchor is
+             never evicted when a later segment launches another one. -->
+        <SubagentTimeline
+          v-for="anchor in sv.subagentAnchors"
+          :key="anchor.id"
+          :launchToolCall="anchor"
+        />
+      </div>
     </div>
 
     <!-- Outbound comm bubbles (extracted from timeline, rendered as message-level items) -->
@@ -86,6 +89,7 @@ import { computed, inject, onUnmounted, ref } from 'vue'
 import { formatTimestamp } from '@/utils/time'
 import { useResourceImages } from '@/composables/useResourceImages'
 import { getEffectiveStatusForTool } from '@/composables/useToolStatus'
+import { computeSubagentAnchorsBySegment } from '@/utils/subagentAnchors'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import MarkdownView from '@/components/common/MarkdownView.vue'
@@ -228,7 +232,7 @@ function segEnrichedToolCalls(seg, attachedTools, orphanedTools) {
  * MessageList's merge pass stamps them there when it collapses a run into mergedMessages.
  */
 const segmentViews = computed(() => {
-  return segments.value.map((seg, index) => {
+  const views = segments.value.map((seg, index) => {
     const isFirst = index === 0
     const attachedTools = isFirst ? props.attachedTools : (seg.attachedTools || [])
     const orphanedTools = isFirst ? props.orphanedPermissionTools : (seg.orphanedPermissionTools || [])
@@ -251,6 +255,14 @@ const segmentViews = computed(() => {
       mainTimelineTools
     }
   })
+
+  // Issue #1746 (stage: subagents) / #1765: attach each segment's own Task/Agent anchors,
+  // deduplicated across the WHOLE run — see utils/subagentAnchors.js for why this (not
+  // last-segment-only) is what fixes the live-view eviction bug.
+  const anchorsBySegment = computeSubagentAnchorsBySegment(views.map(v => v.enrichedToolCalls))
+  views.forEach((v, i) => { v.subagentAnchors = anchorsBySegment[i] })
+
+  return views
 })
 
 // Inline resource image click-to-open — one listener on the whole bubble covers every segment
@@ -260,14 +272,6 @@ const currentSessionId = computed(() => sessionStore.currentSessionId)
 useResourceImages(bubbleRef, currentSessionId)
 
 const lastSegmentView = computed(() => segmentViews.value[segmentViews.value.length - 1])
-
-/**
- * Issue #195 / #1746: Task tool calls — only ever appear on the LAST segment of a merged run,
- * since MessageList's merge pass treats Task/Agent/send_comm calls as a one-way boundary.
- */
-const taskToolCalls = computed(() => {
-  return (lastSegmentView.value?.enrichedToolCalls || []).filter(tc => tc.name === 'Task' || tc.name === 'Agent')
-})
 
 /**
  * Issue #652: send_comm tool calls — extracted for standalone bubble rendering (last segment only)
@@ -298,8 +302,9 @@ const hasAnythingToShow = computed(() => {
   // Issue #1486: always show the streaming placeholder so the caret is visible from the first
   // token — without this guard a thinking-first response is invisible until text arrives.
   return segmentViews.value.some(sv =>
-    !!sv.seg.streaming || sv.hasContent || sv.hasThinking || sv.mainTimelineTools.length > 0
-  ) || taskToolCalls.value.length > 0 || sendCommToolCalls.value.length > 0
+    !!sv.seg.streaming || sv.hasContent || sv.hasThinking ||
+    sv.mainTimelineTools.length > 0 || sv.subagentAnchors.length > 0
+  ) || sendCommToolCalls.value.length > 0
 })
 </script>
 

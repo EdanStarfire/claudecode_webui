@@ -54,9 +54,35 @@ export const useMessageStore = defineStore('message', () => {
   // Map<sessionId, { id, name, input } | null>
   const deferredToolUseBySession = ref(new Map())
 
-  // Issue #689: Latest task activity per tool_use_id for SubagentTimeline display
-  // Map<tool_use_id, { subtype, description, last_tool_name, status, summary, timestamp }>
-  const taskActivityByToolUseId = ref(new Map())
+  // Issue #1746 (stage: subagents) / #1765: task_id-first background-agent (subagent)
+  // tracking. Replaces the old tool_use_id-keyed taskActivityByToolUseId, which could not
+  // bridge a resumed leg (its own tool_use_id) back to the agent's earlier leg(s).
+  // Map<task_id, { task_id, session_id, legs: TaskLeg[] }> — mirrors the backend
+  // TaskLegRegistry's TaskLegEntry shape (src/task_registry.py).
+  const taskLegsByTaskId = ref(new Map())
+  // Map<tool_use_id, task_id> — bridges a launch/resume Task tool_use to its task_id once
+  // task_started arrives (one entry per leg, since every leg has its own launching tool_use).
+  // Before task_started arrives for a brand new launch, a launch anchor keys provisionally
+  // on its own tool_use_id (this map simply has no entry for it yet).
+  const taskIdByLaunchToolUseId = ref(new Map())
+  // Map<task_id, Map<legIndex, Message[]>> — narration (thinking/text) captured from subagent
+  // assistant messages (metadata.parent_tool_use_id set) that MessageList.vue would otherwise
+  // silently drop (issue #1671). Consumed by SubagentLegTranscript.vue.
+  const narrationByTaskIdAndLeg = ref(new Map())
+
+  // Issue #1746 (stage: subagents): shared, dynamic sticky-offset slot registry for the
+  // gutter chip — must live here (not per-component local state) so concurrently-active legs
+  // across independent SubagentTimeline instances stagger onto distinct top offsets instead
+  // of overlapping. Map<task_id, slotIndex> — unbounded (several-concurrent is normal usage,
+  // not a rare edge case, per direct user clarification during this stage's build — every
+  // concurrently-active leg gets its own real slot, not summarized into a "+N more" fallback).
+  // Freed slot indices (leg went idle/completed) are reused by the next claim, so a long
+  // session with many sequential (not simultaneous) subagents doesn't accumulate reserved space.
+  const gutterSlotsByTaskId = ref(new Map())
+
+  const TASK_LIFECYCLE_SUBTYPES = new Set(['task_started', 'task_progress', 'task_notification', 'task_updated'])
+  const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'stopped', 'killed'])
+  const TASK_STATUS_DISPLAY_MAP = { killed: 'stopped' }
 
   // Issue #1486: Per-session streaming delta buffers (in-memory only, never persisted)
   // Map<sessionId, { messageId, pendingText, pendingThinking, blockTypeByIndex, rafHandle }>
@@ -235,24 +261,16 @@ export const useMessageStore = defineStore('message', () => {
       // Trigger reactivity
       messagesBySession.value = new Map(messagesBySession.value)
 
-      // Issue #689: Reconstruct task activity from message history for SubagentTimeline
+      // Issue #1746 (stage: subagents): route subagent narration (thinking/text) into
+      // narrationByTaskIdAndLeg. Lifecycle leg state itself comes from hydrateBackgroundAgents()
+      // (the backend's already-reduced snapshot), which callers are expected to invoke before
+      // loadMessages() — see stores/session.js — so taskIdByLaunchToolUseId is already populated
+      // for every known leg by the time this walk runs.
       regularMessages.forEach(msg => {
-        if (msg.type === 'system') {
-          const subtype = msg.metadata?.subtype
-          const toolUseId = msg.metadata?.tool_use_id
-          if (toolUseId && ['task_started', 'task_progress', 'task_notification'].includes(subtype)) {
-            taskActivityByToolUseId.value.set(toolUseId, {
-              subtype,
-              description: msg.metadata?.description || msg.content,
-              last_tool_name: msg.metadata?.last_tool_name || null,
-              status: msg.metadata?.status || null,
-              summary: msg.metadata?.summary || null,
-              timestamp: msg.timestamp
-            })
-          }
+        if (msg.type === 'assistant' && msg.metadata?.parent_tool_use_id) {
+          _routeSubagentNarration(msg)
         }
       })
-      taskActivityByToolUseId.value = new Map(taskActivityByToolUseId.value)
 
       // Reconstruct task state from message history
       try {
@@ -275,10 +293,156 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   /**
-   * Issue #689: Get task activity data for a tool_use_id (used by SubagentTimeline)
+   * Issue #1746 (stage: subagents) / #1765: apply one Task lifecycle frame
+   * (task_started/task_progress/task_notification/task_updated) to taskLegsByTaskId.
+   * Mirrors src/task_registry.py's TaskLegRegistry.apply_frame() exactly, so live streaming
+   * and (via hydrateBackgroundAgents' backend snapshot) reload converge on the same state.
    */
-  function getTaskActivity(toolUseId) {
-    return taskActivityByToolUseId.value.get(toolUseId) || null
+  function applyTaskLifecycleFrame(sessionId, subtype, metadata, timestamp) {
+    const taskId = metadata?.task_id
+    if (!taskId || !TASK_LIFECYCLE_SUBTYPES.has(subtype)) return
+
+    if (subtype === 'task_started') {
+      let entry = taskLegsByTaskId.value.get(taskId)
+      if (!entry) {
+        entry = { task_id: taskId, session_id: sessionId, legs: [] }
+        taskLegsByTaskId.value.set(taskId, entry)
+      }
+      const toolUseId = metadata.tool_use_id || null
+      // Idempotency guard: a reconnect/replay must not duplicate a leg already recorded
+      // (e.g. hydrateBackgroundAgents' snapshot already included it).
+      if (toolUseId && entry.legs.some(leg => leg.tool_use_id === toolUseId)) return
+      entry.legs.push({
+        tool_use_id: toolUseId,
+        description: metadata.description || null,
+        started_at: timestamp,
+        last_progress_at: timestamp,
+        ended_at: null,
+        status: 'running',
+      })
+      if (toolUseId) taskIdByLaunchToolUseId.value.set(toolUseId, taskId)
+      taskLegsByTaskId.value = new Map(taskLegsByTaskId.value)
+      taskIdByLaunchToolUseId.value = new Map(taskIdByLaunchToolUseId.value)
+      return
+    }
+
+    const entry = taskLegsByTaskId.value.get(taskId)
+    if (!entry) return
+    const leg = entry.legs[entry.legs.length - 1]
+    if (!leg) return
+
+    if (subtype === 'task_progress') {
+      if (leg.status !== 'running') return
+      leg.last_progress_at = timestamp
+      if (metadata.description && !leg.description) leg.description = metadata.description
+      taskLegsByTaskId.value = new Map(taskLegsByTaskId.value)
+      return
+    }
+
+    // task_notification / task_updated: terminal status carrier. First-terminal-wins.
+    if (leg.status !== 'running') return
+    const rawStatus = subtype === 'task_notification'
+      ? metadata.status
+      : (metadata.status || metadata.patch?.status)
+    if (!TERMINAL_TASK_STATUSES.has(rawStatus)) return
+    leg.status = TASK_STATUS_DISPLAY_MAP[rawStatus] || rawStatus
+    leg.ended_at = timestamp
+    taskLegsByTaskId.value = new Map(taskLegsByTaskId.value)
+  }
+
+  /**
+   * Issue #1746 (stage: subagents): seed taskLegsByTaskId/taskIdByLaunchToolUseId from the
+   * backend's already-reduced snapshot (GET /api/sessions/{id}/background_agents) — the
+   * reload/reconnect source of truth, so gutter/anchor state is correct from a cold load
+   * without waiting for live frames to replay. Call before loadMessages() for a session.
+   */
+  async function hydrateBackgroundAgents(sessionId) {
+    try {
+      const data = await api.get(`/api/sessions/${sessionId}/background_agents`)
+      const agents = data.agents || []
+      for (const agent of agents) {
+        const taskId = agent.task_id
+        if (!taskId) continue
+        const legs = (agent.legs || []).map(leg => ({ ...leg }))
+        taskLegsByTaskId.value.set(taskId, { task_id: taskId, session_id: sessionId, legs })
+        for (const leg of legs) {
+          if (leg.tool_use_id) taskIdByLaunchToolUseId.value.set(leg.tool_use_id, taskId)
+        }
+      }
+      taskLegsByTaskId.value = new Map(taskLegsByTaskId.value)
+      taskIdByLaunchToolUseId.value = new Map(taskIdByLaunchToolUseId.value)
+    } catch (error) {
+      console.warn(`Failed to hydrate background agents for session ${sessionId}:`, error)
+    }
+  }
+
+  /** Issue #1746 (stage: subagents): all known legs for a task_id, or null. */
+  function getTaskLegEntry(taskId) {
+    if (!taskId) return null
+    return taskLegsByTaskId.value.get(taskId) || null
+  }
+
+  /** Issue #1746 (stage: subagents): resolve a launch/resume Task tool_use_id to its task_id. */
+  function getTaskIdForLaunchToolUse(toolUseId) {
+    if (!toolUseId) return null
+    return taskIdByLaunchToolUseId.value.get(toolUseId) || null
+  }
+
+  /**
+   * Issue #1746 (stage: subagents): route a subagent assistant message (narration) into
+   * narrationByTaskIdAndLeg, resolved via its parent_tool_use_id — which is always that
+   * specific leg's OWN launching/resuming Task tool_use_id, so it maps to exactly one leg
+   * index (no "current leg at arrival time" ambiguity needed).
+   */
+  function _routeSubagentNarration(message) {
+    const parentId = message.metadata?.parent_tool_use_id
+    if (!parentId) return false
+    const taskId = taskIdByLaunchToolUseId.value.get(parentId)
+    if (!taskId) return false
+    const entry = taskLegsByTaskId.value.get(taskId)
+    const legIndex = entry ? entry.legs.findIndex(leg => leg.tool_use_id === parentId) : -1
+    if (legIndex === -1) return false
+
+    if (!narrationByTaskIdAndLeg.value.has(taskId)) {
+      narrationByTaskIdAndLeg.value.set(taskId, new Map())
+    }
+    const perLeg = narrationByTaskIdAndLeg.value.get(taskId)
+    if (!perLeg.has(legIndex)) perLeg.set(legIndex, [])
+    perLeg.get(legIndex).push(message)
+    narrationByTaskIdAndLeg.value = new Map(narrationByTaskIdAndLeg.value)
+    return true
+  }
+
+  /** Issue #1746 (stage: subagents): narration messages for one leg, oldest first. */
+  function narrationForLeg(taskId, legIndex) {
+    if (!taskId) return []
+    return narrationByTaskIdAndLeg.value.get(taskId)?.get(legIndex) || []
+  }
+
+  /**
+   * Issue #1746 (stage: subagents): claim a shared, dynamic sticky-offset slot for a
+   * currently-active leg's gutter chip. Idempotent — returns the already-claimed slot if
+   * called again for the same task_id. Unbounded: assigns the lowest currently-unused
+   * non-negative index, reusing indices freed by completed/idle legs, so every
+   * concurrently-active leg gets its own distinct stacked position (no fixed cap).
+   */
+  function claimGutterSlot(taskId) {
+    if (!taskId) return 0
+    if (gutterSlotsByTaskId.value.has(taskId)) return gutterSlotsByTaskId.value.get(taskId)
+    const used = new Set(gutterSlotsByTaskId.value.values())
+    let slot = 0
+    while (used.has(slot)) slot++
+    gutterSlotsByTaskId.value.set(taskId, slot)
+    gutterSlotsByTaskId.value = new Map(gutterSlotsByTaskId.value)
+    return slot
+  }
+
+  /** Issue #1746 (stage: subagents): release a claimed gutter slot (leg went idle/completed/unmounted). */
+  function releaseGutterSlot(taskId) {
+    if (!taskId) return
+    if (gutterSlotsByTaskId.value.delete(taskId)) {
+      gutterSlotsByTaskId.value = new Map(gutterSlotsByTaskId.value)
+    }
   }
 
   /**
@@ -487,21 +651,19 @@ export const useMessageStore = defineStore('message', () => {
       lastStopReasonBySession.value = new Map(lastStopReasonBySession.value)
     }
 
-    // Issue #689: Intercept task lifecycle messages for SubagentTimeline activity display
+    // Issue #1746 (stage: subagents) / #1765: apply live Task lifecycle frames to the
+    // task_id-first store (includes task_updated, previously silently excluded here).
     if (message.type === 'system') {
       const subtype = message.metadata?.subtype
-      const toolUseId = message.metadata?.tool_use_id
-      if (toolUseId && ['task_started', 'task_progress', 'task_notification'].includes(subtype)) {
-        taskActivityByToolUseId.value.set(toolUseId, {
-          subtype,
-          description: message.metadata?.description || message.content,
-          last_tool_name: message.metadata?.last_tool_name || null,
-          status: message.metadata?.status || null,
-          summary: message.metadata?.summary || null,
-          timestamp: message.timestamp
-        })
-        taskActivityByToolUseId.value = new Map(taskActivityByToolUseId.value)
+      if (TASK_LIFECYCLE_SUBTYPES.has(subtype)) {
+        applyTaskLifecycleFrame(sessionId, subtype, message.metadata, message.timestamp)
       }
+    }
+
+    // Issue #1746 (stage: subagents): capture subagent narration (thinking/text) that would
+    // otherwise be silently dropped by MessageList's display filter (issue #1671).
+    if (message.type === 'assistant' && message.metadata?.parent_tool_use_id) {
+      _routeSubagentNarration(message)
     }
 
     // Issue #310: Apply backend display metadata if present
@@ -1041,8 +1203,21 @@ export const useMessageStore = defineStore('message', () => {
     toolSignatureToId.value.delete(sessionId)
     lastReceivedTimestamp.value.delete(sessionId)
 
-    // Issue #689: Clear task activity (ephemeral, reconstructs from history)
-    taskActivityByToolUseId.value = new Map()
+    // Issue #1746 (stage: subagents): clear only this session's task_id-scoped state
+    // (ephemeral, reconstructs via hydrateBackgroundAgents + live frames on reload/reconnect).
+    for (const [taskId, entry] of taskLegsByTaskId.value) {
+      if (entry.session_id !== sessionId) continue
+      taskLegsByTaskId.value.delete(taskId)
+      narrationByTaskIdAndLeg.value.delete(taskId)
+      gutterSlotsByTaskId.value.delete(taskId)
+      for (const leg of entry.legs) {
+        if (leg.tool_use_id) taskIdByLaunchToolUseId.value.delete(leg.tool_use_id)
+      }
+    }
+    taskLegsByTaskId.value = new Map(taskLegsByTaskId.value)
+    taskIdByLaunchToolUseId.value = new Map(taskIdByLaunchToolUseId.value)
+    narrationByTaskIdAndLeg.value = new Map(narrationByTaskIdAndLeg.value)
+    gutterSlotsByTaskId.value = new Map(gutterSlotsByTaskId.value)
 
     // Trigger reactivity
     messagesBySession.value = new Map(messagesBySession.value)
@@ -1184,6 +1359,21 @@ export const useMessageStore = defineStore('message', () => {
             message.metadata?.init_data) {
           const sessionStore = useSessionStore()
           sessionStore.storeInitData(sessionId, message.metadata.init_data)
+        }
+
+        // Issue #1746 (stage: subagents) review fix: a reconnect-resync must apply Task
+        // lifecycle frames and route subagent narration the same way addMessage() does —
+        // otherwise any subagent that started/progressed/completed entirely during the
+        // disconnect window is missing from taskLegsByTaskId/narrationByTaskIdAndLeg even
+        // though its raw messages are now present in the message list.
+        if (message.type === 'system') {
+          const subtype = message.metadata?.subtype
+          if (TASK_LIFECYCLE_SUBTYPES.has(subtype)) {
+            applyTaskLifecycleFrame(sessionId, subtype, message.metadata, message.timestamp)
+          }
+        }
+        if (message.type === 'assistant' && message.metadata?.parent_tool_use_id) {
+          _routeSubagentNarration(message)
         }
       })
 
@@ -1590,9 +1780,14 @@ export const useMessageStore = defineStore('message', () => {
     // Issue #1300: Deferred tool use tracking for deferral banner
     deferredToolUseBySession: readonly(deferredToolUseBySession),
 
-    // Issue #689: Task activity tracking for SubagentTimeline
-    taskActivityByToolUseId: readonly(taskActivityByToolUseId),
-    getTaskActivity,
+    // Issue #1746 (stage: subagents) / #1765: task_id-first background-agent tracking
+    applyTaskLifecycleFrame,
+    hydrateBackgroundAgents,
+    getTaskLegEntry,
+    getTaskIdForLaunchToolUse,
+    narrationForLeg,
+    claimGutterSlot,
+    releaseGutterSlot,
 
     // Issue #1000: Event cursors from REST /messages, consumed by connectSession()
     loadedEventCursors,

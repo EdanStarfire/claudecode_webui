@@ -371,6 +371,10 @@ export const useSessionStore = defineStore('session', () => {
         const messageStore = await import('./message')
         const msgStore = messageStore.useMessageStore()
         if (!msgStore.messagesBySession.has(sessionId)) {
+          // Issue #1746 (stage: subagents): seed background-agent leg state from the backend's
+          // reduced snapshot BEFORE loadMessages() replays history, so subagent narration
+          // routing (which resolves via task_id) has taskIdByLaunchToolUseId already populated.
+          await msgStore.hydrateBackgroundAgents(sessionId)
           await msgStore.loadMessages(sessionId)
         }
 
@@ -473,6 +477,10 @@ export const useSessionStore = defineStore('session', () => {
       const messageStore = await import('./message')
       const msgStore = messageStore.useMessageStore()
       if (!msgStore.messagesBySession.has(sessionId)) {
+        // Issue #1746 (stage: subagents): seed background-agent leg state from the backend's
+        // reduced snapshot BEFORE loadMessages() replays history, so subagent narration
+        // routing (which resolves via task_id) has taskIdByLaunchToolUseId already populated.
+        await msgStore.hydrateBackgroundAgents(sessionId)
         await msgStore.loadMessages(sessionId)
       }
 

@@ -522,3 +522,140 @@ describe('terminal-AM after finalized placeholder — Fix A (#1626)', () => {
     expect(store.messagesBySession.get(SID).length).toBe(1)
   })
 })
+
+describe('applyTaskLifecycleFrame — task_id-first subagent tracking (#1746 stage: subagents / #1765)', () => {
+  it('task_started appends a new leg keyed by task_id', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', {
+      task_id: 'task-A',
+      tool_use_id: 'toolu_launch',
+      description: 'alpha: explore the repo',
+    }, 100)
+
+    const entry = store.getTaskLegEntry('task-A')
+    expect(entry.legs).toHaveLength(1)
+    expect(entry.legs[0]).toMatchObject({
+      tool_use_id: 'toolu_launch',
+      description: 'alpha: explore the repo',
+      status: 'running',
+      started_at: 100,
+    })
+    expect(store.getTaskIdForLaunchToolUse('toolu_launch')).toBe('task-A')
+  })
+
+  it('a resume (second task_started for the same task_id) appends a second leg, not overwriting the first', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-B', tool_use_id: 'toolu_1' }, 100)
+    store.applyTaskLifecycleFrame('sess-1', 'task_notification', { task_id: 'task-B', status: 'stopped' }, 150)
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-B', tool_use_id: 'toolu_2' }, 200)
+
+    const entry = store.getTaskLegEntry('task-B')
+    expect(entry.legs).toHaveLength(2)
+    expect(entry.legs[0]).toMatchObject({ tool_use_id: 'toolu_1', status: 'stopped' })
+    expect(entry.legs[1]).toMatchObject({ tool_use_id: 'toolu_2', status: 'running' })
+    // Both legs' own tool_use_ids resolve to the same task_id.
+    expect(store.getTaskIdForLaunchToolUse('toolu_1')).toBe('task-B')
+    expect(store.getTaskIdForLaunchToolUse('toolu_2')).toBe('task-B')
+  })
+
+  it('task_progress bumps last_progress_at on the latest leg only, and is a no-op once terminal', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-C', tool_use_id: 'toolu_c' }, 100)
+    store.applyTaskLifecycleFrame('sess-1', 'task_progress', { task_id: 'task-C' }, 120)
+    expect(store.getTaskLegEntry('task-C').legs[0].last_progress_at).toBe(120)
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_notification', { task_id: 'task-C', status: 'completed' }, 130)
+    store.applyTaskLifecycleFrame('sess-1', 'task_progress', { task_id: 'task-C' }, 999)
+    // Progress after termination must not resurrect the leg or move its timestamp.
+    expect(store.getTaskLegEntry('task-C').legs[0].last_progress_at).toBe(120)
+    expect(store.getTaskLegEntry('task-C').legs[0].ended_at).toBe(130)
+  })
+
+  it('first-terminal-wins: a second terminal frame does not override the first', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-D', tool_use_id: 'toolu_d' }, 100)
+    store.applyTaskLifecycleFrame('sess-1', 'task_notification', { task_id: 'task-D', status: 'completed' }, 200)
+    store.applyTaskLifecycleFrame('sess-1', 'task_updated', { task_id: 'task-D', status: 'killed' }, 300)
+
+    const leg = store.getTaskLegEntry('task-D').legs[0]
+    expect(leg.status).toBe('completed')
+    expect(leg.ended_at).toBe(200)
+  })
+
+  it('task_updated with status=killed normalizes to "stopped" for display', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-E', tool_use_id: 'toolu_e' }, 100)
+    store.applyTaskLifecycleFrame('sess-1', 'task_updated', { task_id: 'task-E', status: 'killed' }, 200)
+
+    expect(store.getTaskLegEntry('task-E').legs[0].status).toBe('stopped')
+  })
+
+  it('task_updated reads status from patch when top-level status is absent', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-F', tool_use_id: 'toolu_f' }, 100)
+    store.applyTaskLifecycleFrame('sess-1', 'task_updated', { task_id: 'task-F', patch: { status: 'failed' } }, 200)
+
+    expect(store.getTaskLegEntry('task-F').legs[0].status).toBe('failed')
+  })
+
+  it('a frame with no task_id or an unrecognized subtype is ignored', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { tool_use_id: 'toolu_x' }, 100)
+    expect(store.getTaskLegEntry('task-missing')).toBeNull()
+
+    store.applyTaskLifecycleFrame('sess-1', 'not_a_real_subtype', { task_id: 'task-G' }, 100)
+    expect(store.getTaskLegEntry('task-G')).toBeNull()
+  })
+
+  it('hydrateBackgroundAgents seeds legs from the backend snapshot without replaying frames', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    apiMock.get.mockResolvedValue({
+      session_id: 'sess-1',
+      agents: [
+        {
+          task_id: 'task-H',
+          legs: [
+            { tool_use_id: 'toolu_h1', description: 'first leg', started_at: 10, last_progress_at: 20, ended_at: 30, status: 'completed' },
+            { tool_use_id: 'toolu_h2', description: 'resumed leg', started_at: 40, last_progress_at: 40, ended_at: null, status: 'running' },
+          ],
+        },
+      ],
+    })
+
+    await store.hydrateBackgroundAgents('sess-1')
+
+    const entry = store.getTaskLegEntry('task-H')
+    expect(entry.legs).toHaveLength(2)
+    expect(store.getTaskIdForLaunchToolUse('toolu_h1')).toBe('task-H')
+    expect(store.getTaskIdForLaunchToolUse('toolu_h2')).toBe('task-H')
+  })
+
+  it('claimGutterSlot assigns distinct, reusable slots dynamically (no fixed cap)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    expect(store.claimGutterSlot('task-1')).toBe(0)
+    expect(store.claimGutterSlot('task-2')).toBe(1)
+    expect(store.claimGutterSlot('task-3')).toBe(2) // no cap at 2 — several-concurrent is normal usage
+    expect(store.claimGutterSlot('task-1')).toBe(0) // idempotent for an already-claimed task_id
+
+    store.releaseGutterSlot('task-2')
+    expect(store.claimGutterSlot('task-4')).toBe(1) // freed slot index reused
+  })
+})

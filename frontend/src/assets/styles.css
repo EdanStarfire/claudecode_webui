@@ -280,6 +280,11 @@
     --row-assistant-accent: #64748b;
     --row-user-wash: rgba(99, 102, 241, 0.06);
     --row-assistant-wash: rgba(100, 116, 139, 0.05);
+    /* Issue #1746 (stage: subagents): soft per-agent row wash (color-mix % against
+       --agent-color-N-accent) and expand-panel chip backgrounds. */
+    --subagent-wash-pct: 8%;
+    --subagent-panel-chip-bg: #f1f5f9;
+    --subagent-code-chip-bg: rgba(0, 0, 0, 0.04);
 }
 
 [data-bs-theme="dark"] {
@@ -303,6 +308,11 @@
     --row-assistant-accent: #94a3b8;
     --row-user-wash: rgba(165, 180, 252, 0.10);
     --row-assistant-wash: rgba(148, 163, 184, 0.08);
+    /* Issue #1746 (stage: subagents): higher wash opacity in dark themes per spec's warning
+       that dark themes need more opacity for the same wash to read clearly. */
+    --subagent-wash-pct: 16%;
+    --subagent-panel-chip-bg: #1e293b;
+    --subagent-code-chip-bg: rgba(255, 255, 255, 0.06);
 }
 
 [data-bs-theme="sensitive-light"] {
@@ -326,6 +336,10 @@
     --row-assistant-accent: #64748b;
     --row-user-wash: rgba(99, 102, 241, 0.06);
     --row-assistant-wash: rgba(100, 116, 139, 0.05);
+    /* Issue #1746 (stage: subagents): soft per-agent row wash and expand-panel chip backgrounds. */
+    --subagent-wash-pct: 8%;
+    --subagent-panel-chip-bg: #f1f5f9;
+    --subagent-code-chip-bg: rgba(0, 0, 0, 0.04);
 }
 
 [data-bs-theme="sensitive-dark"] {
@@ -349,6 +363,10 @@
     --row-assistant-accent: #94a3b8;
     --row-user-wash: rgba(165, 180, 252, 0.10);
     --row-assistant-wash: rgba(148, 163, 184, 0.08);
+    /* Issue #1746 (stage: subagents): higher wash opacity in dark themes per spec's warning. */
+    --subagent-wash-pct: 16%;
+    --subagent-panel-chip-bg: #1e293b;
+    --subagent-code-chip-bg: rgba(255, 255, 255, 0.06);
 }
 
 /* Bootstrap 5.3 compiles button CSS vars to hardcoded values — they don't inherit from theme vars.
