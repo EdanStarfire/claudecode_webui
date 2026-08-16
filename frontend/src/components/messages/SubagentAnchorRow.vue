@@ -1,8 +1,13 @@
 <template>
   <div
     class="anchor-row"
-    :class="[`anchor-${anchorType}`, statusText ? `anchor-status-${statusText}` : null]"
+    :class="[`anchor-${anchorType}`, statusText ? `anchor-status-${statusText}` : null, clickable ? 'anchor-row-clickable' : null]"
     :style="rowStyle"
+    :role="clickable ? 'button' : null"
+    :tabindex="clickable ? 0 : null"
+    @click="clickable && emit('click', $event)"
+    @keydown.enter="clickable && emit('click', $event)"
+    @keydown.space.prevent="clickable && emit('click', $event)"
   >
     <span class="anchor-icon">{{ icon }}</span>
     <span v-if="subagentType" class="anchor-type-badge">{{ subagentType }}</span>
@@ -48,8 +53,16 @@ const props = defineProps({
   statusText: {
     type: String,
     default: ''
+  },
+  // Issue #1746 follow-up: only the PRIMARY (launch/resumed) row is clickable — toggles this
+  // leg's transcript, mirroring what the (now-removed) local gutter chip used to do.
+  clickable: {
+    type: Boolean,
+    default: false
   }
 })
+
+const emit = defineEmits(['click'])
 
 const ICONS = {
   launch: '\u{1F916}',        // robot
@@ -101,6 +114,19 @@ const rowStyle = computed(() => ({
 
 .anchor-row + .anchor-row {
   margin-top: 2px;
+}
+
+.anchor-row-clickable {
+  cursor: pointer;
+}
+
+.anchor-row-clickable:hover {
+  background: color-mix(in srgb, var(--row-accent) calc(var(--subagent-wash-pct, 8%) * 1.6), transparent);
+}
+
+.anchor-row-clickable:focus-visible {
+  outline: 2px solid var(--row-accent);
+  outline-offset: -2px;
 }
 
 .anchor-icon {

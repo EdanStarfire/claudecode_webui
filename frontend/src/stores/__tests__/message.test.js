@@ -740,3 +740,85 @@ describe('applyTaskLifecycleFrame — task_id-first subagent tracking (#1746 sta
     expect(store.claimGutterSlot('task-4')).toBe(1) // freed slot index reused
   })
 })
+
+describe('leg grouping by timestamp window — resume via SendMessage (#1746 follow-up, real repro)', () => {
+  // Reproduces the real Bard-E/F repro: a subagent is resumed not via a fresh Task/Agent call,
+  // but via the main session calling SendMessage(to: "<agent name>") — whose task_started frame
+  // reports the SendMessage call's OWN tool_use_id, not a Task/Agent call's. Confirmed from the
+  // real data: parent_tool_use_id on ALL of a subagent's child activity (original run AND every
+  // resume) stays pinned to the very first leg's own launch tool_use_id — never to the resume
+  // trigger's id — so grouping must resolve by WHEN activity happened, not by an exact
+  // parent_tool_use_id match against a specific leg.
+  const SID = 'sess-bardE'
+  const TASK_ID = 'a35b5c50d38dad9b4' // real task_id from the repro
+  const ROOT_TOOL_USE_ID = 'toolu_01BrQe3UjRSfdWZ3F4rnX5wN' // real leg-0 launch id (Task/Agent)
+  const RESUME_TOOL_USE_ID = 'toolu_01DHhviQiSYa2YH5waCU3YwH' // real resume trigger (SendMessage)
+
+  function setupTwoLegs(store) {
+    // Leg 0: original launch (Task/Agent), runs, then completes.
+    store.applyTaskLifecycleFrame(SID, 'task_started', { task_id: TASK_ID, tool_use_id: ROOT_TOOL_USE_ID, description: 'Bard-E verse sequence' }, 100)
+    store.applyTaskLifecycleFrame(SID, 'task_notification', { task_id: TASK_ID, status: 'completed' }, 150)
+    // Leg 1: resumed via SendMessage(to:"Bard-E") — a DIFFERENT tool_use_id, same task_id.
+    store.applyTaskLifecycleFrame(SID, 'task_started', { task_id: TASK_ID, tool_use_id: RESUME_TOOL_USE_ID, description: 'Bard-E verse sequence' }, 200)
+  }
+
+  it('computeSubagentAnchorsBySegment recognizes a SendMessage resume trigger once resolved via the store, not by name', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const { computeSubagentAnchorsBySegment } = await import('@/utils/subagentAnchors')
+    const store = useMessageStore()
+    setupTwoLegs(store)
+
+    const isLaunchAnchor = (tc) => tc.name === 'Task' || tc.name === 'Agent' || !!store.getTaskIdForLaunchToolUse(tc.id)
+
+    const segment = [
+      { id: RESUME_TOOL_USE_ID, name: 'SendMessage', input: { to: 'Bard-E' } }, // resolves via store
+      { id: 'toolu_unrelated_sendmessage', name: 'SendMessage', input: { to: 'Bard-F' } }, // does NOT resolve — not a real anchor
+    ]
+    const result = computeSubagentAnchorsBySegment([segment], isLaunchAnchor)
+    expect(result[0].map(a => a.id)).toEqual([RESUME_TOOL_USE_ID])
+  })
+
+  it('childToolCallsForLeg buckets child tool calls by which leg was active at the time, not by parent_tool_use_id match', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    setupTwoLegs(store)
+
+    // All child tool calls share the SAME parent_tool_use_id (the root/leg-0 launch id) —
+    // confirmed real behavior — but happen at different times relative to each leg's window.
+    store.handleToolCall(SID, { tool_use_id: 'toolu_leg0_tool', name: 'ToolSearch', input: {}, status: 'completed', parent_tool_use_id: ROOT_TOOL_USE_ID, created_at: 120 }) // during leg 0's window [100,200)
+    store.handleToolCall(SID, { tool_use_id: 'toolu_leg1_tool', name: 'SendMessage', input: { to: 'main' }, status: 'completed', parent_tool_use_id: ROOT_TOOL_USE_ID, created_at: 250 }) // during leg 1's window [200, inf)
+
+    const leg0Tools = store.childToolCallsForLeg(SID, TASK_ID, 0)
+    const leg1Tools = store.childToolCallsForLeg(SID, TASK_ID, 1)
+
+    expect(leg0Tools.map(t => t.id)).toEqual(['toolu_leg0_tool'])
+    expect(leg1Tools.map(t => t.id)).toEqual(['toolu_leg1_tool'])
+  })
+
+  it('narration (addMessage routing) attaches to the leg that was active at the narration message\'s own timestamp', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    setupTwoLegs(store)
+
+    // Narration during leg 0's window.
+    store.addMessage(SID, {
+      type: 'assistant',
+      content: 'Working on the first haiku.',
+      timestamp: 130,
+      metadata: { parent_tool_use_id: ROOT_TOOL_USE_ID },
+    })
+    // Narration during leg 1's window (after the resume) — same parent_tool_use_id as above.
+    store.addMessage(SID, {
+      type: 'assistant',
+      content: 'Working on the follow-up haiku.',
+      timestamp: 260,
+      metadata: { parent_tool_use_id: ROOT_TOOL_USE_ID },
+    })
+
+    const leg0Narration = store.narrationForLeg(TASK_ID, 0)
+    const leg1Narration = store.narrationForLeg(TASK_ID, 1)
+
+    expect(leg0Narration.map(m => m.content)).toEqual(['Working on the first haiku.'])
+    expect(leg1Narration.map(m => m.content)).toEqual(['Working on the follow-up haiku.'])
+  })
+})

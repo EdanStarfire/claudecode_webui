@@ -204,6 +204,19 @@ function segToolUses(seg, attachedTools, orphanedTools) {
 }
 
 /**
+ * Issue #1746 (stage: subagents) follow-up: a subagent leg doesn't always launch via a tool
+ * literally named 'Task'/'Agent' — resuming a stopped subagent happens via
+ * `SendMessage(to: "<agent name>")` instead, and that call's own tool_use_id is what its
+ * task_started frame reports. Recognize it as a launch anchor once the store confirms it
+ * resolved to a real task_id, in addition to the name-based check for freshly-dispatched
+ * Task/Agent calls that haven't resolved yet.
+ */
+function isSubagentLaunchAnchor(tc) {
+  if (tc.name === 'Task' || tc.name === 'Agent') return true
+  return !!messageStore.getTaskIdForLaunchToolUse(tc.id)
+}
+
+/**
  * Enriched tool calls (with live state from the store) for a single segment.
  */
 function segEnrichedToolCalls(seg, attachedTools, orphanedTools) {
@@ -237,9 +250,12 @@ const segmentViews = computed(() => {
     const attachedTools = isFirst ? props.attachedTools : (seg.attachedTools || [])
     const orphanedTools = isFirst ? props.orphanedPermissionTools : (seg.orphanedPermissionTools || [])
     const enrichedToolCalls = segEnrichedToolCalls(seg, attachedTools, orphanedTools)
-    // Issue #195: Main timeline tools — excludes Task tools and child tools (those with parent_tool_use_id)
+    // Issue #195: Main timeline tools — excludes subagent-launch tools and child tools (those
+    // with parent_tool_use_id). Issue #1746 follow-up: excludes ANY resolved leg-launch anchor
+    // (not just Task/Agent by name), so a SendMessage-triggered resume doesn't render twice
+    // (once as a flat main-timeline chip, once as its own subagent anchor).
     const mainTimelineTools = enrichedToolCalls.filter(tc =>
-      tc.name !== 'Task' && tc.name !== 'Agent' &&
+      !isSubagentLaunchAnchor(tc) &&
       tc.name !== 'mcp__legion__send_comm' &&
       !tc.parent_tool_use_id
     )
@@ -256,10 +272,11 @@ const segmentViews = computed(() => {
     }
   })
 
-  // Issue #1746 (stage: subagents) / #1765: attach each segment's own Task/Agent anchors,
+  // Issue #1746 (stage: subagents) / #1765: attach each segment's own subagent-launch anchors,
   // deduplicated across the WHOLE run — see utils/subagentAnchors.js for why this (not
-  // last-segment-only) is what fixes the live-view eviction bug.
-  const anchorsBySegment = computeSubagentAnchorsBySegment(views.map(v => v.enrichedToolCalls))
+  // last-segment-only) matters, and for why isSubagentLaunchAnchor is store-aware rather than
+  // a hardcoded Task/Agent name check.
+  const anchorsBySegment = computeSubagentAnchorsBySegment(views.map(v => v.enrichedToolCalls), isSubagentLaunchAnchor)
   views.forEach((v, i) => { v.subagentAnchors = anchorsBySegment[i] })
 
   return views

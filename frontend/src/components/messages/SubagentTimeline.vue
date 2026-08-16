@@ -1,17 +1,15 @@
 <template>
-  <SubagentGutter
-    :agentColor="agentColor"
-    :needsAttention="hasOpenPermission"
-    :tooltipLabel="tooltipLabel"
-    :slotIndex="slotIndex"
-    @toggle="expanded = !expanded"
-  >
+  <div class="subagent-timeline">
     <SubagentAnchorRow
+      :id="primaryAnchorId"
       :anchorType="primaryAnchorType"
       :agentColor="agentColor"
       :description="description"
       :subagentType="subagentType"
       :timestamp="primaryTimestamp"
+      clickable
+      :title="tooltipLabel"
+      @click="toggleExpanded"
     />
     <SubagentAnchorRow
       v-if="hasOpenPermission"
@@ -44,16 +42,15 @@
       :legToolCall="props.launchToolCall"
       :isRunning="isRunning"
     />
-  </SubagentGutter>
+  </div>
 </template>
 
 <script setup>
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, watch } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import { getEffectiveStatusForTool } from '@/composables/useToolStatus'
 import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
-import SubagentGutter from './SubagentGutter.vue'
 import SubagentAnchorRow from './SubagentAnchorRow.vue'
 import SubagentLegTranscript from './SubagentLegTranscript.vue'
 
@@ -63,6 +60,13 @@ import SubagentLegTranscript from './SubagentLegTranscript.vue'
 // own tool_use_id, so it gets rendered by its own separate SubagentTimeline instance at its
 // own position in the message flow — never sharing identity/DOM with an earlier leg's card,
 // which is what makes the #1765 eviction bug structurally impossible here).
+//
+// Issue #1746 follow-up: this component no longer owns any gutter/sticky-chip rendering —
+// that's SubagentGlobalGutter.vue's job now, mounted ONCE in MessageList.vue as a persistent
+// overlay outside the message flow (a subagent can run for many unrelated turns; a chip scoped
+// to this one card's own small DOM footprint can't stay visible for that whole span). This
+// component just renders the inline anchor rows/transcript and exposes a stable DOM id
+// (primaryAnchorId) on its own primary row so the global gutter can measure its position.
 const props = defineProps({
   launchToolCall: {
     type: Object,
@@ -83,15 +87,24 @@ const legIndex = computed(() => {
 })
 const leg = computed(() => legIndex.value >= 0 ? legEntry.value.legs[legIndex.value] : null)
 
+// Issue #1746 follow-up: stable id the global gutter measures against (see
+// SubagentGlobalGutter.vue) — only assignable once task_id is known, matching when the leg
+// itself becomes eligible for a gutter lane.
+const primaryAnchorId = computed(() =>
+  taskId.value ? `subagent-anchor-primary-${taskId.value}-${legIndex.value}` : undefined
+)
+
 const subagentType = computed(() => props.launchToolCall.input?.subagent_type || null)
 
+// Issue #1746 (stage: subagents) follow-up: a resume anchor's own launching tool call is
+// `SendMessage(to: "<agent name>", summary, message)`, not a Task/Agent call — it carries no
+// description/prompt fields, only summary/message. Fall back to those so a resumed leg's
+// anchor still shows something meaningful instead of the bare "Subagent task" default.
 const description = computed(() => {
   const fromLeg = leg.value?.description
   if (fromLeg) return fromLeg
-  const desc = props.launchToolCall.input?.description
-  if (desc) return desc
-  const prompt = props.launchToolCall.input?.prompt
-  return prompt || 'Subagent task'
+  const input = props.launchToolCall.input || {}
+  return input.description || input.prompt || input.summary || input.message || 'Subagent task'
 })
 
 const terminalDescription = computed(() => {
@@ -116,18 +129,9 @@ const isRunning = computed(() => {
   return ['pending', 'executing'].includes(getEffectiveStatusForTool(props.launchToolCall))
 })
 
-// Issue #1746 (stage: subagents): "needs attention" resolved directly from already-available
-// store data (no new backend surface needed) — any tool call whose parent_tool_use_id is THIS
-// leg's own launch/resume tool_use_id and is currently awaiting a permission decision.
-const hasOpenPermission = computed(() => {
-  const sessionId = sessionStore.currentSessionId
-  if (!sessionId) return false
-  const toolCalls = messageStore.toolCallsBySession.get(sessionId) || []
-  return toolCalls.some(tc =>
-    tc.parent_tool_use_id === props.launchToolCall.id &&
-    getEffectiveStatusForTool(tc) === 'permission_required'
-  )
-})
+const hasOpenPermission = computed(() =>
+  messageStore.hasOpenPermissionForTask(sessionStore.currentSessionId, taskId.value)
+)
 
 // Issue #1746 (stage: subagents): color keys on task_id once known (stable per agent
 // instance across its legs), falling back to subagent_type/tool_use_id before then.
@@ -141,7 +145,13 @@ const tooltipLabel = computed(() => {
   return `${type}${description.value}`
 })
 
-const expanded = ref(false)
+// Issue #1746 follow-up: expand state lives in the shared store (not a local ref) — the
+// global gutter chip, rendered in a completely different part of the DOM, needs to toggle the
+// SAME state as clicking this row directly.
+const expanded = computed(() => messageStore.isLegExpanded(taskId.value, legIndex.value))
+function toggleExpanded() {
+  messageStore.toggleLegExpanded(taskId.value, legIndex.value)
+}
 
 // Issue #1746 (stage: subagents) review fix: the permission-needed anchor is record-only
 // (per spec §4.3, action buttons are stage 4's job) — but the actual Allow/Deny UI for the
@@ -151,28 +161,14 @@ const expanded = ref(false)
 // immediate: true — a reload/cold-mount can land with a permission ALREADY open (not just a
 // live transition to it), which a non-immediate watch would never observe as a "change".
 watch(hasOpenPermission, (isOpen) => {
-  if (isOpen) expanded.value = true
+  if (isOpen && taskId.value) messageStore.setLegExpanded(taskId.value, legIndex.value, true)
 }, { immediate: true })
-
-// Issue #1746 (stage: subagents): claim/release a shared, dynamic sticky-offset slot while
-// this leg is the currently-active one — see message.js claimGutterSlot/releaseGutterSlot.
-const slotIndex = ref(null)
-function syncGutterSlot() {
-  const id = taskId.value
-  if (id && isRunning.value) {
-    slotIndex.value = messageStore.claimGutterSlot(id)
-  } else if (id) {
-    messageStore.releaseGutterSlot(id)
-    slotIndex.value = null
-  }
-}
-watch([taskId, isRunning], syncGutterSlot, { immediate: true })
-onUnmounted(() => {
-  // Issue #1746 (stage: subagents) review fix: only release if THIS instance still believes
-  // it holds the claim (slotIndex !== null). Two SubagentTimeline instances for the same
-  // task_id can coexist (an earlier terminal leg's own component alongside a later resumed
-  // leg's) — releasing unconditionally by task_id would let an unrelated, already-released
-  // instance's unmount evict a sibling leg's still-active slot claim out from under it.
-  if (taskId.value && slotIndex.value !== null) messageStore.releaseGutterSlot(taskId.value)
-})
 </script>
+
+<style scoped>
+.subagent-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+</style>

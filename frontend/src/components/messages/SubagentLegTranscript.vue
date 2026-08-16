@@ -89,7 +89,10 @@ const resourceStore = useResourceStore()
 const promptCollapsed = ref(true)
 const resultCollapsed = ref(true)
 
-const prompt = computed(() => props.legToolCall.input?.prompt || null)
+// Issue #1746 (stage: subagents) follow-up: a resume leg's own launching tool call is
+// SendMessage(to, summary, message) rather than Task/Agent(prompt, description) — fall back to
+// `message` so the resumed leg's own follow-up instructions still show in its Prompt panel.
+const prompt = computed(() => props.legToolCall.input?.prompt || props.legToolCall.input?.message || null)
 
 const promptDisplay = computed(() => {
   if (!prompt.value) return ''
@@ -102,13 +105,15 @@ function openFullPrompt() {
 
 const narration = computed(() => messageStore.narrationForLeg(props.taskId, props.legIndex))
 
-// Child tools: all tool calls whose parent_tool_use_id matches THIS leg's own launch/resume
-// tool_use_id — never another leg's, since each leg's Task/Agent call has its own tool_use_id.
+// Issue #1746 (stage: subagents) follow-up: child tools for THIS leg specifically, resolved by
+// timestamp window (see message.js's childToolCallsForLeg) — NOT by matching parent_tool_use_id
+// against this leg's own launch/resume tool_use_id. Real repro data confirmed parent_tool_use_id
+// on ALL of a subagent's activity (original run and every resume) stays pinned to the very
+// first leg's own id, so an exact-id match here would always attribute everything to leg 0.
 const childTools = computed(() => {
   const sessionId = sessionStore.currentSessionId
   if (!sessionId) return []
-  const allToolCalls = messageStore.toolCallsBySession.get(sessionId) || []
-  return allToolCalls.filter(tc => tc.parent_tool_use_id === props.legToolCall.id)
+  return messageStore.childToolCallsForLeg(sessionId, props.taskId, props.legIndex)
 })
 
 const hasResult = computed(() => props.legToolCall.result != null)

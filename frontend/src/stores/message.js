@@ -382,6 +382,17 @@ export const useMessageStore = defineStore('message', () => {
     return taskLegsByTaskId.value.get(taskId) || null
   }
 
+  /**
+   * Issue #1746 (stage: subagents) follow-up: every known task's leg entry for a session, so
+   * MessageList.vue can surface leg-terminal (completed/failed/stopped) events as their own
+   * main-timeline signals — spec §4.2's causal-moment list, not just the subagent's own nested
+   * card. taskLegsByTaskId itself is intentionally not exposed raw (see getTaskLegEntry).
+   */
+  function allTaskLegEntriesForSession(sessionId) {
+    if (!sessionId) return []
+    return Array.from(taskLegsByTaskId.value.values()).filter(e => e.session_id === sessionId)
+  }
+
   /** Issue #1746 (stage: subagents): resolve a launch/resume Task tool_use_id to its task_id. */
   function getTaskIdForLaunchToolUse(toolUseId) {
     if (!toolUseId) return null
@@ -389,10 +400,33 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   /**
+   * Issue #1746 (stage: subagents) follow-up (real repro data): parent_tool_use_id on ALL of a
+   * subagent's child activity — its original run AND every subsequent resume — stays pinned to
+   * the very FIRST leg's own launching tool_use_id. A resume (triggered via
+   * `SendMessage(to: "<agent name>")`, not a fresh Task/Agent call) never becomes any child's
+   * parent_tool_use_id itself; the underlying SDK continues reporting the original launch's id
+   * for the whole nested session it's waking back up. So which LEG a piece of activity belongs
+   * to can't be resolved by matching parent_tool_use_id against a specific leg's own id (that
+   * always resolves to leg 0) — it has to be resolved by WHEN the activity happened: the most
+   * recent leg whose started_at is at or before the activity's own timestamp.
+   */
+  function _resolveLegIndexForTimestamp(entry, timestamp) {
+    if (!entry || !entry.legs.length) return -1
+    if (timestamp == null) return entry.legs.length - 1
+    let idx = 0
+    for (let i = 0; i < entry.legs.length; i++) {
+      const startedAt = entry.legs[i].started_at
+      if (startedAt == null || startedAt <= timestamp) idx = i
+      else break
+    }
+    return idx
+  }
+
+  /**
    * Issue #1746 (stage: subagents): route a subagent assistant message (narration) into
-   * narrationByTaskIdAndLeg, resolved via its parent_tool_use_id — which is always that
-   * specific leg's OWN launching/resuming Task tool_use_id, so it maps to exactly one leg
-   * index (no "current leg at arrival time" ambiguity needed).
+   * narrationByTaskIdAndLeg, resolved via its parent_tool_use_id (bridges to the task_id — see
+   * _resolveLegIndexForTimestamp for why the LEG itself is then resolved by timestamp, not by
+   * matching parent_tool_use_id against a specific leg's own id).
    */
   function _routeSubagentNarration(message) {
     const parentId = message.metadata?.parent_tool_use_id
@@ -400,7 +434,7 @@ export const useMessageStore = defineStore('message', () => {
     const taskId = taskIdByLaunchToolUseId.value.get(parentId)
     if (!taskId) return false
     const entry = taskLegsByTaskId.value.get(taskId)
-    const legIndex = entry ? entry.legs.findIndex(leg => leg.tool_use_id === parentId) : -1
+    const legIndex = _resolveLegIndexForTimestamp(entry, message.timestamp)
     if (legIndex === -1) return false
 
     if (!narrationByTaskIdAndLeg.value.has(taskId)) {
@@ -411,6 +445,30 @@ export const useMessageStore = defineStore('message', () => {
     perLeg.get(legIndex).push(message)
     narrationByTaskIdAndLeg.value = new Map(narrationByTaskIdAndLeg.value)
     return true
+  }
+
+  /**
+   * Issue #1746 (stage: subagents) follow-up: child tool calls for one specific leg, resolved
+   * the same timestamp-window way as narration (see _resolveLegIndexForTimestamp) — NOT by
+   * matching parent_tool_use_id against that leg's own launch/resume tool_use_id, since only
+   * the very first leg's id ever appears as a child's parent_tool_use_id.
+   */
+  function childToolCallsForLeg(sessionId, taskId, legIndex) {
+    if (!sessionId || !taskId) return []
+    const entry = taskLegsByTaskId.value.get(taskId)
+    if (!entry || !entry.legs.length) return []
+    const rootToolUseId = entry.legs[0].tool_use_id
+    if (!rootToolUseId) return []
+
+    const windowStart = entry.legs[legIndex]?.started_at ?? -Infinity
+    const windowEnd = entry.legs[legIndex + 1]?.started_at ?? Infinity
+
+    const toolCalls = toolCallsBySession.value.get(sessionId) || []
+    return toolCalls.filter(tc => {
+      if (tc.parent_tool_use_id !== rootToolUseId) return false
+      const ts = typeof tc.timestamp === 'number' ? tc.timestamp : new Date(tc.timestamp).getTime() / 1000
+      return ts >= windowStart && ts < windowEnd
+    })
   }
 
   /** Issue #1746 (stage: subagents): narration messages for one leg, oldest first. */
@@ -443,6 +501,50 @@ export const useMessageStore = defineStore('message', () => {
     if (gutterSlotsByTaskId.value.delete(taskId)) {
       gutterSlotsByTaskId.value = new Map(gutterSlotsByTaskId.value)
     }
+  }
+
+  // Issue #1746 (stage: subagents) follow-up: per-leg transcript expand state, shared here
+  // (not a local component ref) — the global gutter chip (SubagentGlobalGutter.vue, rendered
+  // once in MessageList.vue) and the inline anchor row (rendered deep inside AssistantMessage
+  // -> SubagentTimeline) are separate DOM subtrees that both need to control/read the SAME
+  // leg's expand state.
+  const expandedLegs = ref(new Map()) // Map<`${taskId}:${legIndex}`, boolean>
+
+  function isLegExpanded(taskId, legIndex) {
+    if (!taskId) return false
+    return !!expandedLegs.value.get(`${taskId}:${legIndex}`)
+  }
+
+  function setLegExpanded(taskId, legIndex, value) {
+    if (!taskId) return
+    expandedLegs.value.set(`${taskId}:${legIndex}`, value)
+    expandedLegs.value = new Map(expandedLegs.value)
+  }
+
+  function toggleLegExpanded(taskId, legIndex) {
+    setLegExpanded(taskId, legIndex, !isLegExpanded(taskId, legIndex))
+  }
+
+  /**
+   * Issue #1746 (stage: subagents): "needs attention" — true when a leg has an open permission
+   * request on one of its own child tool calls. Resolved from already-available store data (no
+   * new backend surface needed): any tool call whose parent_tool_use_id is the task's root
+   * launch tool_use_id (see childToolCallsForLeg for why child activity always keys off the
+   * root, never a specific leg's own id) and is currently awaiting a permission decision.
+   */
+  function hasOpenPermissionForTask(sessionId, taskId) {
+    if (!sessionId || !taskId) return false
+    const entry = taskLegsByTaskId.value.get(taskId)
+    const rootToolUseId = entry?.legs?.[0]?.tool_use_id
+    if (!rootToolUseId) return false
+    const toolCalls = toolCallsBySession.value.get(sessionId) || []
+    // Inlined status check (not importing useToolStatus.js's getEffectiveStatusForTool here —
+    // that module imports useMessageStore itself, and message.js has never been part of that
+    // import cycle; not worth introducing it for one field comparison).
+    return toolCalls.some(tc =>
+      tc.parent_tool_use_id === rootToolUseId &&
+      (tc.status === 'permission_required' || tc.backendStatus === 'awaiting_permission')
+    )
   }
 
   /**
@@ -1264,6 +1366,9 @@ export const useMessageStore = defineStore('message', () => {
       taskLegsByTaskId.value.delete(taskId)
       narrationByTaskIdAndLeg.value.delete(taskId)
       gutterSlotsByTaskId.value.delete(taskId)
+      for (const legIndex of entry.legs.keys()) {
+        expandedLegs.value.delete(`${taskId}:${legIndex}`)
+      }
       for (const leg of entry.legs) {
         if (leg.tool_use_id) taskIdByLaunchToolUseId.value.delete(leg.tool_use_id)
       }
@@ -1272,6 +1377,7 @@ export const useMessageStore = defineStore('message', () => {
     taskIdByLaunchToolUseId.value = new Map(taskIdByLaunchToolUseId.value)
     narrationByTaskIdAndLeg.value = new Map(narrationByTaskIdAndLeg.value)
     gutterSlotsByTaskId.value = new Map(gutterSlotsByTaskId.value)
+    expandedLegs.value = new Map(expandedLegs.value)
 
     // Trigger reactivity
     messagesBySession.value = new Map(messagesBySession.value)
@@ -1840,8 +1946,14 @@ export const useMessageStore = defineStore('message', () => {
     getTaskLegEntry,
     getTaskIdForLaunchToolUse,
     narrationForLeg,
+    childToolCallsForLeg,
+    allTaskLegEntriesForSession,
     claimGutterSlot,
     releaseGutterSlot,
+    isLegExpanded,
+    setLegExpanded,
+    toggleLegExpanded,
+    hasOpenPermissionForTask,
 
     // Issue #1000: Event cursors from REST /messages, consumed by connectSession()
     loadedEventCursors,
