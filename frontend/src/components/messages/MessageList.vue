@@ -56,6 +56,7 @@
               :anchorType="item.anchorType"
               :agentColor="item.agentColor"
               :description="item.description"
+              :markdownBody="item.markdownBody"
               :statusText="item.statusText"
               :timestamp="item.timestamp"
             />
@@ -244,7 +245,11 @@ function collectSubagentSignals(sessionId) {
       anchorType: 'pushed',
       taskId,
       agentColor: getAgentColor(slugifyAgentName(taskId)),
-      description: tc.input?.message || tc.input?.content || tc.input?.summary || 'Message sent to main',
+      // Issue #1746 follow-up (user feedback): this content guides the main session — it must
+      // render with full markdown support, not a single truncated line. Header keeps a short
+      // static label; the actual message goes in markdownBody (SubagentAnchorRow.vue).
+      description: 'Message to main',
+      markdownBody: tc.input?.message || tc.input?.content || tc.input?.summary || 'Message sent to main',
       statusText: '',
       timestamp: ts,
       _sortTs: parseTimestamp(ts).getTime(),
@@ -265,6 +270,10 @@ function collectSubagentSignals(sessionId) {
         taskId: entry.task_id,
         agentColor: getAgentColor(slugifyAgentName(entry.task_id)),
         description: leg.description || 'Agent',
+        // Issue #1746 follow-up (user feedback): the subagent's own final report (leg.result,
+        // from task_notification's summary) must be shown, not just a bare status badge —
+        // with the same full markdown support as the header's pushed-to-main content.
+        markdownBody: leg.result || null,
         statusText: leg.status,
         timestamp: leg.ended_at,
         _sortTs: parseTimestamp(leg.ended_at).getTime(),

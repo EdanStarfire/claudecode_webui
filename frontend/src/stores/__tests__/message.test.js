@@ -643,6 +643,23 @@ describe('applyTaskLifecycleFrame — task_id-first subagent tracking (#1746 sta
     expect(store.getTaskIdForLaunchToolUse('toolu_2')).toBe('task-B')
   })
 
+  it('task_notification summary is captured as the leg result; task_updated never sets one', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-R', tool_use_id: 'toolu_r' }, 100)
+    store.applyTaskLifecycleFrame('sess-1', 'task_notification', {
+      task_id: 'task-R', status: 'completed', summary: 'The verses are sent, the work is through.',
+    }, 150)
+
+    expect(store.getTaskLegEntry('task-R').legs[0].result).toBe('The verses are sent, the work is through.')
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-S', tool_use_id: 'toolu_s' }, 100)
+    store.applyTaskLifecycleFrame('sess-1', 'task_updated', { task_id: 'task-S', status: 'killed' }, 150)
+
+    expect(store.getTaskLegEntry('task-S').legs[0].result).toBeUndefined()
+  })
+
   it('task_progress bumps last_progress_at on the latest leg only, and is a no-op once terminal', async () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()

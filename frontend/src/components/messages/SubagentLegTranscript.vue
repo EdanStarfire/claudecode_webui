@@ -13,24 +13,25 @@
       <pre v-if="!promptCollapsed" class="prompt-content">{{ promptDisplay }}</pre>
     </div>
 
-    <!-- Narration (thinking/text captured from the subagent's own turns — issue #1671) -->
-    <div v-if="narration.length > 0" class="leg-narration">
-      <div
-        v-for="(msg, idx) in narration"
-        :key="msg.message_id || msg.id || idx"
-        class="narration-entry"
-      >
-        <MarkdownView v-if="msg.content" class="narration-text" :content="msg.content" />
-        <div v-if="msg.thinking" class="narration-thinking">{{ msg.thinking }}</div>
-      </div>
-    </div>
-
-    <!-- Child tool calls -->
-    <ActivityTimeline
-      v-if="childTools.length > 0"
-      :tools="childTools"
-      :messageId="legToolCall.id"
-    />
+    <!-- Issue #1746 follow-up (user feedback): narration (thinking/text — issue #1671) and
+         child tool calls interleaved in the order they actually happened (thought, tool, tool,
+         message, tool, ...), not stacked as two separate lists — otherwise commentary reads out
+         of order relative to the tool usage it's actually about. -->
+    <template v-if="eventRuns.length > 0">
+      <template v-for="(run, runIdx) in eventRuns" :key="runIdx">
+        <div v-if="run.kind === 'narration'" class="leg-narration">
+          <div
+            v-for="(msg, idx) in run.items"
+            :key="msg.message_id || msg.id || idx"
+            class="narration-entry"
+          >
+            <MarkdownView v-if="msg.content" class="narration-text" :content="msg.content" />
+            <div v-if="msg.thinking" class="narration-thinking">{{ msg.thinking }}</div>
+          </div>
+        </div>
+        <ActivityTimeline v-else :tools="run.items" :messageId="legToolCall.id" />
+      </template>
+    </template>
     <div v-else-if="isRunning" class="leg-placeholder">
       <span class="placeholder-spinner"></span>
       Working...
@@ -48,7 +49,9 @@
         {{ isError ? 'Error:' : 'Result:' }}
         <a v-if="isResultTruncated" class="view-full-link" @click.stop="openFullResult">View Full</a>
       </div>
-      <pre v-if="!resultCollapsed && resultSummary" class="result-content">{{ resultSummary }}</pre>
+      <div v-if="!resultCollapsed && resultSummary" class="result-content">
+        <MarkdownView :content="resultSummary" />
+      </div>
     </div>
   </div>
 </template>
@@ -60,6 +63,7 @@ import { useSessionStore } from '@/stores/session'
 import { useResourceStore } from '@/stores/resource'
 import MarkdownView from '@/components/common/MarkdownView.vue'
 import ActivityTimeline from './tools/ActivityTimeline.vue'
+import { buildLegEventRuns } from '@/utils/subagentLegEvents'
 
 const props = defineProps({
   taskId: {
@@ -105,6 +109,13 @@ function openFullPrompt() {
 
 const narration = computed(() => messageStore.narrationForLeg(props.taskId, props.legIndex))
 
+// Issue #1746 follow-up (user feedback): the subagent's own final report lives in the leg's
+// `result` (from task_notification's `summary`) — NOT `legToolCall.result`, which is only the
+// launching tool_use's own dispatch acknowledgment (e.g. "Agent launched in background"), never
+// the subagent's actual output for a run_in_background launch.
+const legEntry = computed(() => props.taskId ? messageStore.getTaskLegEntry(props.taskId) : null)
+const leg = computed(() => legEntry.value?.legs?.[props.legIndex] ?? null)
+
 // Issue #1746 (stage: subagents) follow-up: child tools for THIS leg specifically, resolved by
 // timestamp window (see message.js's childToolCallsForLeg) — NOT by matching parent_tool_use_id
 // against this leg's own launch/resume tool_use_id. Real repro data confirmed parent_tool_use_id
@@ -116,11 +127,18 @@ const childTools = computed(() => {
   return messageStore.childToolCallsForLeg(sessionId, props.taskId, props.legIndex)
 })
 
-const hasResult = computed(() => props.legToolCall.result != null)
-const isError = computed(() => props.legToolCall.result?.error === true)
+// Issue #1746 follow-up (user feedback): chronologically-interleaved narration+tool runs —
+// see utils/subagentLegEvents.js for why this also fixes narration entries losing content
+// (both live's literal "Assistant response" placeholder and reload's blank-content divergence
+// stem from the same underlying content-less segments, which this filters out entirely).
+const eventRuns = computed(() => buildLegEventRuns(narration.value, childTools.value))
+
+const hasResult = computed(() => !!leg.value?.result || props.legToolCall.result != null)
+const isError = computed(() => leg.value?.status === 'failed' || props.legToolCall.result?.error === true)
 
 const fullResultContent = computed(() => {
-  if (!hasResult.value) return ''
+  if (leg.value?.result) return leg.value.result
+  if (props.legToolCall.result == null) return ''
   const content = props.legToolCall.result?.content || props.legToolCall.result?.message || ''
   if (typeof content !== 'string') return JSON.stringify(content, null, 2)
   return content
@@ -210,8 +228,7 @@ function openFullResult() {
   text-decoration: underline;
 }
 
-.prompt-content,
-.result-content {
+.prompt-content {
   margin: 0;
   padding: 8px;
   font-family: 'Courier New', monospace;
@@ -219,6 +236,20 @@ function openFullResult() {
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 200px;
+  overflow-y: auto;
+  line-height: 1.4;
+  color: var(--bs-body-color);
+  background: var(--subagent-code-chip-bg, var(--bs-body-bg));
+  border-top: 1px solid var(--bs-border-color);
+}
+
+/* Issue #1746 follow-up (user feedback): the result is now rendered as markdown, not plain
+   preformatted text — same font/line-height as narration/messages, not the prompt's monospace. */
+.result-content {
+  margin: 0;
+  padding: 8px;
+  font-size: 12px;
+  max-height: 300px;
   overflow-y: auto;
   line-height: 1.4;
   color: var(--bs-body-color);

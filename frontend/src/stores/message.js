@@ -337,6 +337,9 @@ export const useMessageStore = defineStore('message', () => {
     if (!TERMINAL_TASK_STATUSES.has(rawStatus)) return
     leg.status = TASK_STATUS_DISPLAY_MAP[rawStatus] || rawStatus
     leg.ended_at = timestamp
+    // Mirrors src/task_registry.py: only task_notification carries the subagent's own
+    // final report (`summary`) — task_updated (TaskStop-only termination) has no such field.
+    if (subtype === 'task_notification' && metadata.summary) leg.result = metadata.summary
     taskLegsByTaskId.value = new Map(taskLegsByTaskId.value)
   }
 

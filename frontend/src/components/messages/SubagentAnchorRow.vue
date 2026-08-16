@@ -1,29 +1,39 @@
 <template>
-  <div
-    class="anchor-row"
-    :class="[`anchor-${anchorType}`, statusText ? `anchor-status-${statusText}` : null, clickable ? 'anchor-row-clickable' : null]"
-    :style="rowStyle"
-    :role="clickable ? 'button' : null"
-    :tabindex="clickable ? 0 : null"
-    @click="clickable && emit('click', $event)"
-    @keydown.enter="clickable && emit('click', $event)"
-    @keydown.space.prevent="clickable && emit('click', $event)"
-  >
-    <span class="anchor-icon">{{ icon }}</span>
-    <span v-if="subagentType" class="anchor-type-badge">{{ subagentType }}</span>
-    <span class="anchor-description">{{ truncatedDescription }}</span>
-    <!-- Issue #1746 (stage: subagents) review fix: badge color must follow the actual outcome
-         (statusText: completed/failed/stopped), not the anchor's structural type (which is
-         always 'completed' for any terminal leg) — otherwise a failed leg renders with the
-         same green styling as a success. -->
-    <span v-if="statusText" class="anchor-status-badge" :class="`status-${statusText}`">{{ statusText }}</span>
-    <span class="anchor-timestamp">{{ formattedTimestamp }}</span>
+  <div class="anchor-row-group">
+    <div
+      class="anchor-row"
+      :class="[`anchor-${anchorType}`, statusText ? `anchor-status-${statusText}` : null, clickable ? 'anchor-row-clickable' : null]"
+      :style="rowStyle"
+      :role="clickable ? 'button' : null"
+      :tabindex="clickable ? 0 : null"
+      @click="clickable && emit('click', $event)"
+      @keydown.enter="clickable && emit('click', $event)"
+      @keydown.space.prevent="clickable && emit('click', $event)"
+    >
+      <span class="anchor-icon">{{ icon }}</span>
+      <span v-if="subagentType" class="anchor-type-badge">{{ subagentType }}</span>
+      <span class="anchor-description">{{ truncatedDescription }}</span>
+      <!-- Issue #1746 (stage: subagents) review fix: badge color must follow the actual outcome
+           (statusText: completed/failed/stopped), not the anchor's structural type (which is
+           always 'completed' for any terminal leg) — otherwise a failed leg renders with the
+           same green styling as a success. -->
+      <span v-if="statusText" class="anchor-status-badge" :class="`status-${statusText}`">{{ statusText }}</span>
+      <span class="anchor-timestamp">{{ formattedTimestamp }}</span>
+    </div>
+    <!-- Issue #1746 follow-up (user feedback): content that actually guides the main session
+         (a message pushed to main, or a subagent's own completion report) must render with the
+         same full markdown support as any other user/assistant message — not clamped to one
+         truncated line with no way to see what was cut off. Always visible, no collapse. -->
+    <div v-if="markdownBody" class="anchor-body">
+      <MarkdownView :content="markdownBody" />
+    </div>
   </div>
 </template>
 
 <script setup>
 import { computed } from 'vue'
 import { formatTimestamp } from '@/utils/time'
+import MarkdownView from '@/components/common/MarkdownView.vue'
 
 const props = defineProps({
   // Issue #1746 (stage: subagents): one of the spec's causal anchor types. 'pushed' (a
@@ -59,6 +69,13 @@ const props = defineProps({
   clickable: {
     type: Boolean,
     default: false
+  },
+  // Issue #1746 follow-up (user feedback): full markdown content shown below the compact
+  // header row, always visible — used for 'pushed' (the actual message sent to main) and
+  // 'completed' (the subagent's own result/summary, when one exists) anchor types.
+  markdownBody: {
+    type: String,
+    default: null
   }
 })
 
@@ -112,8 +129,14 @@ const rowStyle = computed(() => ({
   background: color-mix(in srgb, var(--row-accent) var(--subagent-wash-pct, 8%), transparent);
 }
 
-.anchor-row + .anchor-row {
+.anchor-row-group + .anchor-row-group {
   margin-top: 2px;
+}
+
+.anchor-body {
+  padding: 4px 10px 8px calc(10px + 3px);
+  font-size: 13px;
+  color: var(--bs-body-color);
 }
 
 .anchor-row-clickable {
