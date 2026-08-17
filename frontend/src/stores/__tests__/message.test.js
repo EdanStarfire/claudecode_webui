@@ -719,6 +719,34 @@ describe('applyTaskLifecycleFrame — task_id-first subagent tracking (#1746 sta
     expect(store.getTaskLegEntry('task-G')).toBeNull()
   })
 
+  it('issue #1771: a local_bash task_started produces no leg and no launch-tool-use mapping', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', {
+      task_id: 'task-bash',
+      tool_use_id: 'toolu_bash',
+      task_type: 'local_bash',
+    }, 100)
+
+    expect(store.getTaskLegEntry('task-bash')).toBeNull()
+    expect(store.getTaskIdForLaunchToolUse('toolu_bash')).toBeNull()
+  })
+
+  it('issue #1771: a task_started with no task_type still registers normally (backward compat)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', {
+      task_id: 'task-notype',
+      tool_use_id: 'toolu_notype',
+    }, 100)
+
+    const entry = store.getTaskLegEntry('task-notype')
+    expect(entry.legs).toHaveLength(1)
+    expect(store.getTaskIdForLaunchToolUse('toolu_notype')).toBe('task-notype')
+  })
+
   it('hydrateBackgroundAgents seeds legs from the backend snapshot without replaying frames', async () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()

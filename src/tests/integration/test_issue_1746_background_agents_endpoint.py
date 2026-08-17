@@ -88,6 +88,44 @@ async def test_background_agents_endpoint_returns_hydrated_snapshot(api_integrat
 
 
 @pytest.mark.asyncio
+async def test_background_agents_endpoint_excludes_local_bash(api_integration_env):
+    """Issue #1771: a mix of one real local_agent task_started and one
+    backgrounded local_bash task_started must only surface the agent one —
+    local_bash must never appear in the background_agents response."""
+    env = api_integration_env
+    client = env["client"]
+    coordinator = env["coordinator"]
+
+    project = await env["create_test_project"]()
+    session = await env["create_test_session"](project["project_id"])
+    session_id = session["session_id"]
+
+    session_dir = await coordinator.session_manager.get_session_directory(session_id)
+    storage = coordinator._storage_managers.get(session_id)
+    if storage is None:
+        from src.data_storage import DataStorageManager
+        storage = DataStorageManager(session_dir)
+        await storage.initialize()
+        coordinator._storage_managers[session_id] = storage
+
+    local_bash_started = _stored_task_started("t2", "tu-2", session_id, 1.5)
+    local_bash_started["data"]["task_type"] = "local_bash"
+
+    for msg in (
+        _stored_task_started("t1", "tu-1", session_id, 1.0),
+        _stored_task_notification("t1", "tu-1", session_id, "completed", 2.0),
+        local_bash_started,
+    ):
+        await storage.append_message(msg)
+
+    resp = await client.get(f"/api/sessions/{session_id}/background_agents")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["agents"]) == 1
+    assert body["agents"][0]["task_id"] == "t1"
+
+
+@pytest.mark.asyncio
 async def test_background_agents_endpoint_404_for_unknown_session(api_integration_env):
     client = api_integration_env["client"]
     resp = await client.get("/api/sessions/does-not-exist/background_agents")

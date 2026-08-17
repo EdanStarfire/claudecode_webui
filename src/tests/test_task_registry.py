@@ -186,6 +186,37 @@ def test_progress_after_terminal_is_noop():
     assert leg["last_progress_at"] == 1.0, "stale progress must not overwrite last_progress_at"
 
 
+def test_local_bash_task_started_produces_no_registry_entry():
+    """Issue #1771: a backgrounded plain Bash call's task_started frame carries
+    task_type="local_bash" and must not be registered as a leg — otherwise it
+    gets misrendered as a subagent card."""
+    registry = TaskLegRegistry()
+    started = _started("t1", "tu-1")
+    started["task_type"] = "local_bash"
+    registry.apply_frame("task_started", started, timestamp=1.0)
+
+    assert registry.snapshot() == []
+
+    # A following task_notification for that task_id must be a no-op (no
+    # task_started on record for it).
+    registry.apply_frame("task_notification", _notification("t1", "completed"), timestamp=2.0)
+    assert registry.snapshot() == []
+
+
+def test_task_started_missing_task_type_still_registers():
+    """Backward compatibility: task_type is optional in the SDK and absent from
+    all pre-existing fixtures/historical data — must still default to "is an
+    agent" and register normally."""
+    registry = TaskLegRegistry()
+    started = _started("t1", "tu-1")
+    assert "task_type" not in started
+    registry.apply_frame("task_started", started, timestamp=1.0)
+
+    snapshot = registry.snapshot()
+    assert len(snapshot) == 1
+    assert snapshot[0]["task_id"] == "t1"
+
+
 def test_frame_with_no_task_id_is_ignored():
     registry = TaskLegRegistry()
     registry.apply_frame("task_started", {"tool_use_id": "tu-1"}, timestamp=1.0)
