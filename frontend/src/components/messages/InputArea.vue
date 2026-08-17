@@ -104,7 +104,7 @@
       <button
         v-else-if="isProcessing && hasContent"
         class="btn btn-info"
-        :disabled="!isConnected || isStarting || isUploading || isPaused"
+        :disabled="!isConnected || isStarting || isUploading"
         title="Send while processing (doesn't interrupt)"
         @click="sendMessage"
       >
@@ -115,7 +115,7 @@
       <button
         v-else
         class="btn btn-primary"
-        :disabled="!hasContent || !isConnected || isStarting || isUploading || isPaused"
+        :disabled="!hasContent || !isConnected || isStarting || isUploading"
         @click="sendMessage"
         data-testid="send-button"
       >
@@ -190,7 +190,7 @@ const inputText = computed({
 const currentSession = computed(() => sessionStore.sessions.get(viewSessionId.value))
 const isProcessing = computed(() => currentSession.value?.is_processing || false)
 const isConnected = computed(() => wsStore.sessionConnected)
-const { isStarting, isPaused } = useSessionState(currentSession)
+const { isStarting } = useSessionState(currentSession)
 
 // Check if input has content (text or valid attachments)
 const hasContent = computed(() => !!inputText.value.trim() || attachments.value.filter(a => !a.error).length > 0)
@@ -199,9 +199,6 @@ const hasContent = computed(() => !!inputText.value.trim() || attachments.value.
 const isMobile = computed(() => windowWidth.value < 768)
 
 const inputPlaceholder = computed(() => {
-  if (isPaused.value) {
-    return 'Respond to the permission prompt first...'
-  }
   if (isStarting.value) {
     return 'Session is starting...'
   }
@@ -541,8 +538,6 @@ async function uploadAllFiles() {
  * Send message with attachments
  */
 async function sendMessage() {
-  if (isPaused.value) return
-
   // Intercept /clear command before normal send path
   if (inputText.value.trim() === '/clear') {
     await executeClearCommand()
