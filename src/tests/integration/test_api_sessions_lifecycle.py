@@ -187,6 +187,30 @@ class TestSendMessage:
         # Wait briefly for message processing
         await asyncio.sleep(1)
 
+    async def test_send_message_to_paused_session_is_accepted(self, api_integration_env):
+        """Issue #1746 (stage: permissions): a session PAUSED for a pending permission
+        decision must still accept a new message — it gets queued for delivery once the
+        current turn resolves, same as an ordinary busy/is_processing session already does.
+        Only genuinely non-running states (created/starting/terminating/terminated/error)
+        should reject with 409."""
+        client = api_integration_env["client"]
+        coordinator = api_integration_env["coordinator"]
+        session = await _create_named_session(api_integration_env, "single_turn")
+        sid = session["session_id"]
+
+        await client.post(f"/api/sessions/{sid}/start")
+        await _wait_for_state(client, sid, "active")
+
+        paused = await coordinator.session_manager.pause_session(sid)
+        assert paused, "Test setup failed: could not pause session"
+        await _wait_for_state(client, sid, "paused")
+
+        resp = await client.post(
+            f"/api/sessions/{sid}/messages",
+            json={"message": "Sent while a permission is pending"},
+        )
+        assert resp.status_code == 200
+
 
 class TestGetMessages:
     async def test_get_messages_empty(self, api_integration_env):

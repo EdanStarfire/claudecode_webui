@@ -15,12 +15,17 @@ vi.mock('@/utils/api', () => ({
   setAuthToken: vi.fn()
 }))
 vi.mock('@/composables/useNotifications', () => ({ notify: vi.fn() }))
+// Issue #1746 (stage: permissions) follow-up: must be real Vue refs, not plain {value} objects —
+// Vue's template auto-unwrap (e.g. `:disabled="... || isStarting || ..."` in InputArea.vue) only
+// unwraps genuine refs. A plain object is always truthy in that position regardless of its own
+// .value, which previously made the Send button appear permanently disabled in any test that
+// exercised it (masked until now because no prior test asserted the enabled-button path).
 vi.mock('@/composables/useSessionState', () => ({
   useSessionState: () => ({
-    isStarting: { value: false },
-    isPaused: { value: false },
-    isActive: { value: true },
-    isError: { value: false }
+    isStarting: ref(false),
+    isPaused: ref(false),
+    isActive: ref(true),
+    isError: ref(false)
   })
 }))
 
@@ -99,5 +104,70 @@ describe('InputArea', () => {
     await nextTick()
 
     expect(screen.getByRole('listbox')).toBeTruthy()
+  })
+
+  it('a rejected send keeps the draft and shows an error, instead of silently discarding it (#1746 follow-up)', async () => {
+    const user = userEvent.setup()
+    const { pinia } = renderWithStores(InputArea, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: {
+        AttachmentList: true,
+        SlashCommandDropdown: true
+      }
+    })
+
+    const { useSessionStore } = await import('@/stores/session')
+    const { usePollingStore } = await import('@/stores/polling')
+    const sessionStore = useSessionStore(pinia)
+    const pollingStore = usePollingStore(pinia)
+    sessionStore.currentSessionId = SESSION_ID
+    pollingStore.sessionConnected = true
+    await nextTick()
+
+    apiMock.post.mockRejectedValue(
+      Object.assign(new Error('Session is not active'), { status: 409, data: { detail: 'Session is not active' } })
+    )
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.update(textarea, 'draft message')
+    await nextTick()
+    const sendBtn = screen.getByRole('button', { name: /^send$/i })
+    await user.click(sendBtn)
+    await new Promise(r => setTimeout(r, 0))
+    await nextTick()
+
+    expect(sessionStore.getInput(SESSION_ID)).toBe('draft message')
+    expect(screen.getByText('Session is not active')).toBeTruthy()
+  })
+
+  it('a successful send clears the draft', async () => {
+    const user = userEvent.setup()
+    const { pinia } = renderWithStores(InputArea, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: {
+        AttachmentList: true,
+        SlashCommandDropdown: true
+      }
+    })
+
+    const { useSessionStore } = await import('@/stores/session')
+    const { usePollingStore } = await import('@/stores/polling')
+    const sessionStore = useSessionStore(pinia)
+    const pollingStore = usePollingStore(pinia)
+    sessionStore.currentSessionId = SESSION_ID
+    pollingStore.sessionConnected = true
+    await nextTick()
+
+    apiMock.post.mockResolvedValue({})
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.update(textarea, 'a real message')
+    await nextTick()
+    const sendBtn = screen.getByRole('button', { name: /^send$/i })
+    await user.click(sendBtn)
+    await new Promise(r => setTimeout(r, 0))
+    await nextTick()
+
+    expect(sessionStore.getInput(SESSION_ID)).toBe('')
   })
 })

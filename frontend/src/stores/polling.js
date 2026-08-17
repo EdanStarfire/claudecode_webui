@@ -306,7 +306,7 @@ export const usePollingStore = defineStore('polling', () => {
     const sid = sessionStore.currentSessionId
     if (!sid) {
       console.error('Cannot send message: no current session')
-      return
+      return { success: false, error: 'No active session' }
     }
     try {
       const payload = { message: content }
@@ -317,12 +317,18 @@ export const usePollingStore = defineStore('polling', () => {
           useMcpStore().fetchMcpStatus(sid)
         })
       }, 2000)
+      return { success: true }
     } catch (err) {
+      // Issue #1746 (stage: permissions) follow-up: surface the failure to the caller instead
+      // of only logging — the caller (InputArea.vue) needs this to avoid silently discarding
+      // the user's typed message on a rejected send.
+      const message = err.data?.detail || err.message || 'Failed to send message'
       if (err.status === 409) {
-        console.warn('Message rejected: session is not active (permission pending?)')
+        console.warn('Message rejected:', message)
       } else {
         console.error('Failed to send message:', err)
       }
+      return { success: false, error: message }
     }
   }
 

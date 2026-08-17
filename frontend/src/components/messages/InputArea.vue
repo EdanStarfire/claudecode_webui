@@ -17,6 +17,17 @@
       <span>Cannot send messages while reconnecting...</span>
     </div>
 
+    <!-- Send failure banner (issue #1746 stage: permissions follow-up): surfaces a rejected
+         send instead of silently discarding the typed message. -->
+    <div
+      v-if="sendErrorMessage"
+      class="alert alert-warning mb-0 py-1 px-3 small d-flex align-items-center gap-2"
+      role="alert"
+    >
+      <span class="flex-shrink-0">⚠</span>
+      <span>{{ sendErrorMessage }}</span>
+    </div>
+
     <!-- Attachment list (hidden in archive mode) -->
     <AttachmentList
       v-if="!isArchived"
@@ -153,6 +164,14 @@ const pendingResourceAttachment = inject('pendingResourceAttachment', ref(null))
 
 const messageTextarea = ref(null)
 const fileInput = ref(null)
+const sendErrorMessage = ref(null)
+let sendErrorTimeout = null
+
+function showSendError(message) {
+  sendErrorMessage.value = message
+  if (sendErrorTimeout) clearTimeout(sendErrorTimeout)
+  sendErrorTimeout = setTimeout(() => { sendErrorMessage.value = null }, 6000)
+}
 
 function focusInput() {
   nextTick(() => {
@@ -235,6 +254,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
+  if (sendErrorTimeout) clearTimeout(sendErrorTimeout)
 })
 
 // Watch for resource attachments added from ResourceGallery.
@@ -600,9 +620,17 @@ async function sendMessage() {
 
   // Send via REST with optional metadata
   const sendMetadata = attachmentsMeta.length > 0 ? { attachments: attachmentsMeta } : undefined
-  wsStore.sendMessage(messageContent, sendMetadata)
+  const result = await wsStore.sendMessage(messageContent, sendMetadata)
 
-  // Clear input and attachments
+  if (!result?.success) {
+    // Issue #1746 (stage: permissions) follow-up: a rejected send must not silently discard
+    // the user's draft — keep inputText/attachments intact and surface why.
+    showSendError(result?.error || 'Failed to send message')
+    return
+  }
+
+  // Clear input and attachments (only once the send actually succeeded)
+  sendErrorMessage.value = null
   inputText.value = ''
   clearAttachments()
 
