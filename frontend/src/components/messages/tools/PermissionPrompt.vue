@@ -410,7 +410,10 @@ async function submitQuestionAnswers() {
       answers: answers
     }
     if (sessionId) {
-      messageStore.updateToolCall(sessionId, props.toolCall.id, { input: updatedInput })
+      // Issue #1774: the live tool_call broadcast never carries `updated_input` (only the
+      // historical/reload replay path does), so persist answers here directly — otherwise
+      // the next live tool_call event's `.input` overwrite leaves them unrecoverable until reload.
+      messageStore.updateToolCall(sessionId, props.toolCall.id, { input: updatedInput, answers })
       messageStore.handlePermissionResponse(sessionId, {
         request_id: props.toolCall.permissionRequestId,
         decision: 'allow',

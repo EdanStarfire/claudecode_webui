@@ -1042,6 +1042,12 @@ export const useMessageStore = defineStore('message', () => {
         existing.input = toolCall.input
       }
 
+      // Issue #1774: persist AskUserQuestion answers independent of `.input`, which gets
+      // overwritten by the terminal `completed` event (no `updated_input` on that event).
+      if (toolCall.updated_input?.answers) {
+        existing.answers = toolCall.updated_input.answers
+      }
+
       // Issue #1694: owning assistant message id, for permission-prompt anchoring
       if (toolCall.message_id) {
         existing.messageId = toolCall.message_id
@@ -1150,6 +1156,8 @@ export const useMessageStore = defineStore('message', () => {
         senderAttachments: toolCall.sender_attachments || null,
         // Issue #1694: owning assistant message id, for permission-prompt anchoring
         messageId: toolCall.message_id || null,
+        // Issue #1774: persist AskUserQuestion answers independent of `.input` churn
+        answers: toolCall.updated_input?.answers || null,
       }
 
       if (toolCall.error) {
