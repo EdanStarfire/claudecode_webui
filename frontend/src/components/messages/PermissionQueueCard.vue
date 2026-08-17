@@ -8,19 +8,25 @@
       wants to use <code>{{ displayName }}</code>
     </div>
     <div class="perm-card-actions">
-      <button
-        type="button"
-        class="perm-btn perm-btn-approve"
-        :disabled="submitting"
-        @click="$emit('approve')"
-      >Approve</button>
-      <button
-        type="button"
-        class="perm-btn perm-btn-deny"
-        :disabled="submitting"
-        @click="$emit('deny')"
-      >Deny</button>
-      <a href="#" class="perm-view-link" @click.prevent="$emit('view')">View in context</a>
+      <template v-if="isAskUserQuestion">
+        <span class="perm-card-directive">Go to context to review questions</span>
+        <a href="#" class="perm-view-link" @click.prevent="$emit('view')">View in context</a>
+      </template>
+      <template v-else>
+        <button
+          type="button"
+          class="perm-btn perm-btn-approve"
+          :disabled="submitting"
+          @click="$emit('approve')"
+        >Approve</button>
+        <button
+          type="button"
+          class="perm-btn perm-btn-deny"
+          :disabled="submitting"
+          @click="$emit('deny')"
+        >Deny</button>
+        <a href="#" class="perm-view-link" @click.prevent="$emit('view')">View in context</a>
+      </template>
     </div>
   </div>
 </template>
@@ -40,6 +46,11 @@ defineEmits(['approve', 'deny', 'view'])
 
 // Same field PermissionPrompt.vue reads (permission.display_name falling back to toolCall.name).
 const displayName = computed(() => props.perm.toolCall.permission?.display_name || props.perm.toolCall.name)
+
+// Issue #1773: AskUserQuestion needs the full answering UI (PermissionPrompt.vue via
+// AskUserQuestionToolHandler), not a binary allow/deny — same check as
+// PermissionPrompt.vue:298 and TimelineDetail.vue:170.
+const isAskUserQuestion = computed(() => props.perm.toolCall.name === 'AskUserQuestion')
 </script>
 
 <style scoped>
@@ -122,6 +133,11 @@ const displayName = computed(() => props.perm.toolCall.permission?.display_name 
   color: white;
 }
 .perm-btn-deny:hover:not(:disabled) { background: #dc2626; }
+
+.perm-card-directive {
+  font-size: 11px;
+  color: var(--bs-secondary-color);
+}
 
 .perm-view-link {
   font-size: 11px;
