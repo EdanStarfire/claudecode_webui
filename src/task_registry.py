@@ -26,6 +26,12 @@ TASK_LIFECYCLE_SUBTYPES = frozenset(
     {"task_started", "task_progress", "task_notification", "task_updated"}
 )
 
+# task_started frames whose task_type is in this set are not background agents (e.g. a
+# backgrounded plain Bash call) and must not be registered as a leg — otherwise they get
+# misrendered as a subagent card. Missing/undefined task_type still defaults to "is an agent"
+# for backward compatibility with historical data and existing tests that predate this field.
+NON_AGENT_TASK_TYPES = frozenset({"local_bash"})
+
 
 def _normalize_status(status: str | None) -> str | None:
     if not status:
@@ -126,6 +132,8 @@ class TaskLegRegistry:
             return
 
         if subtype == "task_started":
+            if metadata.get("task_type") in NON_AGENT_TASK_TYPES:
+                return
             entry = self._entries.setdefault(task_id, TaskLegEntry(task_id=task_id))
             entry.legs.append(TaskLeg(
                 tool_use_id=metadata.get("tool_use_id"),

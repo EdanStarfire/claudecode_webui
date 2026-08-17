@@ -74,6 +74,10 @@ export const useMessageStore = defineStore('message', () => {
   const TASK_LIFECYCLE_SUBTYPES = new Set(['task_started', 'task_progress', 'task_notification', 'task_updated'])
   const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'stopped', 'killed'])
   const TASK_STATUS_DISPLAY_MAP = { killed: 'stopped' }
+  // Mirrors backend NON_AGENT_TASK_TYPES (src/task_registry.py): task_started frames with one
+  // of these task_types are not background agents and must not be registered as a leg. Missing/
+  // undefined task_type still defaults to "is an agent" for backward compatibility.
+  const NON_AGENT_TASK_TYPES = new Set(['local_bash'])
 
   // Issue #1486: Per-session streaming delta buffers (in-memory only, never persisted)
   // Map<sessionId, { messageId, pendingText, pendingThinking, blockTypeByIndex, rafHandle }>
@@ -294,6 +298,7 @@ export const useMessageStore = defineStore('message', () => {
     if (!taskId || !TASK_LIFECYCLE_SUBTYPES.has(subtype)) return
 
     if (subtype === 'task_started') {
+      if (NON_AGENT_TASK_TYPES.has(metadata.task_type)) return
       let entry = taskLegsByTaskId.value.get(taskId)
       if (!entry) {
         entry = { task_id: taskId, session_id: sessionId, legs: [] }
