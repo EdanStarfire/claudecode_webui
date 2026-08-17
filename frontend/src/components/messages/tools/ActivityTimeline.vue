@@ -2,29 +2,29 @@
   <div class="activity-timeline" :class="{ 'timeline-mobile': uiStore.isMobile }" v-if="sortedTools.length > 0" data-testid="activity-timeline">
     <!-- Timeline Row (tool chips, stacked vertically) -->
     <div class="timeline-row">
-      <TimelineNode
-        v-for="tool in sortedTools"
-        :key="tool.id"
-        :tool="tool"
-        :isExpanded="expandedNodeId === tool.id"
-        :compact="uiStore.isMobile"
-        :hooks="hooksForTool(tool.id)"
-        @click="toggleDetail(tool.id)"
-      />
+      <template v-for="tool in sortedTools" :key="tool.id">
+        <TimelineNode
+          :tool="tool"
+          :isExpanded="expandedNodeId === tool.id"
+          :compact="uiStore.isMobile"
+          :hooks="hooksForTool(tool.id)"
+          @click="toggleDetail(tool.id)"
+        />
+
+        <!-- Detail Panel (one at a time, inline beneath its own pill) -->
+        <TimelineDetail
+          v-if="expandedNodeId === tool.id"
+          :toolCall="tool"
+        />
+
+        <!-- Permission Prompt (inline beneath its own pill) -->
+        <PermissionPrompt
+          v-if="expandedNodeId === tool.id && needsPermission"
+          ref="permissionRef"
+          :toolCall="tool"
+        />
+      </template>
     </div>
-
-    <!-- Detail Panel (one at a time) -->
-    <TimelineDetail
-      v-if="expandedNodeId && expandedTool"
-      :toolCall="expandedTool"
-    />
-
-    <!-- Permission Prompt (outside scroll container for accessibility) -->
-    <PermissionPrompt
-      v-if="expandedTool && needsPermission"
-      ref="permissionRef"
-      :toolCall="expandedTool"
-    />
   </div>
 </template>
 
@@ -97,7 +97,7 @@ const needsPermission = computed(() => {
 watch(needsPermission, (needs) => {
   if (needs && uiStore.autoScrollEnabled) {
     nextTick(() => {
-      permissionRef.value?.$el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      permissionRef.value?.[0]?.$el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
     })
   }
 })
