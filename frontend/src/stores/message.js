@@ -4,6 +4,7 @@ import { api } from '../utils/api'
 import { useSessionStore } from './session'
 import { useTaskStore } from './task'
 import { correlateHooks } from '../utils/hookCorrelation'
+import { getAgentColor, getAssistantRowColor, slugifyAgentName } from '../composables/useAgentColor'
 
 /**
  * Message Store - Manages messages and tool calls per session
@@ -512,6 +513,63 @@ export const useMessageStore = defineStore('message', () => {
       tc.parent_tool_use_id === rootToolUseId &&
       (tc.status === 'permission_required' || tc.backendStatus === 'awaiting_permission')
     )
+  }
+
+  /**
+   * Issue #1746 (stage: permissions): every open permission request in a session — main-session
+   * and subagent alike — enriched for the floating PermissionQueue.vue surface. Resolved from
+   * the same store data hasOpenPermissionForTask already reads; no new backend surface needed.
+   * A tool call's parent_tool_use_id always pins to a task's FIRST leg's own launch tool_use_id
+   * (see _resolveLegIndexForTimestamp's comment), so the task itself resolves in one lookup —
+   * the OPEN leg is then whichever of that task's legs is currently 'running' (legs are
+   * sequential, never concurrent, so this is unambiguous).
+   */
+  function openPermissionsForSession(sessionId) {
+    if (!sessionId) return []
+    const toolCalls = toolCallsBySession.value.get(sessionId) || []
+    return toolCalls
+      // backendStatus check mirrors hasOpenPermissionForTask's own OR — defensive belt-and-
+      // suspenders so the two never disagree about what counts as "open" (see that function's
+      // comment for why this can't rely on a single inlined status check).
+      .filter(tc => tc.status === 'permission_required' || tc.backendStatus === 'awaiting_permission')
+      .map(tc => {
+        const taskId = tc.parent_tool_use_id ? getTaskIdForLaunchToolUse(tc.parent_tool_use_id) : null
+
+        if (!taskId) {
+          return {
+            requestId: tc.permissionRequestId,
+            toolCall: tc,
+            taskId: null,
+            legIndex: null,
+            agentColor: getAssistantRowColor(),
+            isSubagent: false,
+            label: 'Main session',
+          }
+        }
+
+        const entry = taskLegsByTaskId.value.get(taskId)
+        const runningIdx = entry?.legs?.findIndex(leg => leg.status === 'running') ?? -1
+        // Fall back to the most recent leg when none is currently 'running' (e.g. a terminal
+        // frame lands before this leg's own child permission has resolved) — never leave
+        // legIndex null just because the snapshot briefly has no running leg, or "view in
+        // context" silently no-ops on a valid, still-open permission.
+        const legIndex = runningIdx >= 0 ? runningIdx : (entry?.legs?.length ? entry.legs.length - 1 : -1)
+        const leg = legIndex >= 0 ? entry.legs[legIndex] : null
+        const launchToolCall = leg ? toolCalls.find(t => t.id === leg.tool_use_id) : null
+        const launchInput = launchToolCall?.input || {}
+        const label = leg?.description || launchInput.description || launchInput.prompt ||
+          launchInput.summary || launchInput.message || 'Subagent task'
+
+        return {
+          requestId: tc.permissionRequestId,
+          toolCall: tc,
+          taskId,
+          legIndex: legIndex >= 0 ? legIndex : null,
+          agentColor: getAgentColor(slugifyAgentName(taskId)),
+          isSubagent: true,
+          label,
+        }
+      })
   }
 
   /**
@@ -1917,6 +1975,7 @@ export const useMessageStore = defineStore('message', () => {
     setLegExpanded,
     toggleLegExpanded,
     hasOpenPermissionForTask,
+    openPermissionsForSession,
 
     // Issue #1000: Event cursors from REST /messages, consumed by connectSession()
     loadedEventCursors,

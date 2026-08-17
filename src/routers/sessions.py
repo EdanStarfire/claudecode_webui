@@ -391,7 +391,12 @@ def build_router(webui) -> APIRouter:
         state = await webui.service.get_session_state(session_id)
         if state is None:
             raise HTTPException(status_code=404, detail="Session not found")
-        if state != SessionState.ACTIVE:
+        # Issue #1746 (stage: permissions): PAUSED (a permission decision pending on the
+        # current turn) is not a reason to reject a new message — the SDK's own message queue
+        # already accepts input regardless of an in-flight permission callback, and it will
+        # simply wait its turn to be delivered once the current turn resolves, the same way an
+        # ordinary busy/is_processing session already queues a message today.
+        if state not in (SessionState.ACTIVE, SessionState.PAUSED):
             raise HTTPException(status_code=409, detail="Session is not active")
         success = await webui.coordinator.send_message(
             session_id, request.message, metadata=request.metadata

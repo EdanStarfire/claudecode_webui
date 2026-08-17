@@ -25,14 +25,21 @@
       <MessageList />
     </div>
 
-    <!-- Input Area -->
-    <InputArea ref="inputAreaRef" :is-archived="isArchiveMode" />
+    <!-- Bottom input-bar stack — measured so PermissionQueue's floating offset always clears
+         its full live height (attachments, multiline drafts, archived banner, etc.), not a
+         hardcoded distance from the frame edge. -->
+    <div ref="bottomStackRef" class="bottom-input-stack">
+      <InputArea ref="inputAreaRef" :is-archived="isArchiveMode" />
+      <SessionStateStatusLine v-if="currentSession && !isArchiveMode" :session-id="props.sessionId" />
+      <SessionStatusBar v-if="currentSession && !isArchiveMode" :session-id="props.sessionId" />
+    </div>
 
-    <!-- Session State Status Line (above status bar) -->
-    <SessionStateStatusLine v-if="currentSession && !isArchiveMode" :session-id="props.sessionId" />
-
-    <!-- Session Status Bar (at bottom) -->
-    <SessionStatusBar v-if="currentSession && !isArchiveMode" :session-id="props.sessionId" />
+    <!-- Floating permission queue (Issue #1746, stage: permissions) -->
+    <PermissionQueue
+      v-if="!isArchiveMode"
+      :session-id="props.sessionId"
+      :bottom-offset="bottomStackHeight"
+    />
   </div>
 </template>
 
@@ -53,6 +60,7 @@ import SessionStatusBar from '../statusbar/SessionStatusBar.vue'
 import MessageList from '../messages/MessageList.vue'
 import InputArea from '../messages/InputArea.vue'
 import AgentNotificationStrip from '../messages/AgentNotificationStrip.vue'
+import PermissionQueue from '../messages/PermissionQueue.vue'
 
 const props = defineProps({
   sessionId: {
@@ -75,6 +83,9 @@ provide('viewArchiveId', readonly(toRef(props, 'archiveId')))
 
 const route = useRoute()
 const inputAreaRef = ref(null)
+const bottomStackRef = ref(null)
+const bottomStackHeight = ref(0)
+let bottomStackObserver = null
 const sessionStore = useSessionStore()
 const messageStore = useMessageStore()
 const resourceStore = useResourceStore()
@@ -85,6 +96,27 @@ const currentSession = computed(() => sessionStore.sessions.get(props.sessionId)
 
 function focusInputWhenReady() {
   nextTick(() => inputAreaRef.value?.focusInput())
+}
+
+// Issue #1746 (stage: permissions): measures the InputArea/SessionStateStatusLine/
+// SessionStatusBar stack's live rendered height, same ResizeObserver technique
+// SubagentGlobalGutter.vue uses for its own measurement — PermissionQueue.vue needs the FULL
+// stack's height (not just InputArea's), or it overlaps whichever of the latter two are visible.
+function measureBottomStack() {
+  if (bottomStackRef.value) bottomStackHeight.value = bottomStackRef.value.getBoundingClientRect().height
+}
+
+function setupBottomStackObserver() {
+  if (bottomStackObserver || !bottomStackRef.value || typeof ResizeObserver === 'undefined') return
+  bottomStackObserver = new ResizeObserver(measureBottomStack)
+  bottomStackObserver.observe(bottomStackRef.value)
+}
+
+function teardownBottomStackObserver() {
+  if (bottomStackObserver) {
+    bottomStackObserver.disconnect()
+    bottomStackObserver = null
+  }
 }
 
 // Issue #1676: Background subagent notifications (agent_needs_input/agent_completed)
@@ -149,6 +181,10 @@ onActivated(async () => {
     await sessionStore.selectSession(props.sessionId)
   }
   focusInputWhenReady()
+  nextTick(() => {
+    setupBottomStackObserver()
+    measureBottomStack()
+  })
 })
 
 // Clear archive data on deactivation so regular-session instances for the same sessionId
@@ -159,6 +195,7 @@ onDeactivated(() => {
     resourceStore.clearResources(props.sessionId)
     resourceStore.clearArchiveContext(props.sessionId)
   }
+  teardownBottomStackObserver()
 })
 
 // Per-instance state watch: currentSession reads sessions.get(props.sessionId) — correct under KeepAlive.
@@ -178,10 +215,17 @@ onUnmounted(() => {
     resourceStore.clearResources(props.sessionId)
     resourceStore.clearArchiveContext(props.sessionId)
   }
+  teardownBottomStackObserver()
 })
 </script>
 
 <style scoped>
+.bottom-input-stack {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .archive-banner {
   display: flex;
   align-items: center;

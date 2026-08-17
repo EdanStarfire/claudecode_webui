@@ -48,7 +48,7 @@
 </template>
 
 <script setup>
-import { computed, watch } from 'vue'
+import { computed } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import { getEffectiveStatusForTool } from '@/composables/useToolStatus'
@@ -155,17 +155,6 @@ const expanded = computed(() => messageStore.isLegExpanded(taskId.value, legInde
 function toggleExpanded() {
   messageStore.toggleLegExpanded(taskId.value, legIndex.value)
 }
-
-// Issue #1746 (stage: subagents) review fix: the permission-needed anchor is record-only
-// (per spec §4.3, action buttons are stage 4's job) — but the actual Allow/Deny UI for the
-// leg's blocked child tool lives inside SubagentLegTranscript's ActivityTimeline, which is
-// collapsed by default. Auto-expand once a permission is actually open so that UI isn't
-// hidden behind an extra click; leave the user's own toggle in control after that.
-// immediate: true — a reload/cold-mount can land with a permission ALREADY open (not just a
-// live transition to it), which a non-immediate watch would never observe as a "change".
-watch(hasOpenPermission, (isOpen) => {
-  if (isOpen && taskId.value) messageStore.setLegExpanded(taskId.value, legIndex.value, true)
-}, { immediate: true })
 </script>
 
 <style scoped>

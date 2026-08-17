@@ -17,6 +17,17 @@
       <span>Cannot send messages while reconnecting...</span>
     </div>
 
+    <!-- Send failure banner (issue #1746 stage: permissions follow-up): surfaces a rejected
+         send instead of silently discarding the typed message. -->
+    <div
+      v-if="sendErrorMessage"
+      class="alert alert-warning mb-0 py-1 px-3 small d-flex align-items-center gap-2"
+      role="alert"
+    >
+      <span class="flex-shrink-0">⚠</span>
+      <span>{{ sendErrorMessage }}</span>
+    </div>
+
     <!-- Attachment list (hidden in archive mode) -->
     <AttachmentList
       v-if="!isArchived"
@@ -104,7 +115,7 @@
       <button
         v-else-if="isProcessing && hasContent"
         class="btn btn-info"
-        :disabled="!isConnected || isStarting || isUploading || isPaused"
+        :disabled="!isConnected || isStarting || isUploading"
         title="Send while processing (doesn't interrupt)"
         @click="sendMessage"
       >
@@ -115,7 +126,7 @@
       <button
         v-else
         class="btn btn-primary"
-        :disabled="!hasContent || !isConnected || isStarting || isUploading || isPaused"
+        :disabled="!hasContent || !isConnected || isStarting || isUploading"
         @click="sendMessage"
         data-testid="send-button"
       >
@@ -153,6 +164,14 @@ const pendingResourceAttachment = inject('pendingResourceAttachment', ref(null))
 
 const messageTextarea = ref(null)
 const fileInput = ref(null)
+const sendErrorMessage = ref(null)
+let sendErrorTimeout = null
+
+function showSendError(message) {
+  sendErrorMessage.value = message
+  if (sendErrorTimeout) clearTimeout(sendErrorTimeout)
+  sendErrorTimeout = setTimeout(() => { sendErrorMessage.value = null }, 6000)
+}
 
 function focusInput() {
   nextTick(() => {
@@ -190,7 +209,7 @@ const inputText = computed({
 const currentSession = computed(() => sessionStore.sessions.get(viewSessionId.value))
 const isProcessing = computed(() => currentSession.value?.is_processing || false)
 const isConnected = computed(() => wsStore.sessionConnected)
-const { isStarting, isPaused } = useSessionState(currentSession)
+const { isStarting } = useSessionState(currentSession)
 
 // Check if input has content (text or valid attachments)
 const hasContent = computed(() => !!inputText.value.trim() || attachments.value.filter(a => !a.error).length > 0)
@@ -199,9 +218,6 @@ const hasContent = computed(() => !!inputText.value.trim() || attachments.value.
 const isMobile = computed(() => windowWidth.value < 768)
 
 const inputPlaceholder = computed(() => {
-  if (isPaused.value) {
-    return 'Respond to the permission prompt first...'
-  }
   if (isStarting.value) {
     return 'Session is starting...'
   }
@@ -238,6 +254,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
+  if (sendErrorTimeout) clearTimeout(sendErrorTimeout)
 })
 
 // Watch for resource attachments added from ResourceGallery.
@@ -541,8 +558,6 @@ async function uploadAllFiles() {
  * Send message with attachments
  */
 async function sendMessage() {
-  if (isPaused.value) return
-
   // Intercept /clear command before normal send path
   if (inputText.value.trim() === '/clear') {
     await executeClearCommand()
@@ -605,9 +620,17 @@ async function sendMessage() {
 
   // Send via REST with optional metadata
   const sendMetadata = attachmentsMeta.length > 0 ? { attachments: attachmentsMeta } : undefined
-  wsStore.sendMessage(messageContent, sendMetadata)
+  const result = await wsStore.sendMessage(messageContent, sendMetadata)
 
-  // Clear input and attachments
+  if (!result?.success) {
+    // Issue #1746 (stage: permissions) follow-up: a rejected send must not silently discard
+    // the user's draft — keep inputText/attachments intact and surface why.
+    showSendError(result?.error || 'Failed to send message')
+    return
+  }
+
+  // Clear input and attachments (only once the send actually succeeded)
+  sendErrorMessage.value = null
   inputText.value = ''
   clearAttachments()
 
