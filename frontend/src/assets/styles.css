@@ -46,6 +46,11 @@
     --perm-amber-suggestion-bg: #fffbf0;
     --perm-amber-suggestion-border: #ffd666;
     --perm-amber-suggestion-strong: #996600;
+    /* Issue #1746 (stage: permissions): floating permission queue surface tokens. */
+    --perm-queue-card-bg: #fffbeb;
+    --perm-queue-card-border: #fbbf24;
+    --perm-queue-minimize-bg: #fef3c7;
+    --perm-queue-scrim: rgba(15, 23, 42, 0.45);
 }
 
 /* ========== STANDARD DARK — slate/navy palette ========== */
@@ -97,6 +102,11 @@
     --perm-amber-suggestion-bg: rgba(245, 158, 11, 0.08);
     --perm-amber-suggestion-border: rgba(245, 158, 11, 0.30);
     --perm-amber-suggestion-strong: #fcd34d;
+    /* Issue #1746 (stage: permissions): floating permission queue surface tokens. */
+    --perm-queue-card-bg: #241c0a;
+    --perm-queue-card-border: #f59e0b;
+    --perm-queue-minimize-bg: rgba(245, 158, 11, 0.18);
+    --perm-queue-scrim: rgba(0, 0, 0, 0.6);
 }
 
 /* ========== SENSITIVE LIGHT (red-tinted light) ========== */
@@ -131,6 +141,13 @@
     --perm-amber-suggestion-bg: #fffbf0;
     --perm-amber-suggestion-border: #ffd666;
     --perm-amber-suggestion-strong: #996600;
+    /* Issue #1746 (stage: permissions): floating permission queue surface tokens — tuned warmer
+       than the standard-light amber so the card still reads distinctly against this theme's
+       red-tinted body/secondary backgrounds instead of blending into them. */
+    --perm-queue-card-bg: #fff8e1;
+    --perm-queue-card-border: #f57f17;
+    --perm-queue-minimize-bg: #ffe0b2;
+    --perm-queue-scrim: rgba(26, 10, 10, 0.45);
 }
 
 /* ========== SENSITIVE DARK (red-tinted dark) ========== */
@@ -183,6 +200,13 @@
     --perm-amber-suggestion-bg: rgba(245, 158, 11, 0.08);
     --perm-amber-suggestion-border: rgba(245, 158, 11, 0.30);
     --perm-amber-suggestion-strong: #fcd34d;
+    /* Issue #1746 (stage: permissions): floating permission queue surface tokens — matches this
+       theme's own remapped --bs-warning (#ffcc80) rather than a plain amber copied from the
+       standard dark theme, so the accent stays consistent with this theme's other warning UI. */
+    --perm-queue-card-bg: rgba(255, 204, 128, 0.10);
+    --perm-queue-card-border: #ffcc80;
+    --perm-queue-minimize-bg: rgba(255, 204, 128, 0.20);
+    --perm-queue-scrim: rgba(0, 0, 0, 0.65);
 }
 
 /* ========== ANALYTICS CHART PALETTE (per theme) ========== */

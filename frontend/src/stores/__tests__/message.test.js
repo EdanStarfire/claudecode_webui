@@ -827,3 +827,132 @@ describe('leg grouping by timestamp window — resume via SendMessage (#1746 fol
     expect(leg1Narration.map(m => m.content)).toEqual(['Working on the follow-up haiku.'])
   })
 })
+
+describe('openPermissionsForSession (#1746 stage: permissions)', () => {
+  it('returns a main-session-only permission with taskId null', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'use-main',
+      name: 'Edit',
+      input: { path: '/tmp/f' },
+      status: 'awaiting_permission',
+      request_id: 'req-main',
+    })
+
+    const perms = store.openPermissionsForSession('sess-1')
+    expect(perms).toHaveLength(1)
+    expect(perms[0]).toMatchObject({
+      requestId: 'req-main',
+      taskId: null,
+      legIndex: null,
+      isSubagent: false,
+      label: 'Main session',
+    })
+  })
+
+  it('returns a subagent-only permission resolved to its running leg', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', {
+      task_id: 'task-1', tool_use_id: 'launch-1', description: 'Fix the failing test',
+    }, 100)
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'child-1',
+      name: 'Bash',
+      input: { command: 'pytest' },
+      status: 'awaiting_permission',
+      request_id: 'req-sub',
+      parent_tool_use_id: 'launch-1',
+    })
+
+    const perms = store.openPermissionsForSession('sess-1')
+    expect(perms).toHaveLength(1)
+    expect(perms[0]).toMatchObject({
+      requestId: 'req-sub',
+      taskId: 'task-1',
+      legIndex: 0,
+      isSubagent: true,
+      label: 'Fix the failing test',
+    })
+  })
+
+  it('returns both a concurrent subagent and main-session permission', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'use-main',
+      name: 'Write',
+      input: {},
+      status: 'awaiting_permission',
+      request_id: 'req-main',
+    })
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', {
+      task_id: 'task-1', tool_use_id: 'launch-1', description: 'Refactor the parser',
+    }, 100)
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'child-1',
+      name: 'Edit',
+      input: {},
+      status: 'awaiting_permission',
+      request_id: 'req-sub',
+      parent_tool_use_id: 'launch-1',
+    })
+
+    const perms = store.openPermissionsForSession('sess-1')
+    expect(perms).toHaveLength(2)
+    expect(perms.map(p => p.requestId).sort()).toEqual(['req-main', 'req-sub'])
+  })
+
+  it('resolving one permission leaves the other open (mirrors the backend per-session-count bug, #6.1)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const { useSessionStore } = await import('@/stores/session')
+    const store = useMessageStore()
+    const sessionStore = useSessionStore()
+    sessionStore.currentSessionId = 'sess-1'
+
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-1', tool_use_id: 'launch-1' }, 100)
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-2', tool_use_id: 'launch-2' }, 100)
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'child-1', name: 'Bash', input: {}, status: 'awaiting_permission',
+      request_id: 'req-1', parent_tool_use_id: 'launch-1',
+    })
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'child-2', name: 'Edit', input: {}, status: 'awaiting_permission',
+      request_id: 'req-2', parent_tool_use_id: 'launch-2',
+    })
+
+    expect(store.openPermissionsForSession('sess-1')).toHaveLength(2)
+
+    store.handlePermissionResponse('sess-1', { request_id: 'req-1', decision: 'allow' })
+
+    const remaining = store.openPermissionsForSession('sess-1')
+    expect(remaining).toHaveLength(1)
+    expect(remaining[0].requestId).toBe('req-2')
+  })
+
+  it('falls back to the most recent leg when no leg is currently running (issue_1746_no_running_leg_fallback)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    // Leg goes terminal (task_notification) before its own child permission resolves — an
+    // edge case the backend's pause/resume gate normally prevents, but the frontend must
+    // still degrade gracefully rather than leaving legIndex null (which would silently break
+    // PermissionQueue's "view in context").
+    store.applyTaskLifecycleFrame('sess-1', 'task_started', {
+      task_id: 'task-1', tool_use_id: 'launch-1', description: 'Stale leg',
+    }, 100)
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'child-1', name: 'Bash', input: {}, status: 'awaiting_permission',
+      request_id: 'req-1', parent_tool_use_id: 'launch-1',
+    })
+    store.applyTaskLifecycleFrame('sess-1', 'task_notification', { task_id: 'task-1', status: 'completed' }, 150)
+
+    const perms = store.openPermissionsForSession('sess-1')
+    expect(perms).toHaveLength(1)
+    expect(perms[0]).toMatchObject({ taskId: 'task-1', legIndex: 0, label: 'Stale leg' })
+  })
+})

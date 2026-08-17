@@ -1,5 +1,6 @@
 <template>
   <div
+    :id="`tool-anchor-${tool.id}`"
     class="tool-row"
     :class="[rowClasses, { 'row-compact': compact }]"
     :style="{ borderLeftColor: statusColor }"
