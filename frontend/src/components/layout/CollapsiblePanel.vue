@@ -110,6 +110,15 @@ function onResizePointerUp(e) {
 
 <style scoped>
 .collapsible-panel {
+  /* Floor for .collapsible-panel--expanded below. Must cover the tallest
+     rendered .panel-header across all panels, including header-actions
+     slot content (e.g. QueueSection's Pause/Resume buttons measure ~40px;
+     SchedulesPanel's new-schedule button measures ~35px), not just the
+     29-30px plain-title row — a too-small value lets flex distribution in
+     .panel-stack clip the header via this element's own overflow:hidden.
+     .panel-header itself needs no matching min-height: flex-shrink: 0
+     already keeps it at its natural content height unconditionally. */
+  --panel-header-height: 41px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -120,7 +129,7 @@ function onResizePointerUp(e) {
 }
 
 .collapsible-panel--expanded {
-  min-height: min-content;
+  min-height: var(--panel-header-height);
 }
 
 .panel-header {

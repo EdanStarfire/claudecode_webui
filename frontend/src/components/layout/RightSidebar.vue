@@ -472,6 +472,7 @@ function stopResize() {
 .right-sidebar {
   display: flex;
   flex-direction: column;
+  min-height: 0;
   overflow: hidden;
   background: var(--bs-secondary-bg);
   border-left: 1px solid var(--bs-border-color);

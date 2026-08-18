@@ -484,7 +484,7 @@ function loadMoreResources() {
 }
 
 .resource-grid-container {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
 }
