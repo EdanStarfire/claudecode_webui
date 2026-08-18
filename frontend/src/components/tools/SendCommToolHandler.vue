@@ -28,6 +28,20 @@
         </span>
       </div>
       <MarkdownView class="outbound-comm-content" ref="contentRef" :content="contentForRender" :self-agent-id="senderSessionId" />
+      <div v-if="hasResult && isError" class="outbound-comm-failure-detail">
+        <div class="tool-section">
+          <div class="tool-label">Raw Input:</div>
+          <div class="tool-code-block">
+            <pre class="tool-code">{{ formattedInput }}</pre>
+          </div>
+        </div>
+        <div class="tool-section">
+          <div class="tool-label">Error:</div>
+          <div class="tool-code-block tool-error">
+            <pre class="tool-code">{{ resultContent }}</pre>
+          </div>
+        </div>
+      </div>
       <div v-if="attachments.length > 0" class="outbound-comm-attachments">
         <AttachmentChip
           v-for="(att, idx) in attachments"
@@ -159,7 +173,7 @@ const projectAgents = computed(() => {
 const recipientSessionId = computed(() => resolveAgentByIdentifier(recipientName.value, projectAgents.value)?.id || null)
 
 // Result handling
-const { hasResult, isError, resultContent } = useToolResult(toRef(props, 'toolCall'))
+const { hasResult, isError, resultContent, formattedInput } = useToolResult(toRef(props, 'toolCall'))
 
 // Expose for TimelineDetail
 const summary = computed(() => `→ ${recipientName.value}: ${summaryText.value || commType.value || 'message'}`)
