@@ -6,9 +6,13 @@ coordinator attributes directly.
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
+
+from .secret_usage import compute_secret_usage, empty_usage
+from .slug_utils import slugify_secret
 
 if TYPE_CHECKING:
     from src.session_coordinator import SessionCoordinator
@@ -845,6 +849,16 @@ class ApplicationService:
         for s in secrets:
             if s.get("type") == "oauth2":
                 s["health"] = _compute_secret_health(s.get("refresh"))
+        # Issue #1772: enrich each secret with a usage breakdown
+        sessions, templates, profiles, mcp_configs = await asyncio.gather(
+            self.coordinator.session_manager.list_sessions(),
+            self.coordinator.template_manager.list_templates(),
+            self.coordinator.profile_manager.list_profiles(area="isolation"),
+            self.coordinator.mcp_config_manager.list_configs(),
+        )
+        usage_map = compute_secret_usage(secrets, sessions, templates, profiles, mcp_configs)
+        for s in secrets:
+            s["usage"] = usage_map.get(slugify_secret(s["name"]), empty_usage())
         return {"secrets": secrets}
 
     async def create_secret(
