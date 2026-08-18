@@ -202,6 +202,52 @@ describe('message store', () => {
     expect(calls[1].messageId).toBe('msg-def')
   })
 
+  it('handleToolCall persists AskUserQuestion answers through the terminal completed clobber (#1774)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    // 1. Initial awaiting_permission event, no answers yet
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'use-1',
+      name: 'AskUserQuestion',
+      input: { questions: [{ question: 'Q1', options: [{ label: 'Option A' }] }] },
+      status: 'awaiting_permission',
+      request_id: 'req-1'
+    })
+
+    let tc = store.toolCallsBySession.get('sess-1')[0]
+    expect(tc.answers).toBeNull()
+
+    // 2. Permission-response transition event carries updated_input sibling field
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'use-1',
+      name: 'AskUserQuestion',
+      input: { questions: [{ question: 'Q1', options: [{ label: 'Option A' }] }] },
+      updated_input: {
+        questions: [{ question: 'Q1', options: [{ label: 'Option A' }] }],
+        answers: { Q1: 'Option A' }
+      },
+      status: 'running'
+    })
+
+    tc = store.toolCallsBySession.get('sess-1')[0]
+    expect(tc.answers).toEqual({ Q1: 'Option A' })
+
+    // 3. Terminal completed event carries only the original input, no updated_input —
+    // this previously clobbered .input and left answers unrecoverable.
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'use-1',
+      name: 'AskUserQuestion',
+      input: { questions: [{ question: 'Q1', options: [{ label: 'Option A' }] }] },
+      status: 'completed',
+      result: 'ok'
+    })
+
+    tc = store.toolCallsBySession.get('sess-1')[0]
+    expect(tc.status).toBe('completed')
+    expect(tc.answers).toEqual({ Q1: 'Option A' })
+  })
+
   it('markToolUseOrphaned marks tool as orphaned', async () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()

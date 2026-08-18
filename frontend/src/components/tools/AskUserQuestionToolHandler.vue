@@ -216,6 +216,11 @@ const isCompleted = computed(() => {
 const completedAnswers = computed(() => {
   if (!isCompleted.value) return {}
 
+  // Issue #1774: primary source, persisted independent of `.input` churn.
+  if (props.toolCall.answers && Object.keys(props.toolCall.answers).length > 0) {
+    return props.toolCall.answers
+  }
+
   // Try to get answers from result
   const result = props.toolCall.result
   if (result?.content) {
