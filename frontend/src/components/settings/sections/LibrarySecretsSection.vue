@@ -79,6 +79,12 @@
                   :class="expiryChipClass(secret)"
                   :title="expiryTitle(secret)"
                 >{{ expiryLabel(secret) }}</span>
+                <!-- Usage chip -->
+                <span
+                  class="usage-chip"
+                  :class="{ 'usage-chip--unused': !(secret.usage?.total) }"
+                  :title="usageTitle(secret)"
+                >{{ usageLabel(secret) }}</span>
               </div>
             </div>
             <div class="row-right">
@@ -200,6 +206,26 @@ function expiryTitle(secret) {
   const expiresAt = secret.refresh?.expires_at
   if (!expiresAt) return ''
   return `Expires: ${new Date(expiresAt).toLocaleString()}`
+}
+
+function usageLabel(secret) {
+  const total = secret.usage?.total ?? 0
+  return total > 0 ? `${total} in use` : 'Unused'
+}
+
+function usageTitle(secret) {
+  const u = secret.usage
+  if (!u) return ''
+  const parts = [
+    `Sessions: ${u.sessions}`,
+    `Templates: ${u.templates}`,
+    `Profiles: ${u.profiles}`,
+    `MCP servers: ${u.mcp_servers}`,
+  ]
+  if (u.oauth2_dependents?.length) {
+    parts.push(`OAuth2 dependency: ${u.oauth2_dependents.join(', ')}`)
+  }
+  return parts.join(' · ')
 }
 
 onMounted(() => {
@@ -434,6 +460,23 @@ onMounted(() => {
 .expiry-chip--ok      { background: rgba(6, 182, 212, 0.15); color: #06b6d4; }
 .expiry-chip--warn    { background: rgba(210, 153, 34, 0.2); color: #d29922; }
 .expiry-chip--expired { background: rgba(248, 113, 113, 0.2); color: #f87171; }
+
+.usage-chip {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(6, 182, 212, 0.15);
+  color: #06b6d4;
+}
+
+.usage-chip--unused {
+  background: none;
+  border: 1px solid var(--bs-border-color);
+  color: var(--bs-tertiary-color);
+  font-weight: 500;
+}
 
 .row-right {
   display: flex;

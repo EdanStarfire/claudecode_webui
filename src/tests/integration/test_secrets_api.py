@@ -220,6 +220,107 @@ async def test_issue_1240_delete_case_variant_returns_200(api_integration_env, m
 
 
 @pytest.mark.asyncio
+async def test_issue_1772_list_secrets_includes_usage(api_integration_env, mock_keyring):
+    """GET /api/secrets reports usage counts across sessions, MCP configs, and OAuth2 deps."""
+    from datetime import UTC, datetime
+
+    from src.models.secret_record import RefreshSpec, ScrubSpec, SecretRecord, SecretType
+
+    client = api_integration_env["client"]
+    coordinator = api_integration_env["coordinator"]
+
+    # A generic secret directly assigned to a session.
+    await client.post(
+        "/api/secrets",
+        json={
+            "name": "session-secret",
+            "type": "generic",
+            "target_hosts": ["example.com"],
+            "value": "sval",
+        },
+    )
+    project = await api_integration_env["create_test_project"]()
+    await api_integration_env["create_test_session"](
+        project["project_id"], name="Secret User", assigned_secrets=["session-secret"]
+    )
+
+    # A generic secret referenced by an MCP config header.
+    await client.post(
+        "/api/secrets",
+        json={
+            "name": "mcp-secret",
+            "type": "generic",
+            "target_hosts": ["example.com"],
+            "value": "mval",
+        },
+    )
+    await client.post(
+        "/api/mcp-configs",
+        json={
+            "name": "Test MCP Server",
+            "type": "sse",
+            "url": "https://mcp.example.com",
+            "headers": {"Authorization": "Bearer ${secret:mcp-secret}"},
+        },
+    )
+
+    # An OAuth2 secret depending on a sibling generic secret via client_secret_secret_name.
+    now = datetime.now(UTC)
+    await coordinator.credential_vault.create_secret(
+        SecretRecord(
+            name="oauth-client-secret",
+            type=SecretType.GENERIC,
+            target_hosts=["example.com"],
+            created_at=now,
+            updated_at=now,
+        ),
+        "csval",
+    )
+    await coordinator.credential_vault.create_secret(
+        SecretRecord(
+            name="oauth-refresh-token",
+            type=SecretType.GENERIC,
+            target_hosts=["example.com"],
+            created_at=now,
+            updated_at=now,
+        ),
+        "rtval",
+    )
+    await coordinator.credential_vault.create_secret(
+        SecretRecord(
+            name="the-oauth",
+            type=SecretType.OAUTH2,
+            target_hosts=["example.com"],
+            created_at=now,
+            updated_at=now,
+            scrub=ScrubSpec(matcher_regex=".*"),
+            refresh=RefreshSpec(
+                token_url="https://example.com/oauth/token",
+                client_id="client123",
+                refresh_token_secret_name="oauth-refresh-token",
+                client_secret_secret_name="oauth-client-secret",
+            ),
+        ),
+        "atval",
+    )
+
+    resp = await client.get("/api/secrets")
+    assert resp.status_code == 200
+    secrets_by_name = {s["name"]: s for s in resp.json()["secrets"]}
+
+    assert secrets_by_name["session-secret"]["usage"]["sessions"] == 1
+    assert secrets_by_name["session-secret"]["usage"]["total"] == 1
+
+    assert secrets_by_name["mcp-secret"]["usage"]["mcp_servers"] == 1
+    assert secrets_by_name["mcp-secret"]["usage"]["total"] == 1
+
+    assert secrets_by_name["oauth-client-secret"]["usage"]["oauth2_dependents"] == ["the-oauth"]
+    assert secrets_by_name["oauth-client-secret"]["usage"]["total"] == 1
+    # The primary OAuth2 secret itself has no direct assignments anywhere.
+    assert secrets_by_name["the-oauth"]["usage"]["total"] == 0
+
+
+@pytest.mark.asyncio
 async def test_issue_1240_create_slug_collision_returns_400(api_integration_env, mock_keyring):
     """POST /api/secrets with a slug-collision name returns 400."""
     client = api_integration_env["client"]
