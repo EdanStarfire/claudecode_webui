@@ -16,6 +16,17 @@ class SharedSecretResolutionError(ValueError):
     """Raised when a ${secret:...} reference cannot be resolved against the vault."""
 
 
+def find_secret_ref_names(value: str | None) -> list[str]:
+    """Return the secret names referenced via ${secret:NAME} in `value`.
+
+    Does not dedupe; may contain repeats if the same name is referenced
+    more than once.
+    """
+    if not value or "${secret:" not in value:
+        return []
+    return [m.group(1).strip() for m in _SECRET_REF_RE.finditer(value)]
+
+
 async def resolve_secret_refs_in_str(value: str, vault) -> str:
     """Replace every ${secret:NAME} in `value` with the plaintext from the vault.
 
@@ -25,7 +36,7 @@ async def resolve_secret_refs_in_str(value: str, vault) -> str:
     if not value or "${secret:" not in value:
         return value
     # Collect unique names preserving insertion order, then batch-resolve once.
-    names = list(dict.fromkeys(m.group(1).strip() for m in _SECRET_REF_RE.finditer(value)))
+    names = list(dict.fromkeys(find_secret_ref_names(value)))
     resolved = await vault.resolve_secrets_for_assignment(names)
     resolved_map = {r["name"]: r["value"] for r in resolved}
     out = value

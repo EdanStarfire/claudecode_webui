@@ -220,6 +220,113 @@ async def test_issue_1240_delete_case_variant_returns_200(api_integration_env, m
 
 
 @pytest.mark.asyncio
+async def test_issue_1772_list_secrets_includes_usage(api_integration_env, mock_keyring):
+    """GET /api/secrets enriches each secret with a usage breakdown.
+
+    Covers: session assignment, MCP config ${secret:NAME} refs, and OAuth2
+    refresh dependency recognition (client_secret_secret_name /
+    refresh_token_secret_name) — the exact scenario issue #1772 calls out,
+    where the client-secret/refresh-token siblings are never directly
+    assigned to anything.
+    """
+    client = api_integration_env["client"]
+    create_test_project = api_integration_env["create_test_project"]
+    create_test_session = api_integration_env["create_test_session"]
+
+    project = await create_test_project()
+
+    # Secret directly assigned to a session.
+    await client.post(
+        "/api/secrets",
+        json={
+            "name": "session-secret",
+            "type": "generic",
+            "target_hosts": ["example.com"],
+            "value": "sval",
+        },
+    )
+    # Secret referenced from an MCP server config header.
+    await client.post(
+        "/api/secrets",
+        json={
+            "name": "mcp-secret",
+            "type": "generic",
+            "target_hosts": ["example.com"],
+            "value": "mval",
+        },
+    )
+    # OAuth2 refresh dependency siblings — never directly assigned anywhere.
+    await client.post(
+        "/api/secrets",
+        json={
+            "name": "oauth-client-secret",
+            "type": "generic",
+            "target_hosts": ["example.com"],
+            "value": "cval",
+        },
+    )
+    await client.post(
+        "/api/secrets",
+        json={
+            "name": "oauth-refresh-token",
+            "type": "generic",
+            "target_hosts": ["example.com"],
+            "value": "rval",
+        },
+    )
+    resp = await client.post(
+        "/api/secrets",
+        json={
+            "name": "github-oauth",
+            "type": "oauth2",
+            "target_hosts": ["example.com"],
+            "value": "access-tok",
+            "scrub": {"matcher_regex": "token"},
+            "refresh": {
+                "token_url": "https://example.com/token",
+                "client_id": "client-id",
+                "refresh_token_secret_name": "oauth-refresh-token",
+                "client_secret_secret_name": "oauth-client-secret",
+            },
+        },
+    )
+    assert resp.status_code == 201, resp.text
+
+    await create_test_session(
+        project["project_id"], name="Usage Session", assigned_secrets=["session-secret"]
+    )
+
+    mcp_resp = await client.post(
+        "/api/mcp-configs",
+        json={
+            "name": "Usage MCP Server",
+            "type": "http",
+            "url": "https://mcp.example.com",
+            "headers": {"Authorization": "Bearer ${secret:mcp-secret}"},
+        },
+    )
+    assert mcp_resp.status_code == 200, mcp_resp.text
+
+    list_resp = await client.get("/api/secrets")
+    assert list_resp.status_code == 200
+    by_name = {s["name"]: s for s in list_resp.json()["secrets"]}
+
+    assert by_name["session-secret"]["usage"]["sessions"] == 1
+    assert by_name["session-secret"]["usage"]["total"] == 1
+
+    assert by_name["mcp-secret"]["usage"]["mcp_servers"] == 1
+    assert by_name["mcp-secret"]["usage"]["total"] == 1
+
+    assert by_name["oauth-client-secret"]["usage"]["oauth2_dependents"] == ["github-oauth"]
+    assert by_name["oauth-client-secret"]["usage"]["total"] == 1
+
+    assert by_name["oauth-refresh-token"]["usage"]["oauth2_dependents"] == ["github-oauth"]
+    assert by_name["oauth-refresh-token"]["usage"]["total"] == 1
+
+    assert by_name["github-oauth"]["usage"]["total"] == 0
+
+
+@pytest.mark.asyncio
 async def test_issue_1240_create_slug_collision_returns_400(api_integration_env, mock_keyring):
     """POST /api/secrets with a slug-collision name returns 400."""
     client = api_integration_env["client"]
