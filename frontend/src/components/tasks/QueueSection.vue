@@ -249,6 +249,7 @@ async function doLoadMore() {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
 }
 
 .queue-empty {
@@ -261,6 +262,7 @@ async function doLoadMore() {
 
 .queue-items {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
