@@ -2700,3 +2700,121 @@ class TestIssue1675AddDirectory:
 
         with pytest.raises(ValueError, match="not in active state"):
             await coordinator.add_directory(session_id, "/test/project/subdir")
+
+
+class TestIssue1779TimestampInjection:
+    """Tests for automatic timestamp injection in SessionCoordinator.send_message()
+    (issue #1779). QueueProcessor delivers queued/cron messages via the same
+    coordinator.send_message() call as the live WebUI send path, so exercising
+    send_message() directly covers both paths (path-convergence)."""
+
+    @pytest.mark.asyncio
+    async def test_disabled_leaves_message_unchanged(self, temp_coordinator, sample_session_config):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        mock_sdk = AsyncMock()
+        mock_sdk.inject_timestamps_enabled = False
+        mock_sdk.send_message.return_value = True
+        coordinator._active_sdks[session_id] = mock_sdk
+
+        await coordinator.send_message(session_id, "Hello, Claude!")
+
+        mock_sdk.send_message.assert_called_once_with("Hello, Claude!", metadata=None)
+
+    @pytest.mark.asyncio
+    async def test_every_message_prepends_timestamp(self, temp_coordinator, sample_session_config):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        mock_sdk = AsyncMock()
+        mock_sdk.inject_timestamps_enabled = True
+        mock_sdk.timestamp_injection_frequency = "every_message"
+        mock_sdk.timestamp_injection_timezone = "UTC"
+        mock_sdk.send_message.return_value = True
+        coordinator._active_sdks[session_id] = mock_sdk
+
+        await coordinator.send_message(session_id, "Hello, Claude!")
+
+        sent = mock_sdk.send_message.call_args[0][0]
+        assert sent.startswith("[Current time:")
+        assert sent.endswith("Hello, Claude!")
+
+    @pytest.mark.asyncio
+    async def test_live_and_queue_delivered_messages_receive_identical_injection(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Both the live send path and QueueProcessor call coordinator.send_message()
+        directly (queue_processor.py: `self._coordinator.send_message(session_id,
+        item.content)`), so two send_message() calls with the same content must be
+        augmented identically regardless of which caller they simulate."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        mock_sdk = AsyncMock()
+        mock_sdk.inject_timestamps_enabled = True
+        mock_sdk.timestamp_injection_frequency = "every_message"
+        mock_sdk.timestamp_injection_timezone = "UTC"
+        mock_sdk.send_message.return_value = True
+        coordinator._active_sdks[session_id] = mock_sdk
+
+        # Simulates a live user send.
+        await coordinator.send_message(session_id, "same content")
+        live_sent = mock_sdk.send_message.call_args[0][0]
+
+        # Simulates QueueProcessor._process_loop() delivering a queued item with
+        # identical content via the same coordinator method.
+        await coordinator.send_message(session_id, "same content")
+        queue_sent = mock_sdk.send_message.call_args[0][0]
+
+        assert live_sent == queue_sent
+        assert live_sent.startswith("[Current time:")
+
+    @pytest.mark.asyncio
+    async def test_once_per_day_second_call_same_day_not_injected(
+        self, temp_coordinator, sample_session_config
+    ):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        mock_sdk = AsyncMock()
+        mock_sdk.inject_timestamps_enabled = True
+        mock_sdk.timestamp_injection_frequency = "once_per_day"
+        mock_sdk.timestamp_injection_timezone = "UTC"
+        mock_sdk.send_message.return_value = True
+        coordinator._active_sdks[session_id] = mock_sdk
+
+        await coordinator.send_message(session_id, "first")
+        first_sent = mock_sdk.send_message.call_args[0][0]
+        assert first_sent.startswith("[Current time:")
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.last_timestamp_injection_date is not None
+
+        await coordinator.send_message(session_id, "second")
+        second_sent = mock_sdk.send_message.call_args[0][0]
+        assert second_sent == "second"
+
+    @pytest.mark.asyncio
+    async def test_inject_timestamp_false_skips_injection(self, temp_coordinator, sample_session_config):
+        """comm_router.py passes inject_timestamp=False for Legion comms and system-error
+        messages, since they aren't "user messages" — send_message() must honor that even
+        when the session has the feature enabled."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        mock_sdk = AsyncMock()
+        mock_sdk.inject_timestamps_enabled = True
+        mock_sdk.timestamp_injection_frequency = "every_message"
+        mock_sdk.timestamp_injection_timezone = "UTC"
+        mock_sdk.send_message.return_value = True
+        coordinator._active_sdks[session_id] = mock_sdk
+
+        await coordinator.send_message(session_id, "inter-agent comm", inject_timestamp=False)
+
+        mock_sdk.send_message.assert_called_once_with("inter-agent comm", metadata=None)

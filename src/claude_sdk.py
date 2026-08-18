@@ -246,6 +246,10 @@ class ClaudeSDK:
         self.bare_mode = config.bare_mode if config else False
         self.env_scrub_enabled = config.env_scrub_enabled if config else False
         self.max_subagent_spawn_depth = config.max_subagent_spawn_depth if config else 1
+        # Issue #1779: automatic timestamp injection into user messages
+        self.inject_timestamps_enabled = config.inject_timestamps_enabled
+        self.timestamp_injection_frequency = config.timestamp_injection_frequency
+        self.timestamp_injection_timezone = config.timestamp_injection_timezone
         self.permission_handler = permission_handler
         self.auto_approval_callback: Callable | None = None  # Issue #707: notifies coordinator
         self._stderr_buffer: list[str] = []

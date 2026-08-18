@@ -371,5 +371,32 @@ export const FIELD_SCHEMAS = {
       widget: 'key-value-list',
       description: 'Custom environment variables passed directly to the session. Highest-priority override — takes precedence over app defaults. Do not use for secrets; use the Secrets vault instead.',
     },
+    {
+      key: 'inject_timestamps_enabled',
+      label: 'Inject Timestamps',
+      widget: 'toggle',
+      defaultValue: false,
+      description: 'Prepends the current time to user messages so the agent knows roughly when each message arrived. Takes effect on next session start/restart.',
+    },
+    {
+      key: 'timestamp_injection_frequency',
+      label: 'Injection Frequency',
+      widget: 'button-group',
+      defaultValue: 'every_message',
+      options: [
+        { value: 'every_message', label: 'Every Message' },
+        { value: 'once_per_day', label: 'Once Per Day' },
+      ],
+      showWhen: (config) => !!config.inject_timestamps_enabled,
+    },
+    {
+      key: 'timestamp_injection_timezone',
+      label: 'Injection Timezone',
+      widget: 'text-input',
+      monospace: true,
+      placeholder: 'UTC',
+      description: 'IANA timezone name (e.g. America/New_York). Falls back to UTC if invalid.',
+      showWhen: (config) => !!config.inject_timestamps_enabled,
+    },
   ],
 }

@@ -2287,10 +2287,12 @@ class LegionMCPTools:
             legion_logger.warning(
                 f"Session {session_id} restart timed out (restart_id={restart_id})"
             )
+            # Issue #1779: system-generated warning, not a user message.
             await coordinator.send_message(
                 session_id,
                 "Session restart timed out after 30 seconds — the session was still processing. "
                 "If you still need to restart, call restart_session() again.",
+                inject_timestamp=False,
             )
 
         except Exception as e:

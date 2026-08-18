@@ -591,9 +591,11 @@ class LegionCoordinator:
             # Send "continue" to all ACTIVE minions
             if minion.state.value == "active":
                 try:
+                    # Issue #1779: bulk-resume nudge is system-generated, not a user message.
                     success = await self.system.session_coordinator.send_message(
                         minion.session_id,
-                        "continue"
+                        "continue",
+                        inject_timestamp=False,
                     )
 
                     if success:

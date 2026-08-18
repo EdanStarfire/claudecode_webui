@@ -212,6 +212,44 @@ class TestSessionInfo:
         assert restored.template_id == "tmpl-rt"
         assert restored.config == {"model": "haiku", "thinking_mode": "adaptive"}
 
+    # --- Issue #1779: last_timestamp_injection_date round trip ---
+
+    def test_last_timestamp_injection_date_default_none(self):
+        now = datetime.now(UTC)
+        info = SessionInfo(
+            session_id="test-tsinj-default",
+            state=SessionState.CREATED,
+            created_at=now,
+            updated_at=now,
+        )
+        assert info.last_timestamp_injection_date is None
+
+    def test_last_timestamp_injection_date_round_trip(self):
+        now = datetime.now(UTC)
+        info = SessionInfo(
+            session_id="test-tsinj-rt",
+            state=SessionState.CREATED,
+            created_at=now,
+            updated_at=now,
+            last_timestamp_injection_date="2026-08-18",
+        )
+        data = info.to_dict()
+        assert data["last_timestamp_injection_date"] == "2026-08-18"
+        restored = SessionInfo.from_dict(data)
+        assert restored.last_timestamp_injection_date == "2026-08-18"
+
+    def test_last_timestamp_injection_date_backward_compat(self):
+        """Old state.json fixtures missing the field default to None instead of KeyError."""
+        now = datetime.now(UTC)
+        data = {
+            "session_id": "test-tsinj-old-fixture",
+            "state": "created",
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+        }
+        info = SessionInfo.from_dict(data)
+        assert info.last_timestamp_injection_date is None
+
 
 class TestSessionManager:
     """Test SessionManager functionality."""

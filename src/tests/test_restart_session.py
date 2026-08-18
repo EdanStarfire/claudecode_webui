@@ -187,6 +187,8 @@ async def test_issue_680_monitor_timeout_sends_failure(mcp_tools):
     msg_args = coordinator.send_message.call_args[0]
     assert msg_args[0] == "session-1"
     assert "timed out" in msg_args[1].lower()
+    # Issue #1779: system-generated warning must not get a timestamp prefix
+    assert coordinator.send_message.call_args.kwargs.get("inject_timestamp") is False
 
     # Pending restart should be cleaned up
     assert "session-1" not in mcp_tools._pending_restarts

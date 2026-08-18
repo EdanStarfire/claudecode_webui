@@ -47,6 +47,9 @@ export const CONFIG_FIELDS_LIST = Object.freeze([
   'skill_creating_enabled',
   'max_subagent_spawn_depth',
   'extra_env',
+  'inject_timestamps_enabled',
+  'timestamp_injection_frequency',
+  'timestamp_injection_timezone',
 ])
 
 /** Default value for each CONFIG_FIELD — mirrors SessionConfig defaults. */
@@ -85,6 +88,9 @@ export const FIELD_DEFAULTS = Object.freeze({
   env_scrub_enabled: false,
   max_subagent_spawn_depth: 1,
   extra_env: null,
+  inject_timestamps_enabled: false,
+  timestamp_injection_frequency: 'every_message',
+  timestamp_injection_timezone: 'UTC',
 })
 
 /** Reverse lookup: field name → profile area key. */
@@ -129,6 +135,9 @@ const _FIELD_TO_AREA = Object.freeze({
   skill_creating_enabled: 'features',
   max_subagent_spawn_depth: 'features',
   extra_env: 'features',
+  inject_timestamps_enabled: 'features',
+  timestamp_injection_frequency: 'features',
+  timestamp_injection_timezone: 'features',
 })
 
 /** Return the profile area for a CONFIG_FIELD, or null if unknown. */

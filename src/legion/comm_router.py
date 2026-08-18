@@ -481,10 +481,12 @@ class CommRouter:
                 # Fall through to send_message below
 
             # Send message to target minion via SessionCoordinator (PIVOT and NORMAL)
+            # Issue #1779: inter-agent comms aren't "user messages" — skip timestamp injection.
             success = await self.system.session_coordinator.send_message(
                 session_id=comm.to_minion_id,
                 message=formatted_message,
-                metadata=comm_metadata
+                metadata=comm_metadata,
+                inject_timestamp=False,
             )
             if not success:
                 legion_logger.error(
@@ -565,9 +567,11 @@ class CommRouter:
             from src.session_manager import SessionState
 
             if target_minion and target_minion.state == SessionState.ACTIVE:
+                # Issue #1779: system error comms aren't "user messages" — skip timestamp injection.
                 await self.system.session_coordinator.send_message(
                     session_id=to_minion_id,
-                    message=formatted_message
+                    message=formatted_message,
+                    inject_timestamp=False,
                 )
                 legion_logger.info(f"Sent system error comm to minion {to_minion_id}")
             else:
