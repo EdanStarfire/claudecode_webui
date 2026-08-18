@@ -48,6 +48,31 @@ async function seedTwoOpenPermissions(pinia) {
   return { messageStore, sessionStore }
 }
 
+async function seedAskUserQuestionAlongsideNormal(pinia) {
+  const { useMessageStore } = await import('@/stores/message')
+  const { useSessionStore } = await import('@/stores/session')
+  const messageStore = useMessageStore(pinia)
+  const sessionStore = useSessionStore(pinia)
+  sessionStore.currentSessionId = SESSION_ID
+
+  messageStore.handleToolCall(SESSION_ID, {
+    tool_use_id: 'use-main',
+    name: 'Write',
+    input: {},
+    status: 'awaiting_permission',
+    request_id: 'req-main',
+  })
+  messageStore.handleToolCall(SESSION_ID, {
+    tool_use_id: 'use-question',
+    name: 'AskUserQuestion',
+    input: { questions: [{ question: 'Which approach?', options: ['A', 'B'] }] },
+    status: 'awaiting_permission',
+    request_id: 'req-question',
+  })
+
+  return { messageStore, sessionStore }
+}
+
 describe('PermissionQueue', () => {
   it('renders one card per open permission', async () => {
     const { pinia } = renderWithStores(PermissionQueue, {
@@ -149,5 +174,39 @@ describe('PermissionQueue', () => {
     await nextTick()
 
     expect(screen.getAllByText(/wants to use/i)).toHaveLength(3)
+  })
+
+  it('renders an AskUserQuestion card with the context directive and no Approve/Deny buttons', async () => {
+    const { pinia } = renderWithStores(PermissionQueue, {
+      props: { sessionId: SESSION_ID, bottomOffset: 0 }
+    })
+    await seedAskUserQuestionAlongsideNormal(pinia)
+    await nextTick()
+
+    expect(screen.getByText(/go to context to review questions/i)).toBeTruthy()
+    // Only the non-AskUserQuestion card gets Approve/Deny.
+    expect(screen.getAllByRole('button', { name: /^approve$/i })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: /^deny$/i })).toHaveLength(1)
+    expect(screen.getAllByText(/view in context/i)).toHaveLength(2)
+  })
+
+  it('clicking View in context on an AskUserQuestion card scrolls to its tool anchor', async () => {
+    const user = userEvent.setup()
+    const { pinia } = renderWithStores(PermissionQueue, {
+      props: { sessionId: SESSION_ID, bottomOffset: 0 }
+    })
+    await seedAskUserQuestionAlongsideNormal(pinia)
+    await nextTick()
+
+    const anchor = document.createElement('div')
+    anchor.id = 'tool-anchor-use-question'
+    anchor.scrollIntoView = vi.fn()
+    document.body.appendChild(anchor)
+
+    const viewLinks = screen.getAllByText(/view in context/i)
+    await user.click(viewLinks[viewLinks.length - 1])
+
+    expect(anchor.scrollIntoView).toHaveBeenCalled()
+    document.body.removeChild(anchor)
   })
 })
