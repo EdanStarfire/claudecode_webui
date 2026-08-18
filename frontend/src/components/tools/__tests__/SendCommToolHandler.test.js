@@ -105,4 +105,44 @@ describe('SendCommToolHandler', () => {
     expect(recipient.text()).toContain('database-optimizer')
     expect(recipient.find('a').exists()).toBe(false)
   })
+
+  it('renders raw input and error detail for a failed send_comm call', async () => {
+    const toolCall = {
+      id: 'use-1',
+      session_id: 'sender-1',
+      name: 'send_comm',
+      input: { to_minion_name: 'database-optimizer', content: 'hello' },
+      status: 'error',
+      result: { error: true, message: "Input validation error: 'comm_type' is a required property" },
+    }
+
+    const { wrapper } = renderWithStores(SendCommToolHandler, { props: { toolCall }, stubs: { MarkdownView: MarkdownViewStub } })
+    await seedSessions(wrapper, [
+      { session_id: 'sender-1', project_id: 'proj-1', slug: 'sender', name: 'Sender' },
+    ])
+
+    const detail = wrapper.find('.outbound-comm-failure-detail')
+    expect(detail.exists()).toBe(true)
+    expect(detail.text()).toContain('to_minion_name')
+    expect(detail.text()).toContain('database-optimizer')
+    expect(detail.text()).toContain("Input validation error: 'comm_type' is a required property")
+  })
+
+  it('does not render failure detail for a successful send_comm call', async () => {
+    const toolCall = {
+      id: 'use-1',
+      session_id: 'sender-1',
+      name: 'send_comm',
+      input: { to_minion_name: 'database-optimizer', content: 'hello', comm_type: 'info' },
+      status: 'completed',
+      result: { error: false, content: 'delivered' },
+    }
+
+    const { wrapper } = renderWithStores(SendCommToolHandler, { props: { toolCall }, stubs: { MarkdownView: MarkdownViewStub } })
+    await seedSessions(wrapper, [
+      { session_id: 'sender-1', project_id: 'proj-1', slug: 'sender', name: 'Sender' },
+    ])
+
+    expect(wrapper.find('.outbound-comm-failure-detail').exists()).toBe(false)
+  })
 })
