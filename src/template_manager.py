@@ -351,6 +351,10 @@ class TemplateManager:
         extra_env: dict[str, str] | None = None,
         provider_catalog_id: str | None = None,
         provider_model_id: str | None = None,
+        # Automatic timestamp injection into user messages (issue #1779)
+        inject_timestamps_enabled: bool | None = None,
+        timestamp_injection_frequency: str | None = None,
+        timestamp_injection_timezone: str | None = None,
         # Deprecated: template_overrides absorbed into config
         template_overrides: dict[str, Any] | None = None,
     ) -> MinionTemplate:
@@ -427,6 +431,9 @@ class TemplateManager:
             "extra_env": extra_env,
             "provider_catalog_id": provider_catalog_id,
             "provider_model_id": provider_model_id,
+            "inject_timestamps_enabled": inject_timestamps_enabled,
+            "timestamp_injection_frequency": timestamp_injection_frequency,
+            "timestamp_injection_timezone": timestamp_injection_timezone,
         }
         for field_name, value in local_vars.items():
             if value is not None and field_name in CONFIG_FIELDS:

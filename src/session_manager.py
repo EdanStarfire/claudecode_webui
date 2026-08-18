@@ -149,6 +149,11 @@ class SessionInfo:
     # values are vault secret names.  None means not yet populated.
     secret_placeholders: dict[str, str] | None = None
 
+    # Issue #1779: date (ISO, in the configured injection timezone) the timestamp
+    # was last injected into a user message, for "once_per_day" frequency tracking.
+    # Runtime state, not part of the resolved config (config dict).
+    last_timestamp_injection_date: str | None = None
+
     def __post_init__(self):
         if self.secret_placeholders is None:
             self.secret_placeholders = {}
@@ -180,6 +185,7 @@ class SessionInfo:
             "last_activity_at": self.last_activity_at.isoformat() if self.last_activity_at else None,
             "last_completion_at": self.last_completion_at.isoformat() if self.last_completion_at else None,
             "last_viewed_at": self.last_viewed_at.isoformat() if self.last_viewed_at else None,
+            "last_timestamp_injection_date": self.last_timestamp_injection_date,
             "latest_message": self.latest_message,
             "latest_message_time": self.latest_message_time.isoformat() if self.latest_message_time else None,
             "latest_message_type": self.latest_message_type,
@@ -253,6 +259,7 @@ class SessionInfo:
         data.setdefault("secret_placeholders", None)
         data.setdefault("config", {})
         data.setdefault("links", [])
+        data.setdefault("last_timestamp_injection_date", None)
 
         # Drop any keys not in the post-#1230 schema (legacy flat CONFIG_FIELDS
         # and session_overrides are removed by migration before from_dict is called).
@@ -267,7 +274,7 @@ class SessionInfo:
             "latest_message_time", "is_ephemeral", "queue_config", "queue_paused",
             "template_id", "config", "last_activity_at", "last_completion_at",
             "last_viewed_at", "secret_fetch_token", "secret_placeholders",
-            "links",
+            "links", "last_timestamp_injection_date",
         }
         for k in list(data.keys()):
             if k not in known:

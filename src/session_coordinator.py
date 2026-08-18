@@ -48,6 +48,7 @@ from .session_config import SessionConfig
 from .session_manager import STOPPED_STATES, VALID_MODELS, SessionManager, SessionState
 from .task_registry import TASK_LIFECYCLE_SUBTYPES, TaskLegRegistry
 from .task_utils import task_done_log_exception
+from .timestamp_injection import maybe_inject_timestamp
 from .timestamp_utils import get_unix_timestamp
 
 # Get specialized logger for coordinator actions
@@ -2456,8 +2457,21 @@ class SessionCoordinator:
             return True
         return await sdk.wait_until_ready(timeout=timeout)
 
-    async def send_message(self, session_id: str, message: str, metadata: dict | None = None) -> bool:
-        """Send a message through the integrated pipeline"""
+    async def send_message(
+        self,
+        session_id: str,
+        message: str,
+        metadata: dict | None = None,
+        inject_timestamp: bool = True,
+    ) -> bool:
+        """Send a message through the integrated pipeline.
+
+        inject_timestamp: gates issue #1779 automatic timestamp injection. True for the
+        live user-send and queue/cron paths (the feature's intended scope: "user
+        messages"). Legion inter-agent comms and system-error messages (comm_router.py)
+        pass False — they aren't user messages and injecting into them would desync the
+        Legion timeline (comm.content persisted pre-injection) from the delivered text.
+        """
         try:
             sdk = self._active_sdks.get(session_id)
             if not sdk:
@@ -2466,6 +2480,25 @@ class SessionCoordinator:
 
             # Issue #1130: Track activity for idle watchdog
             self.session_manager.record_activity(session_id)
+
+            # Issue #1779: Automatic timestamp injection, config resolved at session start
+            # (same restart-to-take-effect convention as every other config field).
+            # `is True` (not truthy check): sdk is a test double in some callers and an
+            # unspecced AsyncMock's auto-generated attributes are truthy by default.
+            if inject_timestamp and sdk.inject_timestamps_enabled is True:
+                session_info = await self.session_manager.get_session_info(session_id)
+                message, new_injection_date = maybe_inject_timestamp(
+                    message,
+                    enabled=True,
+                    frequency=sdk.timestamp_injection_frequency,
+                    tz_name=sdk.timestamp_injection_timezone,
+                    last_injection_date=session_info.last_timestamp_injection_date if session_info else None,
+                    now_utc=datetime.now(UTC),
+                )
+                if new_injection_date:
+                    await self.session_manager.update_session(
+                        session_id, last_timestamp_injection_date=new_injection_date
+                    )
 
             # Mark session as processing before sending message
             await self.session_manager.update_processing_state(session_id, True)

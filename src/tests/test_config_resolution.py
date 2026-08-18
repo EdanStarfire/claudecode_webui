@@ -999,3 +999,74 @@ class TestIssue1669MaxSubagentSpawnDepth:
     def test_valid_range_accepted(self):
         for depth in (1, 2, 3):
             assert SessionConfig(max_subagent_spawn_depth=depth).max_subagent_spawn_depth == depth
+
+
+@pytest.mark.asyncio
+class TestIssue1779TimestampInjectionResolution:
+    """Precedence tests for timestamp injection config fields (issue #1779)."""
+
+    def test_fields_registered_in_features_area(self):
+        for field_name in (
+            "inject_timestamps_enabled",
+            "timestamp_injection_frequency",
+            "timestamp_injection_timezone",
+        ):
+            assert FIELD_TO_AREA.get(field_name) == "features"
+            assert field_name in PROFILE_AREAS["features"]
+
+    async def test_profile_only_override(self):
+        """Profile value is used when template does not set the field."""
+        profile = _make_profile(area="features", config={
+            "inject_timestamps_enabled": True,
+            "timestamp_injection_frequency": "once_per_day",
+            "timestamp_injection_timezone": "America/New_York",
+        })
+        pm = _make_profile_manager([profile])
+        template = _make_template(profile_ids={"features": profile.profile_id})
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm, pm)
+
+        assert result.inject_timestamps_enabled is True
+        assert result.timestamp_injection_frequency == "once_per_day"
+        assert result.timestamp_injection_timezone == "America/New_York"
+
+    async def test_template_overrides_profile(self):
+        """Template config value wins over profile value."""
+        profile = _make_profile(area="features", config={"timestamp_injection_timezone": "America/New_York"})
+        pm = _make_profile_manager([profile])
+        template = _make_template(
+            profile_ids={"features": profile.profile_id},
+            template_overrides={"timestamp_injection_timezone": "Europe/London"},
+        )
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm, pm)
+
+        assert result.timestamp_injection_timezone == "Europe/London"
+
+    async def test_session_overrides_template(self):
+        """Session config value wins over template value."""
+        template = _make_template(timestamp_injection_timezone="Europe/London")
+        session = _make_session(
+            template_id="tmpl-001",
+            session_overrides={"timestamp_injection_timezone": "Asia/Tokyo"},
+        )
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm)
+
+        assert result.timestamp_injection_timezone == "Asia/Tokyo"
+
+    async def test_no_override_falls_back_to_defaults(self):
+        template = _make_template()
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm)
+
+        assert result.inject_timestamps_enabled is False
+        assert result.timestamp_injection_frequency == "every_message"
+        assert result.timestamp_injection_timezone == "UTC"

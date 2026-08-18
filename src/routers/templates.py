@@ -100,6 +100,10 @@ def build_router(webui) -> APIRouter:
             extra_env=request.extra_env,
             provider_catalog_id=request.provider_catalog_id,
             provider_model_id=request.provider_model_id,
+            # Automatic timestamp injection into user messages (issue #1779)
+            inject_timestamps_enabled=request.inject_timestamps_enabled,
+            timestamp_injection_frequency=request.timestamp_injection_frequency,
+            timestamp_injection_timezone=request.timestamp_injection_timezone,
             profile_ids=request.profile_ids,
         )
 

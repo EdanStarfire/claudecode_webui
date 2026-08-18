@@ -67,6 +67,10 @@ class SessionConfig(BaseModel):
     auto_memory_directory: str | None = None  # Custom directory for auto-memory when mode is "claude" (issue #906)
     skill_creating_enabled: bool = False
     enable_streaming_text: bool = False  # Issue #1486 — opt-in streaming text rendering
+    # Issue #1779: opt-in automatic timestamp injection into user messages
+    inject_timestamps_enabled: bool = False
+    timestamp_injection_frequency: str = "every_message"  # "every_message" | "once_per_day"
+    timestamp_injection_timezone: str = "UTC"  # IANA tz name
 
     # MCP servers (issue #676)
     mcp_server_ids: list[str] | None = None  # Global MCP config IDs to attach
@@ -116,6 +120,7 @@ CONFIG_FIELDS: set[str] = {
     "assigned_secrets", "docker_proxy_allowlist_domains",
     "history_distillation_enabled", "auto_memory_mode", "auto_memory_directory",
     "skill_creating_enabled", "enable_streaming_text",
+    "inject_timestamps_enabled", "timestamp_injection_frequency", "timestamp_injection_timezone",
     "mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config",
     "bare_mode", "env_scrub_enabled", "max_subagent_spawn_depth", "extra_env",
     "provider_catalog_id", "provider_model_id",

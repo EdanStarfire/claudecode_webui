@@ -445,9 +445,20 @@ class MockClaudeSDK:
         if config is not None:
             self.current_permission_mode = getattr(config, "permission_mode", "default")
             self.model = getattr(config, "model", None)
+            # Issue #1779: automatic timestamp injection into user messages
+            self.inject_timestamps_enabled = getattr(config, "inject_timestamps_enabled", False)
+            self.timestamp_injection_frequency = getattr(
+                config, "timestamp_injection_frequency", "every_message"
+            )
+            self.timestamp_injection_timezone = getattr(
+                config, "timestamp_injection_timezone", "UTC"
+            )
         else:
             self.current_permission_mode = kwargs.get("permissions", "default")
             self.model = kwargs.get("model")
+            self.inject_timestamps_enabled = False
+            self.timestamp_injection_frequency = "every_message"
+            self.timestamp_injection_timezone = "UTC"
         self.storage_manager = kwargs.get("storage_manager")
         self.session_manager = kwargs.get("session_manager")
 

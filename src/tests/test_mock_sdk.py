@@ -394,6 +394,37 @@ class TestMockClaudeSDK:
         assert result is True
         assert mock.current_permission_mode == "bypassPermissions"
 
+    def test_timestamp_injection_attributes_default_without_config(self):
+        """Issue #1779: MockClaudeSDK must expose the same timestamp-injection
+        attributes as ClaudeSDK even with no config kwarg, since SessionCoordinator.
+        send_message() reads them unconditionally on every call."""
+        mock = MockClaudeSDK(
+            session_id="test-tsinj-no-config",
+            working_directory="/tmp/test",
+            session_dir=str(FIXTURES_DIR / "single_turn"),
+            speed_factor=0.0,
+        )
+        assert mock.inject_timestamps_enabled is False
+        assert mock.timestamp_injection_frequency == "every_message"
+        assert mock.timestamp_injection_timezone == "UTC"
+
+    def test_timestamp_injection_attributes_from_config(self):
+        """Config-derived values are surfaced the same way current_permission_mode/model are."""
+        mock = MockClaudeSDK(
+            session_id="test-tsinj-config",
+            working_directory="/tmp/test",
+            session_dir=str(FIXTURES_DIR / "single_turn"),
+            speed_factor=0.0,
+            config=SessionConfig(
+                inject_timestamps_enabled=True,
+                timestamp_injection_frequency="once_per_day",
+                timestamp_injection_timezone="America/New_York",
+            ),
+        )
+        assert mock.inject_timestamps_enabled is True
+        assert mock.timestamp_injection_frequency == "once_per_day"
+        assert mock.timestamp_injection_timezone == "America/New_York"
+
     @pytest.mark.asyncio
     async def test_interrupt_session(self):
         """Interrupt stops replay."""

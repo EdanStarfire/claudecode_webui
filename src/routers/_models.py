@@ -327,6 +327,10 @@ class TemplateUpdateRequest(BaseModel):
     enable_streaming_text: bool | None = None  # Issue #1486 — opt-in streaming text rendering
     # Non-secret direct env passthrough (issue #1396)
     extra_env: dict[str, str] | None = None
+    # Automatic timestamp injection into user messages (issue #1779)
+    inject_timestamps_enabled: bool | None = None
+    timestamp_injection_frequency: str | None = None  # "every_message" | "once_per_day"
+    timestamp_injection_timezone: str | None = None  # IANA tz name
     provider_catalog_id: str | None = None
     provider_model_id: str | None = None
     # Per-tier model routing (issue #1469)
