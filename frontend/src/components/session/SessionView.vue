@@ -22,7 +22,7 @@
 
     <!-- Messages Area -->
     <div class="d-flex flex-column flex-grow-1 overflow-hidden">
-      <MessageList />
+      <MessageList ref="messageListRef" />
     </div>
 
     <!-- Bottom input-bar stack — measured so PermissionQueue's floating offset always clears
@@ -39,6 +39,7 @@
       v-if="!isArchiveMode"
       :session-id="props.sessionId"
       :bottom-offset="bottomStackHeight"
+      :virtual-nav="messageListRef"
     />
   </div>
 </template>
@@ -83,6 +84,10 @@ provide('viewArchiveId', readonly(toRef(props, 'archiveId')))
 
 const route = useRoute()
 const inputAreaRef = ref(null)
+// Issue #1748 (stage: offset-model): MessageList owns the virtualizer; PermissionQueue (a
+// sibling, not a descendant) needs its exposed scrollToItemIndex/resolve* helpers for
+// "view in context" — forwarded down as a prop since provide/inject only reaches descendants.
+const messageListRef = ref(null)
 const bottomStackRef = ref(null)
 const bottomStackHeight = ref(0)
 let bottomStackObserver = null

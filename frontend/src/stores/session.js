@@ -47,7 +47,10 @@ export const useSessionStore = defineStore('session', () => {
   const localViewedAt = ref(new Map()) // sessionId → epoch ms
 
   // Scroll position preservation across session switches
-  const scrollPositions = ref(new Map())            // sessionId → scrollTop (pixel offset)
+  // Issue #1748 (stage: offset-model): logical position ({itemIndex, offsetWithinItem}) rather
+  // than a raw pixel scrollTop — a pixel offset drifts as more of a virtualized list gets
+  // measured, while an item index stays valid regardless of how estimates settle.
+  const scrollPositions = ref(new Map())            // sessionId → { itemIndex, offsetWithinItem }
 
   // Session reset counter (triggers archive re-fetch in AgentOverview)
   const sessionResets = ref(new Map())              // sessionId → reset count
@@ -740,9 +743,9 @@ export const useSessionStore = defineStore('session', () => {
 
   // ========== SCROLL POSITION ACTIONS ==========
 
-  function saveScrollPosition(sessionId, scrollTop) {
-    if (!sessionId || typeof scrollTop !== 'number') return
-    scrollPositions.value.set(sessionId, scrollTop)
+  function saveScrollPosition(sessionId, position) {
+    if (!sessionId || typeof position?.itemIndex !== 'number') return
+    scrollPositions.value.set(sessionId, position)
   }
 
   // ========== SESSION RESET TRACKING ==========

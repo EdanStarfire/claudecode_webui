@@ -190,4 +190,44 @@ describe('session store', () => {
       )
     })
   })
+
+  describe('scroll position persistence — {itemIndex, offsetWithinItem} (#1748 stage: offset-model)', () => {
+    it('round-trips a logical position through save/restore', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useSessionStore()
+
+      store.saveScrollPosition('sess-a', { itemIndex: 42, offsetWithinItem: 17 })
+
+      expect(store.scrollPositions.get('sess-a')).toEqual({ itemIndex: 42, offsetWithinItem: 17 })
+    })
+
+    it('round-trips restoring into a never-visited region (offsetWithinItem 0, high itemIndex)', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useSessionStore()
+
+      // A large itemIndex with offsetWithinItem 0 is exactly what a never-visited jump target
+      // looks like — the saved position only names an index, not a pixel a never-measured
+      // region can't yet honestly report.
+      store.saveScrollPosition('sess-b', { itemIndex: 9999, offsetWithinItem: 0 })
+
+      expect(store.scrollPositions.get('sess-b')).toEqual({ itemIndex: 9999, offsetWithinItem: 0 })
+    })
+
+    it('ignores a raw pixel number (the pre-#1748 representation) instead of storing it', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useSessionStore()
+
+      store.saveScrollPosition('sess-c', 1234) // old shape: a bare scrollTop pixel offset
+
+      expect(store.scrollPositions.has('sess-c')).toBe(false)
+    })
+
+    it('ignores a missing/null position without throwing', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useSessionStore()
+
+      expect(() => store.saveScrollPosition('sess-d', null)).not.toThrow()
+      expect(store.scrollPositions.has('sess-d')).toBe(false)
+    })
+  })
 })
