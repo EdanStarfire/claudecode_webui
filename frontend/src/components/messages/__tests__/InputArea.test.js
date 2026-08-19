@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { nextTick, ref } from 'vue'
 import { setActivePinia, createPinia } from 'pinia'
 import { screen, fireEvent } from '@testing-library/vue'
@@ -169,5 +169,101 @@ describe('InputArea', () => {
     await nextTick()
 
     expect(sessionStore.getInput(SESSION_ID)).toBe('')
+  })
+
+  // Issue #1788: measurement moved from the live textarea to an offscreen clone to
+  // avoid forcing layout on large unvirtualized sessions. jsdom implements neither
+  // ResizeObserver nor real layout (scrollHeight is always 0), so these tests assert
+  // structural wiring (clone lifecycle, observe/disconnect calls) rather than pixel
+  // heights.
+  describe('offscreen resize clone (#1788)', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('appends a hidden measurement clone on mount and removes it on unmount', async () => {
+      const { pinia, wrapper } = renderWithStores(InputArea, {
+        provide: { viewSessionId: viewSessionIdRef },
+        stubs: {
+          AttachmentList: true,
+          SlashCommandDropdown: true
+        }
+      })
+
+      const { useSessionStore } = await import('@/stores/session')
+      const { usePollingStore } = await import('@/stores/polling')
+      const sessionStore = useSessionStore(pinia)
+      const pollingStore = usePollingStore(pinia)
+      sessionStore.currentSessionId = SESSION_ID
+      pollingStore.sessionConnected = true
+      await nextTick()
+
+      const clones = document.body.querySelectorAll('textarea[aria-hidden="true"]')
+      expect(clones.length).toBe(1)
+
+      wrapper.unmount()
+
+      expect(document.body.querySelectorAll('textarea[aria-hidden="true"]').length).toBe(0)
+    })
+
+    it('observes the real textarea with ResizeObserver on mount and disconnects on unmount, when available', async () => {
+      const observeMock = vi.fn()
+      const disconnectMock = vi.fn()
+      class MockResizeObserver {
+        constructor(callback) { this.callback = callback }
+        observe = observeMock
+        disconnect = disconnectMock
+        unobserve = vi.fn()
+      }
+      vi.stubGlobal('ResizeObserver', MockResizeObserver)
+
+      const { pinia, wrapper } = renderWithStores(InputArea, {
+        provide: { viewSessionId: viewSessionIdRef },
+        stubs: {
+          AttachmentList: true,
+          SlashCommandDropdown: true
+        }
+      })
+
+      const { useSessionStore } = await import('@/stores/session')
+      const { usePollingStore } = await import('@/stores/polling')
+      const sessionStore = useSessionStore(pinia)
+      const pollingStore = usePollingStore(pinia)
+      sessionStore.currentSessionId = SESSION_ID
+      pollingStore.sessionConnected = true
+      await nextTick()
+
+      const textarea = screen.getByRole('textbox')
+      expect(observeMock).toHaveBeenCalledWith(textarea)
+
+      wrapper.unmount()
+
+      expect(disconnectMock).toHaveBeenCalled()
+    })
+
+    it('mounts and unmounts without error when ResizeObserver is unavailable (default jsdom env)', async () => {
+      expect(typeof globalThis.ResizeObserver).toBe('undefined')
+
+      const { pinia, wrapper } = renderWithStores(InputArea, {
+        provide: { viewSessionId: viewSessionIdRef },
+        stubs: {
+          AttachmentList: true,
+          SlashCommandDropdown: true
+        }
+      })
+
+      const { useSessionStore } = await import('@/stores/session')
+      const { usePollingStore } = await import('@/stores/polling')
+      const sessionStore = useSessionStore(pinia)
+      const pollingStore = usePollingStore(pinia)
+      sessionStore.currentSessionId = SESSION_ID
+      pollingStore.sessionConnected = true
+      await nextTick()
+
+      // The measurement clone still gets created regardless of ResizeObserver support.
+      expect(document.body.querySelectorAll('textarea[aria-hidden="true"]').length).toBe(1)
+
+      expect(() => wrapper.unmount()).not.toThrow()
+    })
   })
 })
