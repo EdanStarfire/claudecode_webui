@@ -167,6 +167,36 @@ const fileInput = ref(null)
 const sendErrorMessage = ref(null)
 let sendErrorTimeout = null
 let resizeRafId = null
+let resizeClone = null
+let resizeObserver = null
+let lastObservedInlineSize = null
+
+// Sizing-relevant CSS properties copied from the live textarea onto the offscreen
+// measurement clone on every measurement (issue #1788).
+const SIZING_STYLE_PROPS = [
+  'box-sizing',
+  'border-top-width',
+  'border-right-width',
+  'border-bottom-width',
+  'border-left-width',
+  'font-family',
+  'font-size',
+  'font-style',
+  'font-weight',
+  'letter-spacing',
+  'line-height',
+  'text-indent',
+  'text-rendering',
+  'text-transform',
+  'padding-top',
+  'padding-right',
+  'padding-bottom',
+  'padding-left',
+  'tab-size',
+  'word-break',
+  'word-spacing',
+  'width'
+]
 
 function showSendError(message) {
   sendErrorMessage.value = message
@@ -251,12 +281,30 @@ function handleResize() {
 
 onMounted(() => {
   window.addEventListener('resize', handleResize)
+
+  createResizeClone()
+  // Guard matches the existing ResizeObserver convention at SessionView.vue:110.
+  if (typeof ResizeObserver !== 'undefined' && messageTextarea.value) {
+    resizeObserver = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      const inlineSize = entry.contentBoxSize?.[0]?.inlineSize ?? entry.contentRect.width
+      // The final height write in scheduleTextareaResize() re-fires this observer
+      // (content-box tracking includes block-size); skip re-scheduling when only
+      // height changed to avoid a wasted extra clone-measure pass per keystroke.
+      if (inlineSize === lastObservedInlineSize) return
+      lastObservedInlineSize = inlineSize
+      scheduleTextareaResize()
+    })
+    resizeObserver.observe(messageTextarea.value)
+  }
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   if (sendErrorTimeout) clearTimeout(sendErrorTimeout)
   if (resizeRafId !== null) cancelAnimationFrame(resizeRafId)
+  resizeObserver?.disconnect()
+  resizeClone?.remove()
 })
 
 // Watch for resource attachments added from ResourceGallery.
@@ -332,22 +380,63 @@ function autoResizeTextarea(event) {
 }
 
 /**
+ * Create the hidden offscreen clone used to measure scrollHeight without
+ * forcing layout on the live textarea (issue #1788). Positioned absolutely
+ * and appended to document.body so it's structurally excluded from
+ * SessionView's flex-column layout tree — writing to it can't trigger the
+ * joint flex resolution that made measuring the live textarea expensive on
+ * large sessions.
+ */
+function createResizeClone() {
+  if (resizeClone) return
+  const clone = document.createElement('textarea')
+  clone.setAttribute('tabindex', '-1')
+  clone.setAttribute('aria-hidden', 'true')
+  clone.style.cssText = `
+    position: absolute !important;
+    top: 0 !important;
+    right: 0 !important;
+    visibility: hidden !important;
+    overflow: hidden !important;
+    z-index: -1000 !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    display: block !important;
+  `
+  document.body.appendChild(clone)
+  resizeClone = clone
+}
+
+/**
  * Coalesce write->read->write resize cycles into a single requestAnimationFrame
  * callback per frame, so bursts of 'input' events (fast typing, paste, IME
  * composition) don't each force a synchronous layout (issue #1786).
+ *
+ * Measures against the offscreen clone instead of the live textarea (issue #1788):
+ * on large unvirtualized sessions (#1748), the live textarea sits as a
+ * content-height flex sibling of the message list's flex:1 wrapper, so
+ * resolving its intrinsic height forces a joint layout resolution across the
+ * whole page. The clone has no CSS relationship to that flex tree, so
+ * measuring it is cheap regardless of session size. Sizing styles are copied
+ * fresh every measurement to keep the clone's wrap width in sync with the
+ * live textarea.
  */
 function scheduleTextareaResize() {
   if (resizeRafId !== null) return
   resizeRafId = requestAnimationFrame(() => {
     resizeRafId = null
     const textarea = messageTextarea.value
-    if (!textarea) return
+    if (!textarea || !resizeClone) return
 
-    // Reset height to auto to get the correct scrollHeight
-    textarea.style.height = 'auto'
+    const computed = getComputedStyle(textarea)
+    for (const prop of SIZING_STYLE_PROPS) {
+      resizeClone.style.setProperty(prop, computed.getPropertyValue(prop))
+    }
+    resizeClone.value = textarea.value
 
     // Set height based on scrollHeight, respecting min and max
-    const newHeight = Math.min(textarea.scrollHeight, parseInt(getComputedStyle(textarea).maxHeight))
+    const newHeight = Math.min(resizeClone.scrollHeight, parseInt(computed.maxHeight))
     textarea.style.height = newHeight + 'px'
   })
 }
