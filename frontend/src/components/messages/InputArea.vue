@@ -166,6 +166,7 @@ const messageTextarea = ref(null)
 const fileInput = ref(null)
 const sendErrorMessage = ref(null)
 let sendErrorTimeout = null
+let resizeRafId = null
 
 function showSendError(message) {
   sendErrorMessage.value = message
@@ -255,6 +256,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   if (sendErrorTimeout) clearTimeout(sendErrorTimeout)
+  if (resizeRafId !== null) cancelAnimationFrame(resizeRafId)
 })
 
 // Watch for resource attachments added from ResourceGallery.
@@ -326,16 +328,28 @@ function autoResizeTextarea(event) {
   if (event?.target) {
     inputText.value = event.target.value
   }
+  scheduleTextareaResize()
+}
 
-  const textarea = messageTextarea.value
-  if (!textarea) return
+/**
+ * Coalesce write->read->write resize cycles into a single requestAnimationFrame
+ * callback per frame, so bursts of 'input' events (fast typing, paste, IME
+ * composition) don't each force a synchronous layout (issue #1786).
+ */
+function scheduleTextareaResize() {
+  if (resizeRafId !== null) return
+  resizeRafId = requestAnimationFrame(() => {
+    resizeRafId = null
+    const textarea = messageTextarea.value
+    if (!textarea) return
 
-  // Reset height to auto to get the correct scrollHeight
-  textarea.style.height = 'auto'
+    // Reset height to auto to get the correct scrollHeight
+    textarea.style.height = 'auto'
 
-  // Set height based on scrollHeight, respecting min and max
-  const newHeight = Math.min(textarea.scrollHeight, parseInt(getComputedStyle(textarea).maxHeight))
-  textarea.style.height = newHeight + 'px'
+    // Set height based on scrollHeight, respecting min and max
+    const newHeight = Math.min(textarea.scrollHeight, parseInt(getComputedStyle(textarea).maxHeight))
+    textarea.style.height = newHeight + 'px'
+  })
 }
 
 // Watch input text for slash command trigger
