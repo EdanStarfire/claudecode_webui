@@ -6,6 +6,61 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-20
+
+### Message List, Subagents & Performance
+A full redesign of how the message list handles large sessions and concurrent subagents, plus a chain of performance fixes for typing/scrolling responsiveness.
+- Full-bleed accented row layout replaces the old bubble/dot-strip timeline; concurrent subagents render as a persistent gutter with per-leg causal timeline and full transcript; permission requests move to a floating queue (desktop corner stack, mobile FAB + sheet) decoupled from the inline record (#1746)
+- Virtual scrolling for the message list — only messages near the viewport render, so scrolling and typing stay smooth regardless of session size (#1748)
+- Message textarea no longer forces a synchronous layout on every keystroke, and on large sessions measures against an offscreen clone instead of the live page — fixes typing lag that scaled with session size (#1786, #1787, #1788, #1790)
+- Tool detail panels expand directly beneath the clicked pill instead of always at the end of the list (#1770)
+- Backgrounded plain `Bash` calls no longer misrender as subagent cards, hiding the real command and output (#1775)
+- Permission grouping/cleanup fixed for concurrent per-session requests; permission-mode and API-retry summaries reconstruct correctly on reload (#1753, #1757, #1758)
+- Outbound comm row header/status placement and sender-recipient gradient styling corrected (#1759, #1762)
+- Message history no longer truncates at a fixed cap on long sessions (#1749)
+
+### Permissions & Secrets
+- AskUserQuestion requests in the floating permission queue link to full context instead of showing Approve/Deny; AskUserQuestion answers no longer incorrectly show "No answers recorded" (#1776, #1777)
+- Secrets settings UI shows how many sessions, templates, profiles, and MCP servers reference each secret, including OAuth2 client-secret dependencies (#1782)
+- Basic Auth secrets now allow only a username or only a password (#1742)
+- Permission prompt ordering race fixed with a backend barrier and frontend anchoring (#1715)
+- `PERMISSION CALLBACK` log entries no longer silently dropped (#1718)
+
+### Project Overview & Sessions
+- User-managed kanban priority groups (#1734)
+- Collapsible parent nodes in the minion tree, plus a fixed kebab menu icon (#1702, #1751)
+- Resume Sessions runs in configurable batches, now with a configurable delay between batches (#1738, #1794)
+- Automatic timestamp injection into user messages — per-profile/template/session, "every message" or "once per day", configurable timezone, applies to live and queued/scheduled messages (#1785)
+- Clickable jump links between agents in a project (#1721)
+- Resume All routes based on `is_processing` state at stop time (#1667)
+
+### Notifications
+- Global in-app notification tray for actionable events (#1729)
+- Native browser/OS notifications alongside sound alerts (#1719)
+- Notification tray no longer covered by agent chips; notifications fire only on genuine session state transitions (#1737, #1735)
+
+### Settings & Configuration
+- Extra environment variable editor under Isolation settings (#1700)
+- Several `CLAUDE_CODE_*` toggles exposed directly in profile/template/session settings: process wrapper, max subagent spawn depth, max subagents per session, forward-subagent-text, background Agent execution (#1679, #1681, #1682, #1685, #1689, #1686)
+- Live model switching without a session restart; `register_repo_root` real-time directory support without a restart (#1683, #1684)
+- Branch/commit selection in the restart modal (#1763)
+- Experimental breadcrumb navigation header, raw JSON view for unhandled system message types (#1739, #1745)
+- `extra_env`/`max_subagent_spawn_depth` moved to the Features area; "default" permission mode now displays as "Manual"; `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` correctly wired (#1712, #1678, #1693)
+- Settings sidebar groups stay visible with "No results" during search (#1701)
+
+### UI Polish
+- Escape fully exits Settings instead of only discarding a draft (#1750)
+- Full-screen resource preview: handles a new file version correctly, stays anchored across reorders, supports video seeking (#1717, #1699, #1720)
+- Full-screen markdown viewer preserves list indentation; low-contrast outline button borders fixed in the dark red theme (#1704, #1703)
+- Collapse/expand chevron icon visibility fixed; skill re-invocation notice renders correctly; `send_comm` attachment chips resolve to the correct file version (#1709, #1727, #1736)
+- Failed `send_comm` calls show the raw input and full error text instead of a bare failure badge (#1783)
+- Sidebar panels with many entries no longer push other panels off-screen (#1784)
+
+### Dependencies
+- `claude-agent-sdk` bumped to 0.2.128 (#1668)
+
+[1.5.0]: https://github.com/EdanStarfire/claudecode_webui/releases/tag/v1.5.0
+
 ## [1.4.0] - 2026-07-01
 
 ### Added
