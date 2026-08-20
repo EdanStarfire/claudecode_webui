@@ -914,25 +914,23 @@ function scheduleStickyScroll() {
   nextTick(() => {
     requestAnimationFrame(() => {
       stickyScrollScheduled = false
-      // Issue #1748 (stage: windowing) fix: re-verify stickiness against the LIVE scroll
-      // position right before acting, not just trust the `stickyToBottom` ref read back when
-      // this was scheduled. At a real overscan value, rowVirtualizer's onChange (this
-      // function's other caller) now fires on nearly every scroll tick that crosses a mounted
-      // row's boundary — not just on genuine content growth, as it effectively only did at
-      // stage 1's overscan=count. That means a user actively scrolling AWAY from the bottom can
-      // trigger this schedule in the same tick their own onScroll handler hasn't yet run to
-      // flip stickyToBottom to false — and since a forced scroll-to-bottom itself re-triggers
-      // onChange, an uncorrected stale read here would repeatedly snap the view back down.
-      // Reading the DOM fresh here (not the ref) sidesteps that race entirely.
-      const el = messagesArea.value
-      if (el) {
-        const distance = el.scrollHeight - el.scrollTop - el.clientHeight
-        if (distance >= STICKY_THRESHOLD_PX) {
-          stickyToBottom.value = false
-          uiStore.setStickyToBottom(viewSessionId.value, false)
-          return
-        }
-      }
+      // Issue #1748 (stage: windowing) fix: re-verify `stickyToBottom` fresh at execution time,
+      // not just trust it having been true back when this was scheduled. At a real overscan
+      // value, rowVirtualizer's onChange (this function's other caller) now fires on nearly
+      // every scroll tick that crosses a mounted row's boundary — not just on genuine content
+      // growth, as it effectively only did at stage 1's overscan=count. Both the virtualizer's
+      // own internal scroll listener and this component's `onScroll` (which recomputes
+      // `stickyToBottom`) are attached to the same 'scroll' event; if the virtualizer's listener
+      // happens to run first, `scheduleStickyScroll` can be called with a still-stale `true`
+      // before `onScroll` corrects it. By the time this deferred (nextTick+rAF) callback runs,
+      // though, `onScroll` — a synchronous handler for that same event — has already had its
+      // turn, so re-reading the ref here (not a fresh DOM measurement) reflects the correction.
+      // NOTE: a raw DOM re-check (`scrollHeight - scrollTop - clientHeight`) was tried first and
+      // reverted — it broke the very first scroll-to-bottom on initial load, where scrollTop is
+      // legitimately still 0 (nothing has scrolled yet) while scrollHeight already reflects the
+      // virtualizer's estimated total size, so the DOM alone can't distinguish "never scrolled
+      // down yet" from "user scrolled away" the way the ref (correctly defaulting to `true`) can.
+      if (!stickyToBottom.value) return
       scrollToBottomViaVirtualizer()
     })
   })

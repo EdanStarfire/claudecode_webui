@@ -925,13 +925,65 @@ describe('virtualizer offset model (#1748 stage: offset-model)', () => {
     ])
     messageStore.messagesBySession = new Map(messageStore.messagesBySession)
 
-    // Before the deferred nextTick+rAF callback runs, the user scrolls away from the bottom —
-    // simulating their own onScroll handler not yet having had a turn to flip stickyToBottom.
+    // Before the deferred nextTick+rAF callback runs, the user scrolls away from the bottom.
+    // Dispatching a real 'scroll' event (not just writing scrollTop) matters: the fix relies on
+    // this component's own onScroll handler — a synchronous listener for that same event — having
+    // already corrected `stickyToBottom` to false by the time the deferred callback checks it.
     el.scrollTop = 1000
+    el.dispatchEvent(new Event('scroll'))
 
     await new Promise(r => setTimeout(r, 50))
 
-    expect(scrollToSpy).not.toHaveBeenCalled()
+    // Not a blanket "never called" — the virtualizer's own settle-reconciliation mechanism
+    // (correcting an earlier scrollToIndex call's estimated offset once real measurements land)
+    // can legitimately call scrollTo with a small, unrelated offset. The actual regression is
+    // specifically a jump BACK TO THE BOTTOM (maxOffset here is 5000 - 600 = 4400) — assert none
+    // of the calls target anywhere near that.
+    const calls = scrollToSpy.mock.calls.map(([opts]) => opts?.top).filter(top => typeof top === 'number')
+    expect(calls.every(top => top < 3000)).toBe(true)
+  })
+
+  // Issue #1748 (stage: windowing) regression: the first attempt at the fix above re-checked raw
+  // DOM scroll geometry instead of the `stickyToBottom` ref, which broke the very first
+  // scroll-to-bottom on initial load — scrollTop is legitimately still 0 (nothing has scrolled
+  // down yet) while scrollHeight already reflects the virtualizer's estimated total size, so a
+  // DOM-only check can't distinguish "never scrolled down yet" from "user scrolled away."
+  it('still scrolls to the bottom once messages arrive asynchronously after mount, even though scrollTop starts at 0 (regression)', async () => {
+    const scrollToSpy = vi.fn()
+    Element.prototype.scrollTo = scrollToSpy
+
+    const { pinia, container } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useUIStore } = await import('@/stores/ui')
+    useUIStore(pinia).autoScrollEnabled = true
+
+    // Let the component fully mount and settle with NO messages yet (matches a real page
+    // load/refresh: the message-history API call is still in flight when MessageList mounts).
+    // This is important — mounting inside a <KeepAlive> also fires onActivated, which makes its
+    // own direct (unconditional) scrollToBottomViaVirtualizer() call independent of this fix's
+    // code path; waiting it out here first, on an empty list, isolates the actual regression:
+    // the watcher-triggered scheduleStickyScroll() path that fires once messages actually load.
+    await new Promise(r => setTimeout(r, 50))
+    scrollToSpy.mockClear()
+
+    const el = container.querySelector('.messages-area')
+    // A large already-estimated total size, exactly like a freshly-mounted virtualizer reports
+    // for a large session before anything has actually been measured — while scrollTop is still
+    // untouched (0), matching first paint before any scroll-to-bottom has happened yet.
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => 1900000 })
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 600 })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+    messageStore.messagesBySession.set(SESSION_ID, [makeMessage({ type: 'assistant', content: 'First' })])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(scrollToSpy).toHaveBeenCalled()
   })
 })
 
