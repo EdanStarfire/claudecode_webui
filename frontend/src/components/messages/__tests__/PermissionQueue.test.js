@@ -209,4 +209,34 @@ describe('PermissionQueue', () => {
     expect(anchor.scrollIntoView).toHaveBeenCalled()
     document.body.removeChild(anchor)
   })
+
+  // Issue #1748 (stage: offset-model) regression test: virtualNav present but unable to resolve
+  // an index (e.g. an orphaned permission tool — indexMaps doesn't scan orphanedPermissionTools)
+  // must still fall back to the direct DOM lookup, not silently no-op.
+  it('falls back to the direct DOM lookup when virtualNav is wired but cannot resolve an index', async () => {
+    const user = userEvent.setup()
+    const virtualNav = {
+      resolveToolAnchorIndex: vi.fn(() => null),
+      resolveSubagentPrimaryIndex: vi.fn(() => null),
+      scrollToItemIndex: vi.fn()
+    }
+    const { pinia } = renderWithStores(PermissionQueue, {
+      props: { sessionId: SESSION_ID, bottomOffset: 0, virtualNav }
+    })
+    await seedAskUserQuestionAlongsideNormal(pinia)
+    await nextTick()
+
+    const anchor = document.createElement('div')
+    anchor.id = 'tool-anchor-use-question'
+    anchor.scrollIntoView = vi.fn()
+    document.body.appendChild(anchor)
+
+    const viewLinks = screen.getAllByText(/view in context/i)
+    await user.click(viewLinks[viewLinks.length - 1])
+
+    expect(virtualNav.resolveToolAnchorIndex).toHaveBeenCalled()
+    expect(virtualNav.scrollToItemIndex).not.toHaveBeenCalled() // never called with a null index
+    expect(anchor.scrollIntoView).toHaveBeenCalled()
+    document.body.removeChild(anchor)
+  })
 })

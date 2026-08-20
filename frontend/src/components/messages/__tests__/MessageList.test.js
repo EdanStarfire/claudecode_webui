@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { render, screen } from '@testing-library/vue'
 import { createPinia as _createPinia } from 'pinia'
 import { ref } from 'vue'
 import { renderWithStores } from '@/test-utils/render'
 import { makeMessage } from '@/test-utils/factories'
+import { stubResizeObserver } from '@/test-utils/mockResizeObserver'
 import MessageList from '@/components/messages/MessageList.vue'
 
 const apiMock = vi.hoisted(() => ({
@@ -27,10 +28,19 @@ vi.mock('@/composables/useMermaid', () => ({
 const SESSION_ID = 'sess-1'
 const viewSessionIdRef = ref(SESSION_ID)
 
+let resizeObserverStub
+
 beforeEach(() => {
   setActivePinia(createPinia())
   viewSessionIdRef.value = SESSION_ID
   apiMock.get.mockResolvedValue({ messages: [], total_count: 0, has_more: false })
+  // Issue #1748 (stage: offset-model): MessageList is now virtualizer-driven — see
+  // mockResizeObserver.js for why jsdom needs this to render any rows at all.
+  resizeObserverStub = stubResizeObserver()
+})
+
+afterEach(() => {
+  resizeObserverStub.restore()
 })
 
 describe('MessageList', () => {
@@ -687,5 +697,185 @@ describe('attachOrphanedPermissionTools — Fix B (#1626)', () => {
     const items = screen.getAllByRole('article')
     expect(items[0].getAttribute('data-orphaned-ids')).toBe('')
     expect(items[2].getAttribute('data-orphaned-ids')).toBe('tool-perm-legacy')
+  })
+})
+
+// Issue #1748 (stage: offset-model)
+const MESSAGE_ITEM_STUB = {
+  template: '<div role="article">{{ message.content }}</div>',
+  props: ['message', 'attachedTools', 'orphanedPermissionTools', 'mergedMessages']
+}
+
+describe('virtualizer offset model (#1748 stage: offset-model)', () => {
+  it('gutter lanes resolve via the virtualizer offset model — a still-running leg spans further than a completed one', async () => {
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({
+        type: 'assistant', content: 'Launching a subagent that keeps running', timestamp: 100,
+        metadata: { has_tool_uses: true, tool_uses: [{ id: 'launch-running', name: 'Task', input: {} }] }
+      }),
+      makeMessage({ type: 'user', content: 'meanwhile, unrelated turns happen', timestamp: 150 }),
+      makeMessage({
+        type: 'assistant', content: 'Launching a subagent that finishes quickly', timestamp: 200,
+        metadata: { has_tool_uses: true, tool_uses: [{ id: 'launch-done', name: 'Task', input: {} }] }
+      })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    // One leg stays running (its lane must extend to "wherever the conversation currently is" —
+    // i.e. the virtualizer's total size); the other reaches a terminal status (its lane is
+    // bounded by its own terminal row's offset) — see MessageList.vue's `laneOffsets` computed.
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_started',
+      { task_id: 'task-running', tool_use_id: 'launch-running', description: 'Still going' }, 100)
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_started',
+      { task_id: 'task-done', tool_use_id: 'launch-done', description: 'Finished' }, 200)
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_notification',
+      { task_id: 'task-done', status: 'completed', summary: 'All done' }, 250)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    // Both legs' lanes rendering at all proves toolUseIndexMap/signalIndexMap resolved a real
+    // displayableItems index for each — a lane silently disappears (matching the old
+    // `if (!startEl) continue` behavior) whenever that resolution fails.
+    const lanes = document.querySelectorAll('.gutter-lane')
+    expect(lanes.length).toBe(2)
+
+    const heights = Array.from(lanes).map(l => parseFloat(l.style.height))
+    expect(heights.every(h => Number.isFinite(h) && h > 0)).toBe(true)
+    expect(Math.max(...heights)).toBeGreaterThan(Math.min(...heights))
+  })
+
+  // Issue #1748 follow-up (user feedback): a gutter chip must align to the actual launch/
+  // terminal anchor's own position, not the top/bottom of the whole row/block it lives in — a
+  // long completion summary below the terminal header must not stretch the lane's bottom.
+  it("gutter lane bottom tracks the terminal anchor's own DOM position, not its row's full extent (including a long result body)", async () => {
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({
+        type: 'assistant', content: 'Launching', timestamp: 100,
+        metadata: { has_tool_uses: true, tool_uses: [{ id: 'launch-1', name: 'Task', input: {} }] }
+      })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_started',
+      { task_id: 'task-1', tool_use_id: 'launch-1', description: 'Task' }, 100)
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_notification',
+      { task_id: 'task-1', status: 'completed', summary: 'A long completion summary' }, 200)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    const terminalRow = document.querySelector('[id^="subagent-anchor-terminal-"]')
+    expect(terminalRow).toBeTruthy()
+    const rowWrapper = terminalRow.closest('.virtual-item-row')
+    expect(rowWrapper).toBeTruthy()
+
+    // The terminal header sits near the top of its row; the row itself is much taller because
+    // of a long markdown result body rendered below the header (anchor-body, per
+    // SubagentAnchorRow.vue). Instance-level spies (not prototype-wide) so only these two real
+    // elements are affected.
+    vi.spyOn(rowWrapper, 'getBoundingClientRect').mockReturnValue({ top: 1000, bottom: 1400 })
+    vi.spyOn(terminalRow, 'getBoundingClientRect').mockReturnValue({ top: 1010, bottom: 1036 })
+
+    // laneOffsets is a Vue computed — force it to re-run by touching one of its reactive
+    // dependencies (indexMaps, via displayableItems) now that the spies are installed.
+    messageStore.messagesBySession.set(SESSION_ID, [
+      ...messageStore.messagesBySession.get(SESSION_ID),
+      makeMessage({ type: 'user', content: 'one more turn', timestamp: 300 })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+    await new Promise(r => setTimeout(r, 50))
+
+    const lane = document.querySelector('.gutter-lane')
+    expect(lane).toBeTruthy()
+    const top = parseFloat(lane.style.top)
+    const height = parseFloat(lane.style.height)
+    // The launch row (index 0, unmocked) measures at the ResizeObserver stub's default height
+    // (600, see mockResizeObserver.js) — that becomes the terminal row's own start offset in the
+    // virtualizer's coordinate system. bottom = that start + the anchor's own offset within its
+    // row (1036 - 1000 = 36), NOT the row's full bottom (1400 - 1000 = 400).
+    expect(top + height).toBeCloseTo(600 + 36, 0)
+  })
+
+  it('scrolls to the new bottom when a message is appended while sticky-to-bottom (§7)', async () => {
+    const scrollToSpy = vi.fn()
+    // jsdom has no native Element.prototype.scrollTo — the virtualizer's elementScroll calls
+    // scrollElement.scrollTo({top, behavior}) as its scroll mechanism.
+    Element.prototype.scrollTo = scrollToSpy
+
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const { useUIStore } = await import('@/stores/ui')
+    const messageStore = useMessageStore(pinia)
+    useUIStore(pinia).autoScrollEnabled = true
+
+    messageStore.messagesBySession.set(SESSION_ID, [makeMessage({ type: 'assistant', content: 'First' })])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+    await new Promise(r => setTimeout(r, 50))
+    scrollToSpy.mockClear()
+
+    // 'user' (not 'assistant') so mergeConsecutiveAssistantTurns() doesn't fold it into the
+    // first item — this test is about the item COUNT changing, not merge behavior.
+    messageStore.messagesBySession.set(SESSION_ID, [
+      ...messageStore.messagesBySession.get(SESSION_ID),
+      makeMessage({ type: 'user', content: 'Second' })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    // scheduleStickyScroll coalesces via nextTick + requestAnimationFrame (§7/§10).
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(scrollToSpy).toHaveBeenCalled()
+  })
+
+  it('re-pins to bottom when the tail row\'s measured height grows without a new item being added — streaming growth (§7)', async () => {
+    const scrollToSpy = vi.fn()
+    Element.prototype.scrollTo = scrollToSpy
+
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const { useUIStore } = await import('@/stores/ui')
+    const messageStore = useMessageStore(pinia)
+    useUIStore(pinia).autoScrollEnabled = true
+
+    messageStore.messagesBySession.set(SESSION_ID, [makeMessage({ content: 'Streaming message' })])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+    await new Promise(r => setTimeout(r, 50))
+    scrollToSpy.mockClear()
+
+    // No new item is added — only the already-mounted tail row's measured size changes, matching
+    // a single assistant message growing token-by-token. This is the explicit wiring point (the
+    // virtualizer's onChange, not an outer content-box ResizeObserver) plan §7 calls out as easy
+    // to silently regress.
+    const tailRow = document.querySelector('[data-index="0"]')
+    expect(tailRow).toBeTruthy()
+    resizeObserverStub.triggerResize(tailRow, { height: 900 })
+
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    await new Promise(r => setTimeout(r, 20))
+
+    expect(scrollToSpy).toHaveBeenCalled()
   })
 })

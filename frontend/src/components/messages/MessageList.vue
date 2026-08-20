@@ -6,62 +6,79 @@
              flow — a lane spans from a leg's launch position to wherever the conversation
              currently is while it runs, surviving however many unrelated turns happen in
              between. Must live here (a single instance covering the whole message list), not
-             nested inside any individual message. -->
+             nested inside any individual message.
+             Issue #1748 (stage: offset-model): lane top/bottom now come from the virtualizer's
+             offset model (laneOffsets, computed below) instead of getBoundingClientRect() —
+             see SubagentGlobalGutter.vue's measure()-replacement comment. -->
         <SubagentGlobalGutter
           :sessionId="viewSessionId"
-          :contentEl="messagesContent"
-          :areaEl="messagesArea"
+          :laneOffsets="laneOffsets"
+          @chip-click="onGutterChipClick"
         />
 
         <div v-if="displayableItems.length === 0" class="text-muted text-center py-5">
           No messages yet. Start a conversation!
         </div>
 
-        <!-- Messages and compaction events using new component architecture -->
-        <!-- Tool cards are embedded within AssistantMessage components -->
-        <template v-for="(item, index) in displayableItems" :key="`item-${index}`">
-          <!-- Regular message -->
-          <MessageItem
-            v-if="item.type === 'message'"
-            :message="normalizeMessage(item.message)"
-            :attachedTools="item.attachedTools || []"
-            :orphanedPermissionTools="item.orphanedPermissionTools || []"
-            :mergedMessages="item.mergedMessages || []"
-          />
-
-          <!-- Compaction event group -->
-          <CompactionEventGroup
-            v-else-if="item.type === 'compaction'"
-            :messages="item.messages"
-            :compaction-group-index="item.groupIndex"
-          />
-
-          <!-- Date separator -->
+        <!-- Issue #1748 (stage: offset-model): virtualizer-driven rendering. Item TYPE dispatch
+             (MessageItem/CompactionEventGroup/date-separator/SubagentAnchorRow) is unchanged from
+             before — only "which indices get a real DOM node right now" is new. Stage 1 pins
+             `overscan` to the full item count (see virtualizerOptions below), so every item is
+             always in range and this renders identically to the old plain v-for; only the
+             underlying layout mechanism (sized spacer + translateY per row, instead of normal
+             document flow) has changed. -->
+        <div class="virtual-spacer" :style="{ height: `${rowVirtualizer.getTotalSize()}px` }">
           <div
-            v-else-if="item.type === 'date_separator'"
-            class="date-separator"
-            role="separator"
-            aria-label="Date divider"
+            v-for="row in renderedRows"
+            :key="row.virtualRow.key"
+            :data-index="row.virtualRow.index"
+            :ref="el => rowVirtualizer.measureElement(el)"
+            class="virtual-item-row"
+            :style="{ transform: `translateY(${row.virtualRow.start}px)` }"
           >
-            <span class="date-separator-label">{{ item.label }}</span>
-          </div>
-
-          <!-- Issue #1746 (stage: subagents) follow-up / spec §4.2: subagent signals that
-               interact with the main session (pushed a message to main, or a leg ended) render
-               inline in the MAIN timeline itself, not only inside the subagent's own nested
-               card — otherwise the main assistant's reaction to one looks unprompted. -->
-          <div v-else-if="item.type === 'subagent_signal'" class="subagent-signal-wrapper">
-            <SubagentAnchorRow
-              :id="item.domId"
-              :anchorType="item.anchorType"
-              :agentColor="item.agentColor"
-              :description="item.description"
-              :markdownBody="item.markdownBody"
-              :statusText="item.statusText"
-              :timestamp="item.timestamp"
+            <!-- Regular message -->
+            <MessageItem
+              v-if="row.item.type === 'message'"
+              :message="normalizeMessage(row.item.message)"
+              :attachedTools="row.item.attachedTools || []"
+              :orphanedPermissionTools="row.item.orphanedPermissionTools || []"
+              :mergedMessages="row.item.mergedMessages || []"
             />
+
+            <!-- Compaction event group -->
+            <CompactionEventGroup
+              v-else-if="row.item.type === 'compaction'"
+              :messages="row.item.messages"
+              :compaction-group-index="row.item.groupIndex"
+            />
+
+            <!-- Date separator -->
+            <div
+              v-else-if="row.item.type === 'date_separator'"
+              class="date-separator"
+              role="separator"
+              aria-label="Date divider"
+            >
+              <span class="date-separator-label">{{ row.item.label }}</span>
+            </div>
+
+            <!-- Issue #1746 (stage: subagents) follow-up / spec §4.2: subagent signals that
+                 interact with the main session (pushed a message to main, or a leg ended) render
+                 inline in the MAIN timeline itself, not only inside the subagent's own nested
+                 card — otherwise the main assistant's reaction to one looks unprompted. -->
+            <div v-else-if="row.item.type === 'subagent_signal'" class="subagent-signal-wrapper">
+              <SubagentAnchorRow
+                :id="row.item.domId"
+                :anchorType="row.item.anchorType"
+                :agentColor="row.item.agentColor"
+                :description="row.item.description"
+                :markdownBody="row.item.markdownBody"
+                :statusText="row.item.statusText"
+                :timestamp="row.item.timestamp"
+              />
+            </div>
           </div>
-        </template>
+        </div>
 
         <!-- Issue #662: Truncation banner after last assistant message when response was truncated -->
         <TruncationBanner v-if="showTruncationBanner" :key="'truncation-' + viewSessionId" />
@@ -94,7 +111,8 @@
 </template>
 
 <script setup>
-import { computed, inject, onActivated, onBeforeUnmount, onDeactivated, provide, ref, watch, nextTick } from 'vue'
+import { computed, inject, onActivated, onDeactivated, provide, ref, watch, nextTick } from 'vue'
+import { useVirtualizer } from '@tanstack/vue-virtual'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
@@ -105,6 +123,7 @@ import DeferredToolBanner from './DeferredToolBanner.vue'
 import SubagentAnchorRow from './SubagentAnchorRow.vue'
 import SubagentGlobalGutter from './SubagentGlobalGutter.vue'
 import { useTTSReadAloud } from '@/composables/useTTSReadAloud'
+import { useVirtualNavigation, forceFreshMeasurements } from '@/composables/useVirtualNavigation'
 import { parseTimestamp, formatDateSeparatorLabel } from '@/utils/time'
 import { getEffectiveStatusForTool } from '@/composables/useToolStatus'
 import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
@@ -122,10 +141,7 @@ const messagesArea = ref(null)
 const messagesContent = ref(null)
 const isProgrammaticScroll = ref(false)
 const isInitialLoad = ref(false)
-const lastScrollTop = ref(0)
 const stickyToBottom = ref(true)
-const pendingRestoreTarget = ref(null)
-let resizeObserver = null
 const STICKY_THRESHOLD_PX = 24
 
 // Per-instance message and tool-call sources derived from the injected session id.
@@ -200,6 +216,178 @@ const displayableItems = computed(() => {
     ),
     viewSessionId.value,
   )
+})
+
+function itemAt(index) {
+  return displayableItems.value[index]
+}
+
+// Issue #1748 (stage: offset-model): per-item-TYPE size estimates (not one flat global average),
+// per plan §5.4 — bounds a virtualizer's pre-measurement error to "this item vs. its own type's
+// typical height" rather than "any row vs. any other row." Values are rough starting points, not
+// yet tuned against real large-session height distributions (§5.4 defers that to a follow-up
+// empirical pass); they only matter for the brief window before ResizeObserver measures the real
+// height, since Stage 1 mounts every item immediately (overscan = count, see virtualizerOptions).
+const ITEM_TYPE_SIZE_ESTIMATE = {
+  message: 160,
+  compaction: 120,
+  date_separator: 40,
+  subagent_signal: 90,
+}
+function estimateItemSize(index) {
+  return ITEM_TYPE_SIZE_ESTIMATE[itemAt(index)?.type] ?? 160
+}
+
+// Issue #1748 (stage: offset-model): virtualizer driving MessageList's own rendering AND
+// (via laneOffsets/virtualNav below) SubagentGlobalGutter's lane positions and the shared
+// jump-navigation helper. Stage 1 pins `overscan` to the full item count — verified against
+// @tanstack/virtual-core's actual source (defaultRangeExtractor clamps
+// `[start - overscan, end + overscan]` to `[0, count-1]`), so every item stays mounted exactly
+// as today; only the offset/measurement model changes in this stage. Lowering `overscan` to
+// enable real DOM culling is Stage 2 — a separate, later change.
+const rowVirtualizer = useVirtualizer(computed(() => ({
+  count: displayableItems.value.length,
+  getScrollElement: () => messagesArea.value,
+  estimateSize: estimateItemSize,
+  overscan: displayableItems.value.length,
+  // Fires on every virtualizer measurement change — in particular, a mounted tail row's own
+  // height changing (streaming growth) while no new item was added, which today's whole-container
+  // ResizeObserver caught incidentally. This is the explicit wiring point plan §7 calls out as
+  // easy to silently regress without a dedicated test (see MessageList.test.js).
+  onChange: scheduleStickyScroll,
+})))
+
+const virtualNav = useVirtualNavigation(rowVirtualizer)
+
+// Pairs each virtual row with its displayableItems entry ONCE per render, instead of the template
+// re-indexing displayableItems on every v-if branch and prop binding for the same row (up to 8
+// lookups/row otherwise, across however many rows Stage 1 mounts — the full item count).
+const renderedRows = computed(() =>
+  rowVirtualizer.value.getVirtualItems().map(virtualRow => ({
+    virtualRow,
+    item: itemAt(virtualRow.index),
+  }))
+)
+
+// Issue #1748 (stage: offset-model): reverse indices from a tool_use id (or a subagent-signal's
+// stable domId) to its containing displayableItems index — a pure data lookup, no DOM, rebuilt
+// whenever displayableItems recomputes. This is what lets the gutter and navigation helper
+// resolve a jump target's position without ever touching the DOM (plan §5.2/§5.5).
+const indexMaps = computed(() => {
+  const toolUseIndex = new Map() // tool_use id -> displayableItems index
+  const signalIndex = new Map()  // subagent_signal domId -> displayableItems index
+
+  displayableItems.value.forEach((item, index) => {
+    if (item.type === 'message') {
+      for (const t of item.message?.metadata?.tool_uses || []) toolUseIndex.set(t.id, index)
+      for (const t of item.attachedTools || []) toolUseIndex.set(t.id, index)
+      for (const seg of item.mergedMessages || []) {
+        for (const t of seg.metadata?.tool_uses || []) toolUseIndex.set(t.id, index)
+        for (const t of seg.attachedTools || []) toolUseIndex.set(t.id, index)
+      }
+    } else if (item.type === 'subagent_signal' && item.domId) {
+      signalIndex.set(item.domId, index)
+    }
+  })
+
+  return { toolUseIndex, signalIndex }
+})
+
+function resolveToolAnchorIndex(toolId) {
+  return indexMaps.value.toolUseIndex.get(toolId) ?? null
+}
+
+function resolveSubagentPrimaryIndex(taskId, legIndex) {
+  const legEntry = messageStore.getTaskLegEntry(taskId)
+  const toolUseId = legEntry?.legs?.[legIndex]?.tool_use_id
+  if (!toolUseId) return null
+  return indexMaps.value.toolUseIndex.get(toolUseId) ?? null
+}
+
+// Issue #1748 (stage: offset-model) follow-up (user feedback): a row is the virtualization
+// UNIT, but a launch/terminal anchor can sit anywhere inside its row (e.g. a Task call below a
+// Thinking block, or partway down a merged multi-turn run) — using the row's own start/end
+// alone visibly misplaced the gutter chip at the row's edge instead of the actual anchor.
+// At Stage 1 every row is always mounted (overscan = count), so the real DOM position of the
+// anchor WITHIN its row is always measurable — a small, cheap delta between two elements that
+// scroll together (not the old full-container getBoundingClientRect() math), not the O(session
+// size) "no DOM at all" ideal Section 5.2 describes for content that might not be mounted.
+// Falls back to the row's own bounds when the anchor/row isn't found (Stage 2, once overscan
+// drops and rows can go unmounted) — same graceful-degradation shape as everywhere else here.
+function anchorOffsetWithinRow(rowIndex, anchorDomId) {
+  if (!messagesContent.value || !anchorDomId) return null
+  const rowEl = messagesContent.value.querySelector(`.virtual-item-row[data-index="${rowIndex}"]`)
+  const anchorEl = document.getElementById(anchorDomId)
+  if (!rowEl || !anchorEl) return null
+  const rowTop = rowEl.getBoundingClientRect().top
+  const anchorRect = anchorEl.getBoundingClientRect()
+  return { top: anchorRect.top - rowTop, bottom: anchorRect.bottom - rowTop }
+}
+
+// Issue #1748 (stage: offset-model): SubagentGlobalGutter's lane top/bottom, computed here (not
+// in the gutter itself) because it must live inside a reactive scope that reads
+// rowVirtualizer.value directly — the virtualizer instance is a mutated-in-place class, so a
+// prop passed down to a child component would not reliably re-trigger the child's own reactivity
+// on every internal update. `assignGutterSlots`/rendering stay in SubagentGlobalGutter.vue
+// unchanged (plan §5.2 point 3) — only the top/bottom SOURCE moves here.
+const laneOffsets = computed(() => {
+  const offsets = new Map() // `${taskId}:${legIndex}` -> { top, bottom, height }
+  if (!viewSessionId.value) return offsets
+
+  const totalSize = forceFreshMeasurements(rowVirtualizer.value)
+  const measurements = rowVirtualizer.value.measurementsCache
+
+  for (const entry of messageStore.allTaskLegEntriesForSession(viewSessionId.value)) {
+    entry.legs.forEach((leg, legIndex) => {
+      const primaryIndex = indexMaps.value.toolUseIndex.get(leg.tool_use_id)
+      const startItem = primaryIndex != null ? measurements[primaryIndex] : null
+      if (!startItem) return // matches old `if (!startEl) continue`
+      const primaryDomId = `subagent-anchor-primary-${entry.task_id}-${legIndex}`
+      const primaryDelta = anchorOffsetWithinRow(primaryIndex, primaryDomId)
+      const top = startItem.start + (primaryDelta ? primaryDelta.top : 0)
+
+      let bottom
+      if (leg.status === 'running') {
+        bottom = totalSize
+      } else {
+        const domId = `subagent-anchor-terminal-${entry.task_id}-${legIndex}`
+        const terminalIndex = indexMaps.value.signalIndex.get(domId)
+        const endItem = terminalIndex != null ? measurements[terminalIndex] : null
+        const terminalDelta = terminalIndex != null ? anchorOffsetWithinRow(terminalIndex, domId) : null
+        bottom = terminalDelta
+          ? endItem.start + terminalDelta.bottom
+          : endItem
+            ? endItem.end
+            : top + 26 // defensive fallback (terminal row not found)
+      }
+
+      offsets.set(`${entry.task_id}:${legIndex}`, { top, bottom, height: Math.max(0, bottom - top) })
+    })
+  }
+
+  return offsets
+})
+
+// Issue #1748 (stage: offset-model) follow-up (user feedback): `align: 'auto'` (not 'center')
+// means the virtualizer only moves the scroll position when the target isn't already fully
+// visible, and aligns to whichever edge it's nearest — clicking a chip that's already on screen
+// must not move anything. `block: 'nearest'` (not 'center') gives the DOM fine-correction step
+// the same "don't move unless necessary" behavior. `behavior: 'smooth'` is safe here specifically
+// because Stage 1 keeps every row mounted (overscan = count) — there's no blank unmounted gap to
+// smooth-scroll through; revisit once Stage 2 introduces real culling.
+async function onGutterChipClick(lane) {
+  const index = resolveSubagentPrimaryIndex(lane.taskId, lane.legIndex)
+  if (index == null) return
+  const mounted = await virtualNav.scrollToItemIndex(index, { align: 'auto', behavior: 'smooth' })
+  if (!mounted) return
+  document.getElementById(`subagent-anchor-primary-${lane.taskId}-${lane.legIndex}`)
+    ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+}
+
+defineExpose({
+  scrollToItemIndex: virtualNav.scrollToItemIndex,
+  resolveToolAnchorIndex,
+  resolveSubagentPrimaryIndex,
 })
 
 function timestampForItem(item) {
@@ -611,35 +799,74 @@ const deferredToolUse = computed(() =>
   messageStore.deferredToolUseBySession.get(viewSessionId.value) || null
 )
 
-function setScrollTop(position) {
+// Issue #1748 (stage: offset-model) — §7: sticky-to-bottom and scroll-position save/restore now
+// go through the virtualizer's own offset model (scrollToIndex/scrollToOffset/scrollOffset)
+// instead of raw `scrollTop =` writes, since the virtualizer (not `scrollHeight` growth alone)
+// is the source of truth for "where is the true bottom" once rows are absolutely positioned.
+// Issue #1630/#1632: a programmatic scrollTop write can blur the focused element (e.g. the
+// InputArea textarea while the user is typing during an auto-scroll) — restore focus afterward
+// so keystrokes don't silently stop landing anywhere. Centralized here so every virtualizer-driven
+// scroll path (setScrollOffset, scrollToBottomViaVirtualizer, the banner-nudge below) gets it.
+function guardProgrammaticScroll() {
   const prevFocused = document.activeElement
   isProgrammaticScroll.value = true
-  lastScrollTop.value = Math.round(position)
-  messagesArea.value.scrollTop = position
-  if (
-    prevFocused &&
-    prevFocused !== document.body &&
-    document.activeElement !== prevFocused &&
-    typeof prevFocused.focus === 'function'
-  ) {
-    prevFocused.focus({ preventScroll: true })
-  }
-  requestAnimationFrame(() => { isProgrammaticScroll.value = false })
+  requestAnimationFrame(() => {
+    isProgrammaticScroll.value = false
+    if (
+      prevFocused &&
+      prevFocused !== document.body &&
+      document.activeElement !== prevFocused &&
+      typeof prevFocused.focus === 'function'
+    ) {
+      prevFocused.focus({ preventScroll: true })
+    }
+  })
 }
 
-function scrollToBottomNow() {
-  if (!messagesArea.value) return
-  setScrollTop(messagesArea.value.scrollHeight)
+function setScrollOffset(offset) {
+  const virtualizer = rowVirtualizer.value
+  if (!virtualizer) return
+  guardProgrammaticScroll()
+  virtualizer.scrollToOffset(offset, { align: 'start', behavior: 'auto' })
 }
 
-function applyPendingRestore() {
-  if (pendingRestoreTarget.value === null || !messagesArea.value) return
-  const el = messagesArea.value
-  const target = pendingRestoreTarget.value
-  const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight)
-  const clamped = Math.min(target, maxScroll)
-  setScrollTop(clamped)
-  if (clamped >= target) pendingRestoreTarget.value = null
+function scrollToBottomViaVirtualizer() {
+  const virtualizer = rowVirtualizer.value
+  const count = displayableItems.value.length
+  if (!virtualizer || count === 0) return
+  forceFreshMeasurements(virtualizer)
+  guardProgrammaticScroll()
+  virtualizer.scrollToIndex(count - 1, { align: 'end', behavior: 'auto' })
+  // TruncationBanner/DeferredToolBanner render as normal-flow siblings AFTER the virtualizer's
+  // spacer (§11) and aren't part of its tracked row set, so scrollToIndex alone can leave them
+  // below the fold. messagesArea.scrollHeight still reflects the TRUE total layout height
+  // (spacer + banners) since only the spacer's children are absolutely positioned — nudge to it
+  // once the DOM has caught up with the scrollToIndex write, matching the old scrollTop=scrollHeight
+  // behavior exactly for this specific "go to the very end" case.
+  nextTick(() => {
+    if (!messagesArea.value) return
+    guardProgrammaticScroll()
+    messagesArea.value.scrollTop = messagesArea.value.scrollHeight
+  })
+}
+
+// §8: logical scroll-position save/restore ({itemIndex, offsetWithinItem}) via the virtualizer's
+// own offset model, replacing the old raw-pixel scrollTop representation.
+function computeTopmostVisiblePosition() {
+  const virtualizer = rowVirtualizer.value
+  if (!virtualizer) return null
+  const offset = virtualizer.scrollOffset ?? 0
+  const item = virtualizer.getVirtualItemForOffset(offset)
+  if (!item) return null
+  return { itemIndex: item.index, offsetWithinItem: Math.max(0, offset - item.start) }
+}
+
+function restoreScrollPosition(position) {
+  const virtualizer = rowVirtualizer.value
+  if (!virtualizer || !position) { setScrollOffset(0); return }
+  forceFreshMeasurements(virtualizer)
+  const item = virtualizer.measurementsCache[position.itemIndex]
+  setScrollOffset(item ? item.start + (position.offsetWithinItem || 0) : 0)
 }
 
 function recomputeStickyFromScroll(el) {
@@ -648,30 +875,35 @@ function recomputeStickyFromScroll(el) {
   uiStore.setStickyToBottom(viewSessionId.value, stickyToBottom.value)
 }
 
-function teardownObserver() {
-  if (resizeObserver) {
-    resizeObserver.disconnect()
-    resizeObserver = null
-  }
+// Coalesces every sticky-to-bottom trigger (new item, tool-call burst, virtualizer measurement
+// change) into a single rAF-batched call — each call is now a scrollToIndex computation rather
+// than a plain scrollTop write, so firing several per burst tick (as the old independent watchers
+// did) is worth avoiding under virtualization (plan §7, §10).
+let stickyScrollScheduled = false
+function scheduleStickyScroll() {
+  if (isInitialLoad.value) return
+  if (!uiStore.autoScrollEnabled || !stickyToBottom.value) return
+  if (stickyScrollScheduled) return
+  stickyScrollScheduled = true
+  // nextTick first: when triggered by a Vue-reactive change (e.g. a new item appended), the
+  // virtualizer's own internal options watcher (inside useVirtualizer, reacting to the same
+  // count change) needs its flush turn too, or scrollToIndex resolves against a still-stale
+  // measurementsCache for the new count. A resize-driven trigger (streaming growth) mutates the
+  // virtualizer directly and doesn't need this, but paying for it unconditionally is cheap.
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      stickyScrollScheduled = false
+      scrollToBottomViaVirtualizer()
+    })
+  })
 }
 
-// Auto-scroll function
-async function scrollToBottom() {
-  if (!uiStore.autoScrollEnabled) return
-  if (!stickyToBottom.value) return
-  await nextTick()
-  scrollToBottomNow()
-}
 
 // Scroll event handler: track user-initiated scroll position and guard programmatic scrolls
 function onScroll() {
   if (isProgrammaticScroll.value) return
   const el = messagesArea.value
   if (!el) return
-  lastScrollTop.value = el.scrollTop
-  if (pendingRestoreTarget.value !== null) {
-    pendingRestoreTarget.value = null
-  }
   recomputeStickyFromScroll(el)
 }
 
@@ -726,63 +958,42 @@ onActivated(async () => {
   if (uiStore.autoScrollEnabled) {
     stickyToBottom.value = true
     uiStore.setStickyToBottom(viewSessionId.value, true)
-    pendingRestoreTarget.value = null
-    scrollToBottomNow()
+    scrollToBottomViaVirtualizer()
   } else {
     stickyToBottom.value = false
     uiStore.setStickyToBottom(viewSessionId.value, false)
     const saved = sessionStore.scrollPositions.get(viewSessionId.value)
-    if (typeof saved === 'number' && saved > 0) {
-      pendingRestoreTarget.value = saved
-      applyPendingRestore()
+    if (saved && typeof saved.itemIndex === 'number') {
+      restoreScrollPosition(saved)
     } else {
-      setScrollTop(0)
+      setScrollOffset(0)
     }
   }
-
-  resizeObserver = new ResizeObserver(() => {
-    if (!messagesArea.value) return
-    if (pendingRestoreTarget.value !== null) {
-      applyPendingRestore()
-      return
-    }
-    if (uiStore.autoScrollEnabled && stickyToBottom.value) {
-      scrollToBottomNow()
-    }
-  })
-  resizeObserver.observe(messagesContent.value)
 
   isInitialLoad.value = false  // PERF GUARD released
 })
 
+// The virtualizer's measurement cache — and thus scroll state — survives deactivate/reactivate
+// for free: KeepAlive preserves the whole component instance (including this setup() closure),
+// so there is nothing to tear down here the way the old content-box ResizeObserver needed to be
+// (plan §8). useVirtualizer() disposes its own internal observers via onScopeDispose on real
+// unmount; no manual teardown is needed for either case.
 onDeactivated(() => {
   if (viewSessionId.value) {
-    sessionStore.saveScrollPosition(viewSessionId.value, lastScrollTop.value)
+    sessionStore.saveScrollPosition(viewSessionId.value, computeTopmostVisiblePosition())
   }
-  teardownObserver()
 })
-
-onBeforeUnmount(teardownObserver)
 
 // Auto-scroll on new messages
-watch(() => displayableItems.value.length, () => {
-  if (isInitialLoad.value) return
-  scrollToBottom()
-})
+watch(() => displayableItems.value.length, () => scheduleStickyScroll())
 
 // Auto-scroll on tool call updates (for permission requests, status changes, etc.)
-watch(() => sessionToolCalls.value.length, () => {
-  if (isInitialLoad.value) return
-  scrollToBottom()
-})
+watch(() => sessionToolCalls.value.length, () => scheduleStickyScroll())
 
 // Watch for tool call status changes (e.g., permission_required)
 watch(
   () => sessionToolCalls.value.map(tc => `${tc.id}-${tc.status}`).join(','),
-  () => {
-    if (isInitialLoad.value) return
-    scrollToBottom()
-  }
+  () => scheduleStickyScroll()
 )
 
 // Issue #1631: Immediate scroll-to-bottom on token increment (triggered by SessionStatusBar re-enable click)
@@ -792,7 +1003,7 @@ watch(
     if (token !== prev && token != null) {
       stickyToBottom.value = true
       uiStore.setStickyToBottom(viewSessionId.value, true)
-      scrollToBottomNow()
+      scrollToBottomViaVirtualizer()
     }
   }
 )
@@ -1090,6 +1301,23 @@ function normalizeMessage(message) {
      normal-flow-established height rather than some further ancestor's. */
   position: relative;
   padding-left: 30px;
+}
+
+/* Issue #1748 (stage: offset-model): a normal-flow box sized to the virtualizer's own
+   getTotalSize() — this IS the "sized spacer" the virtual rows below position themselves
+   against via translateY. Its real (non-absolute) height is what keeps TruncationBanner/
+   DeferredToolBanner (siblings after it in the template) sitting exactly where they did before,
+   and what keeps .messages-area's scrollHeight/scrollTop math valid unchanged. */
+.virtual-spacer {
+  position: relative;
+  width: 100%;
+}
+
+.virtual-item-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
 }
 
 .date-separator {

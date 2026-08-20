@@ -22,7 +22,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
 import { assignGutterSlots } from '@/utils/subagentGutterLayout'
@@ -46,16 +46,18 @@ const props = defineProps({
     type: String,
     default: null
   },
-  // Actual DOM elements (not template refs) — passed down once resolved by the parent.
-  contentEl: {
-    type: Object,
-    default: null
-  },
-  areaEl: {
-    type: Object,
-    default: null
+  // Issue #1748 (stage: offset-model): Map<`${taskId}:${legIndex}`, {top, bottom, height}>,
+  // computed by MessageList.vue from the virtualizer's own offset model — replaces the old
+  // getBoundingClientRect()-based measure() below. See MessageList.vue's `laneOffsets` computed
+  // for why the resolution logic lives there rather than here (it needs to read the virtualizer
+  // instance from within a reactive scope that reliably re-triggers on its internal updates).
+  laneOffsets: {
+    type: Map,
+    default: () => new Map()
   }
 })
+
+const emit = defineEmits(['chip-click'])
 
 const messageStore = useMessageStore()
 
@@ -75,78 +77,10 @@ const allLanes = computed(() => {
   return result
 })
 
-const offsets = ref(new Map()) // `${taskId}:${legIndex}` -> { top, bottom, height }
-
-function measure() {
-  if (!props.contentEl || !props.areaEl) return
-  const contentRect = props.contentEl.getBoundingClientRect()
-  const contentHeight = props.contentEl.scrollHeight
-  const next = new Map()
-
-  for (const { taskId, legIndex, leg } of allLanes.value) {
-    const startEl = document.getElementById(`subagent-anchor-primary-${taskId}-${legIndex}`)
-    if (!startEl) continue
-    const startRect = startEl.getBoundingClientRect()
-    // Scroll-invariant: contentRect and startRect are both viewport-relative rects of elements
-    // INSIDE the same scrolled container, so they shift by the identical amount as scrollTop
-    // changes — their difference is the anchor's fixed offset from content-top on its own,
-    // with no further scrollTop adjustment needed (adding one here double-counts the scroll
-    // offset and bakes in whatever scrollTop happened to be current at THIS measure() call,
-    // corrupting the value on every later re-measurement taken at a different scroll position —
-    // this was the root cause of #1746 follow-up drift/misplacement bugs). Recomputed only when
-    // content size or the lane set changes (see watchers below) — never on scroll itself; CSS
-    // position:sticky handles staying pinned while scrolling within [top, bottom] natively, with
-    // zero JS involved.
-    const top = startRect.top - contentRect.top
-
-    let bottom
-    if (leg.status === 'running') {
-      // Still going — its span extends to wherever the conversation currently is.
-      bottom = contentHeight
-    } else {
-      const endEl = document.getElementById(`subagent-anchor-terminal-${taskId}-${legIndex}`)
-      bottom = endEl
-        ? (endEl.getBoundingClientRect().bottom - contentRect.top)
-        : top + 26 // defensive fallback (terminal row not found) — degrade to a minimal span
-    }
-
-    next.set(`${taskId}:${legIndex}`, { top, bottom, height: Math.max(0, bottom - top) })
-  }
-  offsets.value = next
-}
-
-let resizeObserver = null
-function setupObserver() {
-  if (resizeObserver || !props.contentEl || typeof ResizeObserver === 'undefined') return
-  resizeObserver = new ResizeObserver(() => measure())
-  resizeObserver.observe(props.contentEl)
-}
-
-onMounted(() => {
-  setupObserver()
-  nextTick(measure)
-})
-onBeforeUnmount(() => {
-  if (resizeObserver) {
-    resizeObserver.disconnect()
-    resizeObserver = null
-  }
-})
-
-// contentEl can resolve AFTER this component's own onMounted fires (child components mount
-// before their parent's own template refs are necessarily settled) — (re)attach once available.
-watch(() => props.contentEl, (el) => {
-  if (el) { setupObserver(); nextTick(measure) }
-})
-
-// Recompute when the SET of known legs changes (a new leg appears, or a running leg's terminal
-// row is added) — content-size changes are already covered by the ResizeObserver above.
-watch(allLanes, () => nextTick(measure), { deep: true })
-
 const lanes = computed(() => {
   const withBounds = allLanes.value
     .map(l => {
-      const off = offsets.value.get(`${l.taskId}:${l.legIndex}`)
+      const off = props.laneOffsets.get(`${l.taskId}:${l.legIndex}`)
       return off ? { ...l, ...off } : null
     })
     .filter(Boolean)
@@ -181,10 +115,13 @@ const lanes = computed(() => {
   })
 })
 
+// Issue #1748 (stage: offset-model): navigation itself is delegated to MessageList.vue (which
+// owns the virtualizer and the shared useVirtualNavigation helper — see its onGutterChipClick)
+// rather than done here via a direct document.getElementById/scrollIntoView call, per plan §5.5's
+// "unify the three navigation sites" goal.
 function onChipClick(lane) {
   messageStore.toggleLegExpanded(lane.taskId, lane.legIndex)
-  const el = document.getElementById(`subagent-anchor-primary-${lane.taskId}-${lane.legIndex}`)
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  emit('chip-click', lane)
 }
 </script>
 

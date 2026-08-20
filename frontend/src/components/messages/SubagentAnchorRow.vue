@@ -1,6 +1,7 @@
 <template>
   <div class="anchor-row-group" :class="{ 'anchor-bubble': markdownBody }" :style="markdownBody ? bubbleStyle : null">
     <div
+      :id="id"
       class="anchor-row"
       :class="[`anchor-${anchorType}`, statusText ? `anchor-status-${statusText}` : null, clickable ? 'anchor-row-clickable' : null]"
       :style="markdownBody ? null : rowStyle"
@@ -37,6 +38,14 @@ import { getAssistantRowColor } from '@/composables/useAgentColor'
 import MarkdownView from '@/components/common/MarkdownView.vue'
 
 const props = defineProps({
+  // Issue #1748 (stage: offset-model) follow-up (user feedback): declared as a real prop (not
+  // left as a fallthrough attr) so it lands on .anchor-row specifically, not the outer
+  // .anchor-row-group — the group also wraps .anchor-body (a markdown result that can be
+  // arbitrarily long), which must NOT be included when the gutter measures this row's position.
+  id: {
+    type: String,
+    default: null
+  },
   // Issue #1746 (stage: subagents): one of the spec's causal anchor types. 'pushed' (a
   // mid-flight push to main during subagent work) has no wired data source in this stage —
   // the type is supported here for forward compatibility but nothing currently triggers it.
