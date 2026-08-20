@@ -498,6 +498,117 @@ export const useMessageStore = defineStore('message', () => {
     setLegExpanded(taskId, legIndex, !isLegExpanded(taskId, legIndex))
   }
 
+  // Issue #1748 (stage: windowing): which tool detail card is expanded within a given
+  // ActivityTimeline instance — shared here (not a local component ref), same reason as
+  // expandedLegs above: at a real (non-full) overscan value, a row scrolled out of the mounted
+  // range fully unmounts and remounts with a fresh setup() on scroll-back, which would silently
+  // collapse a tool card the user had deliberately expanded to read. `scopeKey` is whatever the
+  // caller uses to identify one ActivityTimeline's own tool group (a messageId, or a fallback);
+  // only one tool is ever expanded per scope, matching the pre-#1748 single-ref behavior.
+  //
+  // Issue #1748 (stage: windowing) review fix: `autoPermission` tracks whether the CURRENT
+  // expansion was auto-triggered by a tool entering permission_required (vs. a manual click) —
+  // ActivityTimeline's own watch uses this to auto-collapse only what it auto-expanded, never a
+  // manual expand. This must be store-backed too (not a second local ref, as first written):
+  // if the permission resolves off-screen (e.g. via PermissionQueue's always-mounted floating
+  // panel) while the row is unmounted, a fresh mount with a local `expandedForPermission = false`
+  // would forget the row was auto-expanded and never auto-collapse it on remount, leaving a
+  // resolved permission's detail panel stuck open. Reproduced and confirmed during review.
+  const expandedTimelineTool = ref(new Map()) // Map<scopeKey, toolId>
+  const expandedTimelineToolAutoPermission = ref(new Map()) // Map<scopeKey, boolean>
+
+  function getExpandedTimelineTool(scopeKey) {
+    if (!scopeKey) return null
+    return expandedTimelineTool.value.get(scopeKey) ?? null
+  }
+
+  function isExpandedTimelineToolAutoPermission(scopeKey) {
+    if (!scopeKey) return false
+    return !!expandedTimelineToolAutoPermission.value.get(scopeKey)
+  }
+
+  function setExpandedTimelineTool(scopeKey, toolId, { autoPermission = false } = {}) {
+    if (!scopeKey) return
+    if (toolId == null) {
+      expandedTimelineTool.value.delete(scopeKey)
+    } else {
+      expandedTimelineTool.value.set(scopeKey, toolId)
+    }
+    expandedTimelineTool.value = new Map(expandedTimelineTool.value)
+    expandedTimelineToolAutoPermission.value.set(scopeKey, toolId != null && autoPermission)
+    expandedTimelineToolAutoPermission.value = new Map(expandedTimelineToolAutoPermission.value)
+  }
+
+  // Issue #1748 (stage: windowing) review fix: prune stale entries on session reset/archive-clear
+  // — mirrors expandedLegs' per-session cleanup a few lines up. scopeKey is a message id or a
+  // tool_use id (optionally suffixed `-run-N` for SubagentLegTranscript's multi-run case), so
+  // matching against every message id / tool_use id still known for this session (before it's
+  // deleted) catches both forms without needing to recompute exact run indices.
+  function pruneExpandedTimelineToolForSession(sessionId) {
+    const messages = messagesBySession.value.get(sessionId) || []
+    const knownIds = new Set()
+    for (const msg of messages) {
+      if (msg.id) knownIds.add(msg.id)
+      if (msg.message_id) knownIds.add(msg.message_id)
+      for (const t of msg.metadata?.tool_uses || []) {
+        if (t.id) knownIds.add(t.id)
+      }
+    }
+    if (knownIds.size === 0) return
+    let changed = false
+    for (const key of expandedTimelineTool.value.keys()) {
+      const runSuffixIndex = key.indexOf('-run-')
+      const baseId = runSuffixIndex === -1 ? key : key.slice(0, runSuffixIndex)
+      if (knownIds.has(key) || knownIds.has(baseId)) {
+        expandedTimelineTool.value.delete(key)
+        expandedTimelineToolAutoPermission.value.delete(key)
+        changed = true
+      }
+    }
+    if (changed) {
+      expandedTimelineTool.value = new Map(expandedTimelineTool.value)
+      expandedTimelineToolAutoPermission.value = new Map(expandedTimelineToolAutoPermission.value)
+    }
+  }
+
+  // Issue #1748 (stage: windowing) review fix: ThinkingBlock's expand/collapse toggle is
+  // store-backed for the same remount-survival reason as expandedTimelineTool above — flagged
+  // during review as the same class of risk left unaddressed for this specific component (a
+  // Thinking block is rendered per-segment inside AssistantMessage, itself inside a virtualized
+  // row, so it unmounts/remounts exactly like ActivityTimeline does). `scopeKey` is the owning
+  // segment's own message id (matching the :key already used for that segment in
+  // AssistantMessage.vue), a simple boolean toggle — mirrors expandedLegs/isLegExpanded exactly.
+  const thinkingBlockExpanded = ref(new Map()) // Map<scopeKey, boolean>
+
+  function isThinkingBlockExpanded(scopeKey) {
+    if (scopeKey == null) return false
+    return !!thinkingBlockExpanded.value.get(scopeKey)
+  }
+
+  function toggleThinkingBlockExpanded(scopeKey) {
+    if (scopeKey == null) return
+    thinkingBlockExpanded.value.set(scopeKey, !isThinkingBlockExpanded(scopeKey))
+    thinkingBlockExpanded.value = new Map(thinkingBlockExpanded.value)
+  }
+
+  function pruneThinkingBlockExpandedForSession(sessionId) {
+    const messages = messagesBySession.value.get(sessionId) || []
+    const knownIds = new Set()
+    for (const msg of messages) {
+      if (msg.id) knownIds.add(msg.id)
+      if (msg.message_id) knownIds.add(msg.message_id)
+    }
+    if (knownIds.size === 0) return
+    let changed = false
+    for (const key of thinkingBlockExpanded.value.keys()) {
+      if (knownIds.has(key)) {
+        thinkingBlockExpanded.value.delete(key)
+        changed = true
+      }
+    }
+    if (changed) thinkingBlockExpanded.value = new Map(thinkingBlockExpanded.value)
+  }
+
   /**
    * Issue #1746 (stage: subagents): "needs attention" — true when a leg has an open permission
    * request on one of its own child tool calls. Resolved from already-available store data (no
@@ -1392,6 +1503,9 @@ export const useMessageStore = defineStore('message', () => {
    */
   function clearMessages(sessionId) {
     _deltaBuffers.delete(sessionId)  // Issue #1486: discard any in-flight streaming buffer
+    // Issue #1748 review fix: prune before messages are gone (both read messagesBySession)
+    pruneExpandedTimelineToolForSession(sessionId)
+    pruneThinkingBlockExpandedForSession(sessionId)
     messagesBySession.value.delete(sessionId)
     toolCallsBySession.value.delete(sessionId)
     toolSignatureToId.value.delete(sessionId)
@@ -1813,6 +1927,8 @@ export const useMessageStore = defineStore('message', () => {
    * Clear archive messages when leaving archive view.
    */
   function clearArchiveMessages(sessionId) {
+    pruneExpandedTimelineToolForSession(sessionId)  // Issue #1748 review fix
+    pruneThinkingBlockExpandedForSession(sessionId)
     messagesBySession.value.delete(sessionId)
     toolCallsBySession.value.delete(sessionId)
   }
@@ -1987,6 +2103,11 @@ export const useMessageStore = defineStore('message', () => {
     isLegExpanded,
     setLegExpanded,
     toggleLegExpanded,
+    getExpandedTimelineTool,
+    isExpandedTimelineToolAutoPermission,
+    setExpandedTimelineTool,
+    isThinkingBlockExpanded,
+    toggleThinkingBlockExpanded,
     hasOpenPermissionForTask,
     openPermissionsForSession,
 

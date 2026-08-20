@@ -24,6 +24,7 @@
 import { ref, computed } from 'vue'
 import { useResourceImages } from '@/composables/useResourceImages'
 import { useSessionStore } from '@/stores/session'
+import { useMessageStore } from '@/stores/message'
 import MarkdownView from '@/components/common/MarkdownView.vue'
 
 const props = defineProps({
@@ -34,10 +35,25 @@ const props = defineProps({
   streaming: {   // Issue #1486 — forwarded from AssistantMessage when message is mid-stream
     type: Boolean,
     default: false
+  },
+  // Issue #1748 (stage: windowing) review fix: the owning segment's own id (matching the :key
+  // AssistantMessage.vue already uses for that segment) — store-backed expand state (below)
+  // needs it to scope one Thinking block's toggle from another's.
+  scopeKey: {
+    type: [String, Number],
+    default: null
   }
 })
 
-const isExpanded = ref(false)
+const messageStore = useMessageStore()
+
+// Issue #1748 (stage: windowing) review fix: store-backed, not a local ref — a Thinking block is
+// rendered inside AssistantMessage, itself inside a virtualized row, so it unmounts/remounts
+// exactly like ActivityTimeline's tool-detail expand state did (the exact case that fix was
+// required to address) — a local ref here would silently re-collapse an expanded Thinking block
+// whenever its row scrolled out of the overscan window and back. Mirrors expandedLegs'
+// boolean-toggle shape (message.js: isThinkingBlockExpanded/toggleThinkingBlockExpanded).
+const isExpanded = computed(() => messageStore.isThinkingBlockExpanded(props.scopeKey))
 
 const contentLength = computed(() => {
   return props.thinking?.length || 0
@@ -53,7 +69,7 @@ const currentSessionId = computed(() => sessionStore.currentSessionId)
 useResourceImages(thinkingRef, currentSessionId)
 
 function toggleExpanded() {
-  isExpanded.value = !isExpanded.value
+  messageStore.toggleThinkingBlockExpanded(props.scopeKey)
 }
 </script>
 

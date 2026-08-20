@@ -17,6 +17,12 @@ vi.mock('@/composables/useTTSReadAloud', () => ({
   useTTSReadAloud: () => ({
     isEnabled: { value: false },
     isPlaying: { value: false },
+    isPaused: { value: false },
+    currentMessageId: { value: null },
+    playMessage: vi.fn(),
+    queueNewMessage: vi.fn(),
+    pause: vi.fn(),
+    resume: vi.fn(),
     speak: vi.fn(),
     stop: vi.fn()
   })
@@ -877,5 +883,308 @@ describe('virtualizer offset model (#1748 stage: offset-model)', () => {
     await new Promise(r => setTimeout(r, 20))
 
     expect(scrollToSpy).toHaveBeenCalled()
+  })
+
+  // Issue #1748 (stage: windowing) regression: a real overscan value means rowVirtualizer's
+  // onChange (scheduleStickyScroll's other trigger, alongside item-count/tool-call watchers) now
+  // fires on nearly every scroll tick that crosses a mounted row's boundary — not just on
+  // genuine content growth, as it effectively only did at stage 1's overscan=count. Reported by
+  // the user as "scroll up near the bottom and it snaps back down, repeatedly, unless you scroll
+  // fast": scheduleStickyScroll's deferred (nextTick+rAF) callback used to act on a `true`
+  // stickyToBottom read back at schedule time, with no re-check before actually force-scrolling —
+  // if the user's own onScroll handler hadn't yet flipped it to `false` by the time the deferred
+  // callback ran, it would snap back to bottom regardless of where the user had actually scrolled.
+  it('does not snap back to bottom if the user scrolled away before the deferred sticky-scroll fires', async () => {
+    const scrollToSpy = vi.fn()
+    Element.prototype.scrollTo = scrollToSpy
+
+    const { pinia, container } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const { useUIStore } = await import('@/stores/ui')
+    const messageStore = useMessageStore(pinia)
+    useUIStore(pinia).autoScrollEnabled = true
+
+    messageStore.messagesBySession.set(SESSION_ID, [makeMessage({ type: 'assistant', content: 'First' })])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+    await new Promise(r => setTimeout(r, 50))
+    scrollToSpy.mockClear()
+
+    const el = container.querySelector('.messages-area')
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => 5000 })
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 600 })
+
+    // Triggers scheduleStickyScroll while stickyToBottom is still true (matches an onChange
+    // firing from a scroll-driven range change, or — as here — a real content-growth trigger).
+    messageStore.messagesBySession.set(SESSION_ID, [
+      ...messageStore.messagesBySession.get(SESSION_ID),
+      makeMessage({ type: 'user', content: 'Second' })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    // Before the deferred nextTick+rAF callback runs, the user scrolls away from the bottom.
+    // Dispatching a real 'scroll' event (not just writing scrollTop) matters: the fix relies on
+    // this component's own onScroll handler — a synchronous listener for that same event — having
+    // already corrected `stickyToBottom` to false by the time the deferred callback checks it.
+    el.scrollTop = 1000
+    el.dispatchEvent(new Event('scroll'))
+
+    await new Promise(r => setTimeout(r, 50))
+
+    // Not a blanket "never called" — the virtualizer's own settle-reconciliation mechanism
+    // (correcting an earlier scrollToIndex call's estimated offset once real measurements land)
+    // can legitimately call scrollTo with a small, unrelated offset. The actual regression is
+    // specifically a jump BACK TO THE BOTTOM (maxOffset here is 5000 - 600 = 4400) — assert none
+    // of the calls target anywhere near that.
+    const calls = scrollToSpy.mock.calls.map(([opts]) => opts?.top).filter(top => typeof top === 'number')
+    expect(calls.every(top => top < 3000)).toBe(true)
+  })
+
+  // Issue #1748 (stage: windowing) regression: the first attempt at the fix above re-checked raw
+  // DOM scroll geometry instead of the `stickyToBottom` ref, which broke the very first
+  // scroll-to-bottom on initial load — scrollTop is legitimately still 0 (nothing has scrolled
+  // down yet) while scrollHeight already reflects the virtualizer's estimated total size, so a
+  // DOM-only check can't distinguish "never scrolled down yet" from "user scrolled away."
+  it('still scrolls to the bottom once messages arrive asynchronously after mount, even though scrollTop starts at 0 (regression)', async () => {
+    const scrollToSpy = vi.fn()
+    Element.prototype.scrollTo = scrollToSpy
+
+    const { pinia, container } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useUIStore } = await import('@/stores/ui')
+    useUIStore(pinia).autoScrollEnabled = true
+
+    // Let the component fully mount and settle with NO messages yet (matches a real page
+    // load/refresh: the message-history API call is still in flight when MessageList mounts).
+    // This is important — mounting inside a <KeepAlive> also fires onActivated, which makes its
+    // own direct (unconditional) scrollToBottomViaVirtualizer() call independent of this fix's
+    // code path; waiting it out here first, on an empty list, isolates the actual regression:
+    // the watcher-triggered scheduleStickyScroll() path that fires once messages actually load.
+    await new Promise(r => setTimeout(r, 50))
+    scrollToSpy.mockClear()
+
+    const el = container.querySelector('.messages-area')
+    // A large already-estimated total size, exactly like a freshly-mounted virtualizer reports
+    // for a large session before anything has actually been measured — while scrollTop is still
+    // untouched (0), matching first paint before any scroll-to-bottom has happened yet.
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => 1900000 })
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 600 })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+    messageStore.messagesBySession.set(SESSION_ID, [makeMessage({ type: 'assistant', content: 'First' })])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(scrollToSpy).toHaveBeenCalled()
+  })
+})
+
+// Issue #1748 (stage: windowing): overscan is now a real, small value (OVERSCAN_ROWS) instead of
+// the full item count — these tests exercise the actual culling/remount/jump behavior that stage
+// 1 deliberately kept dormant (see MessageList.vue's virtualizerOptions comment).
+describe('windowing — real overscan (#1748 stage: windowing)', () => {
+  function manyMessages(count) {
+    return Array.from({ length: count }, (_, i) =>
+      makeMessage({ id: `msg-${i}`, message_id: `msg-${i}`, type: 'user', content: `Message ${i}`, timestamp: 1700000000 + i })
+    )
+  }
+
+  // jsdom's real Element.scrollTo is a no-op (doesn't move scrollTop or fire 'scroll') — the
+  // virtualizer has no optimistic internal offset update of its own, it learns the new scroll
+  // position exclusively via a native 'scroll' event listener (see @tanstack/virtual-core's
+  // observeElementOffset). Without this, scrollToIndex()/scrollToOffset() would never actually
+  // change what's mounted under jsdom, and these tests would be unable to exercise real culling.
+  //
+  // Separately, @tanstack/virtual-core's getMaxScrollOffset() clamps every scroll target against
+  // the scroll element's REAL `scrollHeight`/`clientHeight` (not its own ResizeObserver-tracked
+  // size) — jsdom has no layout engine, so both are always 0, which would clamp every jump to
+  // offset 0 regardless of target. Stubbing them on the actual scroll element is required for any
+  // scrollToIndex/scrollToOffset call to have an observable effect under jsdom.
+  function stubScrollMechanics(scrollEl) {
+    Element.prototype.scrollTo = function (opts) {
+      const top = typeof opts === 'object' && opts !== null ? opts.top : undefined
+      if (typeof top === 'number') {
+        this.scrollTop = top
+        this.dispatchEvent(new Event('scroll'))
+      }
+    }
+    Object.defineProperty(scrollEl, 'scrollHeight', { configurable: true, get: () => 100000 })
+    Object.defineProperty(scrollEl, 'clientHeight', { configurable: true, get: () => 600 })
+  }
+
+  it('unmounts rows far outside the overscan window and remounts them when scrolled back', async () => {
+    const { pinia, wrapper, container } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, manyMessages(40))
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+    await new Promise(r => setTimeout(r, 50))
+
+    // Initial mount (scrolled to top) includes index 0.
+    expect(document.querySelector('[data-index="0"]')).toBeTruthy()
+
+    stubScrollMechanics(container.querySelector('.messages-area'))
+
+    // Jump far away — index 0 must fall well outside [visible ± OVERSCAN_ROWS] and unmount.
+    await wrapper.vm.scrollToItemIndex(35, { align: 'start', behavior: 'auto' })
+    await new Promise(r => setTimeout(r, 20))
+    expect(document.querySelector('[data-index="0"]')).toBeFalsy()
+
+    // Jump back — index 0 must remount.
+    await wrapper.vm.scrollToItemIndex(0, { align: 'start', behavior: 'auto' })
+    await new Promise(r => setTimeout(r, 20))
+    expect(document.querySelector('[data-index="0"]')).toBeTruthy()
+  })
+
+  it('scrollToItemIndex mounts a far, previously-unmounted target (two-phase jump pattern, §5.4/§5.5)', async () => {
+    const { pinia, wrapper, container } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, manyMessages(40))
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(document.querySelector('[data-index="30"]')).toBeFalsy()
+
+    stubScrollMechanics(container.querySelector('.messages-area'))
+    const mounted = await wrapper.vm.scrollToItemIndex(30, { align: 'auto', behavior: 'auto' })
+
+    expect(mounted).toBe(true)
+    expect(document.querySelector('[data-index="30"]')).toBeTruthy()
+  })
+
+  // Issue #1748 (stage: windowing) local-state audit: ActivityTimeline's expanded-tool-card
+  // state is store-backed (message.js: getExpandedTimelineTool/setExpandedTimelineTool) so it
+  // survives a row genuinely unmounting and remounting with a fresh setup() call — the primary
+  // risk this stage's audit was required to address (see MessageList.vue's builder context).
+  it('preserves ActivityTimeline expand state across a real unmount/remount cycle', async () => {
+    const messages = manyMessages(40)
+    messages[0] = makeMessage({
+      id: 'msg-with-tool',
+      message_id: 'msg-with-tool',
+      type: 'assistant',
+      content: '',
+      timestamp: 1700000000,
+      metadata: {
+        has_tool_uses: true,
+        tool_uses: [{ id: 'tool-bash-1', name: 'Bash', input: { command: 'ls' } }]
+      }
+    })
+
+    const { pinia, wrapper, container } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: {
+        TimelineDetail: { template: '<div data-testid="timeline-detail" :data-tool-id="toolCall.id" />', props: ['toolCall'] },
+        PermissionPrompt: true,
+        SubagentTimeline: true,
+        TruncationBanner: true
+      }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, messages)
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+    messageStore.toolCallsBySession.set(SESSION_ID, [
+      { id: 'tool-bash-1', name: 'Bash', input: { command: 'ls' }, status: 'completed', result: { content: 'ok' } }
+    ])
+    messageStore.toolCallsBySession = new Map(messageStore.toolCallsBySession)
+    await new Promise(r => setTimeout(r, 50))
+
+    const node = document.querySelector('[data-testid="timeline-node"]')
+    expect(node).toBeTruthy()
+    node.dispatchEvent(new Event('click', { bubbles: true }))
+    await new Promise(r => setTimeout(r, 10))
+
+    expect(document.querySelector('[data-testid="timeline-detail"]')).toBeTruthy()
+
+    stubScrollMechanics(container.querySelector('.messages-area'))
+
+    // Scroll far away — the row (and its ActivityTimeline instance) genuinely unmounts.
+    await wrapper.vm.scrollToItemIndex(35, { align: 'start', behavior: 'auto' })
+    await new Promise(r => setTimeout(r, 20))
+    expect(document.querySelector('[data-index="0"]')).toBeFalsy()
+
+    // Scroll back — a fresh ActivityTimeline instance mounts; without store-backing this would
+    // read local expandedNodeId = null and show collapsed. It must come back expanded.
+    await wrapper.vm.scrollToItemIndex(0, { align: 'start', behavior: 'auto' })
+    await new Promise(r => setTimeout(r, 20))
+
+    expect(document.querySelector('[data-testid="timeline-detail"]')?.getAttribute('data-tool-id')).toBe('tool-bash-1')
+  })
+
+  // Issue #1748 (stage: windowing) — task: re-verify scroll-position save/restore actually
+  // fires correctly now that rows genuinely unmount/remount, not just assumed correct because
+  // stage 1 wired it up. onActivated/onDeactivated (where save/restore live, §8) only ever fire
+  // for a component inside a real <KeepAlive> — every other test in this file mounts MessageList
+  // directly, so this is the only test that exercises that lifecycle at all.
+  it('saves and restores scroll position across a KeepAlive deactivate/reactivate cycle (§8)', async () => {
+    const { defineComponent, h, KeepAlive } = await import('vue')
+    let exposedMessageList = null
+    const Host = defineComponent({
+      props: { show: { type: Boolean, default: true } },
+      render() {
+        return h(KeepAlive, null, {
+          default: () => (this.show
+            ? h(MessageList, { ref: el => { if (el) exposedMessageList = el } })
+            : h('div', { 'data-testid': 'placeholder' }))
+        })
+      }
+    })
+
+    const { pinia, wrapper, container } = renderWithStores(Host, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const { useUIStore } = await import('@/stores/ui')
+    const messageStore = useMessageStore(pinia)
+    // Restore (not scroll-to-bottom) is the branch under test — matches a user who scrolled up
+    // into history before switching sessions.
+    useUIStore(pinia).autoScrollEnabled = false
+
+    messageStore.messagesBySession.set(SESSION_ID, manyMessages(40))
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+    await new Promise(r => setTimeout(r, 50))
+
+    stubScrollMechanics(container.querySelector('.messages-area'))
+    await exposedMessageList.scrollToItemIndex(20, { align: 'start', behavior: 'auto' })
+    await new Promise(r => setTimeout(r, 20))
+    expect(document.querySelector('[data-index="20"]')).toBeTruthy()
+
+    // Deactivate: onDeactivated must save the current top-most-visible position.
+    await wrapper.setProps({ show: false })
+    await new Promise(r => setTimeout(r, 20))
+    const { useSessionStore } = await import('@/stores/session')
+    const saved = useSessionStore(pinia).scrollPositions.get(SESSION_ID)
+    expect(saved).toBeTruthy()
+    expect(saved.itemIndex).toBeGreaterThan(10) // landed somewhere near index 20, not reset to 0
+
+    // Reactivate: onActivated must restore via the saved {itemIndex, offsetWithinItem} — not
+    // reset to the top, which is what a silent regression here would look like.
+    await wrapper.setProps({ show: true })
+    await new Promise(r => setTimeout(r, 20))
+    expect(document.querySelector(`[data-index="${saved.itemIndex}"]`)).toBeTruthy()
+    expect(document.querySelector('[data-index="0"]')).toBeFalsy()
   })
 })

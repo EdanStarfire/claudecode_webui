@@ -61,9 +61,26 @@ function hooksForTool(toolId) {
   return messageStore.hooksForToolCall(sid, toolId)
 }
 
-// Local state for this timeline instance
-const expandedNodeId = ref(null)
-const expandedForPermission = ref(false)
+// Issue #1748 (stage: windowing): which tool's detail panel is expanded is store-backed
+// (messageStore.getExpandedTimelineTool/setExpandedTimelineTool), not a local ref — at a real
+// overscan value this row can genuinely unmount when scrolled out of view and remount with a
+// fresh setup() call on scroll-back, which would otherwise silently collapse a tool card the
+// user deliberately expanded. Mirrors SubagentTimeline.vue's isLegExpanded/toggleLegExpanded,
+// already store-backed for the same cross-remount-survival reason (see its own comment).
+// scopeKey identifies this ActivityTimeline's own tool group: messageId when the caller has one
+// (AssistantMessage passes the segment's message id), falling back to the first tool's id so two
+// different instances never collide if messageId is ever absent. Callers that render more than
+// one ActivityTimeline sharing the same messageId (SubagentLegTranscript.vue, one instance per
+// interleaved tool-run within a leg) must suffix it themselves to stay unique per instance.
+const scopeKey = computed(() => props.messageId || props.tools[0]?.id || null)
+const expandedNodeId = computed(() => messageStore.getExpandedTimelineTool(scopeKey.value))
+// Issue #1748 (stage: windowing) review fix: also store-backed, not a local ref. This tracks
+// whether the CURRENT expansion was auto-triggered by a permission need (vs. a manual click), so
+// the watch below only auto-collapses what it auto-expanded. A local ref here would reset to
+// false on remount, forgetting that the row was auto-expanded — if the permission then resolves
+// off-screen (e.g. via PermissionQueue's always-mounted floating panel) while unmounted, a
+// fresh mount would never auto-collapse the now-stale expanded panel on scroll-back.
+const expandedForPermission = computed(() => messageStore.isExpandedTimelineToolAutoPermission(scopeKey.value))
 const permissionRef = ref(null)
 
 // Sort tools chronologically
@@ -106,25 +123,22 @@ watch(needsPermission, (needs) => {
 watch(sortedTools, (tools) => {
   const permTool = tools.find(t => getEffectiveStatusForTool(t) === 'permission_required')
   if (permTool) {
-    expandedNodeId.value = permTool.id
-    expandedForPermission.value = true
+    messageStore.setExpandedTimelineTool(scopeKey.value, permTool.id, { autoPermission: true })
   } else if (expandedForPermission.value) {
-    expandedNodeId.value = null
-    expandedForPermission.value = false
+    messageStore.setExpandedTimelineTool(scopeKey.value, null)
   } else if (expandedNodeId.value) {
     const stillExists = tools.some(t => t.id === expandedNodeId.value)
-    if (!stillExists) expandedNodeId.value = null
+    if (!stillExists) messageStore.setExpandedTimelineTool(scopeKey.value, null)
   }
 }, { deep: true, immediate: true })
 
 // Toggle detail panel
 function toggleDetail(toolId) {
   if (expandedNodeId.value === toolId) {
-    expandedNodeId.value = null
+    messageStore.setExpandedTimelineTool(scopeKey.value, null)
   } else {
-    expandedNodeId.value = toolId
+    messageStore.setExpandedTimelineTool(scopeKey.value, toolId)
   }
-  expandedForPermission.value = false
 }
 
 </script>
