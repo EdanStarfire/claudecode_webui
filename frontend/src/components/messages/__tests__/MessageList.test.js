@@ -752,6 +752,65 @@ describe('virtualizer offset model (#1748 stage: offset-model)', () => {
     expect(Math.max(...heights)).toBeGreaterThan(Math.min(...heights))
   })
 
+  // Issue #1748 follow-up (user feedback): a gutter chip must align to the actual launch/
+  // terminal anchor's own position, not the top/bottom of the whole row/block it lives in — a
+  // long completion summary below the terminal header must not stretch the lane's bottom.
+  it("gutter lane bottom tracks the terminal anchor's own DOM position, not its row's full extent (including a long result body)", async () => {
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({
+        type: 'assistant', content: 'Launching', timestamp: 100,
+        metadata: { has_tool_uses: true, tool_uses: [{ id: 'launch-1', name: 'Task', input: {} }] }
+      })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_started',
+      { task_id: 'task-1', tool_use_id: 'launch-1', description: 'Task' }, 100)
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_notification',
+      { task_id: 'task-1', status: 'completed', summary: 'A long completion summary' }, 200)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    const terminalRow = document.querySelector('[id^="subagent-anchor-terminal-"]')
+    expect(terminalRow).toBeTruthy()
+    const rowWrapper = terminalRow.closest('.virtual-item-row')
+    expect(rowWrapper).toBeTruthy()
+
+    // The terminal header sits near the top of its row; the row itself is much taller because
+    // of a long markdown result body rendered below the header (anchor-body, per
+    // SubagentAnchorRow.vue). Instance-level spies (not prototype-wide) so only these two real
+    // elements are affected.
+    vi.spyOn(rowWrapper, 'getBoundingClientRect').mockReturnValue({ top: 1000, bottom: 1400 })
+    vi.spyOn(terminalRow, 'getBoundingClientRect').mockReturnValue({ top: 1010, bottom: 1036 })
+
+    // laneOffsets is a Vue computed — force it to re-run by touching one of its reactive
+    // dependencies (indexMaps, via displayableItems) now that the spies are installed.
+    messageStore.messagesBySession.set(SESSION_ID, [
+      ...messageStore.messagesBySession.get(SESSION_ID),
+      makeMessage({ type: 'user', content: 'one more turn', timestamp: 300 })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+    await new Promise(r => setTimeout(r, 50))
+
+    const lane = document.querySelector('.gutter-lane')
+    expect(lane).toBeTruthy()
+    const top = parseFloat(lane.style.top)
+    const height = parseFloat(lane.style.height)
+    // The launch row (index 0, unmocked) measures at the ResizeObserver stub's default height
+    // (600, see mockResizeObserver.js) — that becomes the terminal row's own start offset in the
+    // virtualizer's coordinate system. bottom = that start + the anchor's own offset within its
+    // row (1036 - 1000 = 36), NOT the row's full bottom (1400 - 1000 = 400).
+    expect(top + height).toBeCloseTo(600 + 36, 0)
+  })
+
   it('scrolls to the new bottom when a message is appended while sticky-to-bottom (§7)', async () => {
     const scrollToSpy = vi.fn()
     // jsdom has no native Element.prototype.scrollTo — the virtualizer's elementScroll calls

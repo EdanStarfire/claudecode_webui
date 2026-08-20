@@ -304,6 +304,26 @@ function resolveSubagentPrimaryIndex(taskId, legIndex) {
   return indexMaps.value.toolUseIndex.get(toolUseId) ?? null
 }
 
+// Issue #1748 (stage: offset-model) follow-up (user feedback): a row is the virtualization
+// UNIT, but a launch/terminal anchor can sit anywhere inside its row (e.g. a Task call below a
+// Thinking block, or partway down a merged multi-turn run) — using the row's own start/end
+// alone visibly misplaced the gutter chip at the row's edge instead of the actual anchor.
+// At Stage 1 every row is always mounted (overscan = count), so the real DOM position of the
+// anchor WITHIN its row is always measurable — a small, cheap delta between two elements that
+// scroll together (not the old full-container getBoundingClientRect() math), not the O(session
+// size) "no DOM at all" ideal Section 5.2 describes for content that might not be mounted.
+// Falls back to the row's own bounds when the anchor/row isn't found (Stage 2, once overscan
+// drops and rows can go unmounted) — same graceful-degradation shape as everywhere else here.
+function anchorOffsetWithinRow(rowIndex, anchorDomId) {
+  if (!messagesContent.value || !anchorDomId) return null
+  const rowEl = messagesContent.value.querySelector(`.virtual-item-row[data-index="${rowIndex}"]`)
+  const anchorEl = document.getElementById(anchorDomId)
+  if (!rowEl || !anchorEl) return null
+  const rowTop = rowEl.getBoundingClientRect().top
+  const anchorRect = anchorEl.getBoundingClientRect()
+  return { top: anchorRect.top - rowTop, bottom: anchorRect.bottom - rowTop }
+}
+
 // Issue #1748 (stage: offset-model): SubagentGlobalGutter's lane top/bottom, computed here (not
 // in the gutter itself) because it must live inside a reactive scope that reads
 // rowVirtualizer.value directly — the virtualizer instance is a mutated-in-place class, so a
@@ -322,7 +342,9 @@ const laneOffsets = computed(() => {
       const primaryIndex = indexMaps.value.toolUseIndex.get(leg.tool_use_id)
       const startItem = primaryIndex != null ? measurements[primaryIndex] : null
       if (!startItem) return // matches old `if (!startEl) continue`
-      const top = startItem.start
+      const primaryDomId = `subagent-anchor-primary-${entry.task_id}-${legIndex}`
+      const primaryDelta = anchorOffsetWithinRow(primaryIndex, primaryDomId)
+      const top = startItem.start + (primaryDelta ? primaryDelta.top : 0)
 
       let bottom
       if (leg.status === 'running') {
@@ -331,7 +353,12 @@ const laneOffsets = computed(() => {
         const domId = `subagent-anchor-terminal-${entry.task_id}-${legIndex}`
         const terminalIndex = indexMaps.value.signalIndex.get(domId)
         const endItem = terminalIndex != null ? measurements[terminalIndex] : null
-        bottom = endItem ? endItem.end : top + 26 // defensive fallback (terminal row not found)
+        const terminalDelta = terminalIndex != null ? anchorOffsetWithinRow(terminalIndex, domId) : null
+        bottom = terminalDelta
+          ? endItem.start + terminalDelta.bottom
+          : endItem
+            ? endItem.end
+            : top + 26 // defensive fallback (terminal row not found)
       }
 
       offsets.set(`${entry.task_id}:${legIndex}`, { top, bottom, height: Math.max(0, bottom - top) })
@@ -341,13 +368,20 @@ const laneOffsets = computed(() => {
   return offsets
 })
 
+// Issue #1748 (stage: offset-model) follow-up (user feedback): `align: 'auto'` (not 'center')
+// means the virtualizer only moves the scroll position when the target isn't already fully
+// visible, and aligns to whichever edge it's nearest — clicking a chip that's already on screen
+// must not move anything. `block: 'nearest'` (not 'center') gives the DOM fine-correction step
+// the same "don't move unless necessary" behavior. `behavior: 'smooth'` is safe here specifically
+// because Stage 1 keeps every row mounted (overscan = count) — there's no blank unmounted gap to
+// smooth-scroll through; revisit once Stage 2 introduces real culling.
 async function onGutterChipClick(lane) {
   const index = resolveSubagentPrimaryIndex(lane.taskId, lane.legIndex)
   if (index == null) return
-  const mounted = await virtualNav.scrollToItemIndex(index, { align: 'center' })
+  const mounted = await virtualNav.scrollToItemIndex(index, { align: 'auto', behavior: 'smooth' })
   if (!mounted) return
   document.getElementById(`subagent-anchor-primary-${lane.taskId}-${lane.legIndex}`)
-    ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
 }
 
 defineExpose({
