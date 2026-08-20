@@ -150,22 +150,26 @@ async function resolve(perm, decision) {
 // Issue #1746 (stage: permissions) US4: expand-then-scroll ordering — the leg transcript must
 // actually be in the DOM before scrollIntoView runs, so the expand is awaited (nextTick) before
 // scrolling (matches the desktop mockup's viewInContext() ordering).
-// Issue #1748 (stage: offset-model): routed through MessageList's shared virtual-navigation
+// Issue #1748 (stage: windowing): routed through MessageList's shared virtual-navigation
 // helper (plan §5.5) when available, since the target row may be anywhere in a long session's
-// history and isn't guaranteed to already be in the DOM. Falls back to the pre-#1748 direct
+// history and isn't guaranteed to already be mounted. Falls back to the pre-#1748 direct
 // document.getElementById lookup when virtualNav isn't wired (e.g. archived/deleted-agent views
 // don't render a live MessageList) or the index couldn't be resolved — correct whenever the
-// target happens to already be mounted, which Stage 1's overscan=count guarantees anyway.
+// target happens to already be mounted.
 // Issue #1748 follow-up (user feedback): `align: 'auto'`/`block: 'nearest'` (not 'center') so an
 // already-visible target doesn't move at all, and an off-screen one moves the minimum distance
-// instead of forcibly recentering the viewport. `behavior: 'smooth'` is safe at Stage 1 since
-// every row is already mounted (overscan = count) — revisit once Stage 2 introduces real culling.
+// instead of forcibly recentering the viewport.
+// Issue #1748 (stage: windowing): the virtualizer-level jump uses `behavior: 'auto'` (instant),
+// not 'smooth' — per plan §5.5, a long unmounted span must never be smooth-scrolled through (it
+// would visibly animate across mostly-empty spacer space now that overscan is a real value). The
+// final scrollIntoView correction stays smooth since by then the target is confirmed mounted —
+// real content, a short distance, where smooth easing is the intended UX.
 async function viewInContext(perm) {
   if (perm.isSubagent) {
     messageStore.setLegExpanded(perm.taskId, perm.legIndex, true)
     await nextTick()
     const index = props.virtualNav?.resolveSubagentPrimaryIndex(perm.taskId, perm.legIndex)
-    const mounted = index != null ? await props.virtualNav.scrollToItemIndex(index, { align: 'auto', behavior: 'smooth' }) : false
+    const mounted = index != null ? await props.virtualNav.scrollToItemIndex(index, { align: 'auto', behavior: 'auto' }) : false
     // index == null covers both "no virtualNav" and "virtualNav present but couldn't resolve an
     // index" (e.g. an orphaned permission tool — indexMaps doesn't scan orphanedPermissionTools)
     // — both cases must fall back to the direct DOM lookup, not just the former.
@@ -177,7 +181,7 @@ async function viewInContext(perm) {
     }
   } else {
     const index = props.virtualNav?.resolveToolAnchorIndex(perm.toolCall.id)
-    const mounted = index != null ? await props.virtualNav.scrollToItemIndex(index, { align: 'auto', behavior: 'smooth' }) : false
+    const mounted = index != null ? await props.virtualNav.scrollToItemIndex(index, { align: 'auto', behavior: 'auto' }) : false
     if (mounted || index == null) {
       document.getElementById(`tool-anchor-${perm.toolCall.id}`)
         ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })

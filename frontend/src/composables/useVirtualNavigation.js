@@ -50,9 +50,10 @@ export function useVirtualNavigation(virtualizerRef) {
       if (!current) return false
       if (current.getVirtualItems().some(item => item.index === index)) return true
     }
-    // Dormant at Stage 1 (overscan = full item count means the target is always immediately in
-    // range) — this only starts firing once Stage 2 introduces real culling, at which point a
-    // silent false return here would read as "the jump button just doesn't work" with no trail.
+    // At a real overscan value a jump target can legitimately take a couple of render passes to
+    // mount (scrollToIndex → measurement pass → possibly-corrected offset) — this warning is the
+    // trail for when that bounded retry budget is actually exhausted, so a silent false return
+    // doesn't just read as "the jump button silently doesn't work" with no diagnostic signal.
     console.warn(`[useVirtualNavigation] index ${index} did not mount within ${maxAttempts} attempts`)
     return false
   }

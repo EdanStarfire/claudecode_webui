@@ -23,7 +23,11 @@
 
         <!-- Thinking Block (collapsible) -->
         <div v-if="sv.hasThinking" class="thinking-block mb-2">
-          <ThinkingBlock :thinking="sv.thinkingContent" :streaming="!!sv.seg.streaming" />
+          <ThinkingBlock
+            :thinking="sv.thinkingContent"
+            :streaming="!!sv.seg.streaming"
+            :scopeKey="sv.seg.id || sv.seg.message_id || index"
+          />
         </div>
 
         <!-- Content -->

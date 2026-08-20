@@ -20,13 +20,12 @@
           No messages yet. Start a conversation!
         </div>
 
-        <!-- Issue #1748 (stage: offset-model): virtualizer-driven rendering. Item TYPE dispatch
+        <!-- Issue #1748 (stage: windowing): virtualizer-driven rendering. Item TYPE dispatch
              (MessageItem/CompactionEventGroup/date-separator/SubagentAnchorRow) is unchanged from
-             before — only "which indices get a real DOM node right now" is new. Stage 1 pins
-             `overscan` to the full item count (see virtualizerOptions below), so every item is
-             always in range and this renders identically to the old plain v-for; only the
-             underlying layout mechanism (sized spacer + translateY per row, instead of normal
-             document flow) has changed. -->
+             before — only "which indices get a real DOM node right now" is new. `overscan` (see
+             virtualizerOptions below) is now a real, small value, so rows outside the viewport
+             (plus the overscan buffer) genuinely unmount — the perf win this whole issue exists
+             to deliver. -->
         <div class="virtual-spacer" :style="{ height: `${rowVirtualizer.getTotalSize()}px` }">
           <div
             v-for="row in renderedRows"
@@ -222,12 +221,14 @@ function itemAt(index) {
   return displayableItems.value[index]
 }
 
-// Issue #1748 (stage: offset-model): per-item-TYPE size estimates (not one flat global average),
+// Issue #1748 (stage: windowing): per-item-TYPE size estimates (not one flat global average),
 // per plan §5.4 — bounds a virtualizer's pre-measurement error to "this item vs. its own type's
 // typical height" rather than "any row vs. any other row." Values are rough starting points, not
 // yet tuned against real large-session height distributions (§5.4 defers that to a follow-up
-// empirical pass); they only matter for the brief window before ResizeObserver measures the real
-// height, since Stage 1 mounts every item immediately (overscan = count, see virtualizerOptions).
+// empirical pass). These matter much more now than in stage 1: at a real overscan value, most of
+// a large session's items are never mounted, so their layout position is driven by these
+// estimates (corrected the instant the user actually scrolls a region into view) rather than by
+// a brief pre-ResizeObserver window.
 const ITEM_TYPE_SIZE_ESTIMATE = {
   message: 160,
   compaction: 120,
@@ -238,18 +239,32 @@ function estimateItemSize(index) {
   return ITEM_TYPE_SIZE_ESTIMATE[itemAt(index)?.type] ?? 160
 }
 
-// Issue #1748 (stage: offset-model): virtualizer driving MessageList's own rendering AND
+// Issue #1748 (stage: windowing): virtualizer driving MessageList's own rendering AND
 // (via laneOffsets/virtualNav below) SubagentGlobalGutter's lane positions and the shared
-// jump-navigation helper. Stage 1 pins `overscan` to the full item count — verified against
+// jump-navigation helper. `overscan` is a real, small value now — verified against
 // @tanstack/virtual-core's actual source (defaultRangeExtractor clamps
-// `[start - overscan, end + overscan]` to `[0, count-1]`), so every item stays mounted exactly
-// as today; only the offset/measurement model changes in this stage. Lowering `overscan` to
-// enable real DOM culling is Stage 2 — a separate, later change.
+// `[start - overscan, end + overscan]` to `[0, count-1]`), so rows genuinely outside
+// [start-OVERSCAN_ROWS, end+OVERSCAN_ROWS] unmount, which is the whole point of this stage:
+// DOM node count for the message list stays bounded regardless of session size instead of
+// growing with it. See OVERSCAN_ROWS below for the value chosen and why.
+//
+// OVERSCAN_ROWS: a typical viewport in this app shows roughly 4-8 rows at once (rows vary
+// widely in height — a date separator is ~40px, a large merged assistant run with tool calls
+// can be 500px+ — so "rows per viewport" is itself an estimate, not a fixed number). 10 extra
+// rows mounted above AND below the visible range is chosen as a buffer generous enough that:
+// (a) a normal wheel/trackpad scroll doesn't visibly pop content in/out at the viewport edge
+// before the next measurement pass catches up, and (b) the two-phase jump-navigation pattern
+// (plan §5.4/§5.5 — jump to estimate, wait for real mount, then correct) usually lands close
+// enough to its target that only a small number of rows need to mount before the target itself
+// does. This is deliberately not tuned against real large-session height/scroll-velocity data
+// (that empirical pass is future work per §5.4) — it's a reasonable starting buffer, not a
+// number with a specific derivation.
+const OVERSCAN_ROWS = 10
 const rowVirtualizer = useVirtualizer(computed(() => ({
   count: displayableItems.value.length,
   getScrollElement: () => messagesArea.value,
   estimateSize: estimateItemSize,
-  overscan: displayableItems.value.length,
+  overscan: OVERSCAN_ROWS,
   // Fires on every virtualizer measurement change — in particular, a mounted tail row's own
   // height changing (streaming growth) while no new item was added, which today's whole-container
   // ResizeObserver caught incidentally. This is the explicit wiring point plan §7 calls out as
@@ -261,7 +276,7 @@ const virtualNav = useVirtualNavigation(rowVirtualizer)
 
 // Pairs each virtual row with its displayableItems entry ONCE per render, instead of the template
 // re-indexing displayableItems on every v-if branch and prop binding for the same row (up to 8
-// lookups/row otherwise, across however many rows Stage 1 mounts — the full item count).
+// lookups/row otherwise, across however many rows are currently mounted).
 const renderedRows = computed(() =>
   rowVirtualizer.value.getVirtualItems().map(virtualRow => ({
     virtualRow,
@@ -304,16 +319,17 @@ function resolveSubagentPrimaryIndex(taskId, legIndex) {
   return indexMaps.value.toolUseIndex.get(toolUseId) ?? null
 }
 
-// Issue #1748 (stage: offset-model) follow-up (user feedback): a row is the virtualization
+// Issue #1748 (stage: windowing) follow-up (user feedback): a row is the virtualization
 // UNIT, but a launch/terminal anchor can sit anywhere inside its row (e.g. a Task call below a
 // Thinking block, or partway down a merged multi-turn run) — using the row's own start/end
 // alone visibly misplaced the gutter chip at the row's edge instead of the actual anchor.
-// At Stage 1 every row is always mounted (overscan = count), so the real DOM position of the
-// anchor WITHIN its row is always measurable — a small, cheap delta between two elements that
-// scroll together (not the old full-container getBoundingClientRect() math), not the O(session
-// size) "no DOM at all" ideal Section 5.2 describes for content that might not be mounted.
-// Falls back to the row's own bounds when the anchor/row isn't found (Stage 2, once overscan
-// drops and rows can go unmounted) — same graceful-degradation shape as everywhere else here.
+// When the row happens to be mounted (within the overscan range, or recently visited), the real
+// DOM position of the anchor WITHIN its row is measurable — a small, cheap delta between two
+// elements that scroll together (not the old full-container getBoundingClientRect() math), not
+// the O(session size) "no DOM at all" ideal Section 5.2 describes for content that might not be
+// mounted. Falls back to the row's own bounds when the anchor/row isn't found (now the common
+// case for any leg outside the mounted window) — same graceful-degradation shape as everywhere
+// else here, and exactly the estimate-until-visited tolerance plan §5.4 designs for.
 function anchorOffsetWithinRow(rowIndex, anchorDomId) {
   if (!messagesContent.value || !anchorDomId) return null
   const rowEl = messagesContent.value.querySelector(`.virtual-item-row[data-index="${rowIndex}"]`)
@@ -324,7 +340,7 @@ function anchorOffsetWithinRow(rowIndex, anchorDomId) {
   return { top: anchorRect.top - rowTop, bottom: anchorRect.bottom - rowTop }
 }
 
-// Issue #1748 (stage: offset-model): SubagentGlobalGutter's lane top/bottom, computed here (not
+// Issue #1748 (stage: windowing): SubagentGlobalGutter's lane top/bottom, computed here (not
 // in the gutter itself) because it must live inside a reactive scope that reads
 // rowVirtualizer.value directly — the virtualizer instance is a mutated-in-place class, so a
 // prop passed down to a child component would not reliably re-trigger the child's own reactivity
@@ -368,17 +384,22 @@ const laneOffsets = computed(() => {
   return offsets
 })
 
-// Issue #1748 (stage: offset-model) follow-up (user feedback): `align: 'auto'` (not 'center')
+// Issue #1748 (stage: windowing) follow-up (user feedback): `align: 'auto'` (not 'center')
 // means the virtualizer only moves the scroll position when the target isn't already fully
 // visible, and aligns to whichever edge it's nearest — clicking a chip that's already on screen
 // must not move anything. `block: 'nearest'` (not 'center') gives the DOM fine-correction step
-// the same "don't move unless necessary" behavior. `behavior: 'smooth'` is safe here specifically
-// because Stage 1 keeps every row mounted (overscan = count) — there's no blank unmounted gap to
-// smooth-scroll through; revisit once Stage 2 introduces real culling.
+// the same "don't move unless necessary" behavior.
+// Issue #1748 (stage: windowing): the big virtualizer-level jump now uses `behavior: 'auto'`
+// (instant), not 'smooth' — per plan §5.5, never smooth-scroll through thousands of unrendered
+// intermediate rows. That was safe at Stage 1 only because overscan=count kept every row mounted
+// (no blank gap to animate through); now that overscan is a real value, a smooth scroll across a
+// long unmounted span would visibly animate past mostly-empty spacer space. The final
+// `scrollIntoView` correction below stays smooth — by the time it runs the target is confirmed
+// mounted, so it's a small, real-content distance where smooth easing reads as intentional.
 async function onGutterChipClick(lane) {
   const index = resolveSubagentPrimaryIndex(lane.taskId, lane.legIndex)
   if (index == null) return
-  const mounted = await virtualNav.scrollToItemIndex(index, { align: 'auto', behavior: 'smooth' })
+  const mounted = await virtualNav.scrollToItemIndex(index, { align: 'auto', behavior: 'auto' })
   if (!mounted) return
   document.getElementById(`subagent-anchor-primary-${lane.taskId}-${lane.legIndex}`)
     ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })

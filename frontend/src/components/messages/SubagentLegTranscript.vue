@@ -29,7 +29,12 @@
             <div v-if="msg.thinking" class="narration-thinking">{{ msg.thinking }}</div>
           </div>
         </div>
-        <ActivityTimeline v-else :tools="run.items" :messageId="legToolCall.id" />
+        <!-- Issue #1748 (stage: windowing) review fix: a leg can have MULTIPLE tool-runs
+             (buildLegEventRuns splits on interleaved narration), each its own ActivityTimeline
+             instance — messageId must be unique per run, not the shared legToolCall.id, or
+             ActivityTimeline's store-backed expand state (scopeKey = messageId || tools[0]?.id)
+             collides across sibling runs since messageId is truthy and skips the fallback. -->
+        <ActivityTimeline v-else :tools="run.items" :messageId="`${legToolCall.id}-run-${runIdx}`" />
       </template>
     </template>
     <div v-else-if="isRunning" class="leg-placeholder">

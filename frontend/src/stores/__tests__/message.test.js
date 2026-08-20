@@ -1029,4 +1029,103 @@ describe('openPermissionsForSession (#1746 stage: permissions)', () => {
     expect(perms).toHaveLength(1)
     expect(perms[0]).toMatchObject({ taskId: 'task-1', legIndex: 0, label: 'Stale leg' })
   })
+
+  // Issue #1748 (stage: windowing): expandedTimelineTool/expandedTimelineToolAutoPermission
+  // back ActivityTimeline's tool-detail-expand state so it survives a virtualized row's
+  // unmount/remount cycle (see ActivityTimeline.vue). Covers the get/set contract and the
+  // auto-permission flag the review fix added after the local-ref version broke auto-collapse
+  // across a remount.
+  describe('expandedTimelineTool (#1748 stage: windowing)', () => {
+    it('get/set round-trips and null clears the entry', async () => {
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useMessageStore()
+
+      expect(store.getExpandedTimelineTool('msg-1')).toBeNull()
+      store.setExpandedTimelineTool('msg-1', 'tool-1')
+      expect(store.getExpandedTimelineTool('msg-1')).toBe('tool-1')
+      store.setExpandedTimelineTool('msg-1', null)
+      expect(store.getExpandedTimelineTool('msg-1')).toBeNull()
+    })
+
+    it('tracks the autoPermission flag separately from the expanded tool id', async () => {
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useMessageStore()
+
+      store.setExpandedTimelineTool('msg-1', 'tool-1', { autoPermission: true })
+      expect(store.isExpandedTimelineToolAutoPermission('msg-1')).toBe(true)
+
+      // A manual expand (no autoPermission) clears the flag even though a tool stays expanded.
+      store.setExpandedTimelineTool('msg-1', 'tool-2')
+      expect(store.getExpandedTimelineTool('msg-1')).toBe('tool-2')
+      expect(store.isExpandedTimelineToolAutoPermission('msg-1')).toBe(false)
+    })
+
+    it('clearMessages prunes entries scoped to the reset session, leaving other sessions intact', async () => {
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useMessageStore()
+
+      store.messagesBySession.set('sess-1', [
+        makeMessage({ id: 'msg-1', session_id: 'sess-1' })
+      ])
+      store.messagesBySession.set('sess-2', [
+        makeMessage({ id: 'msg-2', session_id: 'sess-2' })
+      ])
+      store.setExpandedTimelineTool('msg-1', 'tool-1')
+      store.setExpandedTimelineTool('msg-2', 'tool-2')
+
+      store.clearMessages('sess-1')
+
+      expect(store.getExpandedTimelineTool('msg-1')).toBeNull()
+      expect(store.getExpandedTimelineTool('msg-2')).toBe('tool-2')
+    })
+
+    it('clearMessages prunes SubagentLegTranscript-style run-suffixed scope keys too', async () => {
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useMessageStore()
+
+      store.messagesBySession.set('sess-1', [
+        makeMessage({
+          id: 'msg-1',
+          session_id: 'sess-1',
+          type: 'assistant',
+          metadata: { tool_uses: [{ id: 'toolu_1', name: 'Bash', input: {} }] }
+        })
+      ])
+      store.setExpandedTimelineTool('toolu_1-run-0', 'toolu_1')
+
+      store.clearMessages('sess-1')
+
+      expect(store.getExpandedTimelineTool('toolu_1-run-0')).toBeNull()
+    })
+  })
+
+  // Issue #1748 (stage: windowing) review fix: same remount-survival treatment as
+  // expandedTimelineTool above, for ThinkingBlock's expand/collapse toggle.
+  describe('thinkingBlockExpanded (#1748 stage: windowing)', () => {
+    it('toggles and defaults to collapsed', async () => {
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useMessageStore()
+
+      expect(store.isThinkingBlockExpanded('msg-1')).toBe(false)
+      store.toggleThinkingBlockExpanded('msg-1')
+      expect(store.isThinkingBlockExpanded('msg-1')).toBe(true)
+      store.toggleThinkingBlockExpanded('msg-1')
+      expect(store.isThinkingBlockExpanded('msg-1')).toBe(false)
+    })
+
+    it('clearMessages prunes entries scoped to the reset session', async () => {
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useMessageStore()
+
+      store.messagesBySession.set('sess-1', [makeMessage({ id: 'msg-1', session_id: 'sess-1' })])
+      store.messagesBySession.set('sess-2', [makeMessage({ id: 'msg-2', session_id: 'sess-2' })])
+      store.toggleThinkingBlockExpanded('msg-1')
+      store.toggleThinkingBlockExpanded('msg-2')
+
+      store.clearMessages('sess-1')
+
+      expect(store.isThinkingBlockExpanded('msg-1')).toBe(false)
+      expect(store.isThinkingBlockExpanded('msg-2')).toBe(true)
+    })
+  })
 })
