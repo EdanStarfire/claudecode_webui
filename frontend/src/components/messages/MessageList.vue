@@ -914,6 +914,25 @@ function scheduleStickyScroll() {
   nextTick(() => {
     requestAnimationFrame(() => {
       stickyScrollScheduled = false
+      // Issue #1748 (stage: windowing) fix: re-verify stickiness against the LIVE scroll
+      // position right before acting, not just trust the `stickyToBottom` ref read back when
+      // this was scheduled. At a real overscan value, rowVirtualizer's onChange (this
+      // function's other caller) now fires on nearly every scroll tick that crosses a mounted
+      // row's boundary — not just on genuine content growth, as it effectively only did at
+      // stage 1's overscan=count. That means a user actively scrolling AWAY from the bottom can
+      // trigger this schedule in the same tick their own onScroll handler hasn't yet run to
+      // flip stickyToBottom to false — and since a forced scroll-to-bottom itself re-triggers
+      // onChange, an uncorrected stale read here would repeatedly snap the view back down.
+      // Reading the DOM fresh here (not the ref) sidesteps that race entirely.
+      const el = messagesArea.value
+      if (el) {
+        const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+        if (distance >= STICKY_THRESHOLD_PX) {
+          stickyToBottom.value = false
+          uiStore.setStickyToBottom(viewSessionId.value, false)
+          return
+        }
+      }
       scrollToBottomViaVirtualizer()
     })
   })

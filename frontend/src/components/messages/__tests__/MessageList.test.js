@@ -884,6 +884,55 @@ describe('virtualizer offset model (#1748 stage: offset-model)', () => {
 
     expect(scrollToSpy).toHaveBeenCalled()
   })
+
+  // Issue #1748 (stage: windowing) regression: a real overscan value means rowVirtualizer's
+  // onChange (scheduleStickyScroll's other trigger, alongside item-count/tool-call watchers) now
+  // fires on nearly every scroll tick that crosses a mounted row's boundary — not just on
+  // genuine content growth, as it effectively only did at stage 1's overscan=count. Reported by
+  // the user as "scroll up near the bottom and it snaps back down, repeatedly, unless you scroll
+  // fast": scheduleStickyScroll's deferred (nextTick+rAF) callback used to act on a `true`
+  // stickyToBottom read back at schedule time, with no re-check before actually force-scrolling —
+  // if the user's own onScroll handler hadn't yet flipped it to `false` by the time the deferred
+  // callback ran, it would snap back to bottom regardless of where the user had actually scrolled.
+  it('does not snap back to bottom if the user scrolled away before the deferred sticky-scroll fires', async () => {
+    const scrollToSpy = vi.fn()
+    Element.prototype.scrollTo = scrollToSpy
+
+    const { pinia, container } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const { useUIStore } = await import('@/stores/ui')
+    const messageStore = useMessageStore(pinia)
+    useUIStore(pinia).autoScrollEnabled = true
+
+    messageStore.messagesBySession.set(SESSION_ID, [makeMessage({ type: 'assistant', content: 'First' })])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+    await new Promise(r => setTimeout(r, 50))
+    scrollToSpy.mockClear()
+
+    const el = container.querySelector('.messages-area')
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => 5000 })
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 600 })
+
+    // Triggers scheduleStickyScroll while stickyToBottom is still true (matches an onChange
+    // firing from a scroll-driven range change, or — as here — a real content-growth trigger).
+    messageStore.messagesBySession.set(SESSION_ID, [
+      ...messageStore.messagesBySession.get(SESSION_ID),
+      makeMessage({ type: 'user', content: 'Second' })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    // Before the deferred nextTick+rAF callback runs, the user scrolls away from the bottom —
+    // simulating their own onScroll handler not yet having had a turn to flip stickyToBottom.
+    el.scrollTop = 1000
+
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(scrollToSpy).not.toHaveBeenCalled()
+  })
 })
 
 // Issue #1748 (stage: windowing): overscan is now a real, small value (OVERSCAN_ROWS) instead of
