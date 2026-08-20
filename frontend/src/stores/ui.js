@@ -212,6 +212,16 @@ export const useUIStore = defineStore('ui', () => {
     writeStorage('resumeBatchSize', value)
   }
 
+  // Issue #1791: Default delay (seconds) between "Resume Sessions" batches — synced from /api/config via settings page
+  const resumeBatchDelaySeconds = ref(readStorage('resumeBatchDelaySeconds', 5))
+
+  function setResumeBatchDelaySeconds(n) {
+    const parsed = parseInt(n, 10)
+    const value = Number.isFinite(parsed) && parsed >= 0 ? parsed : 5
+    resumeBatchDelaySeconds.value = value
+    writeStorage('resumeBatchDelaySeconds', value)
+  }
+
   // Issue #1723: Experimental compact breadcrumb nav header — synced from /api/config via settings page,
   // must apply live (unlike most Features flags, which are read once at SDK session start)
   const experimentalNavHeader = ref(readStorage('experimentalNavHeader', false))
@@ -492,6 +502,7 @@ export const useUIStore = defineStore('ui', () => {
     flatGroupMode,
     maxPeekCards,
     resumeBatchSize,
+    resumeBatchDelaySeconds,
     experimentalNavHeader,
     lastContentRoute,
 
@@ -532,6 +543,7 @@ export const useUIStore = defineStore('ui', () => {
     setFlatGroupMode,
     setMaxPeekCards,
     setResumeBatchSize,
+    setResumeBatchDelaySeconds,
     setExperimentalNavHeader,
     setLastContentRoute,
     schedulesGroupBy,
