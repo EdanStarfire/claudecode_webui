@@ -94,6 +94,18 @@
               @click.stop
               aria-label="Resume batch size"
             >
+            <span class="text-warning-emphasis small">delay</span>
+            <input
+              type="number"
+              class="form-control form-control-sm py-0"
+              style="width: 4.5rem;"
+              min="0"
+              step="1"
+              v-model.number="resumeBatchDelayInput"
+              @click.stop
+              aria-label="Resume batch delay in seconds"
+            >
+            <span class="text-warning-emphasis small">s</span>
             <button class="btn btn-sm btn-outline-secondary py-0" @click="cancelResume">Cancel</button>
             <button class="btn btn-sm btn-warning py-0" @click="confirmResume">Confirm Resume</button>
           </div>
@@ -563,6 +575,7 @@ let sessionWatchStop = null
 const stopState = ref('default') // 'default' | 'confirming' | 'stopping'
 const resumeState = ref('default') // 'default' | 'confirming' | 'resuming'
 const resumeBatchSizeInput = ref(uiStore.resumeBatchSize)
+const resumeBatchDelayInput = ref(uiStore.resumeBatchDelaySeconds)
 const stoppedCount = ref(0)
 const fleetToast = ref(null)
 let fleetToastTimer = null
@@ -638,6 +651,7 @@ async function confirmStop() {
 function beginResumeConfirm() {
   if (resumeState.value !== 'default' || stoppedCount.value === 0 || stopState.value === 'stopping') return
   resumeBatchSizeInput.value = uiStore.resumeBatchSize
+  resumeBatchDelayInput.value = uiStore.resumeBatchDelaySeconds
   resumeState.value = 'confirming'
   fleetToast.value = null
 }
@@ -648,6 +662,10 @@ function cancelResume() {
 
 async function confirmResume() {
   const batchSize = Math.max(1, parseInt(resumeBatchSizeInput.value, 10) || uiStore.resumeBatchSize)
+  const rawDelay = parseInt(resumeBatchDelayInput.value, 10)
+  const delaySeconds = Number.isFinite(rawDelay) && rawDelay >= 0
+    ? rawDelay
+    : uiStore.resumeBatchDelaySeconds
   resumeState.value = 'resuming'
   fleetToast.value = null
   try {
@@ -674,6 +692,11 @@ async function confirmResume() {
         )
       )
       settled.push(...chunkSettled)
+
+      const isLastBatch = i + batchSize >= toResume.length
+      if (delaySeconds > 0 && !isLastBatch) {
+        await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000))
+      }
     }
 
     const succeeded = toResume.filter((_, i) => settled[i].status === 'fulfilled')

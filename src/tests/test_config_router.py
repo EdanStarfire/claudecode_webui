@@ -362,6 +362,62 @@ async def test_put_config_resume_batch_size_rejects_non_int(tmp_path):
     assert resp.status_code == 400
 
 
+# ── GET/PUT /api/config — resume_batch_delay_seconds (issue #1791) ──────────
+
+@pytest.mark.asyncio
+async def test_get_config_resume_batch_delay_seconds_default(tmp_path):
+    app, _ = _make_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/config")
+    assert resp.status_code == 200
+    assert resp.json()["config"]["features"]["resume_batch_delay_seconds"] == 5
+
+
+@pytest.mark.asyncio
+async def test_put_config_resume_batch_delay_seconds_round_trip(tmp_path):
+    app, _ = _make_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        put_resp = await client.put("/api/config", json={
+            "features": {"resume_batch_delay_seconds": 12}
+        })
+        assert put_resp.status_code == 200
+        assert put_resp.json()["config"]["features"]["resume_batch_delay_seconds"] == 12
+
+        get_resp = await client.get("/api/config")
+    assert get_resp.json()["config"]["features"]["resume_batch_delay_seconds"] == 12
+
+
+@pytest.mark.asyncio
+async def test_put_config_resume_batch_delay_seconds_accepts_zero(tmp_path):
+    app, _ = _make_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.put("/api/config", json={
+            "features": {"resume_batch_delay_seconds": 0}
+        })
+    assert resp.status_code == 200
+    assert resp.json()["config"]["features"]["resume_batch_delay_seconds"] == 0
+
+
+@pytest.mark.asyncio
+async def test_put_config_resume_batch_delay_seconds_rejects_negative(tmp_path):
+    app, _ = _make_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.put("/api/config", json={
+            "features": {"resume_batch_delay_seconds": -5}
+        })
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_put_config_resume_batch_delay_seconds_rejects_non_int(tmp_path):
+    app, _ = _make_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.put("/api/config", json={
+            "features": {"resume_batch_delay_seconds": "five"}
+        })
+    assert resp.status_code == 400
+
+
 # ── GET/PUT /api/config — enable_experimental_nav_header (issue #1723) ──────
 
 @pytest.mark.asyncio

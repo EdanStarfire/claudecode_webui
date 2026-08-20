@@ -49,6 +49,7 @@ async function load() {
     originalConfig.value = JSON.parse(JSON.stringify(data.config))
     uiStore.setMaxPeekCards(config.value.features?.max_peek_cards ?? 100)
     uiStore.setResumeBatchSize(config.value.features?.resume_batch_size ?? 10)
+    uiStore.setResumeBatchDelaySeconds(config.value.features?.resume_batch_delay_seconds ?? 5)
     uiStore.setExperimentalNavHeader(config.value.features?.enable_experimental_nav_header ?? false)
   } catch (e) {
     error.value = e.message || 'Failed to load configuration'
@@ -74,6 +75,7 @@ async function save() {
     originalConfig.value = JSON.parse(JSON.stringify(data.config))
     uiStore.setMaxPeekCards(config.value.features?.max_peek_cards ?? 100)
     uiStore.setResumeBatchSize(config.value.features?.resume_batch_size ?? 10)
+    uiStore.setResumeBatchDelaySeconds(config.value.features?.resume_batch_delay_seconds ?? 5)
     uiStore.setExperimentalNavHeader(config.value.features?.enable_experimental_nav_header ?? false)
   } catch (e) {
     error.value = e.message || 'Failed to save'

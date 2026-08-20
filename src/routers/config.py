@@ -60,6 +60,11 @@ def build_router(webui) -> APIRouter:
                 if not isinstance(val, int) or val < 1:
                     raise ValueError("resume_batch_size must be a positive integer")
                 config.features.resume_batch_size = val
+            if "resume_batch_delay_seconds" in features:
+                val = features["resume_batch_delay_seconds"]
+                if not isinstance(val, int) or val < 0:
+                    raise ValueError("resume_batch_delay_seconds must be a non-negative integer")
+                config.features.resume_batch_delay_seconds = val
             if "enable_experimental_nav_header" in features:
                 val = features["enable_experimental_nav_header"]
                 if not isinstance(val, bool):

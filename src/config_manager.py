@@ -174,6 +174,7 @@ class FeaturesConfig:
     forward_subagent_text: bool = True  # Issue #1671 — forward subagent assistant text/thinking to parent stream
     allow_background_agent: bool = False  # Issue #1688 — permit Agent(run_in_background=True) in Legion sessions instead of denying (default: off, preserves #1133 behavior)
     resume_batch_size: int = 10  # Issue #1733 — default batch size for throttled "Resume Sessions"
+    resume_batch_delay_seconds: int = 5  # Issue #1791 — default pause between resume batches
     enable_experimental_nav_header: bool = False  # Issue #1723 — opt-in compact breadcrumb nav header
 
 
@@ -278,6 +279,7 @@ class AppConfig:
             forward_subagent_text=features_data.get("forward_subagent_text", True),
             allow_background_agent=features_data.get("allow_background_agent", False),
             resume_batch_size=features_data.get("resume_batch_size", 10),
+            resume_batch_delay_seconds=features_data.get("resume_batch_delay_seconds", 5),
             enable_experimental_nav_header=features_data.get(
                 "enable_experimental_nav_header", False
             ),
@@ -371,6 +373,7 @@ class AppConfig:
                 "forward_subagent_text": self.features.forward_subagent_text,
                 "allow_background_agent": self.features.allow_background_agent,
                 "resume_batch_size": self.features.resume_batch_size,
+                "resume_batch_delay_seconds": self.features.resume_batch_delay_seconds,
                 "enable_experimental_nav_header": self.features.enable_experimental_nav_header,
             },
             "proxy": {

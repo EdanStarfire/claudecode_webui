@@ -149,6 +149,26 @@
       </small>
     </div>
 
+    <div class="mb-3">
+      <label class="form-label" for="resumeBatchDelaySeconds">Resume batch delay (seconds)</label>
+      <input
+        id="resumeBatchDelaySeconds"
+        type="number"
+        class="form-control form-control-sm"
+        :class="{ 'is-invalid': resumeBatchDelayError }"
+        min="0"
+        step="1"
+        :value="config?.resume_batch_delay_seconds ?? 5"
+        @input="onResumeBatchDelayInput($event.target.value)"
+      >
+      <div v-if="resumeBatchDelayError" class="invalid-feedback">{{ resumeBatchDelayError }}</div>
+      <small class="form-text text-muted">
+        Default pause (seconds) between resume batches, after each batch's launches settle and
+        before the next batch starts (default: 5, minimum: 0 = no delay). Can be overridden
+        per-operation at the confirm step.
+      </small>
+    </div>
+
     <div class="form-check form-switch mb-3">
       <input
         class="form-check-input"
@@ -206,6 +226,7 @@ const maxMinionsError = ref(null)
 const maxPeekCardsError = ref(null)
 const maxSubagentsError = ref(null)
 const resumeBatchSizeError = ref(null)
+const resumeBatchDelayError = ref(null)
 
 function onMaxPeekCardsInput(value) {
   const parsed = parseInt(value, 10)
@@ -235,6 +256,16 @@ function onResumeBatchSizeInput(value) {
   }
   resumeBatchSizeError.value = null
   emit('update:config', { ...props.config, resume_batch_size: parsed })
+}
+
+function onResumeBatchDelayInput(value) {
+  const parsed = parseInt(value, 10)
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    resumeBatchDelayError.value = 'Must be a non-negative integer'
+    return
+  }
+  resumeBatchDelayError.value = null
+  emit('update:config', { ...props.config, resume_batch_delay_seconds: parsed })
 }
 
 function onMaxMinionsInput(value) {
