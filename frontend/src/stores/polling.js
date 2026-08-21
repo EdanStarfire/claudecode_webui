@@ -40,11 +40,12 @@ export const usePollingStore = defineStore('polling', () => {
   // Stall detector state
   let stallDetectorInterval = null
   let lastHealedAt = 0
-  const STALL_TIMEOUT_MS = 15000
-  // Issue #1795: coupling note — must stay above the server's long-poll hold time
-  // (src/routers/poll.py: effective_timeout = min(timeout, 30.0)) or healthy idle
-  // sessions will false-positive on every poll cycle.
-  const IDLE_STALL_TIMEOUT_MS = 40000
+  // Issue #1795: coupling note — the heartbeat measures poll round-trip freshness
+  // (not message content), so this must stay above the server's long-poll hold time
+  // (src/routers/poll.py: effective_timeout = min(timeout, 30.0)) regardless of
+  // is_processing, or a healthy-but-quiet connection will false-positive on every
+  // poll cycle. Applies uniformly to active and idle sessions alike.
+  const STALL_TIMEOUT_MS = 40000
   const HEAL_COOLDOWN_MS = 10000
   const STALL_CHECK_INTERVAL_MS = 5000
 
@@ -263,14 +264,14 @@ export const usePollingStore = defineStore('polling', () => {
 
     // Issue #1795: liveness is derived from the session-poll connection's own heartbeat,
     // not from is_processing (which is written exclusively by the separate UI-poll channel
-    // and can flip false while this connection is silently dead). is_processing only
-    // selects which staleness threshold applies.
+    // and can flip false while this connection is silently dead). The single threshold
+    // applies regardless of is_processing — the heartbeat measures poll round-trip
+    // freshness, which behaves identically whether the session is idle or processing.
     const heartbeatMs = sessionPollHeartbeatAt[sid]
     if (!heartbeatMs) return
 
     const stallMs = Date.now() - heartbeatMs
-    const threshold = session.is_processing ? STALL_TIMEOUT_MS : IDLE_STALL_TIMEOUT_MS
-    if (stallMs < threshold) return
+    if (stallMs < STALL_TIMEOUT_MS) return
 
     // Cooldown: prevent heal storms
     if (Date.now() - lastHealedAt < HEAL_COOLDOWN_MS) return

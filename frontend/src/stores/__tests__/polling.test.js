@@ -270,29 +270,43 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     return { pollingStore, sessionStore, messageStore, sid }
   }
 
-  it('T1: heals when is_processing flips false mid-window, before the idle threshold elapses', async () => {
-    const { pollingStore, sessionStore, messageStore, sid } = await setup({ session_id: 'sess-t1', is_processing: true })
+  it('T1: heals a stalled active-processing connection once the unified threshold elapses', async () => {
+    const { pollingStore, messageStore, sid } = await setup({ session_id: 'sess-t1', is_processing: true })
     vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
     abortAwareFetchMock()
 
     await pollingStore.connectSession(sid)
 
-    advanceTime(10000) // below the old 15s active-processing threshold
-    sessionStore.updateSession(sid, { is_processing: false })
-
-    advanceTime(31000) // total 41s since the original heartbeat -> past IDLE_STALL_TIMEOUT_MS (40s)
-    apiMock.get.mockResolvedValue({ cursor: 7 })
+    advanceTime(41000) // past the unified STALL_TIMEOUT_MS (40s) — intentional behavior change from the
+    // old 15s active-processing threshold: is_processing no longer selects a faster threshold, since the
+    // heartbeat measures poll round-trip freshness (bounded by the server's 30s clamp) which behaves the
+    // same whether the session is active or idle.
 
     await pollingStore.checkSessionStall()
     await flush()
 
     expect(messageStore.syncMessages).toHaveBeenCalledWith(sid)
-    expect(apiMock.get).toHaveBeenCalledWith(`/api/poll/session/${sid}/cursor`)
     expect(pollingStore.sessionConnected).toBe(true)
   })
 
-  it('T2a: does not heal a genuinely idle but healthy connection', async () => {
-    const { pollingStore, sid } = await setup({ session_id: 'sess-t2a', is_processing: false })
+  it('T2: heals a stalled idle connection once the unified threshold elapses', async () => {
+    const { pollingStore, messageStore, sid } = await setup({ session_id: 'sess-t2', is_processing: false })
+    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+
+    advanceTime(41000) // past STALL_TIMEOUT_MS (40s) — old is_processing-gated code would never have caught this
+
+    await pollingStore.checkSessionStall()
+    await flush()
+
+    expect(messageStore.syncMessages).toHaveBeenCalledWith(sid)
+    expect(pollingStore.sessionConnected).toBe(true)
+  })
+
+  it('T3: does not heal a genuinely idle but healthy connection', async () => {
+    const { pollingStore, sid } = await setup({ session_id: 'sess-t3', is_processing: false })
 
     let resolveFetch
     const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveFetch = resolve }))
@@ -309,36 +323,23 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(4)
   })
 
-  it('T2b: heals a genuinely idle connection once the idle threshold elapses', async () => {
-    const { pollingStore, messageStore, sid } = await setup({ session_id: 'sess-t2b', is_processing: false })
-    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
-    abortAwareFetchMock()
+  it('T3b: does not heal a healthy-but-quiet active-processing connection (unified threshold clears the 30s server clamp)', async () => {
+    const { pollingStore, sid } = await setup({ session_id: 'sess-t3b', is_processing: true })
+
+    let resolveFetch
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveFetch = resolve }))
 
     await pollingStore.connectSession(sid)
 
-    advanceTime(41000) // past IDLE_STALL_TIMEOUT_MS (40s) — old is_processing-gated code would never have caught this
-
-    await pollingStore.checkSessionStall()
-    await flush()
-
-    expect(messageStore.syncMessages).toHaveBeenCalledWith(sid)
-    expect(pollingStore.sessionConnected).toBe(true)
-  })
-
-  it('T3: still heals an active-processing stall at the original 15s threshold (regression check)', async () => {
-    const { pollingStore, messageStore, sid } = await setup({ session_id: 'sess-t3', is_processing: true })
-    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
-    abortAwareFetchMock()
-
-    await pollingStore.connectSession(sid)
-
-    advanceTime(16000) // just past STALL_TIMEOUT_MS (15s), well under IDLE_STALL_TIMEOUT_MS (40s)
-
-    await pollingStore.checkSessionStall()
-    await flush()
-
-    expect(messageStore.syncMessages).toHaveBeenCalledWith(sid)
-    expect(pollingStore.sessionConnected).toBe(true)
+    for (let i = 0; i < 3; i++) {
+      advanceTime(25000) // simulate the server holding the long-poll request open with no events,
+      // e.g. a long-running tool call with no incremental SDK messages to relay
+      resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: i + 1 }) })
+      await flush()
+      await pollingStore.checkSessionStall()
+      expect(pollingStore.sessionConnected).toBe(true)
+    }
+    expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(4)
   })
 
   it('T4: end-to-end heal cycle re-syncs via syncMessages without a manual loadMessages reload', async () => {
