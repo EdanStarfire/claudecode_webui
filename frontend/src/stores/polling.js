@@ -24,6 +24,7 @@ export const usePollingStore = defineStore('polling', () => {
   // Poll cursors
   let uiCursor = 0
   const sessionCursors = {}  // Per-session cursor cache to avoid replaying history on switch
+  const sessionPollHeartbeatAt = {}  // Per-session last-successful-poll timestamp (Issue #1795)
 
   // AbortControllers for long-poll requests
   let uiAbortController = null
@@ -40,6 +41,10 @@ export const usePollingStore = defineStore('polling', () => {
   let stallDetectorInterval = null
   let lastHealedAt = 0
   const STALL_TIMEOUT_MS = 15000
+  // Issue #1795: coupling note — must stay above the server's long-poll hold time
+  // (src/routers/poll.py: effective_timeout = min(timeout, 30.0)) or healthy idle
+  // sessions will false-positive on every poll cycle.
+  const IDLE_STALL_TIMEOUT_MS = 40000
   const HEAL_COOLDOWN_MS = 10000
   const STALL_CHECK_INTERVAL_MS = 5000
 
@@ -146,6 +151,9 @@ export const usePollingStore = defineStore('polling', () => {
 
         const data = await response.json()
         sessionRetryCount.value = 0
+        // Issue #1795: any successful response — even one carrying zero events after
+        // the server's long-poll hold — proves this connection is alive.
+        sessionPollHeartbeatAt[sessionId] = Date.now()
 
         if (data.events && data.events.length > 0) {
           for (const event of data.events) {
@@ -197,6 +205,10 @@ export const usePollingStore = defineStore('polling', () => {
       }
     }
 
+    // Issue #1795: seed the heartbeat before the loop starts so staleness is measurable
+    // from t=0 — closes a latent gap where a hung first fetch left no baseline to compare.
+    sessionPollHeartbeatAt[sessionId] = Date.now()
+
     // Capture the loop promise so disconnectSession() can await clean exit (Fix 2)
     sessionLoopExitPromise = _runSessionPollLoop(sessionId, myGeneration)
 
@@ -225,6 +237,7 @@ export const usePollingStore = defineStore('polling', () => {
 
   function resetSessionCursor(sessionId) {
     delete sessionCursors[sessionId]
+    delete sessionPollHeartbeatAt[sessionId]
   }
 
   // ========== STALL DETECTOR (Fix 5) ==========
@@ -241,22 +254,29 @@ export const usePollingStore = defineStore('polling', () => {
 
     const session = sessionStore.sessions.get(sid)
     if (!session) return
-
-    // Gate: must be actively processing and not paused (permission prompt)
-    if (!session.is_processing) return
     if (session.state === 'paused') return
 
-    const lastTs = messageStore.getLastReceivedTimestamp(sid)
-    if (!lastTs) return
-    const lastMs = (typeof lastTs === 'number') ? lastTs * 1000 : new Date(lastTs).getTime()
-    const stallMs = Date.now() - lastMs
-    if (stallMs < STALL_TIMEOUT_MS) return
+    // Issue #1795: skip while a detected fetch error is already being retried by the
+    // exponential-backoff loop — that failure mode self-heals; letting the watchdog also
+    // intervene risks a redundant/racy reconnect.
+    if (!sessionConnected.value) return
+
+    // Issue #1795: liveness is derived from the session-poll connection's own heartbeat,
+    // not from is_processing (which is written exclusively by the separate UI-poll channel
+    // and can flip false while this connection is silently dead). is_processing only
+    // selects which staleness threshold applies.
+    const heartbeatMs = sessionPollHeartbeatAt[sid]
+    if (!heartbeatMs) return
+
+    const stallMs = Date.now() - heartbeatMs
+    const threshold = session.is_processing ? STALL_TIMEOUT_MS : IDLE_STALL_TIMEOUT_MS
+    if (stallMs < threshold) return
 
     // Cooldown: prevent heal storms
     if (Date.now() - lastHealedAt < HEAL_COOLDOWN_MS) return
     lastHealedAt = Date.now()
 
-    console.warn(`[stall-heal] Session ${sid} stalled ${Math.round(stallMs / 1000)}s while is_processing=true; re-syncing`)
+    console.warn(`[stall-heal] Session ${sid} stalled ${Math.round(stallMs / 1000)}s (is_processing=${session.is_processing}); re-syncing`)
 
     // Step 1: backfill any missed messages via REST (deduplicates by message ID)
     try {
@@ -452,6 +472,7 @@ export const usePollingStore = defineStore('polling', () => {
           const sessionStore2 = useSessionStore()
           sessionStore2.recordSessionReset(resetSessionId)
           delete sessionCursors[resetSessionId]
+          delete sessionPollHeartbeatAt[resetSessionId]
         }
         break
       }
@@ -695,6 +716,7 @@ export const usePollingStore = defineStore('polling', () => {
     connectSession,
     disconnectSession,
     resetSessionCursor,
+    checkSessionStall,
     sendMessage,
     sendPermissionResponse,
     sendPermissionResponseWithInput,
