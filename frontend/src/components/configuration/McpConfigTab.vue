@@ -39,6 +39,19 @@
         </div>
         <div class="d-flex gap-1 align-items-center">
           <button
+            v-if="config.shared_connection"
+            class="btn btn-xs btn-outline-info"
+            :disabled="configStore.checkingToolsIds.has(config.id)"
+            @click="toggleTools(config)"
+            title="Attempt a live connection and list this server's tools"
+          >
+            {{
+              configStore.checkingToolsIds.has(config.id)
+                ? '…'
+                : (isToolsExpanded(config.id) ? 'Hide tools' : 'Show tools')
+            }}
+          </button>
+          <button
             v-if="vaultBaseName(config)"
             class="btn btn-xs btn-outline-warning"
             :disabled="reconnectingId === config.id"
@@ -87,6 +100,37 @@
       <div class="small text-muted mt-1">
         <span v-if="config.type === 'stdio'">{{ config.command }} {{ (config.args || []).join(' ') }}</span>
         <span v-else>{{ config.url }}</span>
+      </div>
+
+      <!-- Show tools result panel (issue #1799) -->
+      <div v-if="isToolsExpanded(config.id)" class="tools-panel mt-2 p-2 border rounded">
+        <div v-if="configStore.checkingToolsIds.has(config.id)" class="small text-muted d-flex align-items-center gap-2">
+          <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+          Checking connection… this can take up to 35s for an unreachable server.
+        </div>
+        <template v-else-if="toolsResultFor(config.id)">
+          <div class="d-flex align-items-center gap-2 mb-1">
+            <span class="badge" :class="toolsStatusBadgeClass(toolsResultFor(config.id).status)">
+              {{ toolsResultFor(config.id).status }}
+            </span>
+            <span v-if="toolsResultFor(config.id).status === 'needs-auth'" class="small text-muted">
+              No stored OAuth token — connect above, then check again.
+            </span>
+            <span v-if="toolsResultFor(config.id).status === 'disabled'" class="small text-muted">
+              Server is disabled.
+            </span>
+          </div>
+          <div v-if="toolsResultFor(config.id).status === 'failed' && toolsResultFor(config.id).error" class="text-danger small mb-1">
+            {{ toolsResultFor(config.id).error }}
+          </div>
+          <McpToolList
+            v-if="toolsResultFor(config.id).tools?.length"
+            :tools="toolsResultFor(config.id).tools"
+          />
+          <div v-else-if="toolsResultFor(config.id).status === 'connected'" class="small text-muted">
+            Connected — no tools reported.
+          </div>
+        </template>
       </div>
     </div>
 
@@ -439,6 +483,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useMcpConfigStore, OAUTH_STATUS } from '@/stores/mcpConfig'
 import { useSecretsStore } from '@/stores/secrets'
+import McpToolList from '@/components/session/McpToolList.vue'
 
 const configStore = useMcpConfigStore()
 const secretsStore = useSecretsStore()
@@ -489,6 +534,39 @@ const connectingId = ref(null)
 const disconnectingId = ref(null)
 const importingId = ref(null)
 const reconnectingId = ref(null)  // Issue #1387: tracks in-progress Reconnect
+
+// Show tools state (issue #1799)
+const expandedToolsIds = ref(new Set())
+
+function isToolsExpanded(configId) {
+  return expandedToolsIds.value.has(configId)
+}
+
+function toolsResultFor(configId) {
+  return configStore.toolsByConfigId.get(configId)
+}
+
+const _TOOLS_STATUS_BADGE_CLASS = {
+  connected: 'bg-success',
+  failed: 'bg-danger',
+  disabled: 'bg-secondary',
+  'needs-auth': 'bg-needs-auth',
+}
+
+function toolsStatusBadgeClass(status) {
+  return _TOOLS_STATUS_BADGE_CLASS[status] || 'bg-secondary'
+}
+
+async function toggleTools(config) {
+  if (expandedToolsIds.value.has(config.id)) {
+    expandedToolsIds.value.delete(config.id)
+    expandedToolsIds.value = new Set(expandedToolsIds.value)
+    return
+  }
+  expandedToolsIds.value.add(config.id)
+  expandedToolsIds.value = new Set(expandedToolsIds.value)
+  await configStore.fetchTools(config.id)
+}
 
 // OAuth import-as-secret modal state
 const oauthImportConfig = ref(null)
@@ -960,5 +1038,14 @@ function cancelImport() {
 
 .preview-item:last-child {
   border-bottom: none;
+}
+
+.tools-panel {
+  background: var(--bs-secondary-bg);
+}
+
+.bg-needs-auth {
+  background-color: #fd7e14 !important;
+  color: #fff;
 }
 </style>
