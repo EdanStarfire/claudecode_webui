@@ -408,6 +408,7 @@ class ClaudeWebUI:
     async def _broadcast_schedule_event(self, legion_id: str, event: dict):
         """Broadcast schedule event to UI poll queue."""
         try:
+            event["legion_id"] = legion_id
             self.ui_queue.append(event)
         except Exception:
             logger.exception("Error appending schedule event")
