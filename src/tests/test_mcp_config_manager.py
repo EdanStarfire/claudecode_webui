@@ -4,7 +4,9 @@ Covers to_sdk_config() oauth pass-through and from_dict() backward compat
 for the oauth_client_id / oauth_callback_port fields added in #1109.
 """
 
-from src.mcp_config_manager import McpServerConfig, McpServerType
+import pytest
+
+from src.mcp_config_manager import McpConfigManager, McpServerConfig, McpServerType
 
 
 def _http_config(**kwargs) -> McpServerConfig:
@@ -211,3 +213,136 @@ def test_shared_connection_persists_to_disk(tmp_path):
         data = json.load(f)
     restored = McpServerConfig.from_dict(data)
     assert restored.shared_connection is True
+
+
+# ---------------------------------------------------------------------------
+# Issue #1789: oauth_custom_callback_path / oauth_custom_callback_port
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def manager(tmp_path):
+    return McpConfigManager(tmp_path)
+
+
+async def _http_manager_config(manager, name="server", **kwargs):
+    return await manager.create_config(
+        name=name,
+        server_type=McpServerType.HTTP,
+        url="https://example.com/mcp",
+        shared_connection=True,
+        **kwargs,
+    )
+
+
+async def test_custom_callback_accepted_with_shared_connection(manager):
+    cfg = await _http_manager_config(
+        manager,
+        oauth_custom_callback_path="/callback",
+        oauth_custom_callback_port=8765,
+    )
+    assert cfg.oauth_custom_callback_path == "/callback"
+    assert cfg.oauth_custom_callback_port == 8765
+
+
+async def test_custom_callback_path_only_accepted(manager):
+    cfg = await _http_manager_config(manager, oauth_custom_callback_path="/callback")
+    assert cfg.oauth_custom_callback_path == "/callback"
+    assert cfg.oauth_custom_callback_port is None
+
+
+async def test_custom_callback_port_only_accepted(manager):
+    cfg = await _http_manager_config(manager, oauth_custom_callback_port=8765)
+    assert cfg.oauth_custom_callback_port == 8765
+    assert cfg.oauth_custom_callback_path is None
+
+
+async def test_custom_callback_rejected_without_shared_connection(manager):
+    with pytest.raises(ValueError, match="shared_connection"):
+        await manager.create_config(
+            name="server",
+            server_type=McpServerType.HTTP,
+            url="https://example.com/mcp",
+            shared_connection=False,
+            oauth_custom_callback_path="/callback",
+        )
+
+
+async def test_custom_callback_path_cannot_equal_default(manager):
+    with pytest.raises(ValueError, match="default"):
+        await _http_manager_config(manager, oauth_custom_callback_path="/oauth/callback")
+
+
+async def test_custom_callback_port_conflicts_with_main_app_port(manager):
+    with pytest.raises(ValueError, match="main application"):
+        await _http_manager_config(
+            manager, oauth_custom_callback_port=8001, main_app_port=8001
+        )
+
+
+async def test_custom_callback_port_conflicts_with_litellm_port(manager):
+    with pytest.raises(ValueError, match="LiteLLM"):
+        await _http_manager_config(
+            manager, oauth_custom_callback_port=4000, litellm_port=4000
+        )
+
+
+async def test_duplicate_port_and_path_pair_rejected(manager):
+    await _http_manager_config(
+        manager, name="server-a", oauth_custom_callback_path="/callback", oauth_custom_callback_port=8765
+    )
+    with pytest.raises(ValueError, match="already used"):
+        await _http_manager_config(
+            manager, name="server-b", oauth_custom_callback_path="/callback", oauth_custom_callback_port=8765
+        )
+
+
+async def test_shared_port_with_distinct_paths_allowed(manager):
+    """Two configs may share a custom port via distinct paths (routed to one listener)."""
+    a = await _http_manager_config(
+        manager, name="server-a", oauth_custom_callback_path="/callback-a", oauth_custom_callback_port=8765
+    )
+    b = await _http_manager_config(
+        manager, name="server-b", oauth_custom_callback_path="/callback-b", oauth_custom_callback_port=8765
+    )
+    assert a.oauth_custom_callback_port == b.oauth_custom_callback_port == 8765
+    assert a.oauth_custom_callback_path != b.oauth_custom_callback_path
+
+
+async def test_duplicate_path_only_pair_rejected(manager):
+    """Two path-only configs (no custom port) at the same path collide on the main app."""
+    await _http_manager_config(manager, name="server-a", oauth_custom_callback_path="/callback")
+    with pytest.raises(ValueError, match="already used"):
+        await _http_manager_config(manager, name="server-b", oauth_custom_callback_path="/callback")
+
+
+async def test_default_configs_never_conflict_with_each_other(manager):
+    """Two configs with no custom path/port at all never collide (shared static route)."""
+    await _http_manager_config(manager, name="server-a")
+    await _http_manager_config(manager, name="server-b")  # must not raise
+
+
+async def test_update_disallows_toggling_shared_connection_off_with_custom_path_set(manager):
+    cfg = await _http_manager_config(manager, oauth_custom_callback_path="/callback")
+    with pytest.raises(ValueError, match="shared_connection"):
+        await manager.update_config(cfg.id, shared_connection=False)
+
+
+async def test_update_allows_resaving_own_config_unchanged(manager):
+    cfg = await _http_manager_config(
+        manager, oauth_custom_callback_path="/callback", oauth_custom_callback_port=8765
+    )
+    updated = await manager.update_config(cfg.id, name="renamed-server")
+    assert updated.oauth_custom_callback_path == "/callback"
+    assert updated.oauth_custom_callback_port == 8765
+
+
+async def test_update_rejects_new_conflict_with_another_config(manager):
+    await _http_manager_config(
+        manager, name="server-a", oauth_custom_callback_path="/callback", oauth_custom_callback_port=8765
+    )
+    cfg_b = await _http_manager_config(
+        manager, name="server-b", oauth_custom_callback_path="/other", oauth_custom_callback_port=8765
+    )
+    with pytest.raises(ValueError, match="already used"):
+        await manager.update_config(cfg_b.id, oauth_custom_callback_path="/callback")

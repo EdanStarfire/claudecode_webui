@@ -182,6 +182,8 @@ def main():
         available_fixtures=available_fixtures,
         auth_token=auth_token if auth_enabled else None,
         auth_enabled=auth_enabled,
+        host=args.host,
+        port=args.port,
     )
 
     # Add startup/shutdown events

@@ -1,13 +1,11 @@
 """MCP config and OAuth endpoints: /api/mcp-configs, /oauth/callback"""
 
-import html
-import logging
-
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from ..exception_handlers import handle_exceptions
 from ..mcp_config_manager import McpServerType
+from ..oauth_callback_listener_manager import render_oauth_callback
 from ._models import (
     McpConfigCreateRequest,
     McpConfigExportRequest,
@@ -16,8 +14,6 @@ from ._models import (
     McpOAuthImportAsSecretRequest,
     McpOAuthInitiateRequest,
 )
-
-logger = logging.getLogger(__name__)
 
 
 def build_router(webui) -> APIRouter:
@@ -33,7 +29,17 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("create MCP config", value_error_status=400)
     async def create_mcp_config(request: McpConfigCreateRequest):
         """Create a new global MCP server configuration"""
-        return await webui.service.create_mcp_config(
+        if request.oauth_custom_callback_path and webui.oauth_callback_path_conflicts_with_app_route(
+            request.oauth_custom_callback_path
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"oauth_custom_callback_path '{request.oauth_custom_callback_path}' "
+                    "conflicts with an existing application route"
+                ),
+            )
+        result = await webui.service.create_mcp_config(
             name=request.name,
             server_type=request.type,
             command=request.command,
@@ -46,7 +52,13 @@ def build_router(webui) -> APIRouter:
             oauth_client_id=request.oauth_client_id,
             oauth_callback_port=request.oauth_callback_port,
             shared_connection=request.shared_connection,
+            oauth_custom_callback_path=request.oauth_custom_callback_path,
+            oauth_custom_callback_port=request.oauth_custom_callback_port,
         )
+        # Issue #1789: wire the custom callback route/listener synchronously with the write.
+        config_obj = await webui.coordinator.mcp_config_manager.get_config(result["id"])
+        await webui._sync_oauth_callback_for_config(config_obj)
+        return result
 
     @router.post("/api/mcp-configs/export")
     @handle_exceptions("export MCP configs")
@@ -97,7 +109,29 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("update MCP config", value_error_status=400)
     async def update_mcp_config(config_id: str, request: McpConfigUpdateRequest):
         """Update an existing MCP server configuration"""
-        return await webui.service.update_mcp_config(
+        # Issue #1789: only forward oauth_custom_callback_path/port when the caller actually
+        # set them. Unlike the request's other fields, these two are the sole way to *clear*
+        # a live custom callback back to the default — always forwarding them (even when
+        # omitted, where Pydantic defaults to None) would silently wipe an existing custom
+        # callback on any partial update that doesn't happen to resend it (e.g. `{"enabled":
+        # false}`), tearing down its listener/route as an unintended side effect.
+        custom_callback_kwargs = {}
+        if "oauth_custom_callback_path" in request.model_fields_set:
+            custom_callback_kwargs["oauth_custom_callback_path"] = request.oauth_custom_callback_path
+            if request.oauth_custom_callback_path and webui.oauth_callback_path_conflicts_with_app_route(
+                request.oauth_custom_callback_path
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"oauth_custom_callback_path '{request.oauth_custom_callback_path}' "
+                        "conflicts with an existing application route"
+                    ),
+                )
+        if "oauth_custom_callback_port" in request.model_fields_set:
+            custom_callback_kwargs["oauth_custom_callback_port"] = request.oauth_custom_callback_port
+
+        result = await webui.service.update_mcp_config(
             config_id,
             name=request.name,
             server_type=request.type,
@@ -111,7 +145,14 @@ def build_router(webui) -> APIRouter:
             oauth_client_id=request.oauth_client_id,
             oauth_callback_port=request.oauth_callback_port,
             shared_connection=request.shared_connection,
+            **custom_callback_kwargs,
         )
+        # Issue #1789: wire the custom callback route/listener synchronously with the write
+        # (covers enable/disable too, since that's just enabled=False via this same endpoint).
+        config_obj = await webui.coordinator.mcp_config_manager.get_config(config_id)
+        if config_obj is not None:
+            await webui._sync_oauth_callback_for_config(config_obj)
+        return result
 
     @router.delete("/api/mcp-configs/{config_id}")
     @handle_exceptions("delete MCP config")
@@ -120,6 +161,7 @@ def build_router(webui) -> APIRouter:
         success = await webui.service.delete_mcp_config(config_id)
         if not success:
             raise HTTPException(status_code=404, detail="MCP config not found")
+        await webui._remove_oauth_callback_for_config(config_id)
         return {"deleted": True}
 
     # ========== MCP OAuth Endpoints (issue #813) ==========
@@ -131,61 +173,13 @@ def build_router(webui) -> APIRouter:
 
         Exempt from auth middleware — this route is reached before any token exists.
         On success broadcasts mcp_oauth_complete to all UI WebSocket clients.
+
+        Shares its parsing/rendering logic with per-config custom callback routes/listeners
+        (issue #1789) via render_oauth_callback().
         """
-        code = request.query_params.get("code")
-        state = request.query_params.get("state")
-        error = request.query_params.get("error")
-
-        if error:
-            error_desc = request.query_params.get("error_description", error)
-            return HTMLResponse(
-                content=f"""<!DOCTYPE html>
-<html><head><title>OAuth Error</title></head>
-<body style="font-family:sans-serif;text-align:center;padding:40px">
-<h2>&#x274C; Authorization Failed</h2>
-<p>{html.escape(error_desc)}</p>
-<p>You may close this window.</p>
-</body></html>""",
-                status_code=400,
-            )
-
-        if not code or not state:
-            return HTMLResponse(
-                content="""<!DOCTYPE html>
-<html><head><title>OAuth Error</title></head>
-<body style="font-family:sans-serif;text-align:center;padding:40px">
-<h2>&#x274C; Missing Parameters</h2>
-<p>Authorization code or state parameter missing.</p>
-<p>You may close this window.</p>
-</body></html>""",
-                status_code=400,
-            )
-
-        try:
-            server_id = await webui.service.oauth_complete_flow(state, code)
-            # Append OAuth completion to UI poll queue
-            webui._broadcast_mcp_oauth_complete(server_id)
-            return HTMLResponse(
-                content="""<!DOCTYPE html>
-<html><head><title>Connected</title></head>
-<body style="font-family:sans-serif;text-align:center;padding:40px">
-<h2>&#x2705; Connected Successfully</h2>
-<p>MCP server authorized. You may close this window.</p>
-<script>window.close();</script>
-</body></html>"""
-            )
-        except Exception as e:
-            logger.exception("OAuth callback error")
-            return HTMLResponse(
-                content=f"""<!DOCTYPE html>
-<html><head><title>OAuth Error</title></head>
-<body style="font-family:sans-serif;text-align:center;padding:40px">
-<h2>&#x274C; Authorization Failed</h2>
-<p>{html.escape(str(e))}</p>
-<p>You may close this window.</p>
-</body></html>""",
-                status_code=400,
-            )
+        return await render_oauth_callback(
+            request, webui.coordinator.oauth_callback_listener_manager.complete_and_broadcast
+        )
 
     @router.post("/api/mcp-configs/{config_id}/oauth/initiate")
     @handle_exceptions("initiate MCP OAuth")

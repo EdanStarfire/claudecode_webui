@@ -115,10 +115,26 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
     }
   }
 
+  /**
+   * Build the redirect_uri for an OAuth flow, honoring a config's custom callback
+   * path/port (issue #1789). Falls back to today's exact behavior when neither is set.
+   *
+   * Deliberately built from protocol + hostname (not window.location.origin) so a custom
+   * port override doesn't pick up the browser's *current* port (e.g. the Vite dev port)
+   * when the operator's OAuth app is registered against a different port on the same host.
+   */
+  function buildRedirectUri(config) {
+    const protocol = window.location.protocol
+    const hostname = window.location.hostname
+    const port = config?.oauth_custom_callback_port
+    const path = config?.oauth_custom_callback_path || '/oauth/callback'
+    const authority = port ? `${hostname}:${port}` : window.location.host
+    return `${protocol}//${authority}${path}`
+  }
+
   async function initiateOAuth(configId) {
-    // redirect_uri uses current origin — Vite proxies /oauth to the backend in dev,
-    // and in production the backend serves everything directly
-    const redirectUri = `${window.location.origin}/oauth/callback`
+    const config = getConfig(configId)
+    const redirectUri = buildRedirectUri(config)
     return await api.post(`/api/mcp-configs/${configId}/oauth/initiate`, { redirect_uri: redirectUri })
   }
 
@@ -169,6 +185,7 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
     exportConfigs,
     importConfigs,
     fetchOAuthStatus,
+    buildRedirectUri,
     initiateOAuth,
     disconnectOAuth,
     importOAuthAsSecret,
