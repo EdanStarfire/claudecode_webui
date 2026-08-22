@@ -55,6 +55,12 @@ class McpServerConfig:
     oauth_callback_port: int | None = None
     # Issue #1484: route through a single shared upstream connection (opt-in)
     shared_connection: bool = False
+    # Issue #1789: per-server custom OAuth callback path/port for Shared MCP servers.
+    # Distinct from oauth_callback_port above (issue #1109), which is dead for the web
+    # OAuth flow — these are read by OAuthCallbackListenerManager / the dynamic main-app
+    # route helpers, and only take effect when shared_connection=True.
+    oauth_custom_callback_path: str | None = None
+    oauth_custom_callback_port: int | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -76,6 +82,8 @@ class McpServerConfig:
         data.setdefault('oauth_client_id', None)
         data.setdefault('oauth_callback_port', None)
         data.setdefault('shared_connection', False)
+        data.setdefault('oauth_custom_callback_path', None)
+        data.setdefault('oauth_custom_callback_port', None)
         if 'type' in data and isinstance(data['type'], str):
             data['type'] = McpServerType(data['type'])
         if isinstance(data.get('created_at'), str):
@@ -179,6 +187,10 @@ class McpConfigManager:
         oauth_client_id: str | None = None,
         oauth_callback_port: int | None = None,
         shared_connection: bool = False,
+        oauth_custom_callback_path: str | None = None,
+        oauth_custom_callback_port: int | None = None,
+        main_app_port: int | None = None,
+        litellm_port: int | None = None,
     ) -> McpServerConfig:
         """Create a new MCP server configuration."""
         if not name or not name.strip():
@@ -200,6 +212,15 @@ class McpConfigManager:
         if any(c.slug == slug for c in self.configs.values()):
             raise ValueError(f"MCP server with name '{name}' (slug: {slug}) already exists")
 
+        self._validate_custom_callback(
+            path=oauth_custom_callback_path,
+            port=oauth_custom_callback_port,
+            shared_connection=shared_connection,
+            main_app_port=main_app_port,
+            litellm_port=litellm_port,
+            exclude_config_id=None,
+        )
+
         config = McpServerConfig(
             id=str(uuid.uuid4()),
             name=name.strip(),
@@ -215,12 +236,67 @@ class McpConfigManager:
             oauth_client_id=oauth_client_id,
             oauth_callback_port=oauth_callback_port,
             shared_connection=shared_connection,
+            oauth_custom_callback_path=oauth_custom_callback_path,
+            oauth_custom_callback_port=oauth_custom_callback_port,
         )
 
         await self._save_config(config)
         self.configs[config.id] = config
         mcp_logger.info(f"Created MCP config: {config.name} ({config.id})")
         return config
+
+    def _validate_custom_callback(
+        self,
+        *,
+        path: str | None,
+        port: int | None,
+        shared_connection: bool,
+        main_app_port: int | None,
+        litellm_port: int | None,
+        exclude_config_id: str | None,
+    ) -> None:
+        """Validate a custom OAuth callback path/port combo (issue #1789, AC2/AC7).
+
+        Called with the *effective* final state (existing config values merged with
+        any values being changed by this call) so toggling shared_connection off while
+        leaving custom fields untouched is still caught.
+        """
+        if path is None and port is None:
+            return  # uses the default shared /oauth/callback route — nothing to validate
+
+        if not shared_connection:
+            raise ValueError(
+                "oauth_custom_callback_path/oauth_custom_callback_port require "
+                "shared_connection=True"
+            )
+
+        if path == "/oauth/callback":
+            raise ValueError(
+                "oauth_custom_callback_path cannot be the default '/oauth/callback' path"
+            )
+
+        if port is not None:
+            if main_app_port is not None and port == main_app_port:
+                raise ValueError(
+                    f"Custom callback port {port} conflicts with the main application's own port"
+                )
+            if litellm_port is not None and port == litellm_port:
+                raise ValueError(
+                    f"Custom callback port {port} conflicts with the LiteLLM proxy port"
+                )
+
+        effective_path = path or "/oauth/callback"
+        for other in self.configs.values():
+            if other.id == exclude_config_id or not other.enabled:
+                continue
+            if other.oauth_custom_callback_path is None and other.oauth_custom_callback_port is None:
+                continue  # other config uses the default route — no collision possible
+            other_path = other.oauth_custom_callback_path or "/oauth/callback"
+            if port == other.oauth_custom_callback_port and effective_path == other_path:
+                raise ValueError(
+                    f"Custom callback (port={port}, path={effective_path}) is already used "
+                    f"by MCP server '{other.name}'"
+                )
 
     async def get_config(self, config_id: str) -> McpServerConfig | None:
         """Get config by ID."""
@@ -245,6 +321,10 @@ class McpConfigManager:
         oauth_client_id=_UNSET,
         oauth_callback_port=_UNSET,
         shared_connection: bool | None = None,
+        oauth_custom_callback_path=_UNSET,
+        oauth_custom_callback_port=_UNSET,
+        main_app_port: int | None = None,
+        litellm_port: int | None = None,
         shared_mcp_manager=None,
     ) -> McpServerConfig:
         """Update existing MCP server configuration."""
@@ -253,6 +333,28 @@ class McpConfigManager:
             raise ValueError(f"MCP config {config_id} not found")
 
         old_slug = config.slug
+
+        effective_path = (
+            config.oauth_custom_callback_path
+            if oauth_custom_callback_path is _UNSET
+            else oauth_custom_callback_path
+        )
+        effective_port = (
+            config.oauth_custom_callback_port
+            if oauth_custom_callback_port is _UNSET
+            else oauth_custom_callback_port
+        )
+        effective_shared_connection = (
+            config.shared_connection if shared_connection is None else shared_connection
+        )
+        self._validate_custom_callback(
+            path=effective_path,
+            port=effective_port,
+            shared_connection=effective_shared_connection,
+            main_app_port=main_app_port,
+            litellm_port=litellm_port,
+            exclude_config_id=config_id,
+        )
 
         if name is not None and name.strip() != config.name:
             new_slug = _slugify(name)
@@ -290,6 +392,10 @@ class McpConfigManager:
             config.oauth_callback_port = oauth_callback_port
         if shared_connection is not None:
             config.shared_connection = shared_connection
+        if oauth_custom_callback_path is not _UNSET:
+            config.oauth_custom_callback_path = oauth_custom_callback_path
+        if oauth_custom_callback_port is not _UNSET:
+            config.oauth_custom_callback_port = oauth_custom_callback_port
 
         config.updated_at = datetime.now(UTC)
 

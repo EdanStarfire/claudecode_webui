@@ -268,6 +268,36 @@
             />
           </div>
         </div>
+
+        <!-- Custom web OAuth callback path/port (issue #1789) — Shared MCP servers only -->
+        <div v-if="form.shared_connection" class="mb-2 border rounded p-2 bg-light">
+          <div class="fw-medium mb-1">Custom Callback (Web OAuth) <span class="text-muted fw-normal">(optional)</span></div>
+          <p class="text-muted small mb-1">
+            Overrides where this server's OAuth provider redirects back to <em>this WebUI</em> —
+            use when the provider's app registration requires a specific callback path or port.
+            Distinct from the "Callback Port" above, which is unrelated CLI-managed OAuth passthrough.
+          </p>
+          <div class="mb-1">
+            <label class="form-label mb-0">Custom callback path</label>
+            <input
+              type="text"
+              class="form-control form-control-sm"
+              v-model="form.oauth_custom_callback_path"
+              placeholder="e.g., /callback (default: /oauth/callback)"
+            />
+          </div>
+          <div>
+            <label class="form-label mb-0">Custom callback port (web OAuth)</label>
+            <input
+              type="number"
+              class="form-control form-control-sm"
+              v-model.number="form.oauth_custom_callback_port"
+              placeholder="e.g., 8765 (default: this server's own port)"
+              min="1"
+              max="65535"
+            />
+          </div>
+        </div>
       </template>
 
       <div class="form-check mb-2">
@@ -433,6 +463,8 @@ const form = reactive({
   oauth_scope: '',
   oauth_client_id: '',
   oauth_callback_port: null,
+  oauth_custom_callback_path: '',
+  oauth_custom_callback_port: null,
 })
 
 const rawArgs = ref('')
@@ -665,6 +697,8 @@ function resetForm() {
   form.oauth_scope = ''
   form.oauth_client_id = ''
   form.oauth_callback_port = null
+  form.oauth_custom_callback_path = ''
+  form.oauth_custom_callback_port = null
   editingId.value = null
   formError.value = null
   newEnvKey.value = ''
@@ -694,6 +728,8 @@ function editConfig(config) {
   form.oauth_scope = config.oauth_scope || ''
   form.oauth_client_id = config.oauth_client_id || ''
   form.oauth_callback_port = config.oauth_callback_port || null
+  form.oauth_custom_callback_path = config.oauth_custom_callback_path || ''
+  form.oauth_custom_callback_port = config.oauth_custom_callback_port || null
   formError.value = null
   showForm.value = true
 }
@@ -750,6 +786,10 @@ async function saveForm() {
       }
       data.oauth_client_id = form.oauth_client_id.trim() || null
       data.oauth_callback_port = form.oauth_callback_port ? parseInt(form.oauth_callback_port, 10) : null
+      data.oauth_custom_callback_path = form.oauth_custom_callback_path.trim() || null
+      data.oauth_custom_callback_port = form.oauth_custom_callback_port
+        ? parseInt(form.oauth_custom_callback_port, 10)
+        : null
     }
 
     if (editingId.value) {

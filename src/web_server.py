@@ -158,11 +158,17 @@ class ClaudeWebUI:
                  mock_sdk: bool = False, fixtures_dir: Path | None = None,
                  available_fixtures: list[str] | None = None,
                  config_file: Path | None = None,
-                 auth_token: str | None = None, auth_enabled: bool = False):
+                 auth_token: str | None = None, auth_enabled: bool = False,
+                 host: str = "127.0.0.1", port: int = 8000):
         self.app = FastAPI(title="Claude Code WebUI", version="1.0.0")
-        self.coordinator = SessionCoordinator(data_dir, experimental=experimental)
+        self.host = host
+        self.port = port
+        self.coordinator = SessionCoordinator(data_dir, experimental=experimental, host=host, port=port)
         self.service = ApplicationService(self.coordinator)
         self.config_file = config_file
+        # Issue #1789: track config_id -> path for dynamic (path-only, no custom port) OAuth
+        # callback routes registered directly on the main app's router.
+        self._dynamic_oauth_routes: dict[str, str] = {}
 
         # Authentication (issue #728)
         self.auth_token = auth_token
@@ -273,6 +279,12 @@ class ClaudeWebUI:
         self.coordinator.oauth_refresh_manager.set_broadcast_callback(self._broadcast_mcp_oauth_refreshed)
         logger.info("OAuth refresh broadcast callback injected into OAuthRefreshManager")
 
+        # Issue #1789: Inject OAuth completion broadcast callback into OAuthCallbackListenerManager
+        self.coordinator.oauth_callback_listener_manager.set_broadcast_callback(
+            self._broadcast_mcp_oauth_complete
+        )
+        logger.info("OAuth completion broadcast callback injected into OAuthCallbackListenerManager")
+
         # Issue #1387: Wire vault refresh manager service + broadcast callback
         self.coordinator.vault_refresh_manager.set_service(self.service)
         self.coordinator.vault_refresh_manager.set_broadcast_callback(self._broadcast_vault_secret_event)
@@ -289,6 +301,15 @@ class ClaudeWebUI:
         # Serve root-level public files (favicons, robots.txt, etc.) from dist/ root.
         # Registered after all API routes so it only handles paths that don't match any route.
         self.app.mount("/", StaticFiles(directory=str(static_dir)), name="static-root")
+
+        # Issue #1789: snapshot every literal path this app already owns, taken once here
+        # (before any dynamic OAuth callback route is ever registered). Used to reject a
+        # custom callback path that would otherwise silently shadow a real endpoint —
+        # captured now, not read live from app.router.routes, so it can't include our own
+        # later dynamic insertions.
+        self._reserved_route_paths: frozenset[str] = frozenset(
+            r.path for r in self.app.router.routes if getattr(r, "path", None)
+        )
 
     def _get_permission_callback_factory(self):
         """
@@ -438,6 +459,108 @@ class ClaudeWebUI:
         except Exception:
             logger.exception("Error appending mcp_oauth_complete")
 
+    # ── Issue #1789: custom OAuth callback path/port for Shared MCP servers ────────────
+
+    def oauth_callback_path_conflicts_with_app_route(self, path: str) -> bool:
+        """True if `path` collides with a real, pre-existing application route.
+
+        Checked by routers/mcp.py before saving a custom callback path — without this, a
+        path like "/health" or "/api/mcp-configs" would silently shadow the real endpoint
+        once inserted as a dynamic route (and deleting the MCP config later would strip
+        every route matching that path, including the real one).
+        """
+        return path in self._reserved_route_paths
+
+    def _add_dynamic_oauth_route(self, path: str) -> None:
+        """Register a dynamic OAuth callback route directly on the main app (path-only
+        custom callback case — no dedicated listener/port involved).
+
+        Verified safe against the installed fastapi==0.124.4/starlette==0.50.0: Starlette's
+        `Router.app()` scans `self.routes` synchronously on every request with no `await`,
+        so appending here takes effect starting with the very next request — no restart.
+        This is race-free only because this app runs a single uvicorn worker on a single
+        event loop (the route-matching loop can't be interleaved with a concurrent request's
+        route mutation). If this app is ever run with multiple uvicorn workers, route
+        registration would need to be synchronized across worker processes instead.
+
+        Route add and EXEMPT_PATHS add are deliberately paired in this one method — an
+        unauthenticated route with no exemption 401s before reaching the handler; an
+        exemption with no route just 404s. See _remove_dynamic_oauth_route for the paired
+        teardown.
+
+        Inserted at the front of the route list, not appended — `_setup_routes()` mounts a
+        catch-all `StaticFiles` at "/" as the very last route (to serve the Vue SPA for any
+        unmatched path). Starlette's Router stops at the first route whose `.matches()`
+        returns FULL, so appending after that mount would mean it's always shadowed;
+        inserting first guarantees this specific path is checked before the catch-all.
+        """
+        from starlette.routing import Route
+
+        complete_flow = self.coordinator.oauth_callback_listener_manager.complete_and_broadcast
+
+        async def _handler(request):
+            from .oauth_callback_listener_manager import render_oauth_callback
+            return await render_oauth_callback(request, complete_flow)
+
+        self.app.router.routes.insert(0, Route(path, _handler, methods=["GET"]))
+        AuthMiddleware.EXEMPT_PATHS.add(path)
+        logger.info(f"Registered dynamic OAuth callback route: {path}")
+
+    def _remove_dynamic_oauth_route(self, path: str) -> None:
+        """Remove a dynamic OAuth callback route + its EXEMPT_PATHS entry (paired teardown).
+
+        Verified to take effect starting with the very next request — see
+        _add_dynamic_oauth_route for the safety argument.
+        """
+        self.app.router.routes[:] = [
+            r for r in self.app.router.routes if getattr(r, "path", None) != path
+        ]
+        AuthMiddleware.EXEMPT_PATHS.discard(path)
+        logger.info(f"Removed dynamic OAuth callback route: {path}")
+
+    async def _sync_oauth_callback_for_config(self, config) -> None:
+        """Reconcile custom OAuth callback routing/listener state for one MCP config.
+
+        Runs synchronously with every create/update config write so there's never a window
+        where a config claims a custom callback that isn't actually being served. Safe to
+        call unconditionally (idempotent no-op when the config has no custom path/port).
+        """
+        config_id = config.id
+        wants_custom = bool(
+            config.enabled
+            and config.shared_connection
+            and (config.oauth_custom_callback_path or config.oauth_custom_callback_port)
+        )
+        wants_listener = wants_custom and (
+            config.oauth_custom_callback_port is not None
+            and config.oauth_custom_callback_port != self.port
+        )
+        wants_dynamic_route = wants_custom and not wants_listener
+        desired_path = (config.oauth_custom_callback_path or "/oauth/callback") if wants_custom else None
+
+        current_path = self._dynamic_oauth_routes.get(config_id)
+        if wants_dynamic_route:
+            if current_path != desired_path:
+                if current_path is not None:
+                    self._remove_dynamic_oauth_route(current_path)
+                self._add_dynamic_oauth_route(desired_path)
+                self._dynamic_oauth_routes[config_id] = desired_path
+        elif current_path is not None:
+            self._remove_dynamic_oauth_route(current_path)
+            del self._dynamic_oauth_routes[config_id]
+
+        if wants_listener:
+            await self.coordinator.oauth_callback_listener_manager.apply_config(config)
+        else:
+            await self.coordinator.oauth_callback_listener_manager.remove_config(config_id)
+
+    async def _remove_oauth_callback_for_config(self, config_id: str) -> None:
+        """Tear down any dynamic route / listener registration for a deleted config."""
+        path = self._dynamic_oauth_routes.pop(config_id, None)
+        if path is not None:
+            self._remove_dynamic_oauth_route(path)
+        await self.coordinator.oauth_callback_listener_manager.remove_config(config_id)
+
     def _broadcast_vault_secret_event(self, secret_name: str, error: str | None) -> None:
         """Issue #1387: Emit secret_refreshed or secret_refresh_failed to the UI poll queue."""
         try:
@@ -555,6 +678,19 @@ class ClaudeWebUI:
                 "LiteLLM proxy failed to start — catalog-selected sessions will be unavailable; "
                 "native sessions continue normally"
             )
+
+        # Issue #1789: start custom OAuth callback routes/listeners for already-configured
+        # MCP servers (path-only dynamic routes + dedicated custom-port listeners).
+        existing_mcp_configs = await self.coordinator.mcp_config_manager.list_configs()
+        for mcp_cfg in existing_mcp_configs:
+            try:
+                await self._sync_oauth_callback_for_config(mcp_cfg)
+            except Exception:
+                logger.exception(
+                    f"Failed to start OAuth callback routing for MCP config {mcp_cfg.id} — "
+                    "custom-callback OAuth will be unavailable for it until fixed"
+                )
+
         config = load_config(self.config_file) if self.config_file else load_config()
         if config.features.skill_sync_enabled:
             await self.skill_manager.sync()
@@ -930,6 +1066,21 @@ class ClaudeWebUI:
             await self.litellm_proxy_manager.stop()
         except Exception:
             logger.exception("Error stopping LiteLLM proxy during cleanup")
+        try:
+            await self.coordinator.oauth_callback_listener_manager.shutdown()
+        except Exception:
+            logger.exception("Error stopping OAuth callback listeners during cleanup")
+        # Issue #1789: tear down any remaining dynamic OAuth callback routes + their
+        # AuthMiddleware.EXEMPT_PATHS entries. EXEMPT_PATHS is a class-level set shared by
+        # every AuthMiddleware/ClaudeWebUI instance in the process, so a leftover entry from
+        # an instance that's being torn down (e.g. mid-test failure) would otherwise stay
+        # exempt from auth for every other instance created afterward in the same process.
+        for path in list(self._dynamic_oauth_routes.values()):
+            try:
+                self._remove_dynamic_oauth_route(path)
+            except Exception:
+                logger.exception(f"Error removing dynamic OAuth callback route {path} during cleanup")
+        self._dynamic_oauth_routes.clear()
         await self.coordinator.cleanup()
         logger.info("WebUI cleanup completed")
 
@@ -962,6 +1113,8 @@ def create_app(
     available_fixtures: list[str] | None = None,
     auth_token: str | None = None,
     auth_enabled: bool = False,
+    host: str = "127.0.0.1",
+    port: int = 8000,
 ) -> FastAPI:
     """Create and configure the FastAPI application"""
     global webui_app
@@ -970,6 +1123,7 @@ def create_app(
         mock_sdk=mock_sdk, fixtures_dir=fixtures_dir,
         available_fixtures=available_fixtures,
         auth_token=auth_token, auth_enabled=auth_enabled,
+        host=host, port=port,
     )
     return webui_app.app
 

@@ -328,9 +328,20 @@ class SessionCoordinator:
     - Real-time communication pipeline
     """
 
-    def __init__(self, data_dir: Path = None, experimental: bool = False, litellm_proxy_manager=None):
+    def __init__(
+        self,
+        data_dir: Path = None,
+        experimental: bool = False,
+        litellm_proxy_manager=None,
+        host: str = "127.0.0.1",
+        port: int = 8000,
+    ):
         self.data_dir = data_dir or Path("data")
         self.experimental = experimental
+        # Issue #1789: the main app's own bind host/port — used by OAuthCallbackListenerManager
+        # to bind on the same host, and by McpConfigManager's custom-callback conflict checks.
+        self.host = host
+        self.port = port
         self.session_manager = SessionManager(self.data_dir)
         self.project_manager = ProjectManager(self.data_dir)
         self.message_parser = MessageParser()
@@ -379,6 +390,14 @@ class SessionCoordinator:
             return await self.mcp_config_manager.get_config(server_id)
 
         self.shared_mcp_manager.set_cfg_lookup(_cfg_lookup)
+
+        # Issue #1789: custom OAuth callback path/port listeners for Shared MCP servers.
+        # Broadcast callback (UI notification) is injected later via set_broadcast_callback,
+        # same pattern as oauth_refresh_manager below.
+        from src.oauth_callback_listener_manager import OAuthCallbackListenerManager
+        self.oauth_callback_listener_manager = OAuthCallbackListenerManager(
+            self.oauth_manager, host=self.host,
+        )
 
         # Issue #1387: Proactive vault OAuth2 secret refresh
         from .vault_refresh_manager import VaultRefreshManager

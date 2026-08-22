@@ -312,6 +312,8 @@ class ApplicationService:
         oauth_client_id: str | None = None,
         oauth_callback_port: int | None = None,
         shared_connection: bool = False,
+        oauth_custom_callback_path: str | None = None,
+        oauth_custom_callback_port: int | None = None,
     ) -> dict:
         config = await self.coordinator.mcp_config_manager.create_config(
             name=name,
@@ -326,8 +328,17 @@ class ApplicationService:
             oauth_client_id=oauth_client_id,
             oauth_callback_port=oauth_callback_port,
             shared_connection=shared_connection,
+            oauth_custom_callback_path=oauth_custom_callback_path,
+            oauth_custom_callback_port=oauth_custom_callback_port,
+            main_app_port=self.coordinator.port,
+            litellm_port=self._litellm_port(),
         )
         return config.to_dict()
+
+    def _litellm_port(self) -> int | None:
+        """Return the LiteLLM proxy's port, if wired up (issue #1789 conflict checks)."""
+        proxy = getattr(self.coordinator, "litellm_proxy_manager", None)
+        return proxy.port if proxy is not None else None
 
     async def export_mcp_configs(self, ids: list[str] | None = None) -> list:
         configs = await self.coordinator.mcp_config_manager.list_configs()
@@ -446,6 +457,8 @@ class ApplicationService:
         config = await self.coordinator.mcp_config_manager.update_config(
             config_id,
             shared_mcp_manager=self.coordinator.shared_mcp_manager,
+            main_app_port=self.coordinator.port,
+            litellm_port=self._litellm_port(),
             **kwargs,
         )
         return config.to_dict() if config else None
