@@ -223,3 +223,142 @@ describe('polling store', () => {
     expect(taskCompleteCalls).toHaveLength(1)
   })
 })
+
+describe('polling store - stall-heal watchdog (#1795)', () => {
+  // These tests fake only Date so checkSessionStall()'s Date.now() comparisons are
+  // controllable, while setTimeout/setInterval stay real — that keeps the background
+  // stall-detector interval (started by connectSession) from firing mid-test and avoids
+  // needing to wait out disconnectSession()'s real 3s loop-exit budget.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(1_700_000_000_000)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  function advanceTime(ms) {
+    vi.setSystemTime(new Date(vi.getMockedSystemTime().getTime() + ms))
+  }
+
+  function flush() {
+    return new Promise(resolve => setTimeout(resolve, 0))
+  }
+
+  function abortAwareFetchMock() {
+    return vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => new Promise((_resolve, reject) => {
+      opts?.signal?.addEventListener('abort', () => {
+        const err = new Error('Aborted')
+        err.name = 'AbortError'
+        reject(err)
+      })
+    }))
+  }
+
+  async function setup(sessionOverrides) {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useSessionStore } = await import('@/stores/session')
+    const { useMessageStore } = await import('@/stores/message')
+    const pollingStore = usePollingStore()
+    const sessionStore = useSessionStore()
+    const messageStore = useMessageStore()
+    const sid = sessionOverrides.session_id
+    sessionStore.sessions.set(sid, makeSession(sessionOverrides))
+    apiMock.get.mockResolvedValue({ cursor: 0 })
+    return { pollingStore, sessionStore, messageStore, sid }
+  }
+
+  it('T1: heals a stalled active-processing connection once the unified threshold elapses', async () => {
+    const { pollingStore, messageStore, sid } = await setup({ session_id: 'sess-t1', is_processing: true })
+    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+
+    advanceTime(41000) // past the unified STALL_TIMEOUT_MS (40s) — intentional behavior change from the
+    // old 15s active-processing threshold: is_processing no longer selects a faster threshold, since the
+    // heartbeat measures poll round-trip freshness (bounded by the server's 30s clamp) which behaves the
+    // same whether the session is active or idle.
+
+    await pollingStore.checkSessionStall()
+    await flush()
+
+    expect(messageStore.syncMessages).toHaveBeenCalledWith(sid)
+    expect(pollingStore.sessionConnected).toBe(true)
+  })
+
+  it('T2: heals a stalled idle connection once the unified threshold elapses', async () => {
+    const { pollingStore, messageStore, sid } = await setup({ session_id: 'sess-t2', is_processing: false })
+    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+
+    advanceTime(41000) // past STALL_TIMEOUT_MS (40s) — old is_processing-gated code would never have caught this
+
+    await pollingStore.checkSessionStall()
+    await flush()
+
+    expect(messageStore.syncMessages).toHaveBeenCalledWith(sid)
+    expect(pollingStore.sessionConnected).toBe(true)
+  })
+
+  it('T3: does not heal a genuinely idle but healthy connection', async () => {
+    const { pollingStore, sid } = await setup({ session_id: 'sess-t3', is_processing: false })
+
+    let resolveFetch
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveFetch = resolve }))
+
+    await pollingStore.connectSession(sid)
+
+    for (let i = 0; i < 3; i++) {
+      advanceTime(25000) // simulate the server holding the long-poll request open with no events
+      resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: i + 1 }) })
+      await flush()
+      await pollingStore.checkSessionStall()
+      expect(pollingStore.sessionConnected).toBe(true)
+    }
+    expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('T3b: does not heal a healthy-but-quiet active-processing connection (unified threshold clears the 30s server clamp)', async () => {
+    const { pollingStore, sid } = await setup({ session_id: 'sess-t3b', is_processing: true })
+
+    let resolveFetch
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveFetch = resolve }))
+
+    await pollingStore.connectSession(sid)
+
+    for (let i = 0; i < 3; i++) {
+      advanceTime(25000) // simulate the server holding the long-poll request open with no events,
+      // e.g. a long-running tool call with no incremental SDK messages to relay
+      resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: i + 1 }) })
+      await flush()
+      await pollingStore.checkSessionStall()
+      expect(pollingStore.sessionConnected).toBe(true)
+    }
+    expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('T4: end-to-end heal cycle re-syncs via syncMessages without a manual loadMessages reload', async () => {
+    const { pollingStore, messageStore, sid } = await setup({ session_id: 'sess-t4', is_processing: false })
+    apiMock.get.mockResolvedValueOnce({ cursor: 0 }).mockResolvedValue({ cursor: 12 })
+    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 2, hasMore: false })
+    const loadSpy = vi.spyOn(messageStore, 'loadMessages')
+    const fetchSpy = abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+    advanceTime(41000)
+
+    await pollingStore.checkSessionStall()
+    await flush()
+
+    expect(messageStore.syncMessages).toHaveBeenCalledWith(sid)
+    expect(loadSpy).not.toHaveBeenCalled()
+    expect(pollingStore.sessionConnected).toBe(true)
+    const lastFetchUrl = fetchSpy.mock.calls[fetchSpy.mock.calls.length - 1][0]
+    expect(lastFetchUrl).toContain('since=12')
+  })
+})
