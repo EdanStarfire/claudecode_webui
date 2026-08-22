@@ -70,6 +70,11 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
       const config = await api.put(`/api/mcp-configs/${configId}`, configData)
       configs.value.set(config.id, config)
       configs.value = new Map(configs.value)
+      // Issue #1799: a cached tools-check result predates this edit — drop it
+      // so a stale tool list can't keep rendering as if it were still current.
+      if (toolsByConfigId.value.delete(configId)) {
+        toolsByConfigId.value = new Map(toolsByConfigId.value)
+      }
       return config
     } catch (error) {
       console.error('Failed to update MCP config:', error)
@@ -82,6 +87,9 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
       await api.delete(`/api/mcp-configs/${configId}`)
       configs.value.delete(configId)
       configs.value = new Map(configs.value)
+      if (toolsByConfigId.value.delete(configId)) {
+        toolsByConfigId.value = new Map(toolsByConfigId.value)
+      }
     } catch (error) {
       console.error('Failed to delete MCP config:', error)
       throw error
@@ -95,6 +103,38 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
 
   async function importConfigs(servers, dry_run = true) {
     return await api.post('/api/mcp-configs/import', { servers, dry_run })
+  }
+
+  // ========== Tool Listing (issue #1799) ==========
+
+  // Per-config tools check result cache: configId → {status, tools, error}
+  const toolsByConfigId = ref(new Map())
+
+  // In-flight guard: set of configIds currently being checked. A single scalar
+  // can't represent this — checks can legitimately take up to ~35s (broken
+  // shared server), so two rows are often in flight at once; a shared scalar
+  // would let a second check clobber the first row's spinner/disabled state.
+  const checkingToolsIds = ref(new Set())
+
+  async function fetchTools(configId) {
+    checkingToolsIds.value = new Set(checkingToolsIds.value).add(configId)
+    try {
+      const data = await api.get(`/api/mcp-configs/${configId}/tools`)
+      toolsByConfigId.value = new Map(toolsByConfigId.value.set(configId, data))
+      return data
+    } catch (error) {
+      const fallback = {
+        status: 'failed',
+        tools: [],
+        error: error?.data?.detail || error.message || 'Failed to check tools',
+      }
+      toolsByConfigId.value = new Map(toolsByConfigId.value.set(configId, fallback))
+      return fallback
+    } finally {
+      const next = new Set(checkingToolsIds.value)
+      next.delete(configId)
+      checkingToolsIds.value = next
+    }
   }
 
   // ========== OAuth Actions ==========
@@ -176,6 +216,8 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
     loading,
     oauthStatus,
     pendingReconnect,
+    toolsByConfigId,
+    checkingToolsIds,
     configList,
     getConfig,
     fetchConfigs,
@@ -191,5 +233,6 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
     importOAuthAsSecret,
     startReconnect,
     completeReconnect,
+    fetchTools,
   }
 })

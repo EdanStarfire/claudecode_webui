@@ -185,6 +185,42 @@ async def test_mark_draining_then_release_closes():
 
 
 # ---------------------------------------------------------------------------
+# list_tools / _ensure_open — refcount-neutral for non-lifecycle callers
+# (issue #1799: a Library-level tools check must not leak a permanent hold
+# that would block a subsequent config delete/drain)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_tools_cold_start_opens_and_nets_refcount_to_zero():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        tools = await mgr.list_tools(cfg)
+
+    assert [t.name for t in tools] == ["t1"]
+    assert cfg.id in mgr._conns
+    assert mgr._conns[cfg.id].refcount == 0
+
+
+@pytest.mark.asyncio
+async def test_list_tools_after_check_config_can_still_drain_immediately():
+    """Regression for issue #1799: repeated Library tools checks must not leak
+    refcount and block a subsequent config delete/drain."""
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        await mgr.list_tools(cfg)
+        await mgr.list_tools(cfg)  # second call reuses the open connection
+
+    assert mgr._conns[cfg.id].refcount == 0
+    await mgr.mark_draining(cfg.id)  # should close immediately, no lingering hold
+    assert cfg.id not in mgr._conns
+
+
+# ---------------------------------------------------------------------------
 # get_or_open raises on draining conn
 # ---------------------------------------------------------------------------
 
