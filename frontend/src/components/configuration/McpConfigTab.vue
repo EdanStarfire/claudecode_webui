@@ -222,7 +222,7 @@
         </div>
 
         <!-- OAuth 2.1 section (HTTP/SSE only) -->
-        <div class="mb-2 border rounded p-2 bg-light">
+        <div class="mb-2 border rounded p-2 oauth-section">
           <div class="form-check mb-1">
             <input class="form-check-input" type="checkbox" id="mcp-oauth-enabled" v-model="form.oauth_enabled" />
             <label class="form-check-label fw-medium" for="mcp-oauth-enabled">Enable OAuth 2.1</label>
@@ -242,7 +242,7 @@
         </div>
 
         <!-- Pre-registered OAuth App (HTTP/SSE only) -->
-        <div class="mb-2 border rounded p-2 bg-light">
+        <div class="mb-2 border rounded p-2 oauth-section">
           <div class="fw-medium mb-1">Pre-registered OAuth App <span class="text-muted fw-normal">(optional)</span></div>
           <p class="text-muted small mb-1" style="padding-left: 0;">
             For MCP servers that require a pre-registered OAuth application (e.g. Slack MCP).
@@ -270,7 +270,7 @@
         </div>
 
         <!-- Custom web OAuth callback path/port (issue #1789) — Shared MCP servers only -->
-        <div v-if="form.shared_connection" class="mb-2 border rounded p-2 bg-light">
+        <div v-if="form.shared_connection" class="mb-2 border rounded p-2 oauth-section">
           <div class="fw-medium mb-1">Custom Callback (Web OAuth) <span class="text-muted fw-normal">(optional)</span></div>
           <p class="text-muted small mb-1">
             Overrides where this server's OAuth provider redirects back to <em>this WebUI</em> —
@@ -923,6 +923,10 @@ function cancelImport() {
 }
 
 .config-form {
+  background: var(--bs-secondary-bg);
+}
+
+.oauth-section {
   background: var(--bs-secondary-bg);
 }
 
