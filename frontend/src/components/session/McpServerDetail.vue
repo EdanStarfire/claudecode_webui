@@ -29,29 +29,15 @@
 
       <!-- Collapsible tool list -->
       <div v-if="server.tools && server.tools.length > 0" class="mt-2">
-        <button
-          class="btn btn-link btn-sm p-0 text-muted"
-          @click="toolsExpanded = !toolsExpanded"
-        >
-          {{ toolsExpanded ? 'Hide' : 'Show' }} {{ server.tools.length }} tool{{ server.tools.length !== 1 ? 's' : '' }}
-        </button>
-        <div v-if="toolsExpanded" class="tool-list mt-1">
-          <div
-            v-for="tool in server.tools"
-            :key="tool.name"
-            class="tool-item small py-1 px-2"
-          >
-            <code>{{ tool.name }}</code>
-            <span v-if="tool.description" class="text-muted ms-2">{{ tool.description }}</span>
-          </div>
-        </div>
+        <McpToolList :tools="server.tools" />
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
+import McpToolList from './McpToolList.vue'
 
 const props = defineProps({
   server: {
@@ -61,8 +47,6 @@ const props = defineProps({
 })
 
 defineEmits(['reconnect'])
-
-const toolsExpanded = ref(false)
 
 const statusBadgeClass = computed(() => {
   const map = {
@@ -79,26 +63,6 @@ const statusBadgeClass = computed(() => {
 <style scoped>
 .server-name {
   font-family: monospace;
-}
-
-.tool-list {
-  max-height: 200px;
-  overflow-y: auto;
-}
-
-.tool-item {
-  border-radius: 0.25rem;
-  background: var(--bs-tertiary-bg);
-  color: var(--bs-body-color);
-}
-
-.tool-item code {
-  color: var(--bs-code-color);
-  background: transparent;
-}
-
-.tool-item + .tool-item {
-  margin-top: 2px;
 }
 
 .bg-needs-auth {

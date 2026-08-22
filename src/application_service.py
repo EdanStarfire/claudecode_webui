@@ -469,6 +469,43 @@ class ApplicationService:
             shared_mcp_manager=self.coordinator.shared_mcp_manager,
         )
 
+    async def get_mcp_config_tools(self, config_id: str) -> dict | None:
+        """Return live tool list for a shared-connection MCP config (issue #1799).
+
+        Returns None if the config doesn't exist (router raises 404).
+        Raises ValueError if the config isn't shared_connection (router raises 400).
+
+        Status resolution order: disabled -> needs-auth (oauth enabled, no stored
+        token) -> connected/failed via SharedMcpConnectionManager.list_tools(). The
+        connection attempt can block up to ~35s on a broken shared server (inherited
+        from SharedMcpConnectionManager._open_locked's own timeout).
+        """
+        from src.mcp_config_manager import McpServerType
+
+        config = await self.coordinator.mcp_config_manager.get_config(config_id)
+        if config is None:
+            return None
+        if not config.shared_connection:
+            raise ValueError("Tool listing is only supported for shared_connection MCP servers")
+
+        if not config.enabled:
+            return {"status": "disabled", "tools": [], "error": None}
+
+        if config.oauth_enabled and config.type in (McpServerType.HTTP, McpServerType.SSE):
+            token = await self.coordinator.oauth_manager.get_stored_token(config_id)
+            if token is None:
+                return {"status": "needs-auth", "tools": [], "error": None}
+
+        try:
+            tools = await self.coordinator.shared_mcp_manager.list_tools(config)
+            return {
+                "status": "connected",
+                "tools": [{"name": t.name, "description": t.description} for t in tools],
+                "error": None,
+            }
+        except Exception as exc:
+            return {"status": "failed", "tools": [], "error": str(exc)}
+
     # =========================================================================
     # OAuth
     # =========================================================================

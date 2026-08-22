@@ -43,6 +43,9 @@ def mock_coordinator():
     coordinator.mcp_config_manager.update_config = AsyncMock()
     coordinator.mcp_config_manager.delete_config = AsyncMock()
 
+    coordinator.shared_mcp_manager = MagicMock()
+    coordinator.shared_mcp_manager.list_tools = AsyncMock()
+
     coordinator.oauth_manager.complete_flow = AsyncMock()
     coordinator.oauth_manager.start_flow = AsyncMock()
     coordinator.oauth_manager.disconnect = AsyncMock()
@@ -92,10 +95,23 @@ def _make_session(session_id="s1", name="test", state="active", working_director
     return s
 
 
-def _make_config(config_id="c1", name="myserver"):
+def _make_config(
+    config_id="c1",
+    name="myserver",
+    shared_connection=False,
+    enabled=True,
+    oauth_enabled=False,
+    config_type=None,
+):
+    from src.mcp_config_manager import McpServerType
+
     c = MagicMock()
     c.id = config_id
     c.name = name
+    c.shared_connection = shared_connection
+    c.enabled = enabled
+    c.oauth_enabled = oauth_enabled
+    c.type = config_type or McpServerType.HTTP
     c.to_dict.return_value = {"id": config_id, "name": name}
     return c
 
@@ -389,6 +405,109 @@ async def test_delete_mcp_config_returns_bool(service, mock_coordinator):
     result = await service.delete_mcp_config("c1")
 
     assert result is True
+
+
+# ---------------------------------------------------------------------------
+# get_mcp_config_tools (issue #1799)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_config_tools_returns_none_when_config_not_found(service, mock_coordinator):
+    mock_coordinator.mcp_config_manager.get_config.return_value = None
+
+    result = await service.get_mcp_config_tools("nonexistent")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_config_tools_raises_value_error_when_not_shared(service, mock_coordinator):
+    mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
+        shared_connection=False
+    )
+
+    with pytest.raises(ValueError):
+        await service.get_mcp_config_tools("c1")
+
+    mock_coordinator.shared_mcp_manager.list_tools.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_config_tools_disabled_skips_connection(service, mock_coordinator):
+    mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
+        shared_connection=True, enabled=False
+    )
+
+    result = await service.get_mcp_config_tools("c1")
+
+    assert result == {"status": "disabled", "tools": [], "error": None}
+    mock_coordinator.shared_mcp_manager.list_tools.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_config_tools_needs_auth_when_oauth_enabled_no_token(service, mock_coordinator):
+    from src.mcp_config_manager import McpServerType
+
+    mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
+        shared_connection=True, oauth_enabled=True, config_type=McpServerType.HTTP
+    )
+    mock_coordinator.oauth_manager.get_stored_token.return_value = None
+
+    result = await service.get_mcp_config_tools("c1")
+
+    assert result == {"status": "needs-auth", "tools": [], "error": None}
+    mock_coordinator.shared_mcp_manager.list_tools.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_config_tools_connected_with_tools(service, mock_coordinator):
+    mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
+        shared_connection=True
+    )
+    tool = MagicMock()
+    tool.name = "ping"
+    tool.description = "ping tool"
+    mock_coordinator.shared_mcp_manager.list_tools.return_value = [tool]
+
+    result = await service.get_mcp_config_tools("c1")
+
+    assert result == {
+        "status": "connected",
+        "tools": [{"name": "ping", "description": "ping tool"}],
+        "error": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_config_tools_failed_on_connection_error(service, mock_coordinator):
+    mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
+        shared_connection=True
+    )
+    mock_coordinator.shared_mcp_manager.list_tools.side_effect = RuntimeError("connection refused")
+
+    result = await service.get_mcp_config_tools("c1")
+
+    assert result == {"status": "failed", "tools": [], "error": "connection refused"}
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_config_tools_oauth_token_present_still_attempts_connection(
+    service, mock_coordinator
+):
+    """A stored-but-rejected token isn't distinguished as needs-auth; the connection
+    attempt is made and surfaces as failed/connected via list_tools() (per plan)."""
+    from src.mcp_config_manager import McpServerType
+
+    mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
+        shared_connection=True, oauth_enabled=True, config_type=McpServerType.HTTP
+    )
+    mock_coordinator.oauth_manager.get_stored_token.return_value = MagicMock()
+    mock_coordinator.shared_mcp_manager.list_tools.side_effect = RuntimeError("401 unauthorized")
+
+    result = await service.get_mcp_config_tools("c1")
+
+    assert result == {"status": "failed", "tools": [], "error": "401 unauthorized"}
 
 
 # ---------------------------------------------------------------------------
