@@ -247,6 +247,22 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=404, detail="MCP config not found")
         return result
 
+    @router.post("/api/mcp-configs/{config_id}/test-connect")
+    @handle_exceptions("test-connect MCP config", value_error_status=400)
+    async def test_connect_mcp_config(config_id: str):
+        """Open a throwaway connection to a non-shared MCP config, list its tools, and
+        close it immediately (issue #1800). Blocks until the outcome is known (up to
+        ~30s on a hung server).
+
+        Returns {"status": "disabled"|"needs-auth"|"connected"|"failed",
+                 "stage": "transport"|"handshake"|"list_tools"|None,
+                 "tools": [...], "error": str|None}.
+        """
+        result = await webui.service.test_connect_mcp_config(config_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="MCP config not found")
+        return result
+
     @router.get("/api/mcp-configs/{config_id}/oauth/status")
     @handle_exceptions("get MCP OAuth status")
     async def get_mcp_oauth_status(config_id: str):

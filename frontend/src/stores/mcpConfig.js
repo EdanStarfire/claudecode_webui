@@ -137,6 +137,30 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
     }
   }
 
+  // ========== Test Connection for non-shared configs (issue #1800) ==========
+
+  async function testConnect(configId) {
+    checkingToolsIds.value = new Set(checkingToolsIds.value).add(configId)
+    try {
+      const data = await api.post(`/api/mcp-configs/${configId}/test-connect`, {})
+      toolsByConfigId.value = new Map(toolsByConfigId.value.set(configId, data))
+      return data
+    } catch (error) {
+      const fallback = {
+        status: 'failed',
+        stage: null,
+        tools: [],
+        error: error?.data?.detail || error.message || 'Failed to test connection',
+      }
+      toolsByConfigId.value = new Map(toolsByConfigId.value.set(configId, fallback))
+      return fallback
+    } finally {
+      const next = new Set(checkingToolsIds.value)
+      next.delete(configId)
+      checkingToolsIds.value = next
+    }
+  }
+
   // ========== OAuth Actions ==========
 
   // Per-server OAuth status cache: configId → OAUTH_STATUS value
@@ -234,5 +258,6 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
     startReconnect,
     completeReconnect,
     fetchTools,
+    testConnect,
   }
 })

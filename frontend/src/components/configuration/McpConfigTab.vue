@@ -39,7 +39,6 @@
         </div>
         <div class="d-flex gap-1 align-items-center">
           <button
-            v-if="config.shared_connection"
             class="btn btn-xs btn-outline-info"
             :disabled="configStore.checkingToolsIds.has(config.id)"
             @click="toggleTools(config)"
@@ -106,7 +105,7 @@
       <div v-if="isToolsExpanded(config.id)" class="tools-panel mt-2 p-2 border rounded">
         <div v-if="configStore.checkingToolsIds.has(config.id)" class="small text-muted d-flex align-items-center gap-2">
           <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-          Checking connection… this can take up to 35s for an unreachable server.
+          Checking connection…
         </div>
         <template v-else-if="toolsResultFor(config.id)">
           <div class="d-flex align-items-center gap-2 mb-1">
@@ -122,6 +121,7 @@
           </div>
           <div v-if="toolsResultFor(config.id).status === 'failed' && toolsResultFor(config.id).error" class="text-danger small mb-1">
             {{ toolsResultFor(config.id).error }}
+            <span v-if="toolsResultFor(config.id).stage">({{ toolsResultFor(config.id).stage }})</span>
           </div>
           <McpToolList
             v-if="toolsResultFor(config.id).tools?.length"
@@ -565,7 +565,11 @@ async function toggleTools(config) {
   }
   expandedToolsIds.value.add(config.id)
   expandedToolsIds.value = new Set(expandedToolsIds.value)
-  await configStore.fetchTools(config.id)
+  if (config.shared_connection) {
+    await configStore.fetchTools(config.id)
+  } else {
+    await configStore.testConnect(config.id)
+  }
 }
 
 // OAuth import-as-secret modal state

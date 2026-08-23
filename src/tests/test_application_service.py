@@ -46,6 +46,9 @@ def mock_coordinator():
     coordinator.shared_mcp_manager = MagicMock()
     coordinator.shared_mcp_manager.list_tools = AsyncMock()
 
+    coordinator.mcp_oneshot_connector = MagicMock()
+    coordinator.mcp_oneshot_connector.test_connect = AsyncMock()
+
     coordinator.oauth_manager.complete_flow = AsyncMock()
     coordinator.oauth_manager.start_flow = AsyncMock()
     coordinator.oauth_manager.disconnect = AsyncMock()
@@ -508,6 +511,108 @@ async def test_get_mcp_config_tools_oauth_token_present_still_attempts_connectio
     result = await service.get_mcp_config_tools("c1")
 
     assert result == {"status": "failed", "tools": [], "error": "401 unauthorized"}
+
+
+# ---------------------------------------------------------------------------
+# test_connect_mcp_config (issue #1800)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_test_connect_mcp_config_returns_none_when_config_not_found(service, mock_coordinator):
+    mock_coordinator.mcp_config_manager.get_config.return_value = None
+
+    result = await service.test_connect_mcp_config("nonexistent")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_test_connect_mcp_config_raises_value_error_when_shared(service, mock_coordinator):
+    mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
+        shared_connection=True
+    )
+
+    with pytest.raises(ValueError):
+        await service.test_connect_mcp_config("c1")
+
+    mock_coordinator.mcp_oneshot_connector.test_connect.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_test_connect_mcp_config_disabled_skips_connection(service, mock_coordinator):
+    mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
+        shared_connection=False, enabled=False
+    )
+
+    result = await service.test_connect_mcp_config("c1")
+
+    assert result == {"status": "disabled", "stage": None, "tools": [], "error": None}
+    mock_coordinator.mcp_oneshot_connector.test_connect.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_test_connect_mcp_config_needs_auth_when_oauth_enabled_no_token(
+    service, mock_coordinator
+):
+    from src.mcp_config_manager import McpServerType
+
+    mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
+        shared_connection=False, oauth_enabled=True, config_type=McpServerType.HTTP
+    )
+    mock_coordinator.oauth_manager.get_stored_token.return_value = None
+
+    result = await service.test_connect_mcp_config("c1")
+
+    assert result == {"status": "needs-auth", "stage": None, "tools": [], "error": None}
+    mock_coordinator.mcp_oneshot_connector.test_connect.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_test_connect_mcp_config_connected_with_tools(service, mock_coordinator):
+    mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
+        shared_connection=False
+    )
+    tool = MagicMock()
+    tool.name = "ping"
+    tool.description = "ping tool"
+    mock_coordinator.mcp_oneshot_connector.test_connect.return_value = {
+        "status": "connected",
+        "stage": None,
+        "tools": [tool],
+        "error": None,
+    }
+
+    result = await service.test_connect_mcp_config("c1")
+
+    assert result == {
+        "status": "connected",
+        "stage": None,
+        "tools": [{"name": "ping", "description": "ping tool"}],
+        "error": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_test_connect_mcp_config_failed_propagates_stage(service, mock_coordinator):
+    mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
+        shared_connection=False
+    )
+    mock_coordinator.mcp_oneshot_connector.test_connect.return_value = {
+        "status": "failed",
+        "stage": "handshake",
+        "tools": [],
+        "error": "401 unauthorized",
+    }
+
+    result = await service.test_connect_mcp_config("c1")
+
+    assert result == {
+        "status": "failed",
+        "stage": "handshake",
+        "tools": [],
+        "error": "401 unauthorized",
+    }
 
 
 # ---------------------------------------------------------------------------
