@@ -381,6 +381,105 @@ async def test_token_refresh_triggers_reconnect():
 
 
 # ---------------------------------------------------------------------------
+# Mutual exclusion between _on_token_refreshed()'s reopen and get_or_open()'s
+# reopen branch (issue #1806)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_concurrent_token_refresh_and_get_or_open_reopen_serialize():
+    """T1: _on_token_refreshed() and get_or_open() must never call _open_locked
+    concurrently for the same conn.
+
+    Before the #1806 fix, _on_token_refreshed() only held conn.reconnect_lock (not
+    the per-config open-lock), so it could race with get_or_open()'s reopen branch
+    and open two competing connections for the same conn. The fix nests
+    reconnect_lock inside the open-lock in _on_token_refreshed(), so the two paths
+    must now serialize, with the loser observing the winner's live session and
+    skipping its own reopen (AC1).
+    """
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+
+    mgr.set_cfg_lookup(AsyncMock(return_value=cfg))
+
+    in_flight = 0
+    max_in_flight = 0
+    entries = []
+    entered_gate = asyncio.Event()
+    gate = asyncio.Event()
+
+    async def gated_open(self, c, con):
+        nonlocal in_flight, max_in_flight
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        entries.append(asyncio.current_task().get_name())
+        entered_gate.set()
+        await gate.wait()
+        in_flight -= 1
+        await _stub_open_locked(self, c, con)
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", gated_open):
+        t_refresh = asyncio.create_task(mgr._on_token_refreshed(cfg.id), name="refresh")
+        await asyncio.wait_for(entered_gate.wait(), timeout=1.0)
+
+        assert max_in_flight == 1
+        assert entries == ["refresh"]
+
+        # get_or_open must block on the same open-lock refresh is holding — it
+        # cannot enter _open_locked (gated_open) until refresh releases it.
+        t_open = asyncio.create_task(mgr.get_or_open(cfg), name="reopen")
+        await asyncio.sleep(0)
+
+        assert max_in_flight == 1, "only one _open_locked call should be in flight"
+        assert entries == ["refresh"], (
+            "get_or_open must not enter _open_locked while refresh holds the open-lock"
+        )
+
+        gate.set()
+        await asyncio.wait_for(asyncio.gather(t_refresh, t_open), timeout=1.0)
+
+    assert max_in_flight == 1, "the two reopen paths must never call _open_locked concurrently"
+    assert entries == ["refresh"], "get_or_open should see the refreshed live session and skip its own reopen"
+    assert conn.session is not None
+    assert conn.refcount == 2
+
+
+@pytest.mark.asyncio
+async def test_repeated_concurrent_refresh_and_reopen_no_deadlock():
+    """T4: stress the nested open-lock/reconnect_lock acquisition in
+    _on_token_refreshed() across many concurrent iterations to prove no deadlock.
+    """
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+
+    mgr.set_cfg_lookup(AsyncMock(return_value=cfg))
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        for i in range(20):
+            prev_generation = conn.generation
+            refresh_coro = mgr._on_token_refreshed(cfg.id)
+            open_coro = mgr.get_or_open(cfg)
+            if i % 2 == 0:
+                tasks = [asyncio.create_task(refresh_coro), asyncio.create_task(open_coro)]
+            else:
+                tasks = [asyncio.create_task(open_coro), asyncio.create_task(refresh_coro)]
+            try:
+                await asyncio.wait_for(asyncio.gather(*tasks), timeout=1.0)
+            except TimeoutError:
+                pytest.fail(f"iteration {i}: concurrent refresh/reopen deadlocked")
+            assert conn.generation >= prev_generation, "generation must not go backwards"
+
+    assert conn.generation > 0
+
+
+# ---------------------------------------------------------------------------
 # OAuth header built for HTTP; not for STDIO
 # ---------------------------------------------------------------------------
 

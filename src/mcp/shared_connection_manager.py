@@ -351,18 +351,19 @@ class SharedMcpConnectionManager:
         if conn is None or conn.session is None:
             return
         _logger.info("shared MCP token refresh — reconnecting cfg=%s", server_id)
-        async with conn.reconnect_lock:
-            cfg = await self._lookup_cfg(server_id)
-            if cfg is None:
-                _logger.warning(
-                    "shared MCP refresh: cfg %s not found, leaving conn closed", server_id
-                )
-                return
-            await self._mark_disconnected_locked(conn)
-            try:
-                await self._open_locked(cfg, conn)
-            except Exception:
-                _logger.exception("Reconnect after refresh failed cfg=%s", server_id)
+        async with self._get_open_lock(server_id):
+            async with conn.reconnect_lock:
+                cfg = await self._lookup_cfg(server_id)
+                if cfg is None:
+                    _logger.warning(
+                        "shared MCP refresh: cfg %s not found, leaving conn closed", server_id
+                    )
+                    return
+                await self._mark_disconnected_locked(conn)
+                try:
+                    await self._open_locked(cfg, conn)
+                except Exception:
+                    _logger.exception("Reconnect after refresh failed cfg=%s", server_id)
 
     async def _enter_transport(self, cfg, stack: AsyncExitStack):
         """Open the right client transport based on cfg.type.

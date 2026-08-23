@@ -239,7 +239,9 @@ def build_router(webui) -> APIRouter:
         """Return live tool list for a shared-connection MCP server (issue #1799).
 
         Triggers a connection attempt (opening one if not already open) and blocks
-        until the outcome is known — can take up to ~35s on a broken connection.
+        until the outcome is known — can take up to ~35s on a broken connection, or
+        up to ~70s if a concurrent OAuth token-refresh reconnect is also contending
+        for the same config's open-lock (issue #1806).
         Returns {"status": "disabled"|"needs-auth"|"connected"|"failed", "tools": [...], "error": str|None}.
         """
         result = await webui.service.get_mcp_config_tools(config_id)
