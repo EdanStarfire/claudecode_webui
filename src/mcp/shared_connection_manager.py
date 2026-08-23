@@ -67,6 +67,7 @@ class SharedMcpConnectionManager:
         self._vault = credential_vault
         self._conns: dict[str, _SharedConn] = {}
         self._open_locks: dict[str, asyncio.Lock] = {}
+        self._pending_drains: set[str] = set()
         oauth_refresh_manager.add_broadcast_subscriber(self._on_token_refreshed)
         self._cfg_lookup = None
 
@@ -84,6 +85,19 @@ class SharedMcpConnectionManager:
             )
         async with self._get_open_lock(cfg.id):
             conn = self._conns.get(cfg.id)
+            if conn is not None and conn.draining:
+                raise RuntimeError(
+                    f"MCP config '{cfg.name}' is being drained; cannot attach new sessions"
+                )
+            if cfg.id in self._pending_drains:
+                # Do not discard here: with multiple concurrent callers racing
+                # a mark_draining() on a never-opened config, discarding on the
+                # first match would let a later caller fall through and open a
+                # real connection. Only clear_pending_drain() (re-enable) may
+                # remove this marker.
+                raise RuntimeError(
+                    f"MCP config '{cfg.name}' is being drained; cannot attach new sessions"
+                )
             if conn is None:
                 conn = _SharedConn(cfg_id=cfg.id)
                 self._conns[cfg.id] = conn
@@ -110,13 +124,29 @@ class SharedMcpConnectionManager:
             await self._close(cfg_id)
 
     async def mark_draining(self, cfg_id: str) -> None:
-        """Called from config delete/disable. Close immediately if no refs."""
-        conn = self._conns.get(cfg_id)
-        if conn is None:
-            return
-        conn.draining = True
-        if conn.refcount <= 0:
-            await self._close(cfg_id)
+        """Called from config delete/disable. Close immediately if no refs.
+
+        Serialized through the per-config open-lock so a drain that arrives
+        during a first-ever open is either applied to the in-flight
+        connection or recorded in _pending_drains before get_or_open can
+        create a new _SharedConn — never lost to a bare `conn is None` race.
+        """
+        async with self._get_open_lock(cfg_id):
+            conn = self._conns.get(cfg_id)
+            if conn is None:
+                self._pending_drains.add(cfg_id)
+                return
+            conn.draining = True
+            if conn.refcount <= 0:
+                await self._close(cfg_id)
+
+    def clear_pending_drain(self, cfg_id: str) -> None:
+        """Called on config re-enable to undo a mark_draining() recorded while
+        the config had never been opened (no _SharedConn to mark). No-op if
+        cfg_id has a real (possibly draining) connection — this only clears
+        the no-conn-yet marker.
+        """
+        self._pending_drains.discard(cfg_id)
 
     async def list_tools(self, cfg) -> list[Tool]:
         """Return cached tools, opening the connection if needed."""
