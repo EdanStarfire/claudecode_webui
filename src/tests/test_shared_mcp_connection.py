@@ -271,6 +271,154 @@ async def test_mark_draining_then_release_closes():
 
 
 # ---------------------------------------------------------------------------
+# mark_draining / get_or_open race on a never-opened config (issue #1805)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mark_draining_never_opened_then_get_or_open_raises():
+    """T2: mark_draining() on a config that was never opened must record a
+    pending-drain marker; the next get_or_open() must raise before ever
+    calling _open_locked (no transport/subprocess opened for a doomed attach).
+    """
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    await mgr.mark_draining(cfg.id)
+    assert cfg.id not in mgr._conns
+    assert cfg.id in mgr._pending_drains
+
+    open_calls = []
+
+    async def counting_open(self, c, conn):
+        open_calls.append(c.id)
+        await _stub_open_locked(self, c, conn)
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", counting_open):
+        with pytest.raises(RuntimeError, match="drained"):
+            await mgr.get_or_open(cfg)
+
+    assert open_calls == [], "_open_locked must never be called for a pending-drain config"
+    assert cfg.id not in mgr._conns
+    # The marker is NOT consumed by a rejected get_or_open() — only
+    # clear_pending_drain() (re-enable) may remove it. See
+    # test_pending_drain_rejects_all_concurrent_racers for why.
+    assert cfg.id in mgr._pending_drains
+
+
+@pytest.mark.asyncio
+async def test_pending_drain_rejects_all_concurrent_racers():
+    """Regression: a pending-drain marker must reject every concurrent racer,
+    not just the first one to observe it.
+
+    Before this fix, get_or_open() discarded the _pending_drains entry on the
+    first match, so a second caller racing the same never-opened, just-drained
+    config would find the marker already consumed and open a live connection
+    to a config that's supposed to be draining/deleted — leaking a connection
+    and violating the issue's AC1 ("no call to _open_locked completing
+    unguarded").
+    """
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    await mgr.mark_draining(cfg.id)
+    assert cfg.id in mgr._pending_drains
+
+    open_calls = []
+
+    async def counting_open(self, c, conn):
+        open_calls.append(c.id)
+        await _stub_open_locked(self, c, conn)
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", counting_open):
+        results = await asyncio.gather(
+            mgr.get_or_open(cfg), mgr.get_or_open(cfg), return_exceptions=True
+        )
+
+    assert all(isinstance(r, RuntimeError) for r in results), (
+        "every concurrent racer must be rejected, not just the first"
+    )
+    assert open_calls == [], "_open_locked must never be called while the config is draining"
+    assert cfg.id not in mgr._conns
+    assert cfg.id in mgr._pending_drains  # still present; only clear_pending_drain() removes it
+
+
+@pytest.mark.asyncio
+async def test_mark_draining_serializes_behind_inflight_open():
+    """T1: mark_draining() must block until an in-flight first-ever open
+    completes, proving it's now serialized via the per-config open-lock
+    instead of racing the conn's creation/field mutation while _open_locked
+    is running.
+    """
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    block_open = asyncio.Event()
+
+    async def blocking_open(self, c, conn):
+        await block_open.wait()
+        await _stub_open_locked(self, c, conn)
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", blocking_open):
+        task_open = asyncio.create_task(mgr.get_or_open(cfg))
+        await asyncio.sleep(0)  # let task_open enter the lock and start blocking open
+
+        task_drain = asyncio.create_task(mgr.mark_draining(cfg.id))
+        await asyncio.sleep(0)
+        assert not task_drain.done(), "mark_draining must block behind the in-flight open"
+
+        block_open.set()
+        conn = await asyncio.wait_for(task_open, timeout=1.0)
+        await asyncio.wait_for(task_drain, timeout=1.0)
+
+    assert conn.draining is True
+    # refcount was incremented by the in-flight get_or_open before mark_draining
+    # could observe the conn, so it's still present (not closed on 0 refcount).
+    assert cfg.id in mgr._conns
+
+    await mgr.release(cfg.id)
+    assert cfg.id not in mgr._conns
+
+
+@pytest.mark.asyncio
+async def test_clear_pending_drain_allows_reenable_get_or_open_succeeds():
+    """Re-enable regression: disable(never-opened) → clear_pending_drain →
+    get_or_open must succeed normally, not be incorrectly rejected."""
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    await mgr.mark_draining(cfg.id)
+    assert cfg.id in mgr._pending_drains
+
+    mgr.clear_pending_drain(cfg.id)
+    assert cfg.id not in mgr._pending_drains
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+
+    assert conn.session is not None
+    assert cfg.id in mgr._conns
+
+
+@pytest.mark.asyncio
+async def test_clear_pending_drain_noop_for_live_draining_conn():
+    """clear_pending_drain() only clears the no-conn-yet marker; it must not
+    interfere with a real, actively-draining connection."""
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        await mgr.get_or_open(cfg)
+
+    mgr._conns[cfg.id].draining = True
+    mgr.clear_pending_drain(cfg.id)
+
+    assert mgr._conns[cfg.id].draining is True
+    with pytest.raises(RuntimeError, match="drained"):
+        await mgr.get_or_open(cfg)
+
+
+# ---------------------------------------------------------------------------
 # list_tools / _ensure_open — refcount-neutral for non-lifecycle callers
 # (issue #1799: a Library-level tools check must not leak a permanent hold
 # that would block a subsequent config delete/drain)

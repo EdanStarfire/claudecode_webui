@@ -383,6 +383,10 @@ class McpConfigManager:
             # Issue #1484: drain shared connection when disabling a config
             if enabled is False and config.enabled is True and shared_mcp_manager is not None:
                 await shared_mcp_manager.mark_draining(config_id)
+            # Issue #1805: undo a pending-drain marker left by a disable while
+            # the config had never been opened, so re-enabling isn't rejected.
+            if enabled is True and config.enabled is False and shared_mcp_manager is not None:
+                shared_mcp_manager.clear_pending_drain(config_id)
             config.enabled = enabled
         if oauth_enabled is not None:
             config.oauth_enabled = oauth_enabled
