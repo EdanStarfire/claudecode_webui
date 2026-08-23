@@ -478,7 +478,9 @@ class ApplicationService:
         Status resolution order: disabled -> needs-auth (oauth enabled, no stored
         token) -> connected/failed via SharedMcpConnectionManager.list_tools(). The
         connection attempt can block up to ~35s on a broken shared server (inherited
-        from SharedMcpConnectionManager._open_locked's own timeout).
+        from SharedMcpConnectionManager._open_locked's own timeout), or up to ~70s if
+        a concurrent OAuth token-refresh reconnect (_on_token_refreshed) is also
+        contending for the same config's open-lock (issue #1806).
         """
         from src.mcp_config_manager import McpServerType
 
