@@ -391,6 +391,12 @@ class SessionCoordinator:
 
         self.shared_mcp_manager.set_cfg_lookup(_cfg_lookup)
 
+        # Issue #1800: one-shot connection lifecycle for non-shared MCP configs'
+        # "Test connection" affordance. Independent of shared_mcp_manager — see
+        # src/mcp/oneshot_connection.py module docstring for why.
+        from src.mcp.oneshot_connection import McpOneshotConnector
+        self.mcp_oneshot_connector = McpOneshotConnector(self.oauth_manager, self.credential_vault)
+
         # Issue #1789: custom OAuth callback path/port listeners for Shared MCP servers.
         # Broadcast callback (UI notification) is injected later via set_broadcast_callback,
         # same pattern as oauth_refresh_manager below.

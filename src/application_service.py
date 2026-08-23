@@ -506,6 +506,43 @@ class ApplicationService:
         except Exception as exc:
             return {"status": "failed", "tools": [], "error": str(exc)}
 
+    async def test_connect_mcp_config(self, config_id: str) -> dict | None:
+        """Open a throwaway connection to a non-shared-connection MCP config, list its
+        tools, and close it immediately (issue #1800).
+
+        Returns None if the config doesn't exist (router raises 404).
+        Raises ValueError if the config IS shared_connection (router raises 400) — use
+        get_mcp_config_tools()/the /tools endpoint for those instead.
+
+        Status resolution order mirrors get_mcp_config_tools(): disabled -> needs-auth
+        (oauth enabled, no stored token) -> connected/failed via
+        McpOneshotConnector.test_connect(). Blocks until the outcome is known — up to
+        ~30s on a hung server.
+        """
+        from src.mcp_config_manager import McpServerType
+
+        config = await self.coordinator.mcp_config_manager.get_config(config_id)
+        if config is None:
+            return None
+        if config.shared_connection:
+            raise ValueError(
+                "test-connect is only supported for non-shared MCP servers; "
+                "use the /tools endpoint for shared_connection servers"
+            )
+
+        if not config.enabled:
+            return {"status": "disabled", "stage": None, "tools": [], "error": None}
+
+        if config.oauth_enabled and config.type in (McpServerType.HTTP, McpServerType.SSE):
+            token = await self.coordinator.oauth_manager.get_stored_token(config_id)
+            if token is None:
+                return {"status": "needs-auth", "stage": None, "tools": [], "error": None}
+
+        result = await self.coordinator.mcp_oneshot_connector.test_connect(config)
+        if result["status"] != "failed":
+            result["tools"] = [{"name": t.name, "description": t.description} for t in result["tools"]]
+        return result
+
     # =========================================================================
     # OAuth
     # =========================================================================
