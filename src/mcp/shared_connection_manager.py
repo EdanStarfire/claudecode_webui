@@ -66,7 +66,7 @@ class SharedMcpConnectionManager:
         self._oauth_refresh_manager = oauth_refresh_manager
         self._vault = credential_vault
         self._conns: dict[str, _SharedConn] = {}
-        self._open_lock = asyncio.Lock()
+        self._open_locks: dict[str, asyncio.Lock] = {}
         oauth_refresh_manager.add_broadcast_subscriber(self._on_token_refreshed)
         self._cfg_lookup = None
 
@@ -82,7 +82,7 @@ class SharedMcpConnectionManager:
             raise RuntimeError(
                 f"MCP config '{cfg.name}' is being drained; cannot attach new sessions"
             )
-        async with self._open_lock:
+        async with self._get_open_lock(cfg.id):
             conn = self._conns.get(cfg.id)
             if conn is None:
                 conn = _SharedConn(cfg_id=cfg.id)
@@ -154,6 +154,13 @@ class SharedMcpConnectionManager:
         self._cfg_lookup = fn
 
     # ---- private -----------------------------------------------------------
+
+    def _get_open_lock(self, cfg_id: str) -> asyncio.Lock:
+        lock = self._open_locks.get(cfg_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._open_locks[cfg_id] = lock
+        return lock
 
     async def _ensure_open(self, cfg) -> _SharedConn:
         conn = self._conns.get(cfg.id)

@@ -130,6 +130,92 @@ async def test_get_or_open_opens_once_for_multiple_sessions():
 
 
 # ---------------------------------------------------------------------------
+# Per-config lock granularity (issue #1803): one broken/slow server's open
+# must not block another config's open.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_concurrent_opens_for_distinct_configs_do_not_serialize():
+    """Regression test for the bug: distinct configs must not share one lock.
+
+    Fails against the old manager-wide `_open_lock`: cfg-b's open would block
+    on the lock held while cfg-a's open is in flight, and the wait_for below
+    would raise TimeoutError.
+    """
+    mgr = _make_mgr()
+    cfg_a = _http_cfg(cfg_id="cfg-a", slug="server-a")
+    cfg_b = _http_cfg(cfg_id="cfg-b", slug="server-b")
+
+    block_a = asyncio.Event()
+
+    async def patched_open(self, cfg, conn):
+        if cfg.id == "cfg-a":
+            await block_a.wait()
+        await _stub_open_locked(self, cfg, conn)
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", patched_open):
+        task_a = asyncio.create_task(mgr.get_or_open(cfg_a))
+        await asyncio.sleep(0)  # let task_a enter and block inside its own lock
+
+        conn_b = await asyncio.wait_for(mgr.get_or_open(cfg_b), timeout=1.0)
+        assert conn_b.cfg_id == "cfg-b"
+
+        block_a.set()
+        conn_a = await asyncio.wait_for(task_a, timeout=1.0)
+        assert conn_a.cfg_id == "cfg-a"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_opens_for_same_config_serialize_single_open():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+    open_calls = []
+
+    async def slow_open(self, c, conn):
+        open_calls.append(c.id)
+        await asyncio.sleep(0.05)
+        await _stub_open_locked(self, c, conn)
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", slow_open):
+        conn1, conn2 = await asyncio.gather(mgr.get_or_open(cfg), mgr.get_or_open(cfg))
+
+    assert len(open_calls) == 1, "_open_locked should run once for concurrent same-config opens"
+    assert conn1 is conn2
+    assert conn1.refcount == 2
+
+
+@pytest.mark.asyncio
+async def test_list_tools_check_does_not_block_unrelated_session_open():
+    """Maps to the issue's T4 scenario (issue #1799 Library "Show tools" path) and UC2.
+
+    Fails against the old manager-wide `_open_lock`: get_or_open(cfg_healthy)
+    would block on the same lock as list_tools(cfg_broken)'s in-flight open.
+    """
+    mgr = _make_mgr()
+    cfg_broken = _http_cfg(cfg_id="cfg-broken", slug="broken-server")
+    cfg_healthy = _http_cfg(cfg_id="cfg-healthy", slug="healthy-server")
+
+    block_broken = asyncio.Event()
+
+    async def patched_open(self, cfg, conn):
+        if cfg.id == "cfg-broken":
+            await block_broken.wait()
+        await _stub_open_locked(self, cfg, conn)
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", patched_open):
+        task_broken = asyncio.create_task(mgr.list_tools(cfg_broken))
+        await asyncio.sleep(0)  # let task_broken enter and block inside its own lock
+
+        conn_healthy = await asyncio.wait_for(mgr.get_or_open(cfg_healthy), timeout=1.0)
+        assert conn_healthy.cfg_id == "cfg-healthy"
+
+        block_broken.set()
+        tools = await asyncio.wait_for(task_broken, timeout=1.0)
+        assert [t.name for t in tools] == ["t1"]
+
+
+# ---------------------------------------------------------------------------
 # release — decrements and keeps open when not draining
 # ---------------------------------------------------------------------------
 
