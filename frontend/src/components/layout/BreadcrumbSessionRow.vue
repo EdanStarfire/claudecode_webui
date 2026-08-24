@@ -8,16 +8,7 @@
       :title="chipTooltip"
       @click="handleClick"
     >
-      <span
-        v-if="hasChildren"
-        class="chip-expand"
-        role="button"
-        :aria-label="isExpanded ? 'Collapse children' : 'Expand children'"
-        @click.stop="toggleExpand"
-      >
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" :style="{ transform: isExpanded ? 'rotate(90deg)' : 'none' }"><polyline points="9 6 15 12 9 18"></polyline></svg>
-      </span>
-      <span v-else class="chip-expand"></span>
+      <span class="chip-expand"></span>
 
       <span class="status-sq" :class="[statusClass, { unread: isUnreviewed }]"></span>
 
@@ -39,7 +30,7 @@
       </span>
     </div>
 
-    <div v-if="hasChildren && isExpanded" class="bc-session-children">
+    <div v-if="hasChildren" class="bc-session-children">
       <BreadcrumbSessionRow
         v-for="childId in sortedChildIds"
         :key="childId"
@@ -141,30 +132,6 @@ const sortedChildIds = computed(() => {
     })
   })
 })
-
-// Auto-expand when the active session is a descendant, even if not manually expanded —
-// mirrors StackedChip's hasActiveDescendant fallback so the current session is never hidden.
-const hasActiveDescendant = computed(() => {
-  const activeId = sessionStore.currentSessionId
-  if (!activeId) return false
-  function checkDescendants(ids) {
-    for (const id of ids) {
-      if (id === activeId) return true
-      const child = sessionStore.getSession(id)
-      if (child?.child_minion_ids && checkDescendants(child.child_minion_ids)) return true
-    }
-    return false
-  }
-  return checkDescendants(childIds.value)
-})
-
-const isExpanded = computed(() =>
-  uiStore.expandedStacks.has(props.session.session_id) || hasActiveDescendant.value
-)
-
-function toggleExpand() {
-  uiStore.toggleStack(props.session.session_id)
-}
 
 const chipTooltip = computed(() => {
   const parts = [displayName.value]
