@@ -39,7 +39,7 @@
     "@testing-library/user-event": "^14.6.1",
     "@testing-library/vue": "^8.1.0",
     "@vitejs/plugin-vue": "^6.0.3",
-    "@vitest/coverage-v8": "^2.1.9",
+    "@vitest/coverage-v8": "^4.1.8",
     "@vue/test-utils": "^2.4.8",
     "jsdom": "^25.0.1",
     "vite": "^7.1.12",

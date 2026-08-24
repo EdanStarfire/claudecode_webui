@@ -15,6 +15,7 @@ export default defineConfig({
       include: ['src/stores/**', 'src/components/**', 'src/utils/**'],
       exclude: ['src/**/__tests__/**', 'src/test-utils/**']
     },
+    clearMocks: true,
     testTimeout: 5000,
     hookTimeout: 5000
   },
