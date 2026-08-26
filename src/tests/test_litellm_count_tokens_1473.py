@@ -133,7 +133,7 @@ async def test_v1_messages_chat_still_routes_to_openai_after_patch(tmp_path):
 
     async def recording_send(self, request, **kwargs):
         recorded.append(str(request.url))
-        return httpx.Response(
+        response = httpx.Response(
             200,
             json={
                 "id": "chatcmpl-test",
@@ -149,6 +149,12 @@ async def test_v1_messages_chat_still_routes_to_openai_after_patch(tmp_path):
                 "model": "gpt-4o-mini",
             },
         )
+        # Real httpx.AsyncClient.send() attaches `.request` to the response after
+        # the transport returns it; since this mock replaces send() wholesale, that
+        # bookkeeping has to happen here too, or downstream raise_for_status() calls
+        # fail with "the request instance has not been set on this response".
+        response.request = request
+        return response
 
     with patch.object(httpx.AsyncClient, "send", recording_send):
         await litellm.acompletion(
