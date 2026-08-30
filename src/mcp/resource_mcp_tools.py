@@ -717,10 +717,12 @@ At least one of resource_id or filename must be provided.""",
             DataStorageManager instance or None
         """
         try:
-            # Get from session coordinator's active SDK instances
-            sdk_instance = self.session_coordinator._active_sdks.get(session_id)
-            if sdk_instance and sdk_instance.storage_manager:
-                return sdk_instance.storage_manager
+            # Issue #498: read from the coordinator's storage-manager registry directly
+            # instead of reaching through a live SDK instance — identical object, but
+            # doesn't assume a local SDK exists (REMOTE sessions have none on the Hub).
+            storage_manager = self.session_coordinator._storage_managers.get(session_id)
+            if storage_manager:
+                return storage_manager
 
             # Fallback: create from session info
             session_info = await self.session_coordinator.session_manager.get_session_info(

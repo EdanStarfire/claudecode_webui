@@ -4,10 +4,17 @@ Pydantic request models for all API endpoints.
 Moved from src/web_server.py to centralize model definitions.
 """
 
+import re
+
 from pydantic import BaseModel, Field, field_validator
 
 from ..mcp_config_manager import McpServerType
 from ..session_config import SessionConfig
+
+# Issue #498: caller-supplied session_id must be a safe path component — this becomes
+# `data_dir / "sessions" / session_id` (session_manager.py) with no further
+# normalization, so anything else risks path traversal or colliding with reserved names.
+_SAFE_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 class ProjectCreateRequest(BaseModel):
@@ -42,6 +49,19 @@ class SessionCreateRequest(SessionConfig):
     name: str | None = None
     role: str | None = None
     capabilities: list[str] | None = None
+    # Issue #498/#499: caller-supplied session_id so a Hub and REMOTE can agree on the
+    # same id when relaying session creation. Falls back to a server-generated uuid4
+    # when omitted (today's behavior, unchanged).
+    session_id: str | None = None
+
+    @field_validator("session_id")
+    @classmethod
+    def _validate_session_id(cls, v: str | None) -> str | None:
+        if v is not None and not _SAFE_SESSION_ID_RE.match(v):
+            raise ValueError(
+                "session_id must match ^[A-Za-z0-9_-]{1,128}$ (used as a filesystem path component)"
+            )
+        return v
 
 
 class MessageRequest(BaseModel):

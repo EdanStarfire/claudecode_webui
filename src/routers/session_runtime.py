@@ -1,25 +1,82 @@
-"""Session runtime endpoints: permission-mode, MCP, restart, reset, history, disconnect, proxy-logs."""
+"""Session runtime endpoints: permission-mode, MCP, restart, reset, history, disconnect,
+proxy-logs, interrupt, permission-response."""
 
 from fastapi import APIRouter, HTTPException
 
 from ..exception_handlers import handle_exceptions
 from ..models.permission_mode import PermissionMode
-from ..session_manager import VALID_MODELS
+from ..session_backend import BackendMode
+from ..session_manager import VALID_MODELS, SessionState
 from ._models import (
     AddDirectoryRequest,
     McpReconnectRequest,
     McpToggleRequest,
     ModelRequest,
     PermissionModeRequest,
+    PermissionResponseRequest,
 )
 
 
 def build_router(webui) -> APIRouter:
     router = APIRouter()
 
+    # ==================== INTERRUPT / PERMISSION RESPONSE (issue #498: moved out of
+    # core.py so these mirror under /api/backend like the rest of session-domain) ====
+
+    @router.post("/sessions/{session_id}/interrupt")
+    @handle_exceptions("interrupt session")
+    async def interrupt_session_rest(session_id: str):
+        """Interrupt a session via REST (replaces WebSocket interrupt_session message)."""
+        state = await webui.service.get_session_state(session_id)
+        if state is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if state == SessionState.PAUSED:
+            webui.permission_service.deny_all_for_interrupt()
+        result = await webui.coordinator.interrupt_session(session_id)
+        return {"success": bool(result)}
+
+    @router.post("/sessions/{session_id}/permission/{request_id}")
+    @handle_exceptions("respond to permission")
+    async def respond_to_permission(
+        session_id: str, request_id: str, request: PermissionResponseRequest
+    ):
+        """Respond to a pending permission request via REST."""
+        if request.decision == "allow":
+            response = {"behavior": "allow"}
+            if request.updated_input is not None:
+                response["updated_input"] = request.updated_input
+            if request.apply_suggestions:
+                response["apply_suggestions"] = request.apply_suggestions
+            if request.selected_suggestions is not None:
+                response["selected_suggestions"] = request.selected_suggestions
+        else:
+            if request.clarification_message:
+                response = {
+                    "behavior": "deny",
+                    "message": request.clarification_message,
+                    "interrupt": False
+                }
+            else:
+                response = {"behavior": "deny", "message": "User denied permission"}
+
+        # Issue #498: a REMOTE-dispatched session's permission Future lives on REMOTE's
+        # own PermissionService, never in the Hub's — relay the decision instead of
+        # resolving a Hub-local Future that was never created for this request.
+        if webui.coordinator.backend_mode == BackendMode.REMOTE:
+            resolved = await webui.coordinator.backend.resolve_permission(
+                session_id, request_id, response
+            )
+        else:
+            if request_id not in webui.permission_service.pending_permissions:
+                raise HTTPException(status_code=404, detail="No pending permission with that ID")
+            resolved = webui.permission_service.resolve(request_id, response)
+        if not resolved:
+            raise HTTPException(status_code=409, detail="Permission already resolved")
+        return {"success": True}
+
     # ==================== PROXY LOG ENDPOINTS (Issue #1102) ====================
 
-    @router.get("/api/sessions/{session_id}/proxy-logs")
+    @router.get("/sessions/{session_id}/proxy-logs")
     @handle_exceptions("get proxy logs")
     async def get_proxy_logs(
         session_id: str,
@@ -35,7 +92,7 @@ def build_router(webui) -> APIRouter:
 
     # ==================== PERMISSION MODE ENDPOINT ====================
 
-    @router.post("/api/sessions/{session_id}/permission-mode")
+    @router.post("/sessions/{session_id}/permission-mode")
     @handle_exceptions("set permission mode", value_error_status=400)
     async def set_permission_mode(session_id: str, request: PermissionModeRequest):
         """Set the permission mode for a session"""
@@ -49,7 +106,7 @@ def build_router(webui) -> APIRouter:
 
     # ==================== MODEL ENDPOINT ====================
 
-    @router.post("/api/sessions/{session_id}/model")
+    @router.post("/sessions/{session_id}/model")
     @handle_exceptions("set model", value_error_status=400)
     async def set_model(session_id: str, request: ModelRequest):
         """Set the model for a session, live-switching if active (no restart required)"""
@@ -61,7 +118,7 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=400, detail="Failed to set model")
         return {"success": success, "model": request.model}
 
-    @router.post("/api/sessions/{session_id}/add-directory")
+    @router.post("/sessions/{session_id}/add-directory")
     @handle_exceptions("add directory", value_error_status=400)
     async def add_directory(session_id: str, request: AddDirectoryRequest):
         """Register a new working directory on an active session, live (issue #1675)."""
@@ -70,7 +127,16 @@ def build_router(webui) -> APIRouter:
         result = await webui.coordinator.add_directory(session_id, request.directory)
         return {"success": True, **result}
 
-    @router.get("/api/sessions/{session_id}/mcp-status")
+    @router.get("/sessions/{session_id}/context-usage")
+    @handle_exceptions("get context usage")
+    async def get_context_usage(session_id: str):
+        """Get context window usage for a session (issue #498 gap: no route exposed
+        ClaudeSDK.get_context_usage() over HTTP before this)."""
+        if not await webui.service.get_session_exists(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        return await webui.coordinator.get_context_usage(session_id)
+
+    @router.get("/sessions/{session_id}/mcp-status")
     @handle_exceptions("get mcp status")
     async def get_mcp_status(session_id: str):
         """Get MCP server status for a session"""
@@ -79,7 +145,7 @@ def build_router(webui) -> APIRouter:
         result = await webui.coordinator.get_mcp_status(session_id)
         return result
 
-    @router.post("/api/sessions/{session_id}/mcp-toggle")
+    @router.post("/sessions/{session_id}/mcp-toggle")
     @handle_exceptions("toggle mcp server")
     async def toggle_mcp_server(session_id: str, request: McpToggleRequest):
         """Toggle an MCP server on or off"""
@@ -93,7 +159,7 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return {"success": True, "name": request.name, "enabled": request.enabled}
 
-    @router.post("/api/sessions/{session_id}/mcp-reconnect")
+    @router.post("/sessions/{session_id}/mcp-reconnect")
     @handle_exceptions("reconnect mcp server")
     async def reconnect_mcp_server(session_id: str, request: McpReconnectRequest):
         """Reconnect a failed MCP server"""
@@ -105,7 +171,7 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return {"success": True, "name": request.name}
 
-    @router.post("/api/sessions/{session_id}/restart")
+    @router.post("/sessions/{session_id}/restart")
     @handle_exceptions("restart session")
     async def restart_session(session_id: str):
         """Restart a session (disconnect and resume)"""
@@ -125,7 +191,7 @@ def build_router(webui) -> APIRouter:
         )
         return {"success": success}
 
-    @router.post("/api/sessions/{session_id}/reset")
+    @router.post("/sessions/{session_id}/reset")
     @handle_exceptions("reset session")
     async def reset_session(session_id: str):
         """Reset a session (clear messages and start fresh)"""
@@ -145,14 +211,14 @@ def build_router(webui) -> APIRouter:
         )
         return {"success": success}
 
-    @router.delete("/api/sessions/{session_id}/history")
+    @router.delete("/sessions/{session_id}/history")
     @handle_exceptions("erase session history")
     async def erase_session_history(session_id: str):
         """Erase distilled history files for a session."""
         success = await webui.coordinator.erase_history(session_id)
         return {"success": success}
 
-    @router.post("/api/sessions/{session_id}/disconnect")
+    @router.post("/sessions/{session_id}/disconnect")
     @handle_exceptions("disconnect session")
     async def disconnect_session(session_id: str):
         """Disconnect SDK but keep session state (for end session)"""
