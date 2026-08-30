@@ -349,10 +349,24 @@ class ApplicationService:
 
     async def import_mcp_configs(self, servers: dict, dry_run: bool) -> dict:
         from src.mcp_config_manager import McpServerType
+        from src.session_backend import BackendMode
 
         manager = self.coordinator.mcp_config_manager
         existing_configs = await manager.list_configs()  # FIX: was manager.configs.values()
         existing_by_name = {c.name: c for c in existing_configs}
+
+        # Issue #498 Pattern D: non-shared entries route to whichever store is
+        # currently active for non-shared configs. Existing-name dedup must check
+        # REMOTE's list too when REMOTE is configured, or a name that already
+        # exists on REMOTE (but not in the Hub's own local list) would be
+        # miscategorized as "create" and collide there instead of updating.
+        is_remote = self.coordinator.backend_mode == BackendMode.REMOTE
+        remote_by_name: dict[str, dict] = {}
+        if is_remote:
+            remote_configs = await self.coordinator.backend.list_mcp_configs()
+            remote_by_name = {
+                c["name"]: c for c in remote_configs if not c.get("shared_connection")
+            }
 
         preview = []
         imported = []
@@ -388,50 +402,73 @@ class ApplicationService:
                 )
                 continue
 
-            existing = existing_by_name.get(name)
+            # Issue #498 Pattern D: shared_connection entries always route to the
+            # Hub's own local store (never relay — "shared configs never leave the
+            # Hub"). Non-shared entries route to whichever store currently owns
+            # non-shared configs: the Hub's local store in LOCAL mode (unchanged),
+            # REMOTE in REMOTE mode.
+            shared = bool(server_data.get("shared_connection", False))
+            existing_local = existing_by_name.get(name)
+            existing_remote = remote_by_name.get(name) if is_remote and not shared else None
+            existing = existing_local if (shared or not is_remote) else existing_remote
             action = "update" if existing else "create"
             entry: dict = {
                 "name": name,
                 "action": action,
                 "config": dict(server_data),
             }
-            if existing:
-                entry["existing_id"] = existing.id
+            if existing is not None:
+                entry["existing_id"] = existing.id if shared or not is_remote else existing["id"]
 
             if not dry_run:
                 try:
                     oauth_data = server_data.get("oauth") or {}
                     oauth_client_id = oauth_data.get("clientId")
                     oauth_callback_port = oauth_data.get("callbackPort")
-                    if action == "create":
+                    common_kwargs = dict(
+                        name=name,
+                        server_type=server_type,
+                        command=server_data.get("command"),
+                        args=server_data.get("args") or [],
+                        env=server_data.get("env") or {},
+                        url=server_data.get("url"),
+                        headers=server_data.get("headers") or {},
+                        enabled=server_data.get("enabled", True),
+                        oauth_client_id=oauth_client_id,
+                        oauth_callback_port=oauth_callback_port,
+                    )
+
+                    if not shared and is_remote:
+                        # Relay-create/update on REMOTE — non-shared config, REMOTE
+                        # configured, so that's where it lives going forward.
+                        payload = {
+                            "name": name,
+                            "type": server_type.value,
+                            **{k: v for k, v in common_kwargs.items() if k not in ("name", "server_type")},
+                            "shared_connection": False,
+                        }
+                        if action == "create":
+                            result = await self.coordinator.backend.create_mcp_config(payload)
+                        else:
+                            result = await self.coordinator.backend.update_mcp_config(
+                                existing["id"], payload
+                            )
+                        if result is None:
+                            raise RuntimeError("REMOTE unreachable during import")
+                        entry["result"] = result
+                        imported.append(result)
+                    elif action == "create":
                         config = await manager.create_config(
-                            name=name,
-                            server_type=server_type,
-                            command=server_data.get("command"),
-                            args=server_data.get("args") or [],
-                            env=server_data.get("env") or {},
-                            url=server_data.get("url"),
-                            headers=server_data.get("headers") or {},
-                            enabled=server_data.get("enabled", True),
-                            oauth_client_id=oauth_client_id,
-                            oauth_callback_port=oauth_callback_port,
+                            shared_connection=shared, **common_kwargs
                         )
+                        entry["result"] = config.to_dict()
+                        imported.append(config.to_dict())
                     else:
                         config = await manager.update_config(
-                            config_id=existing.id,
-                            name=name,
-                            server_type=server_type,
-                            command=server_data.get("command"),
-                            args=server_data.get("args") or [],
-                            env=server_data.get("env") or {},
-                            url=server_data.get("url"),
-                            headers=server_data.get("headers") or {},
-                            enabled=server_data.get("enabled", True),
-                            oauth_client_id=oauth_client_id,
-                            oauth_callback_port=oauth_callback_port,
+                            config_id=existing.id, shared_connection=shared, **common_kwargs
                         )
-                    entry["result"] = config.to_dict()
-                    imported.append(config.to_dict())
+                        entry["result"] = config.to_dict()
+                        imported.append(config.to_dict())
                 except Exception as e:
                     entry["action"] = "skip"
                     entry["reason"] = str(e)

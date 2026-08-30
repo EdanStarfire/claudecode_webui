@@ -183,6 +183,41 @@ class RemoteBackend:
     def active_session_ids(self) -> list[str]:
         return list(self._active_session_ids)
 
+    async def list_mcp_configs(self) -> list[dict[str, Any]]:
+        """Fetch REMOTE's full MCP config list — used by the Pattern C fan-out-merge
+        in routers/mcp.py (list/export). This hits REMOTE's own unmodified
+        list_configs() handler, so it comes back containing BOTH REMOTE's shared and
+        non-shared entries; the caller is responsible for filtering to
+        shared_connection == False before merging with the Hub's own local configs
+        (taking this wholesale would leak REMOTE's own shared configs into the Hub's
+        view)."""
+        resp = await self._get("/mcp-configs", params={"limit": 10_000, "offset": 0})
+        if resp is None:
+            return []
+        return resp.json().get("configs", [])
+
+    async def create_mcp_config(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        """Create a non-shared MCP config on REMOTE (Pattern D import routing)."""
+        try:
+            resp = await self._client.post("/mcp-configs", json=payload)
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPError:
+            logger.exception("RemoteBackend create_mcp_config failed")
+            return None
+
+    async def update_mcp_config(
+        self, config_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Update a non-shared MCP config on REMOTE (Pattern D import routing)."""
+        try:
+            resp = await self._client.put(f"/mcp-configs/{config_id}", json=payload)
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPError:
+            logger.exception("RemoteBackend update_mcp_config failed")
+            return None
+
     # ------------------------------------------------------------------
     # Generic Pattern-A relay (issue #498 Batch 2+, see relay_client.py)
     # ------------------------------------------------------------------

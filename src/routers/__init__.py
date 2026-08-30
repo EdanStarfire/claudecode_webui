@@ -56,7 +56,7 @@ from . import (
 _RELAY_ELIGIBLE_MODULES = (
     poll, session_runtime, sessions, diff, edit_history, archives,
     projects, legion, fleet, files, filesystem, permissions, proxy, docker_status,
-    queue, schedules,
+    queue, schedules, mcp,
 )
 
 
@@ -78,7 +78,6 @@ def _register_frontend(app: FastAPI, webui) -> None:
     app.include_router(secrets.build_router(webui))
     app.include_router(profiles.build_router(webui))
     app.include_router(templates.build_router(webui))
-    app.include_router(mcp.build_router(webui))
     app.include_router(system.build_router(webui))
     app.include_router(session_routing.build_router(webui))
     for mod in _RELAY_ELIGIBLE_MODULES:

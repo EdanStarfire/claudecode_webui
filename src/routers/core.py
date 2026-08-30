@@ -1,8 +1,11 @@
-"""Core cross-cutting endpoints: /, /health, /api/auth/check.
+"""Core cross-cutting endpoints: /, /health, /api/auth/check, /oauth/callback.
 
 Issue #498: interrupt/permission-response moved to session_runtime.py so they mirror
 under /api/backend like the rest of session-domain routes — this file's remaining
-routes (/, /health, /api/auth/check) are frontend-only concepts with no REMOTE mirror.
+routes are frontend-only concepts with no REMOTE mirror (/oauth/callback handles a
+browser redirect back to the Hub's own OAuth flow — moved here from mcp.py so that
+file can convert to mount-relative paths without accidentally prefixing this
+non-/api, non-relay-eligible route).
 """
 
 from datetime import UTC, datetime
@@ -12,10 +15,26 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from ..exception_handlers import handle_exceptions
+from ..oauth_callback_listener_manager import render_oauth_callback
 
 
 def build_router(webui) -> APIRouter:
     router = APIRouter()
+
+    @router.get("/oauth/callback", response_class=HTMLResponse)
+    @handle_exceptions("handle oauth callback")
+    async def oauth_callback(request: Request):
+        """Handle OAuth 2.1 authorization code callback.
+
+        Exempt from auth middleware — this route is reached before any token exists.
+        On success broadcasts mcp_oauth_complete to all UI WebSocket clients.
+
+        Shares its parsing/rendering logic with per-config custom callback routes/listeners
+        (issue #1789) via render_oauth_callback().
+        """
+        return await render_oauth_callback(
+            request, webui.coordinator.oauth_callback_listener_manager.complete_and_broadcast
+        )
 
     @router.get("/", response_class=HTMLResponse)
     @handle_exceptions("serve root")
