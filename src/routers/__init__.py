@@ -56,7 +56,7 @@ from . import (
 _RELAY_ELIGIBLE_MODULES = (
     poll, session_runtime, sessions, diff, edit_history, archives,
     projects, legion, fleet, files, filesystem, permissions, proxy, docker_status,
-    queue, schedules, mcp,
+    queue, schedules, mcp, audit,
 )
 
 
@@ -70,7 +70,6 @@ def register_all(app: FastAPI, webui) -> None:
 
 def _register_frontend(app: FastAPI, webui) -> None:
     app.include_router(analytics.build_router(webui))
-    app.include_router(audit.build_router(webui))
     app.include_router(skills.build_router(webui))
     app.include_router(config.build_router(webui))
     app.include_router(core.build_router(webui))
