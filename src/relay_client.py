@@ -33,8 +33,20 @@ async def forward(coordinator, request: Request) -> Response:
         path = path[len("/api"):]
     body = await request.body()
 
+    # Content-Type must cross the wire too — FastAPI's body-to-Pydantic-model
+    # parsing depends on it; a raw byte relay with no Content-Type produces a
+    # 422 on REMOTE (it saw the body as an un-decoded string, not a dict).
+    forward_headers = {}
+    content_type = request.headers.get("content-type")
+    if content_type:
+        forward_headers["content-type"] = content_type
+
     resp = await coordinator.backend.relay_request(
-        request.method, path, params=list(request.query_params.multi_items()), content=body
+        request.method,
+        path,
+        params=list(request.query_params.multi_items()),
+        content=body,
+        headers=forward_headers,
     )
     if resp is None:
         return JSONResponse(status_code=502, content={"detail": "REMOTE unreachable"})

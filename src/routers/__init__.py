@@ -27,6 +27,7 @@ from . import (
     config,
     core,
     diff,
+    docker_status,
     edit_history,
     files,
     filesystem,
@@ -52,7 +53,10 @@ from . import (
 
 # Routers already converted to mount-relative paths — mirrored under /api/backend
 # in headless mode. Grows batch by batch as Batches 2-5 convert their own routers.
-_RELAY_ELIGIBLE_MODULES = (poll, session_runtime, sessions, diff, edit_history, archives)
+_RELAY_ELIGIBLE_MODULES = (
+    poll, session_runtime, sessions, diff, edit_history, archives,
+    projects, legion, fleet, files, filesystem, permissions, proxy, docker_status,
+)
 
 
 def register_all(app: FastAPI, webui) -> None:
@@ -66,24 +70,17 @@ def register_all(app: FastAPI, webui) -> None:
 def _register_frontend(app: FastAPI, webui) -> None:
     app.include_router(analytics.build_router(webui))
     app.include_router(audit.build_router(webui))
-    app.include_router(permissions.build_router(webui))
-    app.include_router(filesystem.build_router(webui))
     app.include_router(skills.build_router(webui))
     app.include_router(config.build_router(webui))
-    app.include_router(fleet.build_router(webui))
     app.include_router(core.build_router(webui))
     app.include_router(provider_catalog.build_router(webui))
-    app.include_router(proxy.build_router(webui))
     app.include_router(secrets.build_router(webui))
     app.include_router(profiles.build_router(webui))
     app.include_router(templates.build_router(webui))
     app.include_router(queue.build_router(webui))
-    app.include_router(legion.build_router(webui))
     app.include_router(mcp.build_router(webui))
     app.include_router(schedules.build_router(webui))
     app.include_router(system.build_router(webui))
-    app.include_router(files.build_router(webui))
-    app.include_router(projects.build_router(webui))
     app.include_router(session_routing.build_router(webui))
     for mod in _RELAY_ELIGIBLE_MODULES:
         app.include_router(mod.build_router(webui), prefix="/api")

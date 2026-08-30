@@ -4,9 +4,11 @@ import json
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
+from .. import relay_client
 from ..exception_handlers import handle_exceptions
+from ..session_backend import BackendMode
 from ..timestamp_utils import normalize_timestamp
 from ._models import CommSendRequest, MinionCreateRequest, ReparentRequest
 
@@ -14,10 +16,21 @@ from ._models import CommSendRequest, MinionCreateRequest, ReparentRequest
 def build_router(webui) -> APIRouter:
     router = APIRouter()
 
-    @router.get("/api/legions/{legion_id}/timeline")
+    def _is_remote() -> bool:
+        return webui.coordinator.backend_mode == BackendMode.REMOTE
+
+    # Issue #498: legion == project 1:1 (minions are sessions) — Pattern A
+    # wholesale relay when REMOTE is configured, same as projects.py. The raw
+    # timeline.jsonl read and the CommRouter-based send both relay unconditionally.
+
+    @router.get("/legions/{legion_id}/timeline")
     @handle_exceptions("get legion timeline")
-    async def get_legion_timeline(legion_id: str, limit: int = 100, offset: int = 0):
+    async def get_legion_timeline(
+        legion_id: str, request: Request, limit: int = 100, offset: int = 0
+    ):
         """Get Comms for legion timeline (all communications in the legion)"""
+        if _is_remote():
+            return await relay_client.forward(webui.coordinator, request)
         # Read all comms from the main legion timeline
         legion_dir = webui.coordinator.data_dir / "legions" / legion_id
         if not legion_dir.exists():
@@ -78,10 +91,12 @@ def build_router(webui) -> APIRouter:
             "offset": offset
         }
 
-    @router.get("/api/legions/{legion_id}/hierarchy")
+    @router.get("/legions/{legion_id}/hierarchy")
     @handle_exceptions("get legion hierarchy")
-    async def get_legion_hierarchy(legion_id: str):
+    async def get_legion_hierarchy(legion_id: str, request: Request):
         """Get complete minion hierarchy with user at root (issue #313: universal Legion)"""
+        if _is_remote():
+            return await relay_client.forward(webui.coordinator, request)
         # Issue #313: All projects support hierarchy - verify project exists
         if not await webui.service.validate_project_exists(legion_id):
             raise HTTPException(status_code=404, detail="Project not found")
@@ -96,10 +111,12 @@ def build_router(webui) -> APIRouter:
 
         return hierarchy
 
-    @router.post("/api/legions/{legion_id}/comms")
+    @router.post("/legions/{legion_id}/comms")
     @handle_exceptions("send comm to legion")
-    async def send_comm_to_legion(legion_id: str, request: CommSendRequest):
+    async def send_comm_to_legion(legion_id: str, request: CommSendRequest, http_request: Request):
         """Send a Comm in the legion"""
+        if _is_remote():
+            return await relay_client.forward(webui.coordinator, http_request)
         from src.models.legion_models import Comm, CommType
 
         legion = await webui.coordinator.legion_system.legion_coordinator.get_legion(legion_id)
@@ -130,10 +147,12 @@ def build_router(webui) -> APIRouter:
         else:
             raise HTTPException(status_code=500, detail="Failed to route comm")
 
-    @router.post("/api/legions/{legion_id}/minions")
+    @router.post("/legions/{legion_id}/minions")
     @handle_exceptions("create minion", value_error_status=400)
-    async def create_minion(legion_id: str, request: MinionCreateRequest):
+    async def create_minion(legion_id: str, request: MinionCreateRequest, http_request: Request):
         """Create a new minion in the project (issue #313: universal Legion)"""
+        if _is_remote():
+            return await relay_client.forward(webui.coordinator, http_request)
         # Verify project exists (all projects support minions - issue #313)
         project_dict = await webui.service.get_legion_project(legion_id)
         if not project_dict:
@@ -165,10 +184,14 @@ def build_router(webui) -> APIRouter:
             "minion": minion_info,
         }
 
-    @router.post("/api/legions/{legion_id}/minions/{minion_id}/reparent")
+    @router.post("/legions/{legion_id}/minions/{minion_id}/reparent")
     @handle_exceptions("reparent minion", value_error_status=400)
-    async def reparent_minion(legion_id: str, minion_id: str, request: ReparentRequest):
+    async def reparent_minion(
+        legion_id: str, minion_id: str, request: ReparentRequest, http_request: Request
+    ):
         """Move a minion to a new parent within the same legion (user-initiated)."""
+        if _is_remote():
+            return await relay_client.forward(webui.coordinator, http_request)
         if not await webui.service.validate_project_exists(legion_id):
             raise HTTPException(status_code=404, detail="Project not found")
 

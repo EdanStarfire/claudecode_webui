@@ -113,3 +113,94 @@ async def test_relay_returns_502_when_remote_unreachable(tmp_path):
         response = await client.get("/api/sessions/s1/diff")
 
     assert response.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_list_projects_relays_to_remote(tmp_path):
+    remote = _make_remote(tmp_path)
+    hub = ClaudeWebUI(data_dir=tmp_path / "hub_data5")
+    _wire_hub_to_remote(hub, remote)
+
+    expected = {"projects": [], "total": 0}
+    with patch.object(remote.service, "list_projects", new_callable=AsyncMock, return_value=expected):
+        async with AsyncClient(transport=ASGITransport(app=hub.app), base_url="http://test") as client:
+            response = await client.get("/api/projects")
+
+    assert response.status_code == 200
+    assert response.json() == expected
+
+
+@pytest.mark.asyncio
+async def test_fleet_halt_all_relays_to_remote(tmp_path):
+    remote = _make_remote(tmp_path)
+    hub = ClaudeWebUI(data_dir=tmp_path / "hub_data6")
+    _wire_hub_to_remote(hub, remote)
+
+    with patch.object(remote.service, "validate_project_exists", new_callable=AsyncMock, return_value=False):
+        async with AsyncClient(transport=ASGITransport(app=hub.app), base_url="http://test") as client:
+            response = await client.post("/api/legions/nope/halt-all")
+
+    # REMOTE answered (404 Project not found) rather than the Hub 404ing on its
+    # own local project_manager — proves the request actually crossed the relay.
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_filesystem_browse_relays_to_remote(tmp_path):
+    remote = _make_remote(tmp_path)
+    hub = ClaudeWebUI(data_dir=tmp_path / "hub_data7")
+    _wire_hub_to_remote(hub, remote)
+
+    async with AsyncClient(transport=ASGITransport(app=hub.app), base_url="http://test") as client:
+        response = await client.get("/api/filesystem/browse", params={"path": str(tmp_path)})
+
+    assert response.status_code == 200
+    assert response.json()["current_path"] == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_permissions_preview_relays_to_remote(tmp_path):
+    remote = _make_remote(tmp_path)
+    hub = ClaudeWebUI(data_dir=tmp_path / "hub_data8")
+    _wire_hub_to_remote(hub, remote)
+
+    async with AsyncClient(transport=ASGITransport(app=hub.app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/permissions/preview", json={"working_directory": str(tmp_path)}
+        )
+
+    assert response.status_code == 200
+    assert "permissions" in response.json()
+
+
+@pytest.mark.asyncio
+async def test_docker_status_relays_to_remote(tmp_path):
+    remote = _make_remote(tmp_path)
+    hub = ClaudeWebUI(data_dir=tmp_path / "hub_data9")
+    _wire_hub_to_remote(hub, remote)
+
+    expected = {"available": False, "images": []}
+    with patch("src.docker_utils.check_docker_available", new=AsyncMock(return_value=expected)):
+        async with AsyncClient(transport=ASGITransport(app=hub.app), base_url="http://test") as client:
+            response = await client.get("/api/system/docker-status")
+
+    assert response.status_code == 200
+    assert response.json() == expected
+
+
+@pytest.mark.asyncio
+async def test_upload_file_relays_multipart_to_remote(tmp_path):
+    remote = _make_remote(tmp_path)
+    hub = ClaudeWebUI(data_dir=tmp_path / "hub_data10")
+    _wire_hub_to_remote(hub, remote)
+
+    with patch.object(remote.service, "get_session_exists", new_callable=AsyncMock, return_value=False):
+        async with AsyncClient(transport=ASGITransport(app=hub.app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/sessions/s1/files",
+                files={"file": ("hello.txt", b"hello world", "text/plain")},
+            )
+
+    # REMOTE answered (404 Session not found) — proves the multipart body actually
+    # crossed the relay rather than being consumed/emptied before forwarding.
+    assert response.status_code == 404

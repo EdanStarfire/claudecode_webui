@@ -193,6 +193,7 @@ class RemoteBackend:
         path: str,
         params: Any = None,
         content: bytes | None = None,
+        headers: dict[str, str] | None = None,
     ) -> httpx.Response | None:
         """Replay an arbitrary request against REMOTE's mirrored route verbatim.
 
@@ -200,10 +201,15 @@ class RemoteBackend:
         keep in sync — the response is the answer, byte-for-byte. Returns None
         on connection failure (never raises — REMOTE being down must not crash
         the Hub); HTTP error statuses from REMOTE itself (404/400/409/...) are
-        returned as-is so the caller can forward them verbatim too.
+        returned as-is so the caller can forward them verbatim too. `headers`
+        merges with (and can't override) the client's own Authorization bearer
+        header — used to carry Content-Type through (required for FastAPI's
+        body-to-Pydantic-model parsing, and for multipart boundaries).
         """
         try:
-            return await self._client.request(method, path, params=params, content=content)
+            return await self._client.request(
+                method, path, params=params, content=content, headers=headers
+            )
         except httpx.HTTPError:
             logger.exception(f"RemoteBackend relay {method} {path} failed")
             return None
