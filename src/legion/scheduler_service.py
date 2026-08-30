@@ -108,6 +108,16 @@ class SchedulerService:
 
     async def _tick(self):
         """Evaluate all active schedules and fire any that are due."""
+        # Issue #498: once REMOTE is configured, schedules.py's routes relay
+        # wholesale and schedule definitions live authoritatively on REMOTE, whose
+        # own already-running SchedulerService fires them. This guard is
+        # belt-and-suspenders against pre-existing local schedule state from
+        # before a LOCAL->REMOTE mode switch (self._schedules/schedules.json
+        # loaded unconditionally at boot) — without it this loop would still fire
+        # stale local schedules now orphaned from REMOTE's actual session state.
+        from ..session_backend import BackendMode
+        if self.system.session_coordinator.backend_mode == BackendMode.REMOTE:
+            return
         now = datetime.now(UTC).timestamp()
         for schedule in list(self._schedules.values()):
             if schedule.status != ScheduleStatus.ACTIVE:
