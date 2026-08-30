@@ -703,6 +703,12 @@ class ClaudeWebUI:
         from .config_manager import load_config
         await self.coordinator.initialize()
 
+        # Issue #498: start the single shared audit-stream relay task if REMOTE is
+        # configured (Batch 5, Pattern B) — see RemoteBackend.start_audit_relay.
+        from .session_backend import BackendMode
+        if self.coordinator.backend_mode == BackendMode.REMOTE:
+            await self.coordinator.backend.start_audit_relay(self.audit_queue)
+
         try:
             await self.litellm_proxy_manager.start()
         except Exception:

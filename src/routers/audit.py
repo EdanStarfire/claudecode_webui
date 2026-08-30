@@ -126,7 +126,29 @@ def build_router(webui) -> APIRouter:
     ):
         """Long-poll for new audit events (Stream tab live tail)."""
         if _is_remote():
-            return await relay_client.forward(webui.coordinator, request)
+            # Pattern B, not a per-request relay: /api/poll/audit has no Hub-side
+            # session scoping, so N simultaneous browser tabs/consumers would
+            # otherwise each open their own independent long-poll through to
+            # REMOTE. Instead, a single shared background task
+            # (RemoteBackend.start_audit_relay, started in
+            # ClaudeWebUI.initialize()) continuously fills the Hub's local
+            # audit_queue from REMOTE's stream, and every Hub-side consumer reads
+            # from that one local buffer via EventQueue's existing multi-waiter
+            # fan-out — the exact mechanism session poll already relies on.
+            #
+            # Accepted cold-start edge case: the incoming `cursor` here may still
+            # be the frontend's initial DB-timestamp value (from `since`) rather
+            # than a real EventQueue position the first time a client polls after
+            # REMOTE mode starts — events buffered before that first call can be
+            # skipped once; every poll after that is a normal, correct
+            # EventQueue-cursor round trip (the frontend treats cursor/next_cursor
+            # as opaque and just relays back whatever it was given).
+            audit_queue = webui.audit_queue
+            effective_timeout = min(float(timeout), 25.0)
+            int_cursor = int(cursor) if cursor else 0
+            await audit_queue.wait_for_events(int_cursor, timeout=effective_timeout)
+            events, next_cursor = audit_queue.events_since(int_cursor)
+            return {"events": events, "next_cursor": next_cursor}
         qs = _query_service()
         if qs is None:
             return _unavailable()

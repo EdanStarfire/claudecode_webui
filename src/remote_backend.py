@@ -49,6 +49,8 @@ class RemoteBackend:
         self._session_queues = session_queues
         self._relay_tasks: dict[str, asyncio.Task] = {}
         self._active_session_ids: set[str] = set()
+        self._audit_relay_task: asyncio.Task | None = None
+        self._audit_relay_active = False
 
     async def aclose(self) -> None:
         tasks = list(self._relay_tasks.values())
@@ -60,7 +62,84 @@ class RemoteBackend:
             except asyncio.CancelledError:
                 pass
         self._relay_tasks.clear()
+        await self.stop_audit_relay()
         await self._client.aclose()
+
+    # ------------------------------------------------------------------
+    # Audit relay (issue #498 Batch 5, Pattern B — single shared upstream
+    # connection, not one per browser poller)
+    # ------------------------------------------------------------------
+
+    async def start_audit_relay(self, audit_queue: EventQueue) -> None:
+        """Start the single background task that keeps the Hub's local audit_queue
+        filled from REMOTE's audit stream.
+
+        Deliberately NOT a per-request relay: /api/poll/audit has no Hub-side
+        session scoping, so an admin view opened in N browser tabs (or by N
+        different users) would otherwise open N independent long-poll connections
+        through to REMOTE — exactly the upstream-connection multiplication Pattern
+        B exists to prevent (the same reason start_session's per-session relay
+        loop exists, generalized to a single global stream instead of N
+        per-session streams). All Hub-side consumers instead read from this one
+        local buffer via EventQueue's existing multi-waiter fan-out.
+        """
+        if self._audit_relay_task is not None and not self._audit_relay_task.done():
+            return
+        self._audit_relay_active = True
+        self._audit_relay_task = asyncio.create_task(
+            self._audit_relay_poll_loop(audit_queue), name="remote_audit_relay_poll"
+        )
+
+    async def stop_audit_relay(self) -> None:
+        self._audit_relay_active = False
+        task = self._audit_relay_task
+        self._audit_relay_task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    async def _audit_relay_poll_loop(self, audit_queue: EventQueue) -> None:
+        """Long-poll REMOTE's mirrored /poll/audit and buffer each returned event
+        into the Hub's local audit_queue. Uses REMOTE's own DB-timestamp cursor
+        internally (private to this loop) to keep fetching from REMOTE; the events
+        it appends get their own independent position in the Hub-local
+        EventQueue's integer cursor space, which is what /api/poll/audit actually
+        serves to browser clients in REMOTE mode (see routers/audit.py) — the two
+        cursor spaces are intentionally decoupled, same as session poll relay.
+        """
+        cursor: float = 0.0
+        failures = 0
+        while self._audit_relay_active:
+            await asyncio.sleep(0)
+            try:
+                resp = await self._client.get(
+                    "/poll/audit", params={"cursor": cursor, "timeout": _POLL_TIMEOUT_SECONDS}
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                events = data.get("events", [])
+                next_cursor = data.get("next_cursor")
+                if next_cursor is not None:
+                    cursor = next_cursor
+                failures = 0
+                for event in events:
+                    audit_queue.append(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                failures += 1
+                logger.warning(
+                    f"Audit relay poll failed (attempt {failures}/{MAX_RELAY_FAILURES})",
+                    exc_info=True,
+                )
+                if failures >= MAX_RELAY_FAILURES:
+                    logger.error(f"Giving up audit relay poll after {failures} failures")
+                    self._audit_relay_active = False
+                    break
+                await asyncio.sleep(min(2**failures, 30))
 
     # ------------------------------------------------------------------
     # SessionBackend Protocol
