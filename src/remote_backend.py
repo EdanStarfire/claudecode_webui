@@ -184,6 +184,31 @@ class RemoteBackend:
         return list(self._active_session_ids)
 
     # ------------------------------------------------------------------
+    # Generic Pattern-A relay (issue #498 Batch 2+, see relay_client.py)
+    # ------------------------------------------------------------------
+
+    async def relay_request(
+        self,
+        method: str,
+        path: str,
+        params: Any = None,
+        content: bytes | None = None,
+    ) -> httpx.Response | None:
+        """Replay an arbitrary request against REMOTE's mirrored route verbatim.
+
+        Used by relay_client.forward() for routers with no Hub-local state to
+        keep in sync — the response is the answer, byte-for-byte. Returns None
+        on connection failure (never raises — REMOTE being down must not crash
+        the Hub); HTTP error statuses from REMOTE itself (404/400/409/...) are
+        returned as-is so the caller can forward them verbatim too.
+        """
+        try:
+            return await self._client.request(method, path, params=params, content=content)
+        except httpx.HTTPError:
+            logger.exception(f"RemoteBackend relay {method} {path} failed")
+            return None
+
+    # ------------------------------------------------------------------
     # internals
     # ------------------------------------------------------------------
 

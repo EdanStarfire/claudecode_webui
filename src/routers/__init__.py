@@ -52,7 +52,7 @@ from . import (
 
 # Routers already converted to mount-relative paths — mirrored under /api/backend
 # in headless mode. Grows batch by batch as Batches 2-5 convert their own routers.
-_RELAY_ELIGIBLE_MODULES = (poll, session_runtime, sessions)
+_RELAY_ELIGIBLE_MODULES = (poll, session_runtime, sessions, diff, edit_history, archives)
 
 
 def register_all(app: FastAPI, webui) -> None:
@@ -76,15 +76,12 @@ def _register_frontend(app: FastAPI, webui) -> None:
     app.include_router(proxy.build_router(webui))
     app.include_router(secrets.build_router(webui))
     app.include_router(profiles.build_router(webui))
-    app.include_router(archives.build_router(webui))
     app.include_router(templates.build_router(webui))
     app.include_router(queue.build_router(webui))
     app.include_router(legion.build_router(webui))
     app.include_router(mcp.build_router(webui))
     app.include_router(schedules.build_router(webui))
     app.include_router(system.build_router(webui))
-    app.include_router(diff.build_router(webui))
-    app.include_router(edit_history.build_router(webui))
     app.include_router(files.build_router(webui))
     app.include_router(projects.build_router(webui))
     app.include_router(session_routing.build_router(webui))
