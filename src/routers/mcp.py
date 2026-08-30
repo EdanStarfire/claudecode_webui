@@ -224,6 +224,26 @@ def build_router(webui) -> APIRouter:
         """Update an existing MCP server configuration"""
         if _is_remote() and await _local_shared_config(config_id) is None:
             return await relay_client.forward(webui.coordinator, http_request)
+        # Issue #498: while REMOTE is configured, flipping shared_connection on an
+        # existing config would silently orphan it — a shared->non-shared flip drops
+        # out of every future _local_shared_config() lookup (so subsequent
+        # get/delete/oauth/etc. calls would relay to REMOTE, which never had this
+        # id), and a non-shared->shared flip on a REMOTE-hosted config has no way to
+        # actually move the record to the Hub's local store. Reject rather than
+        # silently corrupt state; the safe path is delete + recreate.
+        if (
+            _is_remote()
+            and request.shared_connection is not None
+        ):
+            current = await webui.coordinator.mcp_config_manager.get_config(config_id)
+            if current is not None and request.shared_connection != current.shared_connection:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Cannot change shared_connection while REMOTE is configured — "
+                        "delete and recreate the config instead"
+                    ),
+                )
         # Issue #1789: only forward oauth_custom_callback_path/port when the caller actually
         # set them. Unlike the request's other fields, these two are the sole way to *clear*
         # a live custom callback back to the default — always forwarding them (even when

@@ -1333,7 +1333,12 @@ class SessionCoordinator:
         """Start a session with SDK integration"""
         if self.backend_mode == BackendMode.REMOTE:
             started, error_message = await self.backend.start_session(
-                session_id, permission_callback=permission_callback
+                session_id,
+                permission_callback=permission_callback,
+                # Without this, RemoteBackend's relay-poll loop has nothing to call
+                # after MAX_RELAY_FAILURES, so a REMOTE outage never surfaces as
+                # SessionState.ERROR — the session just silently stops updating.
+                error_callback=self._create_error_callback(session_id),
             )
             # Issue #498: keep the Hub's own session_manager state in sync even though
             # the SDK itself runs on REMOTE — every other coordinator method (interrupt,

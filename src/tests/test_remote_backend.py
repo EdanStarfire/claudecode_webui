@@ -105,6 +105,11 @@ async def test_start_session_success_spawns_relay_loop_that_forwards_events():
         if request.url.path == "/api/backend/sessions/s1/start":
             return httpx.Response(200)
         if request.url.path == "/api/backend/poll/session/s1":
+            # Regression check: routers/poll.py's poll_session() reads a "since"
+            # query param, not "cursor" — sending the wrong name would be silently
+            # ignored by FastAPI and re-fetch the full backlog every iteration.
+            assert "since" in request.url.params
+            assert "cursor" not in request.url.params
             poll_count["n"] += 1
             if poll_count["n"] == 1:
                 return httpx.Response(

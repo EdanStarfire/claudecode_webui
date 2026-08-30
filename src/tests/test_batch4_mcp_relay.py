@@ -198,3 +198,26 @@ async def test_oauth_callback_route_unaffected_by_mcp_split(tmp_path):
     # No state/code query params — expect a well-formed (non-404) error response,
     # proving the route itself is registered and reachable.
     assert response.status_code != 404
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_shared_connection_flip_in_remote_mode(tmp_path):
+    """Flipping shared_connection via PUT while REMOTE is configured would orphan
+    the config (it stops matching _local_shared_config's routing rule) — must be
+    rejected rather than silently applied."""
+    remote = _make_remote(tmp_path)
+    hub = ClaudeWebUI(data_dir=tmp_path / "hub_data9")
+    config = await hub.coordinator.mcp_config_manager.create_config(
+        name="flip-me", server_type="stdio", command="echo hi", shared_connection=True,
+    )
+    _wire_hub_to_remote(hub, remote)
+
+    async with AsyncClient(transport=ASGITransport(app=hub.app), base_url="http://test") as client:
+        response = await client.put(
+            f"/api/mcp-configs/{config.id}", json={"shared_connection": False}
+        )
+
+    assert response.status_code == 400
+    # Unchanged on the Hub's local store.
+    unchanged = await hub.coordinator.mcp_config_manager.get_config(config.id)
+    assert unchanged.shared_connection is True

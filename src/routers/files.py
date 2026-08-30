@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from .. import relay_client
 from ..exception_handlers import handle_exceptions
@@ -49,8 +50,12 @@ def build_router(webui) -> APIRouter:
 
         form = await request.form()
         file = form.get("file")
-        if file is None:
-            raise HTTPException(status_code=400, detail="Missing 'file' field")
+        # Manual form parsing loses FastAPI's automatic UploadFile validation (used
+        # to 422 here) — a "file" field sent as a plain text part instead of an
+        # actual file upload comes back as a str, not an UploadFile; without this
+        # check that reaches file.filename below and 500s instead of a clean 400.
+        if not isinstance(file, StarletteUploadFile):
+            raise HTTPException(status_code=400, detail="'file' must be an uploaded file")
 
         # Read file content
         file_content = await file.read()

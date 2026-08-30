@@ -64,3 +64,31 @@ async def test_headless_mode_misconfigured_token_refuses_everything(tmp_path):
             "/api/backend/sessions", headers={"Authorization": "Bearer anything"}
         )
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_create_session_rejects_colliding_caller_supplied_id(tmp_path):
+    """A caller-supplied session_id that already exists must 409, not silently
+    overwrite the existing session's state.json (issue #498/#499 §11.1)."""
+    data_dir = tmp_path / "data"
+    (data_dir / "projects").mkdir(parents=True)
+    (data_dir / "sessions").mkdir(parents=True)
+    webui = ClaudeWebUI(data_dir=data_dir)
+    async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+        project_resp = await client.post(
+            "/api/projects", json={"name": "p1", "working_directory": str(tmp_path)}
+        )
+        assert project_resp.status_code == 200, project_resp.text
+        project_id = project_resp.json()["project"]["project_id"]
+
+        first = await client.post(
+            "/api/sessions",
+            json={"project_id": project_id, "session_id": "fixed-id-1"},
+        )
+        assert first.status_code == 200
+
+        second = await client.post(
+            "/api/sessions",
+            json={"project_id": project_id, "session_id": "fixed-id-1"},
+        )
+    assert second.status_code == 409

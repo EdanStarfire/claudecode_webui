@@ -375,7 +375,13 @@ class RemoteBackend:
             try:
                 resp = await self._client.get(
                     f"/poll/session/{session_id}",
-                    params={"cursor": cursor, "timeout": _POLL_TIMEOUT_SECONDS},
+                    # poll_session's query param is named "since", not "cursor" (see
+                    # routers/poll.py) — sending "cursor" was silently ignored by
+                    # FastAPI, so every iteration re-fetched from since=0 and
+                    # re-appended REMOTE's entire event backlog into the Hub's local
+                    # EventQueue on every poll (issue #498 bug, caught in review: the
+                    # test's MockTransport handler never asserted on query params).
+                    params={"since": cursor, "timeout": _POLL_TIMEOUT_SECONDS},
                 )
                 resp.raise_for_status()
                 data = resp.json()

@@ -33,6 +33,10 @@ def build_router(webui) -> APIRouter:
         # Issue #498/#499: honor a caller-supplied session_id (so a Hub and REMOTE can
         # agree on the same id when relaying); fall back to generating one otherwise.
         session_id = request.session_id or str(uuid.uuid4())
+        if request.session_id and await webui.service.get_session_exists(session_id):
+            raise HTTPException(
+                status_code=409, detail=f"Session {session_id} already exists"
+            )
 
         if request.project_id:
             if not await webui.service.validate_project_exists(request.project_id):
