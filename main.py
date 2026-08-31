@@ -65,6 +65,20 @@ def main():
              '(auto-generated if omitted)'
     )
 
+    # Hub -> REMOTE backend connection (issue #499): manually-configured stopgap
+    # ahead of #1818's real pairing/registration flow — not a replacement for it.
+    parser.add_argument(
+        '--remote-backend-url', type=str, default=None,
+        help='Connect this Hub to a REMOTE backend at this base URL instead of '
+             'running sessions locally. Manually-configured stopgap ahead of '
+             "#1818's real pairing/registration flow — not a replacement for it."
+    )
+    parser.add_argument(
+        '--remote-backend-token', type=str, default=None,
+        help='Bearer token for outbound calls to the REMOTE backend configured '
+             'via --remote-backend-url'
+    )
+
     # Mock SDK mode (for browser automation testing — issue #561)
     parser.add_argument(
         '--mock-sdk', action='store_true',
@@ -174,6 +188,8 @@ def main():
     # mount, so the browser-facing auth banner below doesn't apply to it.
     if args.backend_token and not args.headless_backend:
         parser.error("--backend-token requires --headless-backend")
+    if args.remote_backend_token and not args.remote_backend_url:
+        parser.error("--remote-backend-token requires --remote-backend-url")
     backend_mode = "headless" if args.headless_backend else "frontend"
     backend_auth_token = None
     if args.headless_backend:
@@ -194,6 +210,9 @@ def main():
     else:
         print("Authentication disabled (localhost binding)")
 
+    if args.remote_backend_url:
+        print(f"Dispatching sessions to REMOTE backend at {args.remote_backend_url}")
+
     # Advertise the server's internal URL so docker proxy sidecars can call back on the
     # right port. The proxy addon reads WEBUI_BASE_URL; without this it defaults to :8000.
     import os as _os
@@ -212,6 +231,8 @@ def main():
         port=args.port,
         backend_mode=backend_mode,
         backend_auth_token=backend_auth_token,
+        remote_backend_url=args.remote_backend_url,
+        remote_backend_token=args.remote_backend_token,
     )
 
     # Run the server

@@ -1,4 +1,4 @@
-"""Core cross-cutting endpoints: /, /health, /api/auth/check, /oauth/callback.
+"""Core cross-cutting endpoints: /, /api/auth/check, /oauth/callback.
 
 Issue #498: interrupt/permission-response moved to session_runtime.py so they mirror
 under /api/backend like the rest of session-domain routes — this file's remaining
@@ -6,9 +6,11 @@ routes are frontend-only concepts with no REMOTE mirror (/oauth/callback handles
 browser redirect back to the Hub's own OAuth flow — moved here from mcp.py so that
 file can convert to mount-relative paths without accidentally prefixing this
 non-/api, non-relay-eligible route).
+
+Issue #499: /health moved to health.py so it can also be registered (unauthenticated)
+on the headless mount, which does not otherwise include this router.
 """
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -48,12 +50,6 @@ def build_router(webui) -> APIRouter:
                 headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
             )
         return HTMLResponse(content=webui._default_html(), status_code=200)
-
-    @router.get("/health")
-    @handle_exceptions("health check")
-    async def health_check():
-        """Health check endpoint"""
-        return {"status": "healthy", "timestamp": datetime.now(UTC).isoformat()}
 
     @router.get("/api/auth/check")
     @handle_exceptions("check auth")

@@ -1,0 +1,78 @@
+# Minimal production image for `--headless-backend` mode (issue #499).
+#
+# Deliberately leaner than docker/Dockerfile.dev (dev/testing tooling image): no
+# Node.js, Chromium/Playwright, or gh CLI, and no frontend build step — headless
+# mode serves no UI and skips the frontend/dist existence check entirely
+# (backend_mode == "headless" in web_server.py).
+#
+# Build:
+#   docker build -f docker/Dockerfile.backend -t claudecode-webui-backend:local .
+#
+# Run:
+#   docker run -p 8000:8000 claudecode-webui-backend:local \
+#     --backend-token=<token>
+#
+# --headless-backend --host 0.0.0.0 are baked into ENTRYPOINT (not CMD) so extra
+# `docker run` args (--backend-token, --data-dir, ...) APPEND to them rather than
+# replacing them — Docker replaces CMD wholesale with any args given after the
+# image name, it does not merge them with CMD's defaults.
+#
+# --host 0.0.0.0 requires network-binding to be acknowledged (main.py's
+# check_network_binding()); baked into the image's config.json below since a
+# container is only reachable at all via its published port (docker run -p) in
+# the first place, so the operator has already made that call.
+#
+# Out of scope for this image: Docker Compose / Kubernetes manifests — a
+# follow-up once #1818 gives multi-backend deployment a real reason to exist.
+
+FROM debian:bookworm-slim
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    git
+
+RUN useradd -m -s /bin/bash claude
+USER claude
+WORKDIR /home/claude/app
+
+# ---------- UV Python package manager ----------
+RUN curl -fsSL https://astral.sh/uv/install.sh | bash
+ENV PATH="/home/claude/.local/bin:${PATH}"
+ENV UV_NATIVE_TLS=1
+ENV UV_CACHE_DIR=/home/claude/.cache/uv
+ENV UV_LINK_MODE=copy
+
+# ---------- Pre-warm dependency layer (cached until pyproject.toml/uv.lock change) ----------
+COPY --chown=claude:claude pyproject.toml uv.lock ./
+RUN uv python install 3.13 \
+    && uv sync --frozen --no-install-project
+
+# ---------- Claude Code CLI ----------
+# claude-agent-sdk shells out to this binary for real SDK sessions server-side.
+# Bump in lockstep with claude-agent-sdk in pyproject.toml/uv.lock.
+ARG CLAUDE_CODE_VERSION=2.1.220
+RUN curl -fsSL https://claude.ai/install.sh | bash -s ${CLAUDE_CODE_VERSION}
+
+# ---------- Application code ----------
+COPY --chown=claude:claude main.py ./
+COPY --chown=claude:claude src ./src
+RUN uv sync --frozen
+
+# Pre-acknowledge network binding: main.py refuses to bind non-localhost hosts
+# without this (src/config_manager.py's check_network_binding()), but binding
+# 0.0.0.0 is required for the container's published port to reach anything.
+RUN mkdir -p /home/claude/.config/cc_webui && \
+    printf '{\n  "networking": {\n    "allow_network_binding": true,\n    "acknowledged_risk": true\n  }\n}\n' \
+    > /home/claude/.config/cc_webui/config.json
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8000/health/ready || exit 1
+
+ENTRYPOINT ["uv", "run", "python", "main.py", "--headless-backend", "--host", "0.0.0.0"]
+CMD []

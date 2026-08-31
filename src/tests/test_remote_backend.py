@@ -1,12 +1,15 @@
 """Unit tests for RemoteBackend (issue #498) against a mocked httpx transport."""
 
 import asyncio
+import json
 
 import httpx
 import pytest
 
 from ..event_queue import EventQueue
 from ..remote_backend import RemoteBackend
+from ..session_backend import BackendMode
+from ..web_server import ClaudeWebUI
 
 
 def _backend_with_handler(handler, session_queues=None):
@@ -191,3 +194,84 @@ async def test_terminate_session_stops_relay_and_relays_call():
     assert "s1" not in backend._active_session_ids
     assert "s1" not in backend._relay_tasks
     assert "/api/backend/sessions/s1/terminate" in calls
+
+
+# ----------------------------------------------------------------------------
+# --remote-backend-url / --remote-backend-token CLI wiring (issue #499)
+# ----------------------------------------------------------------------------
+
+
+def test_cli_remote_backend_url_wires_remote_without_config_file(tmp_path):
+    """--remote-backend-url alone (no config file involved) results in
+    coordinator.backend_mode == REMOTE with the CLI-supplied URL/token."""
+    webui = ClaudeWebUI(
+        data_dir=tmp_path / "data",
+        remote_backend_url="http://cli-remote.example",
+        remote_backend_token="cli-token",
+    )
+    assert webui.coordinator.backend_mode == BackendMode.REMOTE
+    assert isinstance(webui.coordinator.backend, RemoteBackend)
+    assert webui.coordinator.backend._base_url == "http://cli-remote.example"
+    assert webui.coordinator.backend._client.headers["authorization"] == "Bearer cli-token"
+
+
+def test_cli_remote_backend_url_wins_wholesale_over_config_file(tmp_path):
+    """A CLI-supplied --remote-backend-url replaces the config-file URL+token pair
+    wholesale, rather than pairing the new URL with a stale config-file token."""
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps({
+        "backend": {
+            "mode": "frontend",
+            "remote_base_url": "http://config-file-remote.example",
+            "remote_auth_token": "config-file-token",
+        },
+    }))
+
+    webui = ClaudeWebUI(
+        data_dir=tmp_path / "data",
+        config_file=config_file,
+        remote_backend_url="http://cli-remote.example",
+        remote_backend_token="cli-token",
+    )
+    assert webui.coordinator.backend_mode == BackendMode.REMOTE
+    assert webui.coordinator.backend._base_url == "http://cli-remote.example"
+    assert webui.coordinator.backend._client.headers["authorization"] == "Bearer cli-token"
+
+
+def test_cli_remote_backend_url_without_token_does_not_inherit_config_file_token(tmp_path):
+    """CLI URL with no CLI token must not silently pair with the config file's token
+    for a (potentially different) remote — the pair is replaced wholesale."""
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps({
+        "backend": {
+            "mode": "frontend",
+            "remote_base_url": "http://config-file-remote.example",
+            "remote_auth_token": "config-file-token",
+        },
+    }))
+
+    webui = ClaudeWebUI(
+        data_dir=tmp_path / "data",
+        config_file=config_file,
+        remote_backend_url="http://cli-remote.example",
+    )
+    assert webui.coordinator.backend_mode == BackendMode.REMOTE
+    assert webui.coordinator.backend._base_url == "http://cli-remote.example"
+    assert webui.coordinator.backend._client.headers["authorization"] == "Bearer "
+
+
+def test_no_cli_remote_backend_url_falls_back_to_config_file_pair(tmp_path):
+    """With no CLI override, the config file's REMOTE pair is used as-is."""
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps({
+        "backend": {
+            "mode": "frontend",
+            "remote_base_url": "http://config-file-remote.example",
+            "remote_auth_token": "config-file-token",
+        },
+    }))
+
+    webui = ClaudeWebUI(data_dir=tmp_path / "data", config_file=config_file)
+    assert webui.coordinator.backend_mode == BackendMode.REMOTE
+    assert webui.coordinator.backend._base_url == "http://config-file-remote.example"
+    assert webui.coordinator.backend._client.headers["authorization"] == "Bearer config-file-token"

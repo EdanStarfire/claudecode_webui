@@ -32,6 +32,7 @@ from . import (
     files,
     filesystem,
     fleet,
+    health,
     legion,
     mcp,
     permissions,
@@ -52,7 +53,8 @@ from . import (
 )
 
 # Routers already converted to mount-relative paths — mirrored under /api/backend
-# in headless mode. Grows batch by batch as Batches 2-5 convert their own routers.
+# in headless mode (issue #499's health.py is the sole exception: unprefixed and
+# unauthenticated on both mounts, registered directly rather than via this tuple).
 _RELAY_ELIGIBLE_MODULES = (
     poll, session_runtime, sessions, diff, edit_history, archives,
     projects, legion, fleet, files, filesystem, permissions, proxy, docker_status,
@@ -73,6 +75,7 @@ def _register_frontend(app: FastAPI, webui) -> None:
     app.include_router(skills.build_router(webui))
     app.include_router(config.build_router(webui))
     app.include_router(core.build_router(webui))
+    app.include_router(health.build_router(webui))
     app.include_router(provider_catalog.build_router(webui))
     app.include_router(secrets.build_router(webui))
     app.include_router(profiles.build_router(webui))
@@ -84,7 +87,13 @@ def _register_frontend(app: FastAPI, webui) -> None:
 
 
 def _register_headless(app: FastAPI, webui) -> None:
-    """Headless mount: /api/backend/* only, bearer-gated, no UI, no /api/*."""
+    """Headless mount: /api/backend/* only, bearer-gated, no UI, no /api/*.
+
+    Exception (issue #499): /health and /health/ready are registered unprefixed and
+    outside the bearer-auth dependency group — orchestrator liveness/readiness probes
+    can't carry a token.
+    """
+    app.include_router(health.build_router(webui))
     auth_dep = Depends(backend_auth.build_backend_bearer_auth(webui))
     app.include_router(
         backend_auth.build_router(webui), prefix="/api/backend", dependencies=[auth_dep]

@@ -58,7 +58,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     """
 
     EXEMPT_PATHS = {
-        '/', '/health', '/api/auth/check', '/oauth/callback',
+        '/', '/health', '/health/ready', '/api/auth/check', '/oauth/callback',
         # Public static assets from frontend/public/ — served at root without hashing,
         # must be accessible without a token (browsers fetch favicons unauthenticated).
         '/favicon.ico', '/favicon-16x16.png', '/favicon-32x32.png',
@@ -161,8 +161,13 @@ class ClaudeWebUI:
                  config_file: Path | None = None,
                  auth_token: str | None = None, auth_enabled: bool = False,
                  host: str = "127.0.0.1", port: int = 8000,
-                 backend_mode: str = "frontend", backend_auth_token: str | None = None):
+                 backend_mode: str = "frontend", backend_auth_token: str | None = None,
+                 remote_backend_url: str | None = None, remote_backend_token: str | None = None):
         self.app = FastAPI(title="Claude Code WebUI", version="1.0.0")
+        # Issue #499: readiness state for GET /health/ready — false until initialize()
+        # completes, flipped back to false at the start of cleanup() so orchestrators
+        # stop routing new traffic during shutdown-drain while liveness stays healthy.
+        self._ready = False
         self.host = host
         self.port = port
         self.coordinator = SessionCoordinator(data_dir, experimental=experimental, host=host, port=port)
@@ -184,8 +189,11 @@ class ClaudeWebUI:
         self.backend_auth_token = backend_auth_token
         if self.backend_mode == "headless":
             # Headless mode's only auth mechanism is the per-route backend bearer
-            # dependency — AuthMiddleware's EXEMPT_PATHS (/, /health, ...) don't even
-            # exist on this mount, so the browser-facing operator token never applies.
+            # dependency — AuthMiddleware itself is never added to this mount (see
+            # create_app()), so the browser-facing operator token never applies.
+            # /health and /health/ready (issue #499) are the sole routes registered
+            # unauthenticated on this mount; everything else lives under
+            # /api/backend/* behind the bearer dependency.
             self.auth_enabled = False
 
         # Wire mock SDK factory if mock mode active (issue #561)
@@ -203,19 +211,26 @@ class ClaudeWebUI:
         from .config_manager import load_config as _load_cfg
         _cfg = _load_cfg(config_file) if config_file else _load_cfg()
 
-        # Issue #498: dispatch sessions to a configured REMOTE instead of running them
-        # locally. Independent of this process's own mount mode (backend_mode below) —
-        # a frontend-mode Hub can relay to REMOTE while still serving its own UI.
-        if _cfg.backend.remote_base_url:
+        # Issue #498/#499: dispatch sessions to a configured REMOTE instead of running
+        # them locally. Independent of this process's own mount mode (backend_mode
+        # below) — a frontend-mode Hub can relay to REMOTE while still serving its own
+        # UI. A CLI-supplied remote_backend_url replaces the config-file URL+token pair
+        # wholesale (never pairs a new URL with a stale config-file token for a
+        # different remote); with no CLI URL, the config-file pair is used as-is.
+        effective_remote_base_url = remote_backend_url or _cfg.backend.remote_base_url
+        effective_remote_auth_token = (
+            remote_backend_token if remote_backend_url else _cfg.backend.remote_auth_token
+        )
+        if effective_remote_base_url:
             from .remote_backend import RemoteBackend
             from .session_backend import BackendMode
             self.coordinator.backend = RemoteBackend(
-                _cfg.backend.remote_base_url,
-                _cfg.backend.remote_auth_token or "",
+                effective_remote_base_url,
+                effective_remote_auth_token or "",
                 self.session_queues,
             )
             self.coordinator.backend_mode = BackendMode.REMOTE
-            logger.info(f"SessionCoordinator backend_mode=REMOTE ({_cfg.backend.remote_base_url})")
+            logger.info(f"SessionCoordinator backend_mode=REMOTE ({effective_remote_base_url})")
 
         # Inject ui_queue into LegionSystem so legion components can append events directly
         self.coordinator.legion_system.ui_queue = self.ui_queue
@@ -800,6 +815,7 @@ class ClaudeWebUI:
             self._audit_writer = AuditWriter(None)
             self.audit_writer = self._audit_writer
 
+        self._ready = True
         logger.info("Claude Code WebUI initialized")
 
     def _setup_routes(self):
@@ -1095,6 +1111,10 @@ class ClaudeWebUI:
 
     async def cleanup(self):
         """Cleanup resources"""
+        # Issue #499: flip readiness false immediately so GET /health/ready starts
+        # 503ing during shutdown-drain, while liveness stays healthy until the process
+        # actually exits.
+        self._ready = False
         # Issue #1387: Stop vault refresh manager
         await self.coordinator.vault_refresh_manager.stop()
         # Issue #1130: Stop session watchdog service
@@ -1155,6 +1175,8 @@ def create_app(
     port: int = 8000,
     backend_mode: str = "frontend",
     backend_auth_token: str | None = None,
+    remote_backend_url: str | None = None,
+    remote_backend_token: str | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application"""
     global webui_app
@@ -1165,6 +1187,7 @@ def create_app(
         auth_token=auth_token, auth_enabled=auth_enabled,
         host=host, port=port,
         backend_mode=backend_mode, backend_auth_token=backend_auth_token,
+        remote_backend_url=remote_backend_url, remote_backend_token=remote_backend_token,
     )
     webui_app = app_instance
 

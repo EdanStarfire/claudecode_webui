@@ -84,3 +84,27 @@ def test_main_entrypoint_subprocess_smoke(tmp_path: Path):
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5)
+
+
+def test_remote_backend_token_without_url_rejected_by_argparse(tmp_path: Path):
+    """--remote-backend-token requires --remote-backend-url (issue #499) — argparse
+    must reject the combination before the server ever starts."""
+    env = os.environ.copy()
+    env.pop("CLAUDECODE", None)
+
+    proc = subprocess.run(
+        [
+            "uv", "run", "python", "main.py",
+            "--data-dir", str(tmp_path),
+            "--no-auth",
+            "--remote-backend-token", "some-token",
+        ],
+        cwd=str(REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+    assert proc.returncode != 0
+    assert "--remote-backend-token requires --remote-backend-url" in proc.stderr
