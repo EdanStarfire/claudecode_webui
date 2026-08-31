@@ -4,18 +4,25 @@ import os
 import platform
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
+from .. import relay_client
 from ..exception_handlers import handle_exceptions
+from ..session_backend import BackendMode
 
 
 def build_router(webui) -> APIRouter:
     router = APIRouter()
 
-    @router.get("/api/filesystem/browse")
+    @router.get("/filesystem/browse")
     @handle_exceptions("browse filesystem")
-    async def browse_filesystem(path: str = None):
+    async def browse_filesystem(request: Request, path: str = None):
         """Browse filesystem directories"""
+        # Issue #498: no session/project ID involved — relay unconditionally
+        # whenever REMOTE is configured, since new sessions' working directories
+        # need to come from REMOTE's filesystem, not the Hub's.
+        if webui.coordinator.backend_mode == BackendMode.REMOTE:
+            return await relay_client.forward(webui.coordinator, request)
         # Default to user home directory if no path provided
         if not path:
             path = str(Path.home())

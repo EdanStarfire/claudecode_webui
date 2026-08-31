@@ -551,16 +551,17 @@ class TestSessionCoordinatorInjection:
     """Test that SessionCoordinator supports SDK factory injection."""
 
     def test_sdk_factory_default(self):
-        """SessionCoordinator defaults to ClaudeSDK factory."""
+        """SessionCoordinator's LocalBackend defaults to the ClaudeSDK factory."""
+        from src.local_backend import LocalBackend
         from src.session_coordinator import SessionCoordinator
 
         coordinator = SessionCoordinator()
-        assert coordinator._sdk_factory is SessionCoordinator._default_sdk_factory
+        assert coordinator.backend._sdk_factory is LocalBackend._default_sdk_factory
 
     def test_set_sdk_factory(self):
-        """set_sdk_factory replaces the factory."""
+        """set_sdk_factory replaces the factory on the coordinator's backend."""
         from src.session_coordinator import SessionCoordinator
 
         coordinator = SessionCoordinator()
         coordinator.set_sdk_factory(MockClaudeSDK)
-        assert coordinator._sdk_factory is MockClaudeSDK
+        assert coordinator.backend._sdk_factory is MockClaudeSDK

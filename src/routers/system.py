@@ -131,14 +131,6 @@ def build_router(webui) -> APIRouter:
         from src.secrets_keyring import get_backend_status
         return get_backend_status()
 
-    @router.get("/api/system/docker-status")
-    @handle_exceptions("check docker status")
-    async def get_docker_status():
-        """Check Docker availability and image status (issue #496)."""
-        from src.docker_utils import check_docker_available
-        status = await check_docker_available()
-        return status
-
     @router.get("/api/system/git-status")
     @handle_exceptions("get git status")
     async def get_git_status():

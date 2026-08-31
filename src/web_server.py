@@ -160,7 +160,8 @@ class ClaudeWebUI:
                  available_fixtures: list[str] | None = None,
                  config_file: Path | None = None,
                  auth_token: str | None = None, auth_enabled: bool = False,
-                 host: str = "127.0.0.1", port: int = 8000):
+                 host: str = "127.0.0.1", port: int = 8000,
+                 backend_mode: str = "frontend", backend_auth_token: str | None = None):
         self.app = FastAPI(title="Claude Code WebUI", version="1.0.0")
         self.host = host
         self.port = port
@@ -175,6 +176,18 @@ class ClaudeWebUI:
         self.auth_token = auth_token
         self.auth_enabled = auth_enabled
 
+        # Issue #498: mount exclusivity. "frontend" (default) mounts /api/* + the SPA
+        # and never registers /api/backend/*. "headless" (REMOTE, issue #499) mounts
+        # only /api/backend/*, gated by backend_auth_token, and serves no UI at all —
+        # see routers/__init__.py's register_all() and the static-mount guard below.
+        self.backend_mode = backend_mode
+        self.backend_auth_token = backend_auth_token
+        if self.backend_mode == "headless":
+            # Headless mode's only auth mechanism is the per-route backend bearer
+            # dependency — AuthMiddleware's EXEMPT_PATHS (/, /health, ...) don't even
+            # exist on this mount, so the browser-facing operator token never applies.
+            self.auth_enabled = False
+
         # Wire mock SDK factory if mock mode active (issue #561)
         if mock_sdk and fixtures_dir:
             from src.mock_sdk import MockClaudeSDK
@@ -187,13 +200,28 @@ class ClaudeWebUI:
         self.ui_queue = EventQueue()
         self.session_queues: dict[str, EventQueue] = {}
 
+        from .config_manager import load_config as _load_cfg
+        _cfg = _load_cfg(config_file) if config_file else _load_cfg()
+
+        # Issue #498: dispatch sessions to a configured REMOTE instead of running them
+        # locally. Independent of this process's own mount mode (backend_mode below) —
+        # a frontend-mode Hub can relay to REMOTE while still serving its own UI.
+        if _cfg.backend.remote_base_url:
+            from .remote_backend import RemoteBackend
+            from .session_backend import BackendMode
+            self.coordinator.backend = RemoteBackend(
+                _cfg.backend.remote_base_url,
+                _cfg.backend.remote_auth_token or "",
+                self.session_queues,
+            )
+            self.coordinator.backend_mode = BackendMode.REMOTE
+            logger.info(f"SessionCoordinator backend_mode=REMOTE ({_cfg.backend.remote_base_url})")
+
         # Inject ui_queue into LegionSystem so legion components can append events directly
         self.coordinator.legion_system.ui_queue = self.ui_queue
 
         # Issue #1130/#1131: Session watchdog service (created here, started in initialize())
-        from .config_manager import load_config as _load_cfg
         from .session_watchdog import SessionWatchdogService
-        _cfg = _load_cfg(config_file) if config_file else _load_cfg()
         self._watchdog = SessionWatchdogService(
             session_manager=self.coordinator.session_manager,
             template_manager=self.coordinator.template_manager,
@@ -291,17 +319,19 @@ class ClaudeWebUI:
         self.coordinator.vault_refresh_manager.set_broadcast_callback(self._broadcast_vault_secret_event)
         logger.info("VaultRefreshManager wired")
 
-        # Setup static files (Vue 3 production build)
-        static_dir = Path(__file__).parent.parent / "frontend" / "dist"
-        if not static_dir.exists():
-            raise RuntimeError(
-                f"Frontend build not found at {static_dir}. "
-                "Run 'cd frontend && npm run build' to create production build."
-            )
-        self.app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
-        # Serve root-level public files (favicons, robots.txt, etc.) from dist/ root.
-        # Registered after all API routes so it only handles paths that don't match any route.
-        self.app.mount("/", StaticFiles(directory=str(static_dir)), name="static-root")
+        # Setup static files (Vue 3 production build) — issue #498: headless mode
+        # serves no UI at all, so it never mounts static assets or the SPA catch-all.
+        if self.backend_mode == "frontend":
+            static_dir = Path(__file__).parent.parent / "frontend" / "dist"
+            if not static_dir.exists():
+                raise RuntimeError(
+                    f"Frontend build not found at {static_dir}. "
+                    "Run 'cd frontend && npm run build' to create production build."
+                )
+            self.app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
+            # Serve root-level public files (favicons, robots.txt, etc.) from dist/ root.
+            # Registered after all API routes so it only handles paths that don't match any route.
+            self.app.mount("/", StaticFiles(directory=str(static_dir)), name="static-root")
 
         # Issue #1789: snapshot every literal path this app already owns, taken once here
         # (before any dynamic OAuth callback route is ever registered). Used to reject a
@@ -672,6 +702,12 @@ class ClaudeWebUI:
         """Initialize the WebUI application"""
         from .config_manager import load_config
         await self.coordinator.initialize()
+
+        # Issue #498: start the single shared audit-stream relay task if REMOTE is
+        # configured (Batch 5, Pattern B) — see RemoteBackend.start_audit_relay.
+        from .session_backend import BackendMode
+        if self.coordinator.backend_mode == BackendMode.REMOTE:
+            await self.coordinator.backend.start_audit_relay(self.audit_queue)
 
         try:
             await self.litellm_proxy_manager.start()
@@ -1117,6 +1153,8 @@ def create_app(
     auth_enabled: bool = False,
     host: str = "127.0.0.1",
     port: int = 8000,
+    backend_mode: str = "frontend",
+    backend_auth_token: str | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application"""
     global webui_app
@@ -1126,6 +1164,7 @@ def create_app(
         available_fixtures=available_fixtures,
         auth_token=auth_token, auth_enabled=auth_enabled,
         host=host, port=port,
+        backend_mode=backend_mode, backend_auth_token=backend_auth_token,
     )
     webui_app = app_instance
 

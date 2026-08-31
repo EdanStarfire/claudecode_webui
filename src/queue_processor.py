@@ -65,6 +65,15 @@ class QueueProcessor:
 
     def ensure_running(self, session_id: str) -> None:
         """Start the processor for a session if it's not already running."""
+        # Issue #498: once REMOTE is configured, queue.py's routes relay wholesale
+        # and never call enqueue_message/ensure_running for that session — this is
+        # a belt-and-suspenders guard against pre-existing local queue state from
+        # before a LOCAL->REMOTE mode switch (see SchedulerService._tick() for the
+        # same guard on the schedule-firing side).
+        from .session_backend import BackendMode
+        if self._coordinator.backend_mode == BackendMode.REMOTE:
+            return
+
         task = self._tasks.get(session_id)
         if task and not task.done():
             return  # Already running

@@ -22,11 +22,11 @@ from uuid import uuid4
 from src.docker_utils import cleanup_session_tmp
 from src.legion.minion_system_prompts import get_legion_guide_only
 
-from .claude_sdk import ClaudeSDK
 from .config_resolution import resolve_effective_config
 from .data_storage import DataStorageManager
 from .hooks.pretooluse_handler import InternalPermissionHandler
 from .litellm_proxy_manager import make_model_alias
+from .local_backend import LocalBackend
 from .logging_config import get_logger
 from .mcp_config_manager import McpServerType
 from .message_parser import MessageParser, MessageProcessor
@@ -44,6 +44,7 @@ from .oauth_refresh_manager import OAuthRefreshManager
 from .project_manager import ProjectInfo, ProjectManager
 from .queue_manager import QueueManager
 from .queue_processor import QueueProcessor
+from .session_backend import BackendMode, SessionBackend
 from .session_config import SessionConfig
 from .session_manager import STOPPED_STATES, VALID_MODELS, SessionManager, SessionState
 from .task_registry import TASK_LIFECYCLE_SUBTYPES, TaskLegRegistry
@@ -371,8 +372,12 @@ class SessionCoordinator:
         from src.oauth_manager import OAuthFlowManager
         self.oauth_manager = OAuthFlowManager(self.data_dir)
 
-        # Active SDK instances
-        self._active_sdks: dict[str, ClaudeSDK] = {}
+        # SessionBackend (issue #498): dispatch target for SDK-touching session
+        # operations. LOCAL (default) drives ClaudeSDK instances directly; REMOTE
+        # relays to a configured REMOTE WebUI instance. Selected once at startup —
+        # see backend_mode wiring later in __init__.
+        self.backend: SessionBackend = LocalBackend()
+        self.backend_mode: BackendMode = BackendMode.LOCAL
         self._storage_managers: dict[str, DataStorageManager] = {}
 
         # Issue #976/#989: OAuth token refresh lifecycle (extracted to OAuthRefreshManager)
@@ -428,9 +433,6 @@ class SessionCoordinator:
 
         # Audit writer (set after construction via set_audit_writer; optional)
         self._audit_writer = None
-
-        # SDK factory for dependency injection (enables MockClaudeSDK for testing)
-        self._sdk_factory = self._default_sdk_factory
 
         # Issue #899: Rate limit state accumulator (rate_limit_type -> {used_percentage, resets_at})
         self._rate_limits_state: dict[str, dict] = {}
@@ -518,15 +520,10 @@ class SessionCoordinator:
             broadcast_callback=self._broadcast_link_registered
         )
 
-    @staticmethod
-    def _default_sdk_factory(session_id, working_directory, **kwargs):
-        """Default factory that strips session_name before calling ClaudeSDK."""
-        kwargs.pop("session_name", None)
-        return ClaudeSDK(session_id=session_id, working_directory=working_directory, **kwargs)
-
     def set_sdk_factory(self, factory):
-        """Set custom SDK factory for testing (e.g., MockClaudeSDK)."""
-        self._sdk_factory = factory
+        """Set custom SDK factory for testing (e.g., MockClaudeSDK). Only meaningful
+        while backend_mode is LOCAL — REMOTE sessions don't construct a local SDK."""
+        self.backend.set_sdk_factory(factory)
 
     def set_analytics_store(self, store) -> None:
         """Inject the AnalyticsStore instance (issue #1125)."""
@@ -922,6 +919,28 @@ class SessionCoordinator:
             session_id, queue_config=current
         )
 
+    async def _resolve_project_for_session(self, project_id: str) -> dict[str, Any] | None:
+        """REMOTE-aware project lookup for session creation (issue #498).
+
+        Project data lives wherever it was actually created: the Hub's local
+        `project_manager` for LOCAL, REMOTE's own store for REMOTE — routers/projects.py
+        wholesale-relays project creation there and writes nothing locally in REMOTE
+        mode. Returns a plain dict (`working_directory`, `session_ids`, ...) so callers
+        don't need to special-case a `ProjectInfo` dataclass vs. a relayed JSON body.
+        """
+        if self.backend_mode == BackendMode.REMOTE:
+            resp = await self.backend.relay_request("GET", f"/projects/{project_id}")
+            if resp is None or resp.status_code != 200:
+                return None
+            return resp.json().get("project")
+        project = await self.project_manager.get_project(project_id)
+        return project.to_dict() if project else None
+
+    async def project_exists(self, project_id: str) -> bool:
+        """REMOTE-aware existence check used by the session-creation route's
+        pre-flight validation (issue #498) — see _resolve_project_for_session."""
+        return await self._resolve_project_for_session(project_id) is not None
+
     async def create_session(
         self,
         session_id: str,
@@ -937,16 +956,30 @@ class SessionCoordinator:
     ) -> str:
         """Create a new Claude Code session with integrated components (within a project)"""
         try:
-            # Get project to determine working directory and multi-agent status
-            project = await self.project_manager.get_project(project_id)
+            # Get project to determine working directory and multi-agent status. REMOTE-
+            # aware (issue #498): in REMOTE mode, projects.py wholesale-relays project
+            # creation to REMOTE and writes nothing to the Hub's local project_manager —
+            # see _resolve_project_for_session.
+            project = await self._resolve_project_for_session(project_id)
             if not project:
                 raise ValueError(f"Project {project_id} not found")
 
             # Use custom working directory if provided, otherwise use project directory
-            effective_working_directory = config.working_directory or project.working_directory
+            effective_working_directory = config.working_directory or project["working_directory"]
 
             # Calculate order based on existing sessions in project
-            order = len(project.session_ids)
+            order = len(project.get("session_ids", []))
+
+            if self.backend_mode == BackendMode.REMOTE:
+                # Mirror this session's creation onto REMOTE: RemoteBackend.start_session
+                # (called later) POSTs to REMOTE's own /sessions/{id}/start, which 404s
+                # unless REMOTE's own session_manager already has a record for this id —
+                # relaying creation here is what supplies it. The Hub still builds its own
+                # local SessionManager/EventQueue bookkeeping below regardless of backend
+                # mode — every other coordinator method (interrupt, set_permission_mode,
+                # get_session_info, ...) reads session state from the Hub's local store,
+                # not from REMOTE, so that bookkeeping can't be skipped for REMOTE sessions.
+                await self.backend.create_session(session_id, project_id, config)
 
             # Issue #349: All sessions are minions (is_minion field removed)
 
@@ -1334,6 +1367,32 @@ class SessionCoordinator:
 
     async def start_session(self, session_id: str, permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None) -> bool:
         """Start a session with SDK integration"""
+        if self.backend_mode == BackendMode.REMOTE:
+            started, error_message = await self.backend.start_session(
+                session_id,
+                permission_callback=permission_callback,
+                # Without this, RemoteBackend's relay-poll loop has nothing to call
+                # after MAX_RELAY_FAILURES, so a REMOTE outage never surfaces as
+                # SessionState.ERROR — the session just silently stops updating.
+                error_callback=self._create_error_callback(session_id),
+            )
+            # Issue #498: keep the Hub's own session_manager state in sync even though
+            # the SDK itself runs on REMOTE — every other coordinator method (interrupt,
+            # set_permission_mode, set_model, get_session_info) reads session_info.state
+            # from the Hub's local session_manager, not from REMOTE, so it must reflect
+            # reality for those guards/reads to behave correctly for REMOTE sessions.
+            if started:
+                await self.session_manager.start_session(session_id)
+                await self.session_manager.mark_session_active(session_id)
+                await self._notify_state_change(session_id, SessionState.ACTIVE)
+            else:
+                error_message = self._extract_claude_cli_error(
+                    error_message or "Unknown error occurred while starting on REMOTE"
+                )
+                await self.session_manager.update_session_state(session_id, SessionState.ERROR, error_message)
+                await self._notify_state_change(session_id, SessionState.ERROR)
+                await self._send_session_failure_message(session_id, error_message, error_message)
+            return started
         try:
             # Start session through session manager
             if not await self.session_manager.start_session(session_id):
@@ -1343,7 +1402,7 @@ class SessionCoordinator:
             await self.session_manager.update_processing_state(session_id, False)
 
             # Check if SDK exists and is running
-            sdk = self._active_sdks.get(session_id)
+            sdk = self.backend.get_sdk(session_id)
             if sdk and sdk.is_running():
                 # logger.info(f"Session {session_id} is already running, skipping start - NO CLIENT_LAUNCHED MESSAGE")
                 return True
@@ -1873,27 +1932,34 @@ class SessionCoordinator:
             if litellm_env:
                 _merged_extra_env.update(litellm_env)
 
-            sdk = self._sdk_factory(
-                session_id=session_id,
-                working_directory=session_info.working_directory,
-                session_name=session_info.name,  # For mock SDK fixture resolution (issue #561)
-                config=sdk_config,
-                storage_manager=storage_manager,
-                session_manager=self.session_manager,
-                message_callback=self._create_message_callback(session_id),
-                error_callback=self._create_error_callback(session_id),
+            # Issue #498: the SDK-construction tail (factory call + sdk.start()) is
+            # owned by SessionBackend — LocalBackend constructs+starts a real ClaudeSDK
+            # here; RemoteBackend relays this whole call to REMOTE instead. Everything
+            # above this point (config/env/docker/MCP resolution) is backend-agnostic
+            # setup that stays in the coordinator regardless of backend_mode.
+            started, raw_error_message = await self.backend.start_session(
+                session_id,
+                sdk_kwargs=dict(
+                    working_directory=session_info.working_directory,
+                    session_name=session_info.name,  # For mock SDK fixture resolution (issue #561)
+                    config=sdk_config,
+                    storage_manager=storage_manager,
+                    session_manager=self.session_manager,
+                    message_callback=self._create_message_callback(session_id),
+                    error_callback=self._create_error_callback(session_id),
+                    permission_callback=permission_callback,
+                    rate_limit_callback=self._on_rate_limits,
+                    resume_session_id=resume_sdk_session,
+                    mcp_servers=mcp_servers if mcp_servers else None,
+                    experimental=self.experimental,
+                    stderr_callback=self._create_stderr_callback(session_id),
+                    extra_env=_merged_extra_env,
+                    permission_handler=permission_handler,
+                ),
                 permission_callback=permission_callback,
-                rate_limit_callback=self._on_rate_limits,
-                resume_session_id=resume_sdk_session,
-                mcp_servers=mcp_servers if mcp_servers else None,
-                experimental=self.experimental,
-                stderr_callback=self._create_stderr_callback(session_id),
-                extra_env=_merged_extra_env,
-                permission_handler=permission_handler,
+                # Issue #707: Set auto-approval callback so can_use_tool can notify us
+                auto_approval_callback=self._create_auto_approval_callback(session_id),
             )
-            # Issue #707: Set auto-approval callback so can_use_tool can notify us
-            sdk.auto_approval_callback = self._create_auto_approval_callback(session_id)
-            self._active_sdks[session_id] = sdk
 
             # Initialize callback lists if not exists (preserve existing callbacks)
             if session_id not in self._message_callbacks:
@@ -1901,14 +1967,13 @@ class SessionCoordinator:
             if session_id not in self._error_callbacks:
                 self._error_callbacks[session_id] = []
 
-            if not await sdk.start():
+            if not started:
                 logger.error(f"Failed to start SDK for session {session_id}")
 
-                # Get the error message from the SDK
-                raw_error_message = getattr(sdk.info, 'error_message', 'Unknown error occurred while starting Claude Code')
-
                 # Extract user-friendly error message
-                error_message = self._extract_claude_cli_error(raw_error_message)
+                error_message = self._extract_claude_cli_error(
+                    raw_error_message or 'Unknown error occurred while starting Claude Code'
+                )
 
                 # Update session state to ERROR and reset processing state
                 try:
@@ -1922,11 +1987,6 @@ class SessionCoordinator:
 
                 # Send system message explaining the failure (with raw details)
                 await self._send_session_failure_message(session_id, error_message, raw_error_message)
-
-                # Clean up the failed SDK
-                if session_id in self._active_sdks:
-                    del self._active_sdks[session_id]
-                    # logger.info(f"Cleaned up failed SDK for session {session_id}")
 
                 return False
 
@@ -1968,14 +2028,13 @@ class SessionCoordinator:
             await self._send_session_failure_message(session_id, error_message, raw_error_str)
 
             # Clean up any partially created SDK
-            if session_id in self._active_sdks:
+            sdk = self.backend.get_sdk(session_id)
+            if sdk:
                 try:
-                    sdk = self._active_sdks[session_id]
-                    if sdk:
-                        await sdk.terminate()
+                    await sdk.terminate()
                 except Exception:
                     pass  # Best effort cleanup
-                del self._active_sdks[session_id]
+                self.backend.remove_sdk(session_id)
                 coord_logger.info(f"Cleaned up SDK for session {session_id} after exception")
 
             return False
@@ -2006,11 +2065,9 @@ class SessionCoordinator:
             # Issue #520: Mark active ToolCalls as interrupted and store ToolCallUpdate entries
             self.mark_session_tools_interrupted(session_id)
 
-            # Terminate SDK first
-            sdk = self._active_sdks.get(session_id)
-            if sdk:
-                await sdk.terminate()
-                del self._active_sdks[session_id]
+            # Terminate SDK first (issue #498: routes through backend so a REMOTE
+            # session's terminate call relays instead of touching a local SDK)
+            await self.backend.terminate_session(session_id)
 
             if self.litellm_proxy_manager is not None:
                 self.litellm_proxy_manager.unregister_session_key(session_id)
@@ -2052,13 +2109,7 @@ class SessionCoordinator:
 
     async def disconnect_sdk(self, session_id: str) -> bool:
         """Disconnect the active SDK for a session without full termination."""
-        sdk = self._active_sdks.get(session_id)
-        if sdk:
-            success = await sdk.disconnect()
-            if success:
-                del self._active_sdks[session_id]
-            return success
-        return True  # Already disconnected
+        return await self.backend.disconnect_session(session_id)
 
     # =========================================================================
     # Ephemeral Session Lifecycle (Issue #578)
@@ -2285,10 +2336,8 @@ class SessionCoordinator:
 
             # Step 1.65: Terminate SDK and update state BEFORE archive (Issue #236)
             # This ensures archive captures final "terminated" state (same pattern as dispose_minion)
-            sdk = self._active_sdks.get(session_id)
-            if sdk:
-                await sdk.terminate()
-                del self._active_sdks[session_id]
+            if await self.backend.is_session_active(session_id):
+                await self.backend.terminate_session(session_id)
                 await asyncio.sleep(0.2)  # Give SDK time to fully close
 
             # Update session state to terminated (so archive captures correct final_state)
@@ -2475,12 +2524,15 @@ class SessionCoordinator:
 
     async def wait_for_session_ready(self, session_id: str, timeout: float = 60.0) -> bool:
         """Wait until session's SDK is ready to accept messages."""
-        sdk = self._active_sdks.get(session_id)
-        if not sdk:
-            return False
-        if sdk.is_running():
-            return True
-        return await sdk.wait_until_ready(timeout=timeout)
+        if self.backend_mode == BackendMode.REMOTE:
+            # REMOTE's start_session relay only returns once REMOTE confirms the
+            # session started, so by the time it's active there's nothing further
+            # to wait for on the Hub side.
+            return await self.backend.is_session_active(session_id)
+        # LOCAL-only: wait_for_session_ready isn't on the SessionBackend Protocol
+        # (REMOTE has no local SDK readiness to poll), but self.backend is
+        # guaranteed a LocalBackend on this path.
+        return await self.backend.wait_for_session_ready(session_id, timeout=timeout)
 
     async def send_message(
         self,
@@ -2497,8 +2549,21 @@ class SessionCoordinator:
         pass False — they aren't user messages and injecting into them would desync the
         Legion timeline (comm.content persisted pre-injection) from the delivered text.
         """
+        if self.backend_mode == BackendMode.REMOTE:
+            # REMOTE's own send_message (invoked when this relay lands on REMOTE's
+            # /api/backend/sessions/{id}/messages route) does its own timestamp
+            # injection against REMOTE's own local session state — the Hub relays the
+            # raw message as-is. It does NOT know about the Hub's own session_manager
+            # though, so the Hub still tracks activity/processing state locally itself
+            # (interrupt_session's guard and the idle watchdog both read Hub-local state).
+            self.session_manager.record_activity(session_id)
+            await self.session_manager.update_processing_state(session_id, True)
+            result = await self.backend.send_message(session_id, message, metadata=metadata)
+            if not result:
+                await self.session_manager.update_processing_state(session_id, False)
+            return result
         try:
-            sdk = self._active_sdks.get(session_id)
+            sdk = self.backend.get_sdk(session_id)
             if not sdk:
                 logger.error(f"No SDK found for session {session_id}")
                 return False
@@ -2553,8 +2618,7 @@ class SessionCoordinator:
             coord_logger.info(f"Interrupt requested for session {session_id}")
 
             # Check if SDK exists and is active
-            sdk = self._active_sdks.get(session_id)
-            if not sdk:
+            if not await self.backend.is_session_active(session_id):
                 logger.warning(f"No active SDK found for session {session_id} - cannot interrupt")
                 return False
 
@@ -2574,7 +2638,7 @@ class SessionCoordinator:
             # logger.info(f"Attempting to interrupt session {session_id}")
 
             # Call SDK interrupt method
-            result = await sdk.interrupt_session()
+            result = await self.backend.interrupt_session(session_id)
 
             if result:
                 coord_logger.info(f"Session {session_id} interrupted")
@@ -2625,8 +2689,7 @@ class SessionCoordinator:
                 return True
 
             # Check if SDK exists for live update
-            sdk = self._active_sdks.get(session_id)
-            if not sdk:
+            if not await self.backend.is_session_active(session_id):
                 logger.warning(f"No active SDK found for session {session_id} - cannot set permission mode")
                 return False
 
@@ -2636,7 +2699,7 @@ class SessionCoordinator:
                 return False
 
             # Call SDK set_permission_mode method (may raise if SDK rejects the mode)
-            sdk_result = await sdk.set_permission_mode(mode)
+            sdk_result = await self.backend.set_permission_mode(session_id, mode)
 
             if sdk_result:
                 # Update session manager's tracking of current permission mode
@@ -2681,8 +2744,7 @@ class SessionCoordinator:
                 return True
 
             # Check if SDK exists for live update
-            sdk = self._active_sdks.get(session_id)
-            if not sdk:
+            if not await self.backend.is_session_active(session_id):
                 logger.warning(f"No active SDK found for session {session_id} - cannot set model")
                 return False
 
@@ -2692,7 +2754,7 @@ class SessionCoordinator:
                 return False
 
             # Call SDK set_model method (may raise if SDK rejects the model)
-            sdk_result = await sdk.set_model(model)
+            sdk_result = await self.backend.set_model(session_id, model)
 
             if sdk_result:
                 # Update session manager's tracking of current model
@@ -2715,38 +2777,22 @@ class SessionCoordinator:
     async def get_mcp_status(self, session_id: str) -> dict:
         """Get MCP server status for a session."""
         try:
-            sdk = self._active_sdks.get(session_id)
-            if not sdk:
-                logger.warning(f"No active SDK found for session {session_id} - cannot get MCP status")
-                return {"servers": []}
-
-            return await sdk.get_mcp_status()
+            return await self.backend.get_mcp_status(session_id)
         except Exception:
             logger.exception(f"Failed to get MCP status for session {session_id}")
             return {"servers": []}
 
     async def get_context_usage(self, session_id: str) -> dict:
         """Get context usage for a session via SDK."""
-        sdk = self._active_sdks.get(session_id)
-        if not sdk:
-            return {}
-        return await sdk.get_context_usage()
+        return await self.backend.get_context_usage(session_id)
 
     async def toggle_mcp_server(self, session_id: str, name: str, enabled: bool) -> None:
         """Toggle an MCP server on or off for a session. Raises on failure."""
-        sdk = self._active_sdks.get(session_id)
-        if not sdk:
-            raise RuntimeError(f"No active SDK found for session {session_id}")
-
-        await sdk.toggle_mcp_server(name, enabled)
+        await self.backend.toggle_mcp_server(session_id, name, enabled)
 
     async def reconnect_mcp_server(self, session_id: str, name: str) -> None:
         """Reconnect a failed MCP server for a session. Raises on failure."""
-        sdk = self._active_sdks.get(session_id)
-        if not sdk:
-            raise RuntimeError(f"No active SDK found for session {session_id}")
-
-        await sdk.reconnect_mcp_server(name)
+        await self.backend.reconnect_mcp_server(session_id, name)
 
     async def add_directory(self, session_id: str, directory: str) -> dict:
         """Register a new working directory on an active session, live (issue #1675).
@@ -2773,8 +2819,7 @@ class SessionCoordinator:
         if session_info.state != SessionState.ACTIVE:
             raise ValueError(f"Session not in active state (state: {session_info.state})")
 
-        sdk = self._active_sdks.get(session_id)
-        if not sdk:
+        if not await self.backend.is_session_active(session_id):
             raise ValueError(f"No active SDK found for session {session_id}")
 
         normalized = _validate_new_additional_directory(
@@ -2784,7 +2829,7 @@ class SessionCoordinator:
         )
 
         try:
-            result = await sdk.register_repo_root(normalized)
+            result = await self.backend.add_directory(session_id, normalized)
         except Exception as e:
             logger.exception(f"Failed to register repo root for session {session_id}")
             raise ValueError(str(e)) from e
@@ -2806,13 +2851,18 @@ class SessionCoordinator:
             coord_logger.info(f"Restarting session {session_id}")
 
             # Get current SDK if it exists
-            sdk = self._active_sdks.get(session_id)
-            if sdk:
+            if await self.backend.is_session_active(session_id):
                 # Disconnect existing SDK gracefully
                 coord_logger.debug(f"Disconnecting existing SDK for session {session_id}")
-                disconnect_result = await sdk.disconnect()
+                disconnect_result = await self.backend.disconnect_session(session_id)
                 if not disconnect_result:
                     logger.warning(f"SDK disconnect returned False for session {session_id}")
+                    # A restart must proceed regardless of a clean disconnect — force-drop
+                    # the stale reference so start_session's "already running" short-circuit
+                    # doesn't see a disconnected-but-still-registered SDK (LocalBackend only:
+                    # RemoteBackend.disconnect_session already unregisters unconditionally).
+                    if self.backend_mode == BackendMode.LOCAL:
+                        self.backend.remove_sdk(session_id)
 
                 # Update session state to TERMINATED after disconnect
                 await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
@@ -2820,9 +2870,6 @@ class SessionCoordinator:
                 # Wait for cleanup — Docker --rm needs time to remove crashed containers
                 # before a new container can be started (issue #781)
                 await asyncio.sleep(1.0)
-
-                # Remove old SDK reference
-                del self._active_sdks[session_id]
             else:
                 # No active SDK - restart will act like a fresh start
                 coord_logger.debug(f"No existing SDK for session {session_id}, will create new one")
@@ -2892,12 +2939,10 @@ class SessionCoordinator:
                 self._watchdog.reset_session(session_id)
 
             # Get current SDK and disconnect
-            sdk = self._active_sdks.get(session_id)
-            if sdk:
-                await sdk.disconnect()
+            if await self.backend.is_session_active(session_id):
+                await self.backend.disconnect_session(session_id)
                 await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
                 await asyncio.sleep(0.5)
-                del self._active_sdks[session_id]
 
             # Issue #1019: If session is in ERROR state (no active SDK to disconnect),
             # transition to TERMINATED so start_session() will accept it.
@@ -3165,13 +3210,7 @@ class SessionCoordinator:
                 return None
 
             # Get SDK status
-            sdk_info = {}
-            sdk = self._active_sdks.get(session_id)
-            if sdk:
-                sdk_info = sdk.get_info()
-                sdk_info.update({
-                    "queue_size": sdk.get_queue_size(),
-                })
+            sdk_info = await self.backend.get_session_runtime_info(session_id) or {}
 
             # Get storage stats
             storage_info = {}
@@ -5004,6 +5043,7 @@ class SessionCoordinator:
                     "message_processing_loop_error",
                     "immediate_cli_failure",
                     "consumer_task_died",          # Issue #1503
+                    "relay_connection_lost",       # Issue #498: RemoteBackend relay-poll giveup
                 ]:
                     # logger.info(f"Handling critical SDK error: {error_type}")
 
@@ -5024,10 +5064,10 @@ class SessionCoordinator:
                     # Send system message explaining the runtime failure (with raw details)
                     await self._send_session_failure_message(session_id, user_error_message, raw_error_str)
 
-                    # Clean up the failed SDK
-                    if session_id in self._active_sdks:
-                        del self._active_sdks[session_id]
-                        # logger.info(f"Cleaned up failed SDK for session {session_id}")
+                    # Clean up the failed SDK (LOCAL only — RemoteBackend already drops
+                    # session_id from its own active-set before invoking this callback)
+                    if self.backend_mode == BackendMode.LOCAL:
+                        self.backend.remove_sdk(session_id)
 
                 # Call registered callbacks
                 callbacks = self._error_callbacks.get(session_id, [])
@@ -5707,9 +5747,13 @@ class SessionCoordinator:
                 await self.legion_system.scheduler_service.stop()
 
             # Terminate all active sessions
-            session_ids = list(self._active_sdks.keys())
+            session_ids = self.backend.active_session_ids()
             for session_id in session_ids:
                 await self.terminate_session(session_id)
+
+            # Issue #498: close RemoteBackend's httpx client + relay-poll tasks
+            if hasattr(self.backend, "aclose"):
+                await self.backend.aclose()
 
             # Issue #1484: close shared MCP upstream connections
             try:

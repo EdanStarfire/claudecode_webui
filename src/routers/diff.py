@@ -2,18 +2,24 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
+from .. import relay_client
 from ..exception_handlers import handle_exceptions
+from ..session_backend import BackendMode
 
 
 def build_router(webui) -> APIRouter:
     router = APIRouter()
 
-    @router.get("/api/sessions/{session_id}/diff")
+    @router.get("/sessions/{session_id}/diff")
     @handle_exceptions("get session diff")
-    async def get_session_diff(session_id: str):
+    async def get_session_diff(session_id: str, request: Request):
         """Get diff summary for a session's working directory vs origin/main."""
+        # Issue #498: a REMOTE session's working directory lives on REMOTE's host,
+        # not the Hub's — git commands must run there too, so relay wholesale.
+        if webui.coordinator.backend_mode == BackendMode.REMOTE:
+            return await relay_client.forward(webui.coordinator, request)
         ctx = await webui.service.get_session_diff_context(session_id)
         if not ctx.get("exists"):
             raise HTTPException(status_code=404, detail="Session not found")
@@ -287,10 +293,10 @@ def build_router(webui) -> APIRouter:
             "total_deletions": total_deletions
         }
 
-    @router.get("/api/sessions/{session_id}/diff/file")
+    @router.get("/sessions/{session_id}/diff/file")
     @handle_exceptions("get session diff file")
     async def get_session_diff_file(
-        session_id: str, path: str = None, ref: str = None
+        session_id: str, request: Request, path: str = None, ref: str = None
     ):
         """Get unified diff content for a specific file.
 
@@ -299,6 +305,8 @@ def build_router(webui) -> APIRouter:
                 a commit hash for commit-specific changes, or null/empty
                 for cumulative branch diff (merge_base...HEAD).
         """
+        if webui.coordinator.backend_mode == BackendMode.REMOTE:
+            return await relay_client.forward(webui.coordinator, request)
         if not path:
             raise HTTPException(status_code=400, detail="path query parameter required")
 

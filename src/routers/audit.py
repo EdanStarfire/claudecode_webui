@@ -1,16 +1,37 @@
-"""Audit endpoints: /api/audit/* and /api/poll/audit"""
+"""Audit endpoints: /api/audit/* and /api/poll/audit
+
+Issue #498: Pattern A relay for all three routes. /api/poll/audit could in
+principle reuse Batch 1's background relay-poll-loop shape (a per-session
+EventQueue kept live independent of any single browser request), but audit
+polling has no such decoupling requirement — each browser long-poll request to
+the Hub maps 1:1 to a single relay call to REMOTE's mirrored long-poll route;
+the Hub's handler simply blocks on REMOTE's response (REMOTE enforces its own
+<=30s cap) and returns it. Same end-to-end long-poll behavior, no extra
+background-task lifecycle to manage.
+
+Accepted gap (not solved here, per the plan): audit events recorded before a
+LOCAL->REMOTE mode switch stay in the Hub's local analytics_db and won't
+appear merged with REMOTE's post-switch events — queried wholesale from
+whichever mode is currently active, not fan-out/merged like Batch 4's MCP
+list/export. Mode-switch timing is out of scope for this pass.
+"""
 
 import time
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
+from .. import relay_client
 from ..analytics.audit_query import AuditQueryService
 from ..exception_handlers import handle_exceptions
+from ..session_backend import BackendMode
 
 
 def build_router(webui) -> APIRouter:
     router = APIRouter()
+
+    def _is_remote() -> bool:
+        return webui.coordinator.backend_mode == BackendMode.REMOTE
 
     def _query_service() -> AuditQueryService:
         db = getattr(webui, "analytics_db", None)
@@ -25,9 +46,10 @@ def build_router(webui) -> APIRouter:
             content={"detail": "Audit subsystem not available"},
         )
 
-    @router.get("/api/audit/events")
+    @router.get("/audit/events")
     @handle_exceptions("audit events")
     async def get_audit_events(
+        request: Request,
         since: float | None = Query(default=None),
         until: float | None = Query(default=None),
         session_ids: str | None = Query(default=None, description="Comma-separated session IDs"),
@@ -39,6 +61,8 @@ def build_router(webui) -> APIRouter:
         offset: int = Query(default=0, ge=0),
     ):
         """Flat, paginated audit event list."""
+        if _is_remote():
+            return await relay_client.forward(webui.coordinator, request)
         qs = _query_service()
         if qs is None:
             return _unavailable()
@@ -58,9 +82,10 @@ def build_router(webui) -> APIRouter:
             offset=offset,
         )
 
-    @router.get("/api/audit/turns")
+    @router.get("/audit/turns")
     @handle_exceptions("audit turns")
     async def get_audit_turns(
+        request: Request,
         since: float | None = Query(default=None),
         until: float | None = Query(default=None),
         session_ids: str | None = Query(default=None, description="Comma-separated session IDs"),
@@ -70,6 +95,8 @@ def build_router(webui) -> APIRouter:
         offset: int = Query(default=0, ge=0),
     ):
         """Turn-grouped audit feed."""
+        if _is_remote():
+            return await relay_client.forward(webui.coordinator, request)
         qs = _query_service()
         if qs is None:
             return _unavailable()
@@ -87,9 +114,10 @@ def build_router(webui) -> APIRouter:
             offset=offset,
         )
 
-    @router.get("/api/poll/audit")
+    @router.get("/poll/audit")
     @handle_exceptions("poll audit")
     async def poll_audit(
+        request: Request,
         cursor: float = Query(default=0.0),
         since: float | None = Query(default=None),
         session_ids: str | None = Query(default=None),
@@ -97,6 +125,30 @@ def build_router(webui) -> APIRouter:
         timeout: int = Query(default=25, ge=1, le=30),
     ):
         """Long-poll for new audit events (Stream tab live tail)."""
+        if _is_remote():
+            # Pattern B, not a per-request relay: /api/poll/audit has no Hub-side
+            # session scoping, so N simultaneous browser tabs/consumers would
+            # otherwise each open their own independent long-poll through to
+            # REMOTE. Instead, a single shared background task
+            # (RemoteBackend.start_audit_relay, started in
+            # ClaudeWebUI.initialize()) continuously fills the Hub's local
+            # audit_queue from REMOTE's stream, and every Hub-side consumer reads
+            # from that one local buffer via EventQueue's existing multi-waiter
+            # fan-out — the exact mechanism session poll already relies on.
+            #
+            # Accepted cold-start edge case: the incoming `cursor` here may still
+            # be the frontend's initial DB-timestamp value (from `since`) rather
+            # than a real EventQueue position the first time a client polls after
+            # REMOTE mode starts — events buffered before that first call can be
+            # skipped once; every poll after that is a normal, correct
+            # EventQueue-cursor round trip (the frontend treats cursor/next_cursor
+            # as opaque and just relays back whatever it was given).
+            audit_queue = webui.audit_queue
+            effective_timeout = min(float(timeout), 25.0)
+            int_cursor = int(cursor) if cursor else 0
+            await audit_queue.wait_for_events(int_cursor, timeout=effective_timeout)
+            events, next_cursor = audit_queue.events_since(int_cursor)
+            return {"events": events, "next_cursor": next_cursor}
         qs = _query_service()
         if qs is None:
             return _unavailable()
