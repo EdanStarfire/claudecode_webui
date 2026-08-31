@@ -5,6 +5,7 @@ FastAPI web server for Claude Code WebUI with HTTP long-polling support.
 import asyncio
 import logging
 import re
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -1119,21 +1120,20 @@ def create_app(
 ) -> FastAPI:
     """Create and configure the FastAPI application"""
     global webui_app
-    webui_app = ClaudeWebUI(
+    app_instance = ClaudeWebUI(
         data_dir, experimental=experimental,
         mock_sdk=mock_sdk, fixtures_dir=fixtures_dir,
         available_fixtures=available_fixtures,
         auth_token=auth_token, auth_enabled=auth_enabled,
         host=host, port=port,
     )
-    return webui_app.app
+    webui_app = app_instance
 
-async def startup_event():
-    """Application startup event"""
-    if webui_app:
-        await webui_app.initialize()
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI):
+        await app_instance.initialize()
+        yield
+        await app_instance.cleanup()
 
-async def shutdown_event():
-    """Application shutdown event"""
-    if webui_app:
-        await webui_app.cleanup()
+    app_instance.app.router.lifespan_context = _lifespan
+    return app_instance.app
