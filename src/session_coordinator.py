@@ -919,6 +919,28 @@ class SessionCoordinator:
             session_id, queue_config=current
         )
 
+    async def _resolve_project_for_session(self, project_id: str) -> dict[str, Any] | None:
+        """REMOTE-aware project lookup for session creation (issue #498).
+
+        Project data lives wherever it was actually created: the Hub's local
+        `project_manager` for LOCAL, REMOTE's own store for REMOTE — routers/projects.py
+        wholesale-relays project creation there and writes nothing locally in REMOTE
+        mode. Returns a plain dict (`working_directory`, `session_ids`, ...) so callers
+        don't need to special-case a `ProjectInfo` dataclass vs. a relayed JSON body.
+        """
+        if self.backend_mode == BackendMode.REMOTE:
+            resp = await self.backend.relay_request("GET", f"/projects/{project_id}")
+            if resp is None or resp.status_code != 200:
+                return None
+            return resp.json().get("project")
+        project = await self.project_manager.get_project(project_id)
+        return project.to_dict() if project else None
+
+    async def project_exists(self, project_id: str) -> bool:
+        """REMOTE-aware existence check used by the session-creation route's
+        pre-flight validation (issue #498) — see _resolve_project_for_session."""
+        return await self._resolve_project_for_session(project_id) is not None
+
     async def create_session(
         self,
         session_id: str,
@@ -934,16 +956,30 @@ class SessionCoordinator:
     ) -> str:
         """Create a new Claude Code session with integrated components (within a project)"""
         try:
-            # Get project to determine working directory and multi-agent status
-            project = await self.project_manager.get_project(project_id)
+            # Get project to determine working directory and multi-agent status. REMOTE-
+            # aware (issue #498): in REMOTE mode, projects.py wholesale-relays project
+            # creation to REMOTE and writes nothing to the Hub's local project_manager —
+            # see _resolve_project_for_session.
+            project = await self._resolve_project_for_session(project_id)
             if not project:
                 raise ValueError(f"Project {project_id} not found")
 
             # Use custom working directory if provided, otherwise use project directory
-            effective_working_directory = config.working_directory or project.working_directory
+            effective_working_directory = config.working_directory or project["working_directory"]
 
             # Calculate order based on existing sessions in project
-            order = len(project.session_ids)
+            order = len(project.get("session_ids", []))
+
+            if self.backend_mode == BackendMode.REMOTE:
+                # Mirror this session's creation onto REMOTE: RemoteBackend.start_session
+                # (called later) POSTs to REMOTE's own /sessions/{id}/start, which 404s
+                # unless REMOTE's own session_manager already has a record for this id —
+                # relaying creation here is what supplies it. The Hub still builds its own
+                # local SessionManager/EventQueue bookkeeping below regardless of backend
+                # mode — every other coordinator method (interrupt, set_permission_mode,
+                # get_session_info, ...) reads session state from the Hub's local store,
+                # not from REMOTE, so that bookkeeping can't be skipped for REMOTE sessions.
+                await self.backend.create_session(session_id, project_id, config)
 
             # Issue #349: All sessions are minions (is_minion field removed)
 

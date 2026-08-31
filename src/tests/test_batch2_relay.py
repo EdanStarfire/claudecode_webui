@@ -146,6 +146,73 @@ async def test_fleet_halt_all_relays_to_remote(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_create_session_round_trip_after_relayed_project_creation(tmp_path):
+    """Regression test for a real bug the live two-process smoke test caught that
+    every other test in this file missed: they all patch validate_project_exists/
+    list_projects directly rather than exercising the actual "create a project via
+    the relayed endpoint, then create a session under it" round trip. That gap let
+    session creation ship completely broken in REMOTE mode — POST /api/sessions
+    always 404'd "Project not found" because both validate_project_exists and
+    SessionCoordinator.create_session's own project lookup only ever checked the
+    Hub's local project_manager, which projects.py's wholesale relay never
+    populates in REMOTE mode. Nothing here is mocked: real project creation, real
+    project-existence validation, real session creation, all crossing the relay.
+    """
+    remote = _make_remote(tmp_path)
+    (remote.coordinator.data_dir / "projects").mkdir(parents=True, exist_ok=True)
+    (remote.coordinator.data_dir / "sessions").mkdir(parents=True, exist_ok=True)
+    hub = ClaudeWebUI(data_dir=tmp_path / "hub_data_session_roundtrip")
+    (hub.coordinator.data_dir / "sessions").mkdir(parents=True, exist_ok=True)
+    _wire_hub_to_remote(hub, remote)
+
+    async with AsyncClient(transport=ASGITransport(app=hub.app), base_url="http://test") as client:
+        project_resp = await client.post(
+            "/api/projects", json={"name": "roundtrip-project", "working_directory": str(tmp_path)}
+        )
+        assert project_resp.status_code == 200, project_resp.text
+        project_id = project_resp.json()["project"]["project_id"]
+
+        # The project must be real on REMOTE, not a Hub-local artifact.
+        assert await hub.coordinator.project_manager.get_project(project_id) is None
+        assert await remote.coordinator.project_manager.get_project(project_id) is not None
+
+        session_resp = await client.post(
+            "/api/sessions", json={"project_id": project_id, "session_id": "roundtrip-session-1"}
+        )
+
+    assert session_resp.status_code == 200, session_resp.text
+    assert session_resp.json()["session_id"] == "roundtrip-session-1"
+
+    # Hub-local bookkeeping still happened (Batch 1's design: the Hub keeps its own
+    # SessionManager/EventQueue state for every session regardless of backend mode).
+    hub_info = await hub.coordinator.session_manager.get_session_info("roundtrip-session-1")
+    assert hub_info is not None
+    assert "roundtrip-session-1" in hub.session_queues
+
+    # REMOTE also has a mirrored record — required for the subsequent start_session
+    # REMOTE branch's POST /sessions/{id}/start to find anything at all.
+    remote_info = await remote.coordinator.session_manager.get_session_info("roundtrip-session-1")
+    assert remote_info is not None
+
+
+@pytest.mark.asyncio
+async def test_create_session_404s_for_project_missing_on_both_sides(tmp_path):
+    """Sanity check: a genuinely nonexistent project_id still 404s in REMOTE mode
+    (proves project_exists's REMOTE branch checks REMOTE for real, rather than the
+    fix degenerating into "always assume the project exists")."""
+    remote = _make_remote(tmp_path)
+    hub = ClaudeWebUI(data_dir=tmp_path / "hub_data_session_roundtrip_404")
+    _wire_hub_to_remote(hub, remote)
+
+    async with AsyncClient(transport=ASGITransport(app=hub.app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/sessions", json={"project_id": "does-not-exist-anywhere"}
+        )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_filesystem_browse_relays_to_remote(tmp_path):
     remote = _make_remote(tmp_path)
     hub = ClaudeWebUI(data_dir=tmp_path / "hub_data7")

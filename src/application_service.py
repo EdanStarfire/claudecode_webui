@@ -170,8 +170,8 @@ class ApplicationService:
         return project.to_dict() if project else None
 
     async def validate_project_exists(self, project_id: str) -> bool:
-        project = await self.coordinator.project_manager.get_project(project_id)
-        return project is not None
+        # Issue #498: REMOTE-aware — see SessionCoordinator.project_exists.
+        return await self.coordinator.project_exists(project_id)
 
     # =========================================================================
     # Sessions

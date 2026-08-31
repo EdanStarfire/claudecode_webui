@@ -148,7 +148,17 @@ class RemoteBackend:
     async def create_session(
         self, session_id: str, project_id: str, config: Any, **kwargs: Any
     ) -> str:
-        payload = {"session_id": session_id, "project_id": project_id, **kwargs}
+        """Mirror session creation onto REMOTE so its own session_manager has a
+        record before `start_session` POSTs to REMOTE's `/sessions/{id}/start`
+        (issue #498). `config` is the same `SessionCreateRequest`-shaped object
+        `SessionCoordinator.create_session` received — dump it wholesale so REMOTE's
+        session gets the caller's actual settings (model, permission_mode, tools,
+        ...), not REMOTE-side defaults; session_id/project_id are re-applied
+        explicitly in case the caller-supplied id differs from what `config` carries.
+        """
+        payload = config.model_dump(mode="json") if hasattr(config, "model_dump") else dict(kwargs)
+        payload["session_id"] = session_id
+        payload["project_id"] = project_id
         resp = await self._client.post("/sessions", json=payload)
         resp.raise_for_status()
         return session_id
