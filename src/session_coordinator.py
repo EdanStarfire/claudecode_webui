@@ -5146,20 +5146,44 @@ class SessionCoordinator:
         pipeline once on its own side; doing so again here would double-write
         Hub-local storage/state that only REMOTE should own for this session.
 
-        But `is_processing` is Hub-local bookkeeping the Hub is still responsible for
-        even in REMOTE mode (see `send_message`'s REMOTE branch, and
-        `interrupt_session`'s "processing state will be reset by the message
-        processing loop" comment) — and nothing else ever resets it for a REMOTE
-        session without this hook, since that loop never runs. Mirrors
-        `_create_message_callback`'s own narrow 'result' → is_processing=False rule
-        (see its "Issue #1029: Reactive is_processing tracking" comment), applied
-        directly to the relayed envelope instead of a freshly-parsed message.
+        But some Hub-local bookkeeping the Hub is still responsible for even in
+        REMOTE mode (see `send_message`'s REMOTE branch and the "Hub still tracks
+        activity/processing state locally" design) is otherwise never updated for a
+        REMOTE session, since that pipeline never runs on the Hub side. Mirrors the
+        narrow set of `_create_message_callback` rules that maintain exactly that
+        bookkeeping (see its "Issue #1029: Reactive is_processing tracking" comment,
+        the 'interrupt_success' branch, and `_create_error_callback`'s critical-error
+        branch), applied directly to the relayed envelope instead of a
+        freshly-parsed message or a locally-raised error.
         """
         async def callback(event: dict[str, Any]) -> None:
             try:
+                # Issue #1130: every relayed event is activity, not just outbound
+                # sends — without this, a REMOTE session mid-turn on a long tool
+                # loop looks idle to the Hub's watchdog well before it actually is.
+                self.session_manager.record_activity(session_id)
+
                 data = event.get("data") if isinstance(event, dict) else None
-                if isinstance(data, dict) and data.get("type") == "result":
+                if not isinstance(data, dict):
+                    return
+                data_type = data.get("type")
+                subtype = data.get("subtype")
+
+                if data_type == "result" or (data_type == "system" and subtype == "interrupt_success"):
                     await self.session_manager.update_processing_state(session_id, False)
+                elif data_type == "system" and subtype == "session_failed":
+                    # Mirrors _create_error_callback's critical-error branch — a
+                    # runtime crash on REMOTE (not just a REMOTE-unreachable relay
+                    # failure, already handled by error_callback) must still flip
+                    # the Hub's own session_manager.state, or every Hub-local guard
+                    # reading it (interrupt, watchdog, queue gating) keeps treating
+                    # a dead REMOTE session as alive.
+                    await self.session_manager.update_processing_state(session_id, False)
+                    error_message = data.get("content") or "Session failed on REMOTE"
+                    await self.session_manager.update_session_state(
+                        session_id, SessionState.ERROR, error_message
+                    )
+                    await self._notify_state_change(session_id, SessionState.ERROR)
             except Exception:
                 logger.exception(
                     f"Failed to sync processing state from relayed event for session {session_id}"

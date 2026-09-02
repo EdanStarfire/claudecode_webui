@@ -2890,3 +2890,81 @@ class TestRemoteRelayStateSync:
         await on_relay_event({"type": "message", "data": {"type": "result"}})
         info = await coordinator.session_manager.get_session_info(session_id)
         assert info.is_processing is False
+
+    @staticmethod
+    async def _start_remote_and_get_relay_callback(coordinator, session_id):
+        from ..session_backend import BackendMode
+
+        captured = {}
+
+        class FakeRemoteBackend:
+            async def start_session(self, session_id, **kwargs):
+                captured.update(kwargs)
+                return True, None
+
+            def active_session_ids(self):
+                return []
+
+        coordinator.backend = FakeRemoteBackend()
+        coordinator.backend_mode = BackendMode.REMOTE
+        await coordinator.start_session(session_id)
+        return captured["on_relay_event"]
+
+    @pytest.mark.asyncio
+    async def test_relayed_interrupt_success_event_resets_is_processing(
+        self, temp_coordinator, sample_session_config
+    ):
+        """An interrupted REMOTE turn need not produce a 'result' — only a
+        system/interrupt_success event — so is_processing must reset on that too."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_processing_state(session_id, True)
+
+        on_relay_event = await self._start_remote_and_get_relay_callback(coordinator, session_id)
+
+        await on_relay_event(
+            {"type": "message", "data": {"type": "system", "subtype": "interrupt_success"}}
+        )
+        info = await coordinator.session_manager.get_session_info(session_id)
+        assert info.is_processing is False
+
+    @pytest.mark.asyncio
+    async def test_relayed_session_failed_event_transitions_to_error_state(
+        self, temp_coordinator, sample_session_config
+    ):
+        """A runtime SDK crash mid-turn on REMOTE relays a system/session_failed
+        event — the Hub's own session_manager.state must flip to ERROR (and
+        is_processing must clear), or every Hub-local guard reading state
+        (interrupt, watchdog, queue gating) keeps treating a dead session as alive."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_processing_state(session_id, True)
+
+        on_relay_event = await self._start_remote_and_get_relay_callback(coordinator, session_id)
+
+        await on_relay_event({
+            "type": "message",
+            "data": {"type": "system", "subtype": "session_failed", "content": "boom"},
+        })
+
+        info = await coordinator.session_manager.get_session_info(session_id)
+        assert info.state == SessionState.ERROR
+        assert info.is_processing is False
+        assert info.error_message == "boom"
+
+    @pytest.mark.asyncio
+    async def test_relayed_event_records_activity(self, temp_coordinator, sample_session_config):
+        """Every relayed event is activity, not just outbound sends — otherwise a
+        REMOTE session mid-turn on a long tool loop looks idle to the watchdog
+        well before it actually is."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        on_relay_event = await self._start_remote_and_get_relay_callback(coordinator, session_id)
+
+        before = (await coordinator.session_manager.get_session_info(session_id)).last_activity_at
+        await on_relay_event({"type": "message", "data": {"type": "assistant"}})
+        after = (await coordinator.session_manager.get_session_info(session_id)).last_activity_at
+
+        assert after is not None
+        assert before is None or after >= before
