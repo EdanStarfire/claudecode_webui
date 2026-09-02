@@ -2818,3 +2818,75 @@ class TestIssue1779TimestampInjection:
         await coordinator.send_message(session_id, "inter-agent comm", inject_timestamp=False)
 
         mock_sdk.send_message.assert_called_once_with("inter-agent comm", metadata=None)
+
+
+class TestRemoteRelayStateSync:
+    """Issue #499: RemoteBackend's relay poll loop forwards raw events straight into
+    the Hub's local EventQueue for display, bypassing _create_message_callback (and
+    therefore its is_processing-reset-on-'result' logic) entirely. Without the
+    on_relay_event hook, is_processing (and anything gated on it, e.g. interrupt's
+    completion signal) never resets for a REMOTE-dispatched session."""
+
+    @pytest.mark.asyncio
+    async def test_start_session_passes_relay_state_sync_callback_to_remote_backend(
+        self, temp_coordinator, sample_session_config
+    ):
+        from ..session_backend import BackendMode
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        captured = {}
+
+        class FakeRemoteBackend:
+            async def start_session(self, session_id, **kwargs):
+                captured.update(kwargs)
+                return True, None
+
+            def active_session_ids(self):
+                return []
+
+        coordinator.backend = FakeRemoteBackend()
+        coordinator.backend_mode = BackendMode.REMOTE
+
+        started = await coordinator.start_session(session_id)
+
+        assert started is True
+        assert callable(captured.get("on_relay_event"))
+
+    @pytest.mark.asyncio
+    async def test_relayed_result_event_resets_is_processing(
+        self, temp_coordinator, sample_session_config
+    ):
+        from ..session_backend import BackendMode
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_processing_state(session_id, True)
+
+        captured = {}
+
+        class FakeRemoteBackend:
+            async def start_session(self, session_id, **kwargs):
+                captured.update(kwargs)
+                return True, None
+
+            def active_session_ids(self):
+                return []
+
+        coordinator.backend = FakeRemoteBackend()
+        coordinator.backend_mode = BackendMode.REMOTE
+
+        await coordinator.start_session(session_id)
+        on_relay_event = captured["on_relay_event"]
+
+        # A non-completion event must NOT reset processing state.
+        await on_relay_event({"type": "message", "data": {"type": "assistant"}})
+        info = await coordinator.session_manager.get_session_info(session_id)
+        assert info.is_processing is True
+
+        # The relayed 'result' envelope — the same shape prepare_for_websocket/
+        # web_server.py's append() produces — must reset it.
+        await on_relay_event({"type": "message", "data": {"type": "result"}})
+        info = await coordinator.session_manager.get_session_info(session_id)
+        assert info.is_processing is False

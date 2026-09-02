@@ -1375,6 +1375,12 @@ class SessionCoordinator:
                 # after MAX_RELAY_FAILURES, so a REMOTE outage never surfaces as
                 # SessionState.ERROR — the session just silently stops updating.
                 error_callback=self._create_error_callback(session_id),
+                # Issue #499: the relay poll loop forwards raw events straight into
+                # the Hub's local EventQueue for display, bypassing
+                # _create_message_callback entirely — so is_processing (and anything
+                # gated on it, e.g. interrupt's completion signal) would otherwise
+                # never reset for a REMOTE session after any completed turn.
+                on_relay_event=self._create_remote_relay_state_sync_callback(session_id),
             )
             # Issue #498: keep the Hub's own session_manager state in sync even though
             # the SDK itself runs on REMOTE — every other coordinator method (interrupt,
@@ -5129,6 +5135,35 @@ class SessionCoordinator:
             except Exception:
                 logger.exception(f"Error processing error callback for {session_id}")
 
+        return callback
+
+    def _create_remote_relay_state_sync_callback(self, session_id: str) -> Callable:
+        """Narrow state-sync hook for RemoteBackend's relay poll loop (issue #499).
+
+        The relay loop forwards raw event envelopes straight into the Hub's local
+        EventQueue for display — it deliberately does NOT run them through
+        `_create_message_callback`'s full pipeline, since REMOTE already ran that
+        pipeline once on its own side; doing so again here would double-write
+        Hub-local storage/state that only REMOTE should own for this session.
+
+        But `is_processing` is Hub-local bookkeeping the Hub is still responsible for
+        even in REMOTE mode (see `send_message`'s REMOTE branch, and
+        `interrupt_session`'s "processing state will be reset by the message
+        processing loop" comment) — and nothing else ever resets it for a REMOTE
+        session without this hook, since that loop never runs. Mirrors
+        `_create_message_callback`'s own narrow 'result' → is_processing=False rule
+        (see its "Issue #1029: Reactive is_processing tracking" comment), applied
+        directly to the relayed envelope instead of a freshly-parsed message.
+        """
+        async def callback(event: dict[str, Any]) -> None:
+            try:
+                data = event.get("data") if isinstance(event, dict) else None
+                if isinstance(data, dict) and data.get("type") == "result":
+                    await self.session_manager.update_processing_state(session_id, False)
+            except Exception:
+                logger.exception(
+                    f"Failed to sync processing state from relayed event for session {session_id}"
+                )
         return callback
 
     def _create_stderr_callback(self, session_id: str) -> Callable:

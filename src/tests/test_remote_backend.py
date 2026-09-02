@@ -144,6 +144,50 @@ async def test_start_session_success_spawns_relay_loop_that_forwards_events():
 
 
 @pytest.mark.asyncio
+async def test_relay_loop_invokes_on_relay_event_for_each_event():
+    """The relay poll loop must invoke on_relay_event for every relayed event,
+    independent of whether a session_queue exists — this is the hook
+    SessionCoordinator uses to reset is_processing for REMOTE sessions, since the
+    relay bypasses _create_message_callback's own reset logic entirely (issue #499)."""
+    seen_events = []
+
+    async def on_relay_event(event):
+        seen_events.append(event)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/backend/sessions/s1/start":
+            return httpx.Response(200)
+        if request.url.path == "/api/backend/poll/session/s1":
+            since = int(request.url.params["since"])
+            if since == 0:
+                return httpx.Response(
+                    200,
+                    json={
+                        "events": [
+                            {"type": "message", "data": {"type": "assistant"}},
+                            {"type": "message", "data": {"type": "result"}},
+                        ],
+                        "next_cursor": 2,
+                    },
+                )
+            return httpx.Response(200, json={"events": [], "next_cursor": 2})
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    backend = _backend_with_handler(handler, session_queues={"s1": EventQueue()})
+
+    started, _ = await backend.start_session("s1", on_relay_event=on_relay_event)
+    assert started is True
+    for _ in range(50):
+        if len(seen_events) >= 2:
+            break
+        await asyncio.sleep(0.01)
+
+    assert [e["data"]["type"] for e in seen_events] == ["assistant", "result"]
+
+    await backend.aclose()
+
+
+@pytest.mark.asyncio
 async def test_restart_resumes_relay_from_last_cursor_instead_of_refetching_backlog():
     """Regression test: restarting a session (disconnect_session then start_session
     again, exactly what SessionCoordinator.restart_session does) must resume the

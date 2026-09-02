@@ -177,6 +177,7 @@ class RemoteBackend:
         permission_callback: Callable | None = None,
         auto_approval_callback: Callable | None = None,
         error_callback: Callable | None = None,
+        on_relay_event: Callable | None = None,
     ) -> tuple[bool, str | None]:
         try:
             resp = await self._client.post(f"/sessions/{session_id}/start")
@@ -190,7 +191,7 @@ class RemoteBackend:
         existing = self._relay_tasks.get(session_id)
         if existing is None or existing.done():
             task = asyncio.create_task(
-                self._relay_poll_loop(session_id, error_callback),
+                self._relay_poll_loop(session_id, error_callback, on_relay_event),
                 name=f"remote_relay_poll_{session_id}",
             )
             self._relay_tasks[session_id] = task
@@ -403,6 +404,7 @@ class RemoteBackend:
         self,
         session_id: str,
         error_callback: Callable | None,
+        on_relay_event: Callable | None = None,
     ) -> None:
         """Long-poll REMOTE's mirrored `/poll/session/{id}` and replay each already-
         formed event envelope into the Hub's local EventQueue for this session — the
@@ -415,6 +417,14 @@ class RemoteBackend:
         `disconnect_session()`'s `_stop_relay`), and starting over from since=0 would
         re-fetch and re-append REMOTE's entire event backlog into the Hub's local
         EventQueue on every restart, duplicating message history in the frontend.
+
+        `on_relay_event`, if given, is invoked once per relayed event (issue #499) —
+        this loop deliberately does NOT run events through the Hub's full
+        `_create_message_callback` pipeline (REMOTE already ran that once on its own
+        side; doing so again here would double-write Hub-local storage/state that
+        only REMOTE should own), but some Hub-local bookkeeping (e.g. is_processing)
+        has nothing else that ever updates it for a REMOTE session, so a narrow hook
+        is needed instead of the full pipeline.
         """
         cursor = self._relay_cursors.get(session_id, 0)
         failures = 0
@@ -441,9 +451,16 @@ class RemoteBackend:
                 self._relay_cursors[session_id] = cursor
                 failures = 0
                 queue = self._session_queues.get(session_id)
-                if queue is not None:
-                    for event in events:
+                for event in events:
+                    if queue is not None:
                         queue.append(event)
+                    if on_relay_event is not None:
+                        try:
+                            await on_relay_event(event)
+                        except Exception:
+                            logger.exception(
+                                f"on_relay_event callback failed for session {session_id}"
+                            )
             except asyncio.CancelledError:
                 raise
             except Exception:
