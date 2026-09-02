@@ -720,9 +720,14 @@ class ClaudeWebUI:
 
         # Issue #498: start the single shared audit-stream relay task if REMOTE is
         # configured (Batch 5, Pattern B) — see RemoteBackend.start_audit_relay.
+        # Issue #499: same pattern for the global UI event stream — without this,
+        # every broadcast landing in ui_queue (PAUSED-for-permission state,
+        # rate-limit updates, watchdog alerts, ...) only ever reaches REMOTE's own
+        # local ui_queue, never the Hub's.
         from .session_backend import BackendMode
         if self.coordinator.backend_mode == BackendMode.REMOTE:
             await self.coordinator.backend.start_audit_relay(self.audit_queue)
+            await self.coordinator.backend.start_ui_relay(self.ui_queue)
 
         try:
             await self.litellm_proxy_manager.start()

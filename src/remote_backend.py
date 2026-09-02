@@ -57,6 +57,8 @@ class RemoteBackend:
         self._relay_cursors: dict[str, int] = {}
         self._audit_relay_task: asyncio.Task | None = None
         self._audit_relay_active = False
+        self._ui_relay_task: asyncio.Task | None = None
+        self._ui_relay_active = False
 
     async def aclose(self) -> None:
         tasks = list(self._relay_tasks.values())
@@ -69,6 +71,7 @@ class RemoteBackend:
                 pass
         self._relay_tasks.clear()
         await self.stop_audit_relay()
+        await self.stop_ui_relay()
         await self._client.aclose()
 
     # ------------------------------------------------------------------
@@ -144,6 +147,74 @@ class RemoteBackend:
                 if failures >= MAX_RELAY_FAILURES:
                     logger.error(f"Giving up audit relay poll after {failures} failures")
                     self._audit_relay_active = False
+                    break
+                await asyncio.sleep(min(2**failures, 30))
+
+    # ------------------------------------------------------------------
+    # UI relay (issue #499) — same single-shared-connection pattern as the audit
+    # relay above. Without this, every broadcast that lands in the *global*
+    # ui_queue (session PAUSED-for-permission state, rate-limit updates, watchdog
+    # alerts, SDK-driven permission-mode changes, Legion comm/schedule
+    # notifications — anything sent via ClaudeWebUI._on_state_change and friends)
+    # only ever reaches REMOTE's own local ui_queue, which the Hub never polls —
+    # a systematic gap found auditing every callback/broadcast mechanism against
+    # the same "bypasses the per-session relay" pattern as the is_processing fix.
+    # ------------------------------------------------------------------
+
+    async def start_ui_relay(self, ui_queue: EventQueue) -> None:
+        """Start the single background task that keeps the Hub's local ui_queue
+        filled from REMOTE's global UI event stream (/api/backend/poll/ui)."""
+        if self._ui_relay_task is not None and not self._ui_relay_task.done():
+            return
+        self._ui_relay_active = True
+        self._ui_relay_task = asyncio.create_task(
+            self._ui_relay_poll_loop(ui_queue), name="remote_ui_relay_poll"
+        )
+
+    async def stop_ui_relay(self) -> None:
+        self._ui_relay_active = False
+        task = self._ui_relay_task
+        self._ui_relay_task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    async def _ui_relay_poll_loop(self, ui_queue: EventQueue) -> None:
+        """Long-poll REMOTE's mirrored /poll/ui and replay each event into the
+        Hub's local ui_queue. Uses poll_ui's own since/next_cursor integer
+        convention (same shape as /poll/session/{id}, unlike audit's DB-timestamp
+        cursor) — this loop's cursor is private to it, decoupled from what
+        /api/poll/ui actually serves to browser clients from the Hub-local queue.
+        """
+        cursor = 0
+        failures = 0
+        while self._ui_relay_active:
+            await asyncio.sleep(0)
+            try:
+                resp = await self._client.get(
+                    "/poll/ui", params={"since": cursor, "timeout": _POLL_TIMEOUT_SECONDS}
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                events = data.get("events", [])
+                cursor = data.get("next_cursor", cursor)
+                failures = 0
+                for event in events:
+                    ui_queue.append(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                failures += 1
+                logger.warning(
+                    f"UI relay poll failed (attempt {failures}/{MAX_RELAY_FAILURES})",
+                    exc_info=True,
+                )
+                if failures >= MAX_RELAY_FAILURES:
+                    logger.error(f"Giving up UI relay poll after {failures} failures")
+                    self._ui_relay_active = False
                     break
                 await asyncio.sleep(min(2**failures, 30))
 
