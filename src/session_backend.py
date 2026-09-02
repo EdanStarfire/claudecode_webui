@@ -73,6 +73,31 @@ class SessionBackend(Protocol):
 
     async def set_model(self, session_id: str, model: str) -> bool: ...
 
+    async def update_session_name(self, session_id: str, name: str) -> bool:
+        """Update a session's display name.
+
+        LOCAL: no-op (True) — the caller already applied the rename to the local
+        `session_manager` directly; only invoked at all for REMOTE dispatch.
+        REMOTE: relays the rename to REMOTE's own `/sessions/{id}/name` route so its
+        persisted name stays in sync too (issue #499) — cosmetic fields are still
+        session config that should never silently diverge between Hub and REMOTE.
+        """
+        ...
+
+    async def update_session_config(self, session_id: str, raw_payload: dict[str, Any]) -> bool:
+        """Apply a session config update (PATCH /api/sessions/{id}'s raw request body).
+
+        LOCAL: no-op (True) — the caller already applied the update to the local
+        `session_manager` directly; only invoked at all for REMOTE dispatch.
+        REMOTE: relays the raw, unprocessed client payload to REMOTE's own
+        `/sessions/{id}` PATCH route, so REMOTE independently applies the exact same
+        field-transform logic its own router already has (rather than this side
+        reimplementing it). Without this, REMOTE only ever sees the config it got at
+        session-creation time — any later edit (model, tools, extra_env, MCP servers,
+        ...) would silently never reach the process actually running the SDK (#499).
+        """
+        ...
+
     async def resolve_permission(
         self, session_id: str, request_id: str, response: dict[str, Any]
     ) -> bool:

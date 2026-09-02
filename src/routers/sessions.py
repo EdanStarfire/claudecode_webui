@@ -344,7 +344,9 @@ def build_router(webui) -> APIRouter:
         if not updates:
             return {"success": True, "message": "No fields to update"}
 
-        success = await webui.service.update_session(session_id, **updates)
+        success = await webui.service.update_session(
+            session_id, updates, request.model_dump(exclude_none=True)
+        )
         if not success:
             raise HTTPException(status_code=500, detail="Failed to update session")
 

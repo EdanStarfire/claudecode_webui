@@ -210,6 +210,17 @@ class RemoteBackend:
         resp = await self._post(f"/sessions/{session_id}/model", {"model": model})
         return resp is not None and resp.status_code < 400
 
+    async def update_session_name(self, session_id: str, name: str) -> bool:
+        resp = await self._put(f"/sessions/{session_id}/name", {"name": name})
+        return resp is not None and resp.status_code < 400
+
+    async def update_session_config(self, session_id: str, raw_payload: dict[str, Any]) -> bool:
+        """Relay the raw PATCH /api/sessions/{id} body to REMOTE's own mirrored route
+        (issue #499) so REMOTE's session config stays in sync with edits made after
+        creation, not just what it got from create_session()'s creation-time dump."""
+        resp = await self._patch(f"/sessions/{session_id}", raw_payload)
+        return resp is not None and resp.status_code < 400
+
     async def resolve_permission(
         self, session_id: str, request_id: str, response: dict[str, Any]
     ) -> bool:
@@ -356,6 +367,20 @@ class RemoteBackend:
             return await self._client.post(path, json=json_body)
         except httpx.HTTPError:
             logger.exception(f"RemoteBackend POST {path} failed")
+            return None
+
+    async def _patch(self, path: str, json_body: dict[str, Any]) -> httpx.Response | None:
+        try:
+            return await self._client.patch(path, json=json_body)
+        except httpx.HTTPError:
+            logger.exception(f"RemoteBackend PATCH {path} failed")
+            return None
+
+    async def _put(self, path: str, json_body: dict[str, Any]) -> httpx.Response | None:
+        try:
+            return await self._client.put(path, json=json_body)
+        except httpx.HTTPError:
+            logger.exception(f"RemoteBackend PUT {path} failed")
             return None
 
     def _stop_relay(self, session_id: str) -> None:

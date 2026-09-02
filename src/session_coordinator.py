@@ -2229,8 +2229,14 @@ class SessionCoordinator:
             return False
 
     async def update_session_name(self, session_id: str, name: str) -> bool:
-        """Update session name"""
+        """Update session name, relaying to REMOTE if this session is dispatched
+        there (issue #499) — otherwise REMOTE's persisted name silently diverges
+        from the Hub's, same as any other session config."""
         try:
+            if self.backend_mode == BackendMode.REMOTE:
+                if not await self.backend.update_session_name(session_id, name):
+                    logger.warning(f"Failed to relay session name to REMOTE for {session_id}")
+                    return False
             success = await self.session_manager.update_session_name(session_id, name)
             if success:
                 # Notify about state change to trigger UI updates
@@ -2242,6 +2248,30 @@ class SessionCoordinator:
         except Exception:
             logger.exception(f"Failed to update session {session_id} name")
             return False
+
+    async def update_session_config(
+        self, session_id: str, updates: dict[str, Any], raw_payload: dict[str, Any]
+    ) -> bool:
+        """Apply a PATCH /api/sessions/{id} config update, and relay it to REMOTE if
+        this session is dispatched there (issue #499).
+
+        Without the relay, REMOTE only ever sees the config it got from
+        `create_session()`'s creation-time dump — any later edit (model, tools,
+        extra_env, MCP servers, ...) would silently only update the Hub's own unused
+        local copy, never reaching the process actually running the SDK. `updates` is
+        the already-transformed dict for the local `session_manager` write (matching
+        every other caller of `session_manager.update_session`); `raw_payload` is the
+        untransformed client request body, relayed as-is so REMOTE's own router
+        applies the identical field-transform logic itself rather than this side
+        reimplementing it.
+        """
+        if self.backend_mode == BackendMode.REMOTE:
+            if not await self.backend.update_session_config(session_id, raw_payload):
+                logger.warning(f"Failed to relay session config update to REMOTE for {session_id}")
+                return False
+        return await self.session_manager.update_session(
+            session_id, template_manager=self.template_manager, **updates
+        )
 
     async def delete_session(self, session_id: str, archive_reason: str = "user_deleted") -> dict:
         """
@@ -2680,8 +2710,16 @@ class SessionCoordinator:
                 logger.warning(f"Session {session_id} not found - cannot set permission mode")
                 return False
 
-            # For non-running sessions, just persist to disk — the mode will be applied at startup
+            # For non-running sessions, just persist to disk — the mode will be applied at startup.
+            # Issue #499: relay to REMOTE first (if dispatched there) so its own persisted config
+            # stays in sync too — REMOTE only ever saw creation-time config otherwise.
             if session_info.state in STOPPED_STATES:
+                if self.backend_mode == BackendMode.REMOTE:
+                    if not await self.backend.set_permission_mode(session_id, mode):
+                        logger.warning(
+                            f"Failed to relay permission mode to REMOTE for stopped session {session_id}"
+                        )
+                        return False
                 await self.session_manager.update_permission_mode(
                     session_id, mode, template_manager=self.template_manager
                 )
@@ -2735,8 +2773,16 @@ class SessionCoordinator:
                 logger.warning(f"Session {session_id} not found - cannot set model")
                 return False
 
-            # For non-running sessions, just persist to disk — the model will be applied at startup
+            # For non-running sessions, just persist to disk — the model will be applied at startup.
+            # Issue #499: relay to REMOTE first (if dispatched there) so its own persisted config
+            # stays in sync too — REMOTE only ever saw creation-time config otherwise.
             if session_info.state in STOPPED_STATES:
+                if self.backend_mode == BackendMode.REMOTE:
+                    if not await self.backend.set_model(session_id, model):
+                        logger.warning(
+                            f"Failed to relay model to REMOTE for stopped session {session_id}"
+                        )
+                        return False
                 await self.session_manager.update_model(
                     session_id, model, template_manager=self.template_manager
                 )

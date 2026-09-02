@@ -219,12 +219,10 @@ class ApplicationService:
             session_id, permission_callback=permission_callback
         )
 
-    async def update_session(self, session_id: str, **updates) -> bool:
-        return await self.coordinator.session_manager.update_session(
-            session_id,
-            template_manager=self.coordinator.template_manager,
-            **updates,
-        )
+    async def update_session(
+        self, session_id: str, updates: dict, raw_payload: dict
+    ) -> bool:
+        return await self.coordinator.update_session_config(session_id, updates, raw_payload)
 
     async def get_session_working_directory(self, session_id: str) -> str | None:
         """Return working_directory for file-serving and diff routes."""

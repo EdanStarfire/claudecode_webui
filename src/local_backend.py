@@ -130,6 +130,18 @@ class LocalBackend:
             return False
         return await sdk.set_model(model)
 
+    async def update_session_name(self, session_id: str, name: str) -> bool:
+        # LOCAL renames are coordinator-local (session_manager) and never dispatch
+        # through the backend — see SessionCoordinator.update_session_name. Present
+        # only for Protocol conformance.
+        return True
+
+    async def update_session_config(self, session_id: str, raw_payload: dict[str, Any]) -> bool:
+        # LOCAL config updates are coordinator-local (session_manager) and never
+        # dispatch through the backend — see SessionCoordinator.update_session_config.
+        # Present only for Protocol conformance.
+        return True
+
     async def resolve_permission(
         self, session_id: str, request_id: str, response: dict[str, Any]
     ) -> bool:

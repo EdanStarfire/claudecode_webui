@@ -36,6 +36,7 @@ def mock_coordinator():
     coordinator.session_manager.get_sessions_by_ids = AsyncMock()
     coordinator.session_manager.update_session = AsyncMock()
     coordinator.session_manager.reorder_sessions = AsyncMock()
+    coordinator.update_session_config = AsyncMock()
 
     coordinator.mcp_config_manager.list_configs = AsyncMock()
     coordinator.mcp_config_manager.create_config = AsyncMock()
@@ -301,17 +302,14 @@ async def test_delete_session_no_project_field_when_session_has_no_project(servi
 
 
 @pytest.mark.asyncio
-async def test_update_session_delegates_to_session_manager(service, mock_coordinator):
-    mock_coordinator.session_manager.update_session.return_value = True
+async def test_update_session_delegates_to_coordinator(service, mock_coordinator):
+    mock_coordinator.update_session_config.return_value = True
 
-    result = await service.update_session("s1", name="new name", model="sonnet")
+    updates = {"name": "new name", "model": "sonnet"}
+    raw_payload = {"name": "new name", "model": "sonnet"}
+    result = await service.update_session("s1", updates, raw_payload)
 
-    mock_coordinator.session_manager.update_session.assert_called_once_with(
-        "s1",
-        template_manager=mock_coordinator.template_manager,
-        name="new name",
-        model="sonnet",
-    )
+    mock_coordinator.update_session_config.assert_called_once_with("s1", updates, raw_payload)
     assert result is True
 
 
