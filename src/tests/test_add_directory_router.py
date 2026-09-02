@@ -16,7 +16,7 @@ def _make_app():
     webui.coordinator.add_directory = AsyncMock()
 
     app = FastAPI()
-    app.include_router(build_router(webui), prefix="/api")
+    app.include_router(build_router(webui))
     return app, webui
 
 

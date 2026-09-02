@@ -3,40 +3,30 @@
 
 from fastapi import APIRouter, HTTPException, Request
 
-from .. import relay_client
 from ..exception_handlers import handle_exceptions
 from ..http_range import build_resource_response
-from ..session_backend import BackendMode
 
 
 def build_router(webui) -> APIRouter:
     router = APIRouter()
 
     # ==================== ARCHIVE ENDPOINTS ====================
-    # Issue #498: archives live wherever the session ran — Pattern A wholesale
-    # relay when REMOTE is configured, unchanged local reads otherwise.
 
-    @router.get("/projects/{project_id}/archives/{session_id}")
+    @router.get("/api/projects/{project_id}/archives/{session_id}")
     @handle_exceptions("list session archives")
-    async def list_session_archives(
-        project_id: str, session_id: str, request: Request, limit: int = 50, offset: int = 0
-    ):
+    async def list_session_archives(project_id: str, session_id: str, limit: int = 50, offset: int = 0):
         """List archives for a session within a project, paginated."""
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
         if not await webui.service.validate_project_exists(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
         return await webui.coordinator.get_archives(session_id, limit=limit, offset=offset)
 
-    @router.get("/projects/{project_id}/archives/{session_id}/{archive_id}/messages")
+    @router.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/messages")
     @handle_exceptions("get archive messages")
     async def get_archive_messages(
-        project_id: str, session_id: str, archive_id: str, request: Request,
+        project_id: str, session_id: str, archive_id: str,
         limit: int | None = 50, offset: int = 0
     ):
         """Get paginated messages from an archive."""
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
         if not await webui.service.validate_project_exists(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
         result = await webui.coordinator.get_archive_messages(
@@ -44,12 +34,10 @@ def build_router(webui) -> APIRouter:
         )
         return result
 
-    @router.get("/projects/{project_id}/archives/{session_id}/{archive_id}/state")
+    @router.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/state")
     @handle_exceptions("get archive state")
-    async def get_archive_state(project_id: str, session_id: str, archive_id: str, request: Request):
+    async def get_archive_state(project_id: str, session_id: str, archive_id: str):
         """Get archive state and disposal metadata."""
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
         if not await webui.service.validate_project_exists(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
         result = await webui.coordinator.get_archive_state(session_id, archive_id)
@@ -58,14 +46,13 @@ def build_router(webui) -> APIRouter:
         return result
 
     @router.get(
-        "/projects/{project_id}/archives/{session_id}/{archive_id}/resources"
+        "/api/projects/{project_id}/archives/{session_id}/{archive_id}/resources"
     )
     @handle_exceptions("get archive resources")
     async def get_archive_resources(
         project_id: str,
         session_id: str,
         archive_id: str,
-        request: Request,
         limit: int = 50,
         offset: int = 0,
         search: str | None = None,
@@ -73,8 +60,6 @@ def build_router(webui) -> APIRouter:
         sort: str = "newest",
     ):
         """List resource metadata from an archive, paginated with optional filter/sort."""
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
         if not await webui.service.validate_project_exists(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
         return await webui.coordinator.get_archive_resources(
@@ -88,7 +73,7 @@ def build_router(webui) -> APIRouter:
         )
 
     @router.get(
-        "/projects/{project_id}/archives/{session_id}/{archive_id}"
+        "/api/projects/{project_id}/archives/{session_id}/{archive_id}"
         "/resources/{resource_id}"
     )
     @handle_exceptions("get archive resource file")
@@ -96,8 +81,6 @@ def build_router(webui) -> APIRouter:
         project_id: str, session_id: str, archive_id: str, resource_id: str, request: Request
     ):
         """Get raw file data for a resource in an archive."""
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
         if not await webui.service.validate_project_exists(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -130,31 +113,25 @@ def build_router(webui) -> APIRouter:
             disposition="inline",
         )
 
-    @router.get("/projects/{project_id}/deleted-agents")
+    @router.get("/api/projects/{project_id}/deleted-agents")
     @handle_exceptions("list deleted agents")
-    async def list_deleted_agents(project_id: str, request: Request, limit: int = 50, offset: int = 0):
+    async def list_deleted_agents(project_id: str, limit: int = 50, offset: int = 0):
         """List deleted agents with archives for a project, paginated."""
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
         if not await webui.service.validate_project_exists(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
         return await webui.coordinator.list_project_deleted_agents(project_id, limit=limit, offset=offset)
 
-    @router.delete("/sessions/{session_id}/archives")
+    @router.delete("/api/sessions/{session_id}/archives")
     @handle_exceptions("erase session archives")
-    async def erase_session_archives(session_id: str, request: Request):
+    async def erase_session_archives(session_id: str):
         """Erase archive data for a session."""
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
         success = await webui.coordinator.erase_archives(session_id)
         return {"success": success}
 
-    @router.get("/sessions/{session_id}/history-archives-status")
+    @router.get("/api/sessions/{session_id}/history-archives-status")
     @handle_exceptions("get history archives status")
-    async def get_history_archives_status(session_id: str, request: Request):
+    async def get_history_archives_status(session_id: str):
         """Check if history and/or archives exist for a session."""
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
         return await webui.coordinator.check_history_archives(session_id)
 
     return router

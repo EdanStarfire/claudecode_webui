@@ -12,7 +12,7 @@ _polling_logger = get_logger('polling', category='POLL')
 def build_router(webui) -> APIRouter:
     router = APIRouter()
 
-    @router.get("/poll/ui")
+    @router.get("/api/poll/ui")
     @handle_exceptions("poll ui")
     async def poll_ui(since: int = 0, timeout: int = 30):
         """HTTP long-poll endpoint for global UI events."""
@@ -26,13 +26,13 @@ def build_router(webui) -> APIRouter:
             )
         return {"events": events, "next_cursor": next_cursor}
 
-    @router.get("/poll/cursor")
+    @router.get("/api/poll/cursor")
     @handle_exceptions("poll cursor")
     async def get_poll_cursor():
         """Return current UI event queue cursor position for client initialization."""
         return {"cursor": webui.ui_queue.current_cursor}
 
-    @router.get("/poll/session/{session_id}/cursor")
+    @router.get("/api/poll/session/{session_id}/cursor")
     @handle_exceptions("poll session cursor")
     async def get_session_poll_cursor(session_id: str):
         """Return current session event queue cursor position for client initialization."""
@@ -42,7 +42,7 @@ def build_router(webui) -> APIRouter:
             return {"cursor": 0}  # session exists but queue not yet initialized
         return {"cursor": webui.session_queues[session_id].current_cursor}
 
-    @router.get("/poll/session/{session_id}")
+    @router.get("/api/poll/session/{session_id}")
     @handle_exceptions("poll session")
     async def poll_session(session_id: str, since: int = 0, timeout: int = 30):
         """HTTP long-poll endpoint for session-specific events."""

@@ -3,15 +3,13 @@
 import logging
 import os
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Request
-from starlette.datastructures import UploadFile as StarletteUploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
-from .. import relay_client
 from ..exception_handlers import handle_exceptions
 from ..file_upload import FileUploadError, FileUploadManager
 from ..http_range import build_resource_response
-from ..session_backend import BackendMode
 
 logger = logging.getLogger(__name__)
 
@@ -21,41 +19,21 @@ def build_router(webui) -> APIRouter:
 
     # ==================== FILE UPLOAD ENDPOINTS ====================
 
-    @router.post("/sessions/{session_id}/files")
+    @router.post("/api/sessions/{session_id}/files")
     @handle_exceptions("upload file")
-    async def upload_file(session_id: str, request: Request):
+    async def upload_file(session_id: str, file: Annotated[UploadFile, File(...)]):
         """
         Upload a file for a session.
 
         Files are stored in data/sessions/{session_id}/attachments/
         and paths are passed to Claude for reading via the Read tool.
-
-        Issue #498: relayed wholesale for REMOTE sessions — this deliberately does
-        NOT declare `file: UploadFile` as a route parameter (which would make
-        FastAPI consume the multipart body before this function runs, leaving
-        nothing for relay_client.forward's raw-body relay). The multipart form is
-        parsed manually below on the LOCAL path instead. REMOTE's own upload route
-        performs register_uploaded_file's auto-approval side effect itself as part
-        of its normal handling — no separate mutation-relay needed.
         """
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
-
         # Verify session exists
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
 
         # Initialize file upload manager if not already done
         file_manager = FileUploadManager(webui.coordinator.data_dir / "sessions")
-
-        form = await request.form()
-        file = form.get("file")
-        # Manual form parsing loses FastAPI's automatic UploadFile validation (used
-        # to 422 here) — a "file" field sent as a plain text part instead of an
-        # actual file upload comes back as a str, not an UploadFile; without this
-        # check that reaches file.filename below and 500s instead of a clean 400.
-        if not isinstance(file, StarletteUploadFile):
-            raise HTTPException(status_code=400, detail="'file' must be an uploaded file")
 
         # Read file content
         file_content = await file.read()
@@ -104,14 +82,10 @@ def build_router(webui) -> APIRouter:
             response["file"]["markdown"] = resource_meta["markdown"]
         return response
 
-    @router.get("/sessions/{session_id}/files")
+    @router.get("/api/sessions/{session_id}/files")
     @handle_exceptions("list session files")
-    async def list_session_files(
-        session_id: str, request: Request, limit: int = 100, offset: int = 0
-    ):
+    async def list_session_files(session_id: str, limit: int = 100, offset: int = 0):
         """List uploaded files for a session, paginated"""
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
         # Verify session exists
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
@@ -129,12 +103,10 @@ def build_router(webui) -> APIRouter:
             "has_more": offset + len(sliced) < total,
         }
 
-    @router.delete("/sessions/{session_id}/files/{file_id}")
+    @router.delete("/api/sessions/{session_id}/files/{file_id}")
     @handle_exceptions("delete file")
-    async def delete_file(session_id: str, file_id: str, request: Request):
+    async def delete_file(session_id: str, file_id: str):
         """Delete an uploaded file"""
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
         # Verify session exists
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
@@ -154,11 +126,10 @@ def build_router(webui) -> APIRouter:
         return {"success": True}
 
     # Issue #404: Resource gallery endpoints
-    @router.get("/sessions/{session_id}/resources")
+    @router.get("/api/sessions/{session_id}/resources")
     @handle_exceptions("get session resources")
     async def get_session_resources(
         session_id: str,
-        request: Request,
         limit: int = 50,
         offset: int = 0,
         search: str | None = None,
@@ -166,8 +137,6 @@ def build_router(webui) -> APIRouter:
         sort: str = "newest",
     ):
         """Get resource metadata for a session, paginated with optional filter/sort"""
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
         return await webui.coordinator.get_session_resources(
@@ -179,12 +148,10 @@ def build_router(webui) -> APIRouter:
             sort=sort,
         )
 
-    @router.get("/sessions/{session_id}/resources/{resource_id}")
+    @router.get("/api/sessions/{session_id}/resources/{resource_id}")
     @handle_exceptions("get session resource")
     async def get_session_resource(session_id: str, resource_id: str, request: Request):
         """Get raw file data for a specific resource"""
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
         # Get resource metadata to determine content type
         resource_meta = await webui.coordinator.get_session_resource_by_id(session_id, resource_id)
 
@@ -208,12 +175,10 @@ def build_router(webui) -> APIRouter:
             disposition="inline",
         )
 
-    @router.get("/sessions/{session_id}/resources/{resource_id}/download")
+    @router.get("/api/sessions/{session_id}/resources/{resource_id}/download")
     @handle_exceptions("download session resource")
     async def download_session_resource(session_id: str, resource_id: str, request: Request):
         """Download a resource file"""
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
         # Get resource metadata
         resource_meta = await webui.coordinator.get_session_resource_by_id(session_id, resource_id)
 
@@ -237,16 +202,14 @@ def build_router(webui) -> APIRouter:
         )
 
     # Issue #820: Serve session /tmp files directly (for containerized agents)
-    @router.get("/sessions/{session_id}/tmp/{path:path}")
+    @router.get("/api/sessions/{session_id}/tmp/{path:path}")
     @handle_exceptions("get session tmp file")
-    async def get_session_tmp_file(session_id: str, path: str, request: Request):
+    async def get_session_tmp_file(session_id: str, path: str):
         """Serve a file from the session's /tmp directory (for containerized agents)."""
         import mimetypes
 
         from fastapi.responses import FileResponse
 
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
         # Validate session exists
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
@@ -270,23 +233,19 @@ def build_router(webui) -> APIRouter:
         )
 
     # Issue #1530: Agent-registered persistent links
-    @router.get("/sessions/{session_id}/links")
+    @router.get("/api/sessions/{session_id}/links")
     @handle_exceptions("get session links")
-    async def get_session_links(session_id: str, request: Request):
+    async def get_session_links(session_id: str):
         """Return all agent-registered links for a session."""
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
         return {"links": await webui.coordinator.get_session_links(session_id)}
 
     # Issue #423: Remove resource from session display (soft-remove)
-    @router.delete("/sessions/{session_id}/resources/{resource_id}")
+    @router.delete("/api/sessions/{session_id}/resources/{resource_id}")
     @handle_exceptions("remove session resource")
-    async def remove_session_resource(session_id: str, resource_id: str, request: Request):
+    async def remove_session_resource(session_id: str, resource_id: str):
         """Soft-remove a resource from the session display (file is preserved)"""
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
         success = await webui.coordinator.remove_session_resource(session_id, resource_id)
         if not success:
             raise HTTPException(status_code=404, detail="Resource not found or removal failed")

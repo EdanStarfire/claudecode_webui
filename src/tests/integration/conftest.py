@@ -140,7 +140,7 @@ async def legion_test_env(request):
     if not request.config.getoption("--retain-test-data", default=False):
         try:
             # Terminate all active SDK sessions first
-            for session_id in list(session_coordinator.backend._active_sdks.keys()):
+            for session_id in list(session_coordinator._active_sdks.keys()):
                 try:
                     await session_coordinator.terminate_session(session_id)
                 except Exception:
@@ -367,7 +367,7 @@ def ws_integration_env(tmp_path):
     test_client.__exit__(None, None, None)
     try:
         async def _cleanup():
-            for sid in list(webui.coordinator.backend._active_sdks.keys()):
+            for sid in list(webui.coordinator._active_sdks.keys()):
                 try:
                     await webui.coordinator.terminate_session(sid)
                 except Exception:
