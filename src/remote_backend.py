@@ -359,6 +359,18 @@ class RemoteBackend:
         )
         return resp.json() if resp is not None else {"messages": [], "total": 0}
 
+    async def get_session_usage(self, session_id: str) -> dict[str, Any] | None:
+        """Fetch REMOTE's own /sessions/{id}/usage response (issue #499) — turn/usage
+        records only ever get written to REMOTE's local analytics DB (the write
+        happens inside _create_message_callback's 'result' handling, which never
+        runs on the Hub for a relayed session), so the Hub's own analytics_store has
+        nothing to compute from. Callers should take only the raw usage fields from
+        this response and recompute cost/rates against the Hub's own configured
+        pricing — REMOTE has no UI to configure pricing at all, so its own
+        estimated_cost_usd/rates_used are not meaningful here."""
+        resp = await self._get(f"/sessions/{session_id}/usage")
+        return resp.json() if resp is not None else None
+
     async def is_session_active(self, session_id: str) -> bool:
         return session_id in self._active_session_ids
 

@@ -1012,12 +1012,25 @@ class SessionCoordinator:
             # Add session to project
             await self.project_manager.add_session_to_project(project_id, session_id)
 
-            # Initialize storage manager for this session
-            session_dir = await self.session_manager.get_session_directory(session_id)
-            storage_manager = DataStorageManager(session_dir)
-            await storage_manager.initialize()
-            self._storage_managers[session_id] = storage_manager
-            self._apply_audit_writer(storage_manager, session_id)
+            # Initialize storage manager for this session. REMOTE-aware (issue #499):
+            # messages.jsonl only ever holds real content on REMOTE (RemoteBackend.
+            # get_messages()'s own docstring: "REMOTE is the only place a REMOTE
+            # session's messages.jsonl actually lives") — the relay pushes events
+            # straight into the in-memory EventQueue, never through
+            # DataStorageManager.append_message(), so a Hub-local copy would sit
+            # permanently empty. Creating it anyway is a second, always-stale
+            # "source of truth" for message content that risks a real bug the moment
+            # anything (a future migration/backup tool, a debugging script) reads
+            # storage directly instead of going through the coordinator/relay
+            # abstraction. state.json (via session_manager.create_session() above)
+            # is a deliberate, separate exception — the Hub genuinely needs its own
+            # copy of session state for is_processing/interrupt/watchdog guards.
+            if self.backend_mode != BackendMode.REMOTE:
+                session_dir = await self.session_manager.get_session_directory(session_id)
+                storage_manager = DataStorageManager(session_dir)
+                await storage_manager.initialize()
+                self._storage_managers[session_id] = storage_manager
+                self._apply_audit_writer(storage_manager, session_id)
 
             # Initialize callback lists
             self._message_callbacks[session_id] = []
@@ -5184,6 +5197,20 @@ class SessionCoordinator:
                         session_id, SessionState.ERROR, error_message
                     )
                     await self._notify_state_change(session_id, SessionState.ERROR)
+                elif data_type == "tool_call" and data.get("status") in (
+                    "completed", "failed", "denied", "interrupted"
+                ):
+                    # The error-rate watchdog's tool-outcome tracking (record_tool_
+                    # outcome) is otherwise fed only by ClaudeWebUI._emit_tool_call_
+                    # updates, itself only reachable via _create_message_callback's
+                    # subscriber-forwarding — bypassed for REMOTE like everything
+                    # else here. record_tool_outcome is self-contained (session_id/
+                    # tool_use_id/status only, no dependency on the Hub's own
+                    # per-session ToolCall tracking dict), so it can be fed directly
+                    # from the relayed envelope.
+                    tool_use_id = data.get("tool_use_id")
+                    if tool_use_id and hasattr(self, "_watchdog") and self._watchdog is not None:
+                        self._watchdog.record_tool_outcome(session_id, tool_use_id, data["status"])
             except Exception:
                 logger.exception(
                     f"Failed to sync processing state from relayed event for session {session_id}"

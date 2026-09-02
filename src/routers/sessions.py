@@ -106,9 +106,29 @@ def build_router(webui) -> APIRouter:
     async def get_session_usage(session_id: str):
         """Return aggregated token usage and estimated cost for a session (issue #1125)."""
         from ..config_manager import PricingConfig, compute_cost, load_config
-        aggregate = await webui.coordinator.analytics_store.get_session_usage(session_id)
-        if aggregate is None:
-            raise HTTPException(status_code=404, detail="No usage data for this session")
+
+        if webui.coordinator.backend_mode == BackendMode.REMOTE:
+            # Issue #499: usage records only ever get written to REMOTE's own
+            # analytics DB — the Hub's local analytics_store has no rows for a
+            # REMOTE session at all. Take REMOTE's raw usage numbers but recompute
+            # cost/rates against the Hub's own configured pricing below, not
+            # REMOTE's (REMOTE has no UI to configure pricing at all).
+            remote_usage = await webui.coordinator.backend.get_session_usage(session_id)
+            if remote_usage is None:
+                raise HTTPException(status_code=404, detail="No usage data for this session")
+            aggregate = {
+                "model": remote_usage.get("model"),
+                "turn_count": remote_usage.get("turn_count", 0),
+                "input_tokens": remote_usage.get("input_tokens", 0),
+                "output_tokens": remote_usage.get("output_tokens", 0),
+                "cache_write_tokens": remote_usage.get("cache_write_tokens", 0),
+                "cache_read_tokens": remote_usage.get("cache_read_tokens", 0),
+                "sdk_total_cost_usd": remote_usage.get("sdk_reported_cost_usd"),
+            }
+        else:
+            aggregate = await webui.coordinator.analytics_store.get_session_usage(session_id)
+            if aggregate is None:
+                raise HTTPException(status_code=404, detail="No usage data for this session")
 
         config = load_config(webui.config_file) if webui.config_file else load_config()
         pricing = config.pricing if config.pricing else PricingConfig()

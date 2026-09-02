@@ -2968,3 +2968,89 @@ class TestRemoteRelayStateSync:
 
         assert after is not None
         assert before is None or after >= before
+
+    @pytest.mark.asyncio
+    async def test_relayed_tool_call_terminal_event_feeds_watchdog(
+        self, temp_coordinator, sample_session_config
+    ):
+        """The error-rate watchdog's record_tool_outcome() is otherwise fed only by
+        a Hub-local pipeline that never runs for REMOTE sessions — the relayed
+        'tool_call' envelope must feed it directly instead."""
+        from unittest.mock import Mock
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        coordinator._watchdog = Mock()
+
+        on_relay_event = await self._start_remote_and_get_relay_callback(coordinator, session_id)
+
+        # Non-terminal status must not be recorded.
+        await on_relay_event(
+            {"type": "message", "data": {"type": "tool_call", "tool_use_id": "t1", "status": "running"}}
+        )
+        coordinator._watchdog.record_tool_outcome.assert_not_called()
+
+        await on_relay_event(
+            {"type": "message", "data": {"type": "tool_call", "tool_use_id": "t1", "status": "failed"}}
+        )
+        coordinator._watchdog.record_tool_outcome.assert_called_once_with(session_id, "t1", "failed")
+
+
+class TestRemoteSessionStorageNotDuplicated:
+    """Issue #499: message content only ever lives on REMOTE for a REMOTE-dispatched
+    session (RemoteBackend.get_messages()'s own docstring: "REMOTE is the only place
+    a REMOTE session's messages.jsonl actually lives") — the relay pushes events into
+    the in-memory EventQueue only, never through DataStorageManager.append_message().
+    create_session() must not create a Hub-local DataStorageManager (and therefore a
+    permanently-empty messages.jsonl) for REMOTE sessions."""
+
+    @pytest.mark.asyncio
+    async def test_create_session_skips_storage_manager_for_remote(
+        self, temp_coordinator, sample_session_config
+    ):
+        from ..session_backend import BackendMode
+
+        coordinator = temp_coordinator
+        project_id = sample_session_config["project_id"]
+        project = await coordinator.project_manager.get_project(project_id)
+
+        class _FakeResponse:
+            status_code = 200
+
+            def __init__(self, project_dict):
+                self._project_dict = project_dict
+
+            def json(self):
+                return {"project": self._project_dict}
+
+        class FakeRemoteBackend:
+            async def create_session(self, session_id, project_id, config, **kwargs):
+                return session_id
+
+            async def relay_request(self, method, path):
+                return _FakeResponse(project.to_dict())
+
+            def active_session_ids(self):
+                return []
+
+        coordinator.backend = FakeRemoteBackend()
+        coordinator.backend_mode = BackendMode.REMOTE
+
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        assert session_id not in coordinator._storage_managers
+        session_dir = await coordinator.session_manager.get_session_directory(session_id)
+        assert session_dir is not None  # state.json's directory still legitimately exists
+        assert not (session_dir / "messages.jsonl").exists()
+
+    @pytest.mark.asyncio
+    async def test_create_session_still_creates_storage_manager_for_local(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Sanity check: LOCAL mode's existing behavior is unchanged."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        assert session_id in coordinator._storage_managers
+        session_dir = await coordinator.session_manager.get_session_directory(session_id)
+        assert (session_dir / "messages.jsonl").exists()
