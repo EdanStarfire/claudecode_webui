@@ -144,6 +144,82 @@ async def test_start_session_success_spawns_relay_loop_that_forwards_events():
 
 
 @pytest.mark.asyncio
+async def test_restart_resumes_relay_from_last_cursor_instead_of_refetching_backlog():
+    """Regression test: restarting a session (disconnect_session then start_session
+    again, exactly what SessionCoordinator.restart_session does) must resume the
+    relay poll loop from where it left off, not re-fetch REMOTE's entire event
+    backlog from since=0 — the latter duplicates every past message in the Hub's
+    local EventQueue (and therefore the frontend) on every restart."""
+    queue = EventQueue()
+    seen_since_values = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path in ("/api/backend/sessions/s1/start", "/api/backend/sessions/s1/disconnect"):
+            return httpx.Response(200)
+        if request.url.path == "/api/backend/poll/session/s1":
+            since = int(request.url.params["since"])
+            seen_since_values.append(since)
+            if since == 0:
+                return httpx.Response(
+                    200, json={"events": [{"type": "message", "data": {"x": 1}}], "next_cursor": 3}
+                )
+            # Any poll after the first should keep resuming from cursor 3 onward —
+            # no new events queued in this test, just confirming "since" never
+            # drops back to 0 on the second relay loop.
+            return httpx.Response(200, json={"events": [], "next_cursor": 3})
+
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    backend = _backend_with_handler(handler, session_queues={"s1": queue})
+
+    started, _ = await backend.start_session("s1")
+    assert started is True
+    for _ in range(50):
+        if 0 in seen_since_values:
+            break
+        await asyncio.sleep(0.01)
+    assert 0 in seen_since_values
+
+    # Restart: disconnect (tears down the relay task) then start again — the exact
+    # sequence SessionCoordinator.restart_session() performs.
+    await backend.disconnect_session("s1")
+    assert "s1" not in backend._relay_tasks
+    assert backend._relay_cursors["s1"] == 3
+
+    seen_since_values.clear()
+    started, _ = await backend.start_session("s1")
+    assert started is True
+    for _ in range(50):
+        if seen_since_values:
+            break
+        await asyncio.sleep(0.01)
+
+    assert seen_since_values, "relay loop never polled after restart"
+    assert 0 not in seen_since_values, (
+        f"restart re-fetched from since=0 instead of resuming from cursor 3: {seen_since_values}"
+    )
+    assert all(v == 3 for v in seen_since_values)
+
+    await backend.aclose()
+
+
+@pytest.mark.asyncio
+async def test_terminate_clears_relay_cursor():
+    """Unlike disconnect (restart), a genuine terminate should drop the cursor —
+    nothing will resume this session's relay."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200)
+
+    backend = _backend_with_handler(handler, session_queues={"s1": EventQueue()})
+    backend._relay_cursors["s1"] = 7
+
+    await backend.terminate_session("s1")
+
+    assert "s1" not in backend._relay_cursors
+
+
+@pytest.mark.asyncio
 async def test_relay_loop_gives_up_after_max_failures_and_calls_error_callback(monkeypatch):
     # Real backoff (2s, 4s, 8s, 16s, 30s for 5 failures) would make this test slow —
     # lower the failure threshold instead of touching sleep timing, so only the

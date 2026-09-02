@@ -49,6 +49,12 @@ class RemoteBackend:
         self._session_queues = session_queues
         self._relay_tasks: dict[str, asyncio.Task] = {}
         self._active_session_ids: set[str] = set()
+        # Per-session "how far into REMOTE's own event numbering have we already
+        # relayed" — must survive a relay task being stopped and a new one started
+        # (e.g. on restart_session), or the fresh loop starting from since=0 would
+        # re-fetch and re-append REMOTE's entire event backlog into the Hub's local
+        # (never-cleared) EventQueue every time, duplicating history in the frontend.
+        self._relay_cursors: dict[str, int] = {}
         self._audit_relay_task: asyncio.Task | None = None
         self._audit_relay_active = False
 
@@ -259,6 +265,10 @@ class RemoteBackend:
 
     async def terminate_session(self, session_id: str) -> bool:
         self._stop_relay(session_id)
+        # Unlike disconnect_session (used by restart_session, which needs the cursor
+        # preserved so the next start resumes rather than re-fetching everything),
+        # a genuine terminate ends this session for good — nothing will resume it.
+        self._relay_cursors.pop(session_id, None)
         resp = await self._post(f"/sessions/{session_id}/terminate", {})
         return resp is not None and resp.status_code < 400
 
@@ -399,8 +409,14 @@ class RemoteBackend:
         same envelope shape REMOTE's own message_callback produced when it appended
         to REMOTE's own local queue, so the Hub's frontend poll transport sees an
         identical stream to a LOCAL session with no changes to poll.py/web_server.py.
+
+        Resumes from `self._relay_cursors[session_id]` rather than starting at 0 —
+        this loop is torn down and restarted fresh on every `restart_session()` (via
+        `disconnect_session()`'s `_stop_relay`), and starting over from since=0 would
+        re-fetch and re-append REMOTE's entire event backlog into the Hub's local
+        EventQueue on every restart, duplicating message history in the frontend.
         """
-        cursor = 0
+        cursor = self._relay_cursors.get(session_id, 0)
         failures = 0
         while session_id in self._active_session_ids:
             # Always yield once per iteration — guarantees cancellation is picked up
@@ -422,6 +438,7 @@ class RemoteBackend:
                 data = resp.json()
                 events = data.get("events", [])
                 cursor = data.get("next_cursor", cursor)
+                self._relay_cursors[session_id] = cursor
                 failures = 0
                 queue = self._session_queues.get(session_id)
                 if queue is not None:
