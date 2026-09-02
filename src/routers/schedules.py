@@ -2,12 +2,10 @@
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 
-from .. import relay_client
 from ..exception_handlers import handle_exceptions
 from ..legion.scheduler_service import _ScheduleAutoDeletedError
-from ..session_backend import BackendMode
 from ._models import ScheduleCreateRequest, ScheduleUpdateRequest
 
 logger = logging.getLogger(__name__)
@@ -16,24 +14,13 @@ logger = logging.getLogger(__name__)
 def build_router(webui) -> APIRouter:
     router = APIRouter()
 
-    def _is_remote() -> bool:
-        return webui.coordinator.backend_mode == BackendMode.REMOTE
-
-    # Issue #498: schedule *definitions* relay wholesale to REMOTE's mirrored
-    # routes when configured — REMOTE's own already-running SchedulerService
-    # fires them using its own existing, unmodified logic. SchedulerService._tick()
-    # gains a REMOTE guard (src/legion/scheduler_service.py) so the Hub's own
-    # scheduler loop never fires against stale local schedule state.
-
-    @router.get("/legions/{legion_id}/schedules")
+    @router.get("/api/legions/{legion_id}/schedules")
     @handle_exceptions("list schedules")
     async def list_schedules(
-        legion_id: str, request: Request, minion_id: str | None = None, status: str | None = None,
+        legion_id: str, minion_id: str | None = None, status: str | None = None,
         limit: int = 100, offset: int = 0
     ):
         """List schedules for a legion with optional filters, paginated."""
-        if _is_remote():
-            return await relay_client.forward(webui.coordinator, request)
         if not await webui.service.validate_project_exists(legion_id):
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -62,12 +49,10 @@ def build_router(webui) -> APIRouter:
             "has_more": offset + len(sliced) < total,
         }
 
-    @router.post("/legions/{legion_id}/schedules")
+    @router.post("/api/legions/{legion_id}/schedules")
     @handle_exceptions("create schedule", value_error_status=400)
-    async def create_schedule(legion_id: str, request: ScheduleCreateRequest, http_request: Request):
+    async def create_schedule(legion_id: str, request: ScheduleCreateRequest):
         """Create a new schedule (permanent or ephemeral)."""
-        if _is_remote():
-            return await relay_client.forward(webui.coordinator, http_request)
         if not await webui.service.validate_project_exists(legion_id):
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -129,26 +114,22 @@ def build_router(webui) -> APIRouter:
         )
         return {"schedule": await svc.schedule_to_api_dict(schedule)}
 
-    @router.get("/legions/{legion_id}/schedules/{schedule_id}")
+    @router.get("/api/legions/{legion_id}/schedules/{schedule_id}")
     @handle_exceptions("get schedule")
-    async def get_schedule(legion_id: str, schedule_id: str, request: Request):
+    async def get_schedule(legion_id: str, schedule_id: str):
         """Get a single schedule."""
-        if _is_remote():
-            return await relay_client.forward(webui.coordinator, request)
         svc = webui.coordinator.legion_system.scheduler_service
         schedule = await svc.get_schedule(schedule_id)
         if not schedule or schedule.legion_id != legion_id:
             raise HTTPException(status_code=404, detail="Schedule not found")
         return {"schedule": await svc.schedule_to_api_dict(schedule)}
 
-    @router.put("/legions/{legion_id}/schedules/{schedule_id}")
+    @router.put("/api/legions/{legion_id}/schedules/{schedule_id}")
     @handle_exceptions("update schedule", value_error_status=400)
     async def update_schedule(
-        legion_id: str, schedule_id: str, request: ScheduleUpdateRequest, http_request: Request
+        legion_id: str, schedule_id: str, request: ScheduleUpdateRequest
     ):
         """Update schedule fields."""
-        if _is_remote():
-            return await relay_client.forward(webui.coordinator, http_request)
         schedule = await webui.coordinator.legion_system.scheduler_service.get_schedule(
             schedule_id
         )
@@ -179,12 +160,10 @@ def build_router(webui) -> APIRouter:
             return {"schedule": await svc.schedule_to_api_dict(exc.schedule), "deleted": True}
         return {"schedule": await svc.schedule_to_api_dict(updated)}
 
-    @router.post("/legions/{legion_id}/schedules/{schedule_id}/pause")
+    @router.post("/api/legions/{legion_id}/schedules/{schedule_id}/pause")
     @handle_exceptions("pause schedule", value_error_status=400)
-    async def pause_schedule(legion_id: str, schedule_id: str, request: Request):
+    async def pause_schedule(legion_id: str, schedule_id: str):
         """Pause an active schedule."""
-        if _is_remote():
-            return await relay_client.forward(webui.coordinator, request)
         schedule = await webui.coordinator.legion_system.scheduler_service.get_schedule(
             schedule_id
         )
@@ -195,12 +174,10 @@ def build_router(webui) -> APIRouter:
         updated = await svc.pause_schedule(schedule_id)
         return {"schedule": await svc.schedule_to_api_dict(updated)}
 
-    @router.post("/legions/{legion_id}/schedules/{schedule_id}/resume")
+    @router.post("/api/legions/{legion_id}/schedules/{schedule_id}/resume")
     @handle_exceptions("resume schedule", value_error_status=400)
-    async def resume_schedule(legion_id: str, schedule_id: str, request: Request):
+    async def resume_schedule(legion_id: str, schedule_id: str):
         """Resume a paused schedule."""
-        if _is_remote():
-            return await relay_client.forward(webui.coordinator, request)
         schedule = await webui.coordinator.legion_system.scheduler_service.get_schedule(
             schedule_id
         )
@@ -211,12 +188,10 @@ def build_router(webui) -> APIRouter:
         updated = await svc.resume_schedule(schedule_id)
         return {"schedule": await svc.schedule_to_api_dict(updated)}
 
-    @router.post("/legions/{legion_id}/schedules/{schedule_id}/run-now")
+    @router.post("/api/legions/{legion_id}/schedules/{schedule_id}/run-now")
     @handle_exceptions("run schedule now", value_error_status=400)
-    async def run_schedule_now(legion_id: str, schedule_id: str, request: Request):
+    async def run_schedule_now(legion_id: str, schedule_id: str):
         """Manually trigger a schedule execution immediately."""
-        if _is_remote():
-            return await relay_client.forward(webui.coordinator, request)
         schedule = await webui.coordinator.legion_system.scheduler_service.get_schedule(
             schedule_id
         )
@@ -231,14 +206,12 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(e)) from e
         return result
 
-    @router.delete("/legions/{legion_id}/schedules/{schedule_id}")
+    @router.delete("/api/legions/{legion_id}/schedules/{schedule_id}")
     @handle_exceptions("delete schedule", value_error_status=400)
     async def delete_schedule(
-        legion_id: str, schedule_id: str, request: Request, delete_agent: bool = False
+        legion_id: str, schedule_id: str, delete_agent: bool = False
     ):
         """Delete a schedule entirely. Optionally delete its ephemeral agent."""
-        if _is_remote():
-            return await relay_client.forward(webui.coordinator, request)
         schedule = await webui.coordinator.legion_system.scheduler_service.get_schedule(
             schedule_id
         )
@@ -263,14 +236,12 @@ def build_router(webui) -> APIRouter:
         )
         return {"success": True}
 
-    @router.get("/legions/{legion_id}/schedules/{schedule_id}/history")
+    @router.get("/api/legions/{legion_id}/schedules/{schedule_id}/history")
     @handle_exceptions("get schedule history")
     async def get_schedule_history(
-        legion_id: str, schedule_id: str, request: Request, limit: int = 50, offset: int = 0
+        legion_id: str, schedule_id: str, limit: int = 50, offset: int = 0
     ):
         """Get execution history for a schedule."""
-        if _is_remote():
-            return await relay_client.forward(webui.coordinator, request)
         schedule = await webui.coordinator.legion_system.scheduler_service.get_schedule(
             schedule_id
         )

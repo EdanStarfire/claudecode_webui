@@ -4,11 +4,9 @@ import json
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 
-from .. import relay_client
 from ..exception_handlers import handle_exceptions
-from ..session_backend import BackendMode
 
 # Heuristic for classifying Bash commands as likely file-modifying.
 # Conservative — false positives (treating non-modifying as modifying)
@@ -82,18 +80,15 @@ def _build_entry(block: dict, ts: float | None) -> dict:
 def build_router(webui) -> APIRouter:
     router = APIRouter()
 
-    @router.get("/sessions/{session_id}/edit-history")
+    @router.get("/api/sessions/{session_id}/edit-history")
     @handle_exceptions("get session edit history")
-    async def get_edit_history(session_id: str, request: Request):
+    async def get_edit_history(session_id: str):
         """Return chronological list of file-modifying tool calls.
 
         Filters Edit, Write, and Bash tool_use blocks from messages.jsonl.
         Diffs are NOT computed here — frontend reconstructs them from
         old_string/new_string. Bash entries carry the command only.
         """
-        # Issue #498: a REMOTE session's messages.jsonl lives on REMOTE, not the Hub.
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await relay_client.forward(webui.coordinator, request)
         ctx = await webui.service.get_session_diff_context(session_id)
         if not ctx.get("exists"):
             raise HTTPException(status_code=404, detail="Session not found")

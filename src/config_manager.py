@@ -238,22 +238,6 @@ class SecretsConfig:
 
 
 @dataclass
-class BackendConfig:
-    """LOCAL/REMOTE session dispatch + mount exclusivity (issue #498).
-
-    `mode` controls which mount this process exposes ("frontend": /api/* + the SPA,
-    default; "headless": /api/backend/* only, no UI — see routers/__init__.py). This
-    is independent of `remote_base_url`: a frontend-mode Hub can dispatch sessions to
-    a REMOTE while still serving its own UI — inbound mount exposure and outbound
-    session dispatch are orthogonal per the #498 contract.
-    """
-
-    mode: str = "frontend"  # "frontend" | "headless"
-    remote_base_url: str | None = None  # if set, sessions dispatch to REMOTE
-    remote_auth_token: str | None = None  # bearer token for outbound calls to REMOTE
-
-
-@dataclass
 class HistoryRetentionConfig:
     """Retention policy for schedule_history.jsonl rotation."""
 
@@ -275,7 +259,6 @@ class AppConfig:
     secrets: SecretsConfig = field(default_factory=SecretsConfig)
     pricing: PricingConfig = field(default_factory=PricingConfig)
     history_retention: HistoryRetentionConfig = field(default_factory=HistoryRetentionConfig)
-    backend: BackendConfig = field(default_factory=BackendConfig)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppConfig":
@@ -355,12 +338,6 @@ class AppConfig:
             rotation_trigger_count=hr_data.get("rotation_trigger_count", 100),
             enabled=hr_data.get("enabled", True),
         )
-        backend_data = data.get("backend", {})
-        backend = BackendConfig(
-            mode=backend_data.get("mode", "frontend"),
-            remote_base_url=backend_data.get("remote_base_url"),
-            remote_auth_token=backend_data.get("remote_auth_token"),
-        )
         # Strip legacy key so next save cleans up old config files (migration handled by ProviderCatalogStore)
         data.pop("provider_catalog", None)
         return cls(
@@ -373,7 +350,6 @@ class AppConfig:
             secrets=secrets,
             pricing=pricing,
             history_retention=history_retention,
-            backend=backend,
         )
 
     def to_dict(self) -> dict:
@@ -453,17 +429,6 @@ class AppConfig:
                 "rotation_interval_seconds": self.history_retention.rotation_interval_seconds,
                 "rotation_trigger_count": self.history_retention.rotation_trigger_count,
                 "enabled": self.history_retention.enabled,
-            },
-            "backend": {
-                "_comment": (
-                    "issue #498: mode controls mount exposure (frontend: /api/* + UI, "
-                    "default; headless: /api/backend/* only, no UI). remote_base_url/"
-                    "remote_auth_token (independent of mode) make this process dispatch "
-                    "sessions to a REMOTE WebUI instance instead of running them locally."
-                ),
-                "mode": self.backend.mode,
-                "remote_base_url": self.backend.remote_base_url,
-                "remote_auth_token": self.backend.remote_auth_token,
             },
         }
 

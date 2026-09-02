@@ -52,19 +52,6 @@ def main():
         help='Force authentication even when binding to localhost'
     )
 
-    # Headless backend mode (issue #498/#499): mutually-exclusive REMOTE mount —
-    # exposes only /api/backend/*, no UI, gated by a single bearer token.
-    parser.add_argument(
-        '--headless-backend', action='store_true',
-        help='Run in headless mode: mounts only /api/backend/* (no UI, no /api/*), '
-             'gated by --backend-token'
-    )
-    parser.add_argument(
-        '--backend-token', type=str, default=None,
-        help='Bearer token required for /api/backend/* in --headless-backend mode '
-             '(auto-generated if omitted)'
-    )
-
     # Mock SDK mode (for browser automation testing — issue #561)
     parser.add_argument(
         '--mock-sdk', action='store_true',
@@ -170,20 +157,7 @@ def main():
 
     auth_token = args.token or secrets.token_urlsafe(32)
 
-    # Issue #498: headless backend mode — mutually exclusive with the frontend
-    # mount, so the browser-facing auth banner below doesn't apply to it.
-    if args.backend_token and not args.headless_backend:
-        parser.error("--backend-token requires --headless-backend")
-    backend_mode = "headless" if args.headless_backend else "frontend"
-    backend_auth_token = None
-    if args.headless_backend:
-        backend_auth_token = args.backend_token or secrets.token_urlsafe(32)
-        print("\n" + "=" * 60)
-        print("  HEADLESS BACKEND MODE")
-        print(f"  Backend token: {backend_auth_token}")
-        print(f"  Mounted at: http://{args.host}:{args.port}/api/backend/*")
-        print("=" * 60 + "\n")
-    elif auth_enabled:
+    if auth_enabled:
         print("\n" + "=" * 60)
         print("  AUTHENTICATION ENABLED")
         print(f"  Token: {auth_token}")
@@ -210,8 +184,6 @@ def main():
         auth_enabled=auth_enabled,
         host=args.host,
         port=args.port,
-        backend_mode=backend_mode,
-        backend_auth_token=backend_auth_token,
     )
 
     # Run the server

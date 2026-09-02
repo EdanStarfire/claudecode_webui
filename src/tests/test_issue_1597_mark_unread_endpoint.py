@@ -28,7 +28,7 @@ async def _client(webui) -> AsyncClient:
     from src.routers.sessions import build_router
 
     app = FastAPI()
-    app.include_router(build_router(webui), prefix="/api")
+    app.include_router(build_router(webui))
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 

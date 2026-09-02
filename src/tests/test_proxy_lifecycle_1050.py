@@ -271,7 +271,7 @@ async def test_session_coordinator_routes_token_to_proxy_only(tmp_path):
     mock_sdk.start = AsyncMock(return_value=True)
     mock_sdk.auto_approval_callback = None
 
-    coordinator.set_sdk_factory(lambda **kwargs: mock_sdk)
+    coordinator._sdk_factory = lambda **kwargs: mock_sdk
 
     with patch("src.docker_utils.resolve_docker_cli_path", side_effect=fake_resolve):
         await coordinator.start_session(session_id)
@@ -336,7 +336,7 @@ async def test_issue_1181_proxy_token_files_world_readable(tmp_path):
     mock_sdk.start = AsyncMock(return_value=True)
     mock_sdk.auto_approval_callback = None
 
-    coordinator.set_sdk_factory(lambda **kwargs: mock_sdk)
+    coordinator._sdk_factory = lambda **kwargs: mock_sdk
 
     with patch("src.docker_utils.resolve_docker_cli_path", side_effect=fake_resolve):
         await coordinator.start_session(session_id)

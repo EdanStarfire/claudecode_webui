@@ -58,7 +58,7 @@ class TestSessionCoordinator:
         assert coordinator.data_dir.exists()
         assert coordinator.session_manager is not None
         assert coordinator.message_parser is not None
-        assert isinstance(coordinator.backend._active_sdks, dict)
+        assert isinstance(coordinator._active_sdks, dict)
         assert isinstance(coordinator._storage_managers, dict)
         assert isinstance(coordinator._message_callbacks, dict)
 
@@ -237,7 +237,7 @@ class TestSessionCoordinator:
 
         # Mock SDK terminate method
         mock_sdk = AsyncMock()
-        coordinator.backend._active_sdks[session_id] = mock_sdk
+        coordinator._active_sdks[session_id] = mock_sdk
 
         with patch.object(coordinator.session_manager, 'terminate_session', return_value=True):
             success = await coordinator.terminate_session(session_id)
@@ -246,7 +246,7 @@ class TestSessionCoordinator:
             mock_sdk.terminate.assert_called_once()
 
             # Verify cleanup
-            assert session_id not in coordinator.backend._active_sdks
+            assert session_id not in coordinator._active_sdks
             assert session_id not in coordinator._storage_managers
             assert session_id not in coordinator._message_callbacks
             assert session_id not in coordinator._error_callbacks
@@ -266,7 +266,7 @@ class TestSessionCoordinator:
         # Mock SDK send_message method
         mock_sdk = AsyncMock()
         mock_sdk.send_message.return_value = True
-        coordinator.backend._active_sdks[session_id] = mock_sdk
+        coordinator._active_sdks[session_id] = mock_sdk
 
         success = await coordinator.send_message(session_id, "Hello, Claude!")
 
@@ -293,7 +293,7 @@ class TestSessionCoordinator:
         mock_sdk.get_info.return_value = {"state": "running", "message_count": 5}
         mock_sdk.get_queue_size.return_value = 2
         mock_sdk.is_processing.return_value = False
-        coordinator.backend._active_sdks[session_id] = mock_sdk
+        coordinator._active_sdks[session_id] = mock_sdk
 
         mock_storage = AsyncMock()
         mock_storage.get_message_count.return_value = 10
@@ -532,8 +532,8 @@ class TestSessionCoordinator:
         # Mock SDK terminate methods
         mock_sdk_1 = AsyncMock()
         mock_sdk_2 = AsyncMock()
-        coordinator.backend._active_sdks[session_id_1] = mock_sdk_1
-        coordinator.backend._active_sdks[session_id_2] = mock_sdk_2
+        coordinator._active_sdks[session_id_1] = mock_sdk_1
+        coordinator._active_sdks[session_id_2] = mock_sdk_2
 
         with patch.object(coordinator.session_manager, 'terminate_session', return_value=True):
             await coordinator.cleanup()
@@ -543,7 +543,7 @@ class TestSessionCoordinator:
             mock_sdk_2.terminate.assert_called_once()
 
             # Verify cleanup
-            assert len(coordinator.backend._active_sdks) == 0
+            assert len(coordinator._active_sdks) == 0
 
     @pytest.mark.asyncio
     async def test_concurrent_session_operations(self, temp_coordinator, sample_session_config):
@@ -559,7 +559,7 @@ class TestSessionCoordinator:
         mock_sdk.get_info = MagicMock(return_value={"state": "running", "message_count": 0})
         mock_sdk.get_queue_size = MagicMock(return_value=0)
         mock_sdk.is_processing = MagicMock(return_value=False)
-        coordinator.backend._active_sdks[session_id] = mock_sdk
+        coordinator._active_sdks[session_id] = mock_sdk
 
         # Mock storage manager as well for get_session_info call
         mock_storage = AsyncMock()
@@ -623,7 +623,7 @@ class TestSessionCoordinator:
         assert session_info.state == SessionState.ERROR
 
         # No active SDK (as happens with errored sessions)
-        assert session_id not in coordinator.backend._active_sdks
+        assert session_id not in coordinator._active_sdks
 
         # Mock start_session to succeed without actually launching SDK
         with patch.object(coordinator, "start_session", return_value=True) as mock_start:
@@ -1132,7 +1132,7 @@ class TestIssue811IsProcessingStuck:
 
         mock_sdk = AsyncMock()
         mock_sdk.send_message.side_effect = RuntimeError("SDK blew up")
-        coordinator.backend._active_sdks[session_id] = mock_sdk
+        coordinator._active_sdks[session_id] = mock_sdk
 
         result = await coordinator.send_message(session_id, "Hello!")
 
@@ -1215,7 +1215,7 @@ class TestIssue1002IsProcessingStuckDuringProcessing:
         # PIVOT sends new message — is_processing must be True again
         mock_sdk = AsyncMock()
         mock_sdk.send_message.return_value = True
-        coordinator.backend._active_sdks[session_id] = mock_sdk
+        coordinator._active_sdks[session_id] = mock_sdk
 
         result = await coordinator.send_message(session_id, "New direction")
 
@@ -1333,7 +1333,7 @@ class TestIssue820TmpMount:
         assert tmp_dir.exists()
 
         mock_sdk = AsyncMock()
-        coordinator.backend._active_sdks[session_id] = mock_sdk
+        coordinator._active_sdks[session_id] = mock_sdk
 
         with patch.object(coordinator.session_manager, "terminate_session", return_value=True):
             await coordinator.terminate_session(session_id)
@@ -1352,7 +1352,7 @@ class TestIssue820TmpMount:
         assert not tmp_dir.exists()
 
         mock_sdk = AsyncMock()
-        coordinator.backend._active_sdks[session_id] = mock_sdk
+        coordinator._active_sdks[session_id] = mock_sdk
 
         with patch.object(coordinator.session_manager, "terminate_session", return_value=True):
             success = await coordinator.terminate_session(session_id)
@@ -2638,7 +2638,7 @@ class TestIssue1675AddDirectory:
 
         mock_sdk = AsyncMock()
         mock_sdk.register_repo_root.return_value = {"directory": "/test/project/subdir"}
-        coordinator.backend._active_sdks[session_id] = mock_sdk
+        coordinator._active_sdks[session_id] = mock_sdk
 
         result = await coordinator.add_directory(session_id, "/test/project/subdir")
 
@@ -2675,7 +2675,7 @@ class TestIssue1675AddDirectory:
         await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
 
         mock_sdk = AsyncMock()
-        coordinator.backend._active_sdks[session_id] = mock_sdk
+        coordinator._active_sdks[session_id] = mock_sdk
 
         with pytest.raises(ValueError, match="subdirectory"):
             await coordinator.add_directory(session_id, "/completely/unrelated/path")
@@ -2717,7 +2717,7 @@ class TestIssue1779TimestampInjection:
         mock_sdk = AsyncMock()
         mock_sdk.inject_timestamps_enabled = False
         mock_sdk.send_message.return_value = True
-        coordinator.backend._active_sdks[session_id] = mock_sdk
+        coordinator._active_sdks[session_id] = mock_sdk
 
         await coordinator.send_message(session_id, "Hello, Claude!")
 
@@ -2734,7 +2734,7 @@ class TestIssue1779TimestampInjection:
         mock_sdk.timestamp_injection_frequency = "every_message"
         mock_sdk.timestamp_injection_timezone = "UTC"
         mock_sdk.send_message.return_value = True
-        coordinator.backend._active_sdks[session_id] = mock_sdk
+        coordinator._active_sdks[session_id] = mock_sdk
 
         await coordinator.send_message(session_id, "Hello, Claude!")
 
@@ -2759,7 +2759,7 @@ class TestIssue1779TimestampInjection:
         mock_sdk.timestamp_injection_frequency = "every_message"
         mock_sdk.timestamp_injection_timezone = "UTC"
         mock_sdk.send_message.return_value = True
-        coordinator.backend._active_sdks[session_id] = mock_sdk
+        coordinator._active_sdks[session_id] = mock_sdk
 
         # Simulates a live user send.
         await coordinator.send_message(session_id, "same content")
@@ -2786,7 +2786,7 @@ class TestIssue1779TimestampInjection:
         mock_sdk.timestamp_injection_frequency = "once_per_day"
         mock_sdk.timestamp_injection_timezone = "UTC"
         mock_sdk.send_message.return_value = True
-        coordinator.backend._active_sdks[session_id] = mock_sdk
+        coordinator._active_sdks[session_id] = mock_sdk
 
         await coordinator.send_message(session_id, "first")
         first_sent = mock_sdk.send_message.call_args[0][0]
@@ -2813,7 +2813,7 @@ class TestIssue1779TimestampInjection:
         mock_sdk.timestamp_injection_frequency = "every_message"
         mock_sdk.timestamp_injection_timezone = "UTC"
         mock_sdk.send_message.return_value = True
-        coordinator.backend._active_sdks[session_id] = mock_sdk
+        coordinator._active_sdks[session_id] = mock_sdk
 
         await coordinator.send_message(session_id, "inter-agent comm", inject_timestamp=False)
 

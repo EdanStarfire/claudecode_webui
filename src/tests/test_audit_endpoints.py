@@ -44,7 +44,7 @@ async def app_with_audit(tmp_path):
     webui.coordinator.session_manager = sm
 
     app = FastAPI()
-    app.include_router(build_router(webui), prefix="/api")
+    app.include_router(build_router(webui))
 
     yield app, db
     await db.close()
@@ -75,7 +75,7 @@ async def test_get_audit_events_no_db():
     webui.audit_queue = None
 
     app = FastAPI()
-    app.include_router(build_router(webui), prefix="/api")
+    app.include_router(build_router(webui))
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -150,7 +150,7 @@ async def app_with_real_queue(tmp_path):
     webui.coordinator.session_manager = sm
 
     app = FastAPI()
-    app.include_router(build_router(webui), prefix="/api")
+    app.include_router(build_router(webui))
 
     yield app, db, queue
     await db.close()

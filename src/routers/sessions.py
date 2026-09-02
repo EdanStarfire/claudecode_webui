@@ -8,7 +8,6 @@ from fastapi import APIRouter, HTTPException
 
 from ..event_queue import EventQueue
 from ..exception_handlers import handle_exceptions
-from ..session_backend import BackendMode
 from ..session_manager import SessionState
 from ._models import (
     MessageRequest,
@@ -26,17 +25,12 @@ def build_router(webui) -> APIRouter:
 
     # ==================== SESSION ENDPOINTS ====================
 
-    @router.post("/sessions")
+    @router.post("/api/sessions")
     @handle_exceptions("create session")
     async def create_session(request: SessionCreateRequest):
         """Create a new Claude Code session within a project"""
-        # Issue #498/#499: honor a caller-supplied session_id (so a Hub and REMOTE can
-        # agree on the same id when relaying); fall back to generating one otherwise.
-        session_id = request.session_id or str(uuid.uuid4())
-        if request.session_id and await webui.service.get_session_exists(session_id):
-            raise HTTPException(
-                status_code=409, detail=f"Session {session_id} already exists"
-            )
+        # Pre-generate session ID so we can pass it to permission callback
+        session_id = str(uuid.uuid4())
 
         if request.project_id:
             if not await webui.service.validate_project_exists(request.project_id):
@@ -81,13 +75,13 @@ def build_router(webui) -> APIRouter:
 
         return {"session_id": session_id}
 
-    @router.get("/sessions")
+    @router.get("/api/sessions")
     @handle_exceptions("list sessions")
     async def list_sessions(limit: int = 500, offset: int = 0):
         """List all sessions"""
         return await webui.coordinator.list_sessions(limit=limit, offset=offset)
 
-    @router.get("/sessions/{session_id}")
+    @router.get("/api/sessions/{session_id}")
     @handle_exceptions("get session info")
     async def get_session_info(session_id: str):
         """Get session information"""
@@ -101,7 +95,7 @@ def build_router(webui) -> APIRouter:
 
         return info
 
-    @router.get("/sessions/{session_id}/usage")
+    @router.get("/api/sessions/{session_id}/usage")
     @handle_exceptions("get session usage")
     async def get_session_usage(session_id: str):
         """Return aggregated token usage and estimated cost for a session (issue #1125)."""
@@ -137,7 +131,7 @@ def build_router(webui) -> APIRouter:
 
         return result
 
-    @router.get("/sessions/{session_id}/descendants")
+    @router.get("/api/sessions/{session_id}/descendants")
     @handle_exceptions("get session descendants")
     async def get_session_descendants(session_id: str, limit: int = 50, offset: int = 0):
         """Get all descendant sessions (children, grandchildren, etc.) of a session"""
@@ -145,7 +139,7 @@ def build_router(webui) -> APIRouter:
         result["session_id"] = session_id
         return result
 
-    @router.post("/sessions/{session_id}/start")
+    @router.post("/api/sessions/{session_id}/start")
     @handle_exceptions("start session")
     async def start_session(session_id: str):
         """Start a session"""
@@ -165,7 +159,7 @@ def build_router(webui) -> APIRouter:
         )
         return {"success": success}
 
-    @router.post("/sessions/{session_id}/mark-unread")
+    @router.post("/api/sessions/{session_id}/mark-unread")
     @handle_exceptions("mark session unread")
     async def mark_session_unread(session_id: str):
         """Restore the unread indicator by clearing last_viewed_at (issue #1597)."""
@@ -175,7 +169,7 @@ def build_router(webui) -> APIRouter:
         success = await webui.coordinator.session_manager.mark_unread(session_id)
         return {"success": success}
 
-    @router.post("/sessions/{session_id}/mark-read")
+    @router.post("/api/sessions/{session_id}/mark-read")
     @handle_exceptions("mark session read")
     async def mark_session_read(session_id: str):
         """Clear the unread indicator by aligning last_viewed_at with last_completion_at (issue #1646)."""
@@ -185,7 +179,7 @@ def build_router(webui) -> APIRouter:
         success = await webui.coordinator.session_manager.mark_read(session_id)
         return {"success": success}
 
-    @router.post("/sessions/{session_id}/terminate")
+    @router.post("/api/sessions/{session_id}/terminate")
     @handle_exceptions("terminate session")
     async def terminate_session(session_id: str):
         """Terminate a session"""
@@ -198,7 +192,7 @@ def build_router(webui) -> APIRouter:
         success = await webui.coordinator.terminate_session(session_id)
         return {"success": success}
 
-    @router.put("/sessions/{session_id}/name")
+    @router.put("/api/sessions/{session_id}/name")
     @handle_exceptions("update session name")
     async def update_session_name(session_id: str, request: SessionNameUpdateRequest):
         """Update session name"""
@@ -207,7 +201,7 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=404, detail="Session not found")
         return {"success": success}
 
-    @router.patch("/sessions/{session_id}")
+    @router.patch("/api/sessions/{session_id}")
     @handle_exceptions("update session")
     async def update_session(session_id: str, request: SessionUpdateRequest):
         """Update session fields (generic endpoint)"""
@@ -350,7 +344,7 @@ def build_router(webui) -> APIRouter:
 
         return {"success": success}
 
-    @router.delete("/sessions/{session_id}")
+    @router.delete("/api/sessions/{session_id}")
     @handle_exceptions("delete session")
     async def delete_session(session_id: str):
         """Delete a session and all its data (including cascaded child sessions)"""
@@ -390,7 +384,7 @@ def build_router(webui) -> APIRouter:
             "deleted_session_ids": deleted_ids
         }
 
-    @router.post("/sessions/{session_id}/messages")
+    @router.post("/api/sessions/{session_id}/messages")
     @handle_exceptions("send message")
     async def send_message(session_id: str, request: MessageRequest):
         """Send a message to a session"""
@@ -409,19 +403,12 @@ def build_router(webui) -> APIRouter:
         )
         return {"success": success}
 
-    @router.get("/sessions/{session_id}/messages")
+    @router.get("/api/sessions/{session_id}/messages")
     @handle_exceptions("get messages")
     async def get_messages(session_id: str, limit: int | None = 50, offset: int = 0):
         """Get messages from a session with pagination metadata"""
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
-        # Issue #498: a REMOTE session's messages.jsonl lives on REMOTE, not the Hub —
-        # relay wholesale instead of reading Hub-local storage (which is never written
-        # for REMOTE sessions).
-        if webui.coordinator.backend_mode == BackendMode.REMOTE:
-            return await webui.coordinator.backend.get_messages(
-                session_id, limit=limit, offset=offset
-            )
         result = await webui.coordinator.get_session_messages(
             session_id, limit=limit, offset=offset
         )
@@ -432,7 +419,7 @@ def build_router(webui) -> APIRouter:
             result["event_cursor"] = queue.current_cursor
         return result
 
-    @router.get("/sessions/{session_id}/background_agents")
+    @router.get("/api/sessions/{session_id}/background_agents")
     @handle_exceptions("get background agents")
     async def get_background_agents(session_id: str):
         """Snapshot of background-agent (Task) leg history, for reload/reconnect (issue #1746)."""

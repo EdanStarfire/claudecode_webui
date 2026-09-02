@@ -27,7 +27,7 @@ def _make_webui(messages_path: str | None, session_exists: bool = True):
 
 def _make_app(webui):
     app = FastAPI()
-    app.include_router(build_router(webui), prefix="/api")
+    app.include_router(build_router(webui))
     return app
 
 

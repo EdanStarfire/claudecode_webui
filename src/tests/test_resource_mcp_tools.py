@@ -70,7 +70,7 @@ class FakeStorageManager:
 
 class FakeSessionCoordinator:
     def __init__(self, storage):
-        self._storage_managers = {}
+        self._active_sdks = {}
         self._storage = storage
         self.session_manager = self
 
