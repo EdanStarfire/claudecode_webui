@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Request
 
-from ..exception_handlers import handle_exceptions
+from shared.exception_handlers import handle_exceptions
 
 
 def build_router(webui) -> APIRouter:

@@ -1,10 +1,13 @@
-"""Regression tests for issue #1822 — CLI entrypoint crash on startup.
+"""Regression test for issue #1822 — CLI entrypoint crash on startup.
 
-`main.py` used to wire startup/shutdown via `app.add_event_handler(...)`, which was
-removed in FastAPI 0.141 (bumped in #1815/#1816). Neither test exercised
-`main.py`/`create_app()` together, so the crash went unnoticed. These tests close
-that gap: one exercises the new `lifespan` wiring in-process, the other runs the
-literal CLI entrypoint as a subprocess.
+Runs the literal `main.py` CLI entrypoint (Frontend API) as a subprocess.
+
+Issue #498, Phase 1: this is EXPECTED TO FAIL until Phase 2 rewires
+src/web_server.py into a pure relay shell — main.py's create_app() still
+imports session_coordinator/application_service/etc., which moved to
+backend/ in Phase 1. See src/web_server.py's Phase 1 NOTE comment. The
+Backend-side half of this regression test (create_app()'s lifespan wiring)
+lives in backend/tests/test_main_entrypoint.py and passes today.
 """
 
 import os
@@ -14,7 +17,6 @@ import time
 from pathlib import Path
 
 import httpx
-from starlette.testclient import TestClient
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -23,19 +25,6 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
-
-
-def test_create_app_lifespan_serves_health(tmp_path: Path):
-    """create_app() must wire a working lifespan; entering TestClient must not crash."""
-    from src.web_server import create_app
-
-    app = create_app(data_dir=tmp_path)
-
-    with TestClient(app) as client:
-        resp = client.get("/health")
-
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "healthy"
 
 
 def test_main_entrypoint_subprocess_smoke(tmp_path: Path):

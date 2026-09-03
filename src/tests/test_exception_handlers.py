@@ -6,8 +6,8 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
-import src.logging_config as logging_config
-from src.exception_handlers import handle_exceptions
+import shared.logging_config as logging_config
+from shared.exception_handlers import handle_exceptions
 
 
 @pytest.mark.asyncio
@@ -71,7 +71,7 @@ async def test_issue_855_generic_exception_returns_500(caplog):
     async def handler():
         raise RuntimeError("Unexpected error")
 
-    with caplog.at_level(logging.ERROR, logger="src.exception_handlers"):
+    with caplog.at_level(logging.ERROR, logger="shared.exception_handlers"):
         with pytest.raises(HTTPException) as exc_info:
             await handler()
 
@@ -192,7 +192,7 @@ async def test_issue_852_logger_exception_called_regardless_of_debug(caplog):
     async def handler():
         raise RuntimeError("secret details")
 
-    with caplog.at_level(logging.ERROR, logger="src.exception_handlers"):
+    with caplog.at_level(logging.ERROR, logger="shared.exception_handlers"):
         with patch.object(logging_config, '_log_config', {'debug_error_handler': False}):
             with pytest.raises(HTTPException):
                 await handler()

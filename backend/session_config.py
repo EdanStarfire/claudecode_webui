@@ -1,0 +1,179 @@
+"""
+SessionConfig - Bundled configuration for session/minion/template creation.
+
+Groups configuration toggle parameters that were previously threaded
+individually through create_session/create_template/create_minion call chains.
+Identity and lifecycle params (session_id, name, role, etc.) remain as
+direct function parameters.
+
+Issue #713: Reduce parameter sprawl across session creation APIs.
+"""
+
+from pathlib import Path
+
+from pydantic import BaseModel, Field
+
+
+def validate_and_normalize_working_directory(
+    path: str | None,
+    default_path: str
+) -> Path:
+    """
+    Validate and normalize working directory path.
+
+    Args:
+        path: User-provided path (may be None, relative, or absolute)
+        default_path: Default path if none provided
+
+    Returns:
+        Absolute Path object
+
+    Raises:
+        ValueError: If path doesn't exist or is network path
+    """
+    if not path:
+        return Path(default_path).resolve()
+
+    path_obj = Path(path)
+
+    # Convert relative to absolute
+    if not path_obj.is_absolute():
+        path_obj = path_obj.resolve()
+
+    # Check if it exists
+    if not path_obj.exists():
+        raise ValueError(f"Working directory does not exist: {path_obj}")
+
+    # Check if it's a directory (not file)
+    if not path_obj.is_dir():
+        raise ValueError(f"Working directory path is not a directory: {path_obj}")
+
+    # Reject network paths (Windows UNC or mapped drives that don't exist)
+    path_str = str(path_obj)
+    if path_str.startswith('//') or path_str.startswith('\\\\'):
+        raise ValueError(f"Network paths are not supported: {path_obj}")
+
+    return path_obj
+
+
+class SessionConfig(BaseModel):
+    """Bundled configuration for session/minion/template creation.
+
+    Groups configuration toggle parameters that were previously threaded
+    individually through create_session/create_template/create_minion call chains.
+    Identity and lifecycle params (session_id, name, role, etc.) remain as
+    direct function parameters.
+    """
+
+    # Permission
+    permission_mode: str = "acceptEdits"
+
+    # Prompt
+    system_prompt: str | None = None
+    override_system_prompt: bool = False
+
+    # Tools
+    allowed_tools: list[str] | None = None
+    disallowed_tools: list[str] | None = None
+
+    # Model
+    model: str | None = None
+    thinking_mode: str | None = None
+    thinking_budget_tokens: int | None = None
+    effort: str | None = None
+
+    # Environment
+    working_directory: str | None = None
+    additional_directories: list[str] | None = None
+    cli_path: str | None = None
+    process_wrapper: str | None = None
+    setting_sources: list[str] | None = None
+
+    # Sandbox
+    sandbox_enabled: bool = False
+    sandbox_config: dict | None = None
+
+    # Docker
+    docker_enabled: bool = False
+    docker_image: str | None = None
+    docker_extra_mounts: list[str] | None = None
+    docker_home_directory: str | None = None
+    # Issue #1050: Proxy lifecycle management
+    docker_proxy_enabled: bool = False        # Intent toggle: enable proxy sidecar
+    docker_proxy_image: str | None = None     # Image override (None = use app config default)
+    # Issue #827: Assigned secrets from vault + extra allowed domains
+    assigned_secrets: list[str] | None = None  # Secret names from vault to inject at session start
+    docker_proxy_allowlist_domains: list[str] | None = None  # Extra domains to allow through proxy
+
+    # Features
+    history_distillation_enabled: bool = True
+    auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
+    auto_memory_directory: str | None = None  # Custom directory for auto-memory when mode is "claude" (issue #906)
+    skill_creating_enabled: bool = False
+    enable_streaming_text: bool = False  # Issue #1486 — opt-in streaming text rendering
+    # Issue #1779: opt-in automatic timestamp injection into user messages
+    inject_timestamps_enabled: bool = False
+    timestamp_injection_frequency: str = "every_message"  # "every_message" | "once_per_day"
+    timestamp_injection_timezone: str = "UTC"  # IANA tz name
+
+    # MCP servers (issue #676)
+    mcp_server_ids: list[str] | None = None  # Global MCP config IDs to attach
+    enable_claudeai_mcp_servers: bool = True  # Toggle ENABLE_CLAUDEAI_MCP_SERVERS env var
+    strict_mcp_config: bool = False  # Pass --strict-mcp-config to disable local .mcp.json
+    bare_mode: bool = False  # Pass --bare to skip hooks, LSP, plugin sync, skill walks
+    env_scrub_enabled: bool = False  # Issue #957: Strip credentials from subprocess envs
+    # Issue #1669: CC 2.1.220 raised the CLI default from 1 to 3; WebUI restores 1
+    # to avoid silently changing Legion hierarchy tracking behavior underneath it.
+    max_subagent_spawn_depth: int = Field(default=1, ge=1, le=3)
+
+    # Non-secret direct env passthrough (issue #1396)
+    # Plain key=value pairs emitted as -e flags by claude-docker BEFORE delivery_envs,
+    # so vault secrets win on key conflicts. No proxy substitution — keep secrets
+    # in assigned_secrets / vault instead.
+    extra_env: dict[str, str] | None = None
+
+    # Template linkage (issue #1059)
+    template_id: str | None = None
+
+    # Provider catalog routing (issue #1427)
+    provider_catalog_id: str | None = None
+    provider_model_id: str | None = None
+
+    # Per-tier model routing (issue #1469) — all 6 id fields + default required together
+    provider_haiku_catalog_id: str | None = None
+    provider_haiku_model_id: str | None = None
+    provider_sonnet_catalog_id: str | None = None
+    provider_sonnet_model_id: str | None = None
+    provider_opus_catalog_id: str | None = None
+    provider_opus_model_id: str | None = None
+    provider_default_tier: str | None = None  # "haiku" | "sonnet" | "opus"
+
+
+# Fields that exist on both MinionTemplate and SessionConfig (the mergeable set).
+# Excludes identity fields (template_id, name, role, description, capabilities,
+# profile_ids), lifecycle fields (created_at, updated_at),
+# and session-only fields (working_directory).
+CONFIG_FIELDS: set[str] = {
+    "permission_mode", "system_prompt", "override_system_prompt",
+    "allowed_tools", "disallowed_tools", "model",
+    "thinking_mode", "thinking_budget_tokens", "effort",
+    "additional_directories", "cli_path", "process_wrapper", "setting_sources",
+    "sandbox_enabled", "sandbox_config",
+    "docker_enabled", "docker_image", "docker_extra_mounts",
+    "docker_home_directory", "docker_proxy_enabled", "docker_proxy_image",
+    "assigned_secrets", "docker_proxy_allowlist_domains",
+    "history_distillation_enabled", "auto_memory_mode", "auto_memory_directory",
+    "skill_creating_enabled", "enable_streaming_text",
+    "inject_timestamps_enabled", "timestamp_injection_frequency", "timestamp_injection_timezone",
+    "mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config",
+    "bare_mode", "env_scrub_enabled", "max_subagent_spawn_depth", "extra_env",
+    "provider_catalog_id", "provider_model_id",
+    "provider_haiku_catalog_id", "provider_haiku_model_id",
+    "provider_sonnet_catalog_id", "provider_sonnet_model_id",
+    "provider_opus_catalog_id", "provider_opus_model_id",
+    "provider_default_tier",
+}
+
+# Default values for all CONFIG_FIELDS — derived from a fresh SessionConfig instance.
+# Used by migration helpers (Phase 3) and resolution chain (Phase 2).
+DEFAULTS: dict = {k: v for k, v in SessionConfig().model_dump().items() if k in CONFIG_FIELDS}

@@ -1,0 +1,2348 @@
+"""
+LegionMCPTools - MCP tool definitions for Legion multi-agent capabilities.
+
+This module provides MCP tools that minions can use for:
+- Communication (send_comm - direct minion-to-minion)
+- Lifecycle (spawn_minion, dispose_minion)
+- Discovery (search_capability, list_minions, get_minion_info)
+- Expertise (update_expertise)
+
+All minion SDK sessions receive these tools on creation via MCP server.
+
+Implementation uses Claude Agent SDK's @tool decorator and create_sdk_mcp_server.
+Tools are exposed to minions with names like: mcp__legion__send_comm
+"""
+
+import asyncio
+import uuid
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
+
+try:
+    from claude_agent_sdk import create_sdk_mcp_server, tool
+except ImportError:
+    # For testing environments without SDK
+    tool = None
+    create_sdk_mcp_server = None
+
+from backend.config_resolution import resolve_template_config
+from backend.docker_utils import translate_docker_tmp_path
+from backend.session_config import DEFAULTS as _SESSION_DEFAULTS
+from backend.session_config import SessionConfig
+from backend.task_utils import task_done_log_exception
+from shared.logging_config import get_logger
+
+legion_logger = get_logger('legion', 'MCP_TOOLS')
+
+if TYPE_CHECKING:
+    from backend.legion_system import LegionSystem
+
+
+class LegionMCPTools:
+    """
+    MCP tools for Legion multi-agent capabilities.
+    Creates an MCP server with tools for minion collaboration.
+    """
+
+    def __init__(self, system: 'LegionSystem'):
+        """
+        Initialize LegionMCPTools with LegionSystem.
+
+        Args:
+            system: LegionSystem instance for accessing other components
+        """
+        self.system = system
+        self._pending_restarts: set[str] = set()
+
+        # Note: No longer creating a shared MCP server here
+        # Each minion session gets its own session-specific server
+        # via create_mcp_server_for_session()
+
+    @staticmethod
+    def _err(text: str) -> dict:
+        return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+    def create_mcp_server_for_session(self, session_id: str):
+        """
+        Create session-specific MCP server with all Legion tools.
+
+        Args:
+            session_id: The session ID to inject into tool calls
+
+        Returns:
+            MCP server instance with all tools registered
+        """
+        # Define all tools with @tool decorator
+        # Tools will be named: mcp__legion__send_comm, mcp__legion__spawn_minion, etc.
+
+        @tool(
+            "send_comm",
+            "Send a communication to another minion. BE CONCISE - only send when necessary "
+            "(task complete, blocked/need help, milestone reached, question needing input). "
+            "NEVER send acknowledgments ('OK', 'Got it'), goodbyes, or unsolicited comments. "
+            "\n\nSummary must be SPECIFIC and actionable (e.g., 'Completed auth.py refactor - 3 tests added', "
+            "'Blocked: missing DATABASE_URL'). AVOID generic summaries like 'Status update' or 'Progress report'. "
+            "\n\nSTOP when: task acknowledged complete OR awaiting external input (no 'standing by' messages). "
+            "\n\nValid comm_type: 'task', 'question', 'report', 'info'"
+            "\n\nInterrupt Priority (optional):"
+            "\n- 'none' (default): Queue message normally"
+            "\n- 'halt': Full stop. The target minion is interrupted immediately and will NOT receive the message. "
+            "The message is stored in the comm timeline for user inspection only. Use when the minion must cease "
+            "all work — the minion will not see the halt message or act on it."
+            "\n- 'pivot': Stop and redirect. Current work is interrupted immediately, then the new direction "
+            "is delivered as the next message. Message must include explicit 'cease prior work' instructions."
+            "\n\nUse HALT when: critical error, minion must stop immediately with no further action"
+            "\nUse PIVOT when: requirements changed, need to redirect — minion receives the new direction after interruption"
+            "\nUse NONE when: normal coordination, non-urgent updates, FYI messages (task completion notification)"
+            "\n\n**Visibility Scope:** You can only send comms to minions in your full hierarchy chain: "
+            "all ancestors, all descendants, and siblings. To reach minions outside your group, ask your overseer to relay."
+            "\n\n**File Attachments (optional):**"
+            "\nPass `attachments` as a list of absolute file paths to share files with the recipient. "
+            "Files are copied into the recipient's session and registered for auto-approve Read. "
+            "Max 10MB per file. Supported extensions: text, code, config, image, and data files.",
+            {
+                "to_minion_name": str,       # Exact name of target minion (case-sensitive)
+                "summary": str,              # Specific one-sentence update (actionable)
+                "content": str,              # Details only if summary needs elaboration (supports markdown)
+                "comm_type": str,            # One of: task, question, report, info
+                "interrupt_priority": str,   # Optional: "none", "halt", or "pivot" (default: "none")
+                "attachments": str           # Optional: JSON array of absolute file paths to attach
+            }
+        )
+        async def send_comm_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Send communication to another minion."""
+            # Inject session context
+            args["_from_minion_id"] = session_id
+            return await self._handle_send_comm(args)
+
+        @tool(
+            "spawn_minion",
+            "Create a new child minion to delegate specialized work. You become the overseer "
+            "of this minion and can later dispose of it when done. The child minion will be a "
+            "full Claude agent with access to tools."
+            "\n\n**IMPORTANT - Starting Your Minion:**"
+            "\nAfter spawning, you MUST send a comm message to the minion to start them working. "
+            "The minion will NOT begin work automatically - they wait for explicit task instructions."
+            "\n\nWorkflow:"
+            "\n1. spawn_minion(name='Helper', template_name='Code Expert', system_prompt='Review auth code')"
+            "\n2. send_comm(to_minion_name='Helper', summary='Begin task', content='Task details...', comm_type='task')"
+            "\n\n**Using Templates (Recommended):**"
+            "\nUse a template to spawn with specific permissions:"
+            "\n- First, use list_templates() to see available templates"
+            "\n- Then spawn: spawn_minion(name='Helper', template_name='Code Expert', system_prompt='Review auth code')"
+            "\n- Template enforces permission_mode and allowed_tools (secure, user-controlled)"
+            "\n\n**Without Template:**"
+            "\nIf no template specified, child gets default restricted permissions:"
+            "\n- permission_mode='manual' (prompts for every tool use)"
+            "\n- allowed_tools=[] (no pre-authorized tools)"
+            "\n\n**Working Directory (Optional):**"
+            "\nSpecify a custom working directory for git worktrees or multi-repo workflows:"
+            "\n- working_directory='/path/to/worktree' - Use absolute or relative path"
+            "\n- If not specified, child inherits parent's working directory"
+            "\n\n**Sandbox Mode (Optional):**"
+            "\nEnable OS-level sandboxing to restrict file system and network access:"
+            "\n- sandbox_enabled=True - Enable sandboxing (default: False)"
+            "\n- Sandboxed minions have restricted access to files and network"
+            "\n\n**Parent Name (Optional - Multi-Level Hierarchy):**"
+            "\nDesignate an existing minion in your subtree as the new minion's parent:"
+            "\n- parent_name='TeamLead' - The new minion becomes a child of TeamLead instead of you"
+            "\n- The named parent must be one of your descendants (or yourself)"
+            "\n- If omitted, the new minion is your direct child (default behavior)",
+            {
+                "name": str,                           # Unique name for new minion
+                "role": str,                           # Human-readable role description
+                "system_prompt": str,                   # System prompt defining expertise
+                "template_name": str,                  # Template to apply for permissions (optional)
+                "working_directory": str,              # Custom working directory (optional)
+                "sandbox_enabled": bool,               # Enable OS-level sandboxing (optional, default: False)
+                "parent_name": str                     # Name of existing descendant to be parent (optional)
+            }
+        )
+        async def spawn_minion_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Spawn a new child minion."""
+            # Inject session context (parent overseer ID)
+            args["_parent_overseer_id"] = session_id
+            return await self._handle_spawn_minion(args)
+
+        @tool(
+            "dispose_minion",
+            "Terminate a minion when their task is complete. You can dispose your direct "
+            "children or any minion in your descendant subtree (grandchildren, etc.). "
+            "Use delete=True to permanently remove the minion (their data is archived first). "
+            "Use delete=False (default) for soft dispose - the minion can be restarted later "
+            "by sending it a comm.",
+            {
+                "minion_name": str,  # Name of child minion to dispose
+                "delete": bool       # If True, fully delete after archive (default: False = soft dispose)
+            }
+        )
+        async def dispose_minion_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Dispose of a child minion."""
+            # Inject session context (parent overseer ID)
+            args["_parent_overseer_id"] = session_id
+            return await self._handle_dispose_minion(args)
+
+        @tool(
+            "search_capability",
+            "Find minions with a specific capability by searching the central capability registry. "
+            "Returns ranked list of matching minions sorted by expertise scores. Use keywords like "
+            "'database', 'oauth', 'authentication', 'payment_processing', etc."
+            "\n\n**Visibility Scope:** Results are filtered to your full hierarchy chain: "
+            "all ancestors, all descendants, and siblings. If the needed capability exists outside "
+            "your group, ask your overseer to locate it.",
+            {
+                "capability": str  # Capability keyword to search for
+            }
+        )
+        async def search_capability_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Search for minions by capability."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_search_capability(args)
+
+        @tool(
+            "list_minions",
+            "Get a list of all active minions in your legion with their names, roles, and "
+            "current states. Useful for understanding who's available to collaborate with."
+            "\n\n**Visibility Scope:** Returns only minions in your full hierarchy chain: "
+            "all ancestors, all descendants, and siblings. Use your overseer to discover minions "
+            "outside your group.",
+            {}  # No parameters required
+        )
+        async def list_minions_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """List all active minions."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_list_minions(args)
+
+        @tool(
+            "get_minion_info",
+            "Get detailed information about a specific minion in your legion, including their role, capabilities, "
+            "current task, and parent/children hierarchy.",
+            {
+                "minion_name": str  # Name of minion to query
+            }
+        )
+        async def get_minion_info_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Get detailed minion information."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_get_minion_info(args)
+
+        @tool(
+            "list_templates",
+            "List all available minion templates with their permission configurations. "
+            "Templates are pre-configured permission sets that can be used when spawning "
+            "child minions. Use this to discover what types of minions are available and "
+            "recommend appropriate templates based on task requirements."
+            "\n\nExample:"
+            "\n- list_templates() returns all templates"
+            "\n- Use with spawn_minion to apply template: spawn_minion(name='Helper', template_name='Code Expert')"
+            "\n\nTemplates include permission_mode and allowed_tools for each minion type.",
+            {}  # No parameters required
+        )
+        async def list_templates_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """List all minion templates."""
+            return await self._handle_list_templates(args)
+
+        @tool(
+            "update_expertise",
+            "Report a new or improved technical capability. Updates your expertise score "
+            "for the capability in the central registry so other minions can discover you. "
+            "\n\nExpertise score should be 0.0-1.0 (0.0=no knowledge, 0.5=intermediate, 1.0=expert). "
+            "Defaults to 0.5 if not provided."
+            "\n\nCapability names must be lowercase with underscores (e.g., 'jwt_authentication', 'postgresql')."
+            "\n\nExamples:"
+            "\n- update_expertise('jwt_authentication', 0.7)"
+            "\n- update_expertise('postgresql', 0.9)"
+            "\n- update_expertise('docker')  # Uses default 0.5",
+            {
+                "capability": str,                    # Capability keyword (lowercase with underscores)
+                "expertise_score": float | None       # 0.0-1.0 score (default: 0.5 if None)
+            }
+        )
+        async def update_expertise_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Update minion's expertise for a capability."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_update_expertise(args)
+
+        @tool(
+            "whoami",
+            "Get your own identity and metadata. Returns comprehensive information about "
+            "the calling minion including basic identity (name, role), hierarchy position "
+            "(parent, children, is_overseer), capabilities, and configuration."
+            "\n\nThis tool enables self-aware minion behavior for:"
+            "\n- Self-aware logging (include name/role in log messages)"
+            "\n- Role-based decisions (check role before attempting operations)"
+            "\n- Hierarchy navigation (discover parent/children for coordination)"
+            "\n- Capability discovery (query own capabilities to report expertise)"
+            "\n\nReturns a structured dictionary with all identity fields.",
+            {}  # No parameters required - returns caller's identity
+        )
+        async def whoami_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Get calling minion's identity and metadata."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_whoami(args)
+
+        # ── Schedule tools (Issue #495) ──
+
+        @tool(
+            "create_schedule",
+            "Create a recurring cron schedule for yourself. Provide exactly one of 'prompt' or 'script'."
+            "\n\nPrompt mode: The specified prompt text is delivered to you when the schedule fires."
+            "\nScript mode: A shell script is run at each tick; stdout becomes the delivered message."
+            " Silent exits (no stdout) are discarded and no message is delivered."
+            " If you are terminated when a schedule fires, the system will auto-start you."
+            "\n\nParameters:"
+            "\n- name: Human-readable name (e.g., 'Daily status report')"
+            "\n- cron_expression: Standard 5-field cron (min hour dom mon dow). "
+            "Examples: '0 8 * * 1-5' (weekdays 8am), '0 */2 * * *' (every 2 hours), "
+            "'30 9 1 * *' (1st of month at 9:30am)"
+            "\n- prompt (optional): Prompt mode — text delivered to you when the schedule fires. XOR with script."
+            "\n- script (optional): Script mode — shell command/script run at each tick. XOR with prompt."
+            "\n- script_timeout_seconds (optional, default 60): Script mode only — max seconds before script is killed."
+            "\n- reset_session (optional, default false): Reset session before each execution for clean context"
+            "\n- max_retries (optional, default 3): Max delivery retries on failure"
+            "\n- timeout_seconds (optional, default 3600): Delivery timeout",
+            {
+                "name": str,
+                "cron_expression": str,
+                "prompt": str,
+                "script": str,
+                "script_timeout_seconds": int,
+                "reset_session": bool,
+                "max_retries": int,
+                "timeout_seconds": int,
+            }
+        )
+        async def create_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Create a recurring schedule for the calling minion."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_create_schedule(args)
+
+        @tool(
+            "list_schedules",
+            "List your active schedules. Shows schedule name, cron expression, next run time, "
+            "and status. Optionally filter by status."
+            "\n\nParameters:"
+            "\n- status (optional): Filter by 'active', 'paused', or 'cancelled'",
+            {
+                "status": str,
+            }
+        )
+        async def list_schedules_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """List schedules for the calling minion."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_list_schedules(args)
+
+        @tool(
+            "pause_schedule",
+            "Pause one of your active schedules. The schedule will stop firing until resumed."
+            "\n\nParameters:"
+            "\n- schedule_id: The ID of the schedule to pause",
+            {
+                "schedule_id": str,
+            }
+        )
+        async def pause_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Pause a schedule owned by the calling minion."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_pause_schedule(args)
+
+        @tool(
+            "resume_schedule",
+            "Resume one of your paused schedules. The schedule will start firing again "
+            "from the next cron window."
+            "\n\nParameters:"
+            "\n- schedule_id: The ID of the schedule to resume",
+            {
+                "schedule_id": str,
+            }
+        )
+        async def resume_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Resume a schedule owned by the calling minion."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_resume_schedule(args)
+
+        @tool(
+            "delete_schedule",
+            "Delete one of your schedules permanently."
+            "\n\nParameters:"
+            "\n- schedule_id: The ID of the schedule to delete",
+            {
+                "schedule_id": str,
+            }
+        )
+        async def delete_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Delete a schedule owned by the calling minion."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_delete_schedule(args)
+
+        @tool(
+            "update_schedule",
+            "Update one or more attributes of your own schedule. You can change "
+            "the schedule's name, its prompt (for prompt-type schedules), and/or "
+            "its cron expression. You cannot change a schedule's type, the minion "
+            "it is bound to, or its session configuration via this tool. You can "
+            "only update schedules that belong to you."
+            "\n\nParameters:"
+            "\n- schedule_id: The ID of the schedule to update"
+            "\n- name (optional): New display name for the schedule"
+            "\n- prompt (optional): New prompt text. Only valid for prompt-type schedules. Must be non-empty"
+            "\n- cron_expression (optional): New cron expression (5-field standard cron). "
+            "Examples: '0 8 * * 1-5' (weekdays 8am), '*/30 * * * *' (every 30 min)",
+            {
+                "schedule_id": str,
+                "name": str,
+                "prompt": str,
+                "cron_expression": str,
+            }
+        )
+        async def update_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Update a schedule owned by the calling minion."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_update_schedule(args)
+
+        # ── Session lifecycle tools (Issue #680) ──
+
+        @tool(
+            "restart_session",
+            "Request a restart of your own session. This is useful when you are stuck, "
+            "have accumulated too much context, or need a fresh start to continue work."
+            "\n\n**IMPORTANT:** After calling this tool, you MUST stop all work immediately. "
+            "Do not execute any more tools or produce further output. The system will "
+            "restart your session and send a continuation message so you can resume."
+            "\n\nParameters:"
+            "\n- reason (optional): Why you need to restart (logged for audit)",
+            {
+                "reason": str,
+            }
+        )
+        async def restart_session_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Request a session restart."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_restart_session(args)
+
+        # ── Deferred task delivery (Issue #1114) ──
+
+        @tool(
+            "queue_task",
+            "Enqueue a prompt for deferred delivery to another session. Unlike send_comm "
+            "(which delivers immediately), the item is held until the target session is idle, "
+            "then delivered automatically — including auto-starting a terminated session.\n\n"
+            "Use this for handoffs where you do not want to interrupt in-progress work.\n\n"
+            "Parameters:\n"
+            "- session_id (required): Target session to receive the prompt.\n"
+            "- content (required): Prompt text to deliver.\n"
+            "- reset_session (optional, default false): If true, the session is reset "
+            "before the prompt is delivered.\n\n"
+            "Returns queue_id and position for your own bookkeeping.\n\n"
+            "Note: queue_task is not hierarchy-scoped — you may queue into any session "
+            "whose ID you know, not just your own children.",
+            {
+                "session_id": str,
+                "content": str,
+                "reset_session": bool,
+            }
+        )
+        async def queue_task_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Enqueue a prompt for deferred delivery to a session."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_queue_task(args)
+
+        @tool(
+            "reparent_minion",
+            "Move a minion to a different parent within your subtree. "
+            "Both the subject and the new parent must be within your descendant closure. "
+            "You cannot promote a minion to root level — only a user can do that."
+            "\n\n**Authority rules:**"
+            "\n- subject_name: must be one of your descendants (not yourself)"
+            "\n- new_parent_name: must be yourself or one of your descendants"
+            "\n- You cannot create cycles (moving an ancestor under a descendant)"
+            "\n\n**Examples:**"
+            "\n- reparent_minion(subject_name='Worker', new_parent_name='TeamLead')"
+            "\n  → Worker becomes a child of TeamLead (TeamLead must be in your subtree)"
+            "\n- reparent_minion(subject_name='Worker', new_parent_name='MyName')"
+            "\n  → Worker becomes your direct child",
+            {
+                "subject_name": str,     # Name of the minion to move
+                "new_parent_name": str,  # Name of the new parent (yourself or a descendant)
+            }
+        )
+        async def reparent_minion_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Reparent a descendant minion to a new parent within caller's subtree."""
+            args["_caller_id"] = session_id
+            return await self._handle_reparent_minion(args)
+
+        # Create and return MCP server with all tools
+        return create_sdk_mcp_server(
+            name="legion",
+            version="1.0.0",
+            tools=[
+                send_comm_tool,
+                spawn_minion_tool,
+                dispose_minion_tool,
+                search_capability_tool,
+                list_minions_tool,
+                get_minion_info_tool,
+                list_templates_tool,
+                update_expertise_tool,
+                whoami_tool,
+                create_schedule_tool,
+                list_schedules_tool,
+                pause_schedule_tool,
+                resume_schedule_tool,
+                delete_schedule_tool,
+                update_schedule_tool,
+                restart_session_tool,
+                queue_task_tool,
+                reparent_minion_tool,
+            ]
+        )
+
+    # Tool Handler Methods - Implementation in Phase 2
+    # These are called by the @tool decorated functions above
+
+    async def _handle_send_comm(self, args: dict[str, Any]) -> dict[str, Any]:
+        """
+        Handle send_comm tool call.
+
+        Args:
+            args: {"to_minion_name": str, "content": str, "comm_type": str}
+
+        Returns:
+            Tool result with content array
+        """
+        import uuid
+
+        from backend.models.legion_models import Comm, CommType, InterruptPriority
+
+        # Get current minion context (from session_id in SDK context)
+        # For now, we'll need to pass this through - placeholder
+        from_minion_id = args.get("_from_minion_id")  # Will be injected by SDK wrapper
+
+        if not from_minion_id:
+            return self._err("Error: Unable to determine sender minion ID")
+
+        # Validate comm_type
+        comm_type_str = args.get("comm_type", "task").lower()
+        valid_comm_types = ["task", "question", "report", "info"]
+
+        # Map user-facing types to CommType enum values
+        comm_type_mapping = {
+            "task": "task",
+            "question": "question",
+            "report": "report",
+            "info": "info"  # Maps directly to CommType.INFO
+        }
+
+        if comm_type_str not in valid_comm_types:
+            return self._err(f"Error: Invalid comm_type '{comm_type_str}'. Valid values are: {', '.join(valid_comm_types)}")
+
+        # Get the internal enum value
+        internal_comm_type = comm_type_mapping[comm_type_str]
+
+        # Validate interrupt_priority (optional)
+        interrupt_priority_str = args.get("interrupt_priority", "none").lower()
+        valid_priorities = ["none", "halt", "pivot"]
+
+        if interrupt_priority_str not in valid_priorities:
+            return self._err(f"Error: Invalid interrupt_priority '{interrupt_priority_str}'. Valid values are: {', '.join(valid_priorities)}")
+
+        # Map to InterruptPriority enum
+        priority_mapping = {
+            "none": InterruptPriority.NONE,
+            "halt": InterruptPriority.HALT,
+            "pivot": InterruptPriority.PIVOT
+        }
+
+        interrupt_priority = priority_mapping[interrupt_priority_str]
+
+        # Look up target minion by name
+        to_minion_name = args.get("to_minion_name")
+
+        # Check if sending to the special "user" minion
+        from backend.models.legion_models import SYSTEM_MINION_NAME
+        sending_to_user = (to_minion_name == "user")
+
+        # Prevent sending to system (system only sends, never receives)
+        if to_minion_name and to_minion_name.lower() == SYSTEM_MINION_NAME:
+            return self._err(f"Error: Cannot send comm to '{SYSTEM_MINION_NAME}'. System is a special identifier for system-generated messages only.")
+
+        if sending_to_user:
+            to_minion_id = None  # User doesn't have a minion_id, only use to_user flag
+        else:
+            # Get sender's legion to scope lookup
+            sender_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+            if not sender_session:
+                return self._err("Error: Unable to find sender session")
+
+            legion_id = sender_session.project_id
+
+            # Legion-scoped lookup (only search within sender's legion)
+            to_minion = await self.system.legion_coordinator.get_minion_by_name_in_legion(legion_id, to_minion_name)
+            if not to_minion:
+                return self._err(f"Error: Minion '{to_minion_name}' not found in legion {legion_id}")
+            to_minion_id = to_minion.session_id  # session_id IS the minion_id
+
+        # Block self-comms (would cause LLM loop)
+        if not sending_to_user and to_minion_id and to_minion_id == from_minion_id:
+            return self._err("Error: Cannot send comm to yourself.")
+
+        # Validate comm target is within sender's immediate hierarchy group
+        if not sending_to_user and to_minion_id:
+            is_allowed = await self.system.comm_router.validate_comm_target(
+                sender_id=from_minion_id,
+                recipient_id=to_minion_id
+            )
+            if not is_allowed:
+                # Build list of reachable minions for helpful error
+                visible_ids = await self.system.comm_router.get_visible_minions(from_minion_id)
+                visible_names = []
+                for vid in visible_ids:
+                    vs = await self.system.session_coordinator.session_manager.get_session_info(vid)
+                    if vs:
+                        visible_names.append(vs.name or vid[:8])
+                reachable = ", ".join(visible_names) if visible_names else "none"
+                return self._err(
+                            f"Error: Minion '{to_minion_name}' is not in your immediate hierarchy group. "
+                            f"You can reach: [{reachable}]. "
+                            f"Ask your overseer to relay the message, or coordinate through your shared hierarchy."
+                        )
+
+        # Extract summary and content with fallback
+        content = args.get("content", "")
+        summary = args.get("summary", "")
+
+        # Fallback: If summary is empty, auto-generate from first 50 chars of content
+        if not summary and content:
+            summary = content[:50] + ("..." if len(content) > 50 else "")
+
+        # Look up sender minion name (for historical display)
+        from_minion_name = None
+        from_minion_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+        if from_minion_session:
+            from_minion_name = from_minion_session.name
+
+        # Look up recipient minion name if applicable (for historical display)
+        to_minion_name_captured = None
+        if to_minion_id:
+            to_minion_session = await self.system.session_coordinator.session_manager.get_session_info(to_minion_id)
+            if to_minion_session:
+                to_minion_name_captured = to_minion_session.name
+
+        # Process file attachments (optional)
+        attachment_metadata = []
+        attachment_file_data = {}  # Maps filename -> bytes for CommRouter delivery
+        raw_attachments = args.get("attachments")
+        if raw_attachments:
+            import json as _json
+            from pathlib import Path
+
+            from backend.mcp.resource_mcp_tools import (
+                MAX_RESOURCE_SIZE_BYTES,
+                MIME_TYPES,
+                SUPPORTED_EXTENSIONS,
+            )
+
+            # Parse attachments - could be JSON string (from MCP tool) or list
+            if isinstance(raw_attachments, str):
+                try:
+                    file_paths = _json.loads(raw_attachments)
+                except _json.JSONDecodeError:
+                    # Single path as string
+                    file_paths = [raw_attachments]
+            elif isinstance(raw_attachments, list):
+                file_paths = raw_attachments
+            else:
+                return self._err("Error: 'attachments' must be a JSON array of file paths or a single file path string")
+
+            for fpath_str in file_paths:
+                # Issue #824: Translate /tmp/ paths for Docker sessions
+                fpath_str = await translate_docker_tmp_path(
+                    fpath_str, from_minion_id, self.system.session_coordinator
+                )
+                fpath = Path(fpath_str)
+                # Validate existence
+                if not fpath.exists():
+                    return self._err(f"Error: Attachment file not found: {fpath_str}")
+                if not fpath.is_file():
+                    return self._err(f"Error: Attachment path is not a file: {fpath_str}")
+                # Validate extension
+                ext = fpath.suffix.lower()
+                if ext not in SUPPORTED_EXTENSIONS:
+                    return self._err(f"Error: Unsupported file extension '{ext}' for attachment: {fpath.name}")
+                # Validate size
+                file_size = fpath.stat().st_size
+                if file_size > MAX_RESOURCE_SIZE_BYTES:
+                    return self._err(f"Error: Attachment too large ({file_size} bytes > {MAX_RESOURCE_SIZE_BYTES}): {fpath.name}")
+                if file_size == 0:
+                    return self._err(f"Error: Attachment file is empty: {fpath.name}")
+
+                # Read file content
+                file_bytes = fpath.read_bytes()
+                mime_type = MIME_TYPES.get(ext, "application/octet-stream")
+
+                meta = {
+                    "name": fpath.name,
+                    "size": file_size,
+                    "mime_type": mime_type,
+                    "source_path": str(fpath),
+                    "resource_id": None,
+                    "session_id": None,
+                }
+                # Register in sender's session for outbound preview (issue #949)
+                sender_resource = await self.system.session_coordinator.register_uploaded_resource(
+                    session_id=from_minion_id,
+                    file_path=str(fpath),
+                    title=fpath.name,
+                    description=f"Outbound attachment to {to_minion_name}",
+                )
+                if sender_resource:
+                    meta["sender_resource_id"] = sender_resource.get("resource_id")
+
+                attachment_metadata.append(meta)
+                attachment_file_data[fpath.name] = file_bytes
+
+        # Create Comm
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id=from_minion_id,
+            from_user=False,
+            from_minion_name=from_minion_name,
+            to_minion_id=to_minion_id,
+            to_user=sending_to_user,
+            to_minion_name=to_minion_name_captured,
+            summary=summary,
+            content=content,
+            comm_type=CommType(internal_comm_type),
+            interrupt_priority=interrupt_priority,  # Use validated priority
+            attachments=attachment_metadata,
+            visible_to_user=True
+        )
+
+        # Route the comm (pass file data as parameter, not stashed on Comm)
+        try:
+            success = await self.system.comm_router.route_comm(
+                comm, attachment_data=attachment_file_data or None
+            )
+            if success:
+                text = f"Message sent to {to_minion_name}"
+                if attachment_metadata:
+                    import json as _json
+                    footer_payload = [
+                        {
+                            "name": att["name"],
+                            "resource_id": att.get("sender_resource_id"),
+                            "size": att["size"],
+                            "mime_type": att["mime_type"],
+                        }
+                        for att in attachment_metadata
+                    ]
+                    text += f"\n\n<!-- sender_attachments: {_json.dumps(footer_payload)} -->"
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": text
+                    }],
+                    "is_error": False
+                }
+            else:
+                return self._err(f"Failed to send message to {to_minion_name}")
+        except Exception as e:
+            return self._err(f"Error sending message: {str(e)}")
+
+    async def _handle_spawn_minion(self, args: dict[str, Any]) -> dict[str, Any]:
+        """
+        Handle spawn_minion tool call from a minion.
+
+        Security Model:
+        - Minions can ONLY use templates or default restricted permissions
+        - NO ad-hoc permission specification allowed (prevents privilege escalation)
+        - Templates are user-controlled and enforce specific permission sets
+
+        Args:
+            args: {
+                "_parent_overseer_id": str,  # Injected by tool wrapper
+                "name": str,
+                "role": str,
+                "system_prompt": str,
+                "template_name": str,  # Optional - if provided, enforces template permissions
+                "capabilities": List[str]  # Optional
+            }
+
+        Returns:
+            Tool result with success/error
+        """
+        parent_overseer_id = args.get("_parent_overseer_id")
+        if not parent_overseer_id:
+            return self._err("Error: Unable to determine parent overseer ID")
+
+        # Extract parameters
+        name = args.get("name", "").strip()
+        role = args.get("role", "").strip()
+        system_prompt = args.get("system_prompt", "").strip()
+        template_name = args.get("template_name", "").strip()
+        capabilities = args.get("capabilities", [])
+        working_directory_raw = args.get("working_directory")
+        sandbox_enabled = args.get("sandbox_enabled", False)
+        parent_name_param = args.get("parent_name", "").strip()
+
+        # Get caller session to determine legion_id
+        caller_session = await self.system.session_coordinator.session_manager.get_session_info(parent_overseer_id)
+        if not caller_session:
+            return self._err(f"Error: Parent overseer session {parent_overseer_id} not found")
+
+        legion_id = caller_session.project_id
+        if not legion_id:
+            return self._err("Error: Parent overseer is not part of a legion")
+
+        # Resolve parent_name: allow caller to designate a descendant as the new minion's parent
+        actual_parent_id = parent_overseer_id  # default: caller is the parent
+        parent_session = caller_session
+
+        if parent_name_param:
+            # Look up the named minion within the caller's legion
+            named_minion = await self.system.legion_coordinator.get_minion_by_name_in_legion(
+                legion_id, parent_name_param
+            )
+            if not named_minion:
+                return self._err(f"Error: parent_name '{parent_name_param}' not found in legion")
+
+            # Validate: named minion must be a descendant of the caller (or caller themselves)
+            if named_minion.session_id != parent_overseer_id:
+                descendant_ids = {
+                    d["session_id"]
+                    for d in await self.system.session_coordinator.get_all_descendants(parent_overseer_id)
+                }
+
+                if named_minion.session_id not in descendant_ids:
+                    return self._err(
+                                f"Error: parent_name '{parent_name_param}' must be a descendant "
+                                f"of the calling minion. You can only place children under minions "
+                                f"in your own subtree."
+                            )
+
+            actual_parent_id = named_minion.session_id
+            parent_session = named_minion
+            legion_logger.info(
+                f"parent_name '{parent_name_param}' resolved to {actual_parent_id} "
+                f"(caller: {parent_overseer_id})"
+            )
+
+        # Override the parent_overseer_id with the resolved actual parent
+        parent_overseer_id = actual_parent_id
+
+        # Validate required fields
+        if not name:
+            return self._err("Error: 'name' parameter is required and cannot be empty")
+
+        if not system_prompt:
+            return self._err("Error: 'system_prompt' parameter is required and cannot be empty. Provide clear instructions for what this minion should do.")
+
+        # SECURITY: Apply template permissions or use safe defaults
+        # Minions cannot specify custom permissions directly
+        permission_mode = None
+        allowed_tools = None
+        disallowed_tools = None
+        template_applied = None
+
+        if template_name:
+            # Template specified - look up and apply (no overrides allowed)
+            try:
+                template = await self.system.template_manager.get_template_by_name(template_name)
+
+                if not template:
+                    return self._err(f"❌ Error: Template '{template_name}' not found. Use list_templates() to see available templates.")
+
+                template_applied = template
+
+                profile_manager = getattr(self.system.session_coordinator, 'profile_manager', None)
+                resolved = await resolve_template_config(template, profile_manager)
+
+                # Apply resolved values (enforced, no overrides)
+                # Use resolved config with parent fallback for missing fields.
+                permission_mode = resolved.get('permission_mode') or parent_session.current_permission_mode
+                allowed_tools = resolved.get('allowed_tools')
+                disallowed_tools = resolved.get('disallowed_tools')
+
+                # Use template's role if role not provided
+                if not role and template.role:
+                    role = template.role
+
+                # Prepend template's system_prompt if exists
+                _tpl_sp = template.config.get("system_prompt")
+                if _tpl_sp:
+                    system_prompt = f"{_tpl_sp}\n\n{system_prompt}"
+
+                # Apply model from resolved config if set
+                model = resolved.get('model') or None
+
+                # Apply capabilities from template (merge with any provided)
+                if template.capabilities:
+                    template_caps = list(template.capabilities)
+                    for cap in capabilities:
+                        if cap not in template_caps:
+                            template_caps.append(cap)
+                    capabilities = template_caps
+
+                # Apply override_system_prompt from resolved config
+                override_system_prompt = resolved.get(
+                    'override_system_prompt', template.config.get('override_system_prompt', False)
+                )
+
+                # Apply sandbox_enabled from resolved config
+                if resolved.get('sandbox_enabled'):
+                    sandbox_enabled = True
+
+                # Apply cli_path from resolved config (issue #489)
+                # SECURITY: cli_path flows only through user-controlled templates
+                cli_path = resolved.get('cli_path')
+
+                # Apply process_wrapper from resolved config (issue #1672)
+                # SECURITY: process_wrapper flows only through user-controlled templates
+                process_wrapper = resolved.get('process_wrapper')
+
+                # Apply Docker isolation from resolved config (issue #496)
+                # SECURITY: Docker config flows only through user-controlled templates
+                docker_enabled = resolved.get('docker_enabled', False)
+                docker_image = resolved.get('docker_image')
+                docker_extra_mounts = resolved.get('docker_extra_mounts')
+
+                # Extract additional config fields, falling back to parent session
+                # (issue #762: ensure all SessionConfig fields propagate through spawn path)
+                _pc = parent_session.config
+                thinking_mode = resolved.get('thinking_mode') or _pc.get('thinking_mode')
+                thinking_budget_tokens = (
+                    resolved.get('thinking_budget_tokens') or _pc.get('thinking_budget_tokens')
+                )
+                effort = resolved.get('effort') or _pc.get('effort')
+                setting_sources = resolved.get('setting_sources') or _pc.get('setting_sources')
+                additional_directories = (
+                    resolved.get('additional_directories') or _pc.get('additional_directories')
+                )
+                sandbox_config = resolved.get('sandbox_config') or _pc.get('sandbox_config')
+                docker_home_directory = (
+                    resolved.get('docker_home_directory') or _pc.get('docker_home_directory')
+                )
+                # Booleans: fall back to SessionConfig defaults when neither resolved nor
+                # parent config has the field (post-#1230 config dicts omit default values).
+                history_distillation_enabled = resolved.get(
+                    'history_distillation_enabled',
+                    _pc.get('history_distillation_enabled', _SESSION_DEFAULTS['history_distillation_enabled']),
+                )
+                auto_memory_mode = resolved.get('auto_memory_mode') or _pc.get('auto_memory_mode') or _SESSION_DEFAULTS['auto_memory_mode']
+                skill_creating_enabled = resolved.get(
+                    'skill_creating_enabled',
+                    _pc.get('skill_creating_enabled', _SESSION_DEFAULTS['skill_creating_enabled']),
+                )
+                mcp_server_ids = resolved.get('mcp_server_ids') or _pc.get('mcp_server_ids')
+                enable_claudeai_mcp_servers = resolved.get(
+                    'enable_claudeai_mcp_servers',
+                    _pc.get('enable_claudeai_mcp_servers', _SESSION_DEFAULTS['enable_claudeai_mcp_servers']),
+                )
+                strict_mcp_config = resolved.get(
+                    'strict_mcp_config',
+                    _pc.get('strict_mcp_config', _SESSION_DEFAULTS['strict_mcp_config']),
+                )
+
+            except Exception as e:
+                legion_logger.error(f"Error applying template: {e}", exc_info=True)
+                return self._err(f"❌ Error applying template: {str(e)}")
+        else:
+            # No template - use safe default restricted permissions
+            permission_mode = "manual"  # Prompts for most actions
+            allowed_tools = []  # No pre-authorized tools (user must approve each tool use)
+            model = None
+            override_system_prompt = False
+            cli_path = None
+            process_wrapper = None
+            _pc = parent_session.config
+            docker_enabled = _pc.get('docker_enabled', False)
+            docker_image = _pc.get('docker_image')
+            docker_extra_mounts = _pc.get('docker_extra_mounts')
+            # Inherit operational config from parent (issue #762)
+            thinking_mode = _pc.get('thinking_mode')
+            thinking_budget_tokens = _pc.get('thinking_budget_tokens')
+            effort = _pc.get('effort')
+            setting_sources = _pc.get('setting_sources')
+            additional_directories = _pc.get('additional_directories') or []
+            sandbox_config = _pc.get('sandbox_config')
+            docker_home_directory = _pc.get('docker_home_directory')
+            history_distillation_enabled = _pc.get('history_distillation_enabled', _SESSION_DEFAULTS['history_distillation_enabled'])
+            auto_memory_mode = _pc.get('auto_memory_mode') or _SESSION_DEFAULTS['auto_memory_mode']
+            skill_creating_enabled = _pc.get('skill_creating_enabled', _SESSION_DEFAULTS['skill_creating_enabled'])
+            mcp_server_ids = _pc.get('mcp_server_ids')
+            enable_claudeai_mcp_servers = _pc.get('enable_claudeai_mcp_servers', _SESSION_DEFAULTS['enable_claudeai_mcp_servers'])
+            strict_mcp_config = _pc.get('strict_mcp_config', _SESSION_DEFAULTS['strict_mcp_config'])
+
+        # Validate role is set (from parameter or template)
+        if not role:
+            return self._err("Error: 'role' parameter is required (or use a template with a role)")
+
+        # Validate and normalize working directory if provided
+        working_directory = None
+        if working_directory_raw:
+            try:
+                # Import validation function
+                from ...session_config import validate_and_normalize_working_directory
+
+                # Use parent's working directory as default
+                working_directory = str(validate_and_normalize_working_directory(
+                    working_directory_raw,
+                    str(parent_session.working_directory)
+                ))
+            except ValueError as e:
+                return self._err(f"❌ Invalid working_directory: {str(e)}")
+
+        # Attempt to spawn child minion
+        try:
+            spawn_config = SessionConfig(
+                permission_mode=permission_mode or "default",
+                system_prompt=system_prompt,
+                override_system_prompt=override_system_prompt,
+                allowed_tools=allowed_tools,
+                disallowed_tools=disallowed_tools,
+                model=model,
+                working_directory=working_directory,
+                cli_path=cli_path,
+                process_wrapper=process_wrapper,
+                sandbox_enabled=sandbox_enabled,
+                sandbox_config=sandbox_config,
+                docker_enabled=docker_enabled,
+                docker_image=docker_image,
+                docker_extra_mounts=docker_extra_mounts,
+                docker_home_directory=docker_home_directory,
+                thinking_mode=thinking_mode,
+                thinking_budget_tokens=thinking_budget_tokens,
+                effort=effort,
+                setting_sources=setting_sources,
+                additional_directories=additional_directories,
+                history_distillation_enabled=history_distillation_enabled,
+                auto_memory_mode=auto_memory_mode,
+                skill_creating_enabled=skill_creating_enabled,
+                mcp_server_ids=mcp_server_ids,
+                enable_claudeai_mcp_servers=enable_claudeai_mcp_servers,
+                strict_mcp_config=strict_mcp_config,
+                template_id=template_applied.template_id if template_applied else None,
+            )
+            spawn_result = await self.system.overseer_controller.spawn_minion(
+                parent_overseer_id=parent_overseer_id,
+                name=name,
+                role=role,
+                config=spawn_config,
+                capabilities=capabilities,
+            )
+
+            child_minion_id = spawn_result["minion_id"]
+
+            # Get slug for the newly created minion (issue #546)
+            child_session = await self.system.session_coordinator.session_manager.get_session_info(child_minion_id)
+            child_slug = child_session.slug if child_session else name
+
+            # Build success message with permission info
+            perm_info = ""
+            if template_applied:
+                _tpl_tools = template_applied.config.get("allowed_tools") or []
+                tools_str = ", ".join(_tpl_tools) if _tpl_tools else "all"
+                perm_info = (
+                    f"\n**Permissions** (from template '{template_applied.name}'):\n"
+                    f"  - Permission Mode: {template_applied.config.get('permission_mode', 'manual')}\n"
+                    f"  - Allowed Tools: {tools_str}"
+                )
+            else:
+                perm_info = (
+                    "\n**Permissions** (safe defaults):\n"
+                    "  - Permission Mode: manual\n"
+                    "  - Allowed Tools: none (user must approve each tool use)"
+                )
+
+            # Add working directory info if specified
+            wd_info = ""
+            if working_directory:
+                wd_info = f"\nWorking Directory: {working_directory}\n"
+
+            # Add sandbox info
+            sandbox_info = ""
+            if sandbox_enabled:
+                sandbox_info = "\n**Sandbox:** Enabled (OS-level isolation)\n"
+
+            next_step_msg = f"Send a comm to '{child_slug}' to start them working on their task"
+
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        f"✅ Successfully spawned minion '{name}' (slug: '{child_slug}') with role '{role}'.\n\n"
+                        f"Minion ID: {child_minion_id}\n"
+                        f"Slug: {child_slug}\n"
+                        f"{wd_info}"
+                        f"{sandbox_info}"
+                        f"{perm_info}\n"
+                        f"The child minion is now active and ready to receive comms. "
+                        f"You can communicate with them using send_comm(to_minion_name='{child_slug}', ...)."
+                        f"\n\n**Next Step:** {next_step_msg}"
+                    )
+                }],
+                "is_error": False,
+                "next_step": next_step_msg
+            }
+
+        except ValueError as e:
+            # Handle validation errors (duplicate name, capacity, etc.)
+            return self._err(f"❌ Cannot spawn minion: {str(e)}")
+
+        except PermissionError as e:
+            # Handle permission errors
+            return self._err(f"❌ Permission denied: {str(e)}")
+
+        except Exception as e:
+            # Catch-all for unexpected errors
+            legion_logger.error(f"Unexpected error in spawn_minion: {e}", exc_info=True)
+            return self._err(f"❌ Failed to spawn minion due to unexpected error: {str(e)}")
+
+    async def _handle_dispose_minion(self, args: dict[str, Any]) -> dict[str, Any]:
+        """
+        Handle dispose_minion tool call from a minion.
+
+        Args:
+            args: {
+                "_parent_overseer_id": str,  # Injected by tool wrapper (session_id)
+                "minion_name": str,
+                "delete": bool  # If True, fully delete session after archive (default: False)
+            }
+
+        Returns:
+            Tool result with success/error
+        """
+        parent_overseer_id = args.get("_parent_overseer_id")  # This is actually the CALLER's session_id
+        if not parent_overseer_id:
+            return self._err("Error: Unable to determine caller ID")
+
+        # Extract parameters
+        minion_name = args.get("minion_name", "").strip()
+        delete_after_archive = args.get("delete", False)
+
+        # Validate required field
+        if not minion_name:
+            return self._err("Error: 'minion_name' parameter is required and cannot be empty")
+
+        # Resolve the target minion — may be a direct child or a deeper descendant.
+        # If not a direct child, find the target's actual parent so
+        # overseer_controller.dispose_minion() can enforce parent authority.
+        try:
+            caller_session = await self.system.session_coordinator.session_manager.get_session_info(
+                parent_overseer_id
+            )
+            if not caller_session:
+                return self._err("Error: Caller session not found")
+
+            # Check direct children first (fast path)
+            from backend.slug_utils import slugify_name as _slugify
+            target_slug = _slugify(minion_name)
+            effective_parent_id = parent_overseer_id  # default: caller is the parent
+
+            is_direct_child = False
+            for cid in (caller_session.child_minion_ids or []):
+                s = await self.system.session_coordinator.session_manager.get_session_info(cid)
+                if s and s.slug == target_slug:
+                    is_direct_child = True
+                    break
+
+            if not is_direct_child:
+                # Search full descendant subtree for the target
+                target_desc = None
+                for d in await self.system.session_coordinator.get_all_descendants(parent_overseer_id):
+                    d_slug = _slugify(d["name"])
+                    if d_slug == target_slug:
+                        target_desc = d
+                        break
+
+                if not target_desc:
+                    return self._err(
+                                f"❌ Cannot dispose minion: No minion with name '{minion_name}' "
+                                f"found in your subtree. You can only dispose minions you control "
+                                f"(direct children or deeper descendants)."
+                            )
+
+                # Use the target's actual parent for disposal
+                effective_parent_id = target_desc["parent_id"]
+
+            result = await self.system.overseer_controller.dispose_minion(
+                parent_overseer_id=effective_parent_id,
+                child_minion_name=minion_name,
+                delete_after_archive=delete_after_archive
+            )
+
+            descendants_msg = ""
+            if result["descendants_count"] > 0:
+                action = "deleted" if result.get("deleted") else "disposed"
+                descendants_msg = f"\n\n⚠️  Also {action} {result['descendants_count']} descendant minion(s) (children of {minion_name})."
+
+            action_word = "deleted" if result.get("deleted") else "disposed of"
+            if result.get("deleted"):
+                # Hard delete - data archived
+                status_msg = "Their session data has been archived before deletion."
+            else:
+                # Soft dispose - can restart
+                status_msg = "You can restart this minion later by sending it a comm."
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        f"✅ Successfully {action_word} minion '{minion_name}'."
+                        f"{descendants_msg}\n\n"
+                        f"{status_msg}"
+                    )
+                }],
+                "is_error": False
+            }
+
+        except ValueError as e:
+            # Handle not found or validation errors
+            return self._err(f"❌ Cannot dispose minion: {str(e)}")
+
+        except PermissionError as e:
+            # Handle permission errors (not your child)
+            return self._err(f"❌ Permission denied: {str(e)}")
+
+        except Exception as e:
+            # Catch-all for unexpected errors
+            legion_logger.error(f"Unexpected error in dispose_minion: {e}", exc_info=True)
+            return self._err(f"❌ Failed to dispose minion due to unexpected error: {str(e)}")
+
+    async def _handle_reparent_minion(self, args: dict[str, Any]) -> dict[str, Any]:
+        """
+        Handle reparent_minion tool call from a minion.
+
+        Args:
+            args: {
+                "_caller_id": str,       # Injected by tool wrapper (session_id)
+                "subject_name": str,     # Name of the minion to move
+                "new_parent_name": str,  # Name of the new parent (caller or descendant)
+            }
+
+        Returns:
+            Tool result with success/error
+        """
+        from backend.slug_utils import slugify_name as _slugify
+
+        caller_id = args.get("_caller_id")
+        if not caller_id:
+            return self._err("Error: Unable to determine caller ID")
+
+        subject_name = args.get("subject_name", "").strip()
+        new_parent_name = args.get("new_parent_name", "").strip()
+
+        if not subject_name:
+            return self._err("Error: 'subject_name' parameter is required")
+        if not new_parent_name:
+            return self._err("Error: 'new_parent_name' parameter is required")
+
+        try:
+            caller_session = await self.system.session_coordinator.session_manager.get_session_info(caller_id)
+            if not caller_session:
+                return self._err("Error: Caller session not found")
+
+            subject_slug = _slugify(subject_name)
+            new_parent_slug = _slugify(new_parent_name)
+
+            caller_descendants = await self.system.session_coordinator.get_all_descendants(caller_id)
+
+            subject_id = None
+            new_parent_id = None
+
+            for d in caller_descendants:
+                slug = _slugify(d["name"])
+                if slug == subject_slug and subject_id is None:
+                    subject_id = d["session_id"]
+                if slug == new_parent_slug and new_parent_id is None:
+                    new_parent_id = d["session_id"]
+
+            if subject_id is None:
+                return self._err(
+                            f"❌ Cannot reparent: '{subject_name}' is not in your descendant subtree. "
+                            "You can only reparent minions you control."
+                        )
+
+            # new_parent can also be the caller itself
+            if new_parent_id is None and _slugify(caller_session.name) == new_parent_slug:
+                new_parent_id = caller_id
+
+            if new_parent_id is None:
+                return self._err(
+                            f"❌ Cannot reparent: new parent '{new_parent_name}' is not yourself "
+                            "or one of your descendants."
+                        )
+
+            result = await self.system.overseer_controller.reparent_minion(
+                subject_id=subject_id,
+                new_parent_id=new_parent_id,
+                caller_id=caller_id,
+            )
+
+            descendants_msg = (
+                f"\n{result['descendants_moved']} descendant(s) also moved."
+                if result["descendants_moved"] else ""
+            )
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        f"✅ Successfully moved '{subject_name}' under '{new_parent_name}'.{descendants_msg}"
+                    ),
+                }],
+                "is_error": False,
+            }
+
+        except ValueError as e:
+            return self._err(f"❌ Cannot reparent: {e}")
+        except Exception as e:
+            legion_logger.error(f"Unexpected error in reparent_minion: {e}", exc_info=True)
+            return self._err(f"❌ Failed to reparent minion: {e}")
+
+    async def _handle_search_capability(self, args: dict[str, Any]) -> dict[str, Any]:
+        """
+        Handle search_capability tool call.
+
+        Searches the central capability registry for minions with matching capabilities.
+        Results are filtered to the caller's immediate hierarchy group.
+
+        Args:
+            args: Tool arguments with 'capability' keyword and '_from_minion_id'
+
+        Returns:
+            Tool result with formatted minion list or error message
+        """
+        try:
+            # Get search keyword
+            keyword = args.get("capability", "").strip()
+
+            if not keyword:
+                return self._err("❌ Error: capability parameter is required and cannot be empty")
+
+            # Search the capability registry
+            try:
+                results = await self.system.legion_coordinator.search_capability_registry(
+                    keyword=keyword
+                )
+            except ValueError as e:
+                return self._err(f"❌ Search error: {str(e)}")
+
+            # Filter results to caller's immediate hierarchy group
+            from_minion_id = args.get("_from_minion_id")
+            if from_minion_id:
+                visible_ids = await self.system.comm_router.get_visible_minions(from_minion_id)
+                visible_set = set(visible_ids)
+                results = [
+                    (mid, score, cap) for mid, score, cap in results
+                    if mid in visible_set
+                ]
+
+            # Handle empty results
+            if not results:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"No minions found with capability matching '{keyword}'"
+                    }],
+                    "is_error": False
+                }
+
+            # Format results as text list
+            result_lines = [f"**Minions with capability '{keyword}'** (ranked by expertise):\n"]
+
+            for minion_id, expertise_score, capability_matched in results:
+                # Get minion details
+                minion = await self.system.legion_coordinator.get_minion_info(minion_id)
+                if not minion:
+                    continue  # Skip if minion no longer exists
+
+                name = minion.name or minion_id[:8]
+                slug = minion.slug or name
+                role = minion.role or "No role specified"
+                state = minion.state.value if hasattr(minion.state, 'value') else str(minion.state)
+
+                # Format expertise score as percentage
+                expertise_pct = int(expertise_score * 100)
+
+                result_lines.append(
+                    f"\n• **{name}** (slug: {slug}, ID: {minion_id[:8]}...)\n"
+                    f"  - Role: {role}\n"
+                    f"  - State: {state}\n"
+                    f"  - Expertise: {expertise_pct}% ({expertise_score:.2f})\n"
+                    f"  - Matched capability: {capability_matched}"
+                )
+
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "".join(result_lines)
+                }],
+                "is_error": False
+            }
+
+        except Exception as e:
+            # Catch-all for unexpected errors
+            return self._err(f"❌ Failed to search capabilities due to unexpected error: {str(e)}")
+
+    async def _handle_list_minions(self, args: dict[str, Any]) -> dict[str, Any]:
+        """
+        Handle list_minions tool call.
+
+        Lists all active minions in the caller's legion with their names, roles, and states.
+        Always includes the special "user" minion for sending comms to the user.
+
+        Returns:
+            Tool result with formatted minion list
+        """
+        try:
+            from backend.models.legion_models import USER_MINION_ID
+
+            # Get caller's legion to scope listing
+            from_minion_id = args.get("_from_minion_id")
+            if not from_minion_id:
+                return self._err("Error: Unable to determine caller minion ID")
+
+            caller_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+            if not caller_session:
+                return self._err("Error: Unable to find caller session")
+
+            legion_id = caller_session.project_id
+
+            # Get legion and its sessions
+            legion = await self.system.legion_coordinator.get_legion(legion_id)
+            if not legion:
+                return self._err("Error: Caller is not part of a legion")
+
+            # Scope to caller's immediate hierarchy group (issue #349: all sessions are minions)
+            session_manager = self.system.session_coordinator.session_manager
+            visible_ids = await self.system.comm_router.get_visible_minions(from_minion_id)
+            minions = []
+            session_name_cache: dict[str, str] = {}
+            for vid in visible_ids:
+                session = await session_manager.get_session_info(vid)
+                if session:
+                    minions.append(session)
+                    session_name_cache[session.session_id] = session.name
+
+            # Format minion list
+            minion_lines = []
+
+            # Always include the special "user" minion first
+            minion_lines.append(
+                f"• **user** (ID: {USER_MINION_ID})\n"
+                f"  - Role: Human operator\n"
+                f"  - State: active\n"
+                f"  - Capabilities: Receives reports and can send tasks"
+            )
+
+            # Add other minions
+            for minion in minions:
+                name = minion.name or minion.session_id[:8]
+                slug = minion.slug or name
+                role = minion.role or "No role specified"
+                state = minion.state.value if hasattr(minion.state, 'value') else str(minion.state)
+                capabilities = ", ".join(minion.capabilities) if minion.capabilities else "None"
+                cwd = minion.working_directory or "N/A"
+
+                if minion.parent_overseer_id is None:
+                    parent_display = "user"
+                elif minion.parent_overseer_id in session_name_cache:
+                    parent_display = session_name_cache[minion.parent_overseer_id]
+                else:
+                    parent_session = await session_manager.get_session_info(minion.parent_overseer_id)
+                    parent_display = parent_session.name if parent_session else "unknown"
+                    session_name_cache[minion.parent_overseer_id] = parent_display
+
+                minion_lines.append(
+                    f"• **{name}** (slug: {slug}, ID: {minion.session_id})\n"
+                    f"  - Parent: {parent_display}\n"
+                    f"  - Role: {role}\n"
+                    f"  - State: {state}\n"
+                    f"  - Working Directory: {cwd}\n"
+                    f"  - Capabilities: {capabilities}"
+                )
+
+            total_count = len(minions) + 1  # +1 for user
+            result_text = f"**Active Minions ({total_count}):**\n\n" + "\n\n".join(minion_lines)
+
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": result_text
+                }],
+                "is_error": False
+            }
+
+        except Exception as e:
+            return self._err(f"Error listing minions: {str(e)}")
+
+    async def _handle_get_minion_info(self, args: dict[str, Any]) -> dict[str, Any]:
+        """
+        Handle get_minion_info tool call.
+
+        Returns detailed profile of a minion including name, role, state, capabilities,
+        hierarchy relationships, and legion membership.
+
+        Args:
+            args: {
+                "minion_name": str  # Required - name of minion to query
+            }
+
+        Returns:
+            Tool result with formatted minion profile or error message
+        """
+        # 1. Validate minion_name parameter
+        minion_name = args.get("minion_name", "").strip() if isinstance(args.get("minion_name"), str) else ""
+
+        if not minion_name:
+            return self._err("❌ Error: 'minion_name' parameter is required and cannot be empty")
+
+        # 2. Get caller's legion to scope lookup
+        from_minion_id = args.get("_from_minion_id")
+        if not from_minion_id:
+            return self._err("❌ Error: Unable to determine caller minion ID")
+
+        caller_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+        if not caller_session:
+            return self._err("❌ Error: Unable to find caller session")
+
+        legion_id = caller_session.project_id
+
+        # Legion-scoped lookup (only search within caller's legion)
+        minion = await self.system.legion_coordinator.get_minion_by_name_in_legion(legion_id, minion_name)
+
+        if not minion:
+            return self._err(f"❌ Error: Minion '{minion_name}' not found in legion {legion_id}")
+
+        # 3. Build formatted profile
+        profile_lines = []
+
+        # Header
+        profile_lines.append(f"# Minion Profile: {minion.name}\n")
+
+        # Basic info
+        profile_lines.append(f"**ID:** {minion.session_id[:8]}...")
+        profile_lines.append(f"**Slug:** {minion.slug or 'N/A'}")
+        profile_lines.append(f"**Role:** {minion.role or 'No role specified'}")
+        profile_lines.append(f"**Working Directory:** {minion.working_directory or 'N/A'}")
+
+        # State
+        state_str = minion.state.value if hasattr(minion.state, 'value') else str(minion.state)
+        profile_lines.append(f"**State:** {state_str}")
+
+        # Capabilities with expertise scores
+        if minion.capabilities:
+            profile_lines.append("\n**Capabilities:**")
+
+            # Get expertise scores from capability registry
+            capability_scores = {}
+            for capability, entries in self.system.legion_coordinator.capability_registry.items():
+                for mid, score in entries:
+                    if mid == minion.session_id:
+                        capability_scores[capability] = score
+                        break
+
+            # Format capabilities with scores
+            for capability in minion.capabilities:
+                score = capability_scores.get(capability)
+                if score is not None:
+                    score_pct = int(score * 100)
+                    profile_lines.append(f"- {capability}: {score_pct}%")
+                else:
+                    profile_lines.append(f"- {capability}")
+        else:
+            profile_lines.append("\n**Capabilities:** None registered")
+
+        # Hierarchy info
+        if minion.is_overseer:
+            profile_lines.append("\n**Is Overseer:** Yes")
+
+            if minion.child_minion_ids:
+                # Resolve child names
+                child_names = []
+                for child_id in minion.child_minion_ids:
+                    child_session = await self.system.session_coordinator.session_manager.get_session_info(child_id)
+                    if child_session:
+                        child_names.append(child_session.name or child_id[:8])
+                    else:
+                        child_names.append(child_id[:8])
+
+                profile_lines.append(f"**Child Minions:** {', '.join(child_names)}")
+            else:
+                profile_lines.append("**Child Minions:** None")
+        else:
+            profile_lines.append("\n**Is Overseer:** No")
+
+        # Parent overseer
+        if minion.parent_overseer_id:
+            # Resolve parent name
+            parent_session = await self.system.session_coordinator.session_manager.get_session_info(minion.parent_overseer_id)
+            parent_name = parent_session.name if parent_session else minion.parent_overseer_id[:8]
+            profile_lines.append(f"**Parent Overseer:** {parent_name}")
+
+        # Legion
+        if minion.project_id:
+            # Resolve legion name
+            try:
+                legion = await self.system.session_coordinator.project_manager.get_project(minion.project_id)
+                legion_name = legion.name if legion else minion.project_id[:8]
+            except Exception:
+                legion_name = minion.project_id[:8]
+
+            profile_lines.append(f"\n**Legion:** {legion_name}")
+
+        # Join lines and return
+        profile_text = "\n".join(profile_lines)
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": profile_text
+            }],
+            "is_error": False
+        }
+
+    async def _handle_list_templates(self, args: dict[str, Any]) -> dict[str, Any]:
+        """
+        Handle list_templates tool call.
+
+        Returns formatted list of all available minion templates.
+
+        Args:
+            args: {} (no parameters)
+
+        Returns:
+            Tool result with formatted template list
+        """
+        try:
+            # Get all templates from TemplateManager
+            templates = await self.system.template_manager.list_templates()
+
+            # Handle empty case
+            if not templates:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": (
+                            "No templates available.\n\n"
+                            "Templates are pre-configured permission sets for minions. "
+                            "Ask the user to create templates through the UI (Manage Templates)."
+                        )
+                    }],
+                    "is_error": False
+                }
+
+            # Sort templates alphabetically by name
+            templates = sorted(templates, key=lambda t: t.name)
+
+            # Build formatted list
+            result_lines = ["**Available Minion Templates:**\n"]
+
+            for template in templates:
+                # Format allowed tools
+                _allowed = template.config.get("allowed_tools", [])
+                tools_str = ", ".join(_allowed) if _allowed else "None"
+                if len(tools_str) > 60:  # Truncate if too long
+                    tools_str = tools_str[:60] + "..."
+
+                # Build template entry
+                result_lines.append(
+                    f"• **{template.name}**\n"
+                    f"  - Description: {template.description or 'No description'}\n"
+                    f"  - Permission Mode: {template.config.get('permission_mode', 'manual')}\n"
+                    f"  - Allowed Tools: {tools_str}\n"
+                    f"  - Role: {template.role or 'Not specified'}\n"
+                )
+
+            # Add usage hint
+            result_lines.append(
+                "\n**Usage:**\n"
+                "To spawn a minion with a template, use:\n"
+                "spawn_minion(name='MinionName', template_name='Template Name')"
+            )
+
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "\n".join(result_lines)
+                }],
+                "is_error": False
+            }
+
+        except Exception as e:
+            return self._err(f"Error listing templates: {str(e)}")
+
+    async def _handle_update_expertise(self, args: dict[str, Any]) -> dict[str, Any]:
+        """
+        Handle update_expertise tool call.
+
+        Args:
+            args: {
+                "_from_minion_id": str,  # Injected by tool wrapper
+                "capability": str,
+                "expertise_score": float | None
+            }
+
+        Returns:
+            Tool result with success/error
+        """
+        from_minion_id = args.get("_from_minion_id")
+
+        if not from_minion_id:
+            return self._err("Error: Unable to determine minion ID")
+
+        # Extract parameters
+        capability = args.get("capability", "").strip()
+        expertise_score = args.get("expertise_score")
+
+        # Validate capability
+        if not capability:
+            return self._err("Error: capability parameter is required and cannot be empty")
+
+        # Validate and convert expertise_score if provided
+        if expertise_score is not None:
+            # Convert string to float if needed (MCP may pass as string)
+            if isinstance(expertise_score, str):
+                try:
+                    expertise_score = float(expertise_score)
+                except ValueError:
+                    return self._err("Error: expertise_score must be a number between 0.0 and 1.0")
+            elif not isinstance(expertise_score, (int, float)):
+                return self._err("Error: expertise_score must be a number between 0.0 and 1.0")
+
+            # Validate range
+            if expertise_score < 0.0 or expertise_score > 1.0:
+                return self._err("Error: expertise_score must be between 0.0 and 1.0")
+
+        # Call existing register_capability method
+        try:
+            await self.system.legion_coordinator.register_capability(
+                minion_id=from_minion_id,
+                capability=capability,
+                expertise_score=expertise_score  # Will use minion's default if None
+            )
+
+            # Get updated capability count
+            minion = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+            capability_count = len(minion.capabilities) if minion else 0
+
+            # Format score for display
+            score_display = expertise_score if expertise_score is not None else 0.5
+
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        f"✅ Successfully updated expertise for '{capability}' to {score_display:.2f}. "
+                        f"You now have {capability_count} capabilit{'y' if capability_count == 1 else 'ies'}."
+                    )
+                }],
+                "is_error": False
+            }
+
+        except ValueError as e:
+            # Validation errors from register_capability
+            return self._err(f"❌ Error: {str(e)}")
+        except Exception as e:
+            return self._err(f"❌ Unexpected error updating expertise: {str(e)}")
+
+    async def _handle_whoami(self, args: dict[str, Any]) -> dict[str, Any]:
+        """
+        Handle whoami tool call.
+
+        Returns comprehensive identity and metadata for the calling minion.
+
+        Args:
+            args: {
+                "_from_minion_id": str  # Injected by tool wrapper
+            }
+
+        Returns:
+            Tool result with structured identity data
+        """
+        from_minion_id = args.get("_from_minion_id")
+
+        if not from_minion_id:
+            return self._err("Error: Unable to determine minion ID")
+
+        # Get session info for the calling minion
+        session = await self.system.session_coordinator.session_manager.get_session_info(
+            from_minion_id
+        )
+        if not session:
+            return self._err(f"Error: Session {from_minion_id} not found")
+
+        # Resolve parent name if exists
+        parent_name = None
+        if session.parent_overseer_id:
+            parent_session = await self.system.session_coordinator.session_manager.get_session_info(
+                session.parent_overseer_id
+            )
+            if parent_session:
+                parent_name = parent_session.name
+
+        # Resolve child names
+        child_names = []
+        for child_id in session.child_minion_ids or []:
+            child_session = await self.system.session_coordinator.session_manager.get_session_info(
+                child_id
+            )
+            if child_session:
+                child_names.append(child_session.name or child_id[:8])
+            else:
+                child_names.append(child_id[:8])
+
+        # Format creation timestamp
+        creation_timestamp = None
+        if session.created_at:
+            creation_timestamp = session.created_at.isoformat()
+
+        # Build comprehensive identity response (Option B from issue #320)
+        # Issue #349: is_minion removed - all sessions are minions
+        identity = {
+            # Basic identity
+            "minion_id": session.session_id,
+            "minion_name": session.name,
+            "minion_slug": session.slug,
+            "role": session.role or "",
+            # Hierarchy info
+            "is_overseer": session.is_overseer,
+            "overseer_level": session.overseer_level,
+            "parent_overseer_id": session.parent_overseer_id,
+            "parent_overseer_name": parent_name,
+            "child_minion_ids": session.child_minion_ids or [],
+            "child_minion_names": child_names,
+            # Capabilities
+            "capabilities": session.capabilities or [],
+            "expertise_score": session.expertise_score,
+            # Timestamps and location
+            "creation_timestamp": creation_timestamp,
+            "working_directory": session.working_directory,
+            # Legion/Project
+            "legion_id": session.project_id,
+            "session_id": session.session_id,
+            # Configuration
+            "permission_mode": session.current_permission_mode,
+            "model": session.config.get('model'),
+            "can_spawn_minions": session.can_spawn_minions,
+        }
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": str(identity)
+            }],
+            "is_error": False,
+            "identity": identity  # Also include as structured data for programmatic access
+        }
+
+    # ── Schedule Tool Handlers (Issue #495) ──
+
+    async def _handle_create_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle create_schedule tool call."""
+        from_minion_id = args.get("_from_minion_id")
+        if not from_minion_id:
+            return self._err("Error: Unable to determine minion ID")
+
+        name = args.get("name", "").strip()
+        cron_expression = args.get("cron_expression", "").strip()
+        prompt = args.get("prompt", "").strip()
+        script = args.get("script", "").strip()
+
+        if not name or not cron_expression:
+            return self._err("Error: name and cron_expression are required")
+
+        if prompt and script:
+            return self._err("Error: Provide exactly one of 'prompt' or 'script', not both")
+        if not prompt and not script:
+            return self._err("Error: Either 'prompt' or 'script' is required")
+
+        if script:
+            schedule_type = "script"
+            script_command = script
+            script_timeout_seconds = args.get("script_timeout_seconds", 60)
+            if isinstance(script_timeout_seconds, str):
+                try:
+                    script_timeout_seconds = int(script_timeout_seconds)
+                except ValueError:
+                    script_timeout_seconds = 60
+        else:
+            schedule_type = "prompt"
+            script_command = None
+            script_timeout_seconds = 60
+
+        # Get minion info for legion_id and name
+        session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+        if not session:
+            return self._err("Error: Could not find your session")
+
+        legion_id = session.project_id
+        if not legion_id:
+            return self._err("Error: You must be in a project/legion to create schedules")
+
+        reset_session = args.get("reset_session", False)
+        max_retries = args.get("max_retries", 3)
+        timeout_seconds = args.get("timeout_seconds", 3600)
+
+        # Convert string/int types if needed (MCP may pass as string)
+        if isinstance(reset_session, str):
+            reset_session = reset_session.lower() in ("true", "1", "yes")
+        if isinstance(max_retries, str):
+            try:
+                max_retries = int(max_retries)
+            except ValueError:
+                max_retries = 3
+        if isinstance(timeout_seconds, str):
+            try:
+                timeout_seconds = int(timeout_seconds)
+            except ValueError:
+                timeout_seconds = 3600
+
+        try:
+            schedule = await self.system.scheduler_service.create_schedule(
+                legion_id=legion_id,
+                minion_id=from_minion_id,
+                minion_name=session.name or from_minion_id[:8],
+                name=name,
+                cron_expression=cron_expression,
+                prompt=prompt,
+                reset_session=reset_session,
+                max_retries=max_retries,
+                timeout_seconds=timeout_seconds,
+                schedule_type=schedule_type,
+                script_command=script_command,
+                script_timeout_seconds=script_timeout_seconds,
+            )
+
+            from datetime import datetime
+            next_run_str = "N/A"
+            if schedule.next_run:
+                next_run_str = datetime.fromtimestamp(schedule.next_run).astimezone().strftime(
+                    "%Y-%m-%d %H:%M %Z"
+                )
+
+            if schedule_type == "script":
+                msg = (
+                    f"Schedule created successfully.\n\n"
+                    f"- **ID**: {schedule.schedule_id}\n"
+                    f"- **Name**: {schedule.name}\n"
+                    f"- **Type**: script\n"
+                    f"- **Cron**: {schedule.cron_expression}\n"
+                    f"- **Next run**: {next_run_str}\n"
+                    f"- **Status**: {schedule.status.value}"
+                )
+            else:
+                msg = (
+                    f"Schedule created successfully.\n\n"
+                    f"- **ID**: {schedule.schedule_id}\n"
+                    f"- **Name**: {schedule.name}\n"
+                    f"- **Cron**: {schedule.cron_expression}\n"
+                    f"- **Next run**: {next_run_str}\n"
+                    f"- **Status**: {schedule.status.value}"
+                )
+
+            return {
+                "content": [{"type": "text", "text": msg}],
+                "is_error": False,
+            }
+        except ValueError as e:
+            return self._err(f"Error: {e}")
+        except Exception as e:
+            return self._err(f"Unexpected error creating schedule: {e}")
+
+    async def _handle_list_schedules(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle list_schedules tool call."""
+        from_minion_id = args.get("_from_minion_id")
+        if not from_minion_id:
+            return self._err("Error: Unable to determine minion ID")
+
+        session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+        if not session or not session.project_id:
+            return self._err("Error: Could not find your session/legion")
+
+        status_filter = None
+        status_str = args.get("status", "").strip()
+        if status_str:
+            from backend.models.schedule_models import ScheduleStatus
+            try:
+                status_filter = ScheduleStatus(status_str)
+            except ValueError:
+                return self._err(f"Error: Invalid status '{status_str}'. Use 'active', 'paused', or 'cancelled'")
+
+        try:
+            schedules = await self.system.scheduler_service.list_schedules(
+                legion_id=session.project_id,
+                minion_id=from_minion_id,
+                status=status_filter,
+            )
+
+            if not schedules:
+                return {
+                    "content": [{"type": "text", "text": "No schedules found."}],
+                    "is_error": False,
+                }
+
+            from datetime import datetime
+            lines = [f"**Your Schedules** ({len(schedules)} total):\n"]
+            for s in schedules:
+                next_run_str = "N/A"
+                if s.next_run:
+                    next_run_str = datetime.fromtimestamp(s.next_run).astimezone().strftime(
+                        "%Y-%m-%d %H:%M %Z"
+                    )
+                lines.append(
+                    f"\n- **{s.name}** (ID: {s.schedule_id[:8]}...)\n"
+                    f"  - Cron: `{s.cron_expression}`\n"
+                    f"  - Status: {s.status.value}\n"
+                    f"  - Next run: {next_run_str}\n"
+                    f"  - Executions: {s.execution_count} (failures: {s.failure_count})"
+                )
+
+            return {
+                "content": [{"type": "text", "text": "".join(lines)}],
+                "is_error": False,
+            }
+        except Exception as e:
+            return self._err(f"Unexpected error listing schedules: {e}")
+
+    async def _handle_pause_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle pause_schedule tool call."""
+        from_minion_id = args.get("_from_minion_id")
+        schedule_id = args.get("schedule_id", "").strip()
+
+        if not from_minion_id:
+            return self._err("Error: Unable to determine minion ID")
+        if not schedule_id:
+            return self._err("Error: schedule_id is required")
+
+        # Validate ownership
+        schedule = await self.system.scheduler_service.get_schedule(schedule_id)
+        if not schedule:
+            return self._err(f"Error: Schedule {schedule_id} not found")
+        if schedule.minion_id != from_minion_id:
+            return self._err("Error: You can only pause your own schedules")
+
+        try:
+            await self.system.scheduler_service.pause_schedule(schedule_id)
+            return {
+                "content": [{"type": "text", "text": f"Schedule '{schedule.name}' paused successfully."}],
+                "is_error": False,
+            }
+        except ValueError as e:
+            return self._err(f"Error: {e}")
+        except Exception as e:
+            return self._err(f"Unexpected error pausing schedule: {e}")
+
+    async def _handle_resume_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle resume_schedule tool call."""
+        from_minion_id = args.get("_from_minion_id")
+        schedule_id = args.get("schedule_id", "").strip()
+
+        if not from_minion_id:
+            return self._err("Error: Unable to determine minion ID")
+        if not schedule_id:
+            return self._err("Error: schedule_id is required")
+
+        schedule = await self.system.scheduler_service.get_schedule(schedule_id)
+        if not schedule:
+            return self._err(f"Error: Schedule {schedule_id} not found")
+        if schedule.minion_id != from_minion_id:
+            return self._err("Error: You can only resume your own schedules")
+
+        try:
+            updated = await self.system.scheduler_service.resume_schedule(schedule_id)
+
+            from datetime import datetime
+            next_run_str = "N/A"
+            if updated.next_run:
+                next_run_str = datetime.fromtimestamp(updated.next_run).astimezone().strftime(
+                    "%Y-%m-%d %H:%M %Z"
+                )
+
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Schedule '{schedule.name}' resumed. Next run: {next_run_str}",
+                }],
+                "is_error": False,
+            }
+        except ValueError as e:
+            return self._err(f"Error: {e}")
+        except Exception as e:
+            return self._err(f"Unexpected error resuming schedule: {e}")
+
+    async def _handle_delete_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle delete_schedule tool call."""
+        from_minion_id = args.get("_from_minion_id")
+        schedule_id = args.get("schedule_id", "").strip()
+
+        if not from_minion_id:
+            return self._err("Error: Unable to determine minion ID")
+        if not schedule_id:
+            return self._err("Error: schedule_id is required")
+
+        schedule = await self.system.scheduler_service.get_schedule(schedule_id)
+        if not schedule:
+            return self._err(f"Error: Schedule {schedule_id} not found")
+        if schedule.minion_id != from_minion_id:
+            return self._err("Error: You can only delete your own schedules")
+
+        try:
+            await self.system.scheduler_service.delete_schedule(schedule_id)
+            return {
+                "content": [{"type": "text", "text": f"Schedule '{schedule.name}' deleted."}],
+                "is_error": False,
+            }
+        except ValueError as e:
+            return self._err(f"Error: {e}")
+        except Exception as e:
+            return self._err(f"Unexpected error deleting schedule: {e}")
+
+    async def _handle_update_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle update_schedule tool call."""
+        from_minion_id = args.get("_from_minion_id")
+        schedule_id = args.get("schedule_id", "").strip()
+
+        if not from_minion_id:
+            return self._err("Error: Unable to determine minion ID")
+        if not schedule_id:
+            return self._err("Error: schedule_id is required")
+
+        schedule = await self.system.scheduler_service.get_schedule(schedule_id)
+        if not schedule:
+            return self._err(f"Error: Schedule {schedule_id} not found")
+        if schedule.minion_id != from_minion_id:
+            return self._err("Error: You can only update your own schedules")
+
+        name = args.get("name")
+        prompt = args.get("prompt")
+        cron_expression = args.get("cron_expression")
+
+        if name is None and prompt is None and cron_expression is None:
+            return self._err("Error: Must provide at least one of: name, prompt, cron_expression")
+
+        if prompt is not None:
+            if schedule.schedule_type == "script":
+                if prompt.strip():
+                    return self._err("Error: This schedule is script-type; prompt cannot be set")
+                else:
+                    prompt = None  # empty/whitespace prompt is a no-op for script-type schedules
+            elif not prompt.strip():
+                return self._err("Error: Prompt cannot be empty")
+
+        fields: dict = {}
+        if name is not None:
+            fields["name"] = name
+        if prompt is not None:
+            fields["prompt"] = prompt
+        if cron_expression is not None:
+            fields["cron_expression"] = cron_expression
+
+        if not fields:
+            return self._err("Error: Must provide at least one of: name, prompt, cron_expression")
+
+        from backend.legion.scheduler_service import _ScheduleAutoDeletedError
+
+        try:
+            updated = await self.system.scheduler_service.update_schedule(schedule_id, **fields)
+        except _ScheduleAutoDeletedError:
+            return self._err(f"Schedule {schedule_id} was auto-deleted (repeat count exhausted)")
+        except ValueError as e:
+            return self._err(f"Error: {e}")
+
+        from datetime import datetime
+        next_run_str = "N/A"
+        if updated.next_run:
+            next_run_str = datetime.fromtimestamp(updated.next_run).astimezone().strftime(
+                "%Y-%m-%d %H:%M %Z"
+            )
+
+        updated_fields = ", ".join(fields.keys())
+        return {
+            "content": [{
+                "type": "text",
+                "text": (
+                    f"Schedule '{updated.name}' updated successfully.\n\n"
+                    f"Updated fields: {updated_fields}\n"
+                    f"- **ID**: {updated.schedule_id}\n"
+                    f"- **Name**: {updated.name}\n"
+                    f"- **Cron**: {updated.cron_expression}\n"
+                    f"- **Next run**: {next_run_str}\n"
+                    f"- **Status**: {updated.status.value}"
+                ),
+            }],
+            "is_error": False,
+        }
+
+    # ── Session Lifecycle Handlers (Issue #680) ──
+
+    async def _handle_restart_session(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle restart_session tool call."""
+        from backend.session_manager import SessionState
+
+        session_id = args.get("_from_minion_id")
+        reason = args.get("reason", "").strip()
+
+        if not session_id:
+            return self._err("Error: Unable to determine session ID")
+
+        # Check session exists and is active
+        session_info = await self.system.session_coordinator.session_manager.get_session_info(
+            session_id
+        )
+        if not session_info:
+            return self._err("Error: Session not found")
+        if session_info.state != SessionState.ACTIVE:
+            return self._err(f"Error: Session is not active (state: {session_info.state.value})")
+
+        # Prevent duplicate restarts
+        if session_id in self._pending_restarts:
+            return self._err("Error: Restart already in progress")
+
+        restart_id = str(uuid.uuid4())
+        self._pending_restarts.add(session_id)
+
+        legion_logger.info(
+            f"Session {session_id} restart initiated (restart_id={restart_id}, reason={reason})"
+        )
+
+        # Spawn background monitor task
+        t = asyncio.create_task(self._restart_monitor(session_id, restart_id, reason))
+        t.add_done_callback(task_done_log_exception)
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": (
+                    "Restart initiated. STOP all work immediately and wait for session restart. "
+                    "Do not execute any more tools or produce further output. "
+                    f"Restart ID: {restart_id}"
+                ),
+            }],
+            "is_error": False,
+        }
+
+    async def _restart_monitor(self, session_id: str, restart_id: str, reason: str) -> None:
+        """Background task that waits for session idle then triggers restart."""
+        timestamp = datetime.now(UTC).isoformat()
+        coordinator = self.system.session_coordinator
+
+        try:
+            # Poll is_processing every 2 seconds for up to 30 seconds
+            for _ in range(15):
+                await asyncio.sleep(2)
+
+                session_info = await coordinator.session_manager.get_session_info(session_id)
+                if not session_info:
+                    legion_logger.warning(f"Session {session_id} disappeared during restart monitor")
+                    return
+
+                if not session_info.is_processing:
+                    # Session is idle — proceed with restart
+                    permission_callback = None
+                    if self.system.permission_callback_factory:
+                        permission_callback = self.system.permission_callback_factory(session_id)
+
+                    success = await coordinator.restart_session(
+                        session_id, permission_callback
+                    )
+
+                    if success:
+                        legion_logger.info(
+                            f"Session {session_id} self-restarted successfully "
+                            f"(restart_id={restart_id}, reason={reason})"
+                        )
+
+                        # Broadcast poll event
+                        self.system.broadcast_ui_event({
+                            "type": "session_self_restart",
+                            "data": {
+                                "session_id": session_id,
+                                "restart_id": restart_id,
+                                "reason": reason,
+                                "timestamp": timestamp,
+                            },
+                        })
+
+                        # Queue continuation message
+                        continuation = (
+                            "Your session has been restarted successfully. "
+                            "Continue with your previous work."
+                        )
+                        if reason:
+                            continuation += f" Restart reason: {reason}"
+
+                        await coordinator.enqueue_message(
+                            session_id=session_id,
+                            content=continuation,
+                            reset_session=False,
+                        )
+                    else:
+                        legion_logger.error(
+                            f"Session {session_id} restart failed (restart_id={restart_id})"
+                        )
+
+                    return
+
+            # Timeout — session still processing after 30 seconds
+            legion_logger.warning(
+                f"Session {session_id} restart timed out (restart_id={restart_id})"
+            )
+            # Issue #1779: system-generated warning, not a user message.
+            await coordinator.send_message(
+                session_id,
+                "Session restart timed out after 30 seconds — the session was still processing. "
+                "If you still need to restart, call restart_session() again.",
+                inject_timestamp=False,
+            )
+
+        except Exception as e:
+            legion_logger.error(
+                f"Restart monitor unhandled error for session {session_id}: {e}", exc_info=True
+            )
+            self.system.broadcast_ui_event({
+                "type": "session_restart_error",
+                "data": {
+                    "session_id": session_id,
+                    "restart_id": restart_id,
+                    "error": str(e),
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+            })
+        finally:
+            self._pending_restarts.discard(session_id)
+
+    # ── Deferred Task Delivery Handler (Issue #1114) ──
+
+    async def _handle_queue_task(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle queue_task tool call — enqueue a prompt for deferred delivery."""
+        session_id = args.get("session_id", "").strip()
+        content = args.get("content", "").strip()
+        reset_session = bool(args.get("reset_session", False))
+
+        if not session_id:
+            return self._err("Error: session_id is required")
+        if not content:
+            return self._err("Error: content is required")
+
+        try:
+            item = await self.system.session_coordinator.enqueue_message(
+                session_id=session_id,
+                content=content,
+                reset_session=reset_session,
+            )
+            queue_id = item["queue_id"]
+            position = item["position"]
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Task queued for session {session_id} (queue_id={queue_id}, position={position})",
+                }],
+                "queue_id": queue_id,
+                "position": position,
+                "is_error": False,
+            }
+        except ValueError as e:
+            return self._err(f"Error: {e}")
+        except Exception as e:
+            legion_logger.exception(f"Unexpected error in queue_task for session {session_id}: {e}")
+            return self._err(f"Unexpected error queuing task: {e}")

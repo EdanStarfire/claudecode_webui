@@ -1,0 +1,5816 @@
+"""
+Session Coordinator for Claude Code WebUI
+
+Integrates session management, data storage, and SDK interaction
+into a unified system for managing Claude Code sessions.
+"""
+
+import asyncio
+import gc
+import json
+import logging
+import os
+import re
+import secrets
+import shutil
+from collections.abc import Callable
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from backend.docker_utils import cleanup_session_tmp
+from backend.legion.minion_system_prompts import get_legion_guide_only
+from shared.logging_config import get_logger
+
+from .claude_sdk import ClaudeSDK
+from .config_resolution import resolve_effective_config
+from .data_storage import DataStorageManager
+from .hooks.pretooluse_handler import InternalPermissionHandler
+from .litellm_proxy_manager import make_model_alias
+from .mcp_config_manager import McpServerType
+from .message_parser import MessageParser, MessageProcessor
+from .models.messages import (
+    DisplayProjection,
+    PermissionInfo,
+    StoredMessage,
+    ToolCall,
+    ToolDisplayInfo,
+    ToolState,
+    legacy_to_stored,
+)
+from .models.permission_mode import PermissionMode
+from .oauth_refresh_manager import OAuthRefreshManager
+from .project_manager import ProjectInfo, ProjectManager
+from .queue_manager import QueueManager
+from .queue_processor import QueueProcessor
+from .session_config import SessionConfig
+from .session_manager import STOPPED_STATES, VALID_MODELS, SessionManager, SessionState
+from .task_registry import TASK_LIFECYCLE_SUBTYPES, TaskLegRegistry
+from .task_utils import task_done_log_exception
+from .timestamp_injection import maybe_inject_timestamp
+from .timestamp_utils import get_unix_timestamp
+
+# Get specialized logger for coordinator actions
+coord_logger = get_logger('coordinator', category='COORDINATOR')
+# Keep standard logger for errors
+logger = logging.getLogger(__name__)
+
+# Issue #871: Docker wrapper startup noise filtering
+_DOCKER_WRAPPER_PREFIX = '[claude-docker] '
+_DOCKER_ERROR_KEYWORDS = ('exited with code', 'was killed', 'crashed')
+
+# Issue #1375: Regex for ${secret:<name>} references in MCP server header values.
+_SECRET_REF_RE = re.compile(r"\$\{secret:([^}]+)\}")
+
+# Issue #1746: stored "_type" discriminator (reload path, via StoredMessage)
+# for the four SDK Task lifecycle frame types — feeding TaskLegRegistry.
+# The parsed-"subtype" form (live path) is TASK_LIFECYCLE_SUBTYPES, imported
+# from task_registry so the two modules share one definition.
+_TASK_LIFECYCLE_STORED_TYPES = frozenset(
+    {"TaskStartedMessage", "TaskProgressMessage", "TaskNotificationMessage", "TaskUpdatedMessage"}
+)
+
+# Resource format groups for filtering
+_TEXT_RESOURCE_FORMATS = {
+    "py", "js", "ts", "json", "md", "txt", "yaml", "yml",
+    "toml", "cfg", "ini", "log", "csv", "xml", "html", "css",
+    "sh", "bash", "rs", "go", "java", "c", "cpp", "h", "rb",
+    "php", "sql", "r", "swift", "kt",
+}
+
+# Issue #1660: MCP config fields that the spawn path snapshots into session.config.
+# These are the only fields subject to stale-snapshot pruning.
+_MCP_INHERITABLE_FIELDS = ("mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config")
+
+
+def _mcp_field_equal(field: str, a, b) -> bool:
+    """Compare an MCP config field value, treating mcp_server_ids order-insensitively.
+
+    None and [] are treated as distinct: None means "inherit from chain", [] means
+    "explicitly no servers". Only a list-vs-list comparison uses set equality.
+    """
+    if field == "mcp_server_ids":
+        if (a is None) != (b is None):
+            return False
+        return set(a or []) == set(b or [])
+    return a == b
+
+
+def _apply_resource_filters(
+    resources: list[dict],
+    search: str | None,
+    format_filter: str | None,
+    sort: str,
+) -> list[dict]:
+    """Filter and sort a list of resource dicts. Returns a new list."""
+    result = list(resources)
+
+    if search:
+        q = search.lower()
+        result = [
+            r
+            for r in result
+            if q in (r.get("title") or "").lower() or q in (r.get("original_name") or "").lower()
+        ]
+
+    if format_filter:
+        if format_filter == "image":
+            result = [r for r in result if r.get("is_image")]
+        elif format_filter == "video":
+            result = [r for r in result if r.get("is_video")]
+        elif format_filter == "text":
+            result = [r for r in result if r.get("format") in _TEXT_RESOURCE_FORMATS]
+        else:
+            result = [r for r in result if r.get("format") == format_filter]
+
+    if sort == "newest":
+        result.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+    elif sort == "oldest":
+        result.sort(key=lambda x: x.get("timestamp", 0))
+    elif sort == "name-asc":
+        result.sort(key=lambda x: (x.get("title") or x.get("original_name") or "").lower())
+    elif sort == "name-desc":
+        result.sort(
+            key=lambda x: (x.get("title") or x.get("original_name") or "").lower(),
+            reverse=True,
+        )
+
+    return result
+
+
+def _group_resources_by_filename(resources: list[dict]) -> list[dict]:
+    """Group resources into versions by original_name (case-insensitive).
+
+    Issue #1680: re-registering a resource under the same filename represents
+    an update, not a new independent entry. Groups by the full filename
+    (including extension) so "report.md" and "report.txt" stay separate.
+
+    Each returned item is the group's latest entry (by timestamp), augmented
+    with `version_count`. Groups with more than one entry also carry a
+    `versions` list (newest-first, each entry tagged with `version_number`,
+    oldest = 1). Single-entry groups pass through with only `version_count=1`.
+    """
+    groups: dict[str, list[dict]] = {}
+    for r in resources:
+        key = (r.get("original_name") or "").lower()
+        groups.setdefault(key, []).append(r)
+
+    result = []
+    for entries in groups.values():
+        ordered = sorted(entries, key=lambda x: x.get("timestamp", 0))
+        version_count = len(ordered)
+        versions = [dict(entry, version_number=i + 1) for i, entry in enumerate(ordered)]
+        versions.reverse()  # newest first
+
+        latest = dict(versions[0])
+        latest["version_count"] = version_count
+        if version_count > 1:
+            latest["versions"] = versions
+        result.append(latest)
+
+    return result
+
+
+def _normalize_result_usage(
+    usage: dict | None,
+    model_usage: dict | None,
+) -> tuple[dict, float | None]:
+    """Return (snake_case usage dict, aggregate cost from model_usage or None).
+
+    Prefers SDK 'usage' when it carries non-zero token counts. Otherwise
+    aggregates per-model 'model_usage' entries (camelCase keys, keyed by
+    model name) into the snake_case shape that AnalyticsStore.record_turn
+    already understands.
+    """
+    snake_keys = (
+        "input_tokens",
+        "output_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+    )
+    if isinstance(usage, dict) and any(int(usage.get(k) or 0) for k in snake_keys):
+        return dict(usage), None
+
+    if not isinstance(model_usage, dict) or not model_usage:
+        return (dict(usage) if isinstance(usage, dict) else {}), None
+
+    agg = {k: 0 for k in snake_keys}
+    cost = 0.0
+    has_cost = False
+    for entry in model_usage.values():
+        if not isinstance(entry, dict):
+            continue
+        agg["input_tokens"] += int(entry.get("inputTokens") or 0)
+        agg["output_tokens"] += int(entry.get("outputTokens") or 0)
+        agg["cache_creation_input_tokens"] += int(entry.get("cacheCreationInputTokens") or 0)
+        agg["cache_read_input_tokens"] += int(entry.get("cacheReadInputTokens") or 0)
+        c = entry.get("costUSD")
+        if c is not None:
+            cost += float(c)
+            has_cost = True
+    return agg, (cost if has_cost else None)
+
+
+def _tail_read_lines(path: "Path", limit: int) -> list[str]:
+    """Read the last `limit` lines from a file efficiently using a deque."""
+    from collections import deque
+
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return list(deque(f, maxlen=limit))
+    except OSError:
+        return []
+
+
+def _count_file_lines(path: "Path") -> int:
+    """Count total lines in a file efficiently."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return sum(1 for _ in f)
+    except OSError:
+        return 0
+
+
+def _render_inject_file(placeholder: str, fmt: str, key_path: str | None) -> str:
+    """Render placeholder into an inject_file's content.
+
+    Issue #1134: builds a formatted file containing only the placeholder string
+    so the agent never sees the real credential value.
+    """
+    if fmt == "raw" or not key_path:
+        return placeholder
+
+    keys = key_path.split(".")
+
+    if fmt == "json":
+        import json as _json
+        obj: dict = {}
+        cur = obj
+        for key in keys[:-1]:
+            cur[key] = {}
+            cur = cur[key]
+        cur[keys[-1]] = placeholder
+        return _json.dumps(obj, indent=2)
+
+    if fmt == "yaml":
+        # Minimal YAML without external dependencies.
+        lines = []
+        indent = 0
+        for key in keys[:-1]:
+            lines.append("  " * indent + f"{key}:")
+            indent += 1
+        lines.append("  " * indent + f"{keys[-1]}: {placeholder}")
+        return "\n".join(lines) + "\n"
+
+    if fmt == "toml":
+        section = ".".join(keys[:-1])
+        last = keys[-1]
+        if section:
+            return f'[{section}]\n{last} = "{placeholder}"\n'
+        return f'{last} = "{placeholder}"\n'
+
+    return placeholder
+
+
+_VALID_TIERS: frozenset[str] = frozenset({"haiku", "sonnet", "opus"})
+
+
+def _all_tier_fields_set(cfg) -> bool:
+    """Return True iff all 6 per-tier id fields and provider_default_tier are non-None."""
+    return all((
+        cfg.provider_haiku_catalog_id, cfg.provider_haiku_model_id,
+        cfg.provider_sonnet_catalog_id, cfg.provider_sonnet_model_id,
+        cfg.provider_opus_catalog_id, cfg.provider_opus_model_id,
+        cfg.provider_default_tier,
+    ))
+
+
+def _build_model_map(cfg) -> dict[str, str]:
+    """Build {tier: alias, default: alias} from per-tier config fields."""
+    haiku_alias  = make_model_alias(cfg.provider_haiku_catalog_id,  cfg.provider_haiku_model_id)
+    sonnet_alias = make_model_alias(cfg.provider_sonnet_catalog_id, cfg.provider_sonnet_model_id)
+    opus_alias   = make_model_alias(cfg.provider_opus_catalog_id,   cfg.provider_opus_model_id)
+    tier_map = {"haiku": haiku_alias, "sonnet": sonnet_alias, "opus": opus_alias}
+    tier_map["default"] = tier_map[cfg.provider_default_tier]
+    return tier_map
+
+
+def _resolve_analytics_model_label(cfg) -> str | None:
+    """Return the model label to write to analytics.
+
+    Priority:
+      1. Single provider-catalog routing → catalog alias.
+      2. Per-tier provider-catalog routing → default-tier alias.
+      3. SDK model field (default for non-catalog sessions).
+    """
+    if cfg.provider_catalog_id and cfg.provider_model_id:
+        return make_model_alias(cfg.provider_catalog_id, cfg.provider_model_id)
+    if _all_tier_fields_set(cfg):
+        tier = cfg.provider_default_tier
+        if tier not in _VALID_TIERS:
+            return cfg.model
+        catalog_id = getattr(cfg, f"provider_{tier}_catalog_id")
+        model_id = getattr(cfg, f"provider_{tier}_model_id")
+        return make_model_alias(catalog_id, model_id)
+    return cfg.model
+
+
+class SessionCoordinator:
+    """
+    Coordinates Claude Code sessions with integrated storage and SDK management.
+
+    This is the main orchestrator that ties together:
+    - Session lifecycle management
+    - Persistent data storage
+    - Claude Code SDK integration
+    - Message processing and parsing
+    - Real-time communication pipeline
+    """
+
+    def __init__(
+        self,
+        data_dir: Path = None,
+        experimental: bool = False,
+        litellm_proxy_manager=None,
+        host: str = "127.0.0.1",
+        port: int = 8000,
+    ):
+        self.data_dir = data_dir or Path("data")
+        self.experimental = experimental
+        # Issue #1789: the main app's own bind host/port — used by OAuthCallbackListenerManager
+        # to bind on the same host, and by McpConfigManager's custom-callback conflict checks.
+        self.host = host
+        self.port = port
+        self.session_manager = SessionManager(self.data_dir)
+        self.project_manager = ProjectManager(self.data_dir)
+        self.message_parser = MessageParser()
+        self.message_processor = MessageProcessor(self.message_parser)
+
+        # Credential vault for proxy credential management (issue #1053)
+        from backend.credential_vault import CredentialVault
+        self.credential_vault = CredentialVault(self.data_dir)
+
+        # Template manager for minion templates
+        from backend.template_manager import TemplateManager
+        self.template_manager = TemplateManager(self.data_dir)
+
+        # Profile manager for composable session config profiles (issue #1062)
+        from backend.profile_manager import ProfileManager
+        self.profile_manager = ProfileManager(self.data_dir)
+
+        # MCP config manager for global MCP server configurations (issue #676)
+        from backend.mcp_config_manager import McpConfigManager
+        self.mcp_config_manager = McpConfigManager(self.data_dir)
+
+        # Provider catalog store — data/providers.json (issue #1465)
+        from backend.provider_catalog import ProviderCatalogStore
+        self.provider_catalog_store = ProviderCatalogStore(self.data_dir)
+
+        # OAuth 2.1 flow manager for MCP servers (issue #813)
+        from backend.oauth_manager import OAuthFlowManager
+        self.oauth_manager = OAuthFlowManager(self.data_dir)
+
+        # Active SDK instances
+        self._active_sdks: dict[str, ClaudeSDK] = {}
+        self._storage_managers: dict[str, DataStorageManager] = {}
+
+        # Issue #976/#989: OAuth token refresh lifecycle (extracted to OAuthRefreshManager)
+        self.oauth_refresh_manager = OAuthRefreshManager(self.oauth_manager)
+
+        # Issue #1484: shared-connection MCP manager for opt-in passthrough configs.
+        # Receives credential_vault so ${secret:...} refs in shared configs are resolved
+        # to plaintext inline (no Docker proxy sidecar in the shared-connection egress path).
+        from backend.mcp.shared_connection_manager import SharedMcpConnectionManager
+        self.shared_mcp_manager = SharedMcpConnectionManager(
+            self.oauth_manager, self.oauth_refresh_manager, self.credential_vault,
+        )
+
+        async def _cfg_lookup(server_id: str):
+            return await self.mcp_config_manager.get_config(server_id)
+
+        self.shared_mcp_manager.set_cfg_lookup(_cfg_lookup)
+
+        # Issue #1800: one-shot connection lifecycle for non-shared MCP configs'
+        # "Test connection" affordance. Independent of shared_mcp_manager — see
+        # src/mcp/oneshot_connection.py module docstring for why.
+        from backend.mcp.oneshot_connection import McpOneshotConnector
+        self.mcp_oneshot_connector = McpOneshotConnector(self.oauth_manager, self.credential_vault)
+
+        # Issue #1789: custom OAuth callback path/port listeners for Shared MCP servers.
+        # Broadcast callback (UI notification) is injected later via set_broadcast_callback,
+        # same pattern as oauth_refresh_manager below.
+        from backend.oauth_callback_listener_manager import OAuthCallbackListenerManager
+        self.oauth_callback_listener_manager = OAuthCallbackListenerManager(
+            self.oauth_manager, host=self.host,
+        )
+
+        # Issue #1387: Proactive vault OAuth2 secret refresh
+        from .vault_refresh_manager import VaultRefreshManager
+        self.vault_refresh_manager = VaultRefreshManager(self.credential_vault)
+
+        # Event callbacks
+        self._message_callbacks: dict[str, list[Callable]] = {}
+        self._error_callbacks: dict[str, list[Callable]] = {}
+        self._state_change_callbacks: list[Callable] = []
+        self._session_reset_callbacks: list[Callable] = []
+        self._tool_call_broadcast_callbacks: list[Callable] = []
+
+
+        # Track applied permission updates for state management
+        self._permission_updates: dict[str, list[dict]] = {}  # session_id -> list of applied updates
+
+        self.litellm_proxy_manager = litellm_proxy_manager
+
+        # Display projections per session (Issue #310)
+        # Tracks tool lifecycle state and computes display metadata for frontend
+        self._display_projections: dict[str, DisplayProjection] = {}
+
+        # Audit writer (set after construction via set_audit_writer; optional)
+        self._audit_writer = None
+
+        # SDK factory for dependency injection (enables MockClaudeSDK for testing)
+        self._sdk_factory = self._default_sdk_factory
+
+        # Issue #899: Rate limit state accumulator (rate_limit_type -> {used_percentage, resets_at})
+        self._rate_limits_state: dict[str, dict] = {}
+        self._rate_limit_broadcast_callback: Callable | None = None
+
+        # Issue #894: Track active api_retry sequence per session (session_id -> retry_message_id)
+        self._retry_sequences: dict[str, str] = {}
+
+        # Issue #324: Active tool calls per session for unified ToolCall lifecycle
+        # Maps session_id -> {tool_use_id: ToolCall}
+        self._active_tool_calls: dict[str, dict[str, ToolCall]] = {}
+
+        # Issue #1746: Per-session background-agent (Task) leg registry.
+        # Lazily hydrated from stored messages on first access, then kept live
+        # via the four Task lifecycle frames as they stream in.
+        self._task_leg_registries: dict[str, TaskLegRegistry] = {}
+
+        # Issue #858: Per-session event notified on every create_tool_call(), allowing
+        # permission callbacks to wait efficiently instead of polling.
+        self._tool_call_events: dict[str, asyncio.Event] = {}
+
+        # Issue #1694: Per-session event + set of emitted message_ids, notified whenever
+        # an assistant message envelope is appended to the session queue. Lets the
+        # permission callback wait for "this tool's owning message was queued" before
+        # appending the awaiting_permission update, so the frontend always sees the
+        # assistant bubble ahead of its permission prompt. A dedicated primitive (not a
+        # reuse of _tool_call_events) to avoid coupling two unrelated signals.
+        self._message_emitted_events: dict[str, asyncio.Event] = {}
+        self._emitted_message_ids: dict[str, set[str]] = {}
+
+        # Issue #403: Uploaded file paths per session for auto-approve Read permissions
+        # Maps session_id -> set of absolute file paths
+        self._uploaded_file_paths: dict[str, set[str]] = {}
+
+        # Permission callback factory (injected by web_server)
+        # Allows legion components to create permission callbacks on-demand
+        self._permission_callback_factory: Callable[[str], Callable] | None = None
+
+        # Message callback registrar (injected by web_server)
+        # Allows legion components to register WebSocket message callbacks
+        self._message_callback_registrar: Callable[[str], None] | None = None
+
+        # Initialize Legion multi-agent system
+        from backend.config_manager import load_config
+        from backend.legion_system import LegionSystem
+        # Create a dummy storage manager for now (legion will create its own per-legion storage)
+        dummy_storage = DataStorageManager(self.data_dir / "legion_temp")
+        _app_config = load_config()
+        self.legion_system = LegionSystem(
+            session_coordinator=self,
+            data_storage_manager=dummy_storage,
+            template_manager=self.template_manager,
+            default_max_minions=_app_config.legion.max_concurrent_minions,
+            history_retention=_app_config.history_retention,
+        )
+
+        # Issue #500: Message queue system
+        self.queue_manager = QueueManager()
+        self.queue_processor = QueueProcessor(self)
+
+        # Issue #1125: Per-session token usage analytics (injected by web_server via set_analytics_store)
+        self.analytics_store = None
+        # Per-session turn sequence counters (rehydrated lazily from DB on first use)
+        self._turn_seq_by_session: dict[str, int] = {}
+        # Callback for broadcasting usage_updated events (injected by web_server)
+        self._usage_broadcast_callback: Callable[[str, dict], None] | None = None
+
+        # Issue #404: Resource MCP tools for displaying resources in task panel
+        # Callback for broadcasting resource_registered events will be set by web_server
+        from backend.mcp.resource_mcp_tools import ResourceMCPTools
+        self._resource_broadcast_callback: Callable[[str, dict], None] | None = None
+        # Callback for broadcasting queue_update events (enqueued) will be set by web_server
+        self._enqueue_broadcast_callback: Callable[[str, str, dict], Any] | None = None
+        self.resource_mcp_tools = ResourceMCPTools(
+            session_coordinator=self,
+            broadcast_callback=self._broadcast_resource_registered
+        )
+
+        # Issue #1530: Links MCP tools for registering persistent named links
+        # Callback for broadcasting link_registered events will be set by web_server
+        from backend.mcp.links_mcp_tools import LinksMCPTools
+        self._link_broadcast_callback: Callable[[str, dict], None] | None = None
+        self.links_mcp_tools = LinksMCPTools(
+            session_coordinator=self,
+            broadcast_callback=self._broadcast_link_registered
+        )
+
+    @staticmethod
+    def _default_sdk_factory(session_id, working_directory, **kwargs):
+        """Default factory that strips session_name before calling ClaudeSDK."""
+        kwargs.pop("session_name", None)
+        return ClaudeSDK(session_id=session_id, working_directory=working_directory, **kwargs)
+
+    def set_sdk_factory(self, factory):
+        """Set custom SDK factory for testing (e.g., MockClaudeSDK)."""
+        self._sdk_factory = factory
+
+    def set_analytics_store(self, store) -> None:
+        """Inject the AnalyticsStore instance (issue #1125)."""
+        self.analytics_store = store
+
+    def set_audit_writer(self, writer) -> None:
+        """Wire an AuditWriter into all existing and future storage managers."""
+        self._audit_writer = writer
+        for session_id, manager in list(self._storage_managers.items()):
+            self._apply_audit_writer(manager, session_id)
+
+    def _apply_audit_writer(self, storage_manager, session_id: str) -> None:
+        """Configure audit callbacks on a newly created DataStorageManager."""
+        if self._audit_writer is None:
+            return
+        session = self.session_manager._active_sessions.get(session_id)
+        project_id = session.project_id if session else None
+        storage_manager._session_id = session_id
+        storage_manager._project_id = project_id
+        if self._audit_writer.on_message_append not in storage_manager.on_append:
+            storage_manager.on_append.append(self._audit_writer.on_message_append)
+
+    async def _get_mcp_sdk_config(
+        self, mcp_cfg, name_to_placeholder: "dict[str, str] | None" = None
+    ) -> dict:
+        """Return SDK config for an MCP server, injecting OAuth Bearer token when applicable.
+
+        For HTTP/SSE servers with oauth_enabled=True, reads the stored encrypted token
+        and adds an Authorization: Bearer header. Replaces direct mcp_cfg.to_sdk_config()
+        calls so that OAuth-authenticated servers always have fresh credentials injected.
+
+        Issue #976: Proactively refreshes tokens that are expired or expiring within
+        _OAUTH_REFRESH_BUFFER_SECONDS. On refresh failure the original token is still
+        injected (if present) so mid-session MCP calls have the best available credentials.
+
+        Issue #1375: name_to_placeholder maps secret name → CC_SECRET_* placeholder.
+        After OAuth injection, any ${secret:<name>} references in header values are
+        replaced with the corresponding placeholder for HTTP/SSE servers.
+        """
+        # Issue #1484: route shared-connection configs through the in-process proxy.
+        if getattr(mcp_cfg, "shared_connection", False):
+            await self.shared_mcp_manager.get_or_open(mcp_cfg)
+            from backend.mcp.proxy_server_factory import build_proxy_server
+            return build_proxy_server(mcp_cfg, self.shared_mcp_manager)
+
+        import time as _time
+
+        config = mcp_cfg.to_sdk_config()
+        # Issue #1425: detect ${secret:...} placeholder in Authorization header before OAuth injection.
+        orig_headers = config.get("headers") or {}
+        orig_auth = orig_headers.get("Authorization", "")
+        auth_has_placeholder = bool(_SECRET_REF_RE.search(orig_auth))
+        if mcp_cfg.oauth_enabled and mcp_cfg.type in (McpServerType.SSE, McpServerType.HTTP):
+            if auth_has_placeholder:
+                coord_logger.info(
+                    "[MCP config] server=%s oauth_enabled=True but Authorization header "
+                    "contains ${secret:...} — preserving placeholder, proxy will inject from vault.",
+                    mcp_cfg.id,
+                )
+            else:
+                try:
+                    token = await self.oauth_manager.get_stored_token(mcp_cfg.id)
+                    if token:
+                        store = self.oauth_manager.get_token_store(mcp_cfg.id)
+                        expiry = await store.get_token_expiry()
+                        now = _time.time()
+
+                        # Issue #976: Attempt refresh if token is expired or expiring soon
+                        if expiry is not None and expiry < (now + OAuthRefreshManager.REFRESH_BUFFER_SECONDS):
+                            seconds_until_expiry = expiry - now
+                            if seconds_until_expiry < 0:
+                                logger.warning(
+                                    "OAuth token for MCP server %s expired %.0f s ago — attempting refresh.",
+                                    mcp_cfg.id,
+                                    -seconds_until_expiry,
+                                )
+                            else:
+                                logger.info(
+                                    "OAuth token for MCP server %s expires in %.0f s — refreshing proactively.",
+                                    mcp_cfg.id,
+                                    seconds_until_expiry,
+                                )
+                            new_token = await self.oauth_refresh_manager.refresh_token(mcp_cfg.id)
+                            if new_token:
+                                token = new_token
+                            else:
+                                logger.warning(
+                                    "OAuth token refresh failed for MCP server %s. "
+                                    "Injecting best available token — re-authenticate via the UI if calls fail.",
+                                    mcp_cfg.id,
+                                )
+
+                        headers = dict(config.get("headers") or {})
+                        headers["Authorization"] = f"Bearer {token.access_token}"
+                        config["headers"] = headers
+                        coord_logger.debug(
+                            "[MCP config] server=%s oauth=True token_present=True expiry=%s",
+                            mcp_cfg.id,
+                            int(expiry) if expiry is not None else None,
+                        )
+                    else:
+                        coord_logger.debug(
+                            "[MCP config] server=%s oauth=True token=None (not authenticated) config=%s",
+                            mcp_cfg.id,
+                            config,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to inject OAuth token for MCP server %s: %s", mcp_cfg.id, exc
+                    )
+        else:
+            coord_logger.debug(
+                "[MCP config] server=%s oauth=False config=%s", mcp_cfg.id, config
+            )
+        # Issue #1375: Substitute ${secret:<name>} references in HTTP/SSE header values.
+        if name_to_placeholder and mcp_cfg.type in (McpServerType.SSE, McpServerType.HTTP):
+            headers = dict(config.get("headers") or {})
+            if headers:
+                headers = self._substitute_secret_refs(headers, name_to_placeholder, mcp_cfg.name)
+                config["headers"] = headers
+        return config
+
+    async def _generate_secret_placeholders(
+        self,
+        session_id: str,
+        session_info: Any,
+        resolved_metas: list[dict],
+    ) -> dict[str, str]:
+        """Generate CC_SECRET_* placeholders for assigned secrets and persist them.
+
+        Returns name_to_placeholder (name → placeholder) for MCP header substitution.
+        Stores the inverse (placeholder → name) on session_info.secret_placeholders.
+        """
+        new_placeholders: dict[str, str] = {}
+        name_to_placeholder: dict[str, str] = {}
+        for secret in resolved_metas:
+            name = secret.get("name", "unnamed")
+            placeholder = f"CC_SECRET_{name}_{secrets.token_hex(4)}"
+            new_placeholders[placeholder] = name
+            name_to_placeholder[name] = placeholder
+        session_info.secret_placeholders = new_placeholders
+        await self.session_manager._persist_session_state(session_id)
+        coord_logger.info(
+            "Generated %d placeholder(s) for session %s: names=%s",
+            len(new_placeholders),
+            session_id,
+            list(new_placeholders.values()),
+        )
+        return name_to_placeholder
+
+    def _substitute_secret_refs(
+        self,
+        headers: dict[str, str],
+        name_to_placeholder: dict[str, str],
+        mcp_server_name: str,
+    ) -> dict[str, str]:
+        """Replace ${secret:<name>} in header values with session-scoped CC_SECRET_* placeholders.
+
+        Raises ValueError (fail closed) when a referenced secret is not assigned/known.
+        Header values with no references are passed through unchanged.
+        """
+        out: dict[str, str] = {}
+        for hname, hval in headers.items():
+            new_val = hval
+            for match in _SECRET_REF_RE.finditer(hval):
+                name = match.group(1).strip()
+                placeholder = name_to_placeholder.get(name)
+                if not placeholder:
+                    raise ValueError(
+                        f"MCP server '{mcp_server_name}' header '{hname}' references "
+                        f"secret '{name}' which is not assigned to this session "
+                        f"(or does not exist in the vault)."
+                    )
+                new_val = new_val.replace(match.group(0), placeholder)
+            out[hname] = new_val
+        return out
+
+    async def initialize(self):
+        """Initialize the session coordinator"""
+        try:
+            await self.session_manager.initialize()
+            await self.project_manager.initialize()
+
+            # Load templates from disk
+            await self.template_manager.load_templates()
+            # Create default templates if none exist
+            await self.template_manager.create_default_templates()
+            coord_logger.info("Loaded minion templates")
+
+            # Load configuration profiles from disk (issue #1062).
+            # Pass template_manager so the isolation->features field migration
+            # (issue #1707) can scan already-loaded templates for references.
+            await self.profile_manager.load_profiles(template_manager=self.template_manager)
+            coord_logger.info("Loaded configuration profiles")
+            await self._migrate_stale_mcp_snapshots()  # issue #1660
+
+            # Load global MCP server configs (issue #676)
+            await self.mcp_config_manager.load_configs()
+            coord_logger.info("Loaded global MCP server configs")
+
+            # Load provider catalog from data/providers.json (issue #1465)
+            await self.provider_catalog_store.load()
+            coord_logger.info("Loaded provider catalog")
+
+            # Rebuild capability registry from persisted session data (if LegionSystem is initialized)
+            if hasattr(self, 'legion_system') and self.legion_system is not None:
+                await self.legion_system.legion_coordinator.rebuild_capability_registry()
+
+            # Register callback to receive session manager state changes
+            self.session_manager.add_state_change_callback(self._on_session_manager_state_change)
+
+            # Initialize storage managers for all existing sessions
+            await self._initialize_existing_session_storage()
+
+            # Issue #500: Load message queues for all existing sessions
+            await self._initialize_queues()
+
+            # Validate and cleanup orphaned project/session references (issue #63)
+            await self._validate_and_cleanup_projects()
+
+            # Load and start scheduler service (issue #495)
+            if hasattr(self, 'legion_system') and self.legion_system is not None:
+                await self.legion_system.scheduler_service.load_all_schedules()
+                await self.legion_system.scheduler_service.start()
+                await self.legion_system.history_rotator.start()
+
+            coord_logger.info("Session coordinator initialized successfully")
+        except Exception:
+            logger.exception("Failed to initialize session coordinator")
+            raise
+
+    async def _initialize_existing_session_storage(self):
+        """Initialize storage managers for all existing sessions"""
+        try:
+            # Get all existing sessions
+            sessions = await self.session_manager.list_sessions()
+            # logger.info(f"Initializing storage managers for {len(sessions)} existing sessions")
+
+            for session in sessions:
+                session_id = session.session_id
+                if session_id not in self._storage_managers:
+                    # Create storage manager for this session
+                    session_dir = await self.session_manager.get_session_directory(session_id)
+                    storage_manager = DataStorageManager(session_dir)
+                    await storage_manager.initialize()
+                    self._storage_managers[session_id] = storage_manager
+                    self._apply_audit_writer(storage_manager, session_id)
+                    # logger.info(f"Initialized storage manager for session {session_id}")
+
+        except Exception:
+            logger.exception("Failed to initialize storage managers for existing sessions")
+            # Don't raise - this shouldn't block coordinator initialization
+
+    async def _initialize_queues(self):
+        """Load message queues for all existing sessions on startup."""
+        try:
+            sessions = await self.session_manager.list_sessions()
+            for session in sessions:
+                session_id = session.session_id
+                session_dir = await self.session_manager.get_session_directory(session_id)
+                if session_dir:
+                    await self.queue_manager.load_queue(session_id, session_dir)
+                    # Auto-start processor if there are pending items
+                    if self.queue_manager.get_pending_count(session_id) > 0:
+                        queue_paused = getattr(session, 'queue_paused', False)
+                        if not queue_paused:
+                            self.queue_processor.ensure_running(session_id)
+        except Exception:
+            logger.exception("Failed to initialize queues")
+
+    # =========================================================================
+    # Message Queue Operations (Issue #500)
+    # =========================================================================
+
+    async def enqueue_message(
+        self,
+        session_id: str,
+        content: str,
+        reset_session: bool | None = None,
+        metadata: dict | None = None,
+    ) -> dict:
+        """Enqueue a message for a session. Returns the queue item dict."""
+        session_info = await self.session_manager.get_session_info(session_id)
+        if not session_info:
+            raise ValueError(f"Session {session_id} not found")
+
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            raise ValueError(f"Session directory not found for {session_id}")
+
+        queue_config = getattr(session_info, 'queue_config', None) or {}
+        max_queue_size = queue_config.get("max_queue_size", 100)
+
+        # Use session default if not specified
+        if reset_session is None:
+            reset_session = queue_config.get("default_reset_session", True)
+
+        item = await self.queue_manager.enqueue(
+            session_id=session_id,
+            session_dir=session_dir,
+            content=content,
+            reset_session=reset_session,
+            metadata=metadata,
+            max_queue_size=max_queue_size,
+        )
+
+        # Start processor if not paused
+        queue_paused = getattr(session_info, 'queue_paused', False)
+        if not queue_paused:
+            self.queue_processor.ensure_running(session_id)
+
+        item_dict = item.to_dict()
+        if self._enqueue_broadcast_callback:
+            try:
+                if asyncio.iscoroutinefunction(self._enqueue_broadcast_callback):
+                    await self._enqueue_broadcast_callback(session_id, "enqueued", item_dict)
+                else:
+                    self._enqueue_broadcast_callback(session_id, "enqueued", item_dict)
+            except Exception:
+                logger.exception(f"Failed to broadcast queue enqueued for {session_id}")
+        return item_dict
+
+    async def cancel_queue_item(self, session_id: str, queue_id: str) -> dict | None:
+        """Cancel a pending queue item. Returns the item dict or None."""
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return None
+        item = await self.queue_manager.cancel(session_id, session_dir, queue_id)
+        return item.to_dict() if item else None
+
+    async def requeue_item(self, session_id: str, queue_id: str) -> dict | None:
+        """Re-queue a sent/failed item at the front. Returns the new item dict."""
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return None
+        item = await self.queue_manager.requeue(session_id, session_dir, queue_id)
+        if item:
+            session_info = await self.session_manager.get_session_info(session_id)
+            queue_paused = getattr(session_info, 'queue_paused', False) if session_info else False
+            if not queue_paused:
+                self.queue_processor.ensure_running(session_id)
+        return item.to_dict() if item else None
+
+    async def clear_queue(self, session_id: str) -> int:
+        """Clear all pending queue items. Returns count of cancelled items."""
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return 0
+        return await self.queue_manager.clear_pending(session_id, session_dir)
+
+    async def clear_queue_history(self, session_id: str) -> int:
+        """Remove terminal (sent/failed/cancelled) queue items. Returns count removed."""
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return 0
+        return await self.queue_manager.clear_history(session_id, session_dir)
+
+    async def get_queue(self, session_id: str, limit: int = 100, offset: int = 0) -> dict:
+        """Get queue items for a session, paginated, most recent first."""
+        all_items = [item.to_dict() for item in self.queue_manager.get_queue(session_id)]
+        all_items.reverse()  # Most recent (highest position) first
+        total = len(all_items)
+        pending_count = sum(1 for i in all_items if i.get("status") == "pending")
+        sliced = all_items[offset : offset + limit]
+        return {
+            "items": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+            "pending_count": pending_count,
+        }
+
+    async def pause_queue(self, session_id: str, paused: bool) -> bool:
+        """Pause or resume the queue for a session."""
+        success = await self.session_manager.update_session(
+            session_id, queue_paused=paused
+        )
+        if success and not paused:
+            # Resume: start processor if there are pending items
+            if self.queue_manager.get_pending_count(session_id) > 0:
+                self.queue_processor.ensure_running(session_id)
+        return success
+
+    async def update_queue_config(self, session_id: str, config: dict) -> bool:
+        """Update queue configuration for a session."""
+        session_info = await self.session_manager.get_session_info(session_id)
+        if not session_info:
+            return False
+        current = getattr(session_info, 'queue_config', None) or {}
+        current.update(config)
+        return await self.session_manager.update_session(
+            session_id, queue_config=current
+        )
+
+    async def create_session(
+        self,
+        session_id: str,
+        project_id: str,
+        config: SessionConfig,
+        name: str | None = None,
+        permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None,
+        role: str | None = None,
+        capabilities: list[str] = None,
+        parent_overseer_id: str | None = None,
+        overseer_level: int = 0,
+        can_spawn_minions: bool = True,
+    ) -> str:
+        """Create a new Claude Code session with integrated components (within a project)"""
+        try:
+            # Get project to determine working directory and multi-agent status
+            project = await self.project_manager.get_project(project_id)
+            if not project:
+                raise ValueError(f"Project {project_id} not found")
+
+            # Use custom working directory if provided, otherwise use project directory
+            effective_working_directory = config.working_directory or project.working_directory
+
+            # Calculate order based on existing sessions in project
+            order = len(project.session_ids)
+
+            # Issue #349: All sessions are minions (is_minion field removed)
+
+            # Build a config copy with resolved working directory for session manager
+            sm_config = config.model_copy(update={"working_directory": effective_working_directory})
+
+            # Create session through session manager
+            # Store raw system_prompt (guide will be prepended later in start_session)
+            await self.session_manager.create_session(
+                session_id=session_id,
+                config=sm_config,
+                name=name,
+                order=order,
+                project_id=project_id,
+                role=role or "assistant",
+                capabilities=capabilities,
+                parent_overseer_id=parent_overseer_id,
+                overseer_level=overseer_level,
+                can_spawn_minions=can_spawn_minions,
+            )
+
+            # If template-linked, diff creation-time config against template defaults
+            # and store non-matching fields as initial session_overrides (#1079).
+            if config.template_id:
+                await self._init_session_overrides(session_id, config)
+                sinfo = await self.session_manager.get_session_info(session_id)
+                if sinfo:
+                    await self._prune_inherited_mcp_snapshot(sinfo)  # issue #1660
+
+            # Add session to project
+            await self.project_manager.add_session_to_project(project_id, session_id)
+
+            # Initialize storage manager for this session
+            session_dir = await self.session_manager.get_session_directory(session_id)
+            storage_manager = DataStorageManager(session_dir)
+            await storage_manager.initialize()
+            self._storage_managers[session_id] = storage_manager
+            self._apply_audit_writer(storage_manager, session_id)
+
+            # Initialize callback lists
+            self._message_callbacks[session_id] = []
+            self._error_callbacks[session_id] = []
+
+            coord_logger.info(f"Session {session_id} created in project {project_id}")
+            await self._notify_state_change(session_id, SessionState.CREATED)
+
+            return session_id
+
+        except Exception:
+            logger.exception("Failed to create integrated session")
+            raise
+
+    async def get_session_storage(self, session_id: str):
+        """Get storage manager for a session"""
+        return self._storage_managers.get(session_id)
+
+    async def get_session_resources(
+        self,
+        session_id: str,
+        limit: int = 50,
+        offset: int = 0,
+        search: str | None = None,
+        format_filter: str | None = None,
+        sort: str = "newest",
+    ) -> dict:
+        """
+        Get resource metadata for a session, paginated with optional filter/sort.
+
+        Issue #404: Used by REST endpoint to list session resources.
+        Issue #972: Added server-side search, format_filter, and sort params.
+
+        Args:
+            session_id: Session ID
+            limit: Maximum number of resources to return
+            offset: Number of resources to skip
+            search: Substring match on title or original_name (case-insensitive)
+            format_filter: "image", "text", or a specific extension (e.g. "pdf")
+            sort: "newest" | "oldest" | "name-asc" | "name-desc"
+
+        Returns:
+            Paginated dict with resources, total, limit, offset, has_more
+        """
+        storage_manager = self._storage_managers.get(session_id)
+        if not storage_manager:
+            # Try to get from session directory
+            session_dir = await self.session_manager.get_session_directory(session_id)
+            if session_dir:
+                storage_manager = DataStorageManager(session_dir)
+                await storage_manager.initialize()
+
+        all_resources: list[dict] = []
+        if storage_manager:
+            all_resources = await storage_manager.read_resources()
+
+        all_resources = _group_resources_by_filename(all_resources)
+        all_resources = _apply_resource_filters(all_resources, search, format_filter, sort)
+
+        total = len(all_resources)
+        sliced = all_resources[offset : offset + limit]
+        return {
+            "resources": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+        }
+
+    async def get_session_resource_by_id(self, session_id: str, resource_id: str) -> dict | None:
+        """
+        Look up a single resource's metadata by ID against the raw (ungrouped) log.
+
+        Issue #1680: byte-serving endpoints must resolve the exact version
+        requested, not just the latest representative of its filename group.
+
+        Args:
+            session_id: Session ID
+            resource_id: Resource ID
+
+        Returns:
+            Resource metadata dict or None
+        """
+        storage_manager = self._storage_managers.get(session_id)
+        if not storage_manager:
+            session_dir = await self.session_manager.get_session_directory(session_id)
+            if session_dir:
+                storage_manager = DataStorageManager(session_dir)
+                await storage_manager.initialize()
+
+        if not storage_manager:
+            return None
+
+        all_resources = await storage_manager.read_resources()
+        return next((r for r in all_resources if r.get("resource_id") == resource_id), None)
+
+    async def get_session_resource_file(self, session_id: str, resource_id: str) -> bytes | None:
+        """
+        Get raw file bytes for a specific resource.
+
+        Issue #404: Used by REST endpoint to serve resource files.
+
+        Args:
+            session_id: Session ID
+            resource_id: Resource ID
+
+        Returns:
+            Raw file bytes or None
+        """
+        storage_manager = self._storage_managers.get(session_id)
+        if not storage_manager:
+            session_dir = await self.session_manager.get_session_directory(session_id)
+            if session_dir:
+                storage_manager = DataStorageManager(session_dir)
+                await storage_manager.initialize()
+
+        if storage_manager:
+            return await storage_manager.get_resource_file(resource_id)
+
+        return None
+
+    async def get_proxy_logs(self, session_id: str, log_type: str = "http", limit: int = 200) -> dict:
+        """
+        Get proxy log entries for a session.
+
+        Issue #1102: Reads access.log (HTTP) or dns.log (DNS) from the proxy sidecar
+        data directory and returns the last `limit` parsed entries.
+        Issue #1214: Also supports socks5.log for SOCKS5 connection entries.
+
+        Args:
+            session_id: Session ID
+            log_type: "http", "dns", or "socks5"
+            limit: Maximum number of entries to return (tail-read)
+
+        Returns:
+            dict with entries, total_lines, and log_type
+        """
+        session_dir = self.data_dir / "sessions" / session_id
+        if log_type == "http":
+            log_path = session_dir / "docker_claude_data" / "proxy" / "access.log"
+        elif log_type == "socks5":
+            log_path = session_dir / "docker_claude_data" / "proxy" / "socks5.log"
+        else:
+            log_path = session_dir / "docker_claude_data" / "proxy" / "dns.log"
+
+        if not log_path.exists():
+            return {"entries": [], "total_lines": 0, "log_type": log_type}
+
+        # Tail-read: read last `limit` lines efficiently
+        lines = _tail_read_lines(log_path, limit)
+        total_lines = _count_file_lines(log_path)
+
+        entries = []
+        if log_type == "http":
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    raw = json.loads(line)
+                    entries.append({
+                        "ts": raw.get("ts"),
+                        "host": raw.get("host"),
+                        "method": raw.get("method"),
+                        "path": raw.get("path"),
+                        "status": raw.get("status"),
+                        "allowed": raw.get("allowed"),
+                        "credential_used": raw.get("credential_used"),
+                        "scheme": raw.get("scheme"),
+                        "port": raw.get("port"),
+                        "bytes": raw.get("bytes"),
+                        "routed_via_litellm": raw.get("routed_via_litellm", False),
+                        "original_host": raw.get("original_host", raw.get("host")),
+                    })
+                except (json.JSONDecodeError, ValueError):
+                    self.logger.warning(f"Skipping malformed HTTP proxy log line in session {session_id}")
+        elif log_type == "socks5":
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    raw = json.loads(line)
+                    entries.append({
+                        "ts": raw.get("ts"),
+                        "host": raw.get("host"),
+                        "port": raw.get("port"),
+                        "allowed": raw.get("allowed"),
+                        "reason": raw.get("reason"),
+                    })
+                except (json.JSONDecodeError, ValueError):
+                    self.logger.warning(f"Skipping malformed SOCKS5 proxy log line in session {session_id}")
+        else:
+            # CoreDNS log format:
+            # [INFO] 10.0.0.2:54312 - 12345 "A IN api.github.com. udp 128 false 4096" NOERROR qr,rd,ra 73 0.023s
+            dns_pattern = re.compile(
+                r'\[INFO\].*?"(\w+) IN (\S+?)\. \w+ \d+ \w+ \d+"\s+(\w+)'
+            )
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                m = dns_pattern.search(line)
+                if m:
+                    entries.append({
+                        "query_type": m.group(1),
+                        "hostname": m.group(2),
+                        "result": m.group(3),
+                    })
+
+        return {"entries": entries, "total_lines": total_lines, "log_type": log_type}
+
+    async def remove_session_resource(self, session_id: str, resource_id: str) -> bool:
+        """
+        Soft-remove a resource from the session display.
+
+        Issue #423: Appends a removal marker to resources.jsonl so the resource
+        is hidden from the gallery. The .bin file is NOT deleted.
+
+        Args:
+            session_id: Session ID
+            resource_id: Resource ID to remove from display
+
+        Returns:
+            True if removed successfully, False otherwise
+        """
+        storage_manager = self._storage_managers.get(session_id)
+        if not storage_manager:
+            session_dir = await self.session_manager.get_session_directory(session_id)
+            if session_dir:
+                storage_manager = DataStorageManager(session_dir)
+                await storage_manager.initialize()
+
+        if storage_manager:
+            return await storage_manager.remove_resource_from_display(resource_id)
+
+        return False
+
+    def set_permission_callback_factory(self, factory: Callable[[str], Callable]) -> None:
+        """
+        Set the permission callback factory for creating callbacks on demand.
+
+        This factory is used by legion components (overseer_controller, comm_router)
+        to create permission callbacks for spawned minions.
+
+        Args:
+            factory: Function that takes session_id and returns permission_callback
+        """
+        self._permission_callback_factory = factory
+        coord_logger.info("Permission callback factory registered in SessionCoordinator")
+
+        # Propagate to legion_system if it exists
+        if self.legion_system:
+            self.legion_system.permission_callback_factory = factory
+            coord_logger.info("Permission callback factory propagated to LegionSystem")
+
+    def set_message_callback_registrar(self, registrar: Callable[[str], None]) -> None:
+        """
+        Set the message callback registrar for registering WebSocket callbacks.
+
+        This registrar is used by legion components (overseer_controller, comm_router)
+        to register WebSocket message callbacks for spawned minions.
+
+        Args:
+            registrar: Function that takes session_id and registers message callback
+        """
+        self._message_callback_registrar = registrar
+        coord_logger.info("Message callback registrar registered in SessionCoordinator")
+
+        # Propagate to legion_system if it exists
+        if self.legion_system:
+            self.legion_system.message_callback_registrar = registrar
+            coord_logger.info("Message callback registrar propagated to LegionSystem")
+
+    def set_resource_broadcast_callback(self, callback: Callable[[str, dict], None]) -> None:
+        """
+        Set the callback for broadcasting resource_registered events to WebSocket.
+
+        Issue #404: Resource MCP tool integration.
+
+        Args:
+            callback: Async function(session_id, resource_metadata) for WebSocket broadcast
+        """
+        self._resource_broadcast_callback = callback
+        coord_logger.info("Resource broadcast callback registered in SessionCoordinator")
+
+    # Backward compatibility alias
+    def set_image_broadcast_callback(self, callback: Callable[[str, dict], None]) -> None:
+        """Deprecated: Use set_resource_broadcast_callback instead."""
+        self.set_resource_broadcast_callback(callback)
+
+    def set_link_broadcast_callback(self, callback: Callable[[str, dict], None]) -> None:
+        """Set the callback for broadcasting link_registered events to the session poll queue.
+
+        Issue #1530: Called by web_server after coordinator is initialised.
+        """
+        self._link_broadcast_callback = callback
+        coord_logger.info("Link broadcast callback registered in SessionCoordinator")
+
+    def set_enqueue_broadcast_callback(self, callback: Callable[[str, str, dict], Any]) -> None:
+        """Set the callback for broadcasting queue_update (enqueued) events."""
+        self._enqueue_broadcast_callback = callback
+        coord_logger.info("Enqueue broadcast callback registered in SessionCoordinator")
+
+    async def _broadcast_resource_registered(self, session_id: str, resource_metadata: dict) -> None:
+        """
+        Broadcast resource_registered event via the injected callback.
+
+        Issue #404: Called by ResourceMCPTools when a resource is registered.
+
+        Args:
+            session_id: Session that registered the resource
+            resource_metadata: Resource metadata dict (resource_id, title, is_image, etc.)
+        """
+        if self._resource_broadcast_callback:
+            try:
+                if asyncio.iscoroutinefunction(self._resource_broadcast_callback):
+                    await self._resource_broadcast_callback(session_id, resource_metadata)
+                else:
+                    self._resource_broadcast_callback(session_id, resource_metadata)
+            except Exception:
+                logger.exception(f"Failed to broadcast resource_registered for {session_id}")
+
+    async def _broadcast_link_registered(self, session_id: str, link: dict) -> None:
+        """Broadcast link_registered event via the injected callback.
+
+        Issue #1530: Called by LinksMCPTools when a link is registered or updated.
+        """
+        if self._link_broadcast_callback:
+            try:
+                if asyncio.iscoroutinefunction(self._link_broadcast_callback):
+                    await self._link_broadcast_callback(session_id, link)
+                else:
+                    self._link_broadcast_callback(session_id, link)
+            except Exception:
+                logger.exception(f"Failed to broadcast link_registered for {session_id}")
+
+    async def get_session_links(self, session_id: str) -> list[dict]:
+        """Return the list of agent-registered links for a session.
+
+        Issue #1530: Used by the REST endpoint GET /api/sessions/{id}/links.
+        """
+        session_info = await self.session_manager.get_session_info(session_id)
+        if not session_info:
+            return []
+        return session_info.links or []
+
+    async def start_session(self, session_id: str, permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None) -> bool:
+        """Start a session with SDK integration"""
+        try:
+            # Start session through session manager
+            if not await self.session_manager.start_session(session_id):
+                return False
+
+            # Defensively reset processing state on session start
+            await self.session_manager.update_processing_state(session_id, False)
+
+            # Check if SDK exists and is running
+            sdk = self._active_sdks.get(session_id)
+            if sdk and sdk.is_running():
+                # logger.info(f"Session {session_id} is already running, skipping start - NO CLIENT_LAUNCHED MESSAGE")
+                return True
+
+            # We need to create or recreate the SDK in either case:
+            # - No SDK exists: Create new SDK
+            # - SDK exists but not running: Recreate SDK to restart it
+            sdk_was_created = True
+
+            # if not sdk:
+            #     logger.info(f"No SDK found for session {session_id} - CREATING NEW SDK")
+            # else:
+            #     logger.info(f"SDK exists but not running for session {session_id} - RECREATING SDK")
+
+            # Get session info to create/recreate SDK with same parameters
+            session_info = await self.session_manager.get_session_info(session_id)
+            if not session_info:
+                logger.error(f"No session info found for {session_id}")
+                return False
+
+            # Issue #349: is_minion field removed - all sessions are minions
+            # Ensure role is set for sessions without one
+            if not session_info.role:
+                session_info.role = "assistant"
+                await self.session_manager._persist_session_state(session_id)
+                logger.info(f"Set default role for session {session_id}: {session_info.role}")
+
+            # Issue #827: Generate per-session secrets fetch token if not present.
+            # Used by proxy sidecar to call GET /api/sessions/{id}/secrets/resolve.
+            if not session_info.secret_fetch_token:
+                session_info.secret_fetch_token = secrets.token_urlsafe(32)
+                await self.session_manager._persist_session_state(session_id)
+
+            # Create storage manager
+            session_dir = await self.session_manager.get_session_directory(session_id)
+            storage_manager = DataStorageManager(session_dir)
+            await storage_manager.initialize()
+            self._storage_managers[session_id] = storage_manager
+            # Issue #1172: re-apply audit hook each time start_session creates a new storage
+            # manager, since the previous manager (from create_session or last start) is replaced.
+            self._apply_audit_writer(storage_manager, session_id)
+
+            # Issue #1059: Resolve effective config EARLY — before any CONFIG_FIELD read.
+            # For template-linked sessions, session_info CONFIG_FIELDS are at dataclass defaults;
+            # all real values come from resolve_effective_config().
+            effective_config = await resolve_effective_config(
+                session_info, self.template_manager, self.profile_manager
+            )
+
+            # Issue #917: Resolve template variables in path-typed CONFIG_FIELDS.
+            # Apply to effective_config (single source of truth for CONFIG_FIELDS).
+            from backend.template_variables import build_variables, resolve_path, resolve_path_list
+            _tv = build_variables(session_id, session_dir, session_info.working_directory)
+            _ec_path_updates: dict[str, Any] = {}
+            if effective_config.auto_memory_directory:
+                _ec_path_updates["auto_memory_directory"] = resolve_path(
+                    effective_config.auto_memory_directory, _tv
+                )
+            if effective_config.additional_directories:
+                _ec_path_updates["additional_directories"] = resolve_path_list(
+                    effective_config.additional_directories, _tv
+                )
+            if effective_config.docker_extra_mounts:
+                _ec_path_updates["docker_extra_mounts"] = resolve_path_list(
+                    effective_config.docker_extra_mounts, _tv
+                )
+            if _ec_path_updates:
+                effective_config = effective_config.model_copy(update=_ec_path_updates)
+
+            # Check if we have a valid Claude Code session ID to resume
+            resume_sdk_session = None
+            # if session_info.claude_code_session_id:
+            #     logger.info(f"Resuming session with Claude Code session ID: {session_info.claude_code_session_id}")
+            #     resume_sdk_session = session_id  # Use WebUI session ID as resume identifier
+            # else:
+            #     logger.info(f"No Claude Code session ID found - starting fresh session for {session_id}")
+            if session_info.claude_code_session_id:
+                resume_sdk_session = session_id  # Use WebUI session ID as resume identifier
+
+            # Issue #1375: Resolve secret placeholders early so MCP header substitution
+            # can use them before the mcp_servers dict is built.
+            name_to_placeholder: dict[str, str] = {}
+            resolved_metas: list[dict] = []
+            if effective_config.assigned_secrets:
+                resolved_metas = await self.credential_vault.resolve_secrets_for_assignment(
+                    effective_config.assigned_secrets
+                )
+                name_to_placeholder = await self._generate_secret_placeholders(
+                    session_id, session_info, resolved_metas
+                )
+
+            # Issue #313: Attach MCP tools based on can_spawn_minions flag (universal Legion)
+            # All sessions with can_spawn_minions=True get Legion MCP tools
+            mcp_servers = {}
+            mcp_tools_list = []
+            if session_info.can_spawn_minions and self.legion_system and self.legion_system.mcp_tools:
+                # Create session-specific MCP server (injects session_id into tool calls)
+                mcp_server = self.legion_system.mcp_tools.create_mcp_server_for_session(session_id)
+                if mcp_server:
+                    # SDK expects dict mapping server name to config, not a list
+                    mcp_servers["legion"] = mcp_server
+                    # Allow all legion MCP tools (reduces command-line length)
+                    mcp_tools_list.append("mcp__legion")
+                    coord_logger.info(f"Attaching Legion MCP tools to session {session_id} (can_spawn_minions=True)")
+
+            # Issue #404: Attach resource MCP tools to all sessions
+            if self.resource_mcp_tools:
+                resource_mcp_server = self.resource_mcp_tools.create_mcp_server_for_session(session_id)
+                if resource_mcp_server:
+                    mcp_servers["resources"] = resource_mcp_server
+                    mcp_tools_list.append("mcp__resources")
+                    coord_logger.info(f"Attaching Resource MCP tools to session {session_id}")
+
+            # Issue #1530: Attach links MCP tools to all sessions
+            if self.links_mcp_tools:
+                links_mcp_server = self.links_mcp_tools.create_mcp_server_for_session(session_id)
+                if links_mcp_server:
+                    mcp_servers["links"] = links_mcp_server
+                    mcp_tools_list.append("mcp__links")
+                    coord_logger.info(f"Attaching Links MCP tools to session {session_id}")
+
+            # Issue #676: Attach user-selected global MCP server configs
+            if effective_config.mcp_server_ids:
+                selected_configs = self.mcp_config_manager.get_configs_by_ids(
+                    effective_config.mcp_server_ids
+                )
+                # Issue #1375: Fail closed if ${secret:...} refs exist but proxy is disabled.
+                # Issue #1484: shared_connection configs resolve secrets in-process via
+                # SharedMcpConnectionManager — they never reach the session's MCP client,
+                # so they are exempt from this proxy requirement.
+                has_secret_refs = any(
+                    _SECRET_REF_RE.search(v or "")
+                    for cfg in selected_configs
+                    if cfg.type in (McpServerType.SSE, McpServerType.HTTP)
+                    and not getattr(cfg, "shared_connection", False)
+                    for v in (cfg.headers or {}).values()
+                )
+                if has_secret_refs and not effective_config.docker_proxy_enabled:
+                    raise ValueError(
+                        "MCP header secret references (${secret:...}) require docker_proxy_enabled=True. "
+                        "Enable the proxy sidecar in session/profile/template config, or remove the references."
+                    )
+                for mcp_cfg in selected_configs:
+                    mcp_servers[mcp_cfg.slug] = await self._get_mcp_sdk_config(
+                        mcp_cfg, name_to_placeholder
+                    )
+                    mcp_tools_list.append(f"mcp__{mcp_cfg.slug}")
+                    coord_logger.info(
+                        f"Attaching global MCP server '{mcp_cfg.name}' to session {session_id}"
+                    )
+
+            coord_logger.debug(
+                "[MCP launch] session=%s servers=%s", session_id, list(mcp_servers.keys())
+            )
+
+            # Merge MCP tools with effective allowed_tools
+            all_tools = effective_config.allowed_tools if effective_config.allowed_tools else []
+            all_tools = list(set(all_tools + mcp_tools_list))  # Deduplicate
+
+            # Issue #349: All sessions are minions - always prepend legion guide
+            legion_guide = get_legion_guide_only()
+
+            # Issue #691: Append session history reference so agents can check past context
+            # Issue #710: Skip history reference when knowledge management is disabled
+            if effective_config.history_distillation_enabled:
+                history_dir = session_dir / "history"
+                history_note = (
+                    f"\n\n## Session History\n"
+                    f"Distilled history from previous conversations is available at "
+                    f"`{history_dir}/` (read-only). Before answering questions about past "
+                    f"context, identity, or decisions, check this folder for relevant "
+                    f"archived conversations.\n"
+                    f"Use Read, Glob, or Grep to access history files. "
+                    f"Do NOT use Bash (e.g. `ls`, `cat`) for history access."
+                )
+            else:
+                history_note = ""
+
+            # Issue #749: Skill creating context
+            if effective_config.skill_creating_enabled:
+                skill_creating_note = (
+                    "\n\n## Skill Creation\n"
+                    "You can create custom skills to automate repetitive workflows. "
+                    "Use `/skill-maker` to get guided through writing a SKILL.md file. "
+                    "Skills MUST be created in your working directory at "
+                    "`<working-directory>/.claude/skills/{name}/SKILL.md` — "
+                    "NOT in `~/.claude/skills/` (that is for system-managed global skills). "
+                    "Skills are hot-reloaded and available immediately after writing. "
+                    "If a skill doesn't seem to work correctly, call `restart_session` to fully reload.\n"
+                )
+            else:
+                skill_creating_note = ""
+
+            if effective_config.system_prompt:
+                minion_system_prompt = f"{legion_guide}{history_note}{skill_creating_note}\n\n---\n\n{effective_config.system_prompt}"
+            else:
+                minion_system_prompt = f"{legion_guide}{history_note}{skill_creating_note}"
+            coord_logger.info(f"Built minion system prompt for start (guide + context): {len(minion_system_prompt)} chars")
+
+            # Escape special characters in system_prompt for subprocess command-line safety
+            # CRITICAL: Newlines break subprocess argument parsing on Windows
+            if minion_system_prompt:
+                # Replace literal newlines with escaped newlines for command-line
+                escaped_prompt = minion_system_prompt.replace('\n', '\\n').replace('\r', '\\r')
+                # Also escape other problematic characters
+                escaped_prompt = escaped_prompt.replace('"', '\\"').replace('$', '\\$')
+                coord_logger.info(f"Escaped system prompt: {len(escaped_prompt)} chars (original: {len(minion_system_prompt)})")
+                minion_system_prompt = escaped_prompt
+
+            # Issue #496: Auto-resolve cli_path when Docker mode is enabled
+            effective_cli_path = effective_config.cli_path
+            # Issue #1672: process_wrapper is a host-path launcher; unreachable from inside
+            # the container, so force it off whenever Docker isolation is active.
+            effective_process_wrapper = (
+                None if effective_config.docker_enabled else effective_config.process_wrapper
+            )
+            docker_env_vars = {}
+            if effective_config.docker_enabled and not effective_config.cli_path:
+                from backend.docker_utils import get_session_tmp_dir, resolve_docker_cli_path
+                # Persistent data dir for Claude session transcripts (enables --resume).
+                # Nested inside session_dir so Claude CLI internals and WebUI session data
+                # are created, backed up, and cleaned up together.
+                docker_data_dir = str(session_dir / "docker_claude_data")
+                # Issue #759: Mount session memory dir into Docker container (RW, at host path)
+                extra_mounts = list(effective_config.docker_extra_mounts or [])
+                # Issue #1179: Proxy-sidecar-only mounts (session_token, session_id).
+                # Agent mounts go in extra_mounts; proxy mounts go here.
+                proxy_extra_mounts: list[str] = []
+                if effective_config.auto_memory_mode == "session":
+                    memory_dir = session_dir / "memory"
+                    memory_dir.mkdir(exist_ok=True)
+                    extra_mounts.append(f"{memory_dir}:{memory_dir}")
+                elif effective_config.auto_memory_mode == "claude" and effective_config.auto_memory_directory:
+                    native_mem = Path(effective_config.auto_memory_directory)
+                    native_mem.mkdir(parents=True, exist_ok=True)
+                    extra_mounts.append(f"{native_mem}:{native_mem}")
+                # Issue #773: Mount session data dirs into Docker (read-only)
+                # These host-side dirs contain files the agent needs to Read:
+                #   resources/   - MCP-registered resources, comm file attachments
+                #   attachments/ - User-uploaded files via InputArea
+                #   history/     - Distilled history .md files (issue #691)
+                # Mounted at the same absolute path so paths work identically.
+                for subdir in ("resources", "attachments", "history"):
+                    host_dir = session_dir / subdir
+                    host_dir.mkdir(exist_ok=True)
+                    extra_mounts.append(f"{host_dir}:{host_dir}:ro")
+
+                # Issue #759: Mount synced skills into Docker container (read-only)
+                # Mount the real skills dir (not the symlink dir) to avoid broken
+                # symlinks inside the container.
+                from backend.skill_manager import NEW_GLOBAL_SKILLS_DIR
+                docker_home = effective_config.docker_home_directory or "/home/claude"
+                if NEW_GLOBAL_SKILLS_DIR.exists():
+                    extra_mounts.append(
+                        f"{NEW_GLOBAL_SKILLS_DIR}:{docker_home}/.claude/skills:ro"
+                    )
+                # Issue #820: Mount session-specific /tmp dir so container /tmp is host-accessible
+                # IMPORTANT: mkdir must happen BEFORE adding to extra_mounts — Docker bind-mount
+                # fails at container start if the host source path does not already exist.
+                tmp_dir = get_session_tmp_dir(session_dir)
+                tmp_dir.mkdir(exist_ok=True)
+                extra_mounts.append(f"{tmp_dir}:/tmp")
+
+                # Issue #1134: Typed-secret placeholder injection.
+                # The proxy fetches secrets via REST (GET /api/sessions/{id}/secrets/resolve)
+                # using the per-session Bearer token. Placeholders are stored on SessionInfo
+                # and passed to the agent container via env vars / mounted files.
+                proxy_allowlist_file = None
+                delivery_envs: dict[str, str] = {}  # env var name → placeholder string
+                _ssh_key_prepared = False  # Issue #1052: two-dir SSH isolation flag
+                _ssh_key_dir: Path | None = None
+                _ssh_shared_dir: Path | None = None
+
+                if effective_config.docker_proxy_enabled:
+                    # Build dynamic allowlist: static defaults + config domains
+                    effective_domains: set[str] = set()
+                    static_allowlist_path = Path("backend/docker/proxy/allowlist.json")
+                    if static_allowlist_path.exists():
+                        try:
+                            static = json.loads(static_allowlist_path.read_text())
+                            effective_domains.update(static.get("domains", []))
+                        except Exception:
+                            coord_logger.warning("Failed to read static proxy allowlist")
+                    if effective_config.docker_proxy_allowlist_domains:
+                        effective_domains.update(effective_config.docker_proxy_allowlist_domains)
+                    if effective_domains:
+                        allowlist_path = tmp_dir / "allowlist.json"
+                        allowlist_path.write_text(json.dumps({"domains": sorted(effective_domains)}))
+                        proxy_allowlist_file = str(allowlist_path)
+                        coord_logger.info(
+                            f"Built proxy allowlist for session {session_id}: "
+                            f"{len(effective_domains)} domains"
+                        )
+
+                    # Issue #1134 / #1375: Secret delivery — placeholders were already
+                    # generated early (before mcp_servers build). Reuse them here to
+                    # populate inject_env / inject_file delivery channels.
+                    if resolved_metas:
+                        for secret in resolved_metas:
+                            name = secret.get("name", "unnamed")
+                            placeholder = name_to_placeholder.get(name)
+                            if not placeholder:
+                                continue
+
+                            # inject_env: deliver placeholder via environment variable
+                            inject_env = secret.get("inject_env")
+                            if inject_env:
+                                delivery_envs[inject_env] = placeholder
+
+                            # inject_file: render placeholder into a mounted file
+                            inject_file = secret.get("inject_file")
+                            if inject_file and not (secret.get("type") == "ssh_key" and effective_config.docker_proxy_enabled):
+                                file_path = inject_file.get("path")
+                                if file_path:
+                                    fmt = inject_file.get("format", "raw")
+                                    key_path = inject_file.get("key_path")
+                                    perms_str = inject_file.get("permissions", "0600")
+                                    content = _render_inject_file(placeholder, fmt, key_path)
+                                    safe_fname = re.sub(r"[^a-zA-Z0-9._-]", "_", name)
+                                    host_file = tmp_dir / f"delivery_{safe_fname}"
+                                    host_file.write_text(content)
+                                    os.chmod(host_file, int(perms_str, 8))
+                                    extra_mounts.append(f"{host_file}:{file_path}:ro")
+
+                        # Issue #1052: SSH key isolation via two-dir design.
+                        # key_dir  → proxy-only mount at /run/ssh-private:ro (key bytes
+                        #            never reach the agent; proxy wipes the file after ssh-add).
+                        # shared_dir → both containers at /run/ssh (socket created by proxy
+                        #              ssh-agent; agent uses socket, not key file).
+                        from backend.docker_utils import prepare_session_ssh  # noqa: PLC0415
+                        _ssh_key_dir = tmp_dir / "ssh-key"
+                        _ssh_shared_dir = tmp_dir / "ssh-shared"
+                        try:
+                            if prepare_session_ssh(resolved_metas, _ssh_key_dir, _ssh_shared_dir):
+                                _ssh_key_prepared = True
+                        except ValueError as ssh_err:
+                            coord_logger.error(
+                                f"SSH key setup failed for session {session_id}: {ssh_err}"
+                            )
+                            raise
+
+                    # Issue #827 / #1134: Write per-session token + session_id files for proxy.
+                    # Proxy calls GET /api/sessions/{id}/secrets/resolve with this Bearer token.
+                    # Issue #1179: These mounts target /etc/proxy/ — proxy sidecar only, not agent.
+                    session_token = getattr(session_info, "secret_fetch_token", None)
+                    if session_token:
+                        token_path = tmp_dir / "session_token"
+                        token_path.write_text(session_token)
+                        os.chmod(token_path, 0o644)
+                        proxy_extra_mounts.append(f"{token_path}:/etc/proxy/session_token:ro")
+
+                        session_id_path = tmp_dir / "session_id"
+                        session_id_path.write_text(session_id)
+                        os.chmod(session_id_path, 0o644)
+                        proxy_extra_mounts.append(f"{session_id_path}:/etc/proxy/session_id:ro")
+
+                # Issue #1089: Deduplicate mounts by container destination path (first-seen wins).
+                # Format: "host_path:container_path[:options]" — extract the second colon-delimited field.
+                _seen_container_paths: set[str] = set()
+                _deduped_mounts: list[str] = []
+                for _mount in extra_mounts:
+                    _parts = _mount.split(":", 2)
+                    _container_path = _parts[1] if len(_parts) >= 2 else _mount
+                    if _container_path not in _seen_container_paths:
+                        _seen_container_paths.add(_container_path)
+                        _deduped_mounts.append(_mount)
+                extra_mounts = _deduped_mounts
+
+                # Issue #1179: Deduplicate proxy_extra_mounts independently (same strategy).
+                _seen_proxy_paths: set[str] = set()
+                _deduped_proxy_mounts: list[str] = []
+                for _mount in proxy_extra_mounts:
+                    _parts = _mount.split(":", 2)
+                    _container_path = _parts[1] if len(_parts) >= 2 else _mount
+                    if _container_path not in _seen_proxy_paths:
+                        _seen_proxy_paths.add(_container_path)
+                        _deduped_proxy_mounts.append(_mount)
+                proxy_extra_mounts = _deduped_proxy_mounts
+
+                effective_cli_path, docker_env_vars = resolve_docker_cli_path(
+                    docker_image=effective_config.docker_image,
+                    docker_extra_mounts=extra_mounts or None,
+                    workspace=session_info.working_directory,
+                    session_data_dir=docker_data_dir,
+                    docker_home_directory=effective_config.docker_home_directory,
+                    # Issue #1050: Resolve effective proxy image
+                    proxy_image=(
+                        (effective_config.docker_proxy_image or self._resolve_default_proxy_image())
+                        if effective_config.docker_proxy_enabled
+                        else None
+                    ),
+                    # Issue #1134: pass delivery env vars inline (no file); keep allowlist path
+                    delivery_envs=delivery_envs or None,
+                    # Issue #1396: non-secret direct env passthrough
+                    extra_env=effective_config.extra_env or None,
+                    proxy_allowlist_file=proxy_allowlist_file,
+                    # Issue #1179: Proxy-sidecar-only mounts
+                    docker_proxy_extra_mounts=proxy_extra_mounts or None,
+                    # Issue #1356: label container for script schedule lookup
+                    session_id=session_id,
+                    # Thread server port into proxy sidecar so it calls back on the right port.
+                    # main.py sets WEBUI_BASE_URL at startup; default is :8000 which breaks
+                    # non-default ports (e.g. test instances on 8001).
+                    proxy_webui_url=os.environ.get("WEBUI_BASE_URL") or None,
+                )
+                # Issue #1052: Tell claude-docker where the two SSH tmpdirs live.
+                # key_dir  → proxy-only mount at /run/ssh-private:ro
+                # shared_dir → both containers at /run/ssh (rw on proxy, ro on agent)
+                if _ssh_key_prepared:
+                    docker_env_vars["CLAUDE_DOCKER_SSH_KEY_DIR"] = str(_ssh_key_dir)
+                    docker_env_vars["CLAUDE_DOCKER_SSH_SHARED_DIR"] = str(_ssh_shared_dir)
+                coord_logger.info(
+                    f"Docker mode enabled for session {session_id}: "
+                    f"cli_path={effective_cli_path}, env={docker_env_vars}"
+                )
+
+            # Create/recreate SDK instance with session parameters (uses factory for testability — issue #559)
+            # (effective_config already resolved early in this method — issue #1059)
+
+            # Issue #1401: For session mode, force auto_memory_directory to the session-scoped subdir
+            # so the SDK's built-in memory is isolated per session. Ensure dir exists for both
+            # docker (docker mount section above already ran mkdir) and non-docker paths.
+            if effective_config.auto_memory_mode == "session":
+                _session_memory_dir = session_dir / "memory"
+                _session_memory_dir.mkdir(parents=True, exist_ok=True)
+                effective_config = effective_config.model_copy(
+                    update={"auto_memory_directory": str(_session_memory_dir)}
+                )
+
+            litellm_env: dict[str, str] = {}
+            catalog_model_update: dict = {}
+            _proxy_mgr = self.litellm_proxy_manager
+
+            tier_active = _all_tier_fields_set(effective_config)
+            single_active = bool(
+                effective_config.provider_catalog_id and effective_config.provider_model_id
+            )
+
+            if (tier_active or single_active) and _proxy_mgr is not None:
+                virtual_key = _proxy_mgr.register_session_key(session_id)
+                base_url = f"http://127.0.0.1:{_proxy_mgr.port}/"
+
+                if effective_config.docker_enabled:
+                    # Docker path: proxy addon rewrites body model field; never override SDK model
+                    if tier_active:
+                        model_map = _build_model_map(effective_config)
+                        default_alias = model_map["default"]
+                        # Short alias for CLI baseline so the SDK starts with the right tier
+                        catalog_model_update["model"] = effective_config.provider_default_tier
+                    else:
+                        single_alias = make_model_alias(
+                            effective_config.provider_catalog_id,
+                            effective_config.provider_model_id,
+                        )
+                        model_map = {}
+                        default_alias = single_alias
+                        # NOTE: catalog_model_update["model"] intentionally NOT set —
+                        # proxy rewrites the body; SDK model left unset (R1 behavior change)
+
+                    _proxy_mgr.register_session_routing(
+                        session_id, virtual_key, base_url,
+                        model_map=model_map, default_model=default_alias,
+                    )
+                    # Inject CLAUDE_CODE_ATTRIBUTION_HEADER=0 into the agent container so
+                    # the billing header doesn't cache-bust 3rd-party / local LLM APIs.
+                    # Must go through CLAUDE_DOCKER_EXTRA_ENV (not litellm_env) because
+                    # _merged_extra_env only reaches the wrapper process, not the container.
+                    _extra = json.loads(docker_env_vars.get("CLAUDE_DOCKER_EXTRA_ENV", "{}"))
+                    _extra["CLAUDE_CODE_ATTRIBUTION_HEADER"] = "0"
+                    docker_env_vars["CLAUDE_DOCKER_EXTRA_ENV"] = json.dumps(_extra)
+                else:
+                    # Non-Docker: tier breakout not available; single-model alias override only
+                    if tier_active:
+                        coord_logger.warning(
+                            f"Session {session_id} has per-tier routing configured but "
+                            "docker_enabled=False; falling back to default-tier single-model."
+                        )
+                        tier = effective_config.provider_default_tier
+                        catalog_id = getattr(effective_config, f"provider_{tier}_catalog_id")
+                        model_id = getattr(effective_config, f"provider_{tier}_model_id")
+                    else:
+                        catalog_id = effective_config.provider_catalog_id
+                        model_id = effective_config.provider_model_id
+                    model_alias = make_model_alias(catalog_id, model_id)
+                    catalog_model_update["model"] = model_alias
+                    litellm_env = {
+                        "ANTHROPIC_BASE_URL": base_url,
+                        "ANTHROPIC_API_KEY": virtual_key,
+                        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+                    }
+
+            # Override fields computed earlier in this method:
+            #   system_prompt   — assembled above (includes legion guide, history ref, etc.)
+            #   allowed_tools   — merged MCP + session tools list built above
+            #   cli_path        — Docker-resolved path computed above
+            #   process_wrapper — forced to None under Docker isolation (computed above)
+            sdk_config = effective_config.model_copy(update={
+                "system_prompt": minion_system_prompt,
+                "allowed_tools": all_tools,
+                "cli_path": effective_cli_path,
+                "process_wrapper": effective_process_wrapper,
+                **catalog_model_update,
+            })
+
+            # Issue #906: Custom auto-memory directory (claude mode + directory set) — create dir
+            if effective_config.auto_memory_mode == "claude" and effective_config.auto_memory_directory:
+                custom_memory_dir = Path(effective_config.auto_memory_directory)
+                custom_memory_dir.mkdir(parents=True, exist_ok=True)
+                coord_logger.debug(f"Custom auto-memory directory for session {session_id}: {custom_memory_dir}")
+
+            # Issue #707: Build PreToolUse handler for internal tool access control
+            from backend.config_manager import load_config as load_app_config
+            permission_handler = self._build_permission_handler(
+                session_dir, effective_config.history_distillation_enabled, effective_config.auto_memory_mode,
+                skill_creating_enabled=effective_config.skill_creating_enabled,
+                working_directory=Path(session_info.working_directory),
+                is_legion=("legion" in mcp_servers),
+                allow_background_agent=load_app_config().features.allow_background_agent,
+            )
+
+            # extra_env merge order: user-set < docker wrapper vars < litellm routing.
+            _merged_extra_env: dict[str, str] = {}
+            if effective_config.extra_env:
+                _merged_extra_env.update(effective_config.extra_env)
+            if docker_env_vars:
+                _merged_extra_env.update(docker_env_vars)
+            if litellm_env:
+                _merged_extra_env.update(litellm_env)
+
+            sdk = self._sdk_factory(
+                session_id=session_id,
+                working_directory=session_info.working_directory,
+                session_name=session_info.name,  # For mock SDK fixture resolution (issue #561)
+                config=sdk_config,
+                storage_manager=storage_manager,
+                session_manager=self.session_manager,
+                message_callback=self._create_message_callback(session_id),
+                error_callback=self._create_error_callback(session_id),
+                permission_callback=permission_callback,
+                rate_limit_callback=self._on_rate_limits,
+                resume_session_id=resume_sdk_session,
+                mcp_servers=mcp_servers if mcp_servers else None,
+                experimental=self.experimental,
+                stderr_callback=self._create_stderr_callback(session_id),
+                extra_env=_merged_extra_env,
+                permission_handler=permission_handler,
+            )
+            # Issue #707: Set auto-approval callback so can_use_tool can notify us
+            sdk.auto_approval_callback = self._create_auto_approval_callback(session_id)
+            self._active_sdks[session_id] = sdk
+
+            # Initialize callback lists if not exists (preserve existing callbacks)
+            if session_id not in self._message_callbacks:
+                self._message_callbacks[session_id] = []
+            if session_id not in self._error_callbacks:
+                self._error_callbacks[session_id] = []
+
+            if not await sdk.start():
+                logger.error(f"Failed to start SDK for session {session_id}")
+
+                # Get the error message from the SDK
+                raw_error_message = getattr(sdk.info, 'error_message', 'Unknown error occurred while starting Claude Code')
+
+                # Extract user-friendly error message
+                error_message = self._extract_claude_cli_error(raw_error_message)
+
+                # Update session state to ERROR and reset processing state
+                try:
+                    await self.session_manager.update_session_state(session_id, SessionState.ERROR, error_message)
+                    # Also ensure processing state is reset when going to error state
+                    await self.session_manager.update_processing_state(session_id, False)
+                    await self._notify_state_change(session_id, SessionState.ERROR)
+                    # logger.info(f"Updated session {session_id} state to ERROR and reset processing state")
+                except Exception:
+                    logger.exception("Failed to update session state to ERROR")
+
+                # Send system message explaining the failure (with raw details)
+                await self._send_session_failure_message(session_id, error_message, raw_error_message)
+
+                # Clean up the failed SDK
+                if session_id in self._active_sdks:
+                    del self._active_sdks[session_id]
+                    # logger.info(f"Cleaned up failed SDK for session {session_id}")
+
+                return False
+
+            # Send system message for SDK client launch/resume
+            # logger.info(f"Session {session_id}: sdk_was_created = {sdk_was_created}")
+            if sdk_was_created:  # Only if we actually created/resumed the SDK
+                # logger.info(f"CALLING _send_client_launched_message for session {session_id}")
+                await self._send_client_launched_message(session_id)
+            # else:
+            #     logger.info(f"NOT calling _send_client_launched_message for session {session_id} because sdk_was_created = False")
+
+            # Issue #976: Ensure app-level background refresh tasks for OAuth-enabled servers
+            if effective_config.mcp_server_ids:
+                selected_configs = self.mcp_config_manager.get_configs_by_ids(effective_config.mcp_server_ids)
+                for mcp_cfg in selected_configs:
+                    if mcp_cfg.oauth_enabled:
+                        self.oauth_refresh_manager.ensure_refresh(mcp_cfg.id)
+
+            coord_logger.info(f"Session {session_id} SDK task started - state will update to ACTIVE when SDK is ready")
+            return True
+
+        except Exception as e:
+            logger.exception(f"Failed to start integrated session {session_id}")
+
+            # Extract user-friendly error message, preserve raw for details
+            raw_error_str = str(e)
+            error_message = self._extract_claude_cli_error(raw_error_str)
+
+            # Update session state to ERROR and reset processing state
+            try:
+                await self.session_manager.update_session_state(session_id, SessionState.ERROR, error_message)
+                await self.session_manager.update_processing_state(session_id, False)
+                await self._notify_state_change(session_id, SessionState.ERROR)
+                coord_logger.info(f"Updated session {session_id} state to ERROR after exception")
+            except Exception:
+                logger.exception("Failed to update session state to ERROR")
+
+            # Send system message explaining the failure (with raw details)
+            await self._send_session_failure_message(session_id, error_message, raw_error_str)
+
+            # Clean up any partially created SDK
+            if session_id in self._active_sdks:
+                try:
+                    sdk = self._active_sdks[session_id]
+                    if sdk:
+                        await sdk.terminate()
+                except Exception:
+                    pass  # Best effort cleanup
+                del self._active_sdks[session_id]
+                coord_logger.info(f"Cleaned up SDK for session {session_id} after exception")
+
+            return False
+
+    async def terminate_session(self, session_id: str) -> bool:
+        """Terminate a session and cleanup resources"""
+        try:
+            # Issue #976: Release per-server OAuth refresh ref counts for this session
+            _term_info = await self.session_manager.get_session_info(session_id)
+            if _term_info and _term_info.config.get("mcp_server_ids"):
+                _term_configs = self.mcp_config_manager.get_configs_by_ids(_term_info.config.get("mcp_server_ids"))
+                for _cfg in _term_configs:
+                    if _cfg.oauth_enabled:
+                        self.oauth_refresh_manager.release_refresh(_cfg.id)
+                    # Issue #1484: release shared-connection refcount on termination
+                    if getattr(_cfg, "shared_connection", False):
+                        await self.shared_mcp_manager.release(_cfg.id)
+
+            # Issue #500: Stop queue processor before termination
+            self.queue_processor.stop(session_id)
+
+            # Reset processing state before termination
+            await self.session_manager.update_processing_state(session_id, False)
+
+            # Issue #310: Mark active tools as orphaned before termination
+            self._mark_tools_orphaned(session_id)
+
+            # Issue #520: Mark active ToolCalls as interrupted and store ToolCallUpdate entries
+            self.mark_session_tools_interrupted(session_id)
+
+            # Terminate SDK first
+            sdk = self._active_sdks.get(session_id)
+            if sdk:
+                await sdk.terminate()
+                del self._active_sdks[session_id]
+
+            if self.litellm_proxy_manager is not None:
+                self.litellm_proxy_manager.unregister_session_key(session_id)
+                self.litellm_proxy_manager.unregister_session_routing(session_id)
+
+            # Terminate session through manager
+            success = await self.session_manager.terminate_session(session_id)
+
+            # Issue #820: Clean up session /tmp directory on session end
+            cleanup_session_tmp(session_id, self.session_manager.sessions_dir)
+
+            # Cleanup storage and callbacks
+            if session_id in self._storage_managers:
+                del self._storage_managers[session_id]
+            if session_id in self._message_callbacks:
+                del self._message_callbacks[session_id]
+            if session_id in self._error_callbacks:
+                del self._error_callbacks[session_id]
+            # Issue #310: Cleanup display projection
+            if session_id in self._display_projections:
+                del self._display_projections[session_id]
+            # Issue #858: Cleanup per-session tool-call event
+            self._tool_call_events.pop(session_id, None)
+            # Issue #1694: Cleanup per-session message-emitted barrier state
+            self._message_emitted_events.pop(session_id, None)
+            self._emitted_message_ids.pop(session_id, None)
+            # Issue #894: Cleanup retry sequence tracking
+            self._retry_sequences.pop(session_id, None)
+
+            if success:
+                await self._notify_state_change(session_id, SessionState.TERMINATED)
+
+            coord_logger.info(f"Session {session_id} stopped")
+            return success
+
+        except Exception:
+            logger.exception(f"Failed to terminate integrated session {session_id}")
+            return False
+
+    async def disconnect_sdk(self, session_id: str) -> bool:
+        """Disconnect the active SDK for a session without full termination."""
+        sdk = self._active_sdks.get(session_id)
+        if sdk:
+            success = await sdk.disconnect()
+            if success:
+                del self._active_sdks[session_id]
+            return success
+        return True  # Already disconnected
+
+    # =========================================================================
+    # Ephemeral Session Lifecycle (Issue #578)
+    # =========================================================================
+
+    async def create_ephemeral_session(
+        self,
+        session_config: dict,
+        schedule_name: str,
+        project_id: str,
+        permission_callback=None,
+    ) -> str:
+        """Create a temporary session from a schedule's stored config.
+
+        Args:
+            session_config: Dict with session configuration fields (model, permission_mode, etc.)
+            schedule_name: Name of the schedule (used in session name)
+            project_id: Legion/project ID to add the session to
+
+        Returns:
+            The new session_id
+        """
+        import uuid
+        session_id = str(uuid.uuid4())
+
+        await self.create_session(
+            session_id=session_id,
+            project_id=project_id,
+            permission_mode=session_config.get("permission_mode", "acceptEdits"),
+            system_prompt=session_config.get("system_prompt"),
+            override_system_prompt=session_config.get("override_system_prompt", False),
+            allowed_tools=session_config.get("allowed_tools"),
+            disallowed_tools=session_config.get("disallowed_tools"),
+            model=session_config.get("model"),
+            name=f"[Scheduled] {schedule_name}",
+            permission_callback=permission_callback,
+            working_directory=session_config.get("working_directory"),
+            sandbox_enabled=session_config.get("sandbox_enabled", False),
+            setting_sources=session_config.get("setting_sources"),
+            docker_enabled=session_config.get("docker_enabled", False),
+            docker_image=session_config.get("docker_image"),
+            docker_extra_mounts=session_config.get("docker_extra_mounts"),
+            thinking_mode=session_config.get("thinking_mode"),
+            thinking_budget_tokens=session_config.get("thinking_budget_tokens"),
+            effort=session_config.get("effort"),
+        )
+
+        # Mark session as ephemeral and broadcast the updated state so the
+        # frontend receives is_ephemeral=True (the initial create_session broadcast
+        # fires before this flag is set, creating a race condition).
+        session_info = await self.session_manager.get_session_info(session_id)
+        if session_info:
+            session_info.is_ephemeral = True
+            session_info.updated_at = datetime.now(UTC)
+            await self.session_manager._persist_session_state(session_id)
+            await self.session_manager._notify_state_change_callbacks(
+                session_id, session_info.state
+            )
+
+        coord_logger.info(
+            f"Created ephemeral session {session_id} for schedule '{schedule_name}' "
+            f"in project {project_id}"
+        )
+        return session_id
+
+    async def archive_and_clear_session(self, session_id: str) -> bool:
+        """Archive session data and clear messages, then terminate.
+
+        Used by the scheduler after an ephemeral schedule run completes.
+        Archives with the current timestamp (completion time), clears messages,
+        resets display projection, and terminates the session — leaving it in
+        TERMINATED state ready for the next scheduled fire.
+
+        Unlike reset_session(), this does NOT restart the session after clearing.
+
+        Args:
+            session_id: The session to archive and clear
+
+        Returns:
+            True if cleanup succeeded
+        """
+        try:
+            coord_logger.info(f"Archive-and-clear session {session_id}")
+
+            # Archive session data (copies messages, state, resources to timestamped dir)
+            await self._archive_session_for_reset(session_id)
+
+            # Clear message history
+            storage = self._storage_managers.get(session_id)
+            if not storage:
+                session_dir = await self.session_manager.get_session_directory(session_id)
+                storage = DataStorageManager(session_dir)
+                await storage.initialize()
+                self._storage_managers[session_id] = storage
+
+            if storage:
+                await storage.clear_messages()
+                coord_logger.info(f"Cleared message history for session {session_id}")
+
+            # Reset display projection state
+            self._reset_display_projection(session_id)
+            # Issue #1746: Drop cached task leg registry — it would otherwise
+            # keep serving stale legs from before the message history wipe.
+            self._task_leg_registries.pop(session_id, None)
+
+            # Notify frontend to clear messages
+            await self._notify_session_reset(session_id)
+
+            # Terminate the session (disconnect SDK, set TERMINATED state)
+            await self.terminate_session(session_id)
+
+            coord_logger.info(f"Archive-and-clear complete for session {session_id}")
+            return True
+
+        except Exception:
+            logger.exception(f"Failed to archive-and-clear session {session_id}")
+            return False
+
+    async def update_session_name(self, session_id: str, name: str) -> bool:
+        """Update session name"""
+        try:
+            success = await self.session_manager.update_session_name(session_id, name)
+            if success:
+                # Notify about state change to trigger UI updates
+                session_info = await self.session_manager.get_session_info(session_id)
+                if session_info:
+                    await self._notify_state_change(session_id, session_info.state)
+            coord_logger.info(f"Updated session {session_id} name to '{name}'")
+            return success
+        except Exception:
+            logger.exception(f"Failed to update session {session_id} name")
+            return False
+
+    async def delete_session(self, session_id: str, archive_reason: str = "user_deleted") -> dict:
+        """
+        Delete a session and cleanup all resources (with cascading deletion for child minions).
+
+        Args:
+            session_id: ID of session to delete
+            archive_reason: Reason for archival (default: "user_deleted", use "parent_initiated" for dispose_minion)
+
+        Returns a dict with:
+            - success: bool indicating if deletion succeeded
+            - deleted_session_ids: list of all session IDs deleted (including cascaded children)
+        """
+        deleted_ids = []
+
+        try:
+            # Step 0: If this session has children, recursively delete all children first (cascading)
+            # Check child_minion_ids regardless of is_minion/is_overseer flags - any session with
+            # children should cascade the deletion
+            session_info = await self.session_manager.get_session_info(session_id)
+            if session_info and session_info.child_minion_ids:
+                child_ids = list(session_info.child_minion_ids)  # Make a copy
+                coord_logger.info(f"Session {session_id} has {len(child_ids)} children - cascading deletion")
+
+                for child_id in child_ids:
+                    coord_logger.info(f"Cascading: deleting child minion {child_id} of parent {session_id}")
+                    # Recursively delete child (which may have its own children)
+                    # Pass archive_reason through to children
+                    result = await self.delete_session(child_id, archive_reason=archive_reason)
+                    if result.get("success"):
+                        deleted_ids.extend(result.get("deleted_session_ids", []))
+
+                coord_logger.info(f"Cascading deletion complete for {session_id} - all {len(child_ids)} children deleted")
+
+            # Step 1: Find and remove session from its project
+            project = await self._find_project_for_session(session_id)
+            project_was_deleted = False
+
+            if project:
+                removal_success, project_was_deleted = await self.project_manager.remove_session_from_project(project.project_id, session_id)
+
+                if removal_success:
+                    if project_was_deleted:
+                        coord_logger.info(f"Removed session {session_id} from project {project.project_id} - project was empty and has been deleted")
+                    else:
+                        coord_logger.info(f"Removed session {session_id} from project {project.project_id}")
+                        # Issue #1722: strip the deleted session's kanban group assignment,
+                        # if any (no-op if the project itself was just deleted above)
+                        await self.project_manager.cleanup_session_group_assignment(project.project_id, session_id)
+                else:
+                    logger.warning(f"Failed to remove session {session_id} from project {project.project_id}")
+
+            # Step 1.5: If this is a minion with a parent overseer, remove from parent's child_minion_ids
+            # (session_info was already fetched in Step 0)
+            if not session_info:
+                session_info = await self.session_manager.get_session_info(session_id)
+
+            # Issue #349: All sessions are minions - check parent relationship directly
+            if session_info and session_info.parent_overseer_id:
+                parent_id = session_info.parent_overseer_id
+                parent_info = await self.session_manager.get_session_info(parent_id)
+
+                if parent_info and session_id in parent_info.child_minion_ids:
+                    parent_info.child_minion_ids.remove(session_id)
+                    parent_info.updated_at = datetime.now(UTC)
+                    await self.session_manager._persist_session_state(parent_id)
+                    coord_logger.info(f"Removed minion {session_id} from parent overseer {parent_id}'s child_minion_ids")
+                elif parent_info:
+                    coord_logger.warning(f"Minion {session_id} not found in parent overseer {parent_id}'s child_minion_ids")
+                else:
+                    coord_logger.warning(f"Parent overseer {parent_id} not found for minion {session_id}")
+
+            # Step 1.55: Delete schedules for deleted session (Issue #671)
+            if self.legion_system:
+                try:
+                    deleted = await self.legion_system.scheduler_service.delete_schedules_for_minion(session_id)
+                    if deleted:
+                        coord_logger.info(
+                            f"Deleted {deleted} schedules for deleted session {session_id}"
+                        )
+                except Exception as e:
+                    coord_logger.warning(
+                        f"Failed to delete schedules for session {session_id}: {e}"
+                    )
+
+            # Step 1.6: Clean up capability registry if session has capabilities (issue #349: all sessions are minions)
+            if session_info and session_info.capabilities:
+                # Clean up capability registry
+                if project and self.legion_system:
+                    self.legion_system.legion_coordinator.unregister_minion_capabilities(session_id)
+                    coord_logger.info(f"Cleaned up {len(session_info.capabilities)} capabilities from registry for minion {session_id}")
+
+            # Step 1.65: Terminate SDK and update state BEFORE archive (Issue #236)
+            # This ensures archive captures final "terminated" state (same pattern as dispose_minion)
+            sdk = self._active_sdks.get(session_id)
+            if sdk:
+                await sdk.terminate()
+                del self._active_sdks[session_id]
+                await asyncio.sleep(0.2)  # Give SDK time to fully close
+
+            # Update session state to terminated (so archive captures correct final_state)
+            if session_info and session_info.state != SessionState.TERMINATED:
+                await self.session_manager.terminate_session(session_id)
+                coord_logger.info(f"Terminated session {session_id} before archive/deletion")
+
+            # Step 1.7: Archive session before deletion (Issue #236)
+            # Archive any session in a project before deletion
+            if session_info and project and self.legion_system:
+                try:
+                    # Get parent info for archive metadata
+                    parent_name = None
+                    if session_info.parent_overseer_id:
+                        parent_info = await self.session_manager.get_session_info(session_info.parent_overseer_id)
+                        parent_name = parent_info.name if parent_info else None
+
+                    archive_result = await self.legion_system.archive_manager.archive_minion(
+                        minion_id=session_id,
+                        reason=archive_reason,
+                        parent_overseer_id=session_info.parent_overseer_id,
+                        parent_overseer_name=parent_name,
+                        descendants_count=len(deleted_ids),  # Children already deleted in cascade
+                        will_be_deleted=True  # This is a hard delete
+                    )
+                    if archive_result.success:
+                        coord_logger.info(f"Archived session {session_id} to {archive_result.archive_path} before deletion")
+                    else:
+                        coord_logger.warning(f"Failed to archive session {session_id}: {archive_result.error_message}")
+                except Exception:
+                    coord_logger.exception(f"Error archiving session {session_id} before deletion")
+
+            # Step 1.8: Legion-specific cleanup (issue #349: all sessions are minions)
+            if session_info and project and self.legion_system:
+                legion_id = project.project_id
+                coord_logger.info(f"Starting Legion-specific cleanup for minion {session_id} in legion {legion_id}")
+
+                # 1.8a: Delete minion directory in legions/{legion_id}/minions/{minion_id}/
+                minion_dir = self.data_dir / "legions" / legion_id / "minions" / session_id
+                if minion_dir.exists():
+                    try:
+                        import shutil
+                        shutil.rmtree(minion_dir)
+                        coord_logger.info(f"Deleted Legion minion directory: {minion_dir}")
+                    except Exception:
+                        coord_logger.exception(f"Failed to delete Legion minion directory {minion_dir}")
+                else:
+                    coord_logger.debug(f"Legion minion directory does not exist (already cleaned): {minion_dir}")
+
+            # Step 2: Clean up storage manager and ensure all files are closed
+            if session_id in self._storage_managers:
+                storage_manager = self._storage_managers[session_id]
+                # logger.info(f"Cleaning up storage manager for session {session_id}")
+                await storage_manager.cleanup()
+                del self._storage_managers[session_id]
+                # Give storage manager time to close all file handles
+                await asyncio.sleep(0.2)
+
+            # Step 3: Clean up callbacks
+            if session_id in self._message_callbacks:
+                del self._message_callbacks[session_id]
+            if session_id in self._error_callbacks:
+                del self._error_callbacks[session_id]
+            # Issue #858: Cleanup per-session tool-call event
+            self._tool_call_events.pop(session_id, None)
+            # Issue #1694: Cleanup per-session message-emitted barrier state
+            self._message_emitted_events.pop(session_id, None)
+            self._emitted_message_ids.pop(session_id, None)
+
+            # Step 4: Force multiple garbage collections to ensure all handles are released
+            gc.collect()
+            await asyncio.sleep(0.1)
+            gc.collect()
+            await asyncio.sleep(0.1)
+
+            # Step 5: Additional Windows-specific cleanup
+            if os.name == 'nt':  # Windows
+                # logger.info(f"Performing Windows-specific cleanup for session {session_id}")
+                # Force close any remaining handles that might be held by the system
+                gc.collect()
+                await asyncio.sleep(0.3)
+
+            # Step 6: Delete through session manager (this removes from active sessions and deletes files)
+            # logger.info(f"Deleting session files for session {session_id}")
+            success = await self.session_manager.delete_session(session_id)
+
+            if success:
+                coord_logger.info(f"Session {session_id} deleted")
+                # Issue #1125: Remove analytics rows for deleted session
+                if self.analytics_store:
+                    try:
+                        await self.analytics_store.delete_session(session_id)
+                        self._turn_seq_by_session.pop(session_id, None)
+                    except Exception:
+                        logger.exception("Failed to delete analytics for session %s", session_id)
+                # Notify about session deletion (using a special state change)
+                await self._notify_state_change(session_id, "deleted")
+                # Add this session to the deleted list
+                deleted_ids.append(session_id)
+
+            return {"success": success, "deleted_session_ids": deleted_ids}
+
+        except Exception:
+            logger.exception(f"Failed to delete integrated session {session_id}")
+            return {"success": False, "deleted_session_ids": deleted_ids}
+
+    async def _find_project_for_session(self, session_id: str) -> ProjectInfo | None:
+        """Find the project that contains a given session"""
+        projects = await self.project_manager.list_projects()
+        for project in projects:
+            if session_id in project.session_ids:
+                return project
+        return None
+
+    async def find_project_for_session(self, session_id: str) -> ProjectInfo | None:
+        """Public wrapper: find the project containing the given session."""
+        return await self._find_project_for_session(session_id)
+
+    async def get_all_descendants(self, session_id: str) -> list[dict]:
+        """Return the complete descendant list (unpaginated). Use for
+        membership/cycle checks where truncation produces incorrect results."""
+        return await self._get_all_descendants(session_id)
+
+    async def _get_all_descendants(self, session_id: str) -> list[dict]:
+        """
+        Get all descendant sessions (children, grandchildren, etc.) of a session.
+
+        Returns a list of session info dicts for all descendants, or empty list
+        if the session has no children or doesn't exist.
+        """
+        descendants = []
+
+        session_info = await self.session_manager.get_session_info(session_id)
+        if not session_info:
+            return descendants
+
+        # Check if session has any children - any session with child_minion_ids
+        # can have descendants, regardless of is_minion/is_overseer flags
+        if not session_info.child_minion_ids:
+            return descendants
+
+        # Process each child
+        for child_id in session_info.child_minion_ids:
+            child_info = await self.session_manager.get_session_info(child_id)
+            if child_info:
+                descendants.append({
+                    "session_id": child_id,
+                    "name": child_info.name,
+                    "role": child_info.role,
+                    "state": child_info.state.value if hasattr(child_info.state, 'value') else str(child_info.state),
+                    "parent_id": session_id
+                })
+                # Recursively get grandchildren
+                grandchildren = await self._get_all_descendants(child_id)
+                descendants.extend(grandchildren)
+
+        return descendants
+
+    async def get_descendants(self, session_id: str, limit: int = 50, offset: int = 0) -> dict:
+        """
+        Get descendant sessions of a session, paginated.
+
+        Returns paginated dict with descendants, total, limit, offset, has_more.
+        """
+        all_descendants = await self._get_all_descendants(session_id)
+        total = len(all_descendants)
+        sliced = all_descendants[offset : offset + limit]
+        return {
+            "descendants": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+        }
+
+    async def count_descendants(self, session_id: str) -> int:
+        """
+        Count total number of descendants (children, grandchildren, etc.).
+
+        Returns count of all descendant sessions.
+        """
+        descendants = await self._get_all_descendants(session_id)
+        return len(descendants)
+
+    async def wait_for_session_ready(self, session_id: str, timeout: float = 60.0) -> bool:
+        """Wait until session's SDK is ready to accept messages."""
+        sdk = self._active_sdks.get(session_id)
+        if not sdk:
+            return False
+        if sdk.is_running():
+            return True
+        return await sdk.wait_until_ready(timeout=timeout)
+
+    async def send_message(
+        self,
+        session_id: str,
+        message: str,
+        metadata: dict | None = None,
+        inject_timestamp: bool = True,
+    ) -> bool:
+        """Send a message through the integrated pipeline.
+
+        inject_timestamp: gates issue #1779 automatic timestamp injection. True for the
+        live user-send and queue/cron paths (the feature's intended scope: "user
+        messages"). Legion inter-agent comms and system-error messages (comm_router.py)
+        pass False — they aren't user messages and injecting into them would desync the
+        Legion timeline (comm.content persisted pre-injection) from the delivered text.
+        """
+        try:
+            sdk = self._active_sdks.get(session_id)
+            if not sdk:
+                logger.error(f"No SDK found for session {session_id}")
+                return False
+
+            # Issue #1130: Track activity for idle watchdog
+            self.session_manager.record_activity(session_id)
+
+            # Issue #1779: Automatic timestamp injection, config resolved at session start
+            # (same restart-to-take-effect convention as every other config field).
+            # `is True` (not truthy check): sdk is a test double in some callers and an
+            # unspecced AsyncMock's auto-generated attributes are truthy by default.
+            if inject_timestamp and sdk.inject_timestamps_enabled is True:
+                session_info = await self.session_manager.get_session_info(session_id)
+                message, new_injection_date = maybe_inject_timestamp(
+                    message,
+                    enabled=True,
+                    frequency=sdk.timestamp_injection_frequency,
+                    tz_name=sdk.timestamp_injection_timezone,
+                    last_injection_date=session_info.last_timestamp_injection_date if session_info else None,
+                    now_utc=datetime.now(UTC),
+                )
+                if new_injection_date:
+                    await self.session_manager.update_session(
+                        session_id, last_timestamp_injection_date=new_injection_date
+                    )
+
+            # Mark session as processing before sending message
+            await self.session_manager.update_processing_state(session_id, True)
+
+            # Send message through SDK (will be queued and processed)
+            result = await sdk.send_message(message, metadata=metadata)
+
+            if not result:
+                # Issue #1029: Send failed — set is_processing False directly.
+                # If another query is in flight, the next assistant message
+                # from the SDK stream will set it back to True.
+                await self.session_manager.update_processing_state(session_id, False)
+
+            return result
+
+        except Exception:
+            logger.exception(f"Failed to send message to session {session_id}")
+            try:
+                await self.session_manager.update_processing_state(session_id, False)
+            except Exception:
+                pass  # Don't fail on state update error
+            return False
+
+    async def interrupt_session(self, session_id: str) -> bool:
+        """Interrupt the current Claude Code SDK session"""
+        try:
+            coord_logger.info(f"Interrupt requested for session {session_id}")
+
+            # Check if SDK exists and is active
+            sdk = self._active_sdks.get(session_id)
+            if not sdk:
+                logger.warning(f"No active SDK found for session {session_id} - cannot interrupt")
+                return False
+
+            # Check session state
+            session_info = await self.session_manager.get_session_info(session_id)
+            if not session_info:
+                logger.warning(f"Session {session_id} not found - cannot interrupt")
+                return False
+
+            # Only allow interrupt for active/processing sessions
+            if session_info.state not in [SessionState.ACTIVE] and not session_info.is_processing:
+                logger.warning(f"Session {session_id} not in interruptible state (state: {session_info.state}, processing: {session_info.is_processing})")
+                return False
+
+            # Update processing state to indicate interrupting
+            # Note: We don't have an "INTERRUPTING" state, so we'll just leave it processing until interrupt completes
+            # logger.info(f"Attempting to interrupt session {session_id}")
+
+            # Call SDK interrupt method
+            result = await sdk.interrupt_session()
+
+            if result:
+                coord_logger.info(f"Session {session_id} interrupted")
+
+                # Issue #310: Mark active tools as orphaned on interrupt
+                self._mark_tools_orphaned(session_id)
+
+                # Issue #520: Mark active ToolCalls as interrupted and store ToolCallUpdate entries
+                self.mark_session_tools_interrupted(session_id)
+
+                # Send interrupt system message via callback system (following client_launched pattern)
+                await self._send_interrupt_message(session_id)
+
+                # Note: Processing state will be reset by the SDK's interrupt handling in the message processing loop
+            else:
+                logger.warning(f"Failed to initiate interrupt for session {session_id}")
+                # Reset processing state if interrupt initiation failed
+                await self.session_manager.update_processing_state(session_id, False)
+
+            return result
+
+        except Exception:
+            logger.exception(f"Failed to interrupt session {session_id}")
+            return False
+
+    async def set_permission_mode(self, session_id: str, mode: str) -> bool:
+        """Set the permission mode for a session"""
+        try:
+            coord_logger.info(f"Setting permission mode to '{mode}' for session {session_id}")
+
+            # Validate mode
+            if mode not in PermissionMode._value2member_map_:
+                logger.error(f"Invalid permission mode: {mode}")
+                return False
+
+            # Check session state
+            session_info = await self.session_manager.get_session_info(session_id)
+            if not session_info:
+                logger.warning(f"Session {session_id} not found - cannot set permission mode")
+                return False
+
+            # For non-running sessions, just persist to disk — the mode will be applied at startup
+            if session_info.state in STOPPED_STATES:
+                await self.session_manager.update_permission_mode(
+                    session_id, mode, template_manager=self.template_manager
+                )
+                coord_logger.info(f"Permission mode persisted to '{mode}' for stopped session {session_id}")
+                return True
+
+            # Check if SDK exists for live update
+            sdk = self._active_sdks.get(session_id)
+            if not sdk:
+                logger.warning(f"No active SDK found for session {session_id} - cannot set permission mode")
+                return False
+
+            # Only allow live permission mode change for active sessions
+            if session_info.state != SessionState.ACTIVE:
+                logger.warning(f"Session {session_id} not in active state (state: {session_info.state})")
+                return False
+
+            # Call SDK set_permission_mode method (may raise if SDK rejects the mode)
+            sdk_result = await sdk.set_permission_mode(mode)
+
+            if sdk_result:
+                # Update session manager's tracking of current permission mode
+                await self.session_manager.update_permission_mode(
+                    session_id, mode, template_manager=self.template_manager
+                )
+                coord_logger.info(f"Permission mode set to '{mode}' for session {session_id}")
+            else:
+                logger.warning(f"Failed to set permission mode for session {session_id}")
+
+            return sdk_result
+
+        except ValueError:
+            raise
+        except Exception as e:
+            # Re-raise as ValueError so web_server can surface the SDK error message to the user
+            logger.exception(f"Failed to set permission mode for session {session_id}")
+            raise ValueError(str(e)) from e
+
+    async def set_model(self, session_id: str, model: str) -> bool:
+        """Set the model for a session, live-switching if active (no restart required)."""
+        try:
+            coord_logger.info(f"Setting model to '{model}' for session {session_id}")
+
+            # Validate model
+            if model not in VALID_MODELS:
+                logger.error(f"Invalid model: {model}")
+                return False
+
+            # Check session state
+            session_info = await self.session_manager.get_session_info(session_id)
+            if not session_info:
+                logger.warning(f"Session {session_id} not found - cannot set model")
+                return False
+
+            # For non-running sessions, just persist to disk — the model will be applied at startup
+            if session_info.state in STOPPED_STATES:
+                await self.session_manager.update_model(
+                    session_id, model, template_manager=self.template_manager
+                )
+                coord_logger.info(f"Model persisted to '{model}' for stopped session {session_id}")
+                return True
+
+            # Check if SDK exists for live update
+            sdk = self._active_sdks.get(session_id)
+            if not sdk:
+                logger.warning(f"No active SDK found for session {session_id} - cannot set model")
+                return False
+
+            # Only allow live model change for active sessions
+            if session_info.state != SessionState.ACTIVE:
+                logger.warning(f"Session {session_id} not in active state (state: {session_info.state})")
+                return False
+
+            # Call SDK set_model method (may raise if SDK rejects the model)
+            sdk_result = await sdk.set_model(model)
+
+            if sdk_result:
+                # Update session manager's tracking of current model
+                await self.session_manager.update_model(
+                    session_id, model, template_manager=self.template_manager
+                )
+                coord_logger.info(f"Model set to '{model}' for session {session_id}")
+            else:
+                logger.warning(f"Failed to set model for session {session_id}")
+
+            return sdk_result
+
+        except ValueError:
+            raise
+        except Exception as e:
+            # Re-raise as ValueError so web_server can surface the SDK error message to the user
+            logger.exception(f"Failed to set model for session {session_id}")
+            raise ValueError(str(e)) from e
+
+    async def get_mcp_status(self, session_id: str) -> dict:
+        """Get MCP server status for a session."""
+        try:
+            sdk = self._active_sdks.get(session_id)
+            if not sdk:
+                logger.warning(f"No active SDK found for session {session_id} - cannot get MCP status")
+                return {"servers": []}
+
+            return await sdk.get_mcp_status()
+        except Exception:
+            logger.exception(f"Failed to get MCP status for session {session_id}")
+            return {"servers": []}
+
+    async def get_context_usage(self, session_id: str) -> dict:
+        """Get context usage for a session via SDK."""
+        sdk = self._active_sdks.get(session_id)
+        if not sdk:
+            return {}
+        return await sdk.get_context_usage()
+
+    async def toggle_mcp_server(self, session_id: str, name: str, enabled: bool) -> None:
+        """Toggle an MCP server on or off for a session. Raises on failure."""
+        sdk = self._active_sdks.get(session_id)
+        if not sdk:
+            raise RuntimeError(f"No active SDK found for session {session_id}")
+
+        await sdk.toggle_mcp_server(name, enabled)
+
+    async def reconnect_mcp_server(self, session_id: str, name: str) -> None:
+        """Reconnect a failed MCP server for a session. Raises on failure."""
+        sdk = self._active_sdks.get(session_id)
+        if not sdk:
+            raise RuntimeError(f"No active SDK found for session {session_id}")
+
+        await sdk.reconnect_mcp_server(name)
+
+    async def add_directory(self, session_id: str, directory: str) -> dict:
+        """Register a new working directory on an active session, live (issue #1675).
+
+        Unlike a stopped-session config edit, this takes effect immediately via the
+        SDK's register_repo_root control request, and is persisted so it survives a
+        future restart. Docker-isolated sessions are rejected — new host paths can't
+        be mounted into an already-running container. Raises ValueError on any
+        rejection (Docker guard, path validation, CLI-side error) so the REST layer
+        can surface a clear 400.
+        """
+        from .routers._models import _validate_new_additional_directory
+
+        session_info = await self.session_manager.get_session_info(session_id)
+        if not session_info:
+            raise ValueError(f"Session {session_id} not found")
+
+        if session_info.config.get("docker_enabled"):
+            raise ValueError(
+                "Adding directories to a running Docker session requires a restart — "
+                "the path cannot be mounted into the running container."
+            )
+
+        if session_info.state != SessionState.ACTIVE:
+            raise ValueError(f"Session not in active state (state: {session_info.state})")
+
+        sdk = self._active_sdks.get(session_id)
+        if not sdk:
+            raise ValueError(f"No active SDK found for session {session_id}")
+
+        normalized = _validate_new_additional_directory(
+            directory,
+            session_info.working_directory,
+            session_info.config.get("additional_directories"),
+        )
+
+        try:
+            result = await sdk.register_repo_root(normalized)
+        except Exception as e:
+            logger.exception(f"Failed to register repo root for session {session_id}")
+            raise ValueError(str(e)) from e
+
+        resolved_directory = result.get("directory", normalized) if isinstance(result, dict) else normalized
+
+        await self.session_manager.update_additional_directories(session_id, [resolved_directory])
+        coord_logger.info(f"Registered directory '{resolved_directory}' for session {session_id}")
+
+        return {"directory": resolved_directory}
+
+    async def restart_session(self, session_id: str, permission_callback: Callable | None = None) -> bool:
+        """
+        Restart a session by disconnecting SDK and resuming with same session ID.
+
+        This is useful for unsticking the agent without losing conversation history.
+        """
+        try:
+            coord_logger.info(f"Restarting session {session_id}")
+
+            # Get current SDK if it exists
+            sdk = self._active_sdks.get(session_id)
+            if sdk:
+                # Disconnect existing SDK gracefully
+                coord_logger.debug(f"Disconnecting existing SDK for session {session_id}")
+                disconnect_result = await sdk.disconnect()
+                if not disconnect_result:
+                    logger.warning(f"SDK disconnect returned False for session {session_id}")
+
+                # Update session state to TERMINATED after disconnect
+                await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
+
+                # Wait for cleanup — Docker --rm needs time to remove crashed containers
+                # before a new container can be started (issue #781)
+                await asyncio.sleep(1.0)
+
+                # Remove old SDK reference
+                del self._active_sdks[session_id]
+            else:
+                # No active SDK - restart will act like a fresh start
+                coord_logger.debug(f"No existing SDK for session {session_id}, will create new one")
+                # Ensure session state is TERMINATED before starting
+                await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
+
+            # Issue #1130: Clear watchdog state so next episode starts fresh
+            if hasattr(self, '_watchdog') and self._watchdog is not None:
+                self._watchdog.reset_session(session_id)
+
+            # Issue #1513: Reset unread state — a restart is a new context.
+            try:
+                await self.session_manager.update_session(
+                    session_id,
+                    last_completion_at=None,
+                    last_viewed_at=None,
+                )
+            except Exception:
+                logger.exception(f"Failed to clear unread timestamps for session {session_id}")
+
+            # Start session again (will automatically resume using claude_code_session_id)
+            success = await self.start_session(session_id, permission_callback)
+
+            if success:
+                coord_logger.info(f"Session {session_id} restarted successfully")
+            else:
+                logger.error(f"Failed to restart session {session_id}")
+
+            return success
+
+        except Exception:
+            logger.exception(f"Failed to restart session {session_id}")
+            return False
+
+    async def reset_session(self, session_id: str, permission_callback: Callable | None = None, _from_queue_processor: bool = False) -> bool:
+        """
+        Reset a session by clearing all messages and starting fresh.
+
+        Keeps session settings (permission mode, tools, etc.) but clears conversation history.
+        Queue: pending items preserved, in-flight items marked failed.
+
+        Args:
+            _from_queue_processor: When True, skip stopping the queue processor to avoid
+                cancelling the calling task (the processor manages its own lifecycle).
+        """
+        try:
+            coord_logger.info(f"Resetting session {session_id}")
+
+            # Issue #976: Release per-server OAuth refresh ref counts for this session
+            _reset_info = await self.session_manager.get_session_info(session_id)
+            if _reset_info and _reset_info.config.get("mcp_server_ids"):
+                _reset_configs = self.mcp_config_manager.get_configs_by_ids(_reset_info.config.get("mcp_server_ids"))
+                for _cfg in _reset_configs:
+                    if _cfg.oauth_enabled:
+                        self.oauth_refresh_manager.release_refresh(_cfg.id)
+                    # Issue #1484: release shared-connection refcount on reset
+                    if getattr(_cfg, "shared_connection", False):
+                        await self.shared_mcp_manager.release(_cfg.id)
+
+            # Issue #500: Stop queue processor and mark any in-flight item as failed
+            # Skip when called from the processor itself to avoid self-cancellation
+            if not _from_queue_processor:
+                self.queue_processor.stop(session_id)
+
+            # Issue #1130: Clear watchdog state so next episode starts fresh
+            if hasattr(self, '_watchdog') and self._watchdog is not None:
+                self._watchdog.reset_session(session_id)
+
+            # Get current SDK and disconnect
+            sdk = self._active_sdks.get(session_id)
+            if sdk:
+                await sdk.disconnect()
+                await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
+                await asyncio.sleep(0.5)
+                del self._active_sdks[session_id]
+
+            # Issue #1019: If session is in ERROR state (no active SDK to disconnect),
+            # transition to TERMINATED so start_session() will accept it.
+            _pre_reset_info = await self.session_manager.get_session_info(session_id)
+            if _pre_reset_info and _pre_reset_info.state == SessionState.ERROR:
+                await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
+                coord_logger.info(f"Transitioned errored session {session_id} to TERMINATED for reset")
+
+            # Clear Claude Code session ID from state (prevents resume)
+            session_info = await self.session_manager.get_session_info(session_id)
+            if session_info:
+                await self.session_manager.update_claude_code_session_id(session_id, None)
+                coord_logger.info(f"Cleared Claude Code session ID for {session_id}")
+
+            # Archive session data before clearing (Issue #579)
+            await self._archive_session_for_reset(session_id)
+
+            # Clear message history
+            storage = self._storage_managers.get(session_id)
+            if not storage:
+                # Create storage manager on-demand for inactive sessions
+                coord_logger.debug(f"Creating storage manager for inactive session {session_id}")
+                session_dir = await self.session_manager.get_session_directory(session_id)
+                storage = DataStorageManager(session_dir)
+                await storage.initialize()
+                self._storage_managers[session_id] = storage
+
+            # Clear messages and resources (storage now guaranteed to exist)
+            if storage:
+                await storage.clear_messages()
+                coord_logger.info(f"Cleared message history for session {session_id}")
+                await storage.clear_resources()
+                coord_logger.info(f"Cleared resources for session {session_id}")
+                # Issue #1244: clear queue + attachments (archive already captured them)
+                await storage.clear_queue()
+                coord_logger.info(f"Cleared queue for session {session_id}")
+                await storage.clear_attachments()
+                coord_logger.info(f"Cleared attachments for session {session_id}")
+                # Issue #1746: Drop cached task leg registry along with the
+                # cleared message history it was built from.
+                self._task_leg_registries.pop(session_id, None)
+
+            # Issue #1244: rotate proxy logs then clear non-proxy docker_claude_data and tmp
+            await self._rotate_proxy_logs(session_id)
+            await self._clear_docker_claude_data(session_id, keep_subdirs={"proxy"})
+            await self._clear_session_tmp(session_id)
+
+            # Issue #1513: Reset unread state — a reset is a new context.
+            try:
+                await self.session_manager.update_session(
+                    session_id,
+                    last_completion_at=None,
+                    last_viewed_at=None,
+                )
+            except Exception:
+                logger.exception(f"Failed to clear unread timestamps for session {session_id}")
+
+            # Issue #310: Reset DisplayProjection state (clears tool tracking)
+            self._reset_display_projection(session_id)
+            # Issue #858: Clear event so stale set() signals don't skip the next wait.
+            if session_id in self._tool_call_events:
+                self._tool_call_events[session_id].clear()
+            # Issue #1694: Clear barrier state so stale set() signals / emitted message_ids
+            # from the prior conversation don't leak into the reset session.
+            if session_id in self._message_emitted_events:
+                self._message_emitted_events[session_id].clear()
+            self._emitted_message_ids.pop(session_id, None)
+            # Issue #894: Cleanup retry sequence tracking on reset
+            self._retry_sequences.pop(session_id, None)
+
+            # Issue #500: Notify frontend to clear messages for this session
+            await self._notify_session_reset(session_id)
+
+            # Start fresh session (will create new Claude Code session)
+            success = await self.start_session(session_id, permission_callback)
+
+            if success:
+                coord_logger.info(f"Session {session_id} reset successfully")
+            else:
+                logger.error(f"Failed to reset session {session_id}")
+
+            return success
+
+        except Exception:
+            logger.exception(f"Failed to reset session {session_id}")
+            return False
+
+    async def _archive_session_for_reset(self, session_id: str) -> bool:
+        """Archive session data before a reset so it can be reviewed later.
+
+        Uses snapshot_artifacts() with is_reset=True so that queue.jsonl,
+        attachments/, and proxy logs are captured but history/memory are left
+        in place (decision #5).  Writes disposal_metadata.json with reason="reset".
+
+        Returns True on success, False on failure (logged, never raised).
+        """
+        try:
+            from backend.legion.archive_manager import SnapshotContext
+            from backend.models.archive_models import DisposalMetadata
+
+            session_info = await self.session_manager.get_session_info(session_id)
+            session_dir = self.session_manager.sessions_dir / session_id
+            # Use microsecond-precision timestamp for cross-path consistency
+            timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
+            archive_dir = (
+                self.session_manager.data_dir / "archives" / "minions" / session_id / timestamp
+            )
+            archive_dir.mkdir(parents=True, exist_ok=True)
+
+            # Determine project/legion ID for metadata + snapshot context
+            project_id = ""
+            if session_info:
+                for proj in await self.project_manager.list_projects():
+                    if session_id in proj.session_ids:
+                        project_id = proj.project_id
+                        break
+
+            # Build snapshot context
+            cfg = session_info.config if session_info else {}
+            auto_mem_raw = cfg.get("auto_memory_directory")
+            ctx = SnapshotContext(
+                session_id=session_id,
+                legion_id=project_id or None,
+                auto_memory_directory=Path(auto_mem_raw) if auto_mem_raw else None,
+                docker_enabled=bool(cfg.get("docker_enabled", False)),
+                proxy_enabled=bool(cfg.get("docker_proxy_enabled", False)),
+                is_reset=True,
+                will_be_deleted=False,
+            )
+
+            # Delegate to unified artifact snapshot
+            archive_manager = self.legion_system.archive_manager
+            await archive_manager.snapshot_artifacts(session_dir, archive_dir, ctx)
+
+            # Write disposal_metadata.json using the shared dataclass
+            metadata = DisposalMetadata(
+                disposed_at=datetime.now(UTC).timestamp(),
+                reason="reset",
+                parent_overseer_id=None,
+                parent_overseer_name=None,
+                legion_id=project_id,
+                final_state="reset",
+                minion_id=session_id,
+                minion_name=session_info.name if session_info else "",
+                minion_role=session_info.role if session_info else None,
+                overseer_level=0,
+                child_minion_ids=[],
+                descendants_count=0,
+            )
+            metadata_path = archive_dir / "disposal_metadata.json"
+            metadata_path.write_text(json.dumps(metadata.to_dict(), indent=2))
+
+            # Fire-and-forget distillation — writes to live history/ (decision #5).
+            # Uses the archived copy of messages.jsonl so the live file can be truncated.
+            # Issue #1059: Use resolve_effective_config to support template-linked sessions.
+            _eff_for_archive = await resolve_effective_config(
+                session_info, self.template_manager, self.profile_manager
+            )
+            if _eff_for_archive.history_distillation_enabled:
+                archived_messages = archive_dir / "messages.jsonl"
+                if archived_messages.exists():
+                    from backend.history_distiller import distill_session_history
+
+                    history_output = session_dir / "history" / f"{timestamp}.md"
+                    archive_ts = datetime.now(UTC).isoformat()
+                    t = asyncio.create_task(
+                        distill_session_history(archived_messages, history_output, session_id, archive_ts)
+                    )
+                    t.add_done_callback(task_done_log_exception)
+                    coord_logger.debug(f"Launched history distillation for session {session_id}")
+
+            coord_logger.info(f"Archived session {session_id} to {archive_dir}")
+            return True
+
+        except Exception as e:
+            coord_logger.warning(f"Archive before reset failed for {session_id}: {e}")
+            return False
+
+    async def _rotate_proxy_logs(self, session_id: str) -> None:
+        """Truncate proxy log files to empty after archiving (issue #1244, decision #11).
+
+        Truncate rather than unlink so the file descriptor stays valid if the
+        proxy container is mid-write at reset time.
+        """
+        proxy_dir = self.session_manager.sessions_dir / session_id / "docker_claude_data" / "proxy"
+        if not proxy_dir.is_dir():
+            return
+        for name in ("access.log", "dns.log", "socks5.log", "dropped.log"):
+            log_file = proxy_dir / name
+            if log_file.exists():
+                try:
+                    log_file.write_bytes(b"")
+                    coord_logger.debug(f"Truncated proxy log {name} for {session_id}")
+                except OSError:
+                    logger.exception(f"Failed to truncate proxy log {name} for {session_id}")
+
+    async def _clear_docker_claude_data(
+        self, session_id: str, keep_subdirs: set[str] | None = None
+    ) -> None:
+        """Remove all subdirs under docker_claude_data/ except those in keep_subdirs.
+
+        Subdirs are recreated by claude-docker on next session start.
+        """
+        keep = keep_subdirs or set()
+        docker_data_dir = (
+            self.session_manager.sessions_dir / session_id / "docker_claude_data"
+        )
+        if not docker_data_dir.is_dir():
+            return
+        for child in docker_data_dir.iterdir():
+            if child.is_dir() and child.name not in keep:
+                try:
+                    shutil.rmtree(child)
+                    coord_logger.debug(f"Removed docker_claude_data/{child.name} for {session_id}")
+                except OSError:
+                    logger.exception(
+                        f"Failed to remove docker_claude_data/{child.name} for {session_id}"
+                    )
+
+    async def _clear_session_tmp(self, session_id: str) -> None:
+        """Remove the session's tmp/ directory (issue #1244, decision #3)."""
+        tmp_dir = self.session_manager.sessions_dir / session_id / "tmp"
+        if tmp_dir.is_dir():
+            try:
+                shutil.rmtree(tmp_dir)
+                coord_logger.debug(f"Removed tmp/ for {session_id}")
+            except OSError:
+                logger.exception(f"Failed to remove tmp/ for {session_id}")
+
+    async def _build_effective_config_payload(
+        self, session_info
+    ) -> tuple[dict | None, dict | None]:
+        """Return (effective_config_dict, template_meta) for template-linked sessions.
+
+        Returns (None, None) for standalone sessions or on resolution failure.
+        """
+        if not session_info.template_id:
+            return None, None
+        try:
+            eff = await resolve_effective_config(
+                session_info, self.template_manager, self.profile_manager
+            )
+            effective_config_dict = eff.model_dump()
+            tmpl = await self.template_manager.get_template(session_info.template_id)
+            template_meta = None
+            if tmpl:
+                template_meta = {
+                    "template_id": tmpl.template_id,
+                    "name": tmpl.name,
+                    "profile_ids": tmpl.profile_ids or {},
+                }
+            return effective_config_dict, template_meta
+        except Exception:
+            logger.warning(
+                f"Failed to build effective_config for session {session_info.session_id}"
+            )
+            return None, None
+
+    async def get_session_info(self, session_id: str) -> dict[str, Any] | None:
+        """Get comprehensive session information"""
+        try:
+            # Get session info from manager
+            session_info = await self.session_manager.get_session_info(session_id)
+            if not session_info:
+                return None
+
+            # Get SDK status
+            sdk_info = {}
+            sdk = self._active_sdks.get(session_id)
+            if sdk:
+                sdk_info = sdk.get_info()
+                sdk_info.update({
+                    "queue_size": sdk.get_queue_size(),
+                })
+
+            # Get storage stats
+            storage_info = {}
+            storage = self._storage_managers.get(session_id)
+            if storage:
+                storage_info = {
+                    "message_count": await storage.get_message_count()
+                }
+
+            # Augment with SDK session metadata if claude_code_session_id is available
+            sdk_session_info = None
+            if session_info.claude_code_session_id:
+                try:
+                    from claude_agent_sdk import get_session_info as sdk_get_session_info
+                    result = await asyncio.to_thread(
+                        sdk_get_session_info,
+                        session_info.claude_code_session_id,
+                        session_info.working_directory,
+                    )
+                    if result:
+                        sdk_session_info = {
+                            "summary": result.summary,
+                            "custom_title": result.custom_title,
+                            "git_branch": result.git_branch,
+                            "first_prompt": result.first_prompt,
+                            "tag": result.tag,
+                            "created_at": str(result.created_at) if result.created_at else None,
+                            "last_modified": str(result.last_modified) if result.last_modified else None,
+                        }
+                except Exception:
+                    logger.warning(f"SDK get_session_info failed for {session_id}")
+
+            effective_config_dict, template_meta = await self._build_effective_config_payload(
+                session_info
+            )
+
+            return {
+                "session": session_info.to_dict(),
+                "sdk": sdk_info,
+                "storage": storage_info,
+                "sdk_session_info": sdk_session_info,
+                "effective_config": effective_config_dict,
+                "template": template_meta,
+            }
+
+        except Exception:
+            logger.exception(f"Failed to get session info for {session_id}")
+            return None
+
+    async def list_sessions(self, limit: int = 500, offset: int = 0) -> dict[str, Any]:
+        """List all sessions with their current status, paginated."""
+        try:
+            sessions = await self.session_manager.list_sessions()
+            all_sessions = []
+            for session_info in sessions:
+                entry = session_info.to_dict()
+                if session_info.template_id:
+                    eff, _tmpl = await self._build_effective_config_payload(session_info)
+                    entry["effective_config"] = eff
+                all_sessions.append(entry)
+            total = len(all_sessions)
+            sliced = all_sessions[offset : offset + limit]
+            return {
+                "sessions": sliced,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": offset + len(sliced) < total,
+            }
+        except Exception:
+            logger.exception("Failed to list sessions")
+            return {"sessions": [], "total": 0, "limit": limit, "offset": offset, "has_more": False}
+
+    @staticmethod
+    def _extract_agent_name(description: str | None) -> str:
+        """Extract agent name from task description (e.g., 'alpha: You are...' -> 'alpha')."""
+        if not description:
+            return ""
+        colon_idx = description.find(":")
+        if 0 < colon_idx < 50:
+            return description[:colon_idx].strip()
+        return description[:40] + "..." if len(description) > 40 else description
+
+    # Issue #1676: CLI phrasing for background subagent Notification hook messages.
+    _AGENT_NOTIFICATION_MESSAGE_SUFFIXES = (
+        " needs your input",
+        " finished",
+        " failed",
+    )
+
+    @staticmethod
+    def _parse_agent_notification_label(message: str | None) -> str | None:
+        """Best-effort label parse from a Notification hook's free-text message (issue #1676).
+
+        Isolated here as a single edit point if the CLI's message phrasing changes.
+        """
+        if not message:
+            return None
+        for suffix in SessionCoordinator._AGENT_NOTIFICATION_MESSAGE_SUFFIXES:
+            if message.endswith(suffix):
+                return message[: -len(suffix)]
+        return None
+
+    def _convert_stored_message_to_websocket(self, stored_msg: dict[str, Any]) -> dict[str, Any] | None:
+        """
+        Convert new StoredMessage format (_type discriminator) to WebSocket format.
+
+        Issue #310: The new dataclass-based StoredMessage uses _type as discriminator
+        and stores message data in the 'data' field. This method converts it to the
+        legacy format expected by the frontend.
+        """
+        try:
+            _type = stored_msg.get("_type", "")
+            data = stored_msg.get("data", {})
+            timestamp = stored_msg.get("timestamp")
+            session_id = stored_msg.get("session_id")
+            display = stored_msg.get("display")
+
+            # Issue #494: ToolCallUpdate messages are returned as tool_call type directly
+            if _type == "ToolCallUpdate":
+                tool_call_data = dict(data)
+                triggering = tool_call_data.pop("_triggering_message", None)
+                tool_call_data["type"] = "tool_call"
+                # Preserve request_id from triggering PermissionRequestMessage so that
+                # page-refresh recovery can still correlate permission responses.
+                if (
+                    triggering
+                    and not tool_call_data.get("request_id")
+                    and isinstance(triggering.get("data"), dict)
+                ):
+                    req_id = triggering["data"].get("request_id")
+                    if req_id:
+                        tool_call_data["request_id"] = req_id
+                return tool_call_data
+
+            # Map _type to legacy type string
+            type_mapping = {
+                "AssistantMessage": "assistant",
+                "UserMessage": "user",
+                "SystemMessage": "system",
+                "ResultMessage": "result",
+                "PermissionRequestMessage": "permission_request",
+                "PermissionResponseMessage": "permission_response",
+            }
+            legacy_type = type_mapping.get(_type, "system")
+
+            # Extract content from data
+            content = ""
+            if "content" in data:
+                raw_content = data["content"]
+                if isinstance(raw_content, str):
+                    content = raw_content
+                elif isinstance(raw_content, list):
+                    # Extract text from content blocks
+                    # For AssistantMessages, only include actual text - NOT tool_use blocks
+                    # Tool uses should be suppressed from content display (handled via metadata)
+                    texts = []
+                    for block in raw_content:
+                        if isinstance(block, dict):
+                            if "text" in block:
+                                texts.append(block["text"])
+                            # Skip thinking blocks - they go into metadata.thinking_blocks
+                            # Skip tool_use blocks - they go into metadata.tool_uses
+                            # Neither should contribute to the content string
+                    content = " ".join(texts) if texts else ""
+
+            # Build metadata
+            metadata = {}
+
+            # Extract tool uses from AssistantMessage
+            tool_uses = []
+            if _type == "AssistantMessage" and isinstance(data.get("content"), list):
+                for block in data["content"]:
+                    if isinstance(block, dict) and "id" in block and "name" in block:
+                        tool_uses.append(block)
+            if tool_uses:
+                metadata["has_tool_uses"] = True
+                metadata["tool_uses"] = tool_uses
+
+            # Extract tool results from UserMessage
+            tool_results = []
+            if _type == "UserMessage" and isinstance(data.get("content"), list):
+                for block in data["content"]:
+                    if isinstance(block, dict) and "tool_use_id" in block:
+                        tool_results.append(block)
+            if tool_results:
+                metadata["has_tool_results"] = True
+                metadata["tool_results"] = tool_results
+
+            # Extract parent_tool_use_id for Task subagent filtering (Issue #384, #195)
+            # Present on both UserMessage (prompt) and AssistantMessage (subagent responses)
+            if data.get("parent_tool_use_id"):
+                metadata["parent_tool_use_id"] = data["parent_tool_use_id"]
+
+            # Extract thinking blocks
+            thinking_blocks = []
+            if _type == "AssistantMessage" and isinstance(data.get("content"), list):
+                for block in data["content"]:
+                    if isinstance(block, dict) and "thinking" in block:
+                        thinking_blocks.append({
+                            "content": block["thinking"],
+                            "timestamp": timestamp,
+                        })
+            if thinking_blocks:
+                metadata["has_thinking"] = True
+                metadata["thinking_blocks"] = thinking_blocks
+                metadata["thinking_content"] = " ".join(
+                    block["content"] for block in thinking_blocks
+                )
+
+            # Handle SystemMessage subtypes (including Task* subclasses)
+            if _type in ("SystemMessage", "HookEventMessage", "TaskStartedMessage", "TaskProgressMessage", "TaskNotificationMessage", "TaskUpdatedMessage"):
+                subtype = data.get("subtype")
+                if subtype:
+                    metadata["subtype"] = subtype
+                # Extract init_data if present
+                if data.get("data"):
+                    metadata["init_data"] = data["data"]
+
+                # Issue #677: Extract task message metadata from stored format
+                if _type == "TaskStartedMessage":
+                    metadata["subtype"] = "task_started"
+                    metadata["task_id"] = data.get("task_id")
+                    metadata["description"] = data.get("description")
+                    metadata["task_session_id"] = data.get("session_id")
+                    metadata["task_type"] = data.get("task_type")
+                    metadata["uuid"] = data.get("uuid")
+                    metadata["tool_use_id"] = data.get("tool_use_id")
+                    agent_name = self._extract_agent_name(data.get("description"))
+                    content = f"Agent spawned: {agent_name}" if agent_name else "Agent spawned"
+                elif _type == "TaskProgressMessage":
+                    metadata["subtype"] = "task_progress"
+                    metadata["task_id"] = data.get("task_id")
+                    metadata["description"] = data.get("description")
+                    metadata["task_session_id"] = data.get("session_id")
+                    metadata["last_tool_name"] = data.get("last_tool_name")
+                    metadata["uuid"] = data.get("uuid")
+                    metadata["tool_use_id"] = data.get("tool_use_id")
+                    if data.get("usage"):
+                        metadata["usage"] = data["usage"]
+                    agent_name = self._extract_agent_name(data.get("description"))
+                    tool = f" [{data.get('last_tool_name')}]" if data.get("last_tool_name") else ""
+                    content = f"Agent progress: {agent_name}{tool}" if agent_name else f"Agent progress{tool}"
+                elif _type == "TaskNotificationMessage":
+                    metadata["subtype"] = "task_notification"
+                    metadata["task_id"] = data.get("task_id")
+                    metadata["status"] = data.get("status")
+                    metadata["summary"] = data.get("summary")
+                    metadata["task_session_id"] = data.get("session_id")
+                    metadata["output_file"] = data.get("output_file")
+                    metadata["uuid"] = data.get("uuid")
+                    metadata["tool_use_id"] = data.get("tool_use_id")
+                    if data.get("usage"):
+                        metadata["usage"] = data["usage"]
+                    status = data.get("status", "unknown")
+                    summary = data.get("summary") or ""
+                    content = f"Agent {status}: {summary}" if summary else f"Agent {status}"
+                elif _type == "TaskUpdatedMessage":
+                    metadata["subtype"] = "task_updated"
+                    metadata["task_id"] = data.get("task_id")
+                    metadata["status"] = data.get("status")
+                    # Issue #1746: patch carries the changed fields (e.g. status,
+                    # end_time) — status is sometimes only reported inside patch,
+                    # not the top-level field.
+                    metadata["patch"] = data.get("patch")
+                    metadata["tool_use_id"] = data.get("tool_use_id")
+                    metadata["uuid"] = data.get("uuid")
+                    content = "Agent task updated"
+
+                # Issue #571: Synthesize content for hook messages from stored format
+                elif subtype in ("hook_started", "hook_response"):
+                    hook_data = data.get("data") or {}
+                    # Issue #1676: background subagent notifications (agent_needs_input/agent_completed)
+                    if data.get("hook_event_name") == "Notification" or hook_data.get("hook_event_name") == "Notification":
+                        metadata["subtype"] = "agent_notification"
+                        metadata["notification_type"] = hook_data.get("notification_type")
+                        metadata["message"] = hook_data.get("message")
+                        metadata["title"] = hook_data.get("title")
+                        metadata["label"] = self._parse_agent_notification_label(hook_data.get("message"))
+                        # Issue #1676: HookEventMessage.uuid (top-level dataclass field, not part
+                        # of the nested hook payload) lets the frontend dismiss individual notifications.
+                        if data.get("uuid"):
+                            metadata["uuid"] = data["uuid"]
+                        content = hook_data.get("message") or content
+                    else:
+                        hook_name = hook_data.get("hook_name", hook_data.get("hookName", "unknown"))
+                        hook_event = hook_data.get("hook_event", hook_data.get("hookEvent", ""))
+                        if subtype == "hook_started":
+                            content = f"Hook: {hook_name} ({hook_event})" if hook_event else f"Hook: {hook_name}"
+                        else:
+                            exit_code = hook_data.get("exit_code", hook_data.get("exitCode"))
+                            if exit_code == 0:
+                                display = hook_data.get("stdout") or hook_data.get("outcome", "success")
+                            else:
+                                display = hook_data.get("stderr") or hook_data.get("outcome", "failed")
+                            content = f"Hook: {hook_name} \u2192 {display}"
+                            if exit_code is not None:
+                                metadata["exit_code"] = exit_code
+
+                # Issue #1756: Synthesize content for permission-mode-change status messages
+                elif subtype == "status":
+                    status_data = data.get("data") or {}
+                    permission_mode = status_data.get("permissionMode")
+                    if permission_mode:
+                        metadata["subtype"] = "permission_mode_change"
+                        metadata["permission_mode"] = permission_mode
+                        content = f"Permission mode changed to {permission_mode}"
+
+                # Issue #1756: Synthesize content for api_retry messages (mirrors
+                # message_parser.py SystemMessageHandler's live-path logic, lines 453-465)
+                elif subtype in ("api_retry", "tengu_api_retry"):
+                    retry_data = data.get("data") or {}
+                    attempt = retry_data.get("attempt") or retry_data.get("attemptNumber")
+                    max_retries = retry_data.get("max_retries") or retry_data.get("maxRetries")
+                    wait_ms = (
+                        retry_data.get("wait_ms")
+                        or retry_data.get("waitMs")
+                        or retry_data.get("retryAfterMs")
+                    )
+                    metadata["attempt"] = attempt
+                    metadata["max_retries"] = max_retries
+                    metadata["wait_sec"] = round(wait_ms / 1000) if wait_ms else None
+                    metadata["subtype"] = "api_retry"
+                    attempt_str = f"{attempt}/{max_retries}" if attempt and max_retries else str(attempt or "?")
+                    wait_str = f" (~{round(wait_ms / 1000)}s)" if wait_ms else ""
+                    content = f"API retry {attempt_str}{wait_str}"
+
+            # Handle ResultMessage
+            if _type == "ResultMessage":
+                subtype = data.get("subtype")
+                if subtype:
+                    metadata["subtype"] = subtype
+                # Copy usage data
+                for key in ["usage", "model_usage", "duration_ms", "duration_api_ms", "total_cost_usd", "num_turns"]:
+                    if key in data:
+                        metadata[key] = data[key]
+                # Copy stop_reason for truncation detection
+                if "stop_reason" in data:
+                    metadata["stop_reason"] = data["stop_reason"]
+                # Copy errors and permission_denials for error display
+                if "errors" in data:
+                    metadata["errors"] = data["errors"]
+                if "permission_denials" in data:
+                    metadata["permission_denials"] = data["permission_denials"]
+                # Copy deferred_tool_use for frontend deferral banner
+                if "deferred_tool_use" in data:
+                    metadata["deferred_tool_use"] = data["deferred_tool_use"]
+
+            # Handle PermissionRequestMessage
+            if _type == "PermissionRequestMessage":
+                metadata["request_id"] = data.get("request_id")
+                metadata["tool_name"] = data.get("tool_name")
+                metadata["input_params"] = data.get("input_params", {})
+                metadata["suggestions"] = data.get("suggestions", [])
+                metadata["has_permission_requests"] = True
+
+            # Handle PermissionResponseMessage
+            if _type == "PermissionResponseMessage":
+                metadata["request_id"] = data.get("request_id")
+                metadata["decision"] = data.get("decision")
+                metadata["tool_name"] = data.get("tool_name")
+                metadata["reasoning"] = data.get("reasoning")
+                metadata["applied_updates"] = data.get("applied_updates", [])
+                # Include updated_input for AskUserQuestion answers
+                if data.get("updated_input"):
+                    metadata["updated_input"] = data["updated_input"]
+
+            # Add display metadata if present (Issue #310)
+            if display:
+                metadata["display"] = display
+
+            # Build websocket message
+            websocket_data = {
+                "type": legacy_type,
+                "content": content,
+                "timestamp": timestamp,
+                "session_id": session_id,
+                "metadata": metadata,
+            }
+
+            # Add subtype at root level for backward compatibility
+            if metadata.get("subtype"):
+                websocket_data["subtype"] = metadata["subtype"]
+
+            return websocket_data
+
+        except Exception as e:
+            coord_logger.warning(f"Failed to convert StoredMessage to WebSocket format: {e}")
+            return None
+
+    # ==================== TASK LEG REGISTRY (Issue #1746) ====================
+
+    async def _get_task_leg_registry(self, session_id: str) -> TaskLegRegistry:
+        """Get (lazily hydrating) the per-session TaskLegRegistry.
+
+        Hydration replays every stored Task lifecycle message once via
+        _convert_stored_message_to_websocket — the same reconstruction the
+        reload/history path already uses — so a page refresh and a
+        live-streamed session converge on identical state. Only cached once
+        a storage manager is available; if the session hasn't been started
+        yet in this process, an ephemeral empty registry is returned so a
+        later call (once storage exists) can still hydrate properly.
+        """
+        registry = self._task_leg_registries.get(session_id)
+        if registry is not None:
+            return registry
+
+        registry = TaskLegRegistry()
+        storage = self._storage_managers.get(session_id)
+        if storage:
+            raw_messages = await storage.read_messages()
+            for raw_message in raw_messages:
+                if raw_message.get("_type") not in _TASK_LIFECYCLE_STORED_TYPES:
+                    continue
+                ws_data = self._convert_stored_message_to_websocket(raw_message)
+                if not ws_data:
+                    continue
+                metadata = ws_data.get("metadata") or {}
+                subtype = metadata.get("subtype")
+                if subtype:
+                    registry.apply_frame(subtype, metadata, ws_data.get("timestamp"))
+            self._task_leg_registries[session_id] = registry
+
+        return registry
+
+    async def get_background_agents(self, session_id: str) -> dict[str, Any]:
+        """Snapshot of background-agent (Task) leg history for reload/reconnect."""
+        registry = await self._get_task_leg_registry(session_id)
+        return {"session_id": session_id, "agents": registry.snapshot()}
+
+    # ==================== ARCHIVE METHODS ====================
+
+    async def get_archives(self, session_id: str, limit: int = 50, offset: int = 0) -> dict:
+        """List archives for a session, paginated."""
+        if not self.legion_system:
+            return {"archives": [], "total": 0, "limit": limit, "offset": offset, "has_more": False}
+        all_archives = await self.legion_system.archive_manager.get_archives(session_id)
+        total = len(all_archives)
+        sliced = all_archives[offset : offset + limit]
+        return {
+            "archives": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+        }
+
+    async def get_archive_messages(
+        self, session_id: str, archive_id: str, offset: int = 0, limit: int | None = 50
+    ) -> dict:
+        """Read paginated messages from an archive, converted to websocket format."""
+        if not self.legion_system:
+            return {"messages": [], "total_count": 0, "offset": offset, "has_more": False}
+        result = await self.legion_system.archive_manager.get_archive_messages(
+            session_id, archive_id, offset=offset, limit=limit
+        )
+        # Convert raw stored messages to frontend-expected websocket format
+        converted = []
+        for raw_msg in result.get("messages", []):
+            try:
+                ws_data = None
+                if raw_msg.get("_type"):
+                    ws_data = self._convert_stored_message_to_websocket(raw_msg)
+                elif isinstance(raw_msg.get("metadata"), dict) and raw_msg.get("type"):
+                    ws_data = {
+                        "type": raw_msg["type"],
+                        "content": raw_msg.get("content", ""),
+                        "timestamp": raw_msg.get("timestamp"),
+                        "metadata": raw_msg.get("metadata", {}),
+                        "session_id": raw_msg.get("session_id"),
+                    }
+                    if raw_msg.get("metadata", {}).get("subtype"):
+                        ws_data["subtype"] = raw_msg["metadata"]["subtype"]
+                else:
+                    processed = self.message_processor.process_message(raw_msg, source="storage")
+                    ws_data = self.message_processor.prepare_for_websocket(processed)
+                if ws_data:
+                    converted.append(ws_data)
+            except Exception:
+                pass
+        result["messages"] = converted
+        return result
+
+    async def get_archive_state(self, session_id: str, archive_id: str) -> dict | None:
+        """Read state and metadata from an archive."""
+        if not self.legion_system:
+            return None
+        return await self.legion_system.archive_manager.get_archive_state(session_id, archive_id)
+
+    async def get_archive_resources(
+        self,
+        session_id: str,
+        archive_id: str,
+        limit: int = 50,
+        offset: int = 0,
+        search: str | None = None,
+        format_filter: str | None = None,
+        sort: str = "newest",
+    ) -> dict:
+        """List resource metadata from an archive, paginated with optional filter/sort."""
+        if not self.legion_system:
+            return {"resources": [], "total": 0, "limit": limit, "offset": offset, "has_more": False}
+        all_resources = await self.legion_system.archive_manager.get_archive_resources(
+            session_id, archive_id
+        )
+
+        all_resources = _group_resources_by_filename(all_resources)
+        all_resources = _apply_resource_filters(all_resources, search, format_filter, sort)
+
+        total = len(all_resources)
+        sliced = all_resources[offset : offset + limit]
+        return {
+            "resources": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+        }
+
+    async def get_archive_resource_by_id(
+        self, session_id: str, archive_id: str, resource_id: str
+    ) -> dict | None:
+        """Look up a single archived resource's metadata by ID against the raw (ungrouped) log.
+
+        Issue #1680: mirrors get_session_resource_by_id() for archive byte-serving.
+        """
+        if not self.legion_system:
+            return None
+        all_resources = await self.legion_system.archive_manager.get_archive_resources(
+            session_id, archive_id
+        )
+        return next((r for r in all_resources if r.get("resource_id") == resource_id), None)
+
+    async def get_archive_resource_file(
+        self, session_id: str, archive_id: str, resource_id: str
+    ) -> bytes | None:
+        """Get raw file bytes for a resource in an archive."""
+        if not self.legion_system:
+            return None
+        return await self.legion_system.archive_manager.get_archive_resource_file(
+            session_id, archive_id, resource_id
+        )
+
+    async def list_project_deleted_agents(self, project_id: str, limit: int = 50, offset: int = 0) -> dict:
+        """List deleted agents with archives for a project, paginated."""
+        if not self.legion_system:
+            return {"agents": [], "total": 0, "limit": limit, "offset": offset, "has_more": False}
+        all_agents = await self.legion_system.archive_manager.list_project_deleted_agents(project_id)
+        total = len(all_agents)
+        sliced = all_agents[offset : offset + limit]
+        return {
+            "agents": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+        }
+
+    async def erase_history(self, session_id: str) -> bool:
+        """Erase distilled history for a session."""
+        if not self.legion_system:
+            return False
+        return await self.legion_system.archive_manager.erase_history(session_id)
+
+    async def erase_archives(self, session_id: str) -> bool:
+        """Erase archives for a session."""
+        if not self.legion_system:
+            return False
+        return await self.legion_system.archive_manager.erase_archives(session_id)
+
+    async def check_history_archives(self, session_id: str) -> dict:
+        """Check existence of history and archives for a session."""
+        if not self.legion_system:
+            return {"has_history": False, "has_archives": False}
+        return await self.legion_system.archive_manager.check_history_archives_exist(session_id)
+
+    async def get_session_messages(
+        self,
+        session_id: str,
+        limit: int | None = None,
+        offset: int = 0
+    ) -> dict[str, Any]:
+        """Get messages from a session with pagination metadata.
+
+        Issue #491: Generates interleaved tool_call messages alongside regular messages.
+        The frontend processes all tool_call messages through handleToolCall() regardless
+        of whether they arrived via WebSocket or REST history endpoint.
+        """
+        try:
+            storage = self._storage_managers.get(session_id)
+            if not storage:
+                logger.error(f"No storage manager found for session {session_id}")
+                return {
+                    "messages": [],
+                    "total_count": 0,
+                    "limit": limit or 50,
+                    "offset": offset,
+                    "has_more": False
+                }
+
+            # Get messages and total count
+            raw_messages = await storage.read_messages(limit=limit, offset=offset)
+            total_count = await storage.get_message_count()
+
+            # Convert stored messages to WebSocket format and generate tool_call messages
+            parsed_messages = []
+
+            # Issue #491: Track tool lifecycle state for generating tool_call messages
+            # Maps tool_use_id -> ToolCall being reconstructed from history
+            active_history_tools: dict[str, ToolCall] = {}
+
+            # Issue #494: Track tool_use_ids that have stored ToolCallUpdate entries.
+            # Synthetic reconstruction is skipped for these IDs.
+            stored_tool_update_ids: set[str] = set()
+
+            for raw_message in raw_messages:
+                try:
+                    websocket_data = None
+
+                    # Issue #310: Handle new StoredMessage format with _type discriminator
+                    if raw_message.get("_type"):
+                        # Issue #494: ToolCallUpdate entries are converted to tool_call messages
+                        # directly and should NOT go through synthetic reconstruction
+                        if raw_message["_type"] == "ToolCallUpdate":
+                            tool_call_msg = self._convert_stored_message_to_websocket(raw_message)
+                            if tool_call_msg:
+                                parsed_messages.append(tool_call_msg)
+                                tc_id = tool_call_msg.get("tool_use_id")
+                                if tc_id:
+                                    stored_tool_update_ids.add(tc_id)
+                            continue
+
+                        websocket_data = self._convert_stored_message_to_websocket(raw_message)
+                    # Check if message is already fully processed (has metadata)
+                    elif isinstance(raw_message.get("metadata"), dict) and raw_message.get("type") and raw_message.get("content") is not None:
+                        # Message is already processed, prepare for WebSocket
+                        metadata = raw_message["metadata"].copy()
+
+                        websocket_data = {
+                            "type": raw_message["type"],
+                            "content": raw_message["content"],
+                            "timestamp": raw_message.get("timestamp"),
+                            "metadata": metadata,
+                            "session_id": raw_message.get("session_id"),
+                            "message_id": raw_message.get("message_id"),  # Issue #1000
+                        }
+                        # Maintain backward compatibility with subtype at root level
+                        if metadata.get('subtype'):
+                            websocket_data["subtype"] = metadata['subtype']
+                    else:
+                        # Message needs processing - run through MessageProcessor
+                        processed_message = self.message_processor.process_message(raw_message, source="storage")
+                        websocket_data = self.message_processor.prepare_for_websocket(processed_message)
+                        # Issue #1000: Propagate message_id from storage for frontend dedup
+                        if raw_message.get("message_id"):
+                            websocket_data["message_id"] = raw_message["message_id"]
+
+                    if not websocket_data:
+                        continue
+
+                    # Add the regular message to the response
+                    parsed_messages.append(websocket_data)
+
+                    # Issue #491: Generate interleaved tool_call messages from message metadata
+                    # Issue #494: Skip synthetic reconstruction for tool_use_ids with stored updates
+                    msg_type = websocket_data.get("type", "")
+                    metadata = websocket_data.get("metadata", {})
+                    msg_timestamp = websocket_data.get("timestamp")
+
+                    # AssistantMessage with tool_uses → create pending ToolCall messages
+                    if metadata.get("has_tool_uses") and metadata.get("tool_uses"):
+                        # Issue #195: Propagate parent_tool_use_id to child tool_calls
+                        parent_tool_use_id = metadata.get("parent_tool_use_id")
+                        for tool_use in metadata["tool_uses"]:
+                            tool_use_id = tool_use.get("id")
+                            if not tool_use_id:
+                                continue
+                            # Issue #494: Skip if this tool has stored ToolCallUpdate entries
+                            if tool_use_id in stored_tool_update_ids:
+                                continue
+                            tool_call = ToolCall(
+                                tool_use_id=tool_use_id,
+                                session_id=session_id,
+                                name=tool_use.get("name", ""),
+                                input=tool_use.get("input", {}),
+                                status=ToolState.PENDING,
+                                created_at=msg_timestamp if isinstance(msg_timestamp, (int, float)) else 0.0,
+                                parent_tool_use_id=parent_tool_use_id,
+                                display=ToolDisplayInfo(
+                                    state=ToolState.PENDING,
+                                    visible=True,
+                                    collapsed=False,
+                                    style="default",
+                                ),
+                            )
+                            active_history_tools[tool_use_id] = tool_call
+                            tc_data = tool_call.to_dict()
+                            tc_data["type"] = "tool_call"
+                            parsed_messages.append(tc_data)
+
+                    # PermissionRequestMessage → update matching ToolCall to awaiting_permission
+                    if msg_type == "permission_request" or metadata.get("has_permission_requests"):
+                        perm_tool_name = metadata.get("tool_name", "")
+                        perm_request_id = metadata.get("request_id", "")
+                        perm_suggestions = metadata.get("suggestions", [])
+
+                        # Find matching tool by name+input signature
+                        matched_tool = None
+                        for tc in active_history_tools.values():
+                            if tc.name == perm_tool_name and tc.status == ToolState.PENDING:
+                                matched_tool = tc
+                                break
+                        # Fallback: match by tool name alone if unique pending
+                        if not matched_tool:
+                            candidates = [
+                                tc for tc in active_history_tools.values()
+                                if tc.name == perm_tool_name and tc.status in (
+                                    ToolState.PENDING, ToolState.AWAITING_PERMISSION
+                                )
+                            ]
+                            if len(candidates) == 1:
+                                matched_tool = candidates[0]
+
+                        if matched_tool:
+                            matched_tool.status = ToolState.AWAITING_PERMISSION
+                            matched_tool.requires_permission = True
+                            matched_tool.permission = PermissionInfo(
+                                message=websocket_data.get("content", ""),
+                                suggestions=perm_suggestions,
+                            )
+                            if matched_tool.display:
+                                matched_tool.display.state = ToolState.AWAITING_PERMISSION
+                                matched_tool.display.style = "warning"
+                            tc_data = matched_tool.to_dict()
+                            tc_data["type"] = "tool_call"
+                            tc_data["request_id"] = perm_request_id
+                            parsed_messages.append(tc_data)
+
+                    # PermissionResponseMessage → update matching ToolCall with decision
+                    if msg_type == "permission_response":
+                        perm_decision = metadata.get("decision", "")
+                        perm_request_id = metadata.get("request_id", "")
+                        perm_tool_name = metadata.get("tool_name", "")
+                        updated_input = metadata.get("updated_input")
+                        applied_updates = metadata.get("applied_updates", [])
+
+                        # Find matching tool awaiting permission
+                        matched_tool = None
+                        for tc in active_history_tools.values():
+                            if tc.name == perm_tool_name and tc.status == ToolState.AWAITING_PERMISSION:
+                                matched_tool = tc
+                                break
+
+                        if matched_tool:
+                            granted = perm_decision == "allow"
+                            matched_tool.permission_granted = granted
+                            if granted:
+                                matched_tool.status = ToolState.RUNNING
+                                if matched_tool.display:
+                                    matched_tool.display.state = ToolState.RUNNING
+                                    matched_tool.display.style = "default"
+                            else:
+                                matched_tool.status = ToolState.DENIED
+                                if matched_tool.display:
+                                    matched_tool.display.state = ToolState.DENIED
+                                    matched_tool.display.style = "error"
+
+                            tc_data = matched_tool.to_dict()
+                            tc_data["type"] = "tool_call"
+                            tc_data["request_id"] = perm_request_id
+                            if updated_input:
+                                tc_data["updated_input"] = updated_input
+                            if applied_updates:
+                                tc_data["applied_updates"] = applied_updates
+                            parsed_messages.append(tc_data)
+
+                            # Remove denied tools from tracking
+                            if not granted:
+                                active_history_tools.pop(matched_tool.tool_use_id, None)
+
+                    # UserMessage with tool_results → update matching ToolCall to completed/failed
+                    if metadata.get("has_tool_results") and metadata.get("tool_results"):
+                        for tool_result in metadata["tool_results"]:
+                            tool_use_id = tool_result.get("tool_use_id")
+                            if not tool_use_id:
+                                continue
+                            matched_tool = active_history_tools.pop(tool_use_id, None)
+                            if matched_tool:
+                                is_error = tool_result.get("is_error", False)
+                                result_content = tool_result.get("content", "")
+                                if is_error:
+                                    matched_tool.status = ToolState.FAILED
+                                    matched_tool.error = str(result_content) if result_content else "Tool execution failed"
+                                    if matched_tool.display:
+                                        matched_tool.display.state = ToolState.FAILED
+                                        matched_tool.display.style = "error"
+                                else:
+                                    matched_tool.status = ToolState.COMPLETED
+                                    matched_tool.result = result_content
+                                    if matched_tool.display:
+                                        matched_tool.display.state = ToolState.COMPLETED
+                                        matched_tool.display.style = "success"
+                                    # Issue #1593/#1730: resolve sender attachment resource IDs
+                                    if matched_tool.name == "mcp__legion__send_comm":
+                                        matched_tool.sender_attachments = (
+                                            self._parse_send_comm_sender_attachments(result_content)
+                                        )
+                                tc_data = matched_tool.to_dict()
+                                tc_data["type"] = "tool_call"
+                                parsed_messages.append(tc_data)
+
+                    # SystemMessage client_launched or interrupt → mark unresolved tools as interrupted
+                    if msg_type == "system":
+                        subtype = metadata.get("subtype", "")
+                        if subtype in ("client_launched", "interrupt"):
+                            for tool_use_id in list(active_history_tools.keys()):
+                                tc = active_history_tools.pop(tool_use_id)
+                                tc.status = ToolState.INTERRUPTED
+                                if tc.display:
+                                    tc.display.state = ToolState.INTERRUPTED
+                                    tc.display.style = "orphaned"
+                                tc_data = tc.to_dict()
+                                tc_data["type"] = "tool_call"
+                                parsed_messages.append(tc_data)
+
+                except Exception as e:
+                    logger.warning(f"Failed to prepare historical message for WebSocket: {e}")
+                    # Fallback to basic format if we have enough info
+                    try:
+                        msg_type = raw_message.get("type", raw_message.get("_type", "system"))
+                        fallback_data = {
+                            "type": msg_type,
+                            "content": raw_message.get("content", ""),
+                            "timestamp": raw_message.get("timestamp")
+                        }
+                        if raw_message.get("session_id"):
+                            fallback_data["session_id"] = raw_message["session_id"]
+                        parsed_messages.append(fallback_data)
+                    except Exception:
+                        pass
+
+            # Issue #491: Mark any remaining unresolved tools as interrupted
+            # (session may have been terminated without explicit interrupt/restart message)
+            session_info = await self.session_manager.get_session_info(session_id)
+            if session_info and session_info.state not in (
+                SessionState.ACTIVE, SessionState.PAUSED, SessionState.STARTING
+            ):
+                for tool_use_id in list(active_history_tools.keys()):
+                    tc = active_history_tools.pop(tool_use_id)
+                    tc.status = ToolState.INTERRUPTED
+                    if tc.display:
+                        tc.display.state = ToolState.INTERRUPTED
+                        tc.display.style = "orphaned"
+                    tc_data = tc.to_dict()
+                    tc_data["type"] = "tool_call"
+                    parsed_messages.append(tc_data)
+
+            # Calculate pagination metadata
+            actual_limit = limit or 50
+            has_more = (offset + len(raw_messages)) < total_count
+
+            return {
+                "messages": parsed_messages,
+                "total_count": total_count,
+                "limit": actual_limit,
+                "offset": offset,
+                "has_more": has_more
+            }
+
+        except Exception:
+            logger.exception(f"Failed to get messages for session {session_id}")
+            return {
+                "messages": [],
+                "total_count": 0,
+                "limit": limit or 50,
+                "offset": offset,
+                "has_more": False
+            }
+
+    def add_message_callback(self, session_id: str, callback: Callable):
+        """Add callback for session messages"""
+        if session_id not in self._message_callbacks:
+            self._message_callbacks[session_id] = []
+        self._message_callbacks[session_id].append(callback)
+        # logger.info(f"Added message callback for session {session_id}, total callbacks: {len(self._message_callbacks[session_id])}")
+
+    def clear_message_callbacks(self, session_id: str) -> None:
+        """Clear all message callbacks for a session (prevents duplicate callbacks on restart)."""
+        if session_id in self._message_callbacks:
+            self._message_callbacks[session_id] = []
+
+    def add_error_callback(self, session_id: str, callback: Callable):
+        """Add callback for session errors"""
+        if session_id not in self._error_callbacks:
+            self._error_callbacks[session_id] = []
+        self._error_callbacks[session_id].append(callback)
+
+    def add_state_change_callback(self, callback: Callable):
+        """Add callback for session state changes"""
+        self._state_change_callbacks.append(callback)
+
+    def add_session_reset_callback(self, callback: Callable):
+        """Add callback for session reset events (Issue #500)."""
+        self._session_reset_callbacks.append(callback)
+
+    def add_tool_call_broadcast_callback(self, callback: Callable):
+        """Add callback for broadcasting tool_call messages via WebSocket (Issue #520)."""
+        self._tool_call_broadcast_callbacks.append(callback)
+
+    def set_rate_limit_broadcast_callback(self, callback: Callable) -> None:
+        """Issue #899: Set callback for broadcasting rate_limits_update to the UI poll queue."""
+        self._rate_limit_broadcast_callback = callback
+
+    async def _on_rate_limits(self, rate_limit_info: Any) -> None:
+        """Issue #899: Normalize a RateLimitInfo and broadcast updated state to UI poll queue."""
+        try:
+            window = getattr(rate_limit_info, 'rate_limit_type', None)
+            utilization = getattr(rate_limit_info, 'utilization', None)
+            resets_at_ts = getattr(rate_limit_info, 'resets_at', None)
+
+            if window is None:
+                return
+
+            entry: dict = {}
+            if utilization is not None:
+                entry['used_percentage'] = round(utilization * 100, 1)
+            if resets_at_ts is not None:
+                entry['resets_at'] = datetime.fromtimestamp(resets_at_ts, tz=UTC).isoformat()
+
+            self._rate_limits_state[window] = entry
+
+            if self._rate_limit_broadcast_callback:
+                self._rate_limit_broadcast_callback(dict(self._rate_limits_state))
+        except Exception:
+            logger.exception("Error processing rate_limits")
+
+    async def _notify_session_reset(self, session_id: str) -> None:
+        """Notify registered callbacks that a session was reset."""
+        for cb in self._session_reset_callbacks:
+            try:
+                if asyncio.iscoroutinefunction(cb):
+                    await cb(session_id)
+                else:
+                    cb(session_id)
+            except Exception:
+                logger.exception("Error in session reset callback")
+
+    def _get_display_projection(self, session_id: str) -> DisplayProjection:
+        """
+        Get or create DisplayProjection for a session (Issue #310).
+
+        Each session has its own projection instance to track tool lifecycle
+        state independently.
+        """
+        if session_id not in self._display_projections:
+            self._display_projections[session_id] = DisplayProjection()
+            coord_logger.debug(f"Created DisplayProjection for session {session_id}")
+        return self._display_projections[session_id]
+
+    def _reset_display_projection(self, session_id: str) -> None:
+        """Reset DisplayProjection for a session (e.g., on session reset)."""
+        if session_id in self._display_projections:
+            self._display_projections[session_id].reset()
+            coord_logger.debug(f"Reset DisplayProjection for session {session_id}")
+
+    def _mark_tools_orphaned(self, session_id: str) -> list[str]:
+        """
+        Mark all active tools as orphaned for a session (Issue #310).
+
+        Called when a session is interrupted or terminated to mark pending
+        tools as abandoned. Returns list of orphaned tool IDs.
+        """
+        projection = self._display_projections.get(session_id)
+        if projection:
+            orphaned = projection.mark_tools_orphaned()
+            if orphaned:
+                coord_logger.info(f"Marked {len(orphaned)} tools as orphaned for session {session_id}")
+            return orphaned
+        return []
+
+    # ============================================================
+    # Issue #494: ToolCallUpdate Storage
+    # ============================================================
+
+    def _schedule_tool_call_update_storage(
+        self,
+        session_id: str,
+        tool_call: ToolCall,
+        triggering_message: dict[str, Any] | None = None,
+    ) -> None:
+        """
+        Snapshot and schedule storage of a ToolCallUpdate entry (Issue #494).
+
+        The StoredMessage is built eagerly (synchronously) to capture the
+        current tool_call state before the object is mutated by subsequent
+        lifecycle transitions.  The actual I/O is deferred via ensure_future.
+        """
+        storage = self._storage_managers.get(session_id)
+        if not storage:
+            coord_logger.warning(
+                f"No storage manager for session {session_id}, skipping ToolCallUpdate"
+            )
+            return
+        try:
+            stored_dict = StoredMessage.from_tool_call_update(
+                tool_call, triggering_message
+            ).to_dict()
+        except Exception:
+            coord_logger.exception(
+                f"Failed to build ToolCallUpdate for {tool_call.tool_use_id}"
+            )
+            return
+        task = asyncio.ensure_future(
+            self._write_tool_call_update(storage, stored_dict, tool_call.tool_use_id)
+        )
+        task.add_done_callback(task_done_log_exception)
+
+    async def _write_tool_call_update(
+        self,
+        storage,
+        stored_dict: dict[str, Any],
+        tool_use_id: str,
+    ) -> None:
+        """Write a pre-built ToolCallUpdate dict to storage (Issue #494)."""
+        try:
+            await storage.append_message(stored_dict)
+        except Exception:
+            coord_logger.exception(
+                f"Failed to store ToolCallUpdate for {tool_use_id}"
+            )
+
+    # ============================================================
+    # Issue #707: Auto-Approval Callback
+    # ============================================================
+
+    def _create_auto_approval_callback(self, session_id: str) -> Callable:
+        """
+        Create a callback that can_use_tool calls when it auto-approves a tool.
+
+        The ToolCall already exists (created from the AssistantMessage tool_use block
+        before can_use_tool fires), so we find it by tool_name, set the reason,
+        store a new ToolCallUpdate, and broadcast via the existing tool_call
+        broadcast mechanism.
+        """
+        def callback(tool_name: str, input_params: dict[str, Any], reason: str) -> None:
+            tool_calls = self._active_tool_calls.get(session_id, {})
+            for tool_call in tool_calls.values():
+                if (
+                    tool_call.name == tool_name
+                    and tool_call.auto_approved_reason is None
+                    and tool_call.status == ToolState.PENDING
+                ):
+                    tool_call.auto_approved_reason = reason
+                    coord_logger.info(
+                        f"[707] Auto-approved {tool_call.tool_use_id} ({tool_name}): {reason}"
+                    )
+                    # Store a new ToolCallUpdate with the reason attached
+                    self._schedule_tool_call_update_storage(session_id, tool_call)
+                    # Broadcast via existing tool_call broadcast mechanism
+                    tool_call_data = tool_call.to_dict()
+                    tool_call_data["type"] = "tool_call"
+                    for cb in self._tool_call_broadcast_callbacks:
+                        try:
+                            cb(session_id, tool_call_data)
+                        except Exception:
+                            coord_logger.exception("Error in auto-approval broadcast callback")
+                    break
+        return callback
+
+    # ============================================================
+    # Issue #324: Unified ToolCall Lifecycle Management
+    # ============================================================
+
+    def create_tool_call(
+        self,
+        session_id: str,
+        tool_use_id: str,
+        name: str,
+        input_params: dict[str, Any],
+        requires_permission: bool = False,
+        parent_tool_use_id: str | None = None,
+        message_id: str | None = None,
+    ) -> ToolCall:
+        """
+        Create a new ToolCall when tool_use is detected (Issue #324).
+
+        Called when an AssistantMessage contains a tool_use block.
+        Returns the created ToolCall for WebSocket broadcast.
+        """
+        import time
+
+        tool_call = ToolCall(
+            tool_use_id=tool_use_id,
+            session_id=session_id,
+            name=name,
+            input=input_params,
+            status=ToolState.PENDING,
+            created_at=time.time(),
+            requires_permission=requires_permission,
+            parent_tool_use_id=parent_tool_use_id,
+            message_id=message_id,
+            display=ToolDisplayInfo(
+                state=ToolState.PENDING,
+                visible=True,
+                collapsed=False,
+                style="default",
+            ),
+        )
+
+        # Track in active tool calls
+        if session_id not in self._active_tool_calls:
+            self._active_tool_calls[session_id] = {}
+        self._active_tool_calls[session_id][tool_use_id] = tool_call
+
+        # Issue #858: Notify any permission callbacks waiting for this tool call.
+        if session_id in self._tool_call_events:
+            self._tool_call_events[session_id].set()
+
+        coord_logger.debug(
+            f"Created ToolCall {tool_use_id} for {name} in session {session_id}"
+        )
+
+        # Issue #494: Store PENDING ToolCallUpdate
+        self._schedule_tool_call_update_storage(session_id, tool_call)
+
+        return tool_call
+
+    def update_tool_call_permission_request(
+        self,
+        session_id: str,
+        tool_use_id: str,
+        permission_info: PermissionInfo,
+        triggering_message: dict[str, Any] | None = None,
+    ) -> ToolCall | None:
+        """
+        Update ToolCall to awaiting_permission status (Issue #324).
+
+        Called when a permission request is received for a tool.
+        Returns updated ToolCall for WebSocket broadcast, or None if not found.
+        """
+        tool_call = self._get_active_tool_call(session_id, tool_use_id)
+        if not tool_call:
+            coord_logger.warning(
+                f"ToolCall {tool_use_id} not found for permission request in session {session_id}"
+            )
+            return None
+
+        tool_call.status = ToolState.AWAITING_PERMISSION
+        tool_call.requires_permission = True
+        tool_call.permission = permission_info
+        if tool_call.display:
+            tool_call.display.state = ToolState.AWAITING_PERMISSION
+            tool_call.display.style = "warning"
+
+        coord_logger.debug(
+            f"Updated ToolCall {tool_use_id} to awaiting_permission in session {session_id}"
+        )
+
+        # Issue #494: Store AWAITING_PERMISSION ToolCallUpdate
+        self._schedule_tool_call_update_storage(session_id, tool_call, triggering_message)
+
+        return tool_call
+
+    def update_tool_call_permission_response(
+        self,
+        session_id: str,
+        tool_use_id: str,
+        granted: bool,
+        triggering_message: dict[str, Any] | None = None,
+        applied_updates: list[dict[str, Any]] | None = None,
+    ) -> ToolCall | None:
+        """
+        Update ToolCall after permission response (Issue #324).
+
+        Called when user grants or denies permission.
+        Returns updated ToolCall for WebSocket broadcast, or None if not found.
+        """
+        import time
+
+        tool_call = self._get_active_tool_call(session_id, tool_use_id)
+        if not tool_call:
+            coord_logger.warning(
+                f"ToolCall {tool_use_id} not found for permission response in session {session_id}"
+            )
+            return None
+
+        tool_call.permission_granted = granted
+        tool_call.permission_response_at = time.time()
+        if applied_updates:
+            tool_call.applied_updates = applied_updates
+
+        if granted:
+            tool_call.status = ToolState.RUNNING
+            tool_call.started_at = time.time()
+            if tool_call.display:
+                tool_call.display.state = ToolState.RUNNING
+                tool_call.display.style = "default"
+        else:
+            tool_call.status = ToolState.DENIED
+            tool_call.completed_at = time.time()
+            if tool_call.display:
+                tool_call.display.state = ToolState.DENIED
+                tool_call.display.style = "error"
+            # Remove from active (denied tools are terminal)
+            self._remove_active_tool_call(session_id, tool_use_id)
+
+            # Issue #1131: Record DENIED outcome for error-rate watchdog
+            if hasattr(self, '_watchdog') and self._watchdog is not None:
+                self._watchdog.record_tool_outcome(session_id, tool_use_id, "denied")
+
+        coord_logger.debug(
+            f"Updated ToolCall {tool_use_id} permission_granted={granted} in session {session_id}"
+        )
+
+        # Issue #494: Store RUNNING or DENIED ToolCallUpdate
+        self._schedule_tool_call_update_storage(session_id, tool_call, triggering_message)
+
+        return tool_call
+
+    def update_tool_call_running(
+        self,
+        session_id: str,
+        tool_use_id: str,
+    ) -> ToolCall | None:
+        """
+        Update ToolCall to running status (Issue #324).
+
+        Called when a tool starts executing (for tools that don't require permission).
+        Returns updated ToolCall for WebSocket broadcast, or None if not found.
+        """
+        import time
+
+        tool_call = self._get_active_tool_call(session_id, tool_use_id)
+        if not tool_call:
+            # Tool may not exist yet if tool_use and execution happen quickly
+            coord_logger.debug(
+                f"ToolCall {tool_use_id} not found for running update in session {session_id}"
+            )
+            return None
+
+        tool_call.status = ToolState.RUNNING
+        tool_call.started_at = time.time()
+        if tool_call.display:
+            tool_call.display.state = ToolState.RUNNING
+            tool_call.display.style = "default"
+
+        coord_logger.debug(
+            f"Updated ToolCall {tool_use_id} to running in session {session_id}"
+        )
+
+        # Issue #494: Store RUNNING ToolCallUpdate
+        self._schedule_tool_call_update_storage(session_id, tool_call)
+
+        return tool_call
+
+    def update_tool_call_result(
+        self,
+        session_id: str,
+        tool_use_id: str,
+        result: Any,
+        is_error: bool = False,
+        triggering_message: dict[str, Any] | None = None,
+        sender_attachments: list[dict] | None = None,
+    ) -> ToolCall | None:
+        """
+        Update ToolCall with result (Issue #324).
+
+        Called when a tool_result is received.
+        Returns updated ToolCall for WebSocket broadcast, or None if not found.
+        """
+        import time
+
+        tool_call = self._get_active_tool_call(session_id, tool_use_id)
+        if not tool_call:
+            coord_logger.warning(
+                f"ToolCall {tool_use_id} not found for result in session {session_id}"
+            )
+            return None
+
+        tool_call.completed_at = time.time()
+        tool_call.result = result
+
+        if is_error:
+            tool_call.status = ToolState.FAILED
+            tool_call.error = str(result) if result else "Tool execution failed"
+            if tool_call.display:
+                tool_call.display.state = ToolState.FAILED
+                tool_call.display.style = "error"
+        else:
+            tool_call.status = ToolState.COMPLETED
+            if tool_call.display:
+                tool_call.display.state = ToolState.COMPLETED
+                tool_call.display.style = "success"
+
+        # Issue #1593: Attach sender attachment resource IDs for send_comm chips
+        if sender_attachments is not None:
+            tool_call.sender_attachments = sender_attachments
+
+        # Remove from active (completed/failed tools are terminal)
+        self._remove_active_tool_call(session_id, tool_use_id)
+
+        coord_logger.debug(
+            f"Updated ToolCall {tool_use_id} to {'failed' if is_error else 'completed'} in session {session_id}"
+        )
+
+        # Issue #494: Store COMPLETED or FAILED ToolCallUpdate
+        self._schedule_tool_call_update_storage(session_id, tool_call, triggering_message)
+
+        # Issue #1131: Record terminal tool outcome for error-rate watchdog
+        if hasattr(self, '_watchdog') and self._watchdog is not None:
+            outcome = "failed" if is_error else "completed"
+            self._watchdog.record_tool_outcome(session_id, tool_use_id, outcome)
+
+        return tool_call
+
+    def _parse_send_comm_sender_attachments(
+        self,
+        result_content: str,
+    ) -> list[dict] | None:
+        """Issue #1593/#1730: Parse sender resource IDs for mcp__legion__send_comm attachments.
+
+        Extracts the JSON footer embedded by `_handle_send_comm` in the tool
+        result text (format: `<!-- sender_attachments: [...] -->`). The footer
+        is captured immutably at the moment of that specific send_comm call, so
+        this parser returns the exact version delivered — unlike a filename
+        search against the resource log, which always resolves to the oldest
+        matching version regardless of which send_comm call is being displayed.
+        """
+        import json as _json
+        import re
+
+        if not isinstance(result_content, str):
+            return None
+
+        match = re.search(r"<!-- sender_attachments: (.*?) -->", result_content, re.DOTALL)
+        if not match:
+            return None
+
+        try:
+            parsed = _json.loads(match.group(1))
+        except _json.JSONDecodeError:
+            return None
+
+        return parsed if isinstance(parsed, list) and parsed else None
+
+    def mark_session_tools_interrupted(self, session_id: str) -> list[ToolCall]:
+        """
+        Mark all active tools for a session as interrupted (Issue #324).
+
+        Called when session is terminated or interrupted.
+        Stores INTERRUPTED ToolCallUpdate entries and broadcasts via WebSocket.
+        Returns list of interrupted ToolCalls.
+        """
+        import time
+
+        interrupted = []
+        session_tools = self._active_tool_calls.get(session_id, {})
+
+        for _tool_use_id, tool_call in list(session_tools.items()):
+            tool_call.status = ToolState.INTERRUPTED
+            tool_call.completed_at = time.time()
+            if tool_call.display:
+                tool_call.display.state = ToolState.INTERRUPTED
+                tool_call.display.style = "orphaned"
+            interrupted.append(tool_call)
+
+            # Issue #494: Store INTERRUPTED ToolCallUpdate for each tool
+            self._schedule_tool_call_update_storage(session_id, tool_call)
+
+        # Clear active tools for session
+        if session_id in self._active_tool_calls:
+            self._active_tool_calls[session_id].clear()
+
+        if interrupted:
+            coord_logger.info(
+                f"Marked {len(interrupted)} tools as interrupted for session {session_id}"
+            )
+            # Issue #520: Broadcast interrupted tool_call messages via WebSocket
+            for tool_call in interrupted:
+                tool_call_data = tool_call.to_dict()
+                tool_call_data["type"] = "tool_call"
+                for cb in self._tool_call_broadcast_callbacks:
+                    try:
+                        cb(session_id, tool_call_data)
+                    except Exception:
+                        logger.exception("Error in tool_call broadcast callback")
+
+        return interrupted
+
+    def get_active_tool_calls(self, session_id: str) -> list[ToolCall]:
+        """Get all active tool calls for a session."""
+        return list(self._active_tool_calls.get(session_id, {}).values())
+
+    def get_tool_call_event(self, session_id: str) -> asyncio.Event:
+        """Return (creating if necessary) the per-session tool-call notification event."""
+        if session_id not in self._tool_call_events:
+            self._tool_call_events[session_id] = asyncio.Event()
+        return self._tool_call_events[session_id]
+
+    def mark_assistant_message_emitted(self, session_id: str, message_id: str) -> None:
+        """Issue #1694: Record that the assistant message envelope for message_id has
+        been appended to the session queue, and wake any permission callbacks waiting
+        on the barrier for it."""
+        if session_id not in self._emitted_message_ids:
+            self._emitted_message_ids[session_id] = set()
+        self._emitted_message_ids[session_id].add(message_id)
+        if session_id in self._message_emitted_events:
+            self._message_emitted_events[session_id].set()
+
+    def is_assistant_message_emitted(self, session_id: str, message_id: str) -> bool:
+        """Issue #1694: Check whether the assistant message envelope for message_id has
+        already been appended to the session queue."""
+        return message_id in self._emitted_message_ids.get(session_id, set())
+
+    def get_message_emitted_event(self, session_id: str) -> asyncio.Event:
+        """Return (creating if necessary) the per-session message-emitted notification event."""
+        if session_id not in self._message_emitted_events:
+            self._message_emitted_events[session_id] = asyncio.Event()
+        return self._message_emitted_events[session_id]
+
+    def get_tool_call_by_id(self, session_id: str, tool_use_id: str) -> ToolCall | None:
+        """O(1) lookup of an active tool call by its tool_use_id (Issue #953)."""
+        return self._active_tool_calls.get(session_id, {}).get(tool_use_id)
+
+    def _get_active_tool_call(self, session_id: str, tool_use_id: str) -> ToolCall | None:
+        """Get a specific active tool call."""
+        session_tools = self._active_tool_calls.get(session_id, {})
+        return session_tools.get(tool_use_id)
+
+    def _remove_active_tool_call(self, session_id: str, tool_use_id: str) -> None:
+        """Remove a tool call from active tracking."""
+        session_tools = self._active_tool_calls.get(session_id, {})
+        if tool_use_id in session_tools:
+            del session_tools[tool_use_id]
+
+    def find_tool_call_by_signature(
+        self,
+        session_id: str,
+        tool_name: str,
+        input_params: dict[str, Any],
+    ) -> ToolCall | None:
+        """
+        Find a tool call by matching its signature (Issue #324).
+
+        Used to correlate permission requests with tool_use when tool_use_id
+        is not directly available. Creates a signature from tool name and
+        first significant input parameter.
+        """
+        import hashlib
+        import json
+
+        # Create signature similar to DisplayProjection._create_tool_signature
+        first_value = ""
+        for key, value in input_params.items():
+            if value and key not in ("_simulatedSedEdit",):
+                if isinstance(value, str):
+                    first_value = value[:100]
+                else:
+                    first_value = json.dumps(value)[:100]
+                break
+
+        param_hash = hashlib.md5(first_value.encode()).hexdigest()[:8]
+        target_signature = f"{tool_name}:{param_hash}"
+
+        # Search active tools for matching signature — collect all matches
+        # to handle parallel subagents with identical tool signatures.
+        session_tools = self._active_tool_calls.get(session_id, {})
+        matches = []
+        for tool_call in session_tools.values():
+            # Compute signature for this tool
+            tc_first_value = ""
+            for key, value in tool_call.input.items():
+                if value and key not in ("_simulatedSedEdit",):
+                    if isinstance(value, str):
+                        tc_first_value = value[:100]
+                    else:
+                        tc_first_value = json.dumps(value)[:100]
+                    break
+            tc_hash = hashlib.md5(tc_first_value.encode()).hexdigest()[:8]
+            tc_signature = f"{tool_call.name}:{tc_hash}"
+
+            if tc_signature == target_signature and tool_call.status in (
+                ToolState.PENDING,
+                ToolState.AWAITING_PERMISSION,
+            ):
+                matches.append(tool_call)
+
+        if len(matches) == 1:
+            return matches[0]
+        elif len(matches) > 1:
+            # Multiple signature matches (parallel subagents with same tool).
+            # Return the most recently created one — the permission callback
+            # fires shortly after the tool is created.
+            matches.sort(key=lambda tc: tc.created_at, reverse=True)
+            coord_logger.debug(
+                f"Signature collision: {len(matches)} matches for {target_signature}, "
+                f"selecting most recent (created_at={matches[0].created_at})"
+            )
+            return matches[0]
+
+        return None
+
+    async def _store_processed_message(self, session_id: str, message_data: dict[str, Any]):
+        """Store message using unified MessageProcessor for consistent format."""
+        try:
+            # Process the message through MessageProcessor
+            parsed_message = self.message_processor.process_message(message_data, source="system")
+
+            # Prepare for storage using MessageProcessor
+            storage_data = self.message_processor.prepare_for_storage(parsed_message)
+
+            # Store in session storage
+            storage = self._storage_managers.get(session_id)
+            if storage:
+                # logger.debug(f"Storing processed system message: {storage_data.get('type', 'unknown')}")
+                await storage.append_message(storage_data)
+            else:
+                logger.warning(f"No storage manager found for session {session_id}")
+
+        except Exception:
+            logger.exception(f"Failed to store processed message for session {session_id}")
+            # Fallback to direct storage
+            storage = self._storage_managers.get(session_id)
+            if storage:
+                await storage.append_message(message_data)
+
+    def _build_permission_handler(
+        self,
+        session_dir: Path,
+        knowledge_mgmt_enabled: bool,
+        auto_memory_mode: str = "claude",
+        skill_creating_enabled: bool = False,
+        working_directory: Path | None = None,
+        is_legion: bool = False,
+        allow_background_agent: bool = False,
+    ) -> InternalPermissionHandler:
+        """Build internal permission handler with consistent path configuration (issue #707)."""
+        memory_dir = session_dir / "memory" if auto_memory_mode == "session" else None
+        return InternalPermissionHandler(
+            session_data_dir=session_dir,
+            plans_dir=Path.home() / ".cc_webui" / "plans",
+            knowledge_mgmt_enabled=knowledge_mgmt_enabled,
+            memory_dir=memory_dir,
+            skill_creating_enabled=skill_creating_enabled,
+            working_directory=working_directory,
+            is_legion=is_legion,
+            allow_background_agent=allow_background_agent,
+        )
+
+    def _resolve_default_proxy_image(self) -> str:
+        """Return the app-config default proxy image name (issue #1050)."""
+        from backend.config_manager import load_config as load_app_config
+        app_config = load_app_config()
+        return app_config.proxy.proxy_image
+
+    def _create_message_callback(self, session_id: str) -> Callable:
+        """Create message callback for a session using unified MessageProcessor"""
+        async def callback(message_data: dict[str, Any]):
+            try:
+                # Issue #1486: assistant_delta bypasses parser, projection, and activity tracking
+                if isinstance(message_data, dict) and message_data.get("type") == "assistant_delta":
+                    for cb in self._message_callbacks.get(session_id, []):
+                        try:
+                            await cb(session_id, message_data)
+                        except Exception:
+                            coord_logger.exception("Error forwarding assistant_delta to subscriber")
+                    return
+
+                # Issue #1130: Track activity for idle watchdog
+                self.session_manager.record_activity(session_id)
+
+                # Process message using unified MessageProcessor
+                parsed_message = self.message_processor.process_message(message_data, source="sdk")
+
+                # Issue #310: Process through DisplayProjection for tool lifecycle tracking
+                display_metadata = None
+                try:
+                    projection = self._get_display_projection(session_id)
+                    # Convert to StoredMessage format for projection processing
+                    legacy_dict = {
+                        'type': parsed_message.type.value,
+                        'timestamp': parsed_message.timestamp,
+                        'session_id': session_id,
+                        'content': parsed_message.content,
+                    }
+                    if parsed_message.metadata:
+                        legacy_dict.update(parsed_message.metadata)
+                    stored_msg = legacy_to_stored(legacy_dict)
+                    display_metadata = projection.process_message(stored_msg)
+                except Exception as proj_error:
+                    coord_logger.debug(f"DisplayProjection processing failed: {proj_error}")
+                    # Non-fatal - continue without display metadata
+
+                # Track latest meaningful message (issue #291, issue #1497)
+                # Only track user and assistant messages — system messages are SDK runtime
+                # events (e.g. "Claude Code Launched"), not conversation content.
+                if parsed_message.type.value in ['user', 'assistant']:
+                    content = parsed_message.content or ""
+
+                    # Skip messages that are just internal SDK placeholders or tool execution artifacts
+                    has_tool_results = parsed_message.metadata.get('has_tool_results', False) if parsed_message.metadata else False
+                    has_tool_uses = parsed_message.metadata.get('has_tool_uses', False) if parsed_message.metadata else False
+
+                    skip_message = (
+                        # User messages with only tool_results (no actual user text)
+                        (parsed_message.type.value == 'user' and has_tool_results and content.startswith('Tool results:')) or
+                        # Assistant messages with only tool_uses (no actual text response)
+                        (parsed_message.type.value == 'assistant' and has_tool_uses and content == 'Assistant response')
+                    )
+
+                    if not skip_message:
+                        # Truncate to 200 chars (stored), will be truncated further in frontend (100 chars displayed)
+                        truncated_content = content[:200] if len(content) > 200 else content
+
+                        # Replace newlines with spaces for single-line display
+                        truncated_content = truncated_content.replace('\n', ' ').strip()
+
+                        # Update session's latest message tracking
+                        if truncated_content:  # Only update if there's actual content
+                            await self.session_manager.update_latest_message(
+                                session_id,
+                                truncated_content,
+                                parsed_message.type.value,
+                                datetime.now(UTC)
+                            )
+
+                # Issue #1027: Detect SDK status events reporting permission mode changes.
+                # The SDK emits SystemMessage(subtype="status") with permissionMode when a mode
+                # transition occurs (ExitPlanMode, setMode suggestion applied, user-initiated).
+                # This is the authoritative source of truth for permission mode state.
+                if parsed_message.type.value == 'system' and parsed_message.metadata:
+                    if parsed_message.metadata.get('subtype') == 'permission_mode_change':
+                        new_mode = parsed_message.metadata.get('permission_mode')
+                        if new_mode:
+                            try:
+                                await self.session_manager.update_permission_mode(
+                                    session_id, new_mode, template_manager=self.template_manager
+                                )
+                                coord_logger.info(f"Permission mode updated to '{new_mode}' for session {session_id} via SDK status event")
+                            except Exception:
+                                logger.exception(f"Failed to update permission mode from SDK status event for session {session_id}")
+
+                    # Issue #1746: Feed Task lifecycle frames into the per-session
+                    # TaskLegRegistry — a task_id-keyed source of truth for
+                    # background-agent status, independent of the Agent tool
+                    # call's own dispatch-ack status.
+                    task_subtype = parsed_message.metadata.get('subtype')
+                    if task_subtype in TASK_LIFECYCLE_SUBTYPES:
+                        try:
+                            # Storage always persists this message before this
+                            # callback fires (see ClaudeSDK._process_sdk_message),
+                            # so a *cold* hydration below already replays this
+                            # exact frame from messages.jsonl. Only apply it here
+                            # when the registry was already warm — otherwise this
+                            # frame would be double-counted (e.g. two legs for one
+                            # task_started).
+                            registry_already_cached = session_id in self._task_leg_registries
+                            registry = await self._get_task_leg_registry(session_id)
+                            if registry_already_cached:
+                                registry.apply_frame(task_subtype, parsed_message.metadata, parsed_message.timestamp)
+                        except Exception:
+                            logger.exception(f"Failed to update task leg registry for session {session_id}")
+
+                # Track permission responses with applied updates (for historical/display purposes)
+                if parsed_message.type.value == 'permission_response' and parsed_message.metadata:
+                    applied_updates = parsed_message.metadata.get('applied_updates', [])
+
+                    if applied_updates:
+                        # Track the applied updates for display/history
+                        if session_id not in self._permission_updates:
+                            self._permission_updates[session_id] = []
+                        self._permission_updates[session_id].extend(applied_updates)
+                        coord_logger.debug(f"Tracked {len(applied_updates)} applied permission updates for session {session_id}")
+
+                # Log turn-level errors from ResultMessage.errors
+                if parsed_message.type.value == 'result' and parsed_message.metadata:
+                    errors = parsed_message.metadata.get('errors')
+                    if errors:
+                        coord_logger.warning(
+                            f"Turn completed with {len(errors)} error(s) for session {session_id}: {errors}"
+                        )
+
+                # Issue #1029: Reactive is_processing tracking based on message type.
+                # Instead of counting pending ResultMessages (which breaks when the SDK
+                # folds injected messages into the active turn), we react to message types:
+                # - 'result' → turn done, set is_processing = False
+                # - 'assistant' → SDK actively responding, set is_processing = True
+                # This is self-correcting: if a result briefly sets False, the next
+                # assistant message from a folded query immediately re-sets True.
+
+                if parsed_message.type.value == 'result':
+                    try:
+                        await self.session_manager.update_processing_state(session_id, False)
+                    except Exception:
+                        logger.exception(f"Failed to reset processing state for session {session_id}")
+
+                    # Issue #1513: Track unread state — a result message is new work the user hasn't seen.
+                    try:
+                        _ts = parsed_message.timestamp
+                        if isinstance(_ts, str):
+                            _completion_ts = datetime.fromisoformat(_ts)
+                        elif isinstance(_ts, (int, float)):
+                            _completion_ts = datetime.fromtimestamp(_ts, tz=UTC)
+                        else:
+                            _completion_ts = datetime.now(UTC)
+                        await self.session_manager.mark_completion(session_id, _completion_ts)
+                    except Exception:
+                        logger.exception(f"Failed to mark completion for session {session_id}")
+
+                    # Issue #1125: Record turn usage in analytics DB and broadcast update
+                    if self.analytics_store:
+                        try:
+                            meta = parsed_message.metadata or {}
+                            usage, model_usage_cost = _normalize_result_usage(
+                                meta.get("usage"), meta.get("model_usage")
+                            )
+                            sdk_cost = meta.get("total_cost_usd")
+                            if sdk_cost is None:
+                                sdk_cost = model_usage_cost
+                            # Resolve model via effective config (supports template-linked sessions)
+                            _sinfo = await self.session_manager.get_session_info(session_id)
+                            if _sinfo:
+                                _eff = await resolve_effective_config(
+                                    _sinfo, self.template_manager, self.profile_manager
+                                )
+                                _model = _resolve_analytics_model_label(_eff)
+                            else:
+                                _model = None
+                            # Lazily initialise turn_seq from DB on first use after restart
+                            if session_id not in self._turn_seq_by_session:
+                                db_count = await self.analytics_store.get_turn_count(session_id)
+                                self._turn_seq_by_session[session_id] = db_count
+                            self._turn_seq_by_session[session_id] += 1
+                            turn_seq = self._turn_seq_by_session[session_id]
+                            await self.analytics_store.record_turn(
+                                session_id, turn_seq, _model, usage, sdk_cost
+                            )
+                            aggregate = await self.analytics_store.get_session_usage(session_id)
+                            if aggregate and self._usage_broadcast_callback:
+                                try:
+                                    await self._usage_broadcast_callback(session_id, aggregate)
+                                except Exception:
+                                    logger.exception("Failed to broadcast usage_updated for %s", session_id)
+                        except Exception:
+                            logger.exception("Failed to record analytics for session %s", session_id)
+
+                    # Issue #904: Poll for SDK-generated session title after each turn
+                    task = asyncio.create_task(self._check_sdk_generated_name(session_id))
+                    task.add_done_callback(
+                        lambda t: logger.exception("SDK title check task failed") if t.exception() else None
+                    )
+
+                elif parsed_message.type.value == 'assistant':
+                    try:
+                        await self.session_manager.update_processing_state(session_id, True)
+                    except Exception:
+                        logger.exception(f"Failed to set processing state for session {session_id}")
+
+                # Reset processing state on interrupt_success
+                elif parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'interrupt_success':
+                    try:
+                        await self.session_manager.update_processing_state(session_id, False)
+                        coord_logger.info(f"Reset processing state for session {session_id} after interrupt")
+                    except Exception:
+                        logger.exception(f"Failed to reset processing state after interrupt for session {session_id}")
+
+                # Issue #1628: Distill pre-compaction history on compact_boundary.
+                # microcompact_boundary is explicitly skipped — it does not represent a full
+                # context wipe and does not warrant a dedicated summary.
+                elif parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'compact_boundary':
+                    await self._handle_compact_boundary(session_id, parsed_message)
+
+                # Call registered callbacks with processed message (maintain backward compatibility)
+                callbacks = self._message_callbacks.get(session_id, [])
+                # logger.info(f"Processing message for session {session_id}, found {len(callbacks)} callbacks")
+
+                # Issue #310: Attach display metadata to parsed message for WebSocket broadcast
+                if display_metadata:
+                    if parsed_message.metadata is None:
+                        parsed_message.metadata = {}
+                    parsed_message.metadata['display'] = display_metadata.to_dict()
+
+                # Issue #894: Inject stable retry_message_id for api_retry sequences
+                msg_subtype = parsed_message.metadata.get('subtype') if parsed_message.metadata else None
+                if msg_subtype == 'api_retry':
+                    if session_id not in self._retry_sequences:
+                        self._retry_sequences[session_id] = str(uuid4())
+                    if parsed_message.metadata is None:
+                        parsed_message.metadata = {}
+                    parsed_message.metadata['retry_message_id'] = self._retry_sequences[session_id]
+                else:
+                    self._retry_sequences.pop(session_id, None)
+
+                for cb in callbacks:
+                    try:
+                        if asyncio.iscoroutinefunction(cb):
+                            await cb(session_id, parsed_message)
+                        else:
+                            cb(session_id, parsed_message)
+                    except Exception:
+                        logger.exception("Error in message callback")
+
+            except Exception:
+                logger.exception(f"Error processing message callback for {session_id}")
+
+        return callback
+
+    def _create_error_callback(self, session_id: str) -> Callable:
+        """Create error callback for a session"""
+        async def callback(error_type: str, error: Exception):
+            try:
+                error_data = {
+                    "session_id": session_id,
+                    "error_type": error_type,
+                    "error": str(error),
+                    "timestamp": get_unix_timestamp()
+                }
+
+                logger.error(f"SDK error in session {session_id}: {error_type} - {error}")
+
+                # Reset processing state on any error
+                try:
+                    await self.session_manager.update_processing_state(session_id, False)
+                except Exception:
+                    logger.exception(f"Failed to reset processing state for session {session_id}")
+
+                # Handle critical errors that require session state updates
+                if error_type in [
+                    "startup_failed",
+                    "message_processing_loop_error",
+                    "immediate_cli_failure",
+                    "consumer_task_died",          # Issue #1503
+                ]:
+                    # logger.info(f"Handling critical SDK error: {error_type}")
+
+                    # Extract user-friendly error message, preserve raw for details
+                    raw_error_str = str(error)
+                    user_error_message = self._extract_claude_cli_error(raw_error_str)
+
+                    # Update session state to ERROR and reset processing state
+                    try:
+                        await self.session_manager.update_session_state(session_id, SessionState.ERROR, user_error_message)
+                        # Also ensure processing state is reset when going to error state
+                        await self.session_manager.update_processing_state(session_id, False)
+                        await self._notify_state_change(session_id, SessionState.ERROR)
+                        # logger.info(f"Updated session {session_id} state to ERROR and reset processing state due to SDK error")
+                    except Exception:
+                        logger.exception("Failed to update session state to ERROR")
+
+                    # Send system message explaining the runtime failure (with raw details)
+                    await self._send_session_failure_message(session_id, user_error_message, raw_error_str)
+
+                    # Clean up the failed SDK
+                    if session_id in self._active_sdks:
+                        del self._active_sdks[session_id]
+                        # logger.info(f"Cleaned up failed SDK for session {session_id}")
+
+                # Call registered callbacks
+                callbacks = self._error_callbacks.get(session_id, [])
+                for cb in callbacks:
+                    try:
+                        if asyncio.iscoroutinefunction(cb):
+                            await cb(session_id, error_data)
+                        else:
+                            cb(session_id, error_data)
+                    except Exception:
+                        logger.exception("Error in error callback")
+
+            except Exception:
+                logger.exception(f"Error processing error callback for {session_id}")
+
+        return callback
+
+    def _create_stderr_callback(self, session_id: str) -> Callable:
+        """Create stderr callback that routes SDK stderr output through the message pipeline.
+
+        Issue #517: Each stderr line becomes a system message with subtype 'stderr',
+        persisted to messages.jsonl and broadcast to the frontend via WebSocket.
+        Issue #871: Docker wrapper informational lines are filtered out (they are
+        already logged) to avoid spurious red warning pills on successful Docker startup.
+        """
+        message_callback = self._create_message_callback(session_id)
+
+        async def callback(output: str):
+            try:
+                coord_logger.warning(f"[STDERR] Session {session_id}: {output}")
+
+                # Issue #871: Skip Docker wrapper informational diagnostics.
+                # Lines like "[claude-docker] Container: ..., Image: ..., PID: ..."
+                # are startup metadata, not errors. They are already logged above.
+                # Keep lines containing error keywords (exit codes, kills, crashes).
+                if output.startswith(_DOCKER_WRAPPER_PREFIX) and not any(
+                    kw in output for kw in _DOCKER_ERROR_KEYWORDS
+                ):
+                    return
+
+                stderr_message = {
+                    "type": "system",
+                    "subtype": "stderr",
+                    "content": output,
+                    "session_id": session_id,
+                    "timestamp": get_unix_timestamp()
+                }
+                await message_callback(stderr_message)
+            except Exception:
+                logger.exception(f"Error in stderr callback for session {session_id}")
+
+        return callback
+
+    async def _send_client_launched_message(self, session_id: str):
+        """Send a system message indicating the Claude SDK client was launched/resumed"""
+        try:
+            # logger.info(f"DEBUG: _send_client_launched_message called for session {session_id}")
+
+            # Create system message for client launch
+            message_data = {
+                "type": "system",
+                "subtype": "client_launched",
+                "content": "Claude Code Launched",
+                "session_id": session_id,
+                "timestamp": get_unix_timestamp(),
+                "sdk_message_type": "SystemMessage"
+            }
+
+            # logger.info(f"DEBUG: About to store processed message: {message_data}")
+
+            # Process and store message using unified MessageProcessor
+            await self._store_processed_message(session_id, message_data)
+
+            # logger.info(f"DEBUG: Message stored, about to send via callback")
+
+            # Send through message callback system for real-time display
+            callback = self._create_message_callback(session_id)
+            await callback(message_data)
+
+            # logger.info(f"SUCCESS: Sent client launched message for session {session_id}")
+
+        except Exception:
+            logger.exception(f"Failed to send client launched message for {session_id}")
+
+    async def _send_session_failure_message(self, session_id: str, error_message: str,
+                                               raw_error: str | None = None):
+        """Send a system message indicating the session failed to start"""
+        try:
+            short_reason = self._format_failure_content(error_message, raw_error)
+            raw_dump = raw_error or error_message
+
+            # Create system message for session failure
+            message_data = {
+                "type": "system",
+                "subtype": "session_failed",
+                "is_error": True,
+                "content": short_reason,
+                "error_details": raw_dump,
+                "session_id": session_id,
+                "timestamp": get_unix_timestamp(),
+                "sdk_message_type": "SystemMessage",
+            }
+
+            # Process and store message using unified MessageProcessor
+            await self._store_processed_message(session_id, message_data)
+
+            # Send through message callback system for real-time display
+            callback = self._create_message_callback(session_id)
+            await callback(message_data)
+
+            coord_logger.info(f"Session failure message sent for session {session_id}")
+        except Exception:
+            logger.exception(f"Failed to send session failure message for {session_id}")
+
+    async def _send_interrupt_message(self, session_id: str):
+        """Send interrupt system message via callback system (following client_launched pattern)"""
+        try:
+            # Create interrupt system message
+            message_data = {
+                "type": "system",
+                "subtype": "interrupt",
+                "content": "User Interrupted Processing",
+                "session_id": session_id,
+                "timestamp": get_unix_timestamp(),
+                "sdk_message_type": "SystemMessage"
+            }
+
+            # Process and store message using unified MessageProcessor
+            await self._store_processed_message(session_id, message_data)
+
+            # Send through message callback system for real-time display
+            callback = self._create_message_callback(session_id)
+            await callback(message_data)
+
+            coord_logger.info(f"Interrupt message sent for session {session_id}")
+
+        except Exception:
+            logger.exception(f"Failed to send interrupt message for {session_id}")
+
+    def _format_failure_content(self, friendly_error: str, raw_error: str | None) -> str:
+        """Extract a short, meaningful headline from raw stderr for the session_failed pill.
+
+        Full stderr is stored in error_details; this returns only the summary line.
+        """
+        if not raw_error:
+            return f"Session failed: {friendly_error}" if friendly_error else "Session process exited with error"
+
+        # Pattern-match well-known error conditions for a clean label.
+        # More-specific patterns come first (proxy names before generic DNS).
+        known_patterns = [
+            (r"cc-webui\.internal|host\.docker\.internal", "Proxy startup failed: cc-webui.internal not reachable"),
+            (r"permission denied", "Permission denied"),
+            (r"name or service not known|name resolution fail|no such host", "DNS name resolution failed"),
+            (r"connection refused", "Connection refused"),
+            (r"no such file or directory", "File or directory not found"),
+            (r"address already in use", "Port already in use"),
+        ]
+        for pattern, label in known_patterns:
+            if re.search(pattern, raw_error, re.IGNORECASE):
+                return f"Session failed: {label}"
+
+        # Extract from 'Stderr output:\n' marker if present, otherwise use full raw_error
+        stderr_marker = "Stderr output:\n"
+        idx = raw_error.find(stderr_marker)
+        stderr_content = raw_error[idx + len(stderr_marker):].strip() if idx >= 0 else raw_error.strip()
+
+        # Use last non-empty line as the most specific signal
+        lines = [line.strip() for line in stderr_content.splitlines() if line.strip()]
+        if lines:
+            last_line = lines[-1]
+            if last_line and last_line != friendly_error:
+                return f"Session failed: {last_line[:120]}"
+
+        return f"Session failed: {friendly_error}" if friendly_error else "Session process exited with error"
+
+    def _extract_claude_cli_error(self, error_message: str) -> str:
+        """Extract and format user-friendly error messages from Claude CLI output"""
+        try:
+            error_str = str(error_message).strip()
+
+            # Common Claude CLI error patterns and their user-friendly versions
+            error_patterns = {
+                "Command failed with exit code 1": "Claude Code command failed",
+                "Fatal error in message reader": "Claude Code CLI failed during startup",
+                "not a valid UUID": "Invalid session ID format",
+                "--resume requires a valid session ID": "Session resume failed - invalid session ID",
+                "Check stderr output for details": "See error details above",
+                "Claude Code command failed - see details above": "Claude Code CLI failed - check error details",
+                # Issue #781: Container crash patterns (passthrough — already parsed by ClaudeSDK)
+                # Issue #893: All classification prefixes must be listed here
+                "Container crash detected": None,
+                "Process exited with error": None,
+                "Process terminated": None,
+                "Container setup error": None,
+                "SDK response exceeded maximum buffer size": None,
+                "Docker image not found": None,
+                "Docker daemon is not running": None,
+                "Docker socket permission denied": None,
+                "Nested Claude Code session detected": None,
+                # Issue #958: Sandbox unavailable with failIfUnavailable=True — passthrough.
+                # Full error: "Error: sandbox required but unavailable: ... sandbox.failIfUnavailable is set"
+                "sandbox.failIfUnavailable is set": None,
+            }
+
+            # Check for known patterns and provide clearer descriptions
+            for pattern, friendly_msg in error_patterns.items():
+                if pattern in error_str:
+                    # Issue #781: None means passthrough (already parsed by ClaudeSDK)
+                    if friendly_msg is None:
+                        return error_str
+
+                    # If it's a UUID error, try to extract the actual UUID from the message
+                    if "not a valid UUID" in error_str and "Provided value" in error_str:
+                        # Try to extract the invalid UUID value
+                        uuid_match = re.search(r'Provided value "([^"]+)"', error_str)
+                        if uuid_match:
+                            invalid_uuid = uuid_match.group(1)
+                            return f"Invalid session ID format: '{invalid_uuid}' is not a valid UUID"
+
+                    # For resume errors, provide more context
+                    if "--resume requires a valid session ID" in error_str:
+                        return "Session resume failed: Invalid or missing Claude Code session ID. This may indicate the session was corrupted or manually modified."
+
+                    return friendly_msg
+
+            # If no patterns match, return the original message but clean it up
+            cleaned_msg = error_str.replace("Error output: Check stderr output for details", "").strip()
+            if cleaned_msg:
+                return cleaned_msg
+            else:
+                return "Unknown Claude Code error occurred"
+
+        except Exception as e:
+            logger.warning(f"Failed to extract CLI error message: {e}")
+            return str(error_message)
+
+    async def _notify_state_change(self, session_id: str, new_state: SessionState):
+        """Notify registered callbacks about state changes"""
+        try:
+            state_data = {
+                "session_id": session_id,
+                "new_state": new_state.value,
+                "timestamp": get_unix_timestamp()
+            }
+
+            for callback in self._state_change_callbacks:
+                try:
+                    if asyncio.iscoroutinefunction(callback):
+                        await callback(state_data)
+                    else:
+                        callback(state_data)
+                except Exception:
+                    logger.exception("Error in state change callback")
+
+        except Exception:
+            logger.exception(f"Error notifying state change for {session_id}")
+
+    async def _on_session_manager_state_change(self, session_id: str, new_state: SessionState, is_processing: bool = False, project_id: str | None = None):
+        """Handle state changes from session manager"""
+        # logger.info(f"Received state change from session manager: {session_id} -> {new_state.value}")
+        await self._notify_state_change(session_id, new_state)
+
+    async def _check_sdk_generated_name(self, session_id: str) -> None:
+        """Check if SDK has generated a session title and store it (issue #904)."""
+        try:
+            from claude_agent_sdk import get_session_info as sdk_get_session_info
+        except ImportError:
+            return
+        try:
+            session_info = await self.session_manager.get_session_info(session_id)
+            if not session_info:
+                return
+            sdk_session_id = session_info.claude_code_session_id
+            working_dir = str(session_info.working_directory) if session_info.working_directory else None
+            if not sdk_session_id:
+                return
+
+            sdk_info = await asyncio.to_thread(sdk_get_session_info, sdk_session_id, working_dir)
+            if sdk_info and sdk_info.custom_title:
+                await self.session_manager.update_sdk_generated_name(session_id, sdk_info.custom_title)
+        except Exception:
+            coord_logger.debug(f"SDK title check failed for {session_id}", exc_info=True)
+
+    async def _validate_and_cleanup_projects(self):
+        """
+        Validate project/session references and clean up orphaned data.
+
+        This runs on startup to fix any data corruption from previous bugs (like issue #63).
+        Removes orphaned session references and deletes empty projects.
+        Logs all cleanup actions for debugging.
+        """
+        try:
+            projects = await self.project_manager.list_projects()
+            coord_logger.info(f"Validating {len(projects)} projects for orphaned session references")
+
+            cleanup_count = 0
+
+            for project in projects:
+                project_id = project.project_id
+                session_ids_before = list(project.session_ids)  # Make a copy
+                valid_session_ids = []
+
+                # Check each session ID to see if it actually exists
+                for session_id in session_ids_before:
+                    session_info = await self.session_manager.get_session_info(session_id)
+                    if session_info:
+                        valid_session_ids.append(session_id)
+                    else:
+                        coord_logger.warning(f"Found orphaned session reference '{session_id}' in project {project_id} - will be removed")
+                        cleanup_count += 1
+
+                # If we found orphaned references, update or delete the project
+                if len(valid_session_ids) != len(session_ids_before):
+                    orphaned_count = len(session_ids_before) - len(valid_session_ids)
+
+                    # Clean the session_ids list but keep the project (even if empty)
+                    coord_logger.info(f"Removing {orphaned_count} orphaned session(s) from project {project_id} ({project.name})")
+                    project.session_ids = valid_session_ids
+                    project.updated_at = datetime.now(UTC)
+                    await self.project_manager._persist_project_state(project_id)
+
+                    if len(valid_session_ids) == 0:
+                        coord_logger.info(f"Project {project_id} ({project.name}) now has no sessions but will remain for new minions")
+
+            # Also validate parent-child minion relationships (overseer child_minion_ids)
+            sessions = await self.session_manager.list_sessions()
+            child_cleanup_count = 0
+
+            for session in sessions:
+                # Issue #349: All sessions are minions - just check is_overseer and child_minion_ids
+                if session.is_overseer and session.child_minion_ids:
+                    # This is a parent overseer - validate its children
+                    valid_children = []
+                    children_before = list(session.child_minion_ids)
+
+                    for child_id in children_before:
+                        child_info = await self.session_manager.get_session_info(child_id)
+                        if child_info:
+                            valid_children.append(child_id)
+                        else:
+                            coord_logger.warning(f"Found orphaned child minion reference '{child_id}' in overseer {session.session_id} - will be removed")
+                            child_cleanup_count += 1
+
+                    # Update if we found orphaned children
+                    if len(valid_children) != len(children_before):
+                        session.child_minion_ids = valid_children
+                        session.updated_at = datetime.now(UTC)
+                        await self.session_manager._persist_session_state(session.session_id)
+                        coord_logger.info(f"Removed {len(children_before) - len(valid_children)} orphaned child(ren) from overseer {session.session_id}")
+
+            if cleanup_count > 0 or child_cleanup_count > 0:
+                coord_logger.info(f"Startup cleanup complete: removed {cleanup_count} orphaned project session(s), {child_cleanup_count} orphaned child minion(s)")
+            else:
+                coord_logger.info("Startup validation complete: no orphaned data found")
+
+        except Exception:
+            logger.exception("Error during startup project validation")
+            # Don't raise - this shouldn't block startup
+
+    # ==================== FILE UPLOAD TRACKING (Issue #403) ====================
+
+    async def register_uploaded_file(self, session_id: str, file_path: str) -> None:
+        """
+        Register an uploaded file path for auto-approve Read permissions.
+
+        When a user uploads a file, the path is registered so that subsequent
+        Read tool requests for that path can be auto-approved without prompting.
+
+        Args:
+            session_id: Session ID that owns the file
+            file_path: Absolute path to the uploaded file
+        """
+        if session_id not in self._uploaded_file_paths:
+            self._uploaded_file_paths[session_id] = set()
+        self._uploaded_file_paths[session_id].add(file_path)
+        coord_logger.debug(f"Registered uploaded file for session {session_id}: {file_path}")
+
+    async def unregister_uploaded_file(self, session_id: str, file_path: str) -> None:
+        """
+        Unregister an uploaded file path from auto-approve tracking.
+
+        Called when a file is deleted by the user.
+
+        Args:
+            session_id: Session ID that owns the file
+            file_path: Absolute path to the uploaded file
+        """
+        if session_id in self._uploaded_file_paths:
+            self._uploaded_file_paths[session_id].discard(file_path)
+            coord_logger.debug(f"Unregistered uploaded file for session {session_id}: {file_path}")
+
+    def is_uploaded_file(self, session_id: str, file_path: str) -> bool:
+        """
+        Check if a file path is an uploaded file for a session.
+
+        Used by permission callbacks to auto-approve Read requests for
+        user-uploaded files.
+
+        Args:
+            session_id: Session ID to check
+            file_path: Absolute path to check
+
+        Returns:
+            True if the file was uploaded by the user for this session
+        """
+        return file_path in self._uploaded_file_paths.get(session_id, set())
+
+    def get_uploaded_files(self, session_id: str) -> set[str]:
+        """
+        Get all uploaded file paths for a session.
+
+        Args:
+            session_id: Session ID
+
+        Returns:
+            Set of absolute file paths uploaded to this session
+        """
+        return self._uploaded_file_paths.get(session_id, set()).copy()
+
+    def clear_uploaded_files(self, session_id: str) -> None:
+        """
+        Clear all uploaded file tracking for a session.
+
+        Called when a session is deleted or reset.
+
+        Args:
+            session_id: Session ID to clear
+        """
+        if session_id in self._uploaded_file_paths:
+            del self._uploaded_file_paths[session_id]
+            coord_logger.debug(f"Cleared uploaded files tracking for session {session_id}")
+
+    # ==================== COMPACTION-TIME DISTILLATION (Issue #1628) ====================
+
+    async def _handle_compact_boundary(self, session_id: str, parsed_message) -> None:
+        """Handle a compact_boundary system message by scheduling history distillation.
+
+        Only fires on exact 'compact_boundary' subtype. 'microcompact_boundary' is
+        explicitly excluded — it represents a smaller in-context compaction (not a full
+        context wipe) and does not warrant a dedicated summary. If a future product
+        decision wants microcompactions summarized, extend the detection condition in
+        _create_message_callback.
+
+        No-ops when history_distillation_enabled is False in the session's effective
+        config, matching the existing archive-time distillation gate.
+        """
+        try:
+            session_info = await self.session_manager.get_session_info(session_id)
+            if session_info is None:
+                return
+            eff = await resolve_effective_config(
+                session_info, self.template_manager, self.profile_manager
+            )
+            if not eff.history_distillation_enabled:
+                return
+            boundary_ts = parsed_message.timestamp
+            t = asyncio.create_task(self._distill_compaction(session_id, boundary_ts))
+            t.add_done_callback(task_done_log_exception)
+            coord_logger.debug(
+                f"Launched compaction-time distillation for session {session_id} at ts={boundary_ts}"
+            )
+        except Exception:
+            logger.exception(
+                f"Failed to schedule compaction distillation for session {session_id}"
+            )
+
+    async def _distill_compaction(self, session_id: str, boundary_ts: float) -> None:
+        """Distill messages from the previous compaction boundary to this one.
+
+        Scans messages.jsonl for prior compact_boundary entries to determine the
+        slice window, writes a temp jsonl for that slice, calls distill_session_history,
+        then registers the result as a session resource so the frontend can display it.
+        """
+        from datetime import UTC, datetime
+
+        from backend.history_distiller import distill_session_history
+
+        session_dir = self.session_manager.sessions_dir / session_id
+        messages_file = session_dir / "messages.jsonl"
+
+        if not messages_file.exists():
+            return
+
+        # Scan for all compact_boundary timestamps to determine slice window.
+        import json as _json
+        boundary_timestamps: list[float] = []
+        try:
+            with open(messages_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = _json.loads(line)
+                    except _json.JSONDecodeError:
+                        continue
+                    stored_type = row.get("_type")
+                    if stored_type:
+                        # StoredMessage format
+                        if stored_type == "SystemMessage":
+                            subtype = row.get("data", {}).get("subtype", "")
+                            if subtype == "compact_boundary":
+                                ts = row.get("timestamp")
+                                if ts is not None:
+                                    boundary_timestamps.append(float(ts))
+                    else:
+                        # Legacy format
+                        if row.get("type") == "system":
+                            meta = row.get("metadata") or {}
+                            if meta.get("subtype") == "compact_boundary":
+                                ts = row.get("timestamp")
+                                if ts is not None:
+                                    boundary_timestamps.append(float(ts))
+        except OSError:
+            logger.exception(f"Failed to scan messages.jsonl for {session_id}")
+            return
+
+        # Determine previous boundary (slice starts at prev_ts, exclusive).
+        boundary_timestamps_sorted = sorted(boundary_timestamps)
+        prev_ts: float | None = None
+        for ts in boundary_timestamps_sorted:
+            if ts < boundary_ts:
+                prev_ts = ts
+
+        # Write slice to temp file.
+        history_dir = session_dir / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        safe_ts = str(int(boundary_ts))
+        tmp_path = history_dir / f".compaction_{safe_ts}.tmp.jsonl"
+        output_path = history_dir / f"{safe_ts}.md"
+
+        try:
+            with open(messages_file, encoding="utf-8") as src, \
+                    open(tmp_path, "w", encoding="utf-8") as dst:
+                for line in src:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        row = _json.loads(stripped)
+                    except _json.JSONDecodeError:
+                        continue
+                    ts = row.get("timestamp")
+                    if ts is None:
+                        continue
+                    ts_f = float(ts)
+                    # Include messages after prev boundary (exclusive) up to and
+                    # including this boundary (inclusive).
+                    if prev_ts is not None and ts_f <= prev_ts:
+                        continue
+                    if ts_f > boundary_ts:
+                        continue
+                    dst.write(stripped + "\n")
+
+            boundary_iso = datetime.fromtimestamp(boundary_ts, tz=UTC).isoformat()
+            success = await distill_session_history(
+                tmp_path, output_path, session_id, boundary_iso
+            )
+        finally:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+
+        if not success:
+            if output_path.exists():
+                try:
+                    output_path.unlink()
+                except OSError:
+                    pass
+            return
+
+        # Register the markdown file as a session resource for frontend correlation.
+        try:
+            from datetime import datetime as _dt
+            time_label = _dt.fromtimestamp(boundary_ts, tz=UTC).strftime("%H:%M")
+            title = f"Compaction Summary — {time_label}"
+            description = f"compaction:{int(boundary_ts)}"
+            await self.register_uploaded_resource(
+                session_id,
+                str(output_path),
+                title=title,
+                description=description,
+            )
+            coord_logger.info(
+                f"Registered compaction summary resource for session {session_id} at ts={boundary_ts}"
+            )
+        except Exception:
+            logger.exception(
+                f"Failed to register compaction summary resource for session {session_id}"
+            )
+
+    # ==================== RESOURCE GALLERY INTEGRATION (Issue #404) ====================
+
+    async def register_uploaded_resource(
+        self,
+        session_id: str,
+        file_path: str,
+        title: str | None = None,
+        description: str | None = None
+    ) -> dict | None:
+        """
+        Register an uploaded file to the resource gallery.
+
+        When a user uploads a file through the attachment system,
+        this automatically adds it to the task panel resource gallery.
+
+        Args:
+            session_id: Session ID that owns the resource
+            file_path: Absolute path to the uploaded file
+            title: Optional title for the resource (defaults to filename)
+            description: Optional description
+
+        Returns:
+            Dict with resource_id and markdown URL, or None if registration failed
+        """
+        if not self.resource_mcp_tools:
+            coord_logger.warning("Resource MCP tools not available")
+            return None
+
+        # Build args matching the MCP tool interface
+        args = {
+            "file_path": file_path,
+            "title": title or "",
+            "description": description or ""
+        }
+
+        # Use the MCP tool's internal handler directly
+        result = await self.resource_mcp_tools._handle_register_resource(session_id, args)
+
+        if result.get("is_error"):
+            error_text = result.get("content", [{}])[0].get("text", "Unknown error")
+            raise ValueError(f"Failed to register resource: {error_text}")
+
+        coord_logger.info(f"Registered uploaded resource to gallery for session {session_id}: {title}")
+
+        # Extract resource_id from result text and build metadata for caller
+        result_text = result.get("content", [{}])[0].get("text", "")
+        resource_id = None
+        for line in result_text.splitlines():
+            if line.startswith("- ID: "):
+                resource_id = line[len("- ID: "):].strip()
+                break
+
+        if resource_id:
+            from backend.mcp.resource_mcp_tools import ResourceMCPTools
+            is_image = any(
+                file_path.lower().endswith(ext)
+                for ext in ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.tiff', '.tif')
+            )
+            return {
+                "resource_id": resource_id,
+                "markdown": ResourceMCPTools._get_resource_url(
+                    session_id, resource_id, title or "", is_image
+                ),
+            }
+        return None
+
+    # Backward compatibility alias
+    async def register_uploaded_image(
+        self,
+        session_id: str,
+        file_path: str,
+        title: str | None = None,
+        description: str | None = None
+    ) -> None:
+        """Deprecated: Use register_uploaded_resource instead."""
+        await self.register_uploaded_resource(session_id, file_path, title, description)
+
+    async def cleanup(self):
+        """Cleanup all resources"""
+        try:
+            # Stop scheduler service and history rotator (issue #495, #1372)
+            if hasattr(self, 'legion_system') and self.legion_system is not None:
+                await self.legion_system.history_rotator.stop()
+                await self.legion_system.scheduler_service.stop()
+
+            # Terminate all active sessions
+            session_ids = list(self._active_sdks.keys())
+            for session_id in session_ids:
+                await self.terminate_session(session_id)
+
+            # Issue #1484: close shared MCP upstream connections
+            try:
+                await self.shared_mcp_manager.shutdown()
+            except Exception:
+                logger.exception("Error shutting down shared MCP manager")
+
+            coord_logger.info("Session coordinator cleanup completed")
+
+        except Exception:
+            logger.exception("Error during session coordinator cleanup")
+
+    async def _init_session_overrides(self, session_id: str, config: "SessionConfig") -> None:
+        """Compute and store initial session_overrides for a template-linked session.
+
+        Called at create time so that fields the user customised in the Create Session
+        dialog (before hitting Create) survive restarts instead of being overwritten
+        by the template defaults at resolve_effective_config time (#1079).
+        """
+        if not config.template_id:
+            return
+        try:
+            from backend.config_resolution import CONFIG_FIELDS, resolve_template_config
+
+            template = await self.template_manager.get_template(config.template_id)
+            if template is None:
+                return
+
+            template_values = await resolve_template_config(template, self.profile_manager)
+
+            overrides: dict = {}
+            for field_name in CONFIG_FIELDS:
+                if not hasattr(config, field_name):
+                    continue
+                config_value = getattr(config, field_name)
+                if config_value is None:
+                    continue  # None = not set by user; never freeze as an override
+                template_value = template_values.get(field_name)
+                if config_value != template_value:
+                    overrides[field_name] = config_value
+
+            if overrides:
+                # Write directly — no template_manager so _track_overrides is skipped
+                # (we ARE the source of truth here, not a field mutation to track).
+                await self.session_manager.update_session(
+                    session_id,
+                    session_overrides=overrides,
+                )
+                coord_logger.debug(
+                    f"Session {session_id} initial overrides computed: {list(overrides.keys())}"
+                )
+        except Exception:
+            logger.exception(f"Failed to compute initial session_overrides for {session_id}")
+
+    async def _prune_inherited_mcp_snapshot(self, session_info) -> bool:
+        """Remove MCP config fields from session.config that merely mirror the current
+        template/profile resolution (inherited snapshots, not real overrides).
+
+        Returns True if the session was modified. Issue #1660.
+        """
+        if not session_info.template_id:
+            return False
+        try:
+            from backend.config_resolution import resolve_template_config
+
+            template = await self.template_manager.get_template(session_info.template_id)
+            if template is None:
+                return False
+            resolved = await resolve_template_config(template, self.profile_manager)
+            cfg = dict(session_info.config or {})
+            changed = False
+            for field in _MCP_INHERITABLE_FIELDS:
+                if field not in cfg:
+                    continue
+                if _mcp_field_equal(field, cfg[field], resolved.get(field)):
+                    del cfg[field]
+                    changed = True
+            if changed:
+                await self.session_manager.update_session(
+                    session_info.session_id, _replace_config=cfg
+                )
+            return changed
+        except Exception:
+            logger.exception(
+                f"Failed to prune MCP snapshot for session {session_info.session_id}"
+            )
+            return False
+
+    async def _migrate_stale_mcp_snapshots(self) -> None:
+        """Issue #1660: one-time cleanup of inherited MCP snapshots persisted into
+        session.config by the spawn path. Conservative — only clears fields that still
+        equal the current template/profile resolution. Never blocks startup."""
+        try:
+            sessions = await self.session_manager.list_sessions()
+            cleared = 0
+            for s in sessions:
+                if await self._prune_inherited_mcp_snapshot(s):
+                    cleared += 1
+            if cleared:
+                coord_logger.info(
+                    f"#1660 migration: cleared stale MCP snapshots on {cleared} session(s)"
+                )
+        except Exception:
+            logger.exception("Failed MCP snapshot migration (#1660)")

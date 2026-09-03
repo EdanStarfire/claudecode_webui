@@ -2,9 +2,9 @@
 
 from fastapi import APIRouter, HTTPException
 
-from ..event_queue import EventQueue
-from ..exception_handlers import handle_exceptions
-from ..logging_config import get_logger
+from shared.event_queue import EventQueue
+from shared.exception_handlers import handle_exceptions
+from shared.logging_config import get_logger
 
 _polling_logger = get_logger('polling', category='POLL')
 

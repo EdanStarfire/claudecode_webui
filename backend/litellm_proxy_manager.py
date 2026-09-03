@@ -1,0 +1,313 @@
+"""Manages the in-process LiteLLM proxy server."""
+
+from __future__ import annotations
+
+import asyncio
+import uuid
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from shared.logging_config import get_logger
+
+if TYPE_CHECKING:
+    from backend.provider_catalog import ProviderCatalogManager
+
+legion_logger = get_logger("legion", category="LITELLM_PROXY")
+
+# Separator between catalog_id and model_id in LiteLLM model_name aliases.
+MODEL_ALIAS_SEP = "--"
+
+
+def make_model_alias(catalog_id: str, model_id: str) -> str:
+    return f"{catalog_id}{MODEL_ALIAS_SEP}{model_id}"
+
+
+class LiteLLMProxyManager:
+    """
+    Lifecycle manager for the embedded LiteLLM ASGI proxy.
+
+    Responsibilities:
+    - Start/stop the uvicorn task serving the LiteLLM proxy app
+    - Rebuild the proxy model_list from the provider catalog + vault secrets
+    - Maintain a per-session virtual key registry for custom_auth
+    """
+
+    def __init__(
+        self,
+        catalog_manager: ProviderCatalogManager,
+        vault,
+        port: int = 4000,
+        *,
+        config_file: Path | None = None,
+    ):
+        self._catalog_manager = catalog_manager
+        self._vault = vault
+        self._port = port
+        self._config_file = config_file
+        self._key_registry: dict[str, str] = {}  # api_key -> session_id
+        self._routing_registry: dict[str, dict] = {}  # session_id -> {virtual_key, base_url}
+        self._server_task: asyncio.Task | None = None
+        self._server: object | None = None  # uvicorn.Server reference for graceful shutdown
+        self._rebuild_lock = asyncio.Lock()
+        self._running = False
+        self._last_restart: datetime | None = None
+        self._last_error: str | None = None
+        self._model_count: int = 0
+        try:
+            from litellm.proxy.proxy_server import app as _  # noqa: F401
+        except ImportError as e:
+            raise RuntimeError(
+                "LiteLLM proxy package not available. Install litellm[proxy]."
+            ) from e
+
+    # ── Lifecycle ──────────────────────────────────────────────────────────
+
+    async def start(self) -> None:
+        """Build model_list from catalog and start the uvicorn task."""
+        try:
+            model_list = await self._build_model_list()
+            await self._launch_server(model_list)
+            self._running = True
+            self._last_restart = datetime.now(UTC)
+            self._last_error = None
+            legion_logger.info(
+                f"LiteLLM proxy started on port {self._port} with {len(model_list)} model(s), "
+                f"bound to 0.0.0.0:{self._port} (auth via virtual key)"
+            )
+        except Exception as e:
+            self._last_error = f"{type(e).__name__}: {e}"
+            raise
+
+    async def stop(self) -> None:
+        """Gracefully stop the uvicorn task."""
+        if self._server_task and not self._server_task.done():
+            # Signal uvicorn to exit gracefully so it closes its socket cleanly.
+            if self._server is not None:
+                self._server.should_exit = True  # type: ignore[attr-defined]
+            try:
+                await asyncio.wait_for(self._server_task, timeout=5.0)
+            except (TimeoutError, asyncio.CancelledError, SystemExit):
+                self._server_task.cancel()
+                try:
+                    await self._server_task
+                except (asyncio.CancelledError, SystemExit):
+                    pass
+        self._server = None
+        self._server_task = None
+        self._running = False
+        legion_logger.info("LiteLLM proxy stopped")
+
+    async def rebuild(self) -> None:
+        """Re-resolve catalog secrets, regenerate model_list, restart server."""
+        async with self._rebuild_lock:
+            legion_logger.info("Rebuilding LiteLLM proxy...")
+            await self.stop()
+            await self.start()
+
+    @property
+    def is_running(self) -> bool:
+        return self._running and self._server_task is not None and not self._server_task.done()
+
+    @property
+    def port(self) -> int:
+        return self._port
+
+    @property
+    def last_restart(self) -> datetime | None:
+        return self._last_restart
+
+    @property
+    def last_error(self) -> str | None:
+        return self._last_error
+
+    @property
+    def model_count(self) -> int:
+        return self._model_count
+
+    # ── Virtual Key Registry ───────────────────────────────────────────────
+
+    def register_session_key(self, session_id: str) -> str:
+        """Mint and register a virtual API key for a session. Returns the key."""
+        key = f"lc-{uuid.uuid4().hex}"
+        self._key_registry[key] = session_id
+        return key
+
+    def unregister_session_key(self, session_id: str) -> None:
+        """Remove all keys belonging to session_id."""
+        keys_to_remove = [k for k, v in self._key_registry.items() if v == session_id]
+        for k in keys_to_remove:
+            del self._key_registry[k]
+
+    def lookup_session_for_key(self, api_key: str) -> str | None:
+        """Return session_id for api_key, or None if not registered."""
+        return self._key_registry.get(api_key)
+
+    # ── Routing Registry ──────────────────────────────────────────────────────
+
+    def register_session_routing(
+        self,
+        session_id: str,
+        virtual_key: str,
+        base_url: str,
+        model_map: dict[str, str] | None = None,
+        default_model: str | None = None,
+    ) -> None:
+        """Store virtual key + base URL for a session (used by Docker delivery, Phase 3).
+
+        model_map: optional tier→alias dict (issue #1469 per-tier routing).
+        default_model: optional LiteLLM alias to rewrite unmatched body model fields.
+        """
+        self._routing_registry[session_id] = {
+            "virtual_key": virtual_key,
+            "base_url": base_url,
+            "model_map": model_map or {},
+            "default_model": default_model,
+        }
+
+    def unregister_session_routing(self, session_id: str) -> None:
+        """Remove routing entry for session_id (no-op if absent)."""
+        self._routing_registry.pop(session_id, None)
+
+    def get_session_routing(self, session_id: str) -> dict | None:
+        """Return {virtual_key, base_url} for session_id, or None if not registered."""
+        return self._routing_registry.get(session_id)
+
+    def build_hostname_rewrites(self) -> dict[str, str]:
+        """Return the static hostname-rewrite map for Docker sidecars.
+
+        Keys are source hostnames the CLI contacts; values are the rewrite
+        destination (cc-webui.internal:<port>) where LiteLLM is reachable.
+        """
+        return {"api.anthropic.com": f"cc-webui.internal:{self._port}"}
+
+    # ── LiteLLM Custom Auth ────────────────────────────────────────────────
+
+    async def auth_callback(self, request, api_key: str):
+        """LiteLLM custom_auth hook. Validates virtual keys."""
+        from fastapi import HTTPException
+
+        session_id = self.lookup_session_for_key(api_key)
+        if not session_id:
+            raise HTTPException(status_code=401, detail="Invalid virtual key")
+
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        return UserAPIKeyAuth(api_key=api_key, user_id=session_id)
+
+    # ── Internal ───────────────────────────────────────────────────────────
+
+    def _disable_openai_responses_ct_api(self) -> bool:
+        """Read the feature flag from disk on every call.
+
+        Reading on every _launch_server invocation means an operator can flip
+        the flag in config.json and trigger a rebuild via
+        POST /api/provider-catalog/restart without restarting the process.
+        """
+        if self._config_file is None:
+            return True  # default-on; matches FeaturesConfig default
+        from .config_manager import load_config
+        return load_config(self._config_file).features.disable_openai_responses_count_tokens_api
+
+    async def _build_model_list(self) -> list[dict]:
+        """Resolve catalog entries + secrets into LiteLLM model_list format."""
+        entries = await self._catalog_manager.list_entries()
+        model_list = []
+        for entry in entries:
+            resolved_params = await self._catalog_manager.resolve_params(entry, self._vault)
+            for model in entry.get("models", []):
+                model_name = make_model_alias(entry['id'], model['id'])
+                model_list.append({
+                    "model_name": model_name,
+                    "litellm_params": {
+                        "model": model["litellm_model"],
+                        "drop_params": model.get("drop_params", False),
+                        **resolved_params,
+                    },
+                })
+        self._model_count = len(model_list)
+        return model_list
+
+    async def _launch_server(self, model_list: list[dict]) -> None:
+        """Configure LiteLLM globals and start the uvicorn task."""
+        import litellm
+        from litellm.proxy import proxy_server as _ps
+
+        # Set proxy module globals directly — initialize() in litellm>=1.50
+        # does not accept model_list or custom_auth kwargs.
+        # The auth module re-imports user_custom_auth per-request so setting
+        # the module attribute is sufficient.
+        router = litellm.Router(model_list=model_list)
+        _ps.llm_router = router
+        _ps.llm_model_list = model_list
+        _ps.user_custom_auth = self.auth_callback
+        litellm.telemetry = False
+
+        # Ensure the /v1/messages route is always registered. LiteLLM uses a
+        # lazy-loading middleware (LazyFeatureMiddleware) that imports and
+        # registers the anthropic_endpoints router on the first matching request.
+        # If that first import throws, the feature is marked permanently "loaded"
+        # with no route registered, giving 404 on every subsequent request until
+        # restart. Registering explicitly here makes startup deterministic.
+        # Guard against double-registration across rebuild() calls since _ps.app
+        # is a module-level singleton.
+        if not getattr(_ps.app.state, "_anthropic_endpoints_registered", False):
+            from litellm.proxy.anthropic_endpoints import endpoints as _anthropic_ep
+            _ps.app.include_router(_anthropic_ep.router)
+            _ps.app.state._anthropic_endpoints_registered = True
+
+        # Issue #1473: short-circuit the OpenAI Responses API token-count path.
+        # OpenAITokenCounter.should_use_token_counting_api returning True causes
+        # LiteLLM to POST Anthropic-shaped tools/messages to
+        # api.openai.com/v1/responses/input_tokens, which rejects them with 400.
+        # Patching to return False lets LiteLLM fall back to local tiktoken.
+        disable_flag = self._disable_openai_responses_ct_api()
+        from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
+
+        if disable_flag and not getattr(_ps.app.state, "_openai_count_tokens_disabled", False):
+            _ps.app.state._openai_count_tokens_original = (
+                OpenAITokenCounter.should_use_token_counting_api
+            )
+            OpenAITokenCounter.should_use_token_counting_api = (
+                lambda self, custom_llm_provider=None: False
+            )
+            _ps.app.state._openai_count_tokens_disabled = True
+            legion_logger.info(
+                "Disabled OpenAITokenCounter Responses API path; using local tiktoken "
+                "fallback (issue #1473). Toggle via "
+                "features.disable_openai_responses_count_tokens_api in config + rebuild."
+            )
+        elif not disable_flag and getattr(_ps.app.state, "_openai_count_tokens_disabled", False):
+            OpenAITokenCounter.should_use_token_counting_api = (
+                _ps.app.state._openai_count_tokens_original
+            )
+            _ps.app.state._openai_count_tokens_disabled = False
+            legion_logger.info(
+                "Restored stock OpenAITokenCounter Responses API path (issue #1473)."
+            )
+
+        import uvicorn
+
+        config = uvicorn.Config(_ps.app, host="0.0.0.0", port=self._port, log_level="warning")
+        server = uvicorn.Server(config)
+        self._server = server
+        self._server_task = asyncio.create_task(server.serve())
+
+        # Wait until uvicorn has actually bound the port before returning.
+        deadline = asyncio.get_event_loop().time() + 10.0
+        while not server.started:
+            if self._server_task.done():
+                try:
+                    exc = self._server_task.exception()
+                except BaseException as e:
+                    exc = e
+                # uvicorn calls sys.exit(1) on bind failure — convert to RuntimeError
+                # so it doesn't propagate as SystemExit and kill the main process.
+                if isinstance(exc, SystemExit):
+                    raise RuntimeError(
+                        f"LiteLLM proxy failed to start (port {self._port} in use?)"
+                    ) from exc
+                raise exc or RuntimeError("LiteLLM proxy task exited during startup")
+            if asyncio.get_event_loop().time() > deadline:
+                raise RuntimeError("LiteLLM proxy failed to bind port within 10 seconds")
+            await asyncio.sleep(0.05)

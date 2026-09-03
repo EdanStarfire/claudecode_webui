@@ -18,11 +18,15 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from shared.event_queue import EventQueue
+
+# NOTE (issue #498, Phase 1): the imports below reference modules that moved to
+# backend/ in this phase. web_server.py's slimming to a pure relay shell is
+# explicitly Phase 2 scope — left as-is (and thus non-booting) until then.
 from .analytics.audit_writer import AuditWriter
 from .analytics.database import AnalyticsDB
 from .analytics_store import AnalyticsStore
 from .application_service import ApplicationService
-from .event_queue import EventQueue
 from .message_parser import MessageParser, MessageProcessor
 from .permission_service import PermissionService
 from .session_coordinator import SessionCoordinator
@@ -107,49 +111,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
             )
 
         return await call_next(request)
-
-
-def validate_and_normalize_working_directory(
-    path: str | None,
-    default_path: str
-) -> Path:
-    """
-    Validate and normalize working directory path.
-
-    Args:
-        path: User-provided path (may be None, relative, or absolute)
-        default_path: Default path if none provided
-
-    Returns:
-        Absolute Path object
-
-    Raises:
-        ValueError: If path doesn't exist or is network path
-    """
-    if not path:
-        return Path(default_path).resolve()
-
-    path_obj = Path(path)
-
-    # Convert relative to absolute
-    if not path_obj.is_absolute():
-        path_obj = path_obj.resolve()
-
-    # Check if it exists
-    if not path_obj.exists():
-        raise ValueError(f"Working directory does not exist: {path_obj}")
-
-    # Check if it's a directory (not file)
-    if not path_obj.is_dir():
-        raise ValueError(f"Working directory path is not a directory: {path_obj}")
-
-    # Reject network paths (Windows UNC or mapped drives that don't exist)
-    path_str = str(path_obj)
-    if path_str.startswith('//') or path_str.startswith('\\\\'):
-        raise ValueError(f"Network paths are not supported: {path_obj}")
-
-    return path_obj
-
 
 
 class ClaudeWebUI:
