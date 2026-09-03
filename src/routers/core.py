@@ -33,8 +33,19 @@ def build_router(webui) -> APIRouter:
     @router.get("/health")
     @handle_exceptions("health check")
     async def health_check():
-        """Health check endpoint"""
+        """Liveness — always true once the process is up (doesn't need Backend)."""
         return {"status": "healthy", "timestamp": datetime.now(UTC).isoformat()}
+
+    @router.get("/ready")
+    @handle_exceptions("readiness check")
+    async def ready_check():
+        """Readiness — true once initialize() has run.
+
+        Basic version for Phase 2: doesn't yet gate on live Backend health.
+        Phase 3's backend_supervisor.py wires real readiness-polling here (true
+        only once the attached/spawned Backend itself reports ready).
+        """
+        return {"ready": webui._ready, "timestamp": datetime.now(UTC).isoformat()}
 
     @router.get("/api/auth/check")
     @handle_exceptions("check auth")

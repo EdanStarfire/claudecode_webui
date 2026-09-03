@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-Main entry point for Claude Code WebUI server.
+Main entry point for the Frontend API process (issue #498).
+
+Serves the browser, authenticates it, and relays every domain request to a
+Backend control-plane process — either a manually-configured remote Backend
+(--remote-backend-url/--remote-backend-token, wired here) or, once Phase 3
+lands, an auto-started local one when neither flag is given.
 """
 
 import argparse
@@ -10,21 +15,20 @@ from pathlib import Path
 
 import uvicorn
 
-# Add project root to path (so imports like "from src.legion..." work)
+# Add project root to path (so imports like "from shared..." work)
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.config_manager import check_network_binding, ensure_config_file, load_config
-from src.logging_config import configure_logging
-from src.secrets_keyring import configure_keyring
+from shared.logging_config import configure_logging
+from src.frontend_config import check_network_binding, ensure_config_file, load_frontend_config
 from src.web_server import create_app
 
 
 def main():
-    """Main function to start the Claude Code WebUI server."""
+    """Main function to start the Frontend API server."""
 
     # Parse command-line arguments
     parser = argparse.ArgumentParser(
-        description="Claude Code WebUI Server",
+        description="Claude Code WebUI Frontend API",
     )
 
     # Server options
@@ -33,10 +37,18 @@ def main():
         help='Bind address (default: 127.0.0.1, localhost only). Use --host 0.0.0.0 to allow remote access.'
     )
     parser.add_argument('--port', type=int, default=8000, help='Port to bind to (default: 8000)')
-    parser.add_argument('--data-dir', default='./data', help='Data directory location (default: ./data)')
 
-    # Experimental features
-    parser.add_argument('--experimental', action='store_true', help='Enable experimental features (Agent Teams)')
+    # Backend connection (issue #498) — manual path only until Phase 3's
+    # backend_supervisor.py adds auto-start for the single-user self-hosted case.
+    parser.add_argument(
+        '--remote-backend-url', type=str, default=None,
+        help='URL of a manually-configured Backend (e.g. http://127.0.0.1:8100). '
+             'Required until Phase 3 adds auto-start.'
+    )
+    parser.add_argument(
+        '--remote-backend-token', type=str, default=None,
+        help='Backend-scoped bearer token for --remote-backend-url.'
+    )
 
     # Authentication options (issue #728)
     parser.add_argument(
@@ -52,99 +64,32 @@ def main():
         help='Force authentication even when binding to localhost'
     )
 
-    # Mock SDK mode (for browser automation testing — issue #561)
-    parser.add_argument(
-        '--mock-sdk', action='store_true',
-        help='Use MockClaudeSDK with fixture replay instead of real SDK'
-    )
-    parser.add_argument(
-        '--fixtures-dir', type=str, default=None,
-        help='Directory containing named fixture subdirectories (required with --mock-sdk)'
-    )
-
-    # Debug flags (grouped so they appear under their own section)
+    # Debug flags (Frontend-relevant subset — session-execution debug flags moved
+    # to backend/main.py, since that's the only process with anything to debug there)
     debug_group = parser.add_argument_group("Debug Flags")
     debug_group.add_argument('--debug-polling', action='store_true', help='Enable poll transport signal logging (events-returned lines)')
-    # Note: debug_all excludes debug_all_polling due to excessive noise that obscures other debug output.
-    # Idle long-poll hits occur every 30 seconds per connected client, generating access lines
-    # that make it difficult to identify relevant debugging information.
     debug_group.add_argument('--debug-all-polling', action='store_true', help='Enable full uvicorn access-log for /api/poll/* (high volume)')
-    debug_group.add_argument('--debug-sdk', action='store_true', help='Enable SDK integration debugging')
-    debug_group.add_argument('--debug-permissions', action='store_true', help='Enable permission callback debugging')
-    debug_group.add_argument('--debug-storage', action='store_true', help='Enable data storage debugging')
-    debug_group.add_argument('--debug-parser', action='store_true', help='Enable message parser debugging')
     debug_group.add_argument('--debug-error-handler', action='store_true', help='Enable error handler debugging')
-    debug_group.add_argument('--debug-legion', action='store_true', help='Enable Legion multi-agent system debugging')
-    debug_group.add_argument('--debug-session-manager', action='store_true', help='Enable session manager debugging')
-    debug_group.add_argument('--debug-template-manager', action='store_true', help='Enable template manager debugging')
-    debug_group.add_argument('--debug-skill-manager', action='store_true', help='Enable skill manager debugging')
-    debug_group.add_argument('--debug-queue-manager', action='store_true', help='Enable queue manager debugging')
-    debug_group.add_argument('--debug-queue-processor', action='store_true', help='Enable queue processor debugging')
-    debug_group.add_argument('--debug-archive', action='store_true', help='Enable archive manager debugging')
-    debug_group.add_argument('--debug-project-manager', action='store_true', help='Enable project manager debugging')
-    debug_group.add_argument('--debug-profile-manager', action='store_true', help='Enable profile manager debugging')
     debug_group.add_argument('--debug-all', action='store_true', help='Enable all debug logging (excludes --debug-all-polling)')
 
     args = parser.parse_args()
 
-    # Configure keyring backend early (before ApplicationService init)
-    configure_keyring()
-
     # Ensure config file exists (creates with safe defaults on first run)
     config_file = ensure_config_file()
-    app_config = load_config(config_file)
+    frontend_config = load_frontend_config(config_file)
 
     # Validate network binding permission
-    if not check_network_binding(args.host, app_config, config_file):
-        sys.exit(1)
-
-    # Validate and create data directory
-    data_dir_path = Path(args.data_dir).resolve()
-    try:
-        data_dir_path.mkdir(parents=True, exist_ok=True)
-        print(f"Using data directory: {data_dir_path}")
-    except Exception as e:
-        print(f"Failed to create data directory {data_dir_path}: {e}", file=sys.stderr)
+    if not check_network_binding(args.host, frontend_config, config_file):
         sys.exit(1)
 
     # Configure logging with debug flags
     configure_logging(
         debug_polling=args.debug_polling,
         debug_all_polling=args.debug_all_polling,
-        debug_sdk=args.debug_sdk,
-        debug_permissions=args.debug_permissions,
-        debug_storage=args.debug_storage,
-        debug_parser=args.debug_parser,
         debug_error_handler=args.debug_error_handler,
-        debug_legion=args.debug_legion,
-        debug_session_manager=args.debug_session_manager,
-        debug_template_manager=args.debug_template_manager,
-        debug_skill_manager=args.debug_skill_manager,
-        debug_queue_manager=args.debug_queue_manager,
-        debug_queue_processor=args.debug_queue_processor,
-        debug_archive=args.debug_archive,
-        debug_project_manager=args.debug_project_manager,
-        debug_profile_manager=args.debug_profile_manager,
         debug_all=args.debug_all,
-        log_dir=str(data_dir_path / "logs")
+        log_dir="data/logs",
     )
-
-    # Validate mock SDK arguments (issue #561)
-    if args.mock_sdk:
-        if not args.fixtures_dir:
-            parser.error("--fixtures-dir is required when --mock-sdk is specified")
-        fixtures_path = Path(args.fixtures_dir).resolve()
-        if not fixtures_path.is_dir():
-            parser.error(f"Fixtures directory does not exist: {fixtures_path}")
-        available_fixtures = sorted(
-            d.name for d in fixtures_path.iterdir() if d.is_dir()
-        )
-        if not available_fixtures:
-            parser.error(f"No fixture subdirectories found in: {fixtures_path}")
-        print(f"Mock SDK mode enabled. Available fixtures: {', '.join(available_fixtures)}")
-    else:
-        fixtures_path = None
-        available_fixtures = None
 
     # Determine authentication settings (issue #728)
     is_localhost = args.host in ('127.0.0.1', 'localhost', '::1')
@@ -168,18 +113,24 @@ def main():
     else:
         print("Authentication disabled (localhost binding)")
 
-    # Advertise the server's internal URL so docker proxy sidecars can call back on the
-    # right port. The proxy addon reads WEBUI_BASE_URL; without this it defaults to :8000.
-    import os as _os
-    _os.environ.setdefault("WEBUI_BASE_URL", f"http://cc-webui.internal:{args.port}")
+    # Resolve Backend connection: CLI flags override config's backend_connection
+    # section, which overrides nothing yet (Phase 3 adds auto-start as the final
+    # fallback when neither is set).
+    backend_url = args.remote_backend_url or frontend_config.backend_connection.remote_backend_url
+    backend_token = args.remote_backend_token or frontend_config.backend_connection.remote_backend_token
+    if not backend_url or not backend_token:
+        print(
+            "ERROR: --remote-backend-url and --remote-backend-token are required "
+            "(or set backend_connection in config) until Phase 3 adds Backend auto-start.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Create FastAPI app
     app = create_app(
-        data_dir=data_dir_path,
-        experimental=args.experimental,
-        mock_sdk=args.mock_sdk,
-        fixtures_dir=fixtures_path if args.mock_sdk else None,
-        available_fixtures=available_fixtures,
+        backend_url=backend_url,
+        backend_token=backend_token,
+        config_file=config_file,
         auth_token=auth_token if auth_enabled else None,
         auth_enabled=auth_enabled,
         host=args.host,

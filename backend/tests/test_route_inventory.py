@@ -1,8 +1,10 @@
 """Route inventory test — asserts the API surface is stable across refactors (issue #851).
 
 Issue #498: the single-app route count split across two processes. This file now
-counts Backend's own route table only — core.py (/, /health, /api/auth/check) and
-config.py stayed Frontend-side; poll.py's 4 routes are duplicated into
+counts Backend's own route table only — core.py (/, /health, /api/auth/check) stayed
+Frontend-side entirely; config.py exists on BOTH sides now (Frontend's 2 routes do a
+merged-read/split-write relay, Backend's own 2 routes own everything but
+networking/backend_connection); poll.py's 4 routes are duplicated into
 backend/routers/poll.py (Backend owns the EventQueues); interrupt/permission-response
 moved from core.py into backend/routers/session_runtime.py (backend-owned state).
 """
@@ -32,10 +34,11 @@ def test_route_count_unchanged():
     from backend.web_server import create_app
     app = create_app()
     api_routes_count = _count_api_routes(app)
-    assert api_routes_count == 152, (
-        f"Expected 152 Backend routes post-#498 split (core.py's 3 browser routes and "
-        f"config.py's 2 routes stayed Frontend-side; poll.py's 4 routes are duplicated "
-        f"into backend/routers/poll.py since Backend owns the EventQueues; interrupt + "
-        f"permission-response relocated here from core.py), got {api_routes_count}. "
-        "A route was added or removed."
+    assert api_routes_count == 154, (
+        f"Expected 154 Backend routes post-#498 split (core.py's 3 browser routes "
+        f"stayed Frontend-side only; config.py now has its own 2 backend-owned routes "
+        f"here PLUS 2 more on the Frontend side doing merged-read/split-write; poll.py's "
+        f"4 routes are duplicated into backend/routers/poll.py since Backend owns the "
+        f"EventQueues; interrupt + permission-response relocated here from core.py), "
+        f"got {api_routes_count}. A route was added or removed."
     )

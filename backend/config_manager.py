@@ -464,9 +464,21 @@ def load_config(config_file: Path = CONFIG_FILE) -> AppConfig:
 
 
 def save_config(config: AppConfig, config_file: Path = CONFIG_FILE) -> None:
-    """Save config to file."""
+    """Save config to file.
+
+    Issue #498: merges into the existing file rather than overwriting it outright
+    — the config file is shared with the Frontend API, which owns top-level keys
+    (networking, backend_connection) that aren't fields of AppConfig at all. A
+    blind overwrite would silently drop them every time Backend writes after
+    Frontend has.
+    """
+    try:
+        existing = json.loads(config_file.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        existing = {}
+    existing.update(config.to_dict())
     config_file.parent.mkdir(parents=True, exist_ok=True)
-    config_file.write_text(json.dumps(config.to_dict(), indent=2) + "\n")
+    config_file.write_text(json.dumps(existing, indent=2) + "\n")
 
 
 class AppConfigManager:

@@ -11,6 +11,7 @@ from backend.config_manager import (
     check_network_binding,
     ensure_config_file,
     load_config,
+    save_config,
 )
 
 
@@ -35,6 +36,46 @@ class TestEnsureConfigFile:
         data = json.loads(config_file.read_text())
         assert data["networking"]["allow_network_binding"] is True
         assert data["networking"]["acknowledged_risk"] is True
+
+
+class TestSaveConfig:
+    """Regression tests for issue #498: the shared config.json also carries Frontend-
+    owned top-level keys (networking, backend_connection) that aren't AppConfig
+    fields. save_config() must not clobber them — found live while testing the
+    Phase 2 config split (a Frontend write followed by a Backend write silently
+    dropped Frontend's backend_connection section)."""
+
+    def test_save_config_preserves_unknown_top_level_keys(self, tmp_path):
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({
+            "backend_connection": {"remote_backend_url": "http://127.0.0.1:8100", "remote_backend_token": "t"},
+        }))
+
+        config = load_config(config_file)
+        save_config(config, config_file)
+
+        data = json.loads(config_file.read_text())
+        assert data["backend_connection"] == {
+            "remote_backend_url": "http://127.0.0.1:8100",
+            "remote_backend_token": "t",
+        }
+
+    def test_save_config_still_writes_known_fields(self, tmp_path):
+        config_file = tmp_path / "config.json"
+        ensure_config_file(config_file)
+
+        config = load_config(config_file)
+        config.features.max_peek_cards = 42
+        save_config(config, config_file)
+
+        data = json.loads(config_file.read_text())
+        assert data["features"]["max_peek_cards"] == 42
+
+    def test_save_config_handles_missing_file(self, tmp_path):
+        config_file = tmp_path / "does_not_exist" / "config.json"
+        config = AppConfig()
+        save_config(config, config_file)
+        assert config_file.exists()
 
 
 class TestLoadConfig:
