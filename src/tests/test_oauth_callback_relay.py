@@ -8,6 +8,7 @@ complete by being relayed through Frontend. This covers the mirroring logic
 advance knowledge of Backend's dynamically-registered paths.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -89,6 +90,67 @@ async def test_resync_is_a_noop_on_backend_error():
     await webui.resync_oauth_callback_paths()
 
     assert webui._oauth_callback_paths == {"/custom/existing"}  # untouched, no crash
+
+
+@pytest.mark.asyncio
+async def test_retry_wrapper_recovers_once_backend_becomes_reachable():
+    """WebUI-Agent's review finding: a transient resync failure right at startup
+    must not leave dynamic OAuth routes unmirrored until an unrelated MCP-config
+    mutation happens to trigger a resync. The retry wrapper must actually pick up
+    the paths once Backend becomes reachable within the retry window."""
+    webui = _make_webui()
+    call_count = 0
+
+    async def flaky_get_json(path):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            import httpx
+            raise httpx.ConnectError("refused")
+        return {"paths": ["/custom/callback-a"]}
+
+    webui.backend_client.get_json = flaky_get_json
+    webui.backend_client.health = AsyncMock(side_effect=[False, False, True])
+
+    await webui._resync_oauth_callback_paths_with_retry(attempts=5, delay=0.01)
+
+    assert webui._oauth_callback_paths == {"/custom/callback-a"}
+
+
+@pytest.mark.asyncio
+async def test_periodic_resync_loop_self_heals_after_all_retries_exhausted():
+    """If Backend is unreachable for the entire startup retry window, the
+    background periodic task must still eventually pick up the paths — this is
+    what actually closes the "stuck forever" gap, independent of how well the
+    startup retry heuristic guesses transient-vs-persistent failures."""
+    webui = _make_webui()
+    calls = 0
+
+    async def get_json_after_first_call(path):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            import httpx
+            raise httpx.ConnectError("refused")
+        return {"paths": ["/custom/callback-a"]}
+
+    webui.backend_client.get_json = get_json_after_first_call
+
+    from src import web_server as web_server_module
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(web_server_module, "_OAUTH_RESYNC_INTERVAL_SECONDS", 0.02)
+        task = asyncio.create_task(webui._periodic_oauth_resync_loop())
+        for _ in range(200):
+            if webui._oauth_callback_paths:
+                break
+            await asyncio.sleep(0.01)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert webui._oauth_callback_paths == {"/custom/callback-a"}
 
 
 @pytest.mark.asyncio

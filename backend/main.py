@@ -8,6 +8,7 @@ case (backend_supervisor.py, Phase 3) or pointed at manually for a remote deploy
 """
 
 import argparse
+import os
 import secrets
 import sys
 from pathlib import Path
@@ -21,6 +22,20 @@ from backend.config_manager import check_network_binding, ensure_config_file, lo
 from backend.secrets_keyring import configure_keyring
 from backend.web_server import create_app
 from shared.logging_config import configure_logging
+
+
+def configure_webui_base_url(port: int) -> None:
+    """Advertise this Backend's own bind port so Docker/LiteLLM-proxy sidecars call
+    back on the right port (issue #498 Phase 4).
+
+    session_coordinator.py reads WEBUI_BASE_URL via os.environ.get() and forwards it
+    into spawned sidecar containers (docker_utils.py); cc-webui.internal is a
+    --add-host alias (backend/docker/claude-docker) resolving to the Docker host
+    machine, so only the port needs to be correct here. Docker lives entirely in
+    Backend now — this used to be set by the pre-split unified main.py using
+    Frontend's port, which would have been wrong for sidecars now calling Backend.
+    """
+    os.environ.setdefault("WEBUI_BASE_URL", f"http://cc-webui.internal:{port}")
 
 
 def main():
@@ -145,6 +160,8 @@ def main():
     auth_token = args.token or secrets.token_urlsafe(32)
     if not args.token:
         print(f"No --token supplied; generated one for standalone use: {auth_token}")
+
+    configure_webui_base_url(args.port)
 
     # Create FastAPI app
     app = create_app(

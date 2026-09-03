@@ -8,6 +8,7 @@ relay (generic reverse-proxy for most routes, poll-relay for the two
 long-poll streams, split-ownership merge for /api/config).
 """
 
+import asyncio
 import logging
 import re
 from contextlib import asynccontextmanager
@@ -30,6 +31,11 @@ from .backend_supervisor import BackendSupervisor
 from .poll_relay import PollRelay
 
 logger = logging.getLogger(__name__)
+
+# Self-healing periodic resync of dynamic OAuth callback paths (issue #498) —
+# catches the case where startup's retry window and every subsequent
+# mcp-configs-mutation trigger all missed (e.g. Backend was down the whole time).
+_OAUTH_RESYNC_INTERVAL_SECONDS = 60
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -137,6 +143,7 @@ class ClaudeWebUI:
         # are registered dynamically on Backend, but only Frontend is typically
         # publicly reachable — mirror Backend's registry as dynamic relay routes here.
         self._oauth_callback_paths: set[str] = set()
+        self._oauth_resync_task: asyncio.Task | None = None
 
         self._ready = False
 
@@ -212,6 +219,41 @@ class ClaudeWebUI:
         for path in current - desired:
             self._remove_oauth_callback_relay_route(path)
 
+    async def _resync_oauth_callback_paths_with_retry(self, attempts: int = 3, delay: float = 1.0) -> None:
+        """Startup helper: a transient failure right as Backend becomes ready
+        shouldn't leave pre-existing custom OAuth callback configs unmirrored
+        until the next unrelated MCP-config mutation happens to trigger a resync.
+        Retries a few times before falling back to the periodic background task.
+        """
+        for attempt in range(1, attempts + 1):
+            before = set(self._oauth_callback_paths)
+            await self.resync_oauth_callback_paths()
+            # resync_oauth_callback_paths() swallows httpx errors internally (logs
+            # and returns) rather than raising, so "no visible change and Backend
+            # was unreachable" is inferred, not caught — best-effort, not exact.
+            try:
+                reachable = await self.backend_client.health()
+            except httpx.HTTPError:
+                reachable = False
+            if reachable:
+                return
+            logger.warning(
+                "OAuth callback path resync attempt %d/%d: Backend unreachable, retrying",
+                attempt, attempts,
+            )
+            if before != self._oauth_callback_paths:
+                return
+            await asyncio.sleep(delay)
+
+    async def _periodic_oauth_resync_loop(self) -> None:
+        """Self-healing background resync — catches the case where every retry at
+        startup failed (Backend was down/unreachable for the whole retry window)
+        and no MCP-config mutation happens afterward to trigger a resync otherwise.
+        """
+        while True:
+            await asyncio.sleep(_OAUTH_RESYNC_INTERVAL_SECONDS)
+            await self.resync_oauth_callback_paths()
+
     async def initialize(self):
         """Initialize the Frontend application."""
         if self.backend_supervisor is not None:
@@ -237,7 +279,10 @@ class ClaudeWebUI:
                 )
 
         self.poll_relay.start_ui_relay()
-        await self.resync_oauth_callback_paths()
+        await self._resync_oauth_callback_paths_with_retry()
+        self._oauth_resync_task = asyncio.create_task(
+            self._periodic_oauth_resync_loop(), name="oauth_callback_resync"
+        )
         self._ready = True
         logger.info("Claude Code WebUI (Frontend) initialized")
 
@@ -261,6 +306,12 @@ class ClaudeWebUI:
 
     async def cleanup(self):
         """Cleanup resources"""
+        if self._oauth_resync_task is not None:
+            self._oauth_resync_task.cancel()
+            try:
+                await self._oauth_resync_task
+            except asyncio.CancelledError:
+                pass
         await self.poll_relay.stop()
         await self.backend_client.aclose()
         # Frontend does not exit before Backend has had a chance to shut down
