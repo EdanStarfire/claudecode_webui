@@ -6,7 +6,10 @@ Frontend-side entirely; config.py exists on BOTH sides now (Frontend's 2 routes 
 merged-read/split-write relay, Backend's own 2 routes own everything but
 networking/backend_connection); poll.py's 4 routes are duplicated into
 backend/routers/poll.py (Backend owns the EventQueues); interrupt/permission-response
-moved from core.py into backend/routers/session_runtime.py (backend-owned state).
+moved from core.py into backend/routers/session_runtime.py (backend-owned state);
+Phase 3 added /api/internal/oauth-callback-paths (Frontend polls this to mirror
+Backend's dynamic custom-OAuth-callback routes as relay routes on its own app,
+since Backend usually isn't independently publicly reachable).
 """
 
 
@@ -34,11 +37,12 @@ def test_route_count_unchanged():
     from backend.web_server import create_app
     app = create_app()
     api_routes_count = _count_api_routes(app)
-    assert api_routes_count == 154, (
-        f"Expected 154 Backend routes post-#498 split (core.py's 3 browser routes "
+    assert api_routes_count == 155, (
+        f"Expected 155 Backend routes post-#498 split (core.py's 3 browser routes "
         f"stayed Frontend-side only; config.py now has its own 2 backend-owned routes "
         f"here PLUS 2 more on the Frontend side doing merged-read/split-write; poll.py's "
         f"4 routes are duplicated into backend/routers/poll.py since Backend owns the "
-        f"EventQueues; interrupt + permission-response relocated here from core.py), "
+        f"EventQueues; interrupt + permission-response relocated here from core.py; "
+        f"+1 /api/internal/oauth-callback-paths from Phase 3), "
         f"got {api_routes_count}. A route was added or removed."
     )

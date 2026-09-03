@@ -13,6 +13,7 @@ import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from fastapi import (
     FastAPI,
     Request,
@@ -20,10 +21,12 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.routing import Route
 
 from shared.event_queue import EventQueue
 
 from .backend_client import BackendClient
+from .backend_supervisor import BackendSupervisor
 from .poll_relay import PollRelay
 
 logger = logging.getLogger(__name__)
@@ -94,8 +97,9 @@ class ClaudeWebUI:
 
     def __init__(
         self,
-        backend_url: str,
-        backend_token: str,
+        backend_url: str | None = None,
+        backend_token: str | None = None,
+        backend_supervisor: BackendSupervisor | None = None,
         config_file: Path | None = None,
         auth_token: str | None = None,
         auth_enabled: bool = False,
@@ -112,6 +116,15 @@ class ClaudeWebUI:
         self.auth_token = auth_token
         self.auth_enabled = auth_enabled
 
+        # Either a supervisor that owns an auto-started local Backend (single-user
+        # self-hosted default, issue #498 Phase 3), or a manually-configured
+        # remote Backend URL/token — exactly one of the two is provided.
+        self.backend_supervisor = backend_supervisor
+        if backend_supervisor is not None:
+            backend_url = backend_supervisor.base_url
+            backend_token = backend_supervisor.token
+        if not backend_url or not backend_token:
+            raise ValueError("Either backend_supervisor or backend_url+backend_token is required")
         self.backend_client = BackendClient(backend_url, backend_token)
 
         # Local fan-out queues for the poll-relay — multiple browser tabs share
@@ -119,6 +132,11 @@ class ClaudeWebUI:
         self.ui_queue = EventQueue()
         self.session_queues: dict[str, EventQueue] = {}
         self.poll_relay = PollRelay(self.backend_client, self.ui_queue, self.session_queues)
+
+        # Issue #1789 (via #498): custom OAuth callback paths for shared MCP servers
+        # are registered dynamically on Backend, but only Frontend is typically
+        # publicly reachable — mirror Backend's registry as dynamic relay routes here.
+        self._oauth_callback_paths: set[str] = set()
 
         self._ready = False
 
@@ -147,20 +165,79 @@ class ClaudeWebUI:
         from .routers import register_all
         register_all(self.app, self)
 
+    # ── Issue #1789 (via #498): dynamic OAuth callback path relay ──────────────
+
+    def _add_oauth_callback_relay_route(self, path: str) -> None:
+        """Register a relay route for a Backend-side custom OAuth callback path.
+
+        Mirrors Backend's own _add_dynamic_oauth_route (backend/web_server.py) —
+        same race-safety argument applies (single event loop, single uvicorn worker).
+        Inserted at the front of the route list so it's checked before the catch-all
+        static mount at "/" (registered last, in __init__).
+        """
+        async def _handler(request: Request):
+            return await self.backend_client.relay(request, path)
+
+        self.app.router.routes.insert(0, Route(path, _handler, methods=["GET"]))
+        AuthMiddleware.EXEMPT_PATHS.add(path)
+        self._oauth_callback_paths.add(path)
+        logger.info("Registered OAuth callback relay route: %s", path)
+
+    def _remove_oauth_callback_relay_route(self, path: str) -> None:
+        self.app.router.routes[:] = [
+            r for r in self.app.router.routes if getattr(r, "path", None) != path
+        ]
+        AuthMiddleware.EXEMPT_PATHS.discard(path)
+        self._oauth_callback_paths.discard(path)
+        logger.info("Removed OAuth callback relay route: %s", path)
+
+    async def resync_oauth_callback_paths(self) -> None:
+        """Mirror Backend's currently-registered custom OAuth callback paths as
+        dynamic relay routes here. Backend is typically 127.0.0.1-only and not
+        independently reachable by an external OAuth provider — only Frontend has
+        a public bind address in the common case, so a custom callback path can
+        only ever complete by being relayed through Frontend. The default
+        /oauth/callback path is always relayed regardless (src/routers/relay.py);
+        this only handles non-default, explicitly-configured paths.
+        """
+        try:
+            body = await self.backend_client.get_json("/api/internal/oauth-callback-paths")
+        except httpx.HTTPError:
+            logger.exception("Failed to resync OAuth callback paths from Backend")
+            return
+        desired = set(body.get("paths", [])) - {"/oauth/callback"}
+        current = set(self._oauth_callback_paths)
+        for path in desired - current:
+            self._add_oauth_callback_relay_route(path)
+        for path in current - desired:
+            self._remove_oauth_callback_relay_route(path)
+
     async def initialize(self):
         """Initialize the Frontend application."""
-        self.poll_relay.start_ui_relay()
-        # Best-effort — Backend may still be starting; readiness gating against
-        # this (blocking Frontend's own /ready until Backend reports ready) is
-        # Phase 3's backend_supervisor.py job. For now just log connectivity.
-        if await self.backend_client.health():
-            logger.info("Backend reachable at %s", self.backend_client.base_url)
+        if self.backend_supervisor is not None:
+            await self.backend_supervisor.start()
+            ready = await self.backend_supervisor.wait_ready(self.backend_client)
+            if not ready:
+                logger.error(
+                    "Backend did not become ready during startup — "
+                    "Frontend will report /ready=false until it recovers"
+                )
+                self._ready = False
+                return
         else:
-            logger.warning(
-                "Backend not reachable at %s during Frontend startup — "
-                "requests will fail until it's available",
-                self.backend_client.base_url,
-            )
+            # Manually-configured remote Backend — best-effort connectivity log,
+            # no local process to wait on.
+            if await self.backend_client.health():
+                logger.info("Backend reachable at %s", self.backend_client.base_url)
+            else:
+                logger.warning(
+                    "Backend not reachable at %s during Frontend startup — "
+                    "requests will fail until it's available",
+                    self.backend_client.base_url,
+                )
+
+        self.poll_relay.start_ui_relay()
+        await self.resync_oauth_callback_paths()
         self._ready = True
         logger.info("Claude Code WebUI (Frontend) initialized")
 
@@ -186,12 +263,17 @@ class ClaudeWebUI:
         """Cleanup resources"""
         await self.poll_relay.stop()
         await self.backend_client.aclose()
+        # Frontend does not exit before Backend has had a chance to shut down
+        # cleanly — SIGTERM, wait with timeout, then SIGKILL (backend_supervisor.stop).
+        if self.backend_supervisor is not None:
+            await self.backend_supervisor.stop()
         logger.info("Frontend cleanup completed")
 
 
 def create_app(
-    backend_url: str,
-    backend_token: str,
+    backend_url: str | None = None,
+    backend_token: str | None = None,
+    backend_supervisor: BackendSupervisor | None = None,
     config_file: Path | None = None,
     auth_token: str | None = None,
     auth_enabled: bool = False,
@@ -202,6 +284,7 @@ def create_app(
     app_instance = ClaudeWebUI(
         backend_url=backend_url,
         backend_token=backend_token,
+        backend_supervisor=backend_supervisor,
         config_file=config_file,
         auth_token=auth_token,
         auth_enabled=auth_enabled,

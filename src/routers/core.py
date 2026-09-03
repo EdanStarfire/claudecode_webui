@@ -39,13 +39,17 @@ def build_router(webui) -> APIRouter:
     @router.get("/ready")
     @handle_exceptions("readiness check")
     async def ready_check():
-        """Readiness — true once initialize() has run.
-
-        Basic version for Phase 2: doesn't yet gate on live Backend health.
-        Phase 3's backend_supervisor.py wires real readiness-polling here (true
-        only once the attached/spawned Backend itself reports ready).
+        """Readiness — true once the attached/spawned Backend itself reported ready
+        during startup (webui.initialize() gates this on backend_supervisor.wait_ready()
+        for the auto-start case). Flips back to false if the supervised Backend crash-
+        loops past its restart budget (degraded) — surfaced here for a browser banner.
         """
-        return {"ready": webui._ready, "timestamp": datetime.now(UTC).isoformat()}
+        degraded = webui.backend_supervisor is not None and webui.backend_supervisor.degraded
+        return {
+            "ready": webui._ready and not degraded,
+            "degraded": degraded,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
 
     @router.get("/api/auth/check")
     @handle_exceptions("check auth")

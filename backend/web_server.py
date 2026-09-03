@@ -211,6 +211,19 @@ class BackendApp:
             """Readiness — true once SessionCoordinator and its managers finish constructing."""
             return {"ready": self._ready, "timestamp": datetime.now(UTC).isoformat()}
 
+        @self.app.get("/api/internal/oauth-callback-paths")
+        async def oauth_callback_paths():
+            """Frontend-internal (issue #498): currently-registered custom OAuth callback
+            paths for shared MCP servers (path-only case, no dedicated listener port).
+
+            Backend is typically bound to 127.0.0.1 only and isn't independently
+            reachable by an external OAuth provider — only Frontend has a public bind
+            address in the common case, so any custom callback path must be relayed
+            through Frontend. Frontend polls this to mirror the registry as dynamic
+            relay routes on its own app (src/web_server.py.resync_oauth_callback_paths).
+            """
+            return {"paths": list(self._dynamic_oauth_routes.values())}
+
         # Issue #699: Wire UI notification callback for comm sounds
         self.coordinator.legion_system.comm_router.set_ui_notification_callback(
             self._broadcast_comm_notification_to_ui
