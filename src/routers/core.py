@@ -39,14 +39,21 @@ def build_router(webui) -> APIRouter:
     @router.get("/ready")
     @handle_exceptions("readiness check")
     async def ready_check():
-        """Readiness — true once the attached/spawned Backend itself reported ready
-        during startup (webui.initialize() gates this on backend_supervisor.wait_ready()
-        for the auto-start case). Flips back to false if the supervised Backend crash-
-        loops past its restart budget (degraded) — surfaced here for a browser banner.
+        """Readiness — true once Frontend's own startup finished AND Backend
+        currently reports itself ready. Backend's status is checked LIVE on every
+        call (cheap — backend_client.ready() has its own 2s timeout) rather than
+        cached from a one-time startup snapshot: a Backend that's merely slow to
+        start (not crashed) used to leave this permanently false even after it
+        caught up, since nothing ever re-checked (issue #498 review finding).
+        Flips false if the supervised Backend crash-loops past its restart budget
+        (degraded) — surfaced here for a browser banner.
         """
+        if not webui._ready:
+            return {"ready": False, "degraded": False, "timestamp": datetime.now(UTC).isoformat()}
         degraded = webui.backend_supervisor is not None and webui.backend_supervisor.degraded
+        backend_ready = await webui.backend_client.ready()
         return {
-            "ready": webui._ready and not degraded,
+            "ready": backend_ready and not degraded,
             "degraded": degraded,
             "timestamp": datetime.now(UTC).isoformat(),
         }

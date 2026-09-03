@@ -11,18 +11,11 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from shared.config_file_lock import atomic_write_text, locked_config_write
+from shared.config_models import NetworkingConfig
+
 CONFIG_FILE = Path.home() / ".config" / "cc_webui" / "config.json"
 LOCALHOST_ADDRESSES = {"127.0.0.1", "localhost", "::1"}
-
-
-@dataclass
-class NetworkingConfig:
-    allow_network_binding: bool = False
-    acknowledged_risk: bool = False
-
-    @property
-    def network_binding_allowed(self) -> bool:
-        return self.allow_network_binding and self.acknowledged_risk
 
 
 @dataclass
@@ -75,15 +68,19 @@ def load_frontend_config(config_file: Path = CONFIG_FILE) -> FrontendConfig:
 
 
 def save_frontend_config(config: FrontendConfig, config_file: Path = CONFIG_FILE) -> None:
-    """Write only networking/backend_connection, preserving Backend's sections untouched."""
-    try:
-        data = json.loads(config_file.read_text())
-    except (FileNotFoundError, json.JSONDecodeError):
-        data = {}
-    data["networking"] = asdict(config.networking)
-    data["backend_connection"] = asdict(config.backend_connection)
-    config_file.parent.mkdir(parents=True, exist_ok=True)
-    config_file.write_text(json.dumps(data, indent=2) + "\n")
+    """Write only networking/backend_connection, preserving Backend's sections untouched.
+
+    Holds a cross-process lock for the full read-modify-write so a concurrent
+    Backend save can't be silently dropped (issue #498 review finding).
+    """
+    with locked_config_write(config_file):
+        try:
+            data = json.loads(config_file.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            data = {}
+        data["networking"] = asdict(config.networking)
+        data["backend_connection"] = asdict(config.backend_connection)
+        atomic_write_text(config_file, json.dumps(data, indent=2) + "\n")
 
 
 def check_network_binding(host: str, config: FrontendConfig, config_file: Path = CONFIG_FILE) -> bool:

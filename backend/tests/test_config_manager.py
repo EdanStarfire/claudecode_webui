@@ -77,6 +77,34 @@ class TestSaveConfig:
         save_config(config, config_file)
         assert config_file.exists()
 
+    def test_save_config_does_not_clobber_frontend_owned_networking_section(self, tmp_path):
+        """Regression test for issue #498 review finding: AppConfig itself carries a
+        NetworkingConfig field (read by Backend's own check_network_binding for manual/
+        remote startup), so a naive top-level merge still round-trips Backend's own
+        stale copy of "networking" into the file — reverting a Frontend-owned value the
+        instant Backend saves for an unrelated reason (e.g. a pricing update)."""
+        config_file = tmp_path / "config.json"
+        ensure_config_file(config_file)
+
+        # Backend loads its own view (defaults: allow_network_binding=False) — this is
+        # the in-memory snapshot it will still be holding when it later calls save_config().
+        config = load_config(config_file)
+        assert config.networking.allow_network_binding is False
+
+        # Frontend independently enables network binding via its own save path, after
+        # Backend already loaded the (now stale) snapshot above.
+        data = json.loads(config_file.read_text())
+        data["networking"] = {"allow_network_binding": True, "acknowledged_risk": True}
+        config_file.write_text(json.dumps(data))
+
+        # Backend now saves for an unrelated reason, using its stale in-memory config.
+        config.features.max_peek_cards = 99
+        save_config(config, config_file)
+
+        result = json.loads(config_file.read_text())
+        assert result["networking"] == {"allow_network_binding": True, "acknowledged_risk": True}
+        assert result["features"]["max_peek_cards"] == 99
+
 
 class TestLoadConfig:
     def test_returns_defaults_from_fresh_file(self, tmp_path):

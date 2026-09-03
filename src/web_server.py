@@ -167,6 +167,18 @@ class ClaudeWebUI:
         # Registered after all API routes so it only handles paths that don't match any route.
         self.app.mount("/", StaticFiles(directory=str(static_dir)), name="static-root")
 
+        # Issue #498 review finding: the OAuth custom-callback-path collision guard
+        # (backend/web_server.py's oauth_callback_path_conflicts_with_app_route) only
+        # ever checked Backend's own route table — correct pre-split (one process, one
+        # table), wrong now that the path is actually served here on Frontend via
+        # _add_oauth_callback_relay_route. Snapshot Frontend's own literal routes too,
+        # taken once here (mirrors Backend's own snapshot timing/rationale) so a custom
+        # path colliding with e.g. "/", "/health", "/ready" can be refused instead of
+        # silently shadowing a real Frontend route.
+        self._reserved_route_paths: frozenset[str] = frozenset(
+            r.path for r in self.app.router.routes if getattr(r, "path", None)
+        )
+
     def _setup_routes(self):
         """Setup FastAPI routes"""
         from .routers import register_all
@@ -174,14 +186,28 @@ class ClaudeWebUI:
 
     # ── Issue #1789 (via #498): dynamic OAuth callback path relay ──────────────
 
-    def _add_oauth_callback_relay_route(self, path: str) -> None:
+    def _add_oauth_callback_relay_route(self, path: str) -> bool:
         """Register a relay route for a Backend-side custom OAuth callback path.
 
         Mirrors Backend's own _add_dynamic_oauth_route (backend/web_server.py) —
         same race-safety argument applies (single event loop, single uvicorn worker).
         Inserted at the front of the route list so it's checked before the catch-all
         static mount at "/" (registered last, in __init__).
+
+        Returns False (and refuses to register) if `path` collides with one of
+        Frontend's own reserved routes — Backend's own collision check
+        (oauth_callback_path_conflicts_with_app_route) only validates against its
+        own route table, which no longer covers the namespace this path actually
+        gets registered into (issue #498 review finding).
         """
+        if path in self._reserved_route_paths:
+            logger.error(
+                "Refusing to register OAuth callback relay route %s: collides with "
+                "a reserved Frontend route",
+                path,
+            )
+            return False
+
         async def _handler(request: Request):
             return await self.backend_client.relay(request, path)
 
@@ -189,6 +215,7 @@ class ClaudeWebUI:
         AuthMiddleware.EXEMPT_PATHS.add(path)
         self._oauth_callback_paths.add(path)
         logger.info("Registered OAuth callback relay route: %s", path)
+        return True
 
     def _remove_oauth_callback_relay_route(self, path: str) -> None:
         self.app.router.routes[:] = [
@@ -255,17 +282,29 @@ class ClaudeWebUI:
             await self.resync_oauth_callback_paths()
 
     async def initialize(self):
-        """Initialize the Frontend application."""
+        """Initialize the Frontend application.
+
+        A slow-but-not-crashed Backend taking longer than the startup wait
+        window used to leave self._ready permanently False (or, on the manual
+        remote-Backend path, never actually gated on the health check at all —
+        both issue #498 review findings). Fixed by never letting a failed
+        initial wait skip the rest of startup (poll_relay, OAuth resync, the
+        periodic self-healing task all still need to start regardless), and by
+        making /ready's actual backend-health signal a LIVE check
+        (core.py's ready_check calls backend_client.ready() on every request)
+        instead of a one-time cached snapshot — so it naturally self-heals
+        once Backend catches up, with no separate recovery path to maintain.
+        """
         if self.backend_supervisor is not None:
             await self.backend_supervisor.start()
             ready = await self.backend_supervisor.wait_ready(self.backend_client)
             if not ready:
-                logger.error(
-                    "Backend did not become ready during startup — "
-                    "Frontend will report /ready=false until it recovers"
+                logger.warning(
+                    "Backend did not become ready within the startup window — "
+                    "continuing startup anyway; /ready checks Backend live on "
+                    "every request, so this recovers automatically once Backend "
+                    "catches up or the supervisor's crash-monitor restarts it"
                 )
-                self._ready = False
-                return
         else:
             # Manually-configured remote Backend — best-effort connectivity log,
             # no local process to wait on.
@@ -283,6 +322,8 @@ class ClaudeWebUI:
         self._oauth_resync_task = asyncio.create_task(
             self._periodic_oauth_resync_loop(), name="oauth_callback_resync"
         )
+        # Means "Frontend's own startup sequence finished", not "Backend is
+        # ready" — core.py's /ready checks Backend's live status separately.
         self._ready = True
         logger.info("Claude Code WebUI (Frontend) initialized")
 

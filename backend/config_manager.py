@@ -11,6 +11,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from shared.config_file_lock import atomic_write_text, locked_config_write
+from shared.config_models import NetworkingConfig
+
 CONFIG_DIR = Path.home() / ".config" / "cc_webui"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
@@ -152,16 +155,6 @@ def compute_cost_breakdown(rates: ModelRates, counts: dict[str, Any]) -> dict[st
         "cache_write_cost_usd": rates.cache_write * int(counts.get("cache_write_tokens") or 0) / m,
         "cache_read_cost_usd": rates.cache_read * int(counts.get("cache_read_tokens") or 0) / m,
     }
-
-
-@dataclass
-class NetworkingConfig:
-    allow_network_binding: bool = False
-    acknowledged_risk: bool = False
-
-    @property
-    def network_binding_allowed(self) -> bool:
-        return self.allow_network_binding and self.acknowledged_risk
 
 
 @dataclass
@@ -467,18 +460,25 @@ def save_config(config: AppConfig, config_file: Path = CONFIG_FILE) -> None:
     """Save config to file.
 
     Issue #498: merges into the existing file rather than overwriting it outright
-    — the config file is shared with the Frontend API, which owns top-level keys
-    (networking, backend_connection) that aren't fields of AppConfig at all. A
-    blind overwrite would silently drop them every time Backend writes after
-    Frontend has.
+    — the config file is shared with the Frontend API, which owns the top-level
+    "backend_connection" key (not a field of AppConfig at all) plus "networking"
+    (AppConfig *does* carry its own NetworkingConfig, read-only, so Backend's own
+    manual/remote startup can validate its own --host via check_network_binding —
+    but that copy must never be round-tripped back into the shared file, or every
+    Backend-triggered save silently reverts Frontend's live networking settings to
+    whatever Backend happened to have loaded at its own startup). Holds a
+    cross-process lock for the full read-modify-write so a concurrent Frontend
+    save can't be silently dropped either (review finding).
     """
-    try:
-        existing = json.loads(config_file.read_text())
-    except (FileNotFoundError, json.JSONDecodeError):
-        existing = {}
-    existing.update(config.to_dict())
-    config_file.parent.mkdir(parents=True, exist_ok=True)
-    config_file.write_text(json.dumps(existing, indent=2) + "\n")
+    with locked_config_write(config_file):
+        try:
+            existing = json.loads(config_file.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            existing = {}
+        to_write = config.to_dict()
+        to_write.pop("networking", None)  # Frontend-owned — never write back Backend's copy
+        existing.update(to_write)
+        atomic_write_text(config_file, json.dumps(existing, indent=2) + "\n")
 
 
 class AppConfigManager:

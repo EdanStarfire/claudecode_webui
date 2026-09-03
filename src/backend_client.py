@@ -67,9 +67,16 @@ class BackendClient:
             media_type=backend_resp.headers.get("content-type"),
         )
 
-    async def get_json(self, path: str, params: dict | None = None) -> dict:
-        """GET a JSON endpoint on Backend and return the decoded body. Raises on non-2xx."""
-        resp = await self._client.get(path, params=params, headers=self._auth_headers())
+    async def get_json(self, path: str, params: dict | None = None, timeout: float | None = None) -> dict:
+        """GET a JSON endpoint on Backend and return the decoded body. Raises on non-2xx.
+
+        Pass `timeout` explicitly for long-poll callers — Backend's poll endpoints can
+        legitimately take up to their own `timeout` query param to respond, so the
+        client-side HTTP timeout must have margin above that value, not equal it, or
+        network latency/scheduling jitter on top of an at-the-ceiling server response
+        turns a normal idle poll into a client-side ReadTimeout (issue #498 review finding).
+        """
+        resp = await self._client.get(path, params=params, headers=self._auth_headers(), timeout=timeout)
         resp.raise_for_status()
         return resp.json()
 

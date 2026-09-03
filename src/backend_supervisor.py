@@ -111,10 +111,17 @@ class BackendSupervisor:
         )
 
     async def wait_ready(self, backend_client) -> bool:
-        """Poll /health then /ready with backoff. Returns False on timeout."""
-        deadline = time.monotonic() + _READINESS_TIMEOUT
+        """Poll /health then /ready with backoff. Returns False on timeout.
 
-        while time.monotonic() < deadline:
+        Liveness and readiness each get their own full _READINESS_TIMEOUT budget
+        (worst case ~2x _READINESS_TIMEOUT total) rather than sharing one deadline
+        — a shared deadline meant a Backend slow to pass /health (e.g. disk-bound
+        startup work) left little or no time for the /ready phase, causing a
+        spurious failure on a Backend that would have become ready given the
+        budget its own log message and timeout name imply (issue #498 review finding).
+        """
+        liveness_deadline = time.monotonic() + _READINESS_TIMEOUT
+        while time.monotonic() < liveness_deadline:
             if await backend_client.health():
                 break
             await asyncio.sleep(_READINESS_POLL_INTERVAL)
@@ -122,7 +129,8 @@ class BackendSupervisor:
             logger.error("Backend never became live (liveness) within %ss", _READINESS_TIMEOUT)
             return False
 
-        while time.monotonic() < deadline:
+        readiness_deadline = time.monotonic() + _READINESS_TIMEOUT
+        while time.monotonic() < readiness_deadline:
             if await backend_client.ready():
                 logger.info("Backend reported ready")
                 return True

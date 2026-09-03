@@ -17,11 +17,12 @@ from httpx import ASGITransport, AsyncClient
 from src.web_server import ClaudeWebUI
 
 
-def _make_webui():
+def _make_webui(reserved_paths=frozenset()):
     webui = ClaudeWebUI.__new__(ClaudeWebUI)  # bypass __init__ (needs frontend/dist)
     from fastapi import FastAPI
     webui.app = FastAPI()
     webui._oauth_callback_paths = set()
+    webui._reserved_route_paths = frozenset(reserved_paths)
     webui.backend_client = MagicMock()
     return webui
 
@@ -170,3 +171,43 @@ async def test_dynamic_callback_route_actually_relays():
     webui.backend_client.relay.assert_awaited_once()
     call_args = webui.backend_client.relay.call_args
     assert call_args[0][1] == "/custom/callback"
+
+
+class TestReservedPathCollision:
+    """Regression tests for issue #498 review finding: Backend's own OAuth
+    callback path collision guard (oauth_callback_path_conflicts_with_app_route,
+    backend/web_server.py) only ever validated against Backend's own route
+    table — correct pre-split, wrong now that the path is actually registered
+    on Frontend. Frontend must refuse to mirror a path that collides with one
+    of its own reserved routes instead of silently shadowing it."""
+
+    def test_refuses_to_register_a_path_colliding_with_a_reserved_route(self):
+        webui = _make_webui(reserved_paths={"/health", "/ready", "/"})
+
+        registered = webui._add_oauth_callback_relay_route("/health")
+
+        assert registered is False
+        assert "/health" not in webui._oauth_callback_paths
+        paths = [getattr(r, "path", None) for r in webui.app.router.routes]
+        assert "/health" not in paths
+
+    def test_registers_a_non_colliding_custom_path_normally(self):
+        webui = _make_webui(reserved_paths={"/health", "/ready", "/"})
+
+        registered = webui._add_oauth_callback_relay_route("/my-custom-oauth-callback")
+
+        assert registered is True
+        assert "/my-custom-oauth-callback" in webui._oauth_callback_paths
+
+    @pytest.mark.asyncio
+    async def test_resync_skips_a_colliding_path_but_registers_others(self):
+        webui = _make_webui(reserved_paths={"/ready"})
+        webui.backend_client.get_json = AsyncMock(
+            return_value={"paths": ["/oauth/callback", "/ready", "/custom/ok"]}
+        )
+
+        await webui.resync_oauth_callback_paths()
+
+        # "/oauth/callback" is always excluded (statically handled elsewhere);
+        # "/ready" collides and must be refused; "/custom/ok" has no conflict.
+        assert webui._oauth_callback_paths == {"/custom/ok"}
