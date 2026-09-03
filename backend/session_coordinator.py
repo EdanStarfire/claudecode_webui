@@ -2084,17 +2084,17 @@ class SessionCoordinator:
         import uuid
         session_id = str(uuid.uuid4())
 
-        await self.create_session(
-            session_id=session_id,
-            project_id=project_id,
+        # Issue #498 Phase 1 bugfix: create_session() takes a single bundled
+        # `config: SessionConfig`, not individual flat kwargs — this previously
+        # passed permission_mode/system_prompt/etc. directly, which create_session()
+        # doesn't accept at all (TypeError on any real call). Untested/dead until now.
+        config = SessionConfig(
             permission_mode=session_config.get("permission_mode", "acceptEdits"),
             system_prompt=session_config.get("system_prompt"),
             override_system_prompt=session_config.get("override_system_prompt", False),
             allowed_tools=session_config.get("allowed_tools"),
             disallowed_tools=session_config.get("disallowed_tools"),
             model=session_config.get("model"),
-            name=f"[Scheduled] {schedule_name}",
-            permission_callback=permission_callback,
             working_directory=session_config.get("working_directory"),
             sandbox_enabled=session_config.get("sandbox_enabled", False),
             setting_sources=session_config.get("setting_sources"),
@@ -2104,6 +2104,14 @@ class SessionCoordinator:
             thinking_mode=session_config.get("thinking_mode"),
             thinking_budget_tokens=session_config.get("thinking_budget_tokens"),
             effort=session_config.get("effort"),
+        )
+
+        await self.create_session(
+            session_id=session_id,
+            project_id=project_id,
+            config=config,
+            name=f"[Scheduled] {schedule_name}",
+            permission_callback=permission_callback,
         )
 
         # Mark session as ephemeral and broadcast the updated state so the

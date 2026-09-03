@@ -2819,3 +2819,82 @@ class TestIssue1779TimestampInjection:
 
         mock_sdk.send_message.assert_called_once_with("inter-agent comm", metadata=None)
 
+class TestCreateEphemeralSession:
+    """Regression tests for issue #498 Phase 1: create_ephemeral_session's call into
+    create_session() used to pass permission_mode/system_prompt/model/etc. as individual
+    flat kwargs, but create_session() only accepts a single bundled `config: SessionConfig`
+    — every real call raised TypeError. No existing test exercised this path (confirmed via
+    scheduler_service.py / routers/schedules.py callers, none covered), so the bug shipped
+    silently until this was surfaced while relocating the module during the #498 split.
+    """
+
+    @pytest.mark.asyncio
+    async def test_create_ephemeral_session_does_not_raise(self, temp_coordinator):
+        """The buggy call site raised TypeError on every invocation — this alone is the
+        regression check: a call with a populated session_config dict must succeed."""
+        coordinator = temp_coordinator
+        project = await coordinator.project_manager.create_project(
+            name="Ephemeral Test Project",
+            working_directory="/tmp",
+        )
+
+        session_id = await coordinator.create_ephemeral_session(
+            session_config={
+                "permission_mode": "acceptEdits",
+                "system_prompt": "You are a scheduled agent.",
+                "allowed_tools": ["bash", "read"],
+                "model": "claude-3-sonnet-20241022",
+                "sandbox_enabled": False,
+                "docker_enabled": False,
+            },
+            schedule_name="nightly-report",
+            project_id=project.project_id,
+        )
+
+        assert session_id is not None
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info is not None
+
+    @pytest.mark.asyncio
+    async def test_create_ephemeral_session_propagates_config_fields(self, temp_coordinator):
+        """Config fields passed in session_config must actually reach the created session
+        (proves the fix bundles them into SessionConfig rather than dropping them)."""
+        coordinator = temp_coordinator
+        project = await coordinator.project_manager.create_project(
+            name="Ephemeral Test Project 2",
+            working_directory="/tmp",
+        )
+
+        session_id = await coordinator.create_ephemeral_session(
+            session_config={
+                "permission_mode": "bypassPermissions",
+                "model": "claude-3-opus-20240229",
+                "allowed_tools": ["bash"],
+            },
+            schedule_name="weekly-cleanup",
+            project_id=project.project_id,
+        )
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.current_permission_mode == "bypassPermissions"
+        assert session_info.config.get("model") == "claude-3-opus-20240229"
+        assert session_info.config.get("allowed_tools") == ["bash"]
+
+    @pytest.mark.asyncio
+    async def test_create_ephemeral_session_marks_is_ephemeral(self, temp_coordinator):
+        """The session must be flagged is_ephemeral=True after creation."""
+        coordinator = temp_coordinator
+        project = await coordinator.project_manager.create_project(
+            name="Ephemeral Test Project 3",
+            working_directory="/tmp",
+        )
+
+        session_id = await coordinator.create_ephemeral_session(
+            session_config={},
+            schedule_name="hourly-check",
+            project_id=project.project_id,
+        )
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.is_ephemeral is True
+        assert session_info.name == "[Scheduled] hourly-check"
