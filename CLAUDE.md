@@ -92,7 +92,7 @@ options = ClaudeAgentOptions(
 1. **Before Committing**: Run Ruff on the specific files you modified
    ```bash
    # Lint specific files you changed
-   uv run ruff check --fix src/web_server.py src/session_manager.py
+   uv run ruff check --fix src/web_server.py backend/session_manager.py
 
    # Or use git to find changed files
    uv run ruff check --fix $(git diff --name-only --diff-filter=AM | grep '\.py$')
@@ -196,7 +196,7 @@ dict for each session.
 When upgrading `claude-agent-sdk`, check for new env vars by:
 1. Grepping the installed package for `os.environ`, `os.getenv`, `CLAUDE_*`, `ANTHROPIC_*`.
 2. Checking the bundled CLI binary for new `CLAUDE_CODE_DISABLE_*` flags.
-3. Updating `_BACKGROUND_CALL_ENV_MAP` in `src/claude_sdk.py` and `BackgroundCallsConfig` in `src/config_manager.py`.
+3. Updating `_BACKGROUND_CALL_ENV_MAP` in `backend/claude_sdk.py` and `BackgroundCallsConfig` in `backend/config_manager.py`.
 
 # Frontend Architecture - Vue 3 + Pinia + Vite (PRODUCTION)
 
@@ -465,7 +465,24 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 - **PascalCase**: Component names
 - **kebab-case**: Component file names
 
-# Backend Architecture - Python FastAPI Server
+# Backend Architecture - Two Processes (Frontend API + Backend)
+
+**Issue #498**: what used to be one process is now two. The **Frontend API**
+(`src/`, `main.py`) serves the browser, authenticates it, and relays every
+domain request — it holds zero session-execution code and zero domain state.
+The **Backend** (`backend/`, `backend/main.py`) is the actual control plane:
+SessionCoordinator, ClaudeSDK, Legion, and everything else that used to live
+directly in the old unified `src/`. `shared/` holds the handful of
+zero-SDK-dependency utilities both tiers import (`event_queue.py`,
+`logging_config.py`, `exception_handlers.py`). A static test
+(`src/tests/test_import_boundary.py`) enforces that `src/` can never import
+from `backend/` — this is a structural guarantee, not a convention.
+
+Single-user self-hosted use (the default) auto-starts Backend as a child
+process of Frontend on an OS-assigned free port with a freshly generated
+credential (`src/backend_supervisor.py`) — no manual configuration required.
+`--remote-backend-url`/`--remote-backend-token` point Frontend at a
+manually-run or genuinely remote Backend instead.
 
 ## System Architecture Overview
 
@@ -478,10 +495,23 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 │  └──────────────┘  └──────────────┘  └──────────────┘             │
 └────────┬────────────────────┬────────────────────┬──────────────────┘
          │                    │                    │
-         │ HTTP long-polling + REST API            │
+         │ HTTP long-polling + REST API (browser token auth)         │
          │                    │                    │
 ┌────────▼────────────────────▼────────────────────▼──────────────────┐
-│                   FastAPI Server (src/web_server.py)                 │
+│              Frontend API (src/web_server.py, main.py)               │
+│  Static SPA serving · browser AuthMiddleware · zero domain state     │
+│  ┌──────────────────┐ ┌──────────────────┐ ┌───────────────────┐   │
+│  │ Generic relay     │ │ poll_relay.py     │ │ backend_supervisor │   │
+│  │ (src/routers/     │ │ (fans Backend's   │ │ .py (auto-start,   │   │
+│  │  relay.py)         │ │  poll streams out │ │  readiness gate,   │   │
+│  │                    │ │  to local queues) │ │  crash/restart)    │   │
+│  └──────────────────┘ └──────────────────┘ └───────────────────┘   │
+└────────┬─────────────────────────────────────────────────────────────┘
+         │ backend-scoped bearer token (never the browser's own token)
+┌────────▼─────────────────────────────────────────────────────────────┐
+│               Backend (backend/web_server.py, backend/main.py)       │
+│  Own AuthMiddleware · own /health + /ready · single-tenant control   │
+│  plane — "the actual meat of the platform"                           │
 │  ┌────────────────────────────────────────────────────────────────┐ │
 │  │                    SessionCoordinator                           │ │
 │  │  ┌────────────┐  ┌────────────┐  ┌───────────────────────┐   │ │
@@ -507,31 +537,80 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
-## Backend File Organization
+## Frontend API File Organization (`src/`, `shared/`)
 
 ### Entry Point
-- **`main.py`**: Application entry, arg parsing, logging config, uvicorn server start
+- **`main.py`**: Arg parsing, logging config, resolves Backend connection
+  (manual `--remote-backend-url`/`--remote-backend-token`, or auto-start via
+  `BackendSupervisor`), uvicorn server start
 
-### Core Backend Modules (`src/`)
-
-#### `src/web_server.py` - **HTTP + Long-Polling Server**
+### `src/web_server.py` - **Frontend Shell**
 **Main Class**: `ClaudeWebUI`
 
 **Responsibilities**:
-- REST API endpoints (projects, sessions, legion, utility)
-- HTTP long-polling endpoints: `GET /api/poll/ui`, `GET /api/poll/session/{id}`
-- `EventQueue` instances per session for cursor-based event streaming
+- Static SPA serving, browser-facing `AuthMiddleware` (issue #728)
+- Owns `backend_client` (httpx relay wrapper), `poll_relay` (background
+  long-poll fan-out), optionally `backend_supervisor` (auto-start lifecycle)
+- Dynamic OAuth callback path mirroring for shared MCP servers
+  (`resync_oauth_callback_paths()` — Backend usually isn't independently
+  publicly reachable, so custom callback paths relay through Frontend)
+- **Zero session-execution code.** No SessionCoordinator, no domain state.
+
+### `src/routers/` - **Frontend-Side Routes Only**
+- **`core.py`**: `/`, `/health`, `/ready`, `/api/auth/check`
+- **`poll.py`**: `/api/poll/ui`, `/api/poll/session/{id}` — reads LOCAL
+  EventQueues populated by `poll_relay.py`, not direct coordinator callbacks
+- **`config.py`**: `/api/config` — merged read (local `networking`/
+  `backend_connection` + relayed Backend sections) / split write
+- **`relay.py`**: generic catch-all reverse-proxy for everything else under
+  `/api/*`, plus the default `/oauth/callback` path. Registered last so the
+  three routers above take priority.
+
+### `src/backend_client.py`, `src/backend_supervisor.py`, `src/poll_relay.py`, `src/frontend_config.py`
+- **`backend_client.py`**: httpx wrapper — generic relay, JSON convenience
+  methods, `/health`+`/ready` checks. Injects the backend-scoped token, never
+  the browser's own.
+- **`backend_supervisor.py`**: owns the auto-started local Backend subprocess
+  — OS-assigned port, fresh token, readiness gating, crash/restart with
+  backoff (capped, then marks degraded), clean SIGTERM-then-SIGKILL shutdown.
+- **`poll_relay.py`**: one background long-poll task per stream (UI, each
+  active session) continuously polling Backend's own poll endpoints and
+  fanning results into local `EventQueue`s.
+- **`frontend_config.py`**: Frontend's own `networking`/`backend_connection`
+  config sections — reads/writes only its own keys in the shared
+  `~/.config/cc_webui/config.json`, leaving Backend's sections untouched.
+
+### `shared/` - **Used By Both Tiers**
+- **`event_queue.py`**: `EventQueue` — cursor-based async event buffer
+- **`logging_config.py`**: category-based debug logging setup
+- **`exception_handlers.py`**: `handle_exceptions` decorator for route handlers
+
+## Backend File Organization (`backend/`)
+
+### Entry Point
+- **`backend/main.py`**: Arg parsing (own token, own debug flags), logging
+  config, `configure_webui_base_url()` (Docker/LiteLLM sidecar callback
+  advertising — issue #498 Phase 4), uvicorn server start. Independently
+  runnable (`python -m backend.main`) for manual/remote deployment.
+
+### `backend/web_server.py` - **Backend Control-Plane Application**
+**Main Class**: `BackendApp`
+
+**Responsibilities**:
+- Owns `SessionCoordinator` and every session-execution/control-plane manager
+- Own `AuthMiddleware` validating the backend-scoped bearer token
+- Own `/health` (liveness) + `/ready` (readiness — true once
+  `SessionCoordinator` and its managers finish constructing)
+- Own `/api/poll/ui`, `/api/poll/session/{id}` (`backend/routers/poll.py`) —
+  the real EventQueues SessionCoordinator writes to
+- Own `/api/config` (`backend/routers/config.py`) — every AppConfig section
+  except `networking`/`backend_connection`
+- `/api/internal/oauth-callback-paths` — exposes the dynamic custom-OAuth-
+  callback-path registry so Frontend can mirror it
 - Permission callback creation with asyncio.Future for async approval
 - Session state change broadcasting
 
-**Key Methods**:
-- `poll_ui()`: Long-poll for global UI events (returns `{events, next_cursor}`)
-- `poll_session()`: Long-poll for session-specific events
-- `_create_permission_callback()`: Async permission prompts
-- `_create_message_callback()`: Message wrapping for event queue broadcast
-- `_on_state_change()`: Broadcast session state changes
-
-#### `src/session_coordinator.py` (1050 lines) - **Central Orchestrator**
+#### `backend/session_coordinator.py` (~5700 lines) - **Central Orchestrator**
 **Main Class**: `SessionCoordinator`
 
 **Responsibilities**:
@@ -541,15 +620,18 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 - Permission update tracking
 - Tool use tracking for orphaned detection
 
-**Key Methods**:
-- `create_session()`: Session + storage + SDK initialization (lines 100-171)
-- `start_session()`: Start/resume SDK, send client_launched message (lines 177-289)
-- `send_message()`: Queue message to SDK, update processing state (lines 538-572)
-- `interrupt_session()`: Stop active SDK processing (lines 447-492)
-- `set_permission_mode()`: Runtime permission mode changes (lines 494-536)
-- `_create_message_callback()`: Process SDK messages, detect completion (lines 741-818)
+**Key Methods** (line numbers drift often — use `grep -n "async def "` for current locations):
+- `create_session()`: Session + storage + SDK initialization
+- `start_session()`: Start/resume SDK, send client_launched message
+- `send_message()`: Queue message to SDK, update processing state
+- `interrupt_session()`: Stop active SDK processing
+- `set_permission_mode()`: Runtime permission mode changes
+- `create_ephemeral_session()`: Scheduled/ephemeral session creation (bundles
+  a `SessionConfig` — a #498-era bug had this passing flat kwargs instead,
+  fixed with regression tests, see git history)
+- `_create_message_callback()`: Process SDK messages, detect completion
 
-#### `src/session_manager.py` - **Session Lifecycle & State**
+#### `backend/session_manager.py` - **Session Lifecycle & State**
 **Main Classes**: `SessionState` (enum), `SessionInfo` (dataclass), `SessionManager`
 
 **SessionState Values**:
@@ -557,7 +639,7 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 
 **SessionInfo Fields** (Extended for Legion):
 - Standard: `session_id`, `state`, `working_directory`, `current_permission_mode`, `tools`, `model`, `name`, `order`
-- Legion: `is_minion`, `role`, `is_overseer`, `parent_overseer_id`, `child_minion_ids`, `capabilities`, `initialization_context`
+- Legion: `role`, `is_overseer`, `parent_overseer_id`, `child_minion_ids`, `capabilities`, `initialization_context`
 
 **Key Methods**:
 - `create_session()`: Create directory, persist state.json
@@ -565,7 +647,7 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 - `update_processing_state()`: Track active processing
 - `update_permission_mode()`: Runtime mode changes
 
-#### `src/project_manager.py` - **Project Hierarchy & Organization**
+#### `backend/project_manager.py` - **Project Hierarchy & Organization**
 **Main Classes**: `ProjectInfo` (dataclass), `ProjectManager`
 
 **ProjectInfo Fields** (Extended for Legion):
@@ -577,7 +659,7 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 - `add_session_to_project()`, `remove_session_from_project()`
 - `reorder_projects()`, `reorder_project_sessions()`
 
-#### `src/claude_sdk.py` - **SDK Wrapper & Message Queue**
+#### `backend/claude_sdk.py` - **SDK Wrapper & Message Queue**
 **Main Class**: `ClaudeSDK`
 
 **Responsibilities**:
@@ -599,7 +681,7 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 - `set_permission_mode()`: Send mode change to SDK
 - `_conversation_loop()`: Process queue, stream responses
 
-#### `src/message_parser.py` - **Message Normalization**
+#### `backend/message_parser.py` - **Message Normalization**
 **Main Classes**: `MessageType` (enum), `ParsedMessage` (dataclass), `MessageProcessor`
 
 **Responsibilities**:
@@ -611,9 +693,9 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 **MessageProcessor Methods**:
 - `process_message()`: Raw SDK message → ParsedMessage
 - `prepare_for_storage()`: ParsedMessage → JSON-serializable dict
-- `prepare_for_websocket()`: Format for frontend
+- `prepare_for_websocket()`: Format for the poll response
 
-#### `src/data_storage.py` - **Persistent Storage**
+#### `backend/data_storage.py` - **Persistent Storage**
 **Main Class**: `DataStorageManager`
 
 **Files Managed**:
@@ -623,13 +705,15 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 **Key Methods**:
 - `append_message()`, `read_messages()`, `get_message_count()`, `cleanup()`
 
-#### Additional Backend Modules (`src/`)
+#### Additional Backend Modules (`backend/`)
 
 - **`application_service.py`**: Top-level service facade used by `web_server.py`
-- **`config_manager.py`**: `~/.config/cc_webui/config.json` read/write (network binding, auth settings)
+- **`config_manager.py`**: `~/.config/cc_webui/config.json` read/write —
+  every `AppConfig` section except `networking`/`backend_connection`
+  (Frontend-owned, see `src/frontend_config.py`). `save_config()` merges
+  into the existing file rather than overwriting it, so it doesn't clobber
+  Frontend-owned keys it doesn't know about.
 - **`docker_utils.py`**: Docker image/mount configuration helpers for per-session isolation
-- **`event_queue.py`**: `EventQueue` — cursor-based async event buffer backing long-polling endpoints
-- **`exception_handlers.py`**: FastAPI exception handler registration
 - **`file_upload.py`**: Multipart file upload handling and session attachment storage
 - **`history_distiller.py`**: Session history summarization for archival context continuity
 - **`legion_system.py`**: Top-level Legion system wiring (coordinator + overseer + comm router)
@@ -638,16 +722,18 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 - **`oauth_manager.py`**: OAuth 2.1 token acquisition and storage
 - **`oauth_refresh_manager.py`**: Background OAuth token refresh loop
 - **`permission_service.py`**: Permission evaluation and decision routing
-- **`session_config.py`**: Session configuration dataclass combining all per-session options
+- **`session_config.py`**: Session configuration dataclass combining all per-session options;
+  also home of `validate_and_normalize_working_directory()` (relocated here from the
+  old unified `web_server.py`, since its only real callers are backend-side)
 - **`task_utils.py`**: SDK task reconstruction helpers used by `task.js` store sync
 - **`template_variables.py`**: Template variable substitution (e.g., `{{session_id}}`)
 - **`timestamp_utils.py`**: Consistent timestamp parsing/formatting across storage and API
 
 ## Legion Multi-Agent System
 
-### Legion Components (`src/legion/`)
+### Legion Components (`backend/legion/`)
 
-#### `src/legion/legion_coordinator.py` - **Legion Lifecycle Management**
+#### `backend/legion/legion_coordinator.py` - **Legion Lifecycle Management**
 **Main Class**: `LegionCoordinator`
 
 **Responsibilities**:
@@ -655,7 +741,7 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 - Fleet control (halt all, resume all, emergency halt)
 - Central capability registry (MVP: keyword search)
 
-#### `src/legion/overseer_controller.py` - **Minion Management**
+#### `backend/legion/overseer_controller.py` - **Minion Management**
 **Main Class**: `OverseerController`
 
 **Responsibilities**:
@@ -664,7 +750,7 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 - Memory transfer on disposal
 - Capability registration
 
-#### `src/legion/comm_router.py` - **Inter-Agent Communication**
+#### `backend/legion/comm_router.py` - **Inter-Agent Communication**
 **Main Class**: `CommRouter`
 
 **Responsibilities**:
@@ -674,7 +760,7 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 - Persist to timeline and minion logs
 - Parse and validate #tag references
 
-#### `src/legion/memory_manager.py` - **Memory & Learning** (Planned)
+#### `backend/legion/memory_manager.py` - **Memory & Learning** (Planned)
 **Main Class**: `MemoryManager`
 
 **Responsibilities** (Future):
@@ -684,7 +770,7 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 - Transfer knowledge between minions
 - Support minion forking with memory copy
 
-#### `src/legion/legion_mcp_tools.py` - **MCP Tools for Minions**
+#### `backend/legion/legion_mcp_tools.py` - **MCP Tools for Minions**
 **Main Class**: `LegionMCPTools`
 
 **Tools Provided**:
@@ -694,7 +780,7 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 
 **Integration**: Single instance per legion, attached to all minion SDK sessions
 
-### Legion Data Models (`src/legion/models.py`)
+### Legion Data Models (`backend/models/legion_models.py`)
 
 **Core Entities**:
 - `Comm`: High-level message with routing info
@@ -703,61 +789,67 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 
 ## Additional Backend Systems
 
-### Queue System (`src/queue_manager.py`, `src/queue_processor.py`)
+### Queue System (`backend/queue_manager.py`, `backend/queue_processor.py`)
 
 FIFO message queue with JSONL persistence for timed/sequential message delivery.
 
 - **QueueManager**: State management with `QueueItem` dataclass (queue_id, session_id, content, reset_session, status, position). Storage via `queue.jsonl` with event replay on startup.
 - **QueueProcessor**: Background asyncio task delivering queued messages with timing guards (`min_wait_seconds=10`, `min_idle_seconds=10`). Auto-starts sessions, handles pausing, polls `is_processing` without timeout.
 
-### Cron Scheduler (`src/legion/scheduler_service.py`)
+### Cron Scheduler (`backend/legion/scheduler_service.py`)
 
 Background service evaluating cron schedules every 30 seconds.
 
 - **SchedulerService**: Creates/manages `Schedule` objects with croniter evaluation. Enqueues prompts via SessionCoordinator when due. Records `ScheduleExecution` history to JSONL. Auto-cancels on minion disposal.
 - **Models**: `Schedule` (cron, next_run, status, failure tracking), `ScheduleExecution` (execution record), `ScheduleStatus` (ACTIVE/PAUSED/CANCELLED)
 
-### Archive Manager (`src/legion/archive_manager.py`)
+### Archive Manager (`backend/legion/archive_manager.py`)
 
 Timestamped archival of minion session data before disposal.
 
 - **ArchiveManager**: Copies messages.jsonl, state.json, and disposal metadata to `data/archives/minions/{minion_id}/{timestamp}/`. Returns `ArchiveResult` with archive path and file count.
 
-### Permission Resolver (`src/permission_resolver.py`)
+### Permission Resolver (`backend/permission_resolver.py`)
 
 Multi-source permission merge for effective permission preview.
 
 - **`resolve_effective_permissions()`**: Parses permissions from user/project/local settings files and session-level allowed_tools. Returns list of `{permission, sources}` with source tracking.
 
-### Resource MCP Tools (`src/resource_mcp_tools.py`)
+### Resource MCP Tools (`backend/mcp/resource_mcp_tools.py`)
 
 Session-scoped MCP server for agent resource display in the task panel.
 
 - **ResourceMCPTools**: Creates per-session MCP servers with `register_resource` and `register_image` (deprecated alias) tools. Validates file path, extension, size (10MB max, 100 per session). Broadcasts `resource_registered` via WebSocket.
 
-### Template Manager (`src/template_manager.py`)
+### Template Manager (`backend/template_manager.py`)
 
 File-based minion template CRUD with slug naming.
 
-- **TemplateManager**: Stores templates as JSON+MD file pairs in `data/templates/`. Supports slug-based filenames for human readability. Seeds default templates from `src/default_templates/`. Migrates legacy UUID filenames on load.
+- **TemplateManager**: Stores templates as JSON+MD file pairs in `data/templates/`. Supports slug-based filenames for human readability. Seeds default templates from `backend/default_templates/`. Migrates legacy UUID filenames on load.
 
-### Skill Manager (`src/skill_manager.py`)
+### Skill Manager (`backend/skill_manager.py`)
 
 Global skill deployment and symlink management.
 
-- **SkillManager**: Syncs skills from `src/default_skills/` to `~/.cc_webui/skills/`, creates symlinks in `~/.claude/skills/`. Detects conflicts with user files. Returns (added, updated, removed) counts.
+- **SkillManager**: Syncs skills from `backend/default_skills/` to `~/.cc_webui/skills/`, creates symlinks in `~/.claude/skills/`. Detects conflicts with user files. Returns (added, updated, removed) counts.
 
 ## Data Directory Structure
 
+Both tiers share one `data/` tree (same `--data-dir` value passed through to
+an auto-started Backend by `backend_supervisor.py`). Frontend itself stores
+no domain data — only its own logs.
+
 ```
 data/
-├── logs/                           # Per-category debug logs
-│   ├── coordinator.log             # SessionCoordinator actions
+├── logs/                           # Frontend API's own logs
+│   ├── coordinator.log             # (legacy name — pre-#498 unified process)
 │   ├── error.log                   # All errors
 │   ├── parser.log                  # Message parsing
 │   ├── sdk_debug.log               # SDK integration
 │   ├── storage.log                 # File operations
-│   └── polling.log                 # Poll transport signal logging
+│   ├── polling.log                 # Poll transport signal logging
+│   └── backend/                    # Backend subprocess's own logs (issue #498)
+│       └── backend.log             # Backend's stdout/stderr, piped by backend_supervisor.py
 │
 ├── projects/{uuid}/                # One folder per project
 │   └── state.json                  # ProjectInfo serialized
@@ -790,18 +882,18 @@ data/
 
 For the complete endpoint reference with request/response details, see [.claude/API_REFERENCE.md](./.claude/API_REFERENCE.md).
 
-**Summary**: 50+ REST endpoints across 10 domains (projects, sessions, files, resources, diffs, queue, legion, schedules, templates, system) + 2 HTTP long-polling endpoints (`/api/poll/ui`, `/api/poll/session/{id}`).
+**Summary**: 50+ REST endpoints across 10 domains (projects, sessions, files, resources, diffs, queue, legion, schedules, templates, system), owned by `backend/routers/` and reached through Frontend's generic relay (`src/routers/relay.py`) — plus `core.py`/`poll.py`/`config.py`'s handful of Frontend-side routes. 2 HTTP long-polling endpoints exist on **both** tiers post-#498 (`/api/poll/ui`, `/api/poll/session/{id}`) — Backend's are the real ones SessionCoordinator writes to; Frontend's read from local EventQueues kept in sync by `poll_relay.py`. The browser only ever talks to Frontend's copy.
 
 ## Message Flow Architecture
 
-### SDK Message → Storage → Long-Poll Event Flow
+### SDK Message → Storage → Poll-Relay → Long-Poll Event Flow
 
 ```
-1. ClaudeSDK receives message from claude_agent_sdk
+1. ClaudeSDK (backend/) receives message from claude_agent_sdk
    ↓
 2. ClaudeSDK._conversation_loop() extracts message data
    ↓
-3. Calls message_callback (SessionCoordinator._create_message_callback)
+3. Calls message_callback (SessionCoordinator._create_message_callback, backend/web_server.py)
    ↓
 4. MessageProcessor.process_message() normalizes to ParsedMessage
    ↓
@@ -809,10 +901,18 @@ For the complete endpoint reference with request/response details, see [.claude/
    ├─ MessageProcessor.prepare_for_storage() converts to dict
    └─ Writes to messages.jsonl
    ↓
-6. SessionCoordinator pushes event to session EventQueue
-   └─ EventQueue.put() wakes any waiting poll request
+6. SessionCoordinator pushes event to session EventQueue (Backend's own, real one)
+   └─ EventQueue.put() wakes any waiting poll request — served by
+      backend/routers/poll.py
    ↓
-7. Frontend poll loop receives {events, next_cursor}, updates Pinia stores reactively
+7. Frontend's poll_relay.py background task (long-polling Backend's poll
+   endpoint) receives the event, re-appends it to Frontend's LOCAL EventQueue
+   ↓
+8. Frontend's own poll.py (src/routers/poll.py) serves it from that local
+   queue to the browser's long-poll request — same {events, next_cursor}
+   shape as before the #498 split
+   ↓
+9. Frontend poll loop (browser) receives it, updates Pinia stores reactively
 ```
 
 ### User Message → SDK Flow
@@ -822,41 +922,49 @@ For the complete endpoint reference with request/response details, see [.claude/
    ↓
 2. Frontend POST /api/sessions/{id}/messages {message: "..."}
    ↓
-3. web_server.py REST handler receives request
+3. src/routers/relay.py's generic catch-all forwards method/path/query/body/
+   headers (browser token stripped, backend-scoped token injected) to Backend
    ↓
-4. Calls SessionCoordinator.send_message(session_id, content)
+4. backend/routers/sessions.py REST handler receives the relayed request
    ↓
-5. SessionCoordinator marks session.is_processing = True
+5. Calls SessionCoordinator.send_message(session_id, content)
    ↓
-6. ClaudeSDK.send_message() enqueues to _message_queue
+6. SessionCoordinator marks session.is_processing = True
    ↓
-7. ClaudeSDK._conversation_loop() picks up from queue
+7. ClaudeSDK.send_message() enqueues to _message_queue
    ↓
-8. Sends to claude_agent_sdk via query(prompt=message)
+8. ClaudeSDK._conversation_loop() picks up from queue
    ↓
-9. SDK streams back responses (loop back to SDK Message flow)
+9. Sends to claude_agent_sdk via query(prompt=message)
    ↓
-10. On ResultMessage, SessionCoordinator sets is_processing = False
+10. SDK streams back responses (loop back to SDK Message flow above)
+   ↓
+11. On ResultMessage, SessionCoordinator sets is_processing = False
 ```
 
 ### Permission Flow
 
 ```
-1. SDK needs permission for tool (e.g., Edit, Write)
+1. SDK needs permission for tool (e.g., Edit, Write) — inside Backend
    ↓
-2. SDK calls permission_callback() from web_server.py
+2. SDK calls permission_callback() from backend/web_server.py
    ↓
-3. web_server.py stores permission request message (with suggestions if any)
+3. backend/web_server.py stores permission request message (with suggestions if any)
    ↓
-4. web_server.py pushes permission_request event to session EventQueue
+4. backend/web_server.py pushes permission_request event to session EventQueue
    ↓
-5. Frontend poll loop receives event, displays permission modal with suggestions
+5. Frontend's poll_relay.py picks it up (same relay chain as any other event) and
+   fans it into Frontend's local queue; browser's poll loop displays the
+   permission modal with suggestions
    ↓
 6. User clicks Allow/Deny (optionally applies suggestions)
    ↓
-7. Frontend POST /api/sessions/{id}/permission/{request_id}
+7. Frontend POST /api/sessions/{id}/permission/{request_id} — relayed via
+   src/routers/relay.py (this route lives in backend/routers/session_runtime.py
+   now, relocated from the old unified core.py since it acts on backend-owned
+   state: PermissionService.pending_permissions)
    ↓
-8. web_server.py resolves asyncio.Future with user's decision
+8. backend/web_server.py resolves asyncio.Future with user's decision
    ↓
 9. Permission callback returns {behavior: "allow"/"deny", updated_permissions: [...]}
    ↓
@@ -871,19 +979,29 @@ For the complete endpoint reference with request/response details, see [.claude/
 → **Solution**: `frontend/src/components/messages/tools/EditToolHandler.vue`
 
 **Problem**: Session not starting, need to debug SDK initialization
-→ **Solution**: `src/session_coordinator.py:177-289` (start_session()) + enable `--debug-sdk`
+→ **Solution**: `backend/session_coordinator.py`'s `start_session()` + enable `--debug-sdk` on Backend
 
 **Problem**: Long-poll events not arriving
-→ **Solution**: Check `src/web_server.py` poll endpoints and `src/event_queue.py`; enable `--debug-polling`
+→ **Solution**: Check `backend/routers/poll.py` (the real EventQueues) and
+`src/poll_relay.py` (the fan-out mechanism) and `src/routers/poll.py` (what the
+browser actually talks to); enable `--debug-polling`
 
 **Problem**: Messages not persisting
-→ **Solution**: `src/data_storage.py:51-67` (append_message()) + enable `--debug-storage`
+→ **Solution**: `backend/data_storage.py`'s `append_message()` + enable `--debug-storage` on Backend
 
 **Problem**: Permission callback not triggering
-→ **Solution**: `src/web_server.py:984-1185` (_create_permission_callback()) + enable `--debug-permissions`
+→ **Solution**: `backend/web_server.py`'s `_create_permission_callback()` + enable `--debug-permissions` on Backend
 
 **Problem**: Add new REST endpoint
-→ **Solution**: Add route in `src/web_server.py:232-635` (_setup_routes())
+→ **Solution**: Add route in the appropriate `backend/routers/*.py` file, register it
+in `backend/routers/__init__.py`'s `register_all()`. Frontend's generic relay
+(`src/routers/relay.py`) picks it up automatically — no Frontend-side change needed
+unless the route needs special-casing (like `/api/config` or the poll endpoints).
+
+**Problem**: Frontend<->Backend relay not working
+→ **Solution**: Check `src/backend_client.py` (the relay client), confirm Backend
+is actually reachable (`curl <backend_url>/health`), check
+`src/backend_supervisor.py`'s logs (`data/logs/backend/backend.log`) if auto-started
 
 **Problem**: Add new Vue component
 → **Solution**: Create `.vue` file, register in parent component or router
@@ -915,43 +1033,55 @@ For the complete endpoint reference with request/response details, see [.claude/
 ## Component Dependencies
 
 ```
-main.py
-  └─ web_server.py
-      ├─ session_coordinator.py
-      │   ├─ session_manager.py
-      │   ├─ project_manager.py
-      │   ├─ claude_sdk.py
-      │   │   ├─ data_storage.py
-      │   │   ├─ message_parser.py
-      │   │   └─ logging_config.py
-      │   ├─ data_storage.py
-      │   ├─ message_parser.py
-      │   ├─ queue_manager.py
-      │   ├─ queue_processor.py
-      │   ├─ template_manager.py
-      │   ├─ skill_manager.py
-      │   ├─ permission_resolver.py
-      │   ├─ resource_mcp_tools.py
-      │   ├─ legion/legion_coordinator.py (if multi-agent)
-      │   │   ├─ legion/overseer_controller.py
-      │   │   ├─ legion/comm_router.py
-      │   │   ├─ legion/memory_manager.py
-      │   │   ├─ legion/legion_mcp_tools.py
-      │   │   ├─ legion/scheduler_service.py
-      │   │   └─ legion/archive_manager.py
-      │   └─ logging_config.py
-      ├─ message_parser.py
-      └─ logging_config.py
+main.py (Frontend API)
+  └─ src/web_server.py (ClaudeWebUI)
+      ├─ src/backend_client.py       — relay to Backend
+      ├─ src/backend_supervisor.py   — auto-start Backend (if no --remote-backend-url)
+      ├─ src/poll_relay.py           — fan Backend's poll streams into local queues
+      ├─ src/frontend_config.py      — networking/backend_connection config sections
+      └─ shared/ (logging_config.py, exception_handlers.py, event_queue.py)
+
+backend/main.py (Backend)
+  └─ backend/web_server.py (BackendApp)
+      ├─ backend/session_coordinator.py
+      │   ├─ backend/session_manager.py
+      │   ├─ backend/project_manager.py
+      │   ├─ backend/claude_sdk.py
+      │   │   ├─ backend/data_storage.py
+      │   │   ├─ backend/message_parser.py
+      │   │   └─ shared/logging_config.py
+      │   ├─ backend/data_storage.py
+      │   ├─ backend/message_parser.py
+      │   ├─ backend/queue_manager.py
+      │   ├─ backend/queue_processor.py
+      │   ├─ backend/template_manager.py
+      │   ├─ backend/skill_manager.py
+      │   ├─ backend/permission_resolver.py
+      │   ├─ backend/mcp/resource_mcp_tools.py
+      │   ├─ backend/legion/legion_coordinator.py (if multi-agent)
+      │   │   ├─ backend/legion/overseer_controller.py
+      │   │   ├─ backend/legion/comm_router.py
+      │   │   ├─ backend/legion/memory_manager.py
+      │   │   ├─ backend/legion/legion_mcp_tools.py
+      │   │   ├─ backend/legion/scheduler_service.py
+      │   │   └─ backend/legion/archive_manager.py
+      │   └─ shared/logging_config.py
+      ├─ backend/message_parser.py
+      └─ shared/logging_config.py
 ```
 
 ## Testing & Development Patterns
 
 ### Standard Testing Configuration
 
-**CRITICAL**: Always use port 8001 for testing to avoid conflicts with production on port 8000.
+**CRITICAL**: Always use port 8001 (Frontend API) for testing to avoid
+conflicts with production on port 8000. Backend's port is allocated
+dynamically — do not hardcode a second fixed port (see
+`.claude/skills/custom-environment-setup/SKILL.md` for the full explanation
+of why, tied to issue #1825).
 
 ```bash
-# Test run
+# Test run — auto-starts Backend, no second port to manage
 uv run python main.py --host 0.0.0.0 --debug-all --data-dir test_data --port 8001
 
 # Production run
@@ -960,7 +1090,13 @@ uv run python main.py --port 8000
 
 ### Process Management - REQUIRED PATTERN
 
-**CRITICAL**: Always kill processes by PID, never by name.
+**CRITICAL**: Always kill processes by PID, never by name. Killing the
+Frontend API gracefully (SIGTERM, not `-9`) cascades to its auto-started
+Backend child automatically (`src/backend_supervisor.py`'s shutdown
+handling) — you should not need to separately find and kill Backend's PID
+in the normal case. If you do need Backend's PID directly (e.g. after a
+force-kill of Frontend), find it by process name since its port isn't
+predictable: `ps aux | grep "backend.main" | grep -v grep`.
 
 **Windows**:
 ```bash
@@ -978,31 +1114,36 @@ lsof -i :8001
 
 # Kill by PID
 kill <PID>
-# or: kill -9 <PID>
+# or: kill -9 <PID>  — if you must, then also check for an orphaned Backend
+# process (ps aux | grep backend.main) since -9 skips the graceful cascade
 ```
 
 ### Running Tests
 
 ```bash
-# All tests
-uv run pytest src/tests/ -v
+# Both suites — the split is real, they cover different processes
+uv run pytest backend/tests/ src/tests/ -v
 
 # Specific test file
-uv run pytest src/tests/test_session_manager.py -v
+uv run pytest backend/tests/test_session_manager.py -v
+uv run pytest src/tests/test_backend_supervisor.py -v
 
 # With coverage
-uv run pytest src/tests/ --cov=src --cov-report=html
+uv run pytest backend/tests/ src/tests/ --cov=backend --cov=src --cov-report=html
+
+# The mandatory live two-process E2E test (issue #498's hard acceptance gate —
+# not marked slow, always runs): src/tests/test_live_two_process_e2e.py
 ```
 
 ### Frontend Development
 
 ```bash
-# Terminal 1: Backend
+# Terminal 1: Frontend API (auto-starts Backend as a child process)
 uv run python main.py --host 0.0.0.0 --port 8001 --debug-all
 
 # Terminal 2: Frontend dev server
 cd frontend
-npm run dev  # http://localhost:5173
+VITE_BACKEND_PORT=8001 npm run dev  # http://localhost:5173 — proxies to the Frontend API port, not Backend's
 ```
 
 ## Key Architectural Decisions
@@ -1046,6 +1187,19 @@ npm run dev  # http://localhost:5173
 - Clear error feedback (minions can act on specific errors)
 - Debuggable (tool calls visible in session messages)
 - Self-documenting (tool descriptions teach minions usage)
+
+**Why split Frontend API and Backend into two processes? (issue #498)**
+- A prior attempt at this split (#498/#499, reverted) used an in-process
+  LOCAL/REMOTE mode flag on one shared codebase — nothing physically prevented
+  a code path from quietly reaching session-execution internals in "frontend
+  mode," and gaps (config mutation, watchdog visibility, Legion topology) kept
+  surfacing because partial correctness was shippable
+- Import-enforced structural separation (`src/tests/test_import_boundary.py`)
+  makes "zero in-process execution in the Frontend API" provable by
+  construction instead of relying on code-review vigilance
+- Single-user self-hosted use isn't a special case — it's the same relay
+  mechanism with Backend auto-started locally instead of pointed at manually,
+  so there's exactly one code path to get right, not two
 
 ## Future Enhancements
 
