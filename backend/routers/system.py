@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from shared.exception_handlers import handle_exceptions
+from shared.git_restart import validate_git_ref_component
 
 logger = logging.getLogger(__name__)
 
@@ -19,12 +20,6 @@ logger = logging.getLogger(__name__)
 class RestartRequest(BaseModel):
     branch: str | None = None
     commit: str | None = None
-
-
-def _validate_git_ref_component(value: str, field_name: str) -> None:
-    """Reject values git would interpret as a CLI flag rather than a ref (issue #1760)."""
-    if not value or value.startswith("-"):
-        raise HTTPException(status_code=400, detail=f"Invalid {field_name}: {value!r}")
 
 
 async def _restart_to_target(webui, project_root: Path, payload: "RestartRequest") -> str:
@@ -35,7 +30,7 @@ async def _restart_to_target(webui, project_root: Path, payload: "RestartRequest
     """
     for value, field_name in ((payload.branch, "branch"), (payload.commit, "commit")):
         if value is not None:
-            _validate_git_ref_component(value, field_name)
+            validate_git_ref_component(value, field_name)
 
     project_root_str = str(project_root)
 
@@ -307,7 +302,7 @@ def build_router(webui) -> APIRouter:
         """Return up to 50 one-line commit summaries for a branch (issue #1760)."""
         if not branch:
             raise HTTPException(status_code=400, detail="branch is required")
-        _validate_git_ref_component(branch, "branch")
+        validate_git_ref_component(branch, "branch")
 
         project_root = str(Path(__file__).parent.parent.parent)
 

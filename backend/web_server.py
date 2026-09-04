@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from shared.event_queue import EventQueue
+from shared.git_restart import run_git_command
 
 from .analytics.audit_writer import AuditWriter
 from .analytics.database import AnalyticsDB
@@ -873,20 +874,7 @@ class BackendApp:
         self, args: list[str], cwd: str, allow_nonzero: bool = False
     ) -> str | None:
         """Run a git command via asyncio.create_subprocess_exec and return stdout, or None on error."""
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *args,
-                cwd=cwd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-            if proc.returncode != 0 and not allow_nonzero:
-                return None
-            return stdout.decode().strip()
-        except (TimeoutError, FileNotFoundError, OSError) as e:
-            logger.debug(f"Git command failed: {args} - {e}")
-            return None
+        return await run_git_command(args, cwd, allow_nonzero)
 
     async def cleanup(self):
         """Cleanup resources"""

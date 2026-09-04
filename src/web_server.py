@@ -147,6 +147,10 @@ class ClaudeWebUI:
 
         self._ready = False
 
+        # Issue #498: rate-limits Frontend's own /api/system/restart (mirrors
+        # Backend's identical field on BackendApp).
+        self._last_restart_time: float = 0
+
         # Setup routes
         self._setup_routes()
 

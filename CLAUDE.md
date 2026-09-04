@@ -562,9 +562,19 @@ manually-run or genuinely remote Backend instead.
   EventQueues populated by `poll_relay.py`, not direct coordinator callbacks
 - **`config.py`**: `/api/config` — merged read (local `networking`/
   `backend_connection` + relayed Backend sections) / split write
+- **`system.py`**: `POST /api/system/restart` only — pulls/switches Frontend's
+  own repo and re-execs Frontend itself; in embedded mode also stops the
+  current Backend child first so re-exec's normal startup auto-starts a fresh
+  one from the same, already-pulled code (remote mode leaves Backend alone
+  entirely). Backend's other `/api/system/*` routes (git-status, git-branches,
+  git-commits, docker-status) stay relayed unchanged — in embedded mode
+  they're the same repo either way. A blind relay of `restart` here (the
+  behavior inherited by simply relocating the old unified router into
+  `backend/routers/` in Phase 1) restarted Backend only, silently leaving
+  Frontend running stale code forever — found in manual post-merge testing.
 - **`relay.py`**: generic catch-all reverse-proxy for everything else under
   `/api/*`, plus the default `/oauth/callback` path. Registered last so the
-  three routers above take priority.
+  routers above take priority.
 
 ### `src/backend_client.py`, `src/backend_supervisor.py`, `src/poll_relay.py`, `src/frontend_config.py`
 - **`backend_client.py`**: httpx wrapper — generic relay, JSON convenience
@@ -882,7 +892,7 @@ data/
 
 For the complete endpoint reference with request/response details, see [.claude/API_REFERENCE.md](./.claude/API_REFERENCE.md).
 
-**Summary**: 50+ REST endpoints across 10 domains (projects, sessions, files, resources, diffs, queue, legion, schedules, templates, system), owned by `backend/routers/` and reached through Frontend's generic relay (`src/routers/relay.py`) — plus `core.py`/`poll.py`/`config.py`'s handful of Frontend-side routes. 2 HTTP long-polling endpoints exist on **both** tiers post-#498 (`/api/poll/ui`, `/api/poll/session/{id}`) — Backend's are the real ones SessionCoordinator writes to; Frontend's read from local EventQueues kept in sync by `poll_relay.py`. The browser only ever talks to Frontend's copy.
+**Summary**: 50+ REST endpoints across 10 domains (projects, sessions, files, resources, diffs, queue, legion, schedules, templates, system), owned by `backend/routers/` and reached through Frontend's generic relay (`src/routers/relay.py`) — plus `core.py`/`poll.py`/`config.py`/`system.py`'s handful of Frontend-side routes. 2 HTTP long-polling endpoints exist on **both** tiers post-#498 (`/api/poll/ui`, `/api/poll/session/{id}`) — Backend's are the real ones SessionCoordinator writes to; Frontend's read from local EventQueues kept in sync by `poll_relay.py`. The browser only ever talks to Frontend's copy.
 
 ## Message Flow Architecture
 
