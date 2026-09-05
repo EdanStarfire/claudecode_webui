@@ -8,6 +8,7 @@ Issue #1052: prepare_session_ssh() — SSH key tmpfs delivery for proxy-mode ses
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
@@ -98,24 +99,41 @@ async def detect_docker_bridge_gateway(timeout: float = 5.0) -> str | None:
     this runs on Backend's own startup path, and repeats on every crash-restart
     (src/backend_supervisor.py), so a wedged Docker daemon shouldn't compound
     into a long delay there.
+
+    The whole operation (not just the read) is under one deadline: on WSL2 with
+    Docker Desktop, `docker network inspect` can itself hang past any reasonable
+    timeout (reproduced live — the CLI's cross-boundary call into the Windows-side
+    daemon stalled), and a timeout that only wrapped reading its output would
+    still leave the overall call unbounded. On timeout, the still-running process
+    is killed and reaped rather than left to leak.
     """
-    try:
+    proc: asyncio.subprocess.Process | None = None
+
+    async def _inspect() -> str | None:
+        nonlocal proc
         proc = await asyncio.create_subprocess_exec(
             "docker", "network", "inspect", _DEFAULT_BRIDGE_NETWORK,
             "--format", "{{range .IPAM.Config}}{{.Gateway}}{{end}}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        stdout, _stderr = await proc.communicate()
         if proc.returncode != 0:
             return None
         gateway = stdout.decode().strip()
         return gateway or None
+
+    try:
+        return await asyncio.wait_for(_inspect(), timeout=timeout)
     except FileNotFoundError:
         logger.debug("Docker CLI not found on PATH; embedded Backend binds loopback only")
         return None
     except TimeoutError:
         logger.warning("Docker bridge gateway detection timed out")
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            with contextlib.suppress(Exception):
+                await proc.wait()
         return None
     except Exception as e:
         logger.debug(f"Docker bridge gateway detection failed: {e}")

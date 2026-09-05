@@ -2,6 +2,7 @@
 Tests for src/docker_utils.py — shared Docker /tmp helpers (issue #832).
 """
 
+import asyncio
 import socket
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -203,6 +204,27 @@ class TestDetectDockerBridgeGateway:
              patch("asyncio.wait_for", AsyncMock(side_effect=TimeoutError)):
             result = await detect_docker_bridge_gateway()
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_kills_leftover_process_when_it_hangs_past_the_timeout(self):
+        """Regression test: reproduced live on WSL2 + Docker Desktop, where `docker
+        network inspect` itself hung — the deadline must cover the whole operation
+        (not just reading output), and the hung process must not be left running."""
+        async def _hang(*_args, **_kwargs):
+            await asyncio.sleep(100)
+
+        proc = MagicMock()
+        proc.returncode = None  # still running when the timeout fires
+        proc.kill = MagicMock()
+        proc.wait = AsyncMock(return_value=None)
+        proc.communicate = AsyncMock(side_effect=_hang)
+
+        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+            result = await detect_docker_bridge_gateway(timeout=0.05)
+
+        assert result is None
+        proc.kill.assert_called_once()
+        proc.wait.assert_awaited_once()
 
 
 class TestBuildEmbeddedSockets:
