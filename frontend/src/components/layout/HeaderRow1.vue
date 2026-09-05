@@ -21,23 +21,41 @@
         @click="uiStore.cycleTheme()"
         :title="`Theme: ${themeLabel} — click to cycle`"
         :aria-label="`Theme: ${themeLabel} — click to cycle`"
-      >●</button>
+      ><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 4.5h7a1.5 1.5 0 0 1 1.5 1.5v.5a1.5 1.5 0 0 1-1.5 1.5H2Z"></path>
+        <path d="M5 8v3.5a1.5 1.5 0 0 0 1.5 1.5h0A1.5 1.5 0 0 0 8 11.5V10"></path>
+        <path d="M12.5 6.5A1.5 1.5 0 0 1 14 8v3a1.5 1.5 0 0 1-1.5 1.5h0A1.5 1.5 0 0 1 11 11V8a1.5 1.5 0 0 1 1.5-1.5Z"></path>
+      </svg></button>
       <button
         class="header-btn analytics-nav-btn"
         :class="{ 'nav-active': isAnalyticsRoute }"
         title="Analytics"
         aria-label="Analytics dashboard"
         @click="toggleAnalytics()"
-      >◈</button>
+      ><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2.5 13.5v-9"></path>
+        <path d="M5.5 13.5v-5"></path>
+        <path d="M8.5 13.5v-7"></path>
+        <path d="M11.5 13.5v-3"></path>
+        <path d="M2.5 13.5h11"></path>
+      </svg></button>
       <button
         class="header-btn audit-nav-btn"
         :class="{ 'nav-active': isAuditRoute }"
         title="Audit"
         aria-label="Audit timeline"
         @click="toggleAudit()"
-      >⎗</button>
+      ><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 2.5h4a.5.5 0 0 1 .5.5v1H5.5V3a.5.5 0 0 1 .5-.5Z"></path>
+        <path d="M4.5 3.5H11a1 1 0 0 1 1 1V13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z"></path>
+        <path d="M6 7.5h4"></path>
+        <path d="M6 10h4"></path>
+      </svg></button>
       <button class="header-btn" @click="uiStore.showRestartModal()" title="Restart server" aria-label="Restart server">
-        ↻
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4.5 6.5a3.25 3.25 0 0 1 6.25-1.25A2.5 2.5 0 0 1 11.5 10.5H5A2.25 2.25 0 0 1 4.5 6.5Z"></path>
+          <path d="M8 7v4.5m0 0L6.25 9.75M8 11.5l1.75-1.75"></path>
+        </svg>
       </button>
       <button
         class="header-btn settings-btn"
@@ -202,11 +220,6 @@ function toggleAudit() {
 .theme-btn-dark       { color: #818cf8; border-color: #818cf8; }
 .theme-btn-sensitive-light { color: #ef4444; border-color: #fca5a5; }
 .theme-btn-sensitive-dark  { color: #f87171; border-color: #f87171; }
-
-.analytics-nav-btn,
-.audit-nav-btn {
-  font-size: 14px;
-}
 
 .analytics-nav-btn.nav-active,
 .audit-nav-btn.nav-active {

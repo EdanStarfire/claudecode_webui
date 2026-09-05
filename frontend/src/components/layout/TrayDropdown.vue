@@ -7,7 +7,10 @@
       aria-label="Notification tray"
       @click.stop="toggleOpen"
     >
-      🔔
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 6.5a4 4 0 0 1 8 0c0 3 1 4 1 4.5H3c0-.5 1-1.5 1-4.5Z"></path>
+        <path d="M6.5 13a1.5 1.5 0 0 0 3 0"></path>
+      </svg>
       <span v-if="unreadCount > 0" class="tray-badge">{{ badgeLabel }}</span>
     </button>
 
@@ -102,7 +105,11 @@ onUnmounted(() => {
 <style scoped>
 .tray-btn {
   position: relative;
-  font-size: 13px;
+}
+
+.tray-btn svg {
+  width: 16px;
+  height: 16px;
 }
 
 .tray-badge {
