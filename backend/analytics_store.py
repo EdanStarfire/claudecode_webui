@@ -39,8 +39,14 @@ class AnalyticsStore:
         model: str | None,
         usage: dict,
         sdk_total_cost_usd: float | None,
-    ) -> None:
-        """Insert a turn_usage row (idempotent) and upsert session aggregate."""
+    ) -> bool:
+        """Insert a turn_usage row (idempotent) and upsert session aggregate.
+
+        Returns True on success, False if the write failed (issue #1838's
+        per-turn-delta baseline needs to know this: it must not advance past
+        a turn whose delta was never durably persisted, or that turn's
+        contribution is lost forever instead of merged into the next delta).
+        """
         input_tokens = int(usage.get("input_tokens") or 0)
         output_tokens = int(usage.get("output_tokens") or 0)
         # SDK uses cache_creation_input_tokens; normalize to cache_write_tokens
@@ -107,6 +113,8 @@ class AnalyticsStore:
             )
         except Exception:
             logger.exception("Failed to record turn usage for session %s", session_id)
+            return False
+        return True
 
     async def get_session_usage(self, session_id: str) -> dict | None:
         """Return session aggregate as dict, or None if no data exists yet."""

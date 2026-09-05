@@ -136,3 +136,25 @@ async def test_cache_field_aliases_are_mapped(store):
     agg = await store.get_session_usage("sid-7")
     assert agg["cache_write_tokens"] == 8
     assert agg["cache_read_tokens"] == 4
+
+
+# ---------------------------------------------------------------------------
+# record_turn() success/failure signal (issue #1838 follow-up)
+# ---------------------------------------------------------------------------
+
+
+async def test_record_turn_returns_true_on_success(store):
+    assert await store.record_turn("sid-8", 1, None, {"input_tokens": 10}, 0.01) is True
+
+
+async def test_record_turn_returns_false_on_write_failure(store, monkeypatch):
+    async def failing_execute_write(*args, **kwargs):
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(store._db, "execute_write", failing_execute_write)
+
+    assert await store.record_turn("sid-9", 1, None, {"input_tokens": 10}, 0.01) is False
+
+    # No row should have been recorded.
+    agg = await store.get_session_usage("sid-9")
+    assert agg is None
