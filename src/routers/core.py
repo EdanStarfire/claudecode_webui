@@ -1,60 +1,21 @@
-"""Core cross-cutting endpoints: /, /health, /api/auth/check, interrupt, permission response"""
+"""Core cross-cutting endpoints: /, /health, /api/auth/check.
+
+Interrupt and permission-response moved to backend/routers/session_runtime.py
+(issue #498) — they act on backend-owned state (SessionCoordinator,
+PermissionService) and are now plain relayed routes, not special-cased here.
+"""
 
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from ..exception_handlers import handle_exceptions
-from ..session_manager import SessionState
-from ._models import PermissionResponseRequest
+from shared.exception_handlers import handle_exceptions
 
 
 def build_router(webui) -> APIRouter:
     router = APIRouter()
-
-    @router.post("/api/sessions/{session_id}/interrupt")
-    @handle_exceptions("interrupt session")
-    async def interrupt_session_rest(session_id: str):
-        """Interrupt a session via REST (replaces WebSocket interrupt_session message)."""
-        state = await webui.service.get_session_state(session_id)
-        if state is None:
-            raise HTTPException(status_code=404, detail="Session not found")
-        if state == SessionState.PAUSED:
-            webui.permission_service.deny_all_for_interrupt()
-        result = await webui.coordinator.interrupt_session(session_id)
-        return {"success": bool(result)}
-
-    @router.post("/api/sessions/{session_id}/permission/{request_id}")
-    @handle_exceptions("respond to permission")
-    async def respond_to_permission(
-        session_id: str, request_id: str, request: PermissionResponseRequest
-    ):
-        """Respond to a pending permission request via REST."""
-        if request_id not in webui.permission_service.pending_permissions:
-            raise HTTPException(status_code=404, detail="No pending permission with that ID")
-        if request.decision == "allow":
-            response = {"behavior": "allow"}
-            if request.updated_input is not None:
-                response["updated_input"] = request.updated_input
-            if request.apply_suggestions:
-                response["apply_suggestions"] = request.apply_suggestions
-            if request.selected_suggestions is not None:
-                response["selected_suggestions"] = request.selected_suggestions
-        else:
-            if request.clarification_message:
-                response = {
-                    "behavior": "deny",
-                    "message": request.clarification_message,
-                    "interrupt": False
-                }
-            else:
-                response = {"behavior": "deny", "message": "User denied permission"}
-        resolved = webui.permission_service.resolve(request_id, response)
-        if not resolved:
-            raise HTTPException(status_code=409, detail="Permission already resolved")
-        return {"success": True}
 
     @router.get("/", response_class=HTMLResponse)
     @handle_exceptions("serve root")
@@ -72,8 +33,30 @@ def build_router(webui) -> APIRouter:
     @router.get("/health")
     @handle_exceptions("health check")
     async def health_check():
-        """Health check endpoint"""
+        """Liveness — always true once the process is up (doesn't need Backend)."""
         return {"status": "healthy", "timestamp": datetime.now(UTC).isoformat()}
+
+    @router.get("/ready")
+    @handle_exceptions("readiness check")
+    async def ready_check():
+        """Readiness — true once Frontend's own startup finished AND Backend
+        currently reports itself ready. Backend's status is checked LIVE on every
+        call (cheap — backend_client.ready() has its own 2s timeout) rather than
+        cached from a one-time startup snapshot: a Backend that's merely slow to
+        start (not crashed) used to leave this permanently false even after it
+        caught up, since nothing ever re-checked (issue #498 review finding).
+        Flips false if the supervised Backend crash-loops past its restart budget
+        (degraded) — surfaced here for a browser banner.
+        """
+        if not webui._ready:
+            return {"ready": False, "degraded": False, "timestamp": datetime.now(UTC).isoformat()}
+        degraded = webui.backend_supervisor is not None and webui.backend_supervisor.degraded
+        backend_ready = await webui.backend_client.ready()
+        return {
+            "ready": backend_ready and not degraded,
+            "degraded": degraded,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
 
     @router.get("/api/auth/check")
     @handle_exceptions("check auth")

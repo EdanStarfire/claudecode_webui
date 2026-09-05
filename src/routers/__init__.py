@@ -1,69 +1,32 @@
 """
-Per-domain APIRouter modules for ClaudeWebUI.
+Per-domain APIRouter modules for the Frontend API shell.
 
 Each router module exposes build_router(webui) -> APIRouter.
 register_all() wires every router into the FastAPI app.
+
+Issue #498: core.py/poll.py/config.py/system.py remain Frontend-side with real
+local logic — everything else moved to backend/routers/. relay.py's generic
+catch-all is registered LAST so those routers' specific routes always take
+priority; every other /api/* path falls through to the relay and is forwarded
+to Backend. system.py only intercepts POST /api/system/restart — Backend's
+GET /api/system/git-status etc. are still accurate to relay through unchanged.
 """
 
 from fastapi import FastAPI
 
 from . import (
-    analytics,
-    archives,
-    audit,
     config,
     core,
-    diff,
-    edit_history,
-    files,
-    filesystem,
-    fleet,
-    legion,
-    mcp,
-    permissions,
     poll,
-    profiles,
-    projects,
-    provider_catalog,
-    proxy,
-    queue,
-    schedules,
-    secrets,
-    session_routing,
-    session_runtime,
-    sessions,
-    skills,
+    relay,
     system,
-    templates,
 )
 
 
 def register_all(app: FastAPI, webui) -> None:
-    """Register all domain routers with the FastAPI app."""
-    app.include_router(analytics.build_router(webui))
-    app.include_router(audit.build_router(webui))
+    """Register all Frontend-side routers with the FastAPI app."""
     app.include_router(poll.build_router(webui))
-    app.include_router(permissions.build_router(webui))
-    app.include_router(filesystem.build_router(webui))
-    app.include_router(skills.build_router(webui))
     app.include_router(config.build_router(webui))
-    app.include_router(fleet.build_router(webui))
     app.include_router(core.build_router(webui))
-    app.include_router(provider_catalog.build_router(webui))
-    app.include_router(proxy.build_router(webui))
-    app.include_router(secrets.build_router(webui))
-    app.include_router(profiles.build_router(webui))
-    app.include_router(archives.build_router(webui))
-    app.include_router(templates.build_router(webui))
-    app.include_router(queue.build_router(webui))
-    app.include_router(legion.build_router(webui))
-    app.include_router(mcp.build_router(webui))
-    app.include_router(schedules.build_router(webui))
     app.include_router(system.build_router(webui))
-    app.include_router(diff.build_router(webui))
-    app.include_router(edit_history.build_router(webui))
-    app.include_router(files.build_router(webui))
-    app.include_router(projects.build_router(webui))
-    app.include_router(session_routing.build_router(webui))
-    app.include_router(session_runtime.build_router(webui))
-    app.include_router(sessions.build_router(webui))
+    app.include_router(relay.build_router(webui))

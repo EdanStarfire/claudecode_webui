@@ -1,15 +1,20 @@
 """
-FastAPI web server for Claude Code WebUI with HTTP long-polling support.
+FastAPI Frontend API shell for Claude Code WebUI (issue #498).
+
+Serves the Vue SPA, authenticates the browser, and relays every domain request
+to the Backend control-plane process. Holds zero session-execution code and
+zero domain state — every session/project/legion read or write is a live
+relay (generic reverse-proxy for most routes, poll-relay for the two
+long-poll streams, split-ownership merge for /api/config).
 """
 
 import asyncio
 import logging
 import re
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
+import httpx
 from fastapi import (
     FastAPI,
     Request,
@@ -17,48 +22,32 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.routing import Route
 
-from .analytics.audit_writer import AuditWriter
-from .analytics.database import AnalyticsDB
-from .analytics_store import AnalyticsStore
-from .application_service import ApplicationService
-from .event_queue import EventQueue
-from .message_parser import MessageParser, MessageProcessor
-from .permission_service import PermissionService
-from .session_coordinator import SessionCoordinator
-from .skill_manager import SkillManager
-from .task_utils import task_done_log_exception
+from shared.event_queue import EventQueue
 
-# Keep standard logger for errors
+from .backend_client import BackendClient
+from .backend_supervisor import BackendSupervisor
+from .poll_relay import PollRelay
+
 logger = logging.getLogger(__name__)
 
-
-def _read_litellm_port_sync(data_dir: Path, default: int = 4000) -> int:
-    """Read litellm_port from providers.json or legacy config.json without async I/O."""
-    import json as _json
-    try:
-        providers = data_dir / "providers.json"
-        if providers.exists():
-            return _json.loads(providers.read_text(encoding="utf-8")).get("litellm_port", default)
-        # Fall back to legacy config.json (pre-migration)
-        legacy = Path.home() / ".config" / "cc_webui" / "config.json"
-        if legacy.exists():
-            data = _json.loads(legacy.read_text(encoding="utf-8"))
-            return data.get("provider_catalog", {}).get("litellm_port", default)
-    except Exception:
-        pass
-    return default
+# Self-healing periodic resync of dynamic OAuth callback paths (issue #498) —
+# catches the case where startup's retry window and every subsequent
+# mcp-configs-mutation trigger all missed (e.g. Backend was down the whole time).
+_OAUTH_RESYNC_INTERVAL_SECONDS = 60
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    """Authentication middleware for HTTP requests (issue #728).
+    """Authentication middleware for the browser-facing token (issue #728).
 
     Exempts static assets, root HTML, health check, and auth check endpoint.
-    WebSocket auth is handled separately in each WS endpoint handler.
+    Never validates the backend-scoped token — that's a separate trust boundary
+    Backend's own AuthMiddleware enforces (backend/web_server.py).
     """
 
     EXEMPT_PATHS = {
-        '/', '/health', '/api/auth/check', '/oauth/callback',
+        '/', '/health', '/ready', '/api/auth/check', '/oauth/callback',
         # Public static assets from frontend/public/ — served at root without hashing,
         # must be accessible without a token (browsers fetch favicons unauthenticated).
         '/favicon.ico', '/favicon-16x16.png', '/favicon-32x32.png',
@@ -66,11 +55,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
         '/site.webmanifest', '/robots.txt',
     }
     EXEMPT_PREFIXES = ('/assets/',)
-    # Issue #827: The per-session secrets resolve endpoint uses its own Bearer token auth,
-    # not the global operator token. Exempt it from global AuthMiddleware.
+    # Issue #827: The per-session secrets resolve endpoint uses its own Bearer token
+    # auth, not the global operator token. Exempt it from global AuthMiddleware.
+    # Issue #498: these endpoints are consumed directly by Docker/LiteLLM sidecars
+    # against Backend's own bind address — never actually relayed through Frontend
+    # in practice, but exempted here too for defense in depth.
     EXEMPT_SUFFIXES = ('/secrets/resolve', '/routing')
     # Issue #1134: Session-scoped proxy write-back endpoints (per-session Bearer token auth).
-    # Matches /api/sessions/{uuid}/secrets/{name} (PATCH) and /api/sessions/{uuid}/events (POST).
     _PROXY_WRITE_BACK_PATTERN = re.compile(r'^/api/sessions/[^/]+/(secrets/[^/]+|events)$')
 
     def __init__(self, app, auth_token: str):
@@ -80,7 +71,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        # Exempt paths
         if path in self.EXEMPT_PATHS:
             return await call_next(request)
         for prefix in self.EXEMPT_PREFIXES:
@@ -92,7 +82,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if self._PROXY_WRITE_BACK_PATTERN.match(path):
             return await call_next(request)
 
-        # Extract token from Authorization header or query param
         token = None
         auth_header = request.headers.get('authorization', '')
         if auth_header.startswith('Bearer '):
@@ -109,135 +98,57 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-def validate_and_normalize_working_directory(
-    path: str | None,
-    default_path: str
-) -> Path:
-    """
-    Validate and normalize working directory path.
-
-    Args:
-        path: User-provided path (may be None, relative, or absolute)
-        default_path: Default path if none provided
-
-    Returns:
-        Absolute Path object
-
-    Raises:
-        ValueError: If path doesn't exist or is network path
-    """
-    if not path:
-        return Path(default_path).resolve()
-
-    path_obj = Path(path)
-
-    # Convert relative to absolute
-    if not path_obj.is_absolute():
-        path_obj = path_obj.resolve()
-
-    # Check if it exists
-    if not path_obj.exists():
-        raise ValueError(f"Working directory does not exist: {path_obj}")
-
-    # Check if it's a directory (not file)
-    if not path_obj.is_dir():
-        raise ValueError(f"Working directory path is not a directory: {path_obj}")
-
-    # Reject network paths (Windows UNC or mapped drives that don't exist)
-    path_str = str(path_obj)
-    if path_str.startswith('//') or path_str.startswith('\\\\'):
-        raise ValueError(f"Network paths are not supported: {path_obj}")
-
-    return path_obj
-
-
-
 class ClaudeWebUI:
-    """Main WebUI application class"""
+    """Frontend API application: static serving, browser auth, Backend relay."""
 
-    def __init__(self, data_dir: Path = None, experimental: bool = False,
-                 mock_sdk: bool = False, fixtures_dir: Path | None = None,
-                 available_fixtures: list[str] | None = None,
-                 config_file: Path | None = None,
-                 auth_token: str | None = None, auth_enabled: bool = False,
-                 host: str = "127.0.0.1", port: int = 8000):
+    def __init__(
+        self,
+        backend_url: str | None = None,
+        backend_token: str | None = None,
+        backend_supervisor: BackendSupervisor | None = None,
+        config_file: Path | None = None,
+        auth_token: str | None = None,
+        auth_enabled: bool = False,
+        host: str = "127.0.0.1",
+        port: int = 8000,
+    ):
         self.app = FastAPI(title="Claude Code WebUI", version="1.0.0")
         self.host = host
         self.port = port
-        self.coordinator = SessionCoordinator(data_dir, experimental=experimental, host=host, port=port)
-        self.service = ApplicationService(self.coordinator)
         self.config_file = config_file
-        # Issue #1789: track config_id -> path for dynamic (path-only, no custom port) OAuth
-        # callback routes registered directly on the main app's router.
-        self._dynamic_oauth_routes: dict[str, str] = {}
 
-        # Authentication (issue #728)
+        # Authentication (issue #728) — the browser-facing token. Never forwarded
+        # to Backend; a separate backend-scoped credential is used for that hop.
         self.auth_token = auth_token
         self.auth_enabled = auth_enabled
 
-        # Wire mock SDK factory if mock mode active (issue #561)
-        if mock_sdk and fixtures_dir:
-            from src.mock_sdk import MockClaudeSDK
-            self.coordinator.set_sdk_factory(
-                _mock_factory_for_fixtures(
-                    MockClaudeSDK, fixtures_dir, set(available_fixtures or [])
-                )
-            )
-        self.skill_manager = SkillManager()
+        # Either a supervisor that owns an auto-started local Backend (single-user
+        # self-hosted default, issue #498 Phase 3), or a manually-configured
+        # remote Backend URL/token — exactly one of the two is provided.
+        self.backend_supervisor = backend_supervisor
+        if backend_supervisor is not None:
+            backend_url = backend_supervisor.base_url
+            backend_token = backend_supervisor.token
+        if not backend_url or not backend_token:
+            raise ValueError("Either backend_supervisor or backend_url+backend_token is required")
+        self.backend_client = BackendClient(backend_url, backend_token)
+
+        # Local fan-out queues for the poll-relay — multiple browser tabs share
+        # these instead of each opening their own upstream connection to Backend.
         self.ui_queue = EventQueue()
         self.session_queues: dict[str, EventQueue] = {}
+        self.poll_relay = PollRelay(self.backend_client, self.ui_queue, self.session_queues)
 
-        # Inject ui_queue into LegionSystem so legion components can append events directly
-        self.coordinator.legion_system.ui_queue = self.ui_queue
+        # Issue #1789 (via #498): custom OAuth callback paths for shared MCP servers
+        # are registered dynamically on Backend, but only Frontend is typically
+        # publicly reachable — mirror Backend's registry as dynamic relay routes here.
+        self._oauth_callback_paths: set[str] = set()
+        self._oauth_resync_task: asyncio.Task | None = None
 
-        # Issue #1130/#1131: Session watchdog service (created here, started in initialize())
-        from .config_manager import load_config as _load_cfg
-        from .session_watchdog import SessionWatchdogService
-        _cfg = _load_cfg(config_file) if config_file else _load_cfg()
-        self._watchdog = SessionWatchdogService(
-            session_manager=self.coordinator.session_manager,
-            template_manager=self.coordinator.template_manager,
-            app_config=_cfg,
-            ui_queue=self.ui_queue,
-        )
-        self.coordinator._watchdog = self._watchdog
+        self._ready = False
 
-        from .config_manager import AppConfigManager
-        from .litellm_proxy_manager import LiteLLMProxyManager
-        from .provider_catalog import ProviderCatalogManager
-        self.app_config_manager = AppConfigManager(config_file=config_file) if config_file else AppConfigManager()
-        self.provider_catalog_manager = ProviderCatalogManager(self.coordinator.provider_catalog_store)
-        # Read litellm_port synchronously at init time — providers.json may not exist yet
-        # (store.load() runs in coordinator.initialize()); fall back to legacy config then default 4000.
-        _litellm_port = _read_litellm_port_sync(data_dir or Path("data"))
-        self.litellm_proxy_manager = LiteLLMProxyManager(
-            self.provider_catalog_manager,
-            self.coordinator.credential_vault,
-            port=_litellm_port,
-            config_file=self.config_file,
-        )
-        self.coordinator.litellm_proxy_manager = self.litellm_proxy_manager
-
-        # Issue #1127: Audit subsystem — analytics DB + AuditWriter
-        _analytics_db_path = (data_dir or Path("data")) / "analytics.db"
-        self._analytics_db = AnalyticsDB(_analytics_db_path)
-        self._audit_writer = AuditWriter(self._analytics_db)
-        # Issue #1125: Per-session token usage store (shares AnalyticsDB connection)
-        self.analytics_store = AnalyticsStore(self._analytics_db)
-        # Expose for router access
-        self.analytics_db = self._analytics_db
-        self.audit_writer = self._audit_writer
-        # EventQueue to wake long-poll on new audit events
-        self.audit_queue = EventQueue()
-
-        # Initialize MessageProcessor for unified WebSocket message formatting
-        self._message_parser = MessageParser()
-        self._message_processor = MessageProcessor(self._message_parser)
-
-        # Permission lifecycle management (session_queues must be initialized first)
-        self.permission_service = PermissionService(self.coordinator, self.session_queues)
-
-        # Rate limiting for restart endpoint (issue #434)
+        # Issue #498: rate-limits Frontend's own /api/system/restart (mirrors
+        # Backend's identical field on BackendApp).
         self._last_restart_time: float = 0
 
         # Setup routes
@@ -247,49 +158,6 @@ class ClaudeWebUI:
         if self.auth_enabled and self.auth_token:
             self.app.add_middleware(AuthMiddleware, auth_token=self.auth_token)
             logger.info("Authentication middleware enabled")
-
-        # Issue #699: Wire UI notification callback for comm sounds
-        self.coordinator.legion_system.comm_router.set_ui_notification_callback(
-            self._broadcast_comm_notification_to_ui
-        )
-        self.coordinator.legion_system.scheduler_service.set_schedule_broadcast_callback(
-            self._broadcast_schedule_event
-        )
-
-        # Inject permission callback factory into SessionCoordinator
-        # This allows legion components (overseer_controller, comm_router) to create
-        # permission callbacks for spawned minions without direct access to web_server
-        self.coordinator.set_permission_callback_factory(self._get_permission_callback_factory())
-        logger.info("Permission callback factory injected into SessionCoordinator")
-
-        # Inject message callback registrar into SessionCoordinator
-        # This allows legion components to register WebSocket message callbacks
-        self.coordinator.set_message_callback_registrar(self._get_message_callback_registrar())
-        logger.info("Message callback registrar injected into SessionCoordinator")
-
-        # Issue #404: Inject resource broadcast callback into SessionCoordinator
-        # This allows ResourceMCPTools to broadcast resource_registered events
-        self.coordinator.set_resource_broadcast_callback(self._broadcast_resource_registered)
-        logger.info("Resource broadcast callback injected into SessionCoordinator")
-
-        # Issue #1530: Inject link broadcast callback into SessionCoordinator
-        self.coordinator.set_link_broadcast_callback(self._broadcast_link_registered)
-        logger.info("Link broadcast callback injected into SessionCoordinator")
-
-        # Issue #976/#989: Inject OAuth refresh broadcast callback into OAuthRefreshManager
-        self.coordinator.oauth_refresh_manager.set_broadcast_callback(self._broadcast_mcp_oauth_refreshed)
-        logger.info("OAuth refresh broadcast callback injected into OAuthRefreshManager")
-
-        # Issue #1789: Inject OAuth completion broadcast callback into OAuthCallbackListenerManager
-        self.coordinator.oauth_callback_listener_manager.set_broadcast_callback(
-            self._broadcast_mcp_oauth_complete
-        )
-        logger.info("OAuth completion broadcast callback injected into OAuthCallbackListenerManager")
-
-        # Issue #1387: Wire vault refresh manager service + broadcast callback
-        self.coordinator.vault_refresh_manager.set_service(self.service)
-        self.coordinator.vault_refresh_manager.set_broadcast_callback(self._broadcast_vault_secret_event)
-        logger.info("VaultRefreshManager wired")
 
         # Setup static files (Vue 3 production build)
         static_dir = Path(__file__).parent.parent / "frontend" / "dist"
@@ -303,741 +171,165 @@ class ClaudeWebUI:
         # Registered after all API routes so it only handles paths that don't match any route.
         self.app.mount("/", StaticFiles(directory=str(static_dir)), name="static-root")
 
-        # Issue #1789: snapshot every literal path this app already owns, taken once here
-        # (before any dynamic OAuth callback route is ever registered). Used to reject a
-        # custom callback path that would otherwise silently shadow a real endpoint —
-        # captured now, not read live from app.router.routes, so it can't include our own
-        # later dynamic insertions.
+        # Issue #498 review finding: the OAuth custom-callback-path collision guard
+        # (backend/web_server.py's oauth_callback_path_conflicts_with_app_route) only
+        # ever checked Backend's own route table — correct pre-split (one process, one
+        # table), wrong now that the path is actually served here on Frontend via
+        # _add_oauth_callback_relay_route. Snapshot Frontend's own literal routes too,
+        # taken once here (mirrors Backend's own snapshot timing/rationale) so a custom
+        # path colliding with e.g. "/", "/health", "/ready" can be refused instead of
+        # silently shadowing a real Frontend route.
         self._reserved_route_paths: frozenset[str] = frozenset(
             r.path for r in self.app.router.routes if getattr(r, "path", None)
         )
-
-    def _get_permission_callback_factory(self):
-        """
-        Return a factory function that creates permission callbacks for any session.
-
-        This allows components without direct access to web_server (like overseer_controller)
-        to create permission callbacks that broadcast to WebSockets and handle async approval.
-
-        Pattern: Same as user-created minions, but accessible from legion components.
-
-        Returns:
-            Callable[[str], Callable]: Factory function taking session_id, returning permission_callback
-        """
-        def factory(session_id: str):
-            return self.permission_service.create_permission_callback(session_id)
-        return factory
-
-    def _get_message_callback_registrar(self):
-        """
-        Return a function that registers message callbacks for any session.
-
-        This allows components without direct access to web_server (like overseer_controller)
-        to register WebSocket message callbacks for spawned minions.
-
-        Pattern: Same as user-created minions, but accessible from legion components.
-
-        Returns:
-            Callable[[str], None]: Function taking session_id, registers message callback
-        """
-        def registrar(session_id: str):
-            # Clear any existing callbacks to prevent duplicates
-            self.coordinator.clear_message_callbacks(session_id)
-
-            # Register message callback for this session
-            self.coordinator.add_message_callback(
-                session_id,
-                self._create_message_callback(session_id)
-            )
-            logger.info(f"Registered message callback for session {session_id}")
-
-            # Create session poll queue if not already present
-            if session_id not in self.session_queues:
-                self.session_queues[session_id] = EventQueue()
-
-            # Broadcast project_updated so UI shows new child session in real-time
-            async def _broadcast_session_added():
-                try:
-                    session = await self.service._get_session_object(session_id)
-                    if session and session.project_id:
-                        project_dict = await self.service.get_project(session.project_id)
-                        if project_dict:
-                            self._broadcast_project_updated(
-                                {k: v for k, v in project_dict.items() if k != "sessions"}
-                            )
-                            logger.debug(f"Appended project_updated for internally spawned session {session_id}")
-                except Exception:
-                    logger.exception(f"Error broadcasting project_updated for session {session_id}")
-
-            task = asyncio.create_task(_broadcast_session_added(), name="broadcast_session_added")
-            task.add_done_callback(task_done_log_exception)
-
-        return registrar
-
-    async def _on_watchdog_alert_audit(self, alert: dict) -> None:
-        """Forward watchdog alerts to AuditWriter and wake audit long-poll."""
-        try:
-            await self._audit_writer.on_watchdog_alert(alert)
-            self.audit_queue.append({"type": "audit_event", "data": alert})
-        except Exception:
-            logger.exception("_on_watchdog_alert_audit error (non-fatal)")
-
-    async def _wake_audit_queue(self) -> None:
-        """Signal audit long-poll that new rows are available after a flush."""
-        try:
-            self.audit_queue.append({"type": "audit_event_flush"})
-        except Exception:
-            logger.exception("_wake_audit_queue error (non-fatal)")
-
-    async def _broadcast_comm_notification_to_ui(self, comm):
-        """Issue #699: Push comm notification event to UI poll queue for audio alerts."""
-        try:
-            self.ui_queue.append({
-                "type": "notification",
-                "data": {
-                    "event_type": "minion_comm",
-                    "comm_type": comm.comm_type.value if hasattr(comm.comm_type, 'value') else str(comm.comm_type),
-                    "from_minion_name": comm.from_minion_name or "Minion",
-                    "comm_id": comm.comm_id,
-                    "session_id": comm.from_minion_id,
-                }
-            })
-            logger.debug(f"Appended UI notification for comm {comm.comm_id}")
-        except Exception:
-            logger.exception("Error appending comm notification to UI queue")
-
-    async def _broadcast_schedule_event(self, legion_id: str, event: dict):
-        """Broadcast schedule event to UI poll queue."""
-        try:
-            event["legion_id"] = legion_id
-            self.ui_queue.append(event)
-        except Exception:
-            logger.exception("Error appending schedule event")
-
-    def _broadcast_project_updated(self, project: dict) -> None:
-        """Emit project_updated to the global UI poll queue."""
-        try:
-            self.ui_queue.append({"type": "project_updated", "data": {"project": project}})
-            logger.debug("Appended project_updated for project %s", project.get("project_id"))
-        except Exception:
-            logger.exception("Error appending project_updated")
-
-    def _broadcast_project_deleted(self, project_id: str) -> None:
-        """Emit project_deleted to the global UI poll queue."""
-        try:
-            self.ui_queue.append({"type": "project_deleted", "data": {"project_id": project_id}})
-            logger.debug("Appended project_deleted for project %s", project_id)
-        except Exception:
-            logger.exception("Error appending project_deleted")
-
-    def _broadcast_state_change(self, session_id: str, session_dict: dict, timestamp: str | None = None) -> None:
-        """Emit state_change to the global UI poll queue."""
-        try:
-            self.ui_queue.append({
-                "type": "state_change",
-                "data": {"session_id": session_id, "session": session_dict, "timestamp": timestamp}
-            })
-            logger.info("Appended state_change for session %s", session_id)
-        except Exception:
-            logger.exception("Error appending state_change")
-
-    def _broadcast_server_restarting(self, pull_output: str, sync_output: str) -> None:
-        """Emit server_restarting to the global UI poll queue."""
-        try:
-            self.ui_queue.append({
-                "type": "server_restarting",
-                "message": "Server is restarting...",
-                "pull_output": pull_output,
-                "sync_output": sync_output,
-                "timestamp": datetime.now(UTC).isoformat(),
-            })
-        except Exception:
-            logger.warning("Failed to append restart notice")
-
-    def _broadcast_mcp_oauth_complete(self, server_id: str) -> None:
-        """Emit mcp_oauth_complete to the global UI poll queue."""
-        try:
-            self.ui_queue.append({"type": "mcp_oauth_complete", "server_id": server_id})
-        except Exception:
-            logger.exception("Error appending mcp_oauth_complete")
-
-    # ── Issue #1789: custom OAuth callback path/port for Shared MCP servers ────────────
-
-    def oauth_callback_path_conflicts_with_app_route(self, path: str) -> bool:
-        """True if `path` collides with a real, pre-existing application route.
-
-        Checked by routers/mcp.py before saving a custom callback path — without this, a
-        path like "/health" or "/api/mcp-configs" would silently shadow the real endpoint
-        once inserted as a dynamic route (and deleting the MCP config later would strip
-        every route matching that path, including the real one).
-        """
-        return path in self._reserved_route_paths
-
-    def _add_dynamic_oauth_route(self, path: str) -> None:
-        """Register a dynamic OAuth callback route directly on the main app (path-only
-        custom callback case — no dedicated listener/port involved).
-
-        Verified safe against the installed fastapi==0.124.4/starlette==0.50.0: Starlette's
-        `Router.app()` scans `self.routes` synchronously on every request with no `await`,
-        so appending here takes effect starting with the very next request — no restart.
-        This is race-free only because this app runs a single uvicorn worker on a single
-        event loop (the route-matching loop can't be interleaved with a concurrent request's
-        route mutation). If this app is ever run with multiple uvicorn workers, route
-        registration would need to be synchronized across worker processes instead.
-
-        Route add and EXEMPT_PATHS add are deliberately paired in this one method — an
-        unauthenticated route with no exemption 401s before reaching the handler; an
-        exemption with no route just 404s. See _remove_dynamic_oauth_route for the paired
-        teardown.
-
-        Inserted at the front of the route list, not appended — `_setup_routes()` mounts a
-        catch-all `StaticFiles` at "/" as the very last route (to serve the Vue SPA for any
-        unmatched path). Starlette's Router stops at the first route whose `.matches()`
-        returns FULL, so appending after that mount would mean it's always shadowed;
-        inserting first guarantees this specific path is checked before the catch-all.
-        """
-        from starlette.routing import Route
-
-        complete_flow = self.coordinator.oauth_callback_listener_manager.complete_and_broadcast
-
-        async def _handler(request):
-            from .oauth_callback_listener_manager import render_oauth_callback
-            return await render_oauth_callback(request, complete_flow)
-
-        self.app.router.routes.insert(0, Route(path, _handler, methods=["GET"]))
-        AuthMiddleware.EXEMPT_PATHS.add(path)
-        logger.info(f"Registered dynamic OAuth callback route: {path}")
-
-    def _remove_dynamic_oauth_route(self, path: str) -> None:
-        """Remove a dynamic OAuth callback route + its EXEMPT_PATHS entry (paired teardown).
-
-        Verified to take effect starting with the very next request — see
-        _add_dynamic_oauth_route for the safety argument.
-        """
-        self.app.router.routes[:] = [
-            r for r in self.app.router.routes if getattr(r, "path", None) != path
-        ]
-        AuthMiddleware.EXEMPT_PATHS.discard(path)
-        logger.info(f"Removed dynamic OAuth callback route: {path}")
-
-    async def _sync_oauth_callback_for_config(self, config) -> None:
-        """Reconcile custom OAuth callback routing/listener state for one MCP config.
-
-        Runs synchronously with every create/update config write so there's never a window
-        where a config claims a custom callback that isn't actually being served. Safe to
-        call unconditionally (idempotent no-op when the config has no custom path/port).
-        """
-        config_id = config.id
-        wants_custom = bool(
-            config.enabled
-            and config.shared_connection
-            and (config.oauth_custom_callback_path or config.oauth_custom_callback_port)
-        )
-        wants_listener = wants_custom and (
-            config.oauth_custom_callback_port is not None
-            and config.oauth_custom_callback_port != self.port
-        )
-        wants_dynamic_route = wants_custom and not wants_listener
-        desired_path = (config.oauth_custom_callback_path or "/oauth/callback") if wants_custom else None
-
-        current_path = self._dynamic_oauth_routes.get(config_id)
-        if wants_dynamic_route:
-            if current_path != desired_path:
-                if current_path is not None:
-                    self._remove_dynamic_oauth_route(current_path)
-                self._add_dynamic_oauth_route(desired_path)
-                self._dynamic_oauth_routes[config_id] = desired_path
-        elif current_path is not None:
-            self._remove_dynamic_oauth_route(current_path)
-            del self._dynamic_oauth_routes[config_id]
-
-        if wants_listener:
-            await self.coordinator.oauth_callback_listener_manager.apply_config(config)
-        else:
-            await self.coordinator.oauth_callback_listener_manager.remove_config(config_id)
-
-    async def _remove_oauth_callback_for_config(self, config_id: str) -> None:
-        """Tear down any dynamic route / listener registration for a deleted config."""
-        path = self._dynamic_oauth_routes.pop(config_id, None)
-        if path is not None:
-            self._remove_dynamic_oauth_route(path)
-        await self.coordinator.oauth_callback_listener_manager.remove_config(config_id)
-
-    def _broadcast_vault_secret_event(self, secret_name: str, error: str | None) -> None:
-        """Issue #1387: Emit secret_refreshed or secret_refresh_failed to the UI poll queue."""
-        try:
-            if error is None:
-                self.ui_queue.append({"type": "secret_refreshed", "secret_name": secret_name})
-            else:
-                self.ui_queue.append({
-                    "type": "secret_refresh_failed",
-                    "secret_name": secret_name,
-                    "error": error,
-                })
-        except Exception:
-            logger.exception("Error appending vault secret event for %s", secret_name)
-
-    def _broadcast_mcp_oauth_refreshed(self, server_id: str) -> None:
-        """Issue #976: Emit mcp_oauth_refreshed to the global UI poll queue."""
-        try:
-            self.ui_queue.append({"type": "mcp_oauth_refreshed", "server_id": server_id})
-        except Exception:
-            logger.exception("Error appending mcp_oauth_refreshed")
-
-    def _broadcast_rate_limits_update(self, data: dict) -> None:
-        """Issue #899: Emit rate_limits_update to the global UI poll queue."""
-        try:
-            self.ui_queue.append({"type": "rate_limits_update", "data": data})
-        except Exception:
-            logger.exception("Error appending rate_limits_update")
-
-    async def _broadcast_resource_registered(self, session_id: str, resource_metadata: dict):
-        """
-        Append resource_registered event to session poll queue.
-
-        Issue #404: Called by ResourceMCPTools when a resource is registered.
-
-        Args:
-            session_id: Session that registered the resource
-            resource_metadata: Resource metadata dict (resource_id, title, is_image, etc.)
-        """
-        try:
-            if session_id in self.session_queues:
-                self.session_queues[session_id].append({
-                    "type": "resource_registered",
-                    "resource": resource_metadata,
-                    "timestamp": datetime.now(UTC).isoformat()
-                })
-                logger.debug(f"Appended resource_registered for {resource_metadata.get('resource_id')} to session {session_id}")
-        except Exception:
-            logger.exception("Error appending resource_registered")
-
-    async def _broadcast_link_registered(self, session_id: str, link: dict):
-        """Append link_registered event to session poll queue.
-
-        Issue #1530: Called by LinksMCPTools when a link is registered or updated.
-        """
-        try:
-            if session_id in self.session_queues:
-                self.session_queues[session_id].append({
-                    "type": "link_registered",
-                    "link": link,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                })
-                logger.debug(f"Appended link_registered for '{link.get('label')}' to session {session_id}")
-        except Exception:
-            logger.exception("Error appending link_registered")
-
-    async def _broadcast_queue_update(self, session_id: str, action: str, item: dict):
-        """
-        Append queue update to session poll queue.
-
-        Issue #500: Real-time queue status updates.
-
-        Args:
-            session_id: Session ID
-            action: enqueued|sent|failed|cancelled|cleared|paused|resumed
-            item: Queue item dict or action-specific data
-        """
-        try:
-            if session_id in self.session_queues:
-                self.session_queues[session_id].append({
-                    "type": "queue_update",
-                    "action": action,
-                    "item": item,
-                    "pending_count": self.coordinator.queue_manager.get_pending_count(session_id),
-                    "timestamp": datetime.now(UTC).isoformat()
-                })
-        except Exception:
-            logger.exception("Error appending queue_update")
-
-    async def _broadcast_usage_update(self, session_id: str, usage: dict):
-        """Append usage_updated event to session poll queue (issue #1125)."""
-        try:
-            if session_id in self.session_queues:
-                self.session_queues[session_id].append({
-                    "type": "usage_updated",
-                    "session_id": session_id,
-                    "usage": usage,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                })
-        except Exception:
-            logger.exception("Error appending usage_updated")
-
-    def _cleanup_pending_permissions_for_session(self, session_id: str):
-        """Clean up pending permissions for a specific session by auto-denying them"""
-        self.permission_service.cleanup_pending_for_session(session_id)
-
-    async def initialize(self):
-        """Initialize the WebUI application"""
-        from .config_manager import load_config
-        await self.coordinator.initialize()
-
-        try:
-            await self.litellm_proxy_manager.start()
-        except Exception:
-            logger.exception(
-                "LiteLLM proxy failed to start — catalog-selected sessions will be unavailable; "
-                "native sessions continue normally"
-            )
-
-        # Issue #1789: start custom OAuth callback routes/listeners for already-configured
-        # MCP servers (path-only dynamic routes + dedicated custom-port listeners).
-        existing_mcp_configs = await self.coordinator.mcp_config_manager.list_configs()
-        for mcp_cfg in existing_mcp_configs:
-            try:
-                await self._sync_oauth_callback_for_config(mcp_cfg)
-            except Exception:
-                logger.exception(
-                    f"Failed to start OAuth callback routing for MCP config {mcp_cfg.id} — "
-                    "custom-callback OAuth will be unavailable for it until fixed"
-                )
-
-        config = load_config(self.config_file) if self.config_file else load_config()
-        if config.features.skill_sync_enabled:
-            await self.skill_manager.sync()
-        else:
-            logger.info("Skill syncing disabled by config")
-
-        # Templates are now loaded in SessionCoordinator.initialize()
-
-        # Create event queues for all existing sessions
-        sessions_result = await self.coordinator.list_sessions()
-        for s in sessions_result.get("sessions", []):
-            sid = s.get('session_id') or (s.get('session') or {}).get('session_id')
-            if sid:
-                self.session_queues[sid] = EventQueue()
-
-        # Register callbacks
-        self.coordinator.add_state_change_callback(self._on_state_change)
-        self.coordinator.add_session_reset_callback(self._on_session_reset)
-        self.coordinator.add_tool_call_broadcast_callback(self._on_tool_call_broadcast)
-        self.coordinator.set_rate_limit_broadcast_callback(self._broadcast_rate_limits_update)
-
-        # Issue #500: Wire queue processor broadcast callback
-        self.coordinator.queue_processor.set_broadcast_callback(self._broadcast_queue_update)
-        # Issue #1114: Wire enqueue broadcast callback so MCP queue_task (and other internal
-        # callers of enqueue_message) emit real-time queue_update events to the WebUI.
-        self.coordinator.set_enqueue_broadcast_callback(self._broadcast_queue_update)
-
-        # Issue #1125: Wire analytics usage broadcast callback
-        self.coordinator._usage_broadcast_callback = self._broadcast_usage_update
-
-        # Issue #1050: Best-effort proxy image check on startup (informational only)
-        from .config_manager import load_config
-        from .logging_config import get_logger as _get_logger
-        _startup_logger = _get_logger('coordinator', category='PROXY')
-        startup_config = load_config(self.config_file) if self.config_file else load_config()
-        if startup_config.proxy.proxy_image:
-            from .docker_utils import check_proxy_image_available
-            image_ok = await check_proxy_image_available(startup_config.proxy.proxy_image)
-            if image_ok:
-                _startup_logger.info(f"Default proxy image '{startup_config.proxy.proxy_image}' available.")
-            else:
-                _startup_logger.info(
-                    f"Default proxy image '{startup_config.proxy.proxy_image}' not found locally. "
-                    f"It will be auto-built on first proxy-enabled session start."
-                )
-
-        # Issue #1387: Start vault OAuth2 background refresh manager
-        await self.coordinator.vault_refresh_manager.start()
-        logger.info("VaultRefreshManager started")
-
-        # Issue #1130: Start session watchdog service
-        await self._watchdog.start()
-
-        # Issue #1127: Initialize audit subsystem
-        try:
-            await self._analytics_db.initialize()
-            self.coordinator.set_audit_writer(self._audit_writer)
-            self.coordinator.set_analytics_store(self.analytics_store)
-            self.coordinator.session_manager.add_state_change_callback(
-                self._audit_writer.on_session_state_change
-            )
-            self._watchdog.on_alert.append(self._on_watchdog_alert_audit)
-            self.coordinator.legion_system.comm_router.audit_writer = self._audit_writer
-            self._audit_writer.start()
-            self._audit_writer.on_flush = self._wake_audit_queue
-            logger.info("Audit subsystem initialized")
-        except Exception:
-            logger.exception("Audit subsystem failed to initialize — audit will be unavailable")
-            self._audit_writer = AuditWriter(None)
-            self.audit_writer = self._audit_writer
-
-        logger.info("Claude Code WebUI initialized")
 
     def _setup_routes(self):
         """Setup FastAPI routes"""
         from .routers import register_all
         register_all(self.app, self)
 
-    def _create_message_callback(self, session_id: str):
-        """Create message callback for poll queue broadcasting using unified MessageProcessor"""
-        async def callback(session_id: str, message_data: Any):
-            logger.info(f"Message callback triggered for session {session_id}, message type: {getattr(message_data, 'type', 'unknown')}")
-            try:
-                # Issue #1486: assistant_delta — lightweight envelope, no MessageProcessor
-                if isinstance(message_data, dict) and message_data.get("type") == "assistant_delta":
-                    if message_data.get("parent_tool_use_id") is not None:
-                        # Out of scope for v1: subagent streaming deltas are dropped
-                        logger.debug(
-                            f"Dropped subagent assistant_delta for session {session_id} "
-                            f"(parent_tool_use_id={message_data['parent_tool_use_id']})"
-                        )
-                        return
-                    if session_id in self.session_queues:
-                        self.session_queues[session_id].append({
-                            "type": "assistant_delta",
-                            "session_id": session_id,
-                            "data": {
-                                "uuid": message_data["uuid"],
-                                "event": message_data["event"],
-                                "message_id": message_data.get("message_id"),
-                                "tool_use_id": message_data.get("tool_use_id"),
-                            },
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        })
-                    return
+    # ── Issue #1789 (via #498): dynamic OAuth callback path relay ──────────────
 
-                # Process message and prepare for poll queue using MessageProcessor
-                if hasattr(message_data, '__dict__'):
-                    # Handle ParsedMessage objects (from MessageProcessor)
-                    websocket_data = self._message_processor.prepare_for_websocket(message_data)
-                    parsed_message = message_data
-                else:
-                    # Handle raw dict messages - process them first
-                    parsed_message = self._message_processor.process_message(message_data, source="websocket")
-                    websocket_data = self._message_processor.prepare_for_websocket(parsed_message)
+    def _add_oauth_callback_relay_route(self, path: str) -> bool:
+        """Register a relay route for a Backend-side custom OAuth callback path.
 
-                # Issue #1000/#1486: Propagate message_id for frontend streaming dedup.
-                # parsed_message.metadata is the most reliable source — MessageProcessor
-                # extracts sdk_msg.message_id into metadata['message_id'] for AssistantMessages.
-                # The SDK AssistantMessage object has no .metadata attribute, so the original
-                # isinstance(meta, dict) guard never fired; fall back to parsed_message.
-                if isinstance(message_data, dict) and 'message_id' in message_data:
-                    websocket_data['message_id'] = message_data['message_id']
-                elif isinstance((meta := getattr(message_data, 'metadata', None)), dict) and meta.get('message_id'):
-                    websocket_data['message_id'] = meta['message_id']
-                elif parsed_message.metadata and parsed_message.metadata.get('message_id'):
-                    websocket_data['message_id'] = parsed_message.metadata['message_id']
+        Mirrors Backend's own _add_dynamic_oauth_route (backend/web_server.py) —
+        same race-safety argument applies (single event loop, single uvicorn worker).
+        Inserted at the front of the route list so it's checked before the catch-all
+        static mount at "/" (registered last, in __init__).
 
-                # Wrap in standard poll queue envelope
-                serialized = {
-                    "type": "message",
-                    "session_id": session_id,
-                    "data": websocket_data,
-                    "timestamp": datetime.now(UTC).isoformat()
-                }
-
-                # Issue #1694: Append the assistant envelope — and mark it on the message-
-                # emitted barrier — BEFORE emitting tool_call updates below. This guarantees
-                # the assistant bubble is always queued ahead of any tool_call event derived
-                # from it, both for same-coroutine emission and for the permission callback's
-                # separate asyncio Task, which waits on this barrier before appending its
-                # awaiting_permission update.
-                if session_id in self.session_queues:
-                    self.session_queues[session_id].append(serialized)
-                    logger.info(f"Appended message to session queue for {session_id}")
-
-                message_id_for_barrier = websocket_data.get('message_id')
-                if message_id_for_barrier:
-                    self.coordinator.mark_assistant_message_emitted(session_id, message_id_for_barrier)
-
-                # Issue #324: Emit tool_call messages for tool lifecycle events
-                await self._emit_tool_call_updates(session_id, parsed_message)
-
-                # Issue #952: Emit context_update after result messages using SDK API
-                msg_type = getattr(parsed_message, 'type', None)
-                if msg_type is not None:
-                    msg_type_str = msg_type.value if hasattr(msg_type, 'value') else str(msg_type)
-                else:
-                    msg_type_str = websocket_data.get("type", "")
-                if msg_type_str == "result" and session_id in self.session_queues:
-                    ctx = await self.coordinator.get_context_usage(session_id)
-                    if ctx and ctx.get("totalTokens"):
-                        self.session_queues[session_id].append({
-                            "type": "context_update",
-                            "session_id": session_id,
-                            "input_tokens": ctx["totalTokens"],
-                            "context_window": ctx["maxTokens"],
-                            "context_pct": round(ctx["percentage"], 1),
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        })
-
-            except Exception:
-                logger.exception("Error in message callback")
-
-        return callback
-
-    async def _emit_tool_call_updates(self, session_id: str, parsed_message: Any):
+        Returns False (and refuses to register) if `path` collides with one of
+        Frontend's own reserved routes — Backend's own collision check
+        (oauth_callback_path_conflicts_with_app_route) only validates against its
+        own route table, which no longer covers the namespace this path actually
+        gets registered into (issue #498 review finding).
         """
-        Issue #324: Emit unified tool_call messages for tool lifecycle events.
-
-        Detects tool_use blocks in assistant messages and tool_results in user messages,
-        creates/updates ToolCall objects, and broadcasts them to WebSocket.
-        """
-        try:
-            msg_type = getattr(parsed_message, 'type', None)
-            if msg_type:
-                msg_type = msg_type.value if hasattr(msg_type, 'value') else str(msg_type)
-
-            metadata = getattr(parsed_message, 'metadata', {}) or {}
-
-            # Handle tool_use in assistant messages
-            if msg_type == 'assistant':
-                tool_uses = metadata.get('tool_uses', [])
-                # Issue #195: Propagate parent_tool_use_id from message to child tool_calls
-                parent_tool_use_id = metadata.get('parent_tool_use_id')
-                for tool_use in tool_uses:
-                    tool_id = tool_use.get('id')
-                    tool_name = tool_use.get('name')
-                    input_params = tool_use.get('input', {})
-
-                    if tool_id and tool_name:
-                        # Create new ToolCall with PENDING status
-                        # Issue #195: Pass parent_tool_use_id so it's stored in the ToolCall object
-                        # Issue #1694: Pass message_id so permission_service can wait on the
-                        # owning assistant message's emission barrier.
-                        tool_call = self.coordinator.create_tool_call(
-                            session_id=session_id,
-                            tool_use_id=tool_id,
-                            name=tool_name,
-                            input_params=input_params,
-                            requires_permission=False,  # Will be updated if permission is requested
-                            parent_tool_use_id=parent_tool_use_id,
-                            message_id=metadata.get('message_id'),
-                        )
-
-                        # Emit tool_call message (parent_tool_use_id included via to_dict())
-                        tool_call_data = tool_call.to_dict()
-                        tool_call_data["type"] = "tool_call"
-
-                        websocket_message = {
-                            "type": "message",
-                            "session_id": session_id,
-                            "data": tool_call_data,
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        }
-                        if session_id in self.session_queues:
-                            self.session_queues[session_id].append(websocket_message)
-                        logger.debug(f"Emitted tool_call pending for {tool_name} ({tool_id}) in session {session_id}")
-
-            # Handle tool_results in user messages
-            elif msg_type == 'user':
-                tool_results = metadata.get('tool_results', [])
-                for tool_result in tool_results:
-                    tool_use_id = tool_result.get('tool_use_id')
-                    result_content = tool_result.get('content')
-                    is_error = tool_result.get('is_error', False)
-
-                    if tool_use_id:
-                        # Issue #1593/#1730: resolve sender attachment resource IDs for send_comm
-                        sender_attachments = None
-                        if not is_error:
-                            active_tc = self.coordinator._get_active_tool_call(session_id, tool_use_id)
-                            if active_tc and active_tc.name == "mcp__legion__send_comm":
-                                sender_attachments = self.coordinator._parse_send_comm_sender_attachments(
-                                    result_content
-                                )
-
-                        # Update ToolCall with result
-                        updated_tool_call = self.coordinator.update_tool_call_result(
-                            session_id=session_id,
-                            tool_use_id=tool_use_id,
-                            result=result_content,
-                            is_error=is_error,
-                            triggering_message=tool_result,  # Issue #494: embed ToolResultBlock
-                            sender_attachments=sender_attachments,
-                        )
-
-                        if updated_tool_call:
-                            # Emit tool_call message
-                            tool_call_data = updated_tool_call.to_dict()
-                            tool_call_data["type"] = "tool_call"
-
-                            websocket_message = {
-                                "type": "message",
-                                "session_id": session_id,
-                                "data": tool_call_data,
-                                "timestamp": datetime.now(UTC).isoformat(),
-                            }
-                            if session_id in self.session_queues:
-                                self.session_queues[session_id].append(websocket_message)
-                            logger.debug(
-                                f"Emitted tool_call {'failed' if is_error else 'completed'} "
-                                f"for {tool_use_id} in session {session_id}"
-                            )
-
-        except Exception:
-            logger.exception("Error emitting tool_call updates")
-
-    async def _on_state_change(self, state_data: dict):
-        """Handle session state changes"""
-        try:
-            session_id = state_data.get("session_id")
-            if session_id:
-                # Get full session info for real-time updates
-                session_info_dict = await self.coordinator.get_session_info(session_id)
-                if session_info_dict:
-                    session_dict = session_info_dict.get("session", {})
-                    # Issue #500: Include queue status in state changes
-                    session_dict["queue_pending_count"] = (
-                        self.coordinator.queue_manager.get_pending_count(session_id)
-                    )
-                    self._broadcast_state_change(session_id, session_dict, state_data.get("timestamp"))
-        except Exception:
-            logger.exception("Error handling state change")
-
-    def _on_tool_call_broadcast(self, session_id: str, tool_call_data: dict):
-        """Issue #520: Append tool_call message to session poll queue.
-
-        Called synchronously from coordinator.
-        """
-        if session_id in self.session_queues:
-            self.session_queues[session_id].append({
-                "type": "tool_call",
-                "session_id": session_id,
-                "data": tool_call_data,
-                "timestamp": datetime.now(UTC).isoformat(),
-            })
-
-    async def _on_session_reset(self, session_id: str):
-        """Issue #500: Append session_reset to UI queue so frontend clears stale messages."""
-        try:
-            message = {
-                "type": "session_reset",
-                "data": {"session_id": session_id},
-            }
-            self.ui_queue.append(message)
-            logger.info(f"Appended session_reset for {session_id} to UI queue")
-        except Exception:
-            logger.exception("Error appending session_reset")
-
-
-    async def _run_git_command(
-        self, args: list[str], cwd: str, allow_nonzero: bool = False
-    ) -> str | None:
-        """Run a git command via asyncio.create_subprocess_exec and return stdout, or None on error.
-
-        Args:
-            allow_nonzero: If True, return stdout even on non-zero exit codes.
-                Required for commands like ``git diff --no-index`` which return
-                exit code 1 when files differ (expected, not an error).
-        """
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *args,
-                cwd=cwd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+        if path in self._reserved_route_paths:
+            logger.error(
+                "Refusing to register OAuth callback relay route %s: collides with "
+                "a reserved Frontend route",
+                path,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-            if proc.returncode != 0 and not allow_nonzero:
-                return None
-            return stdout.decode().strip()
-        except (TimeoutError, FileNotFoundError, OSError) as e:
-            logger.debug(f"Git command failed: {args} - {e}")
-            return None
+            return False
+
+        async def _handler(request: Request):
+            return await self.backend_client.relay(request, path)
+
+        self.app.router.routes.insert(0, Route(path, _handler, methods=["GET"]))
+        AuthMiddleware.EXEMPT_PATHS.add(path)
+        self._oauth_callback_paths.add(path)
+        logger.info("Registered OAuth callback relay route: %s", path)
+        return True
+
+    def _remove_oauth_callback_relay_route(self, path: str) -> None:
+        self.app.router.routes[:] = [
+            r for r in self.app.router.routes if getattr(r, "path", None) != path
+        ]
+        AuthMiddleware.EXEMPT_PATHS.discard(path)
+        self._oauth_callback_paths.discard(path)
+        logger.info("Removed OAuth callback relay route: %s", path)
+
+    async def resync_oauth_callback_paths(self) -> None:
+        """Mirror Backend's currently-registered custom OAuth callback paths as
+        dynamic relay routes here. Backend is typically 127.0.0.1-only and not
+        independently reachable by an external OAuth provider — only Frontend has
+        a public bind address in the common case, so a custom callback path can
+        only ever complete by being relayed through Frontend. The default
+        /oauth/callback path is always relayed regardless (src/routers/relay.py);
+        this only handles non-default, explicitly-configured paths.
+        """
+        try:
+            body = await self.backend_client.get_json("/api/internal/oauth-callback-paths")
+        except httpx.HTTPError:
+            logger.exception("Failed to resync OAuth callback paths from Backend")
+            return
+        desired = set(body.get("paths", [])) - {"/oauth/callback"}
+        current = set(self._oauth_callback_paths)
+        for path in desired - current:
+            self._add_oauth_callback_relay_route(path)
+        for path in current - desired:
+            self._remove_oauth_callback_relay_route(path)
+
+    async def _resync_oauth_callback_paths_with_retry(self, attempts: int = 3, delay: float = 1.0) -> None:
+        """Startup helper: a transient failure right as Backend becomes ready
+        shouldn't leave pre-existing custom OAuth callback configs unmirrored
+        until the next unrelated MCP-config mutation happens to trigger a resync.
+        Retries a few times before falling back to the periodic background task.
+        """
+        for attempt in range(1, attempts + 1):
+            before = set(self._oauth_callback_paths)
+            await self.resync_oauth_callback_paths()
+            # resync_oauth_callback_paths() swallows httpx errors internally (logs
+            # and returns) rather than raising, so "no visible change and Backend
+            # was unreachable" is inferred, not caught — best-effort, not exact.
+            try:
+                reachable = await self.backend_client.health()
+            except httpx.HTTPError:
+                reachable = False
+            if reachable:
+                return
+            logger.warning(
+                "OAuth callback path resync attempt %d/%d: Backend unreachable, retrying",
+                attempt, attempts,
+            )
+            if before != self._oauth_callback_paths:
+                return
+            await asyncio.sleep(delay)
+
+    async def _periodic_oauth_resync_loop(self) -> None:
+        """Self-healing background resync — catches the case where every retry at
+        startup failed (Backend was down/unreachable for the whole retry window)
+        and no MCP-config mutation happens afterward to trigger a resync otherwise.
+        """
+        while True:
+            await asyncio.sleep(_OAUTH_RESYNC_INTERVAL_SECONDS)
+            await self.resync_oauth_callback_paths()
+
+    async def initialize(self):
+        """Initialize the Frontend application.
+
+        A slow-but-not-crashed Backend taking longer than the startup wait
+        window used to leave self._ready permanently False (or, on the manual
+        remote-Backend path, never actually gated on the health check at all —
+        both issue #498 review findings). Fixed by never letting a failed
+        initial wait skip the rest of startup (poll_relay, OAuth resync, the
+        periodic self-healing task all still need to start regardless), and by
+        making /ready's actual backend-health signal a LIVE check
+        (core.py's ready_check calls backend_client.ready() on every request)
+        instead of a one-time cached snapshot — so it naturally self-heals
+        once Backend catches up, with no separate recovery path to maintain.
+        """
+        if self.backend_supervisor is not None:
+            await self.backend_supervisor.start()
+            ready = await self.backend_supervisor.wait_ready(self.backend_client)
+            if not ready:
+                logger.warning(
+                    "Backend did not become ready within the startup window — "
+                    "continuing startup anyway; /ready checks Backend live on "
+                    "every request, so this recovers automatically once Backend "
+                    "catches up or the supervisor's crash-monitor restarts it"
+                )
+        else:
+            # Manually-configured remote Backend — best-effort connectivity log,
+            # no local process to wait on.
+            if await self.backend_client.health():
+                logger.info("Backend reachable at %s", self.backend_client.base_url)
+            else:
+                logger.warning(
+                    "Backend not reachable at %s during Frontend startup — "
+                    "requests will fail until it's available",
+                    self.backend_client.base_url,
+                )
+
+        self.poll_relay.start_ui_relay()
+        await self._resync_oauth_callback_paths_with_retry()
+        self._oauth_resync_task = asyncio.create_task(
+            self._periodic_oauth_resync_loop(), name="oauth_callback_resync"
+        )
+        # Means "Frontend's own startup sequence finished", not "Backend is
+        # ready" — core.py's /ready checks Backend's live status separately.
+        self._ready = True
+        logger.info("Claude Code WebUI (Frontend) initialized")
 
     def _default_html(self) -> str:
         """Default HTML content when no index.html exists"""
@@ -1059,75 +351,42 @@ class ClaudeWebUI:
 
     async def cleanup(self):
         """Cleanup resources"""
-        # Issue #1387: Stop vault refresh manager
-        await self.coordinator.vault_refresh_manager.stop()
-        # Issue #1130: Stop session watchdog service
-        if hasattr(self, '_watchdog') and self._watchdog is not None:
-            await self._watchdog.stop()
-        try:
-            await self.litellm_proxy_manager.stop()
-        except Exception:
-            logger.exception("Error stopping LiteLLM proxy during cleanup")
-        try:
-            await self.coordinator.oauth_callback_listener_manager.shutdown()
-        except Exception:
-            logger.exception("Error stopping OAuth callback listeners during cleanup")
-        # Issue #1789: tear down any remaining dynamic OAuth callback routes + their
-        # AuthMiddleware.EXEMPT_PATHS entries. EXEMPT_PATHS is a class-level set shared by
-        # every AuthMiddleware/ClaudeWebUI instance in the process, so a leftover entry from
-        # an instance that's being torn down (e.g. mid-test failure) would otherwise stay
-        # exempt from auth for every other instance created afterward in the same process.
-        for path in list(self._dynamic_oauth_routes.values()):
+        if self._oauth_resync_task is not None:
+            self._oauth_resync_task.cancel()
             try:
-                self._remove_dynamic_oauth_route(path)
-            except Exception:
-                logger.exception(f"Error removing dynamic OAuth callback route {path} during cleanup")
-        self._dynamic_oauth_routes.clear()
-        await self.coordinator.cleanup()
-        logger.info("WebUI cleanup completed")
-
-
-# Global application instance
-webui_app = None
-
-def _mock_factory_for_fixtures(mock_cls, fixtures_dir: Path, available_fixtures: set[str]):
-    """Create a factory that maps session names to fixture directories (issue #561)."""
-    def factory(session_id, working_directory, **kwargs):
-        session_name = kwargs.pop("session_name", None)
-        if session_name:
-            candidate = fixtures_dir / session_name
-            if candidate.is_dir():
-                kwargs["session_dir"] = str(candidate)
-            else:
-                raise ValueError(
-                    f"No fixture found for session name '{session_name}'. "
-                    f"Available fixtures: {', '.join(sorted(available_fixtures))}"
-                )
-        return mock_cls(session_id=session_id, working_directory=working_directory, **kwargs)
-    return factory
+                await self._oauth_resync_task
+            except asyncio.CancelledError:
+                pass
+        await self.poll_relay.stop()
+        await self.backend_client.aclose()
+        # Frontend does not exit before Backend has had a chance to shut down
+        # cleanly — SIGTERM, wait with timeout, then SIGKILL (backend_supervisor.stop).
+        if self.backend_supervisor is not None:
+            await self.backend_supervisor.stop()
+        logger.info("Frontend cleanup completed")
 
 
 def create_app(
-    data_dir: Path = None,
-    experimental: bool = False,
-    mock_sdk: bool = False,
-    fixtures_dir: Path | None = None,
-    available_fixtures: list[str] | None = None,
+    backend_url: str | None = None,
+    backend_token: str | None = None,
+    backend_supervisor: BackendSupervisor | None = None,
+    config_file: Path | None = None,
     auth_token: str | None = None,
     auth_enabled: bool = False,
     host: str = "127.0.0.1",
     port: int = 8000,
 ) -> FastAPI:
-    """Create and configure the FastAPI application"""
-    global webui_app
+    """Create and configure the Frontend FastAPI application"""
     app_instance = ClaudeWebUI(
-        data_dir, experimental=experimental,
-        mock_sdk=mock_sdk, fixtures_dir=fixtures_dir,
-        available_fixtures=available_fixtures,
-        auth_token=auth_token, auth_enabled=auth_enabled,
-        host=host, port=port,
+        backend_url=backend_url,
+        backend_token=backend_token,
+        backend_supervisor=backend_supervisor,
+        config_file=config_file,
+        auth_token=auth_token,
+        auth_enabled=auth_enabled,
+        host=host,
+        port=port,
     )
-    webui_app = app_instance
 
     @asynccontextmanager
     async def _lifespan(_app: FastAPI):

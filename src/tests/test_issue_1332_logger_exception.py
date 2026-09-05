@@ -6,7 +6,7 @@ Verifies that logger.exception() produces traceback output via StandardizedForma
 import logging
 from io import StringIO
 
-from ..logging_config import StandardizedFormatter, configure_logging
+from shared.logging_config import StandardizedFormatter, configure_logging
 
 
 class TestLoggerExceptionTraceback:

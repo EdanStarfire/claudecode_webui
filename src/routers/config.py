@@ -1,148 +1,73 @@
-"""Config endpoints: /api/config"""
+"""Config endpoints: /api/config — split ownership, merged read (issue #498).
+
+Frontend owns/writes networking + backend_connection; Backend owns/writes
+everything else (features, legion, watchdog, pricing, background-calls, proxy,
+secrets). This route merges a local read of Frontend's sections with a relayed
+read of Backend's sections into one response, so the browser's Settings modal
+doesn't need to know two processes exist. A PUT body may contain a mix of
+Frontend-owned and Backend-owned keys in one request; each half is routed to
+wherever it's actually written.
+"""
 
 from fastapi import APIRouter, Request
 
-from ..exception_handlers import handle_exceptions
+from shared.exception_handlers import handle_exceptions
+
+from ..frontend_config import load_frontend_config, save_frontend_config
+
+_FRONTEND_OWNED_KEYS = {"networking", "backend_connection"}
 
 
 def build_router(webui) -> APIRouter:
     router = APIRouter()
 
+    async def _merged_config() -> dict:
+        backend_result = await webui.backend_client.get_json("/api/config")
+        merged = backend_result["config"]
+        frontend_cfg = (
+            load_frontend_config(webui.config_file) if webui.config_file else load_frontend_config()
+        )
+        merged.update(frontend_cfg.to_dict())
+        return merged
+
     @router.get("/api/config")
     @handle_exceptions("get config")
     async def get_config():
-        """Return full application config."""
-        from ..config_manager import default_pricing_rates, load_config
-        config = load_config(webui.config_file) if webui.config_file else load_config()
-        result = config.to_dict()
-        result["pricing_defaults"] = {
-            model_id: rates.to_dict()
-            for model_id, rates in default_pricing_rates().items()
-        }
-        return {"config": result}
+        """Return full application config: local Frontend sections + relayed Backend sections."""
+        return {"config": await _merged_config()}
 
     @router.put("/api/config")
     @handle_exceptions("update config", value_error_status=400)
     async def update_config(request: Request):
-        """Update application config with side effects."""
-        from ..config_manager import load_config, save_config
+        """Split a config update between Frontend's local sections and a relayed Backend write."""
         body = await request.json()
-        config = load_config(webui.config_file) if webui.config_file else load_config()
-        old_sync = config.features.skill_sync_enabled
+        frontend_body = {k: v for k, v in body.items() if k in _FRONTEND_OWNED_KEYS}
+        backend_body = {k: v for k, v in body.items() if k not in _FRONTEND_OWNED_KEYS}
 
-        # Merge features section
-        if "features" in body:
-            features = body["features"]
-            if "skill_sync_enabled" in features:
-                config.features.skill_sync_enabled = features["skill_sync_enabled"]
-            if "max_peek_cards" in features:
-                val = features["max_peek_cards"]
-                if not isinstance(val, int) or val < 1:
-                    raise ValueError("max_peek_cards must be a positive integer")
-                config.features.max_peek_cards = val
-            if "max_subagents_per_session" in features:
-                val = features["max_subagents_per_session"]
-                if not isinstance(val, int) or not (1 <= val <= 200):
-                    raise ValueError("max_subagents_per_session must be an integer between 1 and 200")
-                config.features.max_subagents_per_session = val
-            if "forward_subagent_text" in features:
-                val = features["forward_subagent_text"]
-                if not isinstance(val, bool):
-                    raise ValueError("forward_subagent_text must be a boolean")
-                config.features.forward_subagent_text = val
-            if "allow_background_agent" in features:
-                val = features["allow_background_agent"]
-                if not isinstance(val, bool):
-                    raise ValueError("allow_background_agent must be a boolean")
-                config.features.allow_background_agent = val
-            if "resume_batch_size" in features:
-                val = features["resume_batch_size"]
-                if not isinstance(val, int) or val < 1:
-                    raise ValueError("resume_batch_size must be a positive integer")
-                config.features.resume_batch_size = val
-            if "resume_batch_delay_seconds" in features:
-                val = features["resume_batch_delay_seconds"]
-                if not isinstance(val, int) or val < 0:
-                    raise ValueError("resume_batch_delay_seconds must be a non-negative integer")
-                config.features.resume_batch_delay_seconds = val
-            if "enable_experimental_nav_header" in features:
-                val = features["enable_experimental_nav_header"]
-                if not isinstance(val, bool):
-                    raise ValueError("enable_experimental_nav_header must be a boolean")
-                config.features.enable_experimental_nav_header = val
+        if frontend_body:
+            frontend_cfg = (
+                load_frontend_config(webui.config_file) if webui.config_file else load_frontend_config()
+            )
+            if "networking" in frontend_body:
+                net = frontend_body["networking"]
+                if "allow_network_binding" in net:
+                    frontend_cfg.networking.allow_network_binding = net["allow_network_binding"]
+                if "acknowledged_risk" in net:
+                    frontend_cfg.networking.acknowledged_risk = net["acknowledged_risk"]
+            if "backend_connection" in frontend_body:
+                bc = frontend_body["backend_connection"]
+                if "remote_backend_url" in bc:
+                    frontend_cfg.backend_connection.remote_backend_url = bc["remote_backend_url"]
+                if "remote_backend_token" in bc:
+                    frontend_cfg.backend_connection.remote_backend_token = bc["remote_backend_token"]
+            if webui.config_file:
+                save_frontend_config(frontend_cfg, webui.config_file)
+            else:
+                save_frontend_config(frontend_cfg)
 
-        # Merge networking section
-        if "networking" in body:
-            net = body["networking"]
-            if "allow_network_binding" in net:
-                config.networking.allow_network_binding = net["allow_network_binding"]
-            if "acknowledged_risk" in net:
-                config.networking.acknowledged_risk = net["acknowledged_risk"]
+        if backend_body:
+            await webui.backend_client.request_json("PUT", "/api/config", json=backend_body)
 
-        # Merge proxy section (issue #1050)
-        if "proxy" in body:
-            proxy_data = body["proxy"]
-            if "proxy_image" in proxy_data:
-                config.proxy.proxy_image = str(proxy_data["proxy_image"])
-
-        # Merge legion section (issue #1064)
-        if "legion" in body:
-            legion_data = body["legion"]
-            if "max_concurrent_minions" in legion_data:
-                val = legion_data["max_concurrent_minions"]
-                if not isinstance(val, int) or val < 1:
-                    raise ValueError("max_concurrent_minions must be a positive integer")
-                config.legion.max_concurrent_minions = val
-
-        # Merge pricing section (issue #1125)
-        if "pricing" in body:
-            from ..config_manager import ModelRates
-            pricing_body = body["pricing"]
-            if "default_model" in pricing_body:
-                config.pricing.default_model = str(pricing_body["default_model"])
-            if "rates" in pricing_body:
-                raw_rates = pricing_body["rates"]
-                if not isinstance(raw_rates, dict):
-                    raise ValueError("pricing.rates must be an object")
-                for model_id, rate_data in raw_rates.items():
-                    if not isinstance(rate_data, dict):
-                        raise ValueError(f"pricing.rates.{model_id} must be an object")
-                    for key in ("input", "output", "cache_write", "cache_read"):
-                        val = rate_data.get(key)
-                        if val is not None and (not isinstance(val, (int, float)) or float(val) < 0):
-                            raise ValueError(
-                                f"pricing.rates.{model_id}.{key} must be a non-negative number"
-                            )
-                    config.pricing.rates[model_id] = ModelRates.from_dict(rate_data)
-            if "removed_models" in pricing_body:
-                removed = pricing_body["removed_models"]
-                if not isinstance(removed, list) or not all(isinstance(m, str) for m in removed):
-                    raise ValueError("pricing.removed_models must be a list of strings")
-                for model_id in removed:
-                    if model_id == config.pricing.default_model:
-                        raise ValueError(
-                            f"Cannot remove '{model_id}' because it is the default_model"
-                        )
-                    config.pricing.rates.pop(model_id, None)
-
-        if webui.config_file:
-            save_config(config, webui.config_file)
-        else:
-            save_config(config)
-
-        # Side effects for skill sync toggle
-        new_sync = config.features.skill_sync_enabled
-        if old_sync and not new_sync:
-            await webui.skill_manager.cleanup_symlinks()
-        elif not old_sync and new_sync:
-            await webui.skill_manager.sync()
-
-        from ..config_manager import default_pricing_rates
-        result = config.to_dict()
-        result["pricing_defaults"] = {
-            model_id: rates.to_dict()
-            for model_id, rates in default_pricing_rates().items()
-        }
-        return {"config": result}
+        return {"config": await _merged_config()}
 
     return router

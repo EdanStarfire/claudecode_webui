@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from ..logging_config import (
+from shared.logging_config import (
     CategoryAdapter,
     StandardizedFormatter,
     configure_logging,
@@ -384,7 +384,7 @@ class TestLogRotation:
 
     def test_rotation_settings(self, temp_log_dir):
         """Test that rotation maxBytes and backupCount are configured."""
-        from ..logging_config import LOG_BACKUP_COUNT, MAX_LOG_FILE_SIZE
+        from shared.logging_config import LOG_BACKUP_COUNT, MAX_LOG_FILE_SIZE
 
         configure_logging(debug_sdk=True, log_dir=temp_log_dir)
 

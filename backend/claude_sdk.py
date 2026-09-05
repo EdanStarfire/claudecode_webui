@@ -1,0 +1,2070 @@
+"""Claude Code SDK integration and session management."""
+
+import asyncio
+import contextlib
+import json
+import logging
+import tempfile
+import time
+from collections.abc import Callable, Coroutine
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
+from shared.logging_config import get_logger
+
+from .data_storage import DataStorageManager
+from .message_parser import MessageParser, MessageProcessor
+from .models.messages import sdk_message_to_stored
+from .models.permission_mode import PermissionMode
+from .session_config import SessionConfig
+from .session_manager import VALID_MODELS
+from .task_utils import task_done_log_exception
+
+# Import SDK components
+try:
+    from claude_agent_sdk import (
+        AssistantMessage,
+        ClaudeAgentOptions,
+        ClaudeSDKClient,
+        DeferredToolUse,
+        PermissionResultAllow,
+        PermissionResultDeny,
+        RateLimitEvent,
+        ResultMessage,
+        StreamEvent,
+        SystemMessage,
+        TaskNotificationMessage,
+        TaskProgressMessage,
+        TaskStartedMessage,
+        TextBlock,
+        ToolPermissionContext,
+        UserMessage,
+    )
+except ImportError:
+    # Fallback for development/testing environments
+    ClaudeSDKClient = None
+    ClaudeAgentOptions = None
+    DeferredToolUse = None
+    PermissionResultAllow = None
+    PermissionResultDeny = None
+    ToolPermissionContext = None
+    AssistantMessage = None
+    UserMessage = None
+    SystemMessage = None
+    ResultMessage = None
+    RateLimitEvent = None
+    StreamEvent = None
+    TaskStartedMessage = None
+    TaskProgressMessage = None
+    TaskNotificationMessage = None
+    TextBlock = None
+
+# Issue #1126: Mapping from BackgroundCallsConfig fields to SDK env vars.
+# Each entry: config_attr -> (env_var_name, value_when_true)
+_BACKGROUND_CALL_ENV_MAP: dict[str, tuple[str, str]] = {
+    "disable_auto_memory":          ("CLAUDE_CODE_DISABLE_AUTO_MEMORY",            "1"),
+    "disable_claudeai_mcp_servers": ("ENABLE_CLAUDEAI_MCP_SERVERS",                "false"),
+    "disable_background_tasks":     ("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",       "1"),
+    "disable_nonessential_traffic": ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",   "1"),
+    "disable_cron":                 ("CLAUDE_CODE_DISABLE_CRON",                   "1"),
+    "disable_feedback_survey":      ("CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY",        "1"),
+    "disable_telemetry":            ("CLAUDE_CODE_ENABLE_TELEMETRY",               "0"),
+    "subprocess_env_scrub":         ("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",           "1"),
+    "skip_version_check":           ("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK",        "1"),
+    "dont_inherit_env":             ("CLAUDE_CODE_DONT_INHERIT_ENV",               "1"),
+}
+
+# Get specialized loggers for SDK debugging
+sdk_logger = get_logger('sdk_debug', category='SDK')
+perm_logger = get_logger('sdk_debug', category='PERMISSIONS')
+# Keep standard logger for errors
+logger = logging.getLogger(__name__)
+
+
+def _schedule_coro(coro: Coroutine) -> None:
+    """Schedule a coroutine as a task and attach error logging done callback."""
+    task = asyncio.ensure_future(coro)
+    task.add_done_callback(task_done_log_exception)
+
+
+class SessionState(Enum):
+    """Claude Code SDK session states."""
+    CREATED = "created"
+    STARTING = "starting"
+    RUNNING = "running"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    TERMINATED = "terminated"
+
+
+# Named SessionState groupings — update these when adding new states
+SDK_ACTIVE_STATES: frozenset[SessionState] = frozenset({
+    SessionState.RUNNING, SessionState.PROCESSING,
+})
+
+
+class SDKErrorDetectionHandler(logging.Handler):
+    """Custom log handler to detect immediate SDK CLI failures."""
+
+    def __init__(self, session_id: str, error_callback: Callable | None = None):
+        super().__init__()
+        self.session_id = session_id
+        self.error_callback = error_callback
+        self.logger = get_logger('sdk_debug', category='SDK_ERROR_HANDLER')
+
+    def emit(self, record):
+        """Handle log records from claude_code_sdk._internal.query."""
+        try:
+            if (record.levelno >= logging.ERROR and
+                "Fatal error in message reader" in record.getMessage()):
+                self.logger.error(f"[SDK_LOG_DETECTION] Immediate CLI failure detected for session {self.session_id}: {record.getMessage()}")
+
+                if self.error_callback:
+                    # Schedule the error callback to run in the event loop
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        t = loop.create_task(self._trigger_error_callback(record.getMessage()))
+                        t.add_done_callback(task_done_log_exception)
+                    else:
+                        asyncio.run(self._trigger_error_callback(record.getMessage()))
+        except Exception:
+            # Prevent logging errors from breaking the handler
+            pass
+
+    async def _trigger_error_callback(self, error_message: str):
+        """Trigger the error callback asynchronously."""
+        try:
+            if self.error_callback:
+                if asyncio.iscoroutinefunction(self.error_callback):
+                    await self.error_callback("immediate_cli_failure", Exception(error_message))
+                else:
+                    self.error_callback("immediate_cli_failure", Exception(error_message))
+        except Exception:
+            self.logger.exception("Error in SDK error callback")
+
+
+@dataclass
+class SessionInfo:
+    """Information about a Claude Code SDK session."""
+    session_id: str
+    working_directory: str
+    state: SessionState = SessionState.CREATED
+    start_time: float | None = None
+    last_activity: float | None = None
+    message_count: int = 0
+    error_message: str | None = None
+
+
+class ClaudeSDK:
+    """
+    Enhanced Claude Code SDK wrapper with interactive conversation support.
+
+    Handles session lifecycle, SDK configuration, message streaming,
+    message queuing, and persistent storage integration.
+    """
+
+    def __init__(
+        self,
+        session_id: str,
+        working_directory: str,
+        config: SessionConfig | None = None,
+        storage_manager: DataStorageManager | None = None,
+        session_manager: Any | None = None,
+        message_callback: Callable[[dict[str, Any]], None] | None = None,
+        error_callback: Callable[[str, Exception], None] | None = None,
+        permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None,
+        rate_limit_callback: Callable[[Any], None] | None = None,
+        resume_session_id: str | None = None,
+        mcp_servers: list[Any] | None = None,
+        experimental: bool = False,
+        stderr_callback: Callable[[str], Any] | None = None,
+        extra_env: dict[str, str] | None = None,
+        permission_handler: Any | None = None,
+    ):
+        """
+        Initialize enhanced Claude Code SDK wrapper.
+
+        Args:
+            session_id: Unique session identifier
+            working_directory: Directory where Claude Code should run
+            config: Bundled configuration (permission, tools, model, etc.)
+            storage_manager: Data storage manager for persistence
+            session_manager: Session manager for state updates
+            message_callback: Called when new messages are received
+            error_callback: Called when errors occur
+            permission_callback: Called to check for tool permissions
+            resume_session_id: SDK session ID to resume
+            mcp_servers: List of MCP servers to attach (for multi-agent)
+            experimental: Enable experimental features like Agent Teams (issue #411)
+            stderr_callback: Called with each stderr line from SDK subprocess (issue #517)
+            extra_env: Extra environment variables (e.g., Docker wrapper config)
+            permission_handler: InternalPermissionHandler for suggestion-based auto-approval (issue #707)
+        """
+        if config is None:
+            config = SessionConfig()
+        self.session_id = session_id
+        self.working_directory = Path(working_directory)
+        self.storage_manager = storage_manager
+        self.session_manager = session_manager
+        self.message_callback = message_callback
+        self.error_callback = error_callback
+        self.permission_callback = permission_callback
+        self.rate_limit_callback = rate_limit_callback
+        sdk_logger.debug(f"ClaudeSDK initialized with permission_callback: {permission_callback is not None}")
+        if permission_callback:
+            sdk_logger.debug(f"Permission callback type: {type(permission_callback)}")
+        else:
+            logger.warning("No permission callback provided to ClaudeSDK!")
+        self.current_permission_mode = config.permission_mode
+        self.system_prompt = config.system_prompt
+        self.override_system_prompt = config.override_system_prompt
+        self.tools = config.allowed_tools if config.allowed_tools is not None else []
+        self.disallowed_tools = config.disallowed_tools if config.disallowed_tools is not None else []
+        self.model = config.model
+        self.resume_session_id = resume_session_id
+        self.mcp_servers = mcp_servers if mcp_servers is not None else []
+        self.sandbox_enabled = config.sandbox_enabled
+        self.sandbox_config = config.sandbox_config
+        self.setting_sources = config.setting_sources
+        self.experimental = experimental
+        self.cli_path = config.cli_path
+        self.process_wrapper = config.process_wrapper
+        self.stderr_callback = stderr_callback
+        self.additional_directories = config.additional_directories or []
+        self.extra_env = extra_env or {}
+        self.thinking_mode = config.thinking_mode
+        self.thinking_budget_tokens = config.thinking_budget_tokens
+        self.effort = config.effort
+        self.auto_memory_mode = config.auto_memory_mode
+        self.auto_memory_directory = config.auto_memory_directory
+        self.enable_claudeai_mcp_servers = config.enable_claudeai_mcp_servers
+        self.enable_streaming_text = config.enable_streaming_text
+        self.strict_mcp_config = config.strict_mcp_config
+        self.bare_mode = config.bare_mode if config else False
+        self.env_scrub_enabled = config.env_scrub_enabled if config else False
+        self.max_subagent_spawn_depth = config.max_subagent_spawn_depth if config else 1
+        # Issue #1779: automatic timestamp injection into user messages
+        self.inject_timestamps_enabled = config.inject_timestamps_enabled
+        self.timestamp_injection_frequency = config.timestamp_injection_frequency
+        self.timestamp_injection_timezone = config.timestamp_injection_timezone
+        self.permission_handler = permission_handler
+        self.auto_approval_callback: Callable | None = None  # Issue #707: notifies coordinator
+        self._stderr_buffer: list[str] = []
+
+        self.info = SessionInfo(session_id=session_id, working_directory=str(self.working_directory))
+
+        # New SDK client pattern
+        self._sdk_client: ClaudeSDKClient | None = None
+        self._sdk_options: ClaudeAgentOptions | None = None
+
+        # Interactive conversation support
+        self._message_queue = asyncio.Queue()
+        self._conversation_task: asyncio.Task | None = None
+
+        # Control
+        self._shutdown_event = asyncio.Event()
+        self._ready_event = asyncio.Event()
+
+        # Claude Code's actual session ID (captured from init message)
+        self._claude_code_session_id: str | None = None
+
+        # Temp file for system prompt (cleaned up after init message received)
+        self._system_prompt_temp_file: str | None = None
+
+        # Initialize MessageProcessor for unified message handling
+        self._message_parser = MessageParser()
+        self._message_processor = MessageProcessor(self._message_parser)
+
+        # Session health monitoring
+        self._session_health_checks = {
+            "context_manager_active": False,
+            "client_object_valid": False,
+            "last_health_check": None,
+            "health_check_count": 0,
+            "consecutive_health_failures": 0,
+            "session_start_time": None,
+            "last_successful_query": None,
+            "last_successful_response": None,
+            "total_queries_sent": 0,
+            "total_responses_received": 0
+        }
+
+        # Issue #1614: per-stream state for stamping message_id / tool_use_id on delta events.
+        # Keyed by parent_tool_use_id (None = top-level session).
+        self._stream_state: dict[str | None, dict] = {}
+
+        # Set up SDK error detection handler to capture immediate CLI failures
+        self._sdk_error_handler = None
+        self._setup_sdk_error_detection()
+
+        sdk_logger.info(f"Initialized enhanced Claude SDK wrapper for session {session_id}")
+
+    def _setup_sdk_error_detection(self):
+        """Set up SDK error detection handler to capture immediate CLI failures."""
+        try:
+            # Get the SDK logger that emits the "Fatal error in message reader" error
+            sdk_logger = logging.getLogger('claude_code_sdk._internal.query')
+
+            # Create our error detection handler
+            self._sdk_error_handler = SDKErrorDetectionHandler(
+                session_id=self.session_id,
+                error_callback=self.error_callback
+            )
+
+            # Add our handler to the SDK logger
+            sdk_logger.addHandler(self._sdk_error_handler)
+
+            sdk_logger.debug(f"SDK error detection handler set up for session {self.session_id}")
+        except Exception:
+            logger.exception("Failed to set up SDK error detection")
+
+    def _cleanup_sdk_error_detection(self):
+        """Clean up SDK error detection handler."""
+        try:
+            if self._sdk_error_handler:
+                sdk_logger = logging.getLogger('claude_code_sdk._internal.query')
+                sdk_logger.removeHandler(self._sdk_error_handler)
+                self._sdk_error_handler = None
+                sdk_logger.debug(f"SDK error detection handler cleaned up for session {self.session_id}")
+        except Exception:
+            logger.exception("Failed to clean up SDK error detection")
+
+    async def start(self) -> bool:
+        """
+        Start the Claude Code SDK session with new ClaudeSDKClient pattern.
+
+        Returns:
+            True if started successfully, False otherwise
+        """
+        try:
+            sdk_logger.info(f"Starting Claude Code SDK session with ClaudeSDKClient in {self.working_directory}")
+
+            # Reset shutdown event to ensure clean start (fixes resumed session disconnect loops)
+            self._shutdown_event.clear()
+            self._ready_event.clear()
+
+            self.info.state = SessionState.STARTING
+            self.info.start_time = time.time()
+
+            # Verify working directory exists
+            if not self.working_directory.exists():
+                raise FileNotFoundError(f"Working directory does not exist: {self.working_directory}")
+
+            # Check SDK components are available
+            if not ClaudeSDKClient or not ClaudeAgentOptions:
+                raise ImportError("Claude Agent SDK components not available")
+
+            # Check for existing Claude Code session ID if this is a resume operation
+            if self.resume_session_id is not None and self.session_manager:
+                session_info = await self.session_manager.get_session_info(self.session_id)
+                if session_info and session_info.claude_code_session_id:
+                    sdk_logger.info(f"Using stored Claude Code session ID for resume: {session_info.claude_code_session_id}")
+                    # Temporarily override resume_session_id with actual Claude Code ID
+                    original_resume_id = self.resume_session_id
+                    self.resume_session_id = session_info.claude_code_session_id
+                    self._sdk_options = self._get_sdk_options()
+                    # Restore original for tracking purposes
+                    self.resume_session_id = original_resume_id
+                else:
+                    logger.warning(f"No stored Claude Code session ID found for WebUI session {self.session_id}, using WebUI ID for resume")
+                    self._sdk_options = self._get_sdk_options()
+            else:
+                # Configure SDK options normally for new sessions
+                self._sdk_options = self._get_sdk_options()
+            sdk_logger.info("Claude Code SDK options configured")
+
+            # Start message processing task
+            self._conversation_task = asyncio.create_task(self._message_processing_loop())
+
+            # Keep session in STARTING state until context manager is ready
+            # State will be changed to RUNNING in _message_processing_loop when SDK is ready
+            sdk_logger.info("Claude Code SDK session task started - waiting for context manager initialization")
+            return True
+
+        except Exception as e:
+            logger.exception("Failed to start Claude Code SDK session")
+            self.info.state = SessionState.FAILED
+            self.info.error_message = str(e)
+            if self.error_callback:
+                await self._safe_callback(self.error_callback, "startup_failed", e)
+            return False
+
+    async def send_message(self, message: str, metadata: dict | None = None) -> bool:
+        """
+        Queue a message to send to the Claude Code SDK.
+
+        Args:
+            message: Message text to send
+            metadata: Optional metadata dict to attach to the message
+
+        Returns:
+            True if queued successfully, False otherwise
+        """
+        if not self._is_ready_for_input():
+            logger.warning(f"Session not ready for input, state: {self.info.state}")
+            return False
+
+        try:
+            sdk_logger.debug(f"Queuing message: {message[:100]}...")
+
+            # Add to message queue
+            queue_item = {
+                "type": "user_message",
+                "content": message,
+                "timestamp": time.time()
+            }
+            if metadata:
+                queue_item["metadata"] = metadata
+            await self._message_queue.put(queue_item)
+
+            sdk_logger.debug("Message queued successfully")
+            return True
+
+        except Exception as e:
+            logger.exception("Failed to queue message")
+            if self.error_callback:
+                await self._safe_callback(self.error_callback, "message_queue_failed", e)
+            return False
+
+    async def interrupt_session(self) -> bool:
+        """
+        Interrupt the current Claude Code SDK session.
+
+        This method attempts to gracefully interrupt any ongoing SDK operations
+        by calling the interrupt() method on the active SDK client.
+
+        Returns:
+            True if interrupt was sent successfully, False otherwise
+        """
+        try:
+            sdk_logger.info(f"INTERRUPT REQUESTED for session {self.session_id}")
+
+            # Check if we have an active SDK client
+            if not self._sdk_client:
+                sdk_logger.debug(f"No active SDK client for session {self.session_id} - cannot interrupt")
+                return False
+
+            # Check if we're in a state that can be interrupted
+            if self.info.state not in SDK_ACTIVE_STATES:
+                sdk_logger.debug(f"Session {self.session_id} not in interruptible state: {self.info.state}")
+                return False
+
+            sdk_logger.debug(f"Session {self.session_id} state check passed: {self.info.state}")
+            sdk_logger.debug(f"SDK client exists: {bool(self._sdk_client)}")
+
+            # Call interrupt directly on the SDK client, bypassing the message queue.
+            # The queue is sequential — if a query() is in flight, an interrupt_request
+            # would wait behind it, arriving too late. client.interrupt() sends a control
+            # message via the transport and is safe to call concurrently. (Issue #748)
+            sdk_logger.debug(f"Sending direct interrupt to SDK for session {self.session_id}")
+            await self._sdk_client.interrupt()
+            sdk_logger.info(f"INTERRUPT SENT DIRECTLY for session {self.session_id}")
+
+            # Notify through callback
+            if self.message_callback:
+                await self._safe_callback(self.message_callback, {
+                    "type": "system",
+                    "content": "Session interrupted successfully",
+                    "subtype": "interrupt_success",
+                    "session_id": self.session_id,
+                    "timestamp": time.time()
+                })
+
+            return True
+
+        except Exception as e:
+            logger.exception(f"Failed to interrupt session {self.session_id}")
+            if self.error_callback:
+                await self._safe_callback(self.error_callback, "interrupt_failed", e)
+            return False
+
+    async def set_permission_mode(self, mode: str) -> bool:
+        """
+        Set the permission mode for the current session.
+
+        Args:
+            mode: Permission mode ("default", "acceptEdits", "plan", "bypassPermissions")
+
+        Returns:
+            True if mode was set successfully, False otherwise
+        """
+        try:
+            perm_logger.info(f"Setting permission mode to '{mode}' for session {self.session_id}")
+
+            # Validate mode
+            if mode not in PermissionMode._value2member_map_:
+                logger.error(f"Invalid permission mode: {mode}")
+                return False
+
+            # Check if we have an active SDK client
+            if not self._sdk_client:
+                logger.warning(f"No active SDK client for session {self.session_id} - cannot set permission mode")
+                return False
+
+            # Check if we're in a valid state
+            if self.info.state not in SDK_ACTIVE_STATES:
+                logger.warning(f"Session {self.session_id} not in valid state for permission mode change: {self.info.state}")
+                return False
+
+            # Call SDK's set_permission_mode method
+            await self._sdk_client.set_permission_mode(mode)
+
+            # Update local permissions tracking
+            self.current_permission_mode = mode
+
+            perm_logger.info(f"Successfully set permission mode to '{mode}' for session {self.session_id}")
+            return True
+
+        except Exception as e:
+            logger.exception(f"Failed to set permission mode for session {self.session_id}")
+            if self.error_callback:
+                await self._safe_callback(self.error_callback, "set_permission_mode_failed", e)
+            raise  # Propagate so callers can surface the SDK error message to the user
+
+    async def set_model(self, model: str) -> bool:
+        """
+        Set the model for the current session without restarting it.
+
+        Args:
+            model: Model alias ("sonnet", "opus", "haiku", "opusplan")
+
+        Returns:
+            True if model was set successfully, False otherwise
+        """
+        try:
+            sdk_logger.info(f"Setting model to '{model}' for session {self.session_id}")
+
+            # Validate model
+            if model not in VALID_MODELS:
+                logger.error(f"Invalid model: {model}")
+                return False
+
+            # Check if we have an active SDK client
+            if not self._sdk_client:
+                logger.warning(f"No active SDK client for session {self.session_id} - cannot set model")
+                return False
+
+            # Check if we're in a valid state
+            if self.info.state not in SDK_ACTIVE_STATES:
+                logger.warning(f"Session {self.session_id} not in valid state for model change: {self.info.state}")
+                return False
+
+            # Call SDK's set_model method
+            await self._sdk_client.set_model(model)
+
+            # Update local model tracking
+            self.model = model
+
+            sdk_logger.info(f"Successfully set model to '{model}' for session {self.session_id}")
+            return True
+
+        except Exception as e:
+            logger.exception(f"Failed to set model for session {self.session_id}")
+            if self.error_callback:
+                await self._safe_callback(self.error_callback, "set_model_failed", e)
+            raise  # Propagate so callers can surface the SDK error message to the user
+
+    async def get_mcp_status(self) -> dict:
+        """Get MCP server status for the current session."""
+        try:
+            if not self._sdk_client:
+                logger.warning(f"No active SDK client for session {self.session_id} - cannot get MCP status")
+                return {"servers": []}
+
+            if self.info.state not in SDK_ACTIVE_STATES:
+                logger.warning(f"Session {self.session_id} not in valid state for MCP status: {self.info.state}")
+                return {"servers": []}
+
+            result = await self._sdk_client.get_mcp_status()
+            return result
+        except Exception:
+            logger.exception(f"Failed to get MCP status for session {self.session_id}")
+            return {"servers": []}
+
+    async def get_context_usage(self) -> dict:
+        """Get context window usage from the SDK."""
+        try:
+            if not self._sdk_client:
+                logger.warning(f"No active SDK client for session {self.session_id}")
+                return {}
+            if self.info.state not in SDK_ACTIVE_STATES:
+                return {}
+            result = await self._sdk_client.get_context_usage()
+            return dict(result)
+        except Exception:
+            logger.exception(f"Failed to get context usage for session {self.session_id}")
+            return {}
+
+    async def toggle_mcp_server(self, name: str, enabled: bool) -> None:
+        """Toggle an MCP server on or off. Raises on failure."""
+        if not self._sdk_client:
+            raise RuntimeError(f"No active SDK client for session {self.session_id}")
+
+        if self.info.state not in SDK_ACTIVE_STATES:
+            raise RuntimeError(f"Session not in valid state for MCP toggle: {self.info.state}")
+
+        await self._sdk_client.toggle_mcp_server(name, enabled)
+
+    async def reconnect_mcp_server(self, name: str) -> None:
+        """Reconnect a failed MCP server. Raises on failure."""
+        if not self._sdk_client:
+            raise RuntimeError(f"No active SDK client for session {self.session_id}")
+
+        if self.info.state not in SDK_ACTIVE_STATES:
+            raise RuntimeError(f"Session not in valid state for MCP reconnect: {self.info.state}")
+
+        await self._sdk_client.reconnect_mcp_server(name)
+
+    async def register_repo_root(self, directory: str) -> dict:
+        """Register a new working directory on the live session (issue #1675).
+
+        No public ClaudeSDKClient method exists for this as of claude-agent-sdk==0.2.128
+        (verified against installed CLI 2.1.220, whose control-request dispatcher accepts
+        a "register_repo_root" subtype alongside "add_directory"). Calls the private
+        _query._send_control_request path directly, mirroring toggle_mcp_server's
+        guard-then-delegate shape. Re-evaluate this if/when the SDK exposes a public
+        wrapper. Raises on failure.
+        """
+        if not self._sdk_client:
+            raise RuntimeError(f"No active SDK client for session {self.session_id}")
+
+        if self.info.state not in SDK_ACTIVE_STATES:
+            raise RuntimeError(f"Session not in valid state for add-directory: {self.info.state}")
+
+        try:
+            return await self._sdk_client._query._send_control_request(
+                {"subtype": "register_repo_root", "directory": directory}
+            )
+        except AttributeError as e:
+            raise RuntimeError(
+                "SDK internal control-request API (_query._send_control_request) is "
+                "unavailable — claude-agent-sdk internals may have changed since 0.2.128"
+            ) from e
+
+    async def disconnect(self) -> bool:
+        """
+        Disconnect from the Claude SDK session gracefully.
+
+        This triggers the context manager's __aexit__ which properly closes
+        the SDK client connection. The session can be resumed later.
+
+        Returns:
+            True if disconnected successfully, False otherwise
+        """
+        try:
+            sdk_logger.info(f"Disconnecting SDK session {self.session_id}")
+
+            # Set shutdown event to exit message processing loop
+            self._shutdown_event.set()
+
+            # Wait for conversation task to complete (which will trigger context manager cleanup)
+            if self._conversation_task and not self._conversation_task.done():
+                try:
+                    await asyncio.wait_for(self._conversation_task, timeout=5.0)
+                    sdk_logger.info(f"Conversation task completed for session {self.session_id}")
+                except TimeoutError:
+                    sdk_logger.warning(f"Conversation task did not complete within timeout for {self.session_id}")
+                    self._conversation_task.cancel()
+
+            # Context manager cleanup happens automatically when task exits
+            sdk_logger.info(f"SDK session {self.session_id} disconnected successfully")
+            return True
+
+        except Exception:
+            logger.exception(f"Failed to disconnect SDK session {self.session_id}")
+            return False
+
+    async def _message_processing_loop(self):
+        """
+        Main message processing loop using the new ClaudeSDKClient pattern.
+        """
+        loop_start_time = time.time()
+        sdk_logger.info(f"Starting message processing loop for session {self.session_id}")
+
+        try:
+            async with ClaudeSDKClient(self._sdk_options) as client:
+                self._sdk_client = client
+
+                # Log the actual CLI command for MCP debugging (issue #947)
+                try:
+                    transport = getattr(client, "_transport", None)
+                    if transport and hasattr(transport, "_build_command"):
+                        cli_cmd = transport._build_command()
+                        sdk_logger.debug(
+                            "[CLI command] session=%s cmd=%s", self.session_id, cli_cmd
+                        )
+                except Exception:
+                    pass
+
+                # Update health monitoring state
+                self._session_health_checks["context_manager_active"] = True
+                self._session_health_checks["client_object_valid"] = True
+                self._session_health_checks["session_start_time"] = time.time()
+
+                # NOW the SDK is truly ready - change session state to RUNNING
+                self.info.state = SessionState.RUNNING
+                self._ready_event.set()  # Signal readiness to waiting comm_router callers
+                sdk_logger.info(f"Session {self.session_id} state changed to RUNNING")
+
+                # Also notify session manager that SDK is ready
+                if self.session_manager:
+                    await self.session_manager.mark_session_active(self.session_id)
+
+                # Start SINGLE global response consumer for ALL queries
+                async def consume_all_responses():
+                    """Consume all responses from all queries for entire session"""
+                    try:
+                        # Wrap iteration to survive SDK parse errors (e.g. rate_limit_event
+                        # in Claude Code >=2.1.49 not yet handled by claude_agent_sdk).
+                        # client.receive_messages() yields parse_message(data) which raises
+                        # MessageParseError for unknown types, killing the async generator.
+                        # We fall back to the raw transport stream and parse with tolerance.
+                        raw_stream = client._query.receive_messages()
+                        async for raw_data in raw_stream:
+                            if self._shutdown_event.is_set():
+                                break
+                            try:
+                                from claude_agent_sdk._internal.message_parser import (
+                                    parse_message,
+                                )
+                                response_message = parse_message(raw_data)
+                            except Exception as parse_err:
+                                sdk_logger.debug(
+                                    f"Skipping unparseable SDK message: {parse_err}"
+                                )
+                                continue
+                            await self._process_sdk_message(response_message)
+                            self._session_health_checks["total_responses_received"] += 1
+                            self._session_health_checks["last_successful_response"] = time.time()
+                    except Exception as consumer_err:
+                        if not self._shutdown_event.is_set() and not asyncio.current_task().cancelling() > 0:
+                            logger.exception("Error in global response consumer")
+                            # Issue #781: Parse the error for actionable diagnostics
+                            # and surface it to the user via error callback
+                            error_msg = str(consumer_err)
+                            parsed = self._parse_container_exit_code(
+                                error_msg, self._stderr_buffer
+                            )
+                            if parsed:
+                                error_msg = parsed
+                            self.info.state = SessionState.FAILED
+                            self.info.error_message = error_msg
+                            if self.error_callback:
+                                await self._safe_callback(
+                                    self.error_callback,
+                                    "immediate_cli_failure",
+                                    Exception(error_msg),
+                                )
+                    finally:
+                        if not self._shutdown_event.is_set():
+                            sdk_logger.warning(
+                                f"[session {self.session_id}] consume_all_responses exited "
+                                f"while shutdown_event not set — watchdog will surface FAILED"
+                            )
+
+                # Start response consumer as background task
+                response_consumer_task = asyncio.create_task(consume_all_responses())
+                sdk_logger.info("Global response consumer started")
+
+                # Main message loop - just send queries, consumer handles all responses
+                while not self._shutdown_event.is_set():
+                    if not await self._check_consumer_alive(response_consumer_task):
+                        break
+
+                    try:
+                        message_data = await asyncio.wait_for(
+                            self._message_queue.get(),
+                            timeout=1.0
+                        )
+
+                        # Handle different message types
+                        message_type = message_data.get("type", "unknown") if message_data else "unknown"
+
+                        if message_type == "user_message" and message_data.get("content"):
+                            content = message_data["content"]
+                            sdk_logger.debug(f"Processing user message: {content[:100]}...")
+
+                            # Create user message for storage and broadcast
+                            user_message = {
+                                "type": "user",
+                                "content": content,
+                                "session_id": self.session_id,
+                                "timestamp": datetime.now(UTC).timestamp()
+                            }
+                            if message_data.get("metadata"):
+                                user_message["metadata"] = message_data["metadata"]
+
+                            # Store user message if storage available
+                            if self.storage_manager:
+                                await self.storage_manager.append_message(user_message)
+
+                            # Broadcast user message via callback for real-time display
+                            if self.message_callback:
+                                await self._safe_callback(self.message_callback, user_message)
+                                sdk_logger.debug("Broadcasted user message via callback")
+
+                            self.info.message_count += 1
+                            self.info.last_activity = time.time()
+
+                            # Just send query - global response consumer handles all responses
+                            await client.query(content)
+                            self._session_health_checks["total_queries_sent"] += 1
+                            self._session_health_checks["last_successful_query"] = time.time()
+                            sdk_logger.debug("Query sent to SDK, responses will be handled by global consumer")
+
+                        elif message_type == "interrupt_request":
+                            # Handle interrupt request directly
+                            sdk_logger.info(f"INTERRUPT RECEIVED for session {self.session_id}")
+                            try:
+                                await client.interrupt()
+                                sdk_logger.info(f"INTERRUPT SENT successfully to SDK for session {self.session_id}")
+
+                                # Notify through callback
+                                if self.message_callback:
+                                    await self._safe_callback(self.message_callback, {
+                                        "type": "system",
+                                        "content": "Session interrupted successfully",
+                                        "subtype": "interrupt_success",
+                                        "session_id": self.session_id,
+                                        "timestamp": time.time()
+                                    })
+                            except Exception:
+                                logger.exception("Failed to send interrupt")
+
+
+                        self._message_queue.task_done()
+
+                    except TimeoutError:
+                        # No message in queue, continue loop
+                        continue
+                    except asyncio.CancelledError:
+                        sdk_logger.info("Message processing loop cancelled")
+                        break
+                    except Exception as e:
+                        logger.exception("Error processing message")
+                        if self.error_callback:
+                            await self._safe_callback(self.error_callback, "message_processing_error", e)
+
+                # Cleanup response consumer task
+                sdk_logger.info("Cleaning up global response consumer")
+                response_consumer_task.cancel()
+                try:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await response_consumer_task
+                    sdk_logger.info("Global response consumer cleaned up successfully")
+                except Exception:
+                    logger.exception("Error during response consumer cleanup")
+                    sdk_logger.info("Global response consumer cleanup completed with errors")
+
+            # Update health monitoring state
+            self._session_health_checks["context_manager_active"] = False
+            self._session_health_checks["client_object_valid"] = False
+
+        except Exception as e:
+            fatal_error_time = time.time()
+            logger.exception(
+                f"FATAL ERROR in message processing loop at {fatal_error_time}. "
+                f"Context: session={self.session_id}, cwd={self.working_directory}, "
+                f"state={self.info.state}, msg_count={self.info.message_count}, "
+                f"queue_size={self._message_queue.qsize()}, "
+                f"shutdown={self._shutdown_event.is_set()}, "
+                f"ctx_mgr_active={self._session_health_checks.get('context_manager_active', False)}, "
+                f"queries_sent={self._session_health_checks.get('total_queries_sent', 0)}, "
+                f"responses_received={self._session_health_checks.get('total_responses_received', 0)}"
+            )
+
+            # Update health monitoring
+            self._session_health_checks["context_manager_active"] = False
+            self._session_health_checks["client_object_valid"] = False
+
+            # Final health check for fatal error
+            try:
+                self._log_session_health(None, "fatal_error")
+            except Exception:
+                logger.exception("Health check failed during fatal error handling")
+
+            self.info.state = SessionState.FAILED
+            self._ready_event.set()  # Unblock any waiters even on fatal failure
+            # Include buffered stderr in error message (issue #517)
+            error_msg = str(e)
+            # Issue #781: Parse container exit codes for actionable error reporting
+            exit_code_info = self._parse_container_exit_code(error_msg, self._stderr_buffer)
+            if exit_code_info:
+                error_msg = exit_code_info
+            elif self._stderr_buffer:
+                stderr_text = "\n".join(self._stderr_buffer)
+                error_msg = f"{error_msg}\nStderr output:\n{stderr_text}"
+            self.info.error_message = error_msg
+            if self.error_callback:
+                await self._safe_callback(self.error_callback, "message_processing_loop_error",
+                                          Exception(error_msg))
+        finally:
+            cleanup_time = time.time()
+            self._sdk_client = None
+            sdk_logger.info(f"Message processing loop cleanup at {cleanup_time}")
+            sdk_logger.info(f"Total loop runtime: {cleanup_time - loop_start_time:.3f}s")
+            sdk_logger.info("Message processing loop ENDED")
+
+
+    async def _check_consumer_alive(self, task: asyncio.Task) -> bool:
+        """Return False and transition to FAILED if consumer exited outside of shutdown."""
+        if not task.done():
+            return True
+        if self._shutdown_event.is_set():
+            return True
+
+        # Consumer died unexpectedly. Build a diagnostic.
+        exc: BaseException | None = None
+        if task.cancelled():
+            reason = "Response consumer task was cancelled"
+        else:
+            exc = task.exception()
+            reason = (
+                f"Response consumer exited with exception: {exc!r}"
+                if exc is not None
+                else "Response consumer exited normally (subprocess stdout closed?)"
+            )
+
+        sdk_logger.error(f"[session {self.session_id}] {reason}")
+
+        self.info.state = SessionState.FAILED
+        self.info.error_message = reason
+
+        if self.error_callback:
+            await self._safe_callback(
+                self.error_callback,
+                "consumer_task_died",
+                exc if exc is not None else Exception(reason),
+            )
+
+        return False
+
+    def _get_sdk_options(self):
+        """Configure SDK options with correct parameter names for new ClaudeSDKClient pattern."""
+
+        # Create callback function with new PermissionResult return types
+        async def can_use_tool_wrapper(
+            tool_name: str,
+            input_params: dict[str, Any],
+            context: ToolPermissionContext
+        ) -> PermissionResultAllow | PermissionResultDeny:
+            return await self._can_use_tool_callback(tool_name, input_params, context)
+
+        # Configure system prompt using file-based delivery to bypass CLI length limits
+        # Issue #382: Use --append-system-prompt-file or --system-prompt-file flags via extra_args
+        # extra_args is a dict where keys are flag names (without --) and values are the flag values
+        extra_args = {}
+
+        if self.override_system_prompt and self.system_prompt:
+            # Override mode: use custom prompt only (no Claude Code preset)
+            # Write system prompt to temp file and use --system-prompt-file flag
+            self._system_prompt_temp_file = self._create_system_prompt_temp_file(self.system_prompt)
+            extra_args["system-prompt-file"] = self._system_prompt_temp_file
+            system_prompt_config = None  # Don't pass inline system_prompt
+            sdk_logger.info(f"Using OVERRIDE mode - custom system prompt from file: {self._system_prompt_temp_file}")
+        elif self.system_prompt:
+            # Append mode: use Claude Code preset with custom append from file
+            # Write system prompt to temp file and use --append-system-prompt-file flag
+            self._system_prompt_temp_file = self._create_system_prompt_temp_file(self.system_prompt)
+            extra_args["append-system-prompt-file"] = self._system_prompt_temp_file
+            system_prompt_config = {
+                "type": "preset",
+                "preset": "claude_code"
+            }
+            sdk_logger.info(f"Using APPEND mode - Claude Code preset + custom append from file: {self._system_prompt_temp_file}")
+        else:
+            # Default mode: Claude Code preset only, no temp file needed
+            system_prompt_config = {
+                "type": "preset",
+                "preset": "claude_code"
+            }
+            sdk_logger.info("Using DEFAULT mode - Claude Code preset only")
+
+        # Issue #902: Bare mode skips hooks, LSP, plugin sync, skill walks
+        if self.bare_mode:
+            extra_args["bare"] = None
+
+        # Issue #1027: Always enable auto mode and allow mid-session mode cycling
+        # Use None (not True) so the SDK transport emits bare flags without values.
+        extra_args["enable-auto-mode"] = None
+        extra_args["allow-dangerously-skip-permissions"] = None
+
+        options_kwargs = {
+            "cwd": str(self.working_directory),
+            "permission_mode": self.current_permission_mode,
+            "allowed_tools": self.tools,
+            # Issue #36: Use configurable setting_sources (default: load from user, project, and local)
+            "setting_sources": self.setting_sources if self.setting_sources else ["user", "project", "local"]
+        }
+
+        # Issue #676 / #1301: strict_mcp_config is a typed ClaudeAgentOptions field
+        # in claude-agent-sdk >= 0.1.74; pass as kwarg instead of CLI extra_args.
+        if self.strict_mcp_config:
+            options_kwargs["strict_mcp_config"] = True
+
+        # Issue #461: Add disallowed_tools if any are configured
+        if self.disallowed_tools:
+            options_kwargs["disallowed_tools"] = self.disallowed_tools
+
+        # Only add system_prompt if not using file-based override
+        if system_prompt_config is not None:
+            options_kwargs["system_prompt"] = system_prompt_config
+
+        # Add extra_args if any (for file-based system prompts)
+        if extra_args:
+            options_kwargs["extra_args"] = extra_args
+
+        # Issue #906/#1401: Auto-memory directory via settings JSON.
+        # "claude" + optional user-set dir, or "session" (dir forced upstream in session_coordinator).
+        if self.auto_memory_directory and self.auto_memory_mode in ("claude", "session"):
+            options_kwargs["settings"] = json.dumps({"autoMemoryDirectory": self.auto_memory_directory})
+            sdk_logger.info(f"Auto-memory directory for session {self.session_id}: {self.auto_memory_directory}")
+
+        # Only add can_use_tool callback if permission callback is provided and SDK classes are available
+        perm_logger.debug("Callback registration check:")
+        perm_logger.debug(f"- permission_callback exists: {self.permission_callback is not None}")
+        perm_logger.debug(f"- PermissionResultAllow available: {PermissionResultAllow is not None}")
+        perm_logger.debug(f"- PermissionResultDeny available: {PermissionResultDeny is not None}")
+
+        if self.permission_callback and PermissionResultAllow and PermissionResultDeny:
+            options_kwargs["can_use_tool"] = can_use_tool_wrapper
+            perm_logger.info("Permission callback registered with SDK")
+        else:
+            logger.warning("Permission callback NOT registered - missing requirements")
+
+        if self.model is not None:
+            options_kwargs["model"] = self.model
+
+        if self.resume_session_id is not None:
+            options_kwargs["resume"] = self.resume_session_id
+            sdk_logger.debug(f"Setting resume parameter to: {self.resume_session_id}")
+
+        # Add MCP servers for multi-agent sessions (minions)
+        if self.mcp_servers:
+            options_kwargs["mcp_servers"] = self.mcp_servers
+            sdk_logger.info(f"Attaching MCP servers to session {self.session_id}: {list(self.mcp_servers.keys()) if isinstance(self.mcp_servers, dict) else 'unknown format'}")
+
+        # Issue #630: Add additional directories
+        if self.additional_directories:
+            options_kwargs["add_dirs"] = [str(d) for d in self.additional_directories]
+            sdk_logger.info(f"Additional directories for session {self.session_id}: {self.additional_directories}")
+
+        # Add CLI path override (issue #489)
+        if self.cli_path:
+            options_kwargs["cli_path"] = self.cli_path
+            sdk_logger.info(f"Using custom CLI path for session {self.session_id}: {self.cli_path}")
+
+        # Add sandbox configuration (issue #319, #958)
+        if self.sandbox_enabled:
+            sandbox_settings = {"enabled": True, "failIfUnavailable": True}
+            # Merge custom sandbox config if provided
+            if self.sandbox_config:
+                sandbox_settings.update(self.sandbox_config)
+            # Issue #958: Enforce failIfUnavailable after merge to prevent silent fallback
+            sandbox_settings["failIfUnavailable"] = True
+            options_kwargs["sandbox"] = sandbox_settings
+            sdk_logger.info(f"Sandbox enabled for session {self.session_id}: {sandbox_settings}")
+
+        # Issue #540 / #1486: Thinking configuration.
+        # Opus 4.7+ defaults to display="omitted" (signature-only, empty thinking text).
+        # Always request display="summarized" so thinking content is visible in the UI.
+        if self.thinking_mode:
+            if self.thinking_mode == "adaptive":
+                options_kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
+            elif self.thinking_mode == "enabled":
+                options_kwargs["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": self.thinking_budget_tokens or 10240,
+                    "display": "summarized",
+                }
+            elif self.thinking_mode == "disabled":
+                options_kwargs["thinking"] = {"type": "disabled"}
+        else:
+            # Opus 4.7+ thinks implicitly (adaptive) and returns signature-only by default.
+            # Request "summarized" display so the thinking text reaches the frontend.
+            options_kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
+
+        # Issue #540: Effort configuration
+        if self.effort:
+            options_kwargs["effort"] = self.effort
+
+        # Issue #781: Increase JSON buffer to 10MB to handle large MCP tool responses
+        # (e.g., Chrome DevTools screenshots/snapshots). SDK default is 1MB which is too small.
+        options_kwargs["max_buffer_size"] = 10 * 1024 * 1024
+
+        # Issue #1299: Emit hook lifecycle events (hook_started/hook_response) into the message
+        # stream as HookEventMessage objects. Without this flag, hook events are silently dropped.
+        options_kwargs["include_hook_events"] = True
+
+        # Issue #1486: opt into SDK streaming when both per-session AND global flags allow
+        if self.enable_streaming_text:
+            from .config_manager import load_config as _load_app_config
+            _app_cfg = _load_app_config()
+            if _app_cfg.features.streaming_text_enabled:
+                options_kwargs["include_partial_messages"] = True
+
+        options_kwargs["env"] = self._resolve_env_vars()
+
+        # Add stderr handler to capture SDK CLI errors (issue #517)
+        def stderr_handler(output: str) -> None:
+            """Capture and log stderr output from Claude Code CLI."""
+            logger.error(f"[SDK_STDERR] {self.session_id}: {output}")
+            self._stderr_buffer.append(output)
+            if self.stderr_callback:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.call_soon_threadsafe(
+                        _schedule_coro,
+                        self._safe_callback(self.stderr_callback, output)
+                    )
+                except RuntimeError:
+                    pass  # No running event loop, skip callback
+
+        options_kwargs["stderr"] = stderr_handler
+
+        sdk_logger.debug(f"Final SDK options keys: {list(options_kwargs.keys())}")
+        sdk_logger.debug(f"can_use_tool included: {'can_use_tool' in options_kwargs}")
+        sdk_logger.debug(f"mcp_servers included: {'mcp_servers' in options_kwargs}")
+        sdk_logger.debug(f"sandbox included: {'sandbox' in options_kwargs}")
+        sdk_logger.debug(f"stderr callback included: {'stderr' in options_kwargs}")
+        sdk_logger.debug(f"ClaudeAgentOptions: {options_kwargs}")
+        return ClaudeAgentOptions(**options_kwargs)
+
+    def _resolve_env_vars(self) -> dict[str, str]:
+        """Build the env dict for ClaudeAgentOptions.
+
+        Merge order (highest priority wins):
+          global BackgroundCallsConfig → allow_background_agent override → per-session
+          opt-back-in → always-set → extra_env
+
+        Note: most categories here are additive/opt-in (a var is only added when a
+        flag is true, or removed to opt back in to CC's own default). The
+        always-set category (e.g. CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH) is the
+        exception — it is emitted unconditionally because the WebUI default
+        diverges from CC's own CLI default, and omitting it would silently
+        revert to CC's default.
+        """
+        # Always-on
+        env_vars: dict[str, str] = {"CLAUDE_CODE_ENABLE_TASKS": "true"}
+
+        # Issue #411: Enable Agent Teams when experimental flag is set
+        if self.experimental:
+            env_vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
+            sdk_logger.info(f"Experimental Agent Teams enabled for session {self.session_id}")
+
+        # Issue #1126: Apply global background-call suppression as the floor
+        from .config_manager import load_config
+        app_cfg = load_config()
+        bg_cfg = app_cfg.background_calls
+        for attr, (var, value) in _BACKGROUND_CALL_ENV_MAP.items():
+            if getattr(bg_cfg, attr):
+                env_vars[var] = value
+
+        # Issue #1690: allow_background_agent (#1688) must win over disable_background_tasks —
+        # otherwise the tool-block gate permits Agent(run_in_background=True) but the CLI env
+        # flag still forces it to run synchronously, silently nullifying the toggle.
+        if app_cfg.features.allow_background_agent:
+            env_vars["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "0"
+
+        # Per-session opt-back-in: remove suppression keys when session expresses preference
+        # Issues #709, #906: auto-memory
+        if self.auto_memory_mode in ("claude", "session"):
+            env_vars.pop("CLAUDE_CODE_DISABLE_AUTO_MEMORY", None)
+        elif self.auto_memory_mode == "disabled":
+            env_vars["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+
+        # Issue #676: Claude AI MCP servers
+        if self.enable_claudeai_mcp_servers:
+            env_vars.pop("ENABLE_CLAUDEAI_MCP_SERVERS", None)
+        else:
+            env_vars["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
+
+        # Issue #957: subprocess env scrub — only additive (no session-level opt-out)
+        if self.env_scrub_enabled:
+            env_vars["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] = "1"
+
+        # Issue #1669: always-set (not opt-in) — WebUI default (1) diverges from CC's
+        # own CLI default (3), so omitting the var when unset would silently pick up 3.
+        env_vars["CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"] = str(self.max_subagent_spawn_depth)
+
+        # Issue #1672: Route Claude Code self-spawns through a corporate launcher wrapper
+        if self.process_wrapper:
+            env_vars["CLAUDE_CODE_PROCESS_WRAPPER"] = self.process_wrapper
+
+        # Issue #1670: opt-in (not always-set) — WebUI default (200) matches CC's own
+        # CLI default exactly, so omitting the var at default is fully transparent.
+        max_subagents = app_cfg.features.max_subagents_per_session
+        if max_subagents < 200:
+            env_vars["CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION"] = str(max_subagents)
+
+        # Issue #1671: always-set (not opt-in) — WebUI default (on) diverges from CC's
+        # own CLI default (off), so omitting the var would silently disable forwarding.
+        env_vars["CLAUDE_CODE_FORWARD_SUBAGENT_TEXT"] = (
+            "1" if app_cfg.features.forward_subagent_text else "0"
+        )
+
+        # Issue #496: Merge extra env vars (highest priority; e.g., CLAUDE_DOCKER_*)
+        if self.extra_env:
+            env_vars.update(self.extra_env)
+
+        return env_vars
+
+    async def _process_sdk_message(self, sdk_message: Any):
+        """Process a single message from the SDK stream."""
+        try:
+            # Issue #571: Skip None messages emitted by the SDK (partial/empty messages)
+            if sdk_message is None:
+                sdk_logger.debug("Skipping None SDK message")
+                return
+
+            # Check for fatal error messages that indicate immediate CLI failures
+            if hasattr(sdk_message, 'type') and sdk_message.type == 'error':
+                error_content = str(sdk_message.content) if hasattr(sdk_message, 'content') else str(sdk_message)
+                if "Fatal error in message reader" in error_content:
+                    logger.error(f"Immediate CLI failure detected: {error_content}")
+
+                    # Issue #781: Parse exit codes for actionable diagnostics
+                    parsed_error = self._parse_container_exit_code(
+                        error_content, self._stderr_buffer
+                    )
+                    if parsed_error:
+                        fatal_error = parsed_error
+                    elif "Command failed with exit code" in error_content:
+                        logger.error(f"CLI command failure: {error_content}")
+                        fatal_error = "Claude Code command failed - see details above"
+                    else:
+                        fatal_error = error_content
+
+                    # Trigger immediate error callback to update session state
+                    if self.error_callback:
+                        sdk_logger.debug("Triggering immediate error callback")
+                        await self._safe_callback(self.error_callback, "immediate_cli_failure", Exception(fatal_error))
+
+                    return  # Don't process this error message further
+
+            # Capture Claude Code's actual session ID from init message
+            if hasattr(sdk_message, 'subtype') and sdk_message.subtype == 'init':
+                session_id = getattr(sdk_message, 'data', {}).get('session_id') if hasattr(sdk_message, 'data') else None
+                if session_id:
+                    # Only store if this is a different session ID (prevent duplicates)
+                    if not hasattr(self, '_claude_code_session_id') or self._claude_code_session_id != session_id:
+                        self._claude_code_session_id = session_id
+                        sdk_logger.info(f"Captured Claude Code session ID: {session_id} for WebUI session: {self.session_id}")
+
+                        # Always store the latest Claude Code session ID for cumulative sessions
+                        if self.session_manager:
+                            await self.session_manager.update_claude_code_session_id(self.session_id, session_id)
+                            if self.resume_session_id is None:
+                                sdk_logger.info(f"Stored new Claude Code session ID: {session_id}")
+                            else:
+                                sdk_logger.info(f"Resume created new cumulative session {session_id} (was attempting to resume {self.resume_session_id})")
+                                sdk_logger.info(f"Updated stored session ID to latest: {session_id}")
+
+                # Issue #382: Clean up temp system prompt file after init message received
+                self._cleanup_system_prompt_temp_file()
+
+            # Issue #899: Handle RateLimitEvent before generic conversion
+            if RateLimitEvent and isinstance(sdk_message, RateLimitEvent):
+                sdk_logger.debug(f"RateLimitEvent received: {sdk_message.rate_limit_info}")
+                if self.rate_limit_callback:
+                    await self._safe_callback(self.rate_limit_callback, sdk_message.rate_limit_info)
+                return
+
+            converted_message = self._convert_sdk_message(sdk_message)
+            self.info.last_activity = time.time()
+
+            # Issue #1486: assistant_delta is ephemeral — bypass storage, deliver directly
+            if converted_message.get("type") == "assistant_delta":
+                ev = converted_message.get("event", {})
+                ev_type = ev.get("type", "?")
+                if ev_type == "content_block_delta":
+                    delta = ev.get("delta", {})
+                    dt = delta.get("type", "?")
+                    # Log thinking/text deltas concisely; omit signature_delta noise
+                    if dt in ("thinking_delta", "text_delta"):
+                        preview = (delta.get("thinking") or delta.get("text") or "")[:40]
+                        sdk_logger.debug(f"[delta] {dt} idx={ev.get('index')} len={len(delta.get('thinking') or delta.get('text') or '')} preview={preview!r}")
+                    elif dt != "signature_delta":
+                        sdk_logger.debug(f"[delta] {dt} idx={ev.get('index')}")
+                else:
+                    sdk_logger.debug(f"[delta] event={ev_type}")
+                if self.message_callback:
+                    await self._safe_callback(self.message_callback, converted_message)
+                return
+
+            # Debug log raw SDK response structure
+            sdk_logger.debug(f"Raw SDK response: {sdk_message=}")
+
+            if self.storage_manager:
+                await self._store_sdk_message(converted_message)
+
+            if self.message_callback:
+                await self._safe_callback(self.message_callback, converted_message)
+
+            sdk_logger.debug(f"Processed SDK message: {converted_message.get('type', 'unknown')}")
+
+        except Exception as e:
+            logger.exception("Failed to process SDK message")
+            if self.error_callback:
+                await self._safe_callback(self.error_callback, "sdk_message_processing_failed", e)
+
+    async def _store_sdk_message(self, converted_message: dict[str, Any]):
+        """
+        Store the SDK message using unified StoredMessage format (Phase 0, Issue #310).
+
+        Uses the new dataclass-based StoredMessage for clean serialization, with fallback
+        to legacy MessageProcessor format for backward compatibility during migration.
+        """
+        try:
+            # Get the SDK message object from converted message
+            sdk_msg = converted_message.get("sdk_message")
+
+            # Try to use new StoredMessage format if we have an SDK message object
+            if sdk_msg is not None and hasattr(sdk_msg, '__dataclass_fields__'):
+                # SDK message is a dataclass - use new format
+                stored_msg = sdk_message_to_stored(
+                    sdk_msg,
+                    session_id=self.session_id,
+                    timestamp=converted_message.get("timestamp"),
+                )
+                storage_data = stored_msg.to_dict()
+
+                sdk_logger.debug(f"Storing SDK message with new StoredMessage format: {stored_msg._type}")
+                await self.storage_manager.append_message(storage_data)
+                return
+
+            # Fallback: Use legacy MessageProcessor format for non-dataclass messages
+            # This handles dict messages, unknown types, and transition period
+            parsed_message = self._message_processor.process_message(converted_message, source="sdk")
+            storage_data = self._message_processor.prepare_for_storage(parsed_message)
+
+            if converted_message.get("sdk_message"):
+                storage_data["sdk_message_type"] = converted_message.get("sdk_message").__class__.__name__
+
+            sdk_logger.debug(f"Storing SDK message with legacy format: {storage_data.get('type', 'unknown')}")
+            await self.storage_manager.append_message(storage_data)
+
+        except Exception as e:
+            logger.exception("Failed to store SDK message")
+            # Ultimate fallback - minimal storage format
+            storage_message = {
+                "type": converted_message.get("type", "unknown"),
+                "content": converted_message.get("content", ""),
+                "session_id": converted_message.get("session_id"),
+                "timestamp": converted_message.get("timestamp"),
+                "error": f"Storage failed: {str(e)}"
+            }
+            await self.storage_manager.append_message(storage_message)
+
+    def _capture_raw_sdk_data(self, sdk_message: Any) -> str | None:
+        """Capture raw SDK message data in a standardized, serializable format."""
+        if sdk_message is None:
+            return None
+
+        try:
+            import json
+
+            # For SDK objects, capture all non-private attributes comprehensively
+            raw_data = {}
+
+            # Add type information
+            raw_data["__class__"] = sdk_message.__class__.__name__
+            raw_data["__module__"] = getattr(sdk_message.__class__, "__module__", "unknown")
+
+            # Capture all accessible attributes
+            for attr in dir(sdk_message):
+                if not attr.startswith('_') and not callable(getattr(sdk_message, attr, None)):
+                    try:
+                        value = getattr(sdk_message, attr)
+                        # Try to serialize the value
+                        json.dumps(value)
+                        raw_data[attr] = value
+                    except (TypeError, ValueError):
+                        # If not directly serializable, convert to string representation
+                        raw_data[attr] = str(value)
+
+            # Store as JSON string
+            return json.dumps(raw_data)
+
+        except Exception as e:
+            logger.warning(f"Failed to capture raw SDK data: {e}")
+            # Ultimate fallback - string representation
+            try:
+                return json.dumps({"__fallback__": str(sdk_message)})
+            except Exception:
+                return json.dumps({"__fallback__": "failed to serialize"})
+
+    async def _can_use_tool_callback(
+        self,
+        tool_name: str,
+        input_params: dict[str, Any],
+        context: ToolPermissionContext
+    ) -> PermissionResultAllow | PermissionResultDeny:
+        """
+        Callback to decide if a tool can be used using new PermissionResult types.
+
+        First checks CLI permission suggestions against internal rules (issue #707).
+        The CLI infers permission mappings (e.g., Bash accessing history → Read rule)
+        and we auto-approve/deny if the suggested path matches an internal managed
+        directory. This avoids prompting the user for operations on internal files.
+
+        Falls back to the external permission callback for all other cases.
+
+        Returns:
+            PermissionResultAllow or PermissionResultDeny object
+        """
+        perm_logger.info("=======================================")
+        perm_logger.info("Permission callback triggered")
+        perm_logger.info(f"Tool: {tool_name}")
+        perm_logger.info(f"Input: {input_params}")
+        perm_logger.info(f"Context suggestions: {getattr(context, 'suggestions', [])}")
+        perm_logger.info("=======================================")
+
+        # Issue #1133: Block SendMessage and background Agent in Legion sessions
+        # Must run before evaluate_suggestions — the CLI may emit allow-suggestions
+        # for these tools that would otherwise let the call through.
+        if self.permission_handler:
+            result = self.permission_handler.evaluate_tool_block(tool_name, input_params)
+            if result is not None:
+                decision, reason = result
+                perm_logger.info(f"Auto-denied via tool block: {reason}")
+                return PermissionResultDeny(message=reason)
+
+        # Check CLI suggestions against internal rules (issue #707)
+        if self.permission_handler and hasattr(context, "suggestions") and context.suggestions:
+            result = self.permission_handler.evaluate_suggestions(
+                context.suggestions, actual_tool=tool_name, tool_input=input_params
+            )
+            if result is not None:
+                decision, reason = result
+                if decision == "allow":
+                    perm_logger.info(f"Auto-approved via suggestion: {reason}")
+                    # Issue #707: Notify coordinator to update the already-created ToolCall
+                    if self.auto_approval_callback:
+                        self.auto_approval_callback(tool_name, input_params, reason)
+                    return PermissionResultAllow(updated_input=input_params)
+                else:
+                    perm_logger.info(f"Auto-denied via suggestion: {reason}")
+                    return PermissionResultDeny(message=reason)
+
+        # Issue #749: Direct rule check (no suggestions needed) for managed paths
+        if self.permission_handler:
+            result = self.permission_handler.evaluate_direct(tool_name, input_params)
+            if result is not None:
+                decision, reason = result
+                if decision == "allow":
+                    perm_logger.info(f"Auto-approved via direct rule: {reason}")
+                    if self.auto_approval_callback:
+                        self.auto_approval_callback(tool_name, input_params, reason)
+                    return PermissionResultAllow(updated_input=input_params)
+                else:
+                    perm_logger.info(f"Auto-denied via direct rule: {reason}")
+                    return PermissionResultDeny(message=reason)
+
+        if self.permission_callback:
+            perm_logger.debug(f"Delegating permission check for tool '{tool_name}' to external callback")
+            try:
+                # Call the callback with context - can now await since SDK callback is async
+                if asyncio.iscoroutinefunction(self.permission_callback):
+                    decision = await self.permission_callback(tool_name, input_params, context)
+                else:
+                    decision = self.permission_callback(tool_name, input_params, context)
+
+                # Convert different response formats to new PermissionResult objects
+                if isinstance(decision, bool):
+                    if decision:
+                        perm_logger.info(f"Tool '{tool_name}' approved by callback")
+                        return PermissionResultAllow(updated_input=input_params)
+                    else:
+                        perm_logger.info(f"Tool '{tool_name}' denied by callback")
+                        return PermissionResultDeny(message=f"Tool '{tool_name}' denied by permission callback")
+                elif isinstance(decision, dict):
+                    # Handle dict responses with optional updated_permissions
+                    behavior = decision.get("behavior", "deny")
+                    if behavior == "allow":
+                        updated_input = decision.get("updated_input", input_params)
+                        updated_permissions = decision.get("updated_permissions")
+                        return PermissionResultAllow(
+                            updated_input=updated_input,
+                            updated_permissions=updated_permissions
+                        )
+                    else:
+                        message = decision.get("message", "Tool denied by callback")
+                        return PermissionResultDeny(message=message)
+                elif isinstance(decision, (PermissionResultAllow, PermissionResultDeny)):
+                    # Already in correct format
+                    return decision
+                else:
+                    logger.warning(f"Unexpected permission callback return type: {type(decision)}")
+                    return PermissionResultDeny(message="Invalid callback response")
+
+            except Exception as e:
+                logger.exception("Error in external permission_callback")
+                return PermissionResultDeny(message=f"Permission callback error: {str(e)}")
+
+        perm_logger.debug(f"No permission_callback provided. Denying tool use: '{tool_name}'")
+        return PermissionResultDeny(message="No permission callback configured")
+
+
+    async def _safe_callback(self, callback: Callable, *args, **kwargs):
+        """Safely execute callback with error handling"""
+        try:
+            if asyncio.iscoroutinefunction(callback):
+                await callback(*args, **kwargs)
+            else:
+                callback(*args, **kwargs)
+        except Exception:
+            logger.exception("Error in callback execution")
+
+    def _convert_sdk_message(self, sdk_message: Any) -> dict[str, Any]:
+        """Convert SDK message to a serializable format while preserving type information."""
+        try:
+            # Issue #1486: StreamEvent — partial message delta, never persisted
+            if StreamEvent is not None and isinstance(sdk_message, StreamEvent):
+                # Issue #1614: stamp stable message_id / tool_use_id on every delta so the
+                # frontend can associate deltas with placeholders without depending on event order.
+                key = sdk_message.parent_tool_use_id  # None for top-level session
+                event = sdk_message.event if isinstance(sdk_message.event, dict) else {}
+                event_type = event.get("type")
+
+                if event_type == "message_start":
+                    # Overwrite any stale state (guards against dropped message_stop).
+                    self._stream_state[key] = {
+                        "message_id": event.get("message", {}).get("id"),
+                        "tool_use_id_by_index": {},
+                    }
+                elif event_type == "content_block_start":
+                    content_block = event.get("content_block", {})
+                    if content_block.get("type") == "tool_use":
+                        state = self._stream_state.setdefault(key, {"message_id": None, "tool_use_id_by_index": {}})
+                        idx = event.get("index")
+                        state["tool_use_id_by_index"][idx] = content_block.get("id")
+                elif event_type == "content_block_stop":
+                    state = self._stream_state.get(key, {})
+                    idx = event.get("index")
+                    state.get("tool_use_id_by_index", {}).pop(idx, None)
+                elif event_type == "message_stop":
+                    self._stream_state.pop(key, None)
+
+                state = self._stream_state.get(key, {})
+                payload: dict[str, Any] = {
+                    "type": "assistant_delta",
+                    "uuid": sdk_message.uuid,
+                    "session_id": sdk_message.session_id,
+                    "parent_tool_use_id": sdk_message.parent_tool_use_id,
+                    "event": sdk_message.event,
+                    "timestamp": time.time(),
+                    "message_id": state.get("message_id"),
+                }
+                # Stamp tool_use_id only on input_json_delta (keyed by block index).
+                if event_type == "content_block_delta":
+                    delta = event.get("delta", {})
+                    if isinstance(delta, dict) and delta.get("type") == "input_json_delta":
+                        idx = event.get("index")
+                        tool_use_id = state.get("tool_use_id_by_index", {}).get(idx)
+                        if tool_use_id:
+                            payload["tool_use_id"] = tool_use_id
+                return payload
+
+            # Handle dict-like objects (for backward compatibility)
+            if isinstance(sdk_message, dict):
+                message_dict = {
+                    "type": sdk_message.get("type", "unknown"),
+                    "sdk_message": sdk_message,
+                    "timestamp": time.time(),
+                    "session_id": self.session_id
+                }
+                # Copy all fields from dict
+                message_dict.update(sdk_message)
+                return message_dict
+
+            # Handle SDK message objects using imported classes
+            message_type = "unknown"
+            if UserMessage and isinstance(sdk_message, UserMessage):
+                message_type = "user"
+            elif AssistantMessage and isinstance(sdk_message, AssistantMessage):
+                message_type = "assistant"
+            elif SystemMessage and isinstance(sdk_message, SystemMessage):
+                message_type = "system"
+            elif ResultMessage and isinstance(sdk_message, ResultMessage):
+                message_type = "result"
+
+            # Create message dict with type and original SDK message
+            message_dict = {
+                "type": message_type,
+                "sdk_message": sdk_message,  # Keep original SDK message object
+                "timestamp": time.time(),
+                "session_id": self.session_id
+            }
+
+            # Add content for serialization if needed
+            if hasattr(sdk_message, 'content'):
+                # Handle content which can be string or list of blocks
+                content = sdk_message.content
+                if isinstance(content, str):
+                    message_dict["content"] = content
+                elif isinstance(content, list):
+                    # Extract text from content blocks
+                    text_parts = []
+                    for block in content:
+                        if hasattr(block, 'text'):
+                            text_parts.append(block.text)
+                        elif TextBlock and isinstance(block, TextBlock):
+                            text_parts.append(block.text)
+                    message_dict["content"] = " ".join(text_parts) if text_parts else ""
+
+            # Copy other common attributes from SDK message
+            for attr in ['message', 'data', 'subtype', 'error', 'usage', 'model_usage', 'model', 'duration_ms', 'total_cost_usd', 'parent_tool_use_id', 'stop_reason', 'errors', 'permission_denials', 'is_error', 'num_turns', 'duration_api_ms', 'api_error_status']:
+                if hasattr(sdk_message, attr):
+                    value = getattr(sdk_message, attr)
+                    # Only add serializable values
+                    if isinstance(value, (str, int, float, bool, type(None))):
+                        message_dict[attr] = value
+                    elif isinstance(value, (dict, list)):
+                        # For dict/list, try to include if they appear to contain serializable data
+                        try:
+                            # Test if it's JSON serializable
+                            import json
+                            json.dumps(value)
+                            message_dict[attr] = value
+                        except (TypeError, ValueError):
+                            # If not serializable, skip it
+                            pass
+
+            # Serialize DeferredToolUse dataclass (not JSON-serializable by the loop above)
+            if ResultMessage and isinstance(sdk_message, ResultMessage) and sdk_message.deferred_tool_use:
+                dt = sdk_message.deferred_tool_use
+                message_dict["deferred_tool_use"] = {
+                    "id": dt.id,
+                    "name": dt.name,
+                    "input": dt.input,
+                }
+
+            # For unknown objects, add string representation as content
+            if message_type == "unknown":
+                message_dict["content"] = str(sdk_message)
+
+            return message_dict
+
+        except Exception as e:
+            logger.warning(f"Failed to convert SDK message: {e}")
+            # For completely unknown objects, convert to string representation
+            content = str(sdk_message) if not isinstance(sdk_message, dict) else ""
+            return {
+                "type": "unknown",
+                "sdk_message": sdk_message,
+                "timestamp": time.time(),
+                "session_id": self.session_id,
+                "content": content,
+                "conversion_error": str(e)
+            }
+
+    def _is_ready_for_input(self) -> bool:
+        """Check if the session is ready to accept input."""
+        return self.info.state in [SessionState.RUNNING]
+
+    async def terminate(self, timeout: float = 5.0) -> bool:
+        """
+        Terminate the Claude Code SDK session gracefully with new ClaudeSDKClient pattern.
+
+        Args:
+            timeout: Seconds to wait for graceful shutdown
+
+        Returns:
+            True if terminated successfully, False otherwise
+        """
+        sdk_logger.info(f"Terminating Claude Code SDK session {self.session_id}")
+
+        self.info.state = SessionState.TERMINATED
+        self._shutdown_event.set()
+
+        try:
+            # Cancel message processing task
+            if self._conversation_task and not self._conversation_task.done():
+                self._conversation_task.cancel()
+                try:
+                    await asyncio.wait_for(self._conversation_task, timeout=timeout)
+                except TimeoutError:
+                    logger.warning("Message processing task did not terminate within timeout")
+                except asyncio.CancelledError:
+                    sdk_logger.debug("Message processing task cancelled successfully")
+
+            # SDK client will be cleaned up by context manager in the task
+
+            # Clear message queue
+            while not self._message_queue.empty():
+                try:
+                    self._message_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+
+            # Cleanup storage
+            if self.storage_manager:
+                await self.storage_manager.cleanup()
+
+            # Cleanup SDK error detection handler
+            self._cleanup_sdk_error_detection()
+
+            # Cleanup system prompt temp file (issue #382)
+            self._cleanup_system_prompt_temp_file()
+
+            sdk_logger.info("Claude Code SDK session terminated successfully")
+            return True
+
+        except Exception:
+            logger.exception("Error terminating SDK session")
+            # Cleanup SDK error detection handler even on error
+            self._cleanup_sdk_error_detection()
+            return False
+
+    def get_queue_size(self) -> int:
+        """Get current message queue size"""
+        return self._message_queue.qsize()
+
+
+
+    def get_info(self) -> dict[str, Any]:
+        """Get current session information."""
+        info_dict = asdict(self.info)
+        # Convert enum to string value for JSON serialization
+        info_dict["state"] = self.info.state.value
+        return info_dict
+
+    def is_running(self) -> bool:
+        """Check if the session is currently running."""
+        return self.info.state in SDK_ACTIVE_STATES
+
+    async def wait_until_ready(self, timeout: float = 60.0) -> bool:
+        """Wait until SDK is ready to accept messages. Returns False on timeout."""
+        try:
+            await asyncio.wait_for(self._ready_event.wait(), timeout=timeout)
+            return True
+        except TimeoutError:
+            return False
+
+    def _perform_session_health_check(self, client: ClaudeSDKClient | None = None) -> dict[str, Any]:
+        """
+        Perform comprehensive session health check.
+
+        Returns:
+            Dictionary containing health check results
+        """
+        health_check_time = time.time()
+        self._session_health_checks["health_check_count"] += 1
+        self._session_health_checks["last_health_check"] = health_check_time
+
+        health_status = {
+            "check_time": health_check_time,
+            "check_number": self._session_health_checks["health_check_count"],
+            "session_id": self.session_id,
+            "session_state": self.info.state.value,
+            "context_manager_active": self._session_health_checks["context_manager_active"],
+            "client_object_valid": client is not None,
+            "sdk_client_reference_valid": self._sdk_client is not None,
+            "shutdown_event_set": self._shutdown_event.is_set(),
+            "message_queue_size": self._message_queue.qsize(),
+            "message_count": self.info.message_count,
+            "last_activity": self.info.last_activity,
+            "total_queries_sent": self._session_health_checks["total_queries_sent"],
+            "total_responses_received": self._session_health_checks["total_responses_received"],
+            "session_uptime": None,
+            "time_since_last_activity": None
+        }
+
+        # Calculate timing metrics
+        if self._session_health_checks["session_start_time"]:
+            health_status["session_uptime"] = health_check_time - self._session_health_checks["session_start_time"]
+
+        if self.info.last_activity:
+            health_status["time_since_last_activity"] = health_check_time - self.info.last_activity
+
+        # Assess overall health
+        is_healthy = (
+            health_status["context_manager_active"] and
+            health_status["client_object_valid"] and
+            not health_status["shutdown_event_set"] and
+            self.info.state in SDK_ACTIVE_STATES
+        )
+
+        health_status["overall_health"] = "healthy" if is_healthy else "unhealthy"
+
+        if is_healthy:
+            self._session_health_checks["consecutive_health_failures"] = 0
+        else:
+            self._session_health_checks["consecutive_health_failures"] += 1
+
+        health_status["consecutive_failures"] = self._session_health_checks["consecutive_health_failures"]
+
+        return health_status
+
+    def _log_session_health(self, client: ClaudeSDKClient | None = None, context: str = "general"):
+        """Log detailed session health information."""
+        health_status = self._perform_session_health_check(client)
+
+        sdk_logger.debug(f"Health check #{health_status['check_number']} for session {self.session_id} ({context})")
+        sdk_logger.debug(f"Overall health: {health_status['overall_health']}")
+        sdk_logger.debug(f"Session state: {health_status['session_state']}")
+        sdk_logger.debug(f"Context manager active: {health_status['context_manager_active']}")
+        sdk_logger.debug(f"Client object valid: {health_status['client_object_valid']}")
+        sdk_logger.debug(f"SDK client reference valid: {health_status['sdk_client_reference_valid']}")
+        sdk_logger.debug(f"Shutdown event set: {health_status['shutdown_event_set']}")
+        sdk_logger.debug(f"Message queue size: {health_status['message_queue_size']}")
+        sdk_logger.debug(f"Total queries sent: {health_status['total_queries_sent']}")
+        sdk_logger.debug(f"Total responses received: {health_status['total_responses_received']}")
+        sdk_logger.debug(f"Session uptime: {health_status['session_uptime']:.3f}s" if health_status['session_uptime'] else "Session uptime: not available")
+        sdk_logger.debug(f"Time since last activity: {health_status['time_since_last_activity']:.3f}s" if health_status['time_since_last_activity'] else "Time since last activity: not available")
+
+        if health_status['consecutive_failures'] > 0:
+            logger.warning(f"Consecutive health check failures: {health_status['consecutive_failures']}")
+
+        return health_status
+
+    # Issue #781: Container exit code parsing for actionable error reporting
+    # Maps Docker/Linux exit codes to human-readable crash diagnostics
+    _EXIT_CODE_MAP: dict[int, tuple[str, str]] = {
+        137: (
+            "Container was killed (OOM or SIGKILL)",
+            "The container ran out of memory or was forcefully killed. "
+            "Try increasing CLAUDE_DOCKER_MEMORY_LIMIT or reducing concurrent operations. "
+            "Restart should recover automatically.",
+        ),
+        139: (
+            "Container crashed (segmentation fault)",
+            "A process inside the container crashed with a segfault (SIGSEGV). "
+            "This is common with Chromium in Docker when /dev/shm is too small. "
+            "Restart should recover automatically.",
+        ),
+        1: (
+            "The Claude Code process exited with an error",
+            "Check the stderr output above for the specific error message. "
+            "Restart should recover the session once the underlying issue is resolved.",
+        ),
+        126: (
+            "Container command not executable",
+            "The entrypoint or command could not be executed (permission denied or not found).",
+        ),
+        127: (
+            "Container command not found",
+            "The entrypoint or command was not found in the container image.",
+        ),
+        143: (
+            "Container was terminated (SIGTERM)",
+            "The container received a termination signal. "
+            "Restart should recover automatically.",
+        ),
+    }
+
+    # Stderr patterns that override generic exit code messages with specific diagnostics
+    _STDERR_OVERRIDES: list[tuple[str, str, str]] = [
+        (
+            r"Claude Code cannot be launched inside another Claude Code session",
+            "Nested Claude Code session detected",
+            "Claude Code detected it is running inside another Claude Code session and exited. "
+            "To bypass this check, unset the CLAUDECODE environment variable before starting the "
+            "inner session, or run the inner session in a separate terminal without Claude Code active.",
+        ),
+        (
+            r"Docker image '([^']+)' not found",
+            "Docker image not found: {match}",
+            "Build or pull the image, then restart the session.",
+        ),
+        (
+            r"Cannot connect to the Docker daemon",
+            "Docker daemon is not running",
+            "Start the Docker daemon and restart the session.",
+        ),
+        (
+            r"JSON message exceeded maximum buffer size",
+            "SDK response exceeded maximum buffer size (1MB)",
+            "A tool returned a response too large for the SDK parser. "
+            "This commonly happens with Chrome DevTools screenshots. "
+            "Try reducing the page size or using a different capture method. "
+            "Restart should recover the session.",
+        ),
+        (
+            r"permission denied.*docker\.sock",
+            "Docker socket permission denied",
+            "Ensure the user has access to /var/run/docker.sock (docker group).",
+        ),
+    ]
+
+    # Exit codes that represent actual container/process crashes (fatal signals)
+    # Docker: 128 + signal_number; SIGKILL=9→137, SIGSEGV=11→139
+    _CRASH_EXIT_CODES: frozenset[int] = frozenset({137, 139})
+
+    # Exit codes that represent clean process termination via signal (not a crash)
+    # SIGTERM=15→143
+    _SIGNAL_EXIT_CODES: frozenset[int] = frozenset({143})
+
+    # Exit codes that represent container setup/config errors (not runtime failures)
+    _SETUP_EXIT_CODES: frozenset[int] = frozenset({126, 127})
+
+    # Regex patterns for extracting exit codes from error messages (used in Phase 1.5 and Phase 2)
+    _EXIT_CODE_PATTERNS: list[str] = [
+        r"exit code[:\s]+(\d+)",
+        r"exited with code\s+(\d+)",
+        r"exit status\s+(\d+)",
+        r"returned non-zero exit status\s+(\d+)",
+        r"Command failed with exit code\s+(\d+)",
+    ]
+
+    def _parse_container_exit_code(
+        self, error_msg: str, stderr_buffer: list[str]
+    ) -> str | None:
+        """Parse container exit codes from error messages and stderr for actionable diagnostics.
+
+        Checks stderr for specific error patterns first (e.g., "Docker image not found"),
+        then falls back to generic exit code mapping.
+
+        Returns a formatted error string with diagnosis and recovery guidance,
+        or None if no exit code pattern is found.
+        """
+        import re
+
+        # Combine error message and stderr for pattern matching
+        combined = error_msg + "\n" + "\n".join(stderr_buffer) if stderr_buffer else error_msg
+
+        # Phase 1: Check stderr for specific, actionable patterns that override exit codes
+        for pattern, diagnosis_template, recovery in self._STDERR_OVERRIDES:
+            match = re.search(pattern, combined, re.IGNORECASE)
+            if match:
+                # Format diagnosis with captured group if template uses {match}
+                if "{match}" in diagnosis_template:
+                    diagnosis = diagnosis_template.format(match=match.group(1))
+                else:
+                    diagnosis = diagnosis_template
+                parts = [diagnosis, f"Recovery: {recovery}"]
+                if stderr_buffer:
+                    recent_stderr = stderr_buffer[-5:]
+                    parts.append("Recent stderr:\n" + "\n".join(recent_stderr))
+                return "\n".join(parts)
+
+        # Phase 1.5: Detect stale resume ID (issue #1017)
+        # When --resume points to a CLI session that no longer exists, the CLI exits
+        # immediately with code 1, empty stderr, and zero queries sent.
+        if (
+            self.resume_session_id is not None
+            and not stderr_buffer
+            and self._session_health_checks.get("total_queries_sent", 0) == 0
+        ):
+            for pattern in self._EXIT_CODE_PATTERNS:
+                match = re.search(pattern, combined, re.IGNORECASE)
+                if match and int(match.group(1)) == 1:
+                    return (
+                        "Process exited with error: The stored session ID is no longer valid "
+                        "(the Claude Code conversation history may have been cleared or expired).\n\n"
+                        "Recovery: Use **Reset Session** instead of Restart to start a fresh conversation."
+                    )
+
+        # Phase 2: Extract exit code from error message
+        exit_code = None
+        for pattern in self._EXIT_CODE_PATTERNS:
+            match = re.search(pattern, combined, re.IGNORECASE)
+            if match:
+                exit_code = int(match.group(1))
+                break
+
+        if exit_code is None:
+            # Check for OOM-specific patterns even without exit code
+            oom_patterns = [
+                r"OOM",
+                r"out of memory",
+                r"memory allocation failed",
+                r"Cannot allocate memory",
+                r"Killed\s*$",
+            ]
+            for pattern in oom_patterns:
+                if re.search(pattern, combined, re.IGNORECASE):
+                    exit_code = 137  # Treat as OOM
+                    break
+
+        if exit_code is None:
+            return None
+
+        diagnosis, recovery = self._EXIT_CODE_MAP.get(
+            exit_code,
+            (
+                f"Container exited with code {exit_code}",
+                "Check container logs for details. Restart may recover the session.",
+            ),
+        )
+
+        # Classify the exit type to choose an accurate prefix
+        if exit_code in self._CRASH_EXIT_CODES:
+            prefix = f"Container crash detected (exit code {exit_code})"
+        elif exit_code in self._SIGNAL_EXIT_CODES:
+            prefix = f"Process terminated (exit code {exit_code})"
+        elif exit_code in self._SETUP_EXIT_CODES:
+            prefix = f"Container setup error (exit code {exit_code})"
+        elif exit_code >= 128:
+            # Unrecognised signal exit (128 + N)
+            prefix = f"Process terminated by signal (exit code {exit_code})"
+        else:
+            # Normal process exit (exit codes 1–127)
+            prefix = f"Process exited with error (exit code {exit_code})"
+
+        parts = [f"{prefix}: {diagnosis}"]
+        parts.append(f"Recovery: {recovery}")
+
+        if stderr_buffer:
+            # For process exits (not crashes), show stderr first since it's the real cause
+            recent_stderr = stderr_buffer[-5:]
+            # Filter out docker-script noise lines
+            meaningful_stderr = [
+                line for line in recent_stderr
+                if not line.startswith("[claude-docker] Container") or "exited with code" not in line
+            ]
+            if meaningful_stderr:
+                parts.append("Stderr:\n" + "\n".join(meaningful_stderr))
+            elif recent_stderr:
+                parts.append("Recent stderr:\n" + "\n".join(recent_stderr))
+
+        return "\n".join(parts)
+
+    def _create_system_prompt_temp_file(self, content: str) -> str:
+        """
+        Create a temporary file containing the system prompt content.
+
+        Issue #382: Uses file-based system prompt delivery to bypass Windows
+        command-line length limitations.
+
+        Args:
+            content: The system prompt content to write to the temp file
+
+        Returns:
+            str: Path to the temporary file
+        """
+        try:
+            # Create temp file with descriptive prefix, don't delete automatically
+            fd, path = tempfile.mkstemp(prefix=f"claude_prompt_{self.session_id[:8]}_", suffix=".txt")
+            with Path(path).open("w", encoding="utf-8") as f:
+                f.write(content)
+            # Close the file descriptor
+            import os
+            os.close(fd)
+            sdk_logger.debug(f"Created system prompt temp file: {path} ({len(content)} chars)")
+            return path
+        except Exception:
+            logger.exception("Failed to create system prompt temp file")
+            raise
+
+    def _cleanup_system_prompt_temp_file(self):
+        """
+        Clean up the temporary system prompt file after session initialization.
+
+        Issue #382: Called after init message is received to remove temp file.
+        """
+        if self._system_prompt_temp_file:
+            try:
+                temp_path = Path(self._system_prompt_temp_file)
+                if temp_path.exists():
+                    temp_path.unlink()
+                    sdk_logger.debug(f"Cleaned up system prompt temp file: {self._system_prompt_temp_file}")
+                self._system_prompt_temp_file = None
+            except Exception as e:
+                logger.warning(f"Failed to cleanup system prompt temp file: {e}")
+

@@ -1,0 +1,121 @@
+"""
+LegionSystem - Central dependency injection container for Legion multi-agent system.
+
+This module provides the LegionSystem dataclass which acts as a service locator
+and dependency container to break circular dependencies between Legion components.
+
+Architecture Pattern:
+- All Legion components receive LegionSystem in their __init__
+- Components access peers via self.system.component_name
+- Single initialization point in LegionSystem.__post_init__
+- Easy to test (mock LegionSystem)
+"""
+
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from backend.config_manager import HistoryRetentionConfig
+    from backend.data_storage import DataStorageManager
+    from backend.legion.archive_manager import ArchiveManager
+    from backend.legion.comm_router import CommRouter
+    from backend.legion.history_rotator import HistoryRotator
+    from backend.legion.legion_coordinator import LegionCoordinator
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from backend.legion.memory_manager import MemoryManager
+    from backend.legion.overseer_controller import OverseerController
+    from backend.legion.scheduler_service import SchedulerService
+    from backend.session_coordinator import SessionCoordinator
+    from backend.template_manager import TemplateManager
+
+
+@dataclass
+class LegionSystem:
+    """
+    Central context container for all Legion components.
+    Breaks circular dependencies by providing single initialization point.
+
+    Usage:
+        # Create system with existing infrastructure
+        legion_system = LegionSystem(
+            session_coordinator=session_coordinator,
+            data_storage_manager=data_storage_manager
+        )
+        # All Legion components are automatically wired in __post_init__
+
+        # Components access each other via system
+        legion_system.legion_coordinator.create_legion(...)
+        legion_system.overseer_controller.spawn_minion(...)
+    """
+
+    # Existing infrastructure (injected at creation)
+    session_coordinator: 'SessionCoordinator'
+    data_storage_manager: 'DataStorageManager'
+    template_manager: 'TemplateManager'
+    ui_queue: Any | None = None  # EventQueue (optional, for broadcasting project updates to poll clients)
+    default_max_minions: int = 20  # Global default max concurrent minions (from app config)
+    history_retention: 'HistoryRetentionConfig | None' = None  # Retention config for HistoryRotator
+
+    # Permission callback factory (injected after creation by web_server via session_coordinator)
+    # Allows legion components to create permission callbacks for spawned minions
+    permission_callback_factory: Callable[[str], Callable] | None = None
+
+    # Message callback registrar (injected after creation by web_server via session_coordinator)
+    # Allows legion components to register WebSocket message callbacks for spawned minions
+    message_callback_registrar: Callable[[str], None] | None = None
+
+    # Legion components (initialized in __post_init__)
+    legion_coordinator: 'LegionCoordinator' = field(init=False)
+    overseer_controller: 'OverseerController' = field(init=False)
+    comm_router: 'CommRouter' = field(init=False)
+    memory_manager: 'MemoryManager' = field(init=False)
+    archive_manager: 'ArchiveManager' = field(init=False)
+    scheduler_service: 'SchedulerService' = field(init=False)
+    history_rotator: 'HistoryRotator' = field(init=False)
+    mcp_tools: 'LegionMCPTools' = field(init=False)
+
+    def broadcast_ui_event(self, event: dict) -> None:
+        """Append a UI event to the global poll queue.
+
+        All legion components should use this method instead of accessing
+        ui_queue directly. Handles null-check and errors safely.
+        """
+        if self.ui_queue is None:
+            return
+        try:
+            self.ui_queue.append(event)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Failed to broadcast UI event: %s", event.get("type"))
+
+    def __post_init__(self):
+        """
+        Wire up all Legion components with reference to this system.
+
+        Order matters: components with fewer dependencies first.
+        """
+        # Import here to avoid circular imports at module level
+        from backend.config_manager import HistoryRetentionConfig
+        from backend.legion.archive_manager import ArchiveManager
+        from backend.legion.comm_router import CommRouter
+        from backend.legion.history_rotator import HistoryRotator
+        from backend.legion.legion_coordinator import LegionCoordinator
+        from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+        from backend.legion.memory_manager import MemoryManager
+        from backend.legion.overseer_controller import OverseerController
+        from backend.legion.scheduler_service import SchedulerService
+
+        # Initialize components in dependency order
+        # Lower-level components first (fewer dependencies)
+        self.comm_router = CommRouter(self)
+        self.memory_manager = MemoryManager(self)
+        self.archive_manager = ArchiveManager(self)
+        self.scheduler_service = SchedulerService(self)
+        retention = self.history_retention if self.history_retention is not None else HistoryRetentionConfig()
+        self.history_rotator = HistoryRotator(self, retention)
+        self.overseer_controller = OverseerController(self)
+
+        # Higher-level components (depend on above)
+        self.legion_coordinator = LegionCoordinator(self)
+        self.mcp_tools = LegionMCPTools(self)
