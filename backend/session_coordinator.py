@@ -212,6 +212,55 @@ def _normalize_result_usage(
     return agg, (cost if has_cost else None)
 
 
+def _delta_from_baseline(
+    usage: dict,
+    sdk_cost: float | None,
+    baseline: dict[str, float] | None,
+) -> tuple[dict, float | None, dict[str, float]]:
+    """Compute per-turn deltas from cumulative-since-subprocess snapshots.
+
+    `baseline` is None at the first turn of a new epoch (post-restart or
+    brand new session) — treated as an all-zero prior snapshot, so the
+    delta equals the turn's full raw value, exactly as intended.
+
+    A field's absence is NOT the same as a real zero: `usage` is not
+    guaranteed to carry all 4 token keys on every ResultMessage — e.g.
+    backend/tests/fixtures/multi_turn/messages.jsonl has ResultMessages
+    with `total_cost_usd` present and `usage` entirely absent, and
+    `_normalize_result_usage()`'s passthrough branch
+    (`return dict(usage), None`) copies whatever partial shape the SDK
+    sent rather than guaranteeing all 4 keys. Treating a missing key as 0
+    and writing that 0 into the baseline would corrupt the *next* turn's
+    delta for that field (the same failure mode `sdk_cost is None`
+    already guards against for cost) — so missing/None fields contribute
+    0 delta for *this* turn but leave that field's baseline untouched,
+    symmetric with the cost handling below.
+    """
+    fields = (
+        "input_tokens", "output_tokens",
+        "cache_creation_input_tokens", "cache_read_input_tokens",
+    )
+    baseline = dict(baseline or {})
+    delta: dict[str, float] = {}
+    for k in fields:
+        if k in usage and usage[k] is not None:
+            current = float(usage[k])
+            delta[k] = max(0.0, current - baseline.get(k, 0.0))
+            baseline[k] = current
+        else:
+            delta[k] = 0.0
+            # field not reported this turn — leave baseline[k] untouched
+
+    delta_cost = None
+    if sdk_cost is not None:
+        delta_cost = max(0.0, float(sdk_cost) - baseline.get("total_cost_usd", 0.0))
+        baseline["total_cost_usd"] = float(sdk_cost)
+    # else: no cost reported this turn — leave total_cost_usd baseline
+    # untouched so the next turn's delta is still computed correctly.
+
+    return delta, delta_cost, baseline
+
+
 def _tail_read_lines(path: "Path", limit: int) -> list[str]:
     """Read the last `limit` lines from a file efficiently using a deque."""
     from collections import deque
@@ -495,6 +544,10 @@ class SessionCoordinator:
         self.analytics_store = None
         # Per-session turn sequence counters (rehydrated lazily from DB on first use)
         self._turn_seq_by_session: dict[str, int] = {}
+        # Issue #1838: last-seen raw cumulative usage/cost snapshot per session,
+        # used to compute true per-turn deltas from the SDK's cumulative-since-
+        # subprocess-start counters. Reset at every new-SDK-creation epoch boundary.
+        self._usage_baseline_by_session: dict[str, dict[str, float]] = {}
         # Callback for broadcasting usage_updated events (injected by web_server)
         self._usage_broadcast_callback: Callable[[str, dict], None] | None = None
 
@@ -1895,6 +1948,12 @@ class SessionCoordinator:
             sdk.auto_approval_callback = self._create_auto_approval_callback(session_id)
             self._active_sdks[session_id] = sdk
 
+            # Issue #1838: a new SDK subprocess starts its own cumulative usage/cost
+            # counters from zero, so the per-turn delta baseline must reset here too —
+            # this fires on every genuine new-epoch creation (initial start, resume,
+            # restart, reset) and never on the "already running" early return above.
+            self._usage_baseline_by_session.pop(session_id, None)
+
             # Initialize callback lists if not exists (preserve existing callbacks)
             if session_id not in self._message_callbacks:
                 self._message_callbacks[session_id] = []
@@ -2390,6 +2449,7 @@ class SessionCoordinator:
                     try:
                         await self.analytics_store.delete_session(session_id)
                         self._turn_seq_by_session.pop(session_id, None)
+                        self._usage_baseline_by_session.pop(session_id, None)
                     except Exception:
                         logger.exception("Failed to delete analytics for session %s", session_id)
                 # Notify about session deletion (using a special state change)
@@ -4914,8 +4974,16 @@ class SessionCoordinator:
                                 self._turn_seq_by_session[session_id] = db_count
                             self._turn_seq_by_session[session_id] += 1
                             turn_seq = self._turn_seq_by_session[session_id]
+                            # Issue #1838: usage/total_cost_usd are cumulative snapshots
+                            # since subprocess start, not per-turn values — convert to
+                            # true per-turn deltas before recording.
+                            baseline = self._usage_baseline_by_session.get(session_id)
+                            usage_delta, cost_delta, new_baseline = _delta_from_baseline(
+                                usage, sdk_cost, baseline
+                            )
+                            self._usage_baseline_by_session[session_id] = new_baseline
                             await self.analytics_store.record_turn(
-                                session_id, turn_seq, _model, usage, sdk_cost
+                                session_id, turn_seq, _model, usage_delta, cost_delta
                             )
                             aggregate = await self.analytics_store.get_session_usage(session_id)
                             if aggregate and self._usage_broadcast_callback:

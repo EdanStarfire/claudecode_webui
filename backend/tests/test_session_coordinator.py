@@ -2898,3 +2898,60 @@ class TestCreateEphemeralSession:
         session_info = await coordinator.session_manager.get_session_info(session_id)
         assert session_info.is_ephemeral is True
         assert session_info.name == "[Scheduled] hourly-check"
+
+
+class TestIssue1838UsageBaselineReset:
+    """The per-turn usage delta baseline must reset exactly on start_session()'s
+    new-SDK-creation path (initial start/resume/restart/reset), and never on the
+    "already running" early-return path — an authoritative lifecycle boundary,
+    not value-trend inference (issue #1838)."""
+
+    @pytest.mark.asyncio
+    async def test_start_session_resets_baseline_on_new_sdk_creation(
+        self, temp_coordinator, sample_session_config
+    ):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        mock_sdk_instance = AsyncMock()
+        mock_sdk_instance.start.return_value = True
+        mock_sdk_instance.is_running = Mock(return_value=False)  # is_running() is sync on the real SDK
+        coordinator.set_sdk_factory(Mock(return_value=mock_sdk_instance))
+
+        # Seed a stale baseline as if a prior epoch had already recorded usage.
+        coordinator._usage_baseline_by_session[session_id] = {"total_cost_usd": 999.0}
+
+        success = await coordinator.start_session(session_id)
+
+        assert success is True
+        assert session_id not in coordinator._usage_baseline_by_session
+
+    @pytest.mark.asyncio
+    async def test_start_session_early_return_does_not_reset_baseline(
+        self, temp_coordinator, sample_session_config
+    ):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        mock_sdk_instance = AsyncMock()
+        mock_sdk_instance.start.return_value = True
+        mock_sdk_instance.is_running = Mock(return_value=False)  # is_running() is sync on the real SDK
+        coordinator.set_sdk_factory(Mock(return_value=mock_sdk_instance))
+
+        # First call creates the SDK (not yet running).
+        await coordinator.start_session(session_id)
+
+        # Session state must be startable again (e.g. paused without the SDK
+        # subprocess itself stopping) for a second start_session() call to reach
+        # the coordinator's "already running" check at all.
+        await coordinator.session_manager.update_session_state(session_id, SessionState.PAUSED)
+
+        # Now the SDK reports as running, so the second call takes the
+        # "already running" early return and must not touch the baseline.
+        mock_sdk_instance.is_running.return_value = True
+        coordinator._usage_baseline_by_session[session_id] = {"total_cost_usd": 42.0}
+
+        success = await coordinator.start_session(session_id)
+
+        assert success is True
+        assert coordinator._usage_baseline_by_session[session_id] == {"total_cost_usd": 42.0}
