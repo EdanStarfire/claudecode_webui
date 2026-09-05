@@ -39,20 +39,14 @@
         :class="{ expanded: isExpanded(entry.tool_use_id) }"
       >
         <!-- Entry header row -->
-        <div class="entry-row" @click="toggle(entry)">
+        <div class="entry-row" @click="entry.tool_name === 'Edit' ? openDiff(entry) : toggle(entry)">
           <span class="entry-icon">{{ toolIcon(entry.tool_name) }}</span>
 
           <span class="entry-label text-truncate" :title="entryLabel(entry)">
             {{ entryLabel(entry) }}
           </span>
 
-          <span v-if="entry.tool_name === 'Edit'" class="entry-stats">
-            <span class="stat-diff" v-if="isExpanded(entry.tool_use_id)">
-              <span class="stat-removed">-{{ diffFor(entry).removed }}</span>
-              <span class="stat-added">+{{ diffFor(entry).added }}</span>
-            </span>
-          </span>
-          <span v-else-if="entry.tool_name === 'Write'" class="entry-stats write-lines">
+          <span v-if="entry.tool_name === 'Write'" class="entry-stats write-lines">
             {{ entry.line_count }} lines
           </span>
 
@@ -64,38 +58,15 @@
             {{ statusIcon(entry.succeeded) }}
           </span>
 
-          <span class="expand-arrow">{{ isExpanded(entry.tool_use_id) ? '▲' : '▼' }}</span>
+          <span v-if="entry.tool_name === 'Edit'" class="expand-arrow" title="Open full-screen diff">⤢</span>
+          <span v-else class="expand-arrow">{{ isExpanded(entry.tool_use_id) ? '▲' : '▼' }}</span>
         </div>
 
         <!-- Expanded detail -->
-        <div v-if="isExpanded(entry.tool_use_id)" class="entry-detail">
-
-          <!-- Edit: inline diff -->
-          <template v-if="entry.tool_name === 'Edit'">
-            <div class="diff-container">
-              <div
-                v-for="(line, i) in diffFor(entry).lines"
-                :key="i"
-                class="diff-line"
-                :class="{
-                  'diff-line-removed': line.type === 'removed',
-                  'diff-line-added': line.type === 'added',
-                  'diff-line-context': line.type === 'context',
-                  'diff-line-hunk': line.type === 'hunk'
-                }"
-              >
-                <span class="diff-marker">{{
-                  line.type === 'removed' ? '-' :
-                  line.type === 'added' ? '+' :
-                  line.type === 'hunk' ? '@' : ' '
-                }}</span>
-                <span class="diff-content">{{ line.content }}</span>
-              </div>
-            </div>
-          </template>
+        <div v-if="entry.tool_name !== 'Edit' && isExpanded(entry.tool_use_id)" class="entry-detail">
 
           <!-- Write: content preview -->
-          <template v-else-if="entry.tool_name === 'Write'">
+          <template v-if="entry.tool_name === 'Write'">
             <div class="write-preview">
               <div class="write-meta">
                 Wrote {{ entry.line_count }} lines to
@@ -125,12 +96,14 @@ import { computed, watch } from 'vue'
 import { useEditHistoryStore } from '@/stores/editHistory'
 import { useSessionStore } from '@/stores/session'
 import { useResourceStore } from '@/stores/resource'
+import { useDiffStore } from '@/stores/diff'
 import { buildEditDiff } from '@/utils/diffRender'
 import { getRelativeTime, formatFullTimestamp } from '@/utils/time'
 
 const editHistoryStore = useEditHistoryStore()
 const sessionStore = useSessionStore()
 const resourceStore = useResourceStore()
+const diffStore = useDiffStore()
 
 const sessionId = computed(() => sessionStore.currentSessionId)
 
@@ -149,6 +122,17 @@ function isExpanded(toolUseId) {
 
 function toggle(entry) {
   if (sessionId.value) editHistoryStore.toggleExpand(sessionId.value, entry.tool_use_id)
+}
+
+function openDiff(entry) {
+  if (!sessionId.value) return
+  const { added, removed, text } = diffFor(entry)
+  diffStore.openFullViewForEdit(sessionId.value, entry.file_path, text, {
+    toolUseId: entry.tool_use_id,
+    added,
+    removed,
+    succeeded: entry.succeeded
+  })
 }
 
 // Lazy diff computation per entry (only when expanded)
@@ -354,10 +338,6 @@ watch(
   font-family: 'Courier New', monospace;
 }
 
-.stat-removed { color: var(--bs-danger-text-emphasis, #dc3545); }
-.stat-added { color: var(--bs-success-text-emphasis, #198754); }
-.stat-diff { display: flex; gap: 4px; }
-
 .write-lines {
   color: var(--bs-secondary-color);
 }
@@ -385,44 +365,6 @@ watch(
 /* Entry detail sections */
 .entry-detail {
   padding: 0 8px 8px;
-}
-
-/* Diff (Edit) */
-.diff-container {
-  font-family: 'Courier New', monospace;
-  font-size: 11px;
-  border: 1px solid var(--bs-border-color);
-  border-radius: 4px;
-  overflow: auto;
-  max-height: 240px;
-}
-
-.diff-line {
-  display: flex;
-  white-space: nowrap;
-  line-height: 1.4;
-}
-
-.diff-line-removed { background: var(--diff-line-remove-bg); color: var(--bs-body-color); }
-.diff-line-removed .diff-marker { background: var(--diff-line-remove-num-bg); color: var(--bs-danger-text-emphasis, #dc3545); }
-.diff-line-added { background: var(--diff-line-add-bg); color: var(--bs-body-color); }
-.diff-line-added .diff-marker { background: var(--diff-line-add-num-bg); color: var(--bs-success-text-emphasis, #198754); }
-.diff-line-context { background: var(--diff-line-context-bg); color: var(--diff-line-info-color); }
-.diff-line-context .diff-marker { background: var(--diff-line-context-bg); color: var(--diff-line-info-color); }
-.diff-line-hunk { background: var(--diff-line-hunk-bg); color: var(--diff-line-hunk-color); font-weight: 600; }
-.diff-line-hunk .diff-marker { background: var(--diff-line-hunk-bg); color: var(--diff-line-hunk-color); }
-
-.diff-marker {
-  width: 1.6rem;
-  flex-shrink: 0;
-  text-align: center;
-  font-weight: 700;
-  user-select: none;
-}
-
-.diff-content {
-  padding: 0 6px;
-  white-space: pre;
 }
 
 /* Write preview */

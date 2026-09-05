@@ -151,13 +151,28 @@ const currentFileIndex = computed(() => {
 })
 
 const currentFileInfo = computed(() => {
-  if (!diffStore.currentFilePath || !diffStore.currentDiff?.files) return null
-  return diffStore.currentDiff.files[diffStore.currentFilePath] || null
+  // meta is only ever present on cache entries seeded by openFullViewForEdit(), so checking
+  // it first (rather than the aggregate git-diff lookup) is what makes a specific Edit's own
+  // status/counts win over the file's unrelated aggregate session-diff entry.
+  const meta = fileDiffEntry.value?.meta
+  if (meta) {
+    return {
+      status: meta.succeeded === false ? 'failed' : 'modified',
+      insertions: meta.added ?? 0,
+      deletions: meta.removed ?? 0,
+      is_binary: false
+    }
+  }
+  if (diffStore.currentFilePath && diffStore.currentDiff?.files?.[diffStore.currentFilePath]) {
+    return diffStore.currentDiff.files[diffStore.currentFilePath]
+  }
+  return null
 })
 
 const statusBadgeClass = computed(() => {
   const map = { added: 'text-bg-success', deleted: 'text-bg-danger',
-                modified: 'text-bg-warning', renamed: 'text-bg-primary' }
+                modified: 'text-bg-warning', renamed: 'text-bg-primary',
+                failed: 'text-bg-danger' }
   return map[currentFileInfo.value?.status] || 'text-bg-secondary'
 })
 
