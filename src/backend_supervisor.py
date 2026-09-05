@@ -14,10 +14,11 @@ is constructed.
 import asyncio
 import logging
 import secrets
-import socket
 import sys
 import time
 from pathlib import Path
+
+from shared.net_utils import allocate_free_port
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +30,10 @@ _SHUTDOWN_TIMEOUT = 10.0
 
 
 def _allocate_free_port() -> int:
-    """Bind a throwaway socket on 127.0.0.1:0 to obtain a free OS-assigned port.
-
-    Avoids a fixed offset, which collides when multiple frontend/backend pairs
-    run on one host (issue #1825).
-    """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+    """Delegates to shared.net_utils.allocate_free_port() — kept as a local
+    name so existing tests that patch src.backend_supervisor._allocate_free_port
+    keep working."""
+    return allocate_free_port()
 
 
 class BackendSupervisor:

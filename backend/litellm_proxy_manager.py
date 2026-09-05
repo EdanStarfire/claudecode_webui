@@ -37,7 +37,7 @@ class LiteLLMProxyManager:
         self,
         catalog_manager: ProviderCatalogManager,
         vault,
-        port: int = 4000,
+        port: int,
         *,
         config_file: Path | None = None,
     ):
@@ -291,22 +291,28 @@ class LiteLLMProxyManager:
         config = uvicorn.Config(_ps.app, host="0.0.0.0", port=self._port, log_level="warning")
         server = uvicorn.Server(config)
         self._server = server
-        self._server_task = asyncio.create_task(server.serve())
+
+        async def _serve() -> None:
+            # uvicorn calls sys.exit(1) on bind failure. asyncio.Task special-cases
+            # SystemExit/KeyboardInterrupt: it re-raises them out of the event loop
+            # instead of just failing this task (see Task.__step), so left uncaught
+            # here a port collision would crash the whole process. Converting to a
+            # plain RuntimeError makes it a normal task exception the polling loop
+            # below can retrieve via self._server_task.exception().
+            try:
+                await server.serve()
+            except SystemExit as e:
+                raise RuntimeError(
+                    f"LiteLLM proxy failed to start (port {self._port} in use?)"
+                ) from e
+
+        self._server_task = asyncio.create_task(_serve())
 
         # Wait until uvicorn has actually bound the port before returning.
         deadline = asyncio.get_event_loop().time() + 10.0
         while not server.started:
             if self._server_task.done():
-                try:
-                    exc = self._server_task.exception()
-                except BaseException as e:
-                    exc = e
-                # uvicorn calls sys.exit(1) on bind failure — convert to RuntimeError
-                # so it doesn't propagate as SystemExit and kill the main process.
-                if isinstance(exc, SystemExit):
-                    raise RuntimeError(
-                        f"LiteLLM proxy failed to start (port {self._port} in use?)"
-                    ) from exc
+                exc = self._server_task.exception()
                 raise exc or RuntimeError("LiteLLM proxy task exited during startup")
             if asyncio.get_event_loop().time() > deadline:
                 raise RuntimeError("LiteLLM proxy failed to bind port within 10 seconds")
