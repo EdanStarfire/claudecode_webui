@@ -2955,3 +2955,60 @@ class TestIssue1838UsageBaselineReset:
 
         assert success is True
         assert coordinator._usage_baseline_by_session[session_id] == {"total_cost_usd": 42.0}
+
+
+class TestIssue1838RecordTurnFailurePreservesBaseline:
+    """If analytics_store.record_turn() fails to persist a turn, the in-memory
+    baseline must NOT advance — otherwise that turn's usage/cost is lost forever
+    instead of being naturally absorbed into the next successfully-recorded
+    turn's delta (issue #1838 follow-up)."""
+
+    @pytest.mark.asyncio
+    async def test_failed_write_does_not_advance_baseline_and_next_turn_absorbs_it(
+        self, temp_coordinator
+    ):
+        coordinator = temp_coordinator
+        session_id = "test-session-1838-failure"
+
+        coordinator.analytics_store = AsyncMock()
+        coordinator.analytics_store.get_turn_count.return_value = 0
+        coordinator.analytics_store.get_session_usage.return_value = None
+        # First call (turn 1) fails to persist; second call (turn 2) succeeds.
+        coordinator.analytics_store.record_turn = AsyncMock(side_effect=[False, True])
+
+        message_callback = coordinator._create_message_callback(session_id)
+
+        # Turn 1: cumulative usage since subprocess start = 100 input tokens, $10.00.
+        await message_callback({
+            "type": "result",
+            "timestamp": 1700000000.0,
+            "session_id": session_id,
+            "usage": {"input_tokens": 100, "output_tokens": 0},
+            "total_cost_usd": 10.0,
+        })
+
+        # The failed write must leave no baseline behind.
+        assert session_id not in coordinator._usage_baseline_by_session
+
+        # Turn 2: cumulative usage since subprocess start = 250 input tokens, $22.50.
+        await message_callback({
+            "type": "result",
+            "timestamp": 1700000010.0,
+            "session_id": session_id,
+            "usage": {"input_tokens": 250, "output_tokens": 0},
+            "total_cost_usd": 22.5,
+        })
+
+        # Turn 2's delta must be computed against the un-advanced (still-absent)
+        # baseline, so it equals the FULL raw cumulative value (250 / $22.50) —
+        # naturally including turn 1's un-recorded 100 tokens / $10.00, not just
+        # the 150 / $12.50 that turn 2 alone contributed.
+        assert coordinator.analytics_store.record_turn.call_count == 2
+        second_call_args = coordinator.analytics_store.record_turn.call_args_list[1].args
+        _, _, _, usage_delta_arg, cost_delta_arg = second_call_args
+        assert usage_delta_arg["input_tokens"] == 250
+        assert cost_delta_arg == 22.5
+
+        # And the baseline is now correctly advanced to the latest cumulative value.
+        assert coordinator._usage_baseline_by_session[session_id]["input_tokens"] == 250
+        assert coordinator._usage_baseline_by_session[session_id]["total_cost_usd"] == 22.5

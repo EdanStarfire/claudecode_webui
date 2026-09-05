@@ -4981,10 +4981,15 @@ class SessionCoordinator:
                             usage_delta, cost_delta, new_baseline = _delta_from_baseline(
                                 usage, sdk_cost, baseline
                             )
-                            self._usage_baseline_by_session[session_id] = new_baseline
-                            await self.analytics_store.record_turn(
+                            turn_recorded = await self.analytics_store.record_turn(
                                 session_id, turn_seq, _model, usage_delta, cost_delta
                             )
+                            if turn_recorded:
+                                self._usage_baseline_by_session[session_id] = new_baseline
+                            # else: leave the baseline un-advanced — the next successful
+                            # write computes its delta against the stale baseline, so this
+                            # turn's un-recorded usage/cost is naturally absorbed into that
+                            # turn's delta rather than lost.
                             aggregate = await self.analytics_store.get_session_usage(session_id)
                             if aggregate and self._usage_broadcast_callback:
                                 try:
