@@ -83,6 +83,31 @@ async def test_no_migration_when_catalog_absent(tmp_path, monkeypatch):
         "providers.json should not be created when nothing to migrate"
     )
     assert store.entries == []
+    assert store.litellm_port is None
+
+
+@pytest.mark.asyncio
+async def test_migration_triggered_when_legacy_port_explicitly_4000(tmp_path, monkeypatch):
+    """Legacy config.json with litellm_port explicitly set to 4000 still migrates.
+
+    Regression test for the sentinel bug (issue #1825): the old migration gate compared
+    the value against 4000, so a legitimate `litellm_port: 4000` was indistinguishable
+    from "never set" and silently skipped migration. The fix checks key presence instead.
+    """
+    legacy_cfg = tmp_path / "config.json"
+    _write_legacy_config(legacy_cfg, {"entries": [], "litellm_port": 4000, "pending_changes": False})
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    import backend.provider_catalog as pc_mod
+    monkeypatch.setattr(pc_mod, "_LEGACY_CONFIG_FILE", legacy_cfg)
+
+    store = ProviderCatalogStore(data_dir)
+    await store.load()
+
+    providers_file = data_dir / "providers.json"
+    assert providers_file.exists(), "providers.json should be created — key presence, not value, gates migration"
     assert store.litellm_port == 4000
 
 

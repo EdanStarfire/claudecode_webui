@@ -90,7 +90,7 @@ class ProviderCatalogStore:
     def __init__(self, data_dir: Path):
         self.providers_file = data_dir / "providers.json"
         self._entries: list[ProviderCatalogEntry] = []
-        self._litellm_port: int = 4000
+        self._litellm_port: int | None = None
         self._pending_changes: bool = False
 
     @property
@@ -98,7 +98,7 @@ class ProviderCatalogStore:
         return self._entries
 
     @property
-    def litellm_port(self) -> int:
+    def litellm_port(self) -> int | None:
         return self._litellm_port
 
     @property
@@ -110,14 +110,14 @@ class ProviderCatalogStore:
         if self.providers_file.exists():
             data = json.loads(self.providers_file.read_text(encoding="utf-8"))
             self._entries = [ProviderCatalogEntry.from_dict(e) for e in data.get("entries", [])]
-            self._litellm_port = data.get("litellm_port", 4000)
+            self._litellm_port = data.get("litellm_port")
             self._pending_changes = data.get("pending_changes", False)
             return
 
         legacy = self._read_legacy_catalog()
         if legacy:
             self._entries = [ProviderCatalogEntry.from_dict(e) for e in legacy.get("entries", [])]
-            self._litellm_port = legacy.get("litellm_port", 4000)
+            self._litellm_port = legacy.get("litellm_port")
             self._pending_changes = legacy.get("pending_changes", False)
             await self._save()
             legion_logger.info(
@@ -131,7 +131,7 @@ class ProviderCatalogStore:
         try:
             data = json.loads(_LEGACY_CONFIG_FILE.read_text(encoding="utf-8"))
             pc = data.get("provider_catalog")
-            if pc and (pc.get("entries") or pc.get("litellm_port", 4000) != 4000):
+            if pc and (pc.get("entries") or "litellm_port" in pc):
                 return pc
         except Exception:
             pass

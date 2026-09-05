@@ -57,6 +57,11 @@ def main():
         help='Bind address (default: 127.0.0.1, localhost only).'
     )
     parser.add_argument('--port', type=int, default=8100, help='Port to bind to (default: 8100)')
+    parser.add_argument(
+        '--litellm-port', type=int, default=None,
+        help='Pin the embedded LiteLLM proxy to a specific port (default: dynamic '
+             'OS-assigned port, or a previously persisted value in providers.json)'
+    )
     parser.add_argument('--data-dir', default='./data', help='Data directory location (default: ./data)')
     parser.add_argument(
         '--embedded', action='store_true',
@@ -191,6 +196,7 @@ def main():
         auth_token=auth_token,
         host=args.host,
         port=args.port,
+        litellm_port=args.litellm_port,
     )
 
     # Run the server

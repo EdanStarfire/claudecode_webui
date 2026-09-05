@@ -148,6 +148,30 @@ def test_is_running_false_before_start(manager):
     assert manager.is_running is False
 
 
+# ── Port Resolution Tests (issue #1825) ────────────────────────────────────
+
+
+def test_port_is_a_required_argument():
+    """port no longer defaults to 4000 — BackendApp must always resolve a concrete
+    value before constructing LiteLLMProxyManager."""
+    from backend.litellm_proxy_manager import LiteLLMProxyManager
+
+    with pytest.raises(TypeError):
+        LiteLLMProxyManager(AsyncMock(), AsyncMock())
+
+
+def test_default_port_resolution_picks_real_bindable_port():
+    """The system default (BackendApp's resolution, exercised here via
+    allocate_free_port() directly) yields a port that's actually bindable."""
+    import socket
+
+    from shared.net_utils import allocate_free_port
+
+    port = allocate_free_port()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", port))
+
+
 # ── Routing Registry Tests (issue #1427 Phase 2) ──────────────────────────────
 
 

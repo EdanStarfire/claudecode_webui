@@ -39,20 +39,24 @@ from .task_utils import task_done_log_exception
 logger = logging.getLogger(__name__)
 
 
-def _read_litellm_port_sync(data_dir: Path, default: int = 4000) -> int:
-    """Read litellm_port from providers.json or legacy config.json without async I/O."""
+def _read_litellm_port_sync(data_dir: Path) -> int | None:
+    """Read litellm_port from providers.json or legacy config.json without async I/O.
+
+    Returns None if no explicit value has ever been persisted — callers fall back to
+    a dynamically-allocated port in that case (issue #1825).
+    """
     import json as _json
     try:
         providers = data_dir / "providers.json"
         if providers.exists():
-            return _json.loads(providers.read_text(encoding="utf-8")).get("litellm_port", default)
+            return _json.loads(providers.read_text(encoding="utf-8")).get("litellm_port")
         legacy = Path.home() / ".config" / "cc_webui" / "config.json"
         if legacy.exists():
             data = _json.loads(legacy.read_text(encoding="utf-8"))
-            return data.get("provider_catalog", {}).get("litellm_port", default)
+            return data.get("provider_catalog", {}).get("litellm_port")
     except Exception:
         pass
-    return default
+    return None
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -112,7 +116,8 @@ class BackendApp:
                  available_fixtures: list[str] | None = None,
                  config_file: Path | None = None,
                  auth_token: str | None = None,
-                 host: str = "127.0.0.1", port: int = 8000):
+                 host: str = "127.0.0.1", port: int = 8000,
+                 litellm_port: int | None = None):
         self.app = FastAPI(title="Claude Code WebUI Backend", version="1.0.0")
         self.host = host
         self.port = port
@@ -157,9 +162,18 @@ class BackendApp:
         from .provider_catalog import ProviderCatalogManager
         self.app_config_manager = AppConfigManager(config_file=config_file) if config_file else AppConfigManager()
         self.provider_catalog_manager = ProviderCatalogManager(self.coordinator.provider_catalog_store)
-        # Read litellm_port synchronously at init time — providers.json may not exist yet
-        # (store.load() runs in coordinator.initialize()); fall back to legacy config then default 4000.
-        _litellm_port = _read_litellm_port_sync(data_dir or Path("data"))
+        # Resolve the LiteLLM proxy port: explicit CLI flag > explicit persisted value
+        # (providers.json may not exist yet — store.load() runs in coordinator.initialize(),
+        # so read synchronously here — or migrated legacy config.json) > OS-assigned dynamic
+        # port. The dynamic port is never persisted (issue #1825).
+        from shared.net_utils import allocate_free_port
+        _persisted_litellm_port = _read_litellm_port_sync(data_dir or Path("data"))
+        if litellm_port is not None:
+            _litellm_port = litellm_port
+        elif _persisted_litellm_port is not None:
+            _litellm_port = _persisted_litellm_port
+        else:
+            _litellm_port = allocate_free_port()
         self.litellm_proxy_manager = LiteLLMProxyManager(
             self.provider_catalog_manager,
             self.coordinator.credential_vault,
@@ -929,6 +943,7 @@ def create_app(
     auth_token: str | None = None,
     host: str = "127.0.0.1",
     port: int = 8000,
+    litellm_port: int | None = None,
 ) -> FastAPI:
     """Create and configure the Backend FastAPI application"""
     app_instance = BackendApp(
@@ -937,6 +952,7 @@ def create_app(
         available_fixtures=available_fixtures,
         auth_token=auth_token,
         host=host, port=port,
+        litellm_port=litellm_port,
     )
 
     @asynccontextmanager
