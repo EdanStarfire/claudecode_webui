@@ -181,7 +181,7 @@ def main():
             extra_backend_args=extra_backend_args,
             log_dir=data_dir_path / "logs" / "backend",
         )
-        print(f"Auto-starting Backend on 127.0.0.1:{backend_supervisor.port}")
+        print(f"Auto-starting Backend (embedded) on {backend_supervisor.host}:{backend_supervisor.port}")
 
     # Create FastAPI app
     app = create_app(

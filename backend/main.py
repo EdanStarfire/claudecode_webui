@@ -4,10 +4,15 @@ Main entry point for the Backend control-plane process (issue #498).
 
 Independently runnable: `python -m backend.main --host 127.0.0.1 --port <n> --token <t>
 --data-dir <dir>`. Auto-started by the Frontend API for the single-user self-hosted
-case (backend_supervisor.py, Phase 3) or pointed at manually for a remote deployment.
+case (backend_supervisor.py, Phase 3, always passing --embedded) or pointed at
+manually for a remote deployment (--host stays gated by check_network_binding).
+--embedded mode binds loopback plus Docker's default bridge gateway (if reachable
+on this host) instead of --host, for Docker sandbox reachability on native Docker
+Engine hosts (issue #1850) — see build_embedded_sockets() in docker_utils.py.
 """
 
 import argparse
+import asyncio
 import os
 import secrets
 import sys
@@ -19,6 +24,7 @@ import uvicorn
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.config_manager import check_network_binding, ensure_config_file, load_config
+from backend.docker_utils import build_embedded_sockets, detect_docker_bridge_gateway
 from backend.secrets_keyring import configure_keyring
 from backend.web_server import create_app
 from shared.logging_config import configure_logging
@@ -52,6 +58,15 @@ def main():
     )
     parser.add_argument('--port', type=int, default=8100, help='Port to bind to (default: 8100)')
     parser.add_argument('--data-dir', default='./data', help='Data directory location (default: ./data)')
+    parser.add_argument(
+        '--embedded', action='store_true',
+        help='Set only by BackendSupervisor when auto-starting Backend '
+             '(src/backend_supervisor.py) — never for manual/remote use. Binds loopback '
+             "plus Docker's default bridge gateway (if reachable on this host) instead of "
+             '--host, so Docker sandbox containers can reach Backend on native Docker '
+             'Engine hosts (issue #1850). Never a wildcard/LAN-facing bind, so the '
+             'network-binding consent gate below does not apply to this mode.'
+    )
 
     # Experimental features
     parser.add_argument('--experimental', action='store_true', help='Enable experimental features (Agent Teams)')
@@ -105,8 +120,11 @@ def main():
     config_file = ensure_config_file()
     app_config = load_config(config_file)
 
-    # Validate network binding permission
-    if not check_network_binding(args.host, app_config, config_file):
+    # Validate network binding permission — skipped in --embedded mode, since that
+    # mode never does a real network-facing (wildcard/LAN) bind; see build_embedded_
+    # sockets() below and the --embedded help text (issue #1850). Manual/remote
+    # (non-embedded) invocations are completely unaffected — gated exactly as before.
+    if not args.embedded and not check_network_binding(args.host, app_config, config_file):
         sys.exit(1)
 
     # Validate and create data directory
@@ -176,13 +194,36 @@ def main():
     )
 
     # Run the server
-    uvicorn.run(
-        app,
-        host=args.host,
-        port=args.port,
-        log_level="info",
-        access_log=True
-    )
+    if args.embedded:
+        # Loopback plus Docker's default bridge gateway (if reachable on this host) —
+        # never a wildcard bind (issue #1850). Falls back to loopback-only wherever
+        # Docker is unavailable or the gateway address isn't real on this host (e.g.
+        # Docker Desktop/Rancher, whose bridge lives inside a VM, not the actual host).
+        bridge_gateway = asyncio.run(detect_docker_bridge_gateway())
+        sockets = build_embedded_sockets(args.port, bridge_gateway)
+        # Frontend's BackendSupervisor always reaches Backend over 127.0.0.1 (base_url,
+        # wait_ready()) — if loopback specifically failed to bind (unlike the bridge
+        # gateway, this is never expected to fail) while some other address still
+        # succeeded, continuing would silently produce a Backend Frontend can never
+        # reach instead of a clear startup failure.
+        if not any(s.getsockname()[0] == "127.0.0.1" for s in sockets):
+            print(f"Failed to bind 127.0.0.1:{args.port}", file=sys.stderr)
+            sys.exit(1)
+        bound = ", ".join(f"{s.getsockname()[0]}:{s.getsockname()[1]}" for s in sockets)
+        print(f"Embedded Backend listening on: {bound}")
+        # server.run(), not asyncio.run(server.serve(...)) — .run() calls
+        # config.setup_event_loop() first (installs uvloop when available), which a
+        # bare .serve() call would silently skip.
+        server = uvicorn.Server(uvicorn.Config(app, log_level="info", access_log=True))
+        server.run(sockets=sockets)
+    else:
+        uvicorn.run(
+            app,
+            host=args.host,
+            port=args.port,
+            log_level="info",
+            access_log=True
+        )
 
 
 if __name__ == "__main__":

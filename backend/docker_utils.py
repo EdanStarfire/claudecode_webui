@@ -11,12 +11,18 @@ import asyncio
 import logging
 import os
 import shutil
+import socket
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 # Default Docker image name used by the bundled wrapper
 DEFAULT_DOCKER_IMAGE = "claude-code:local"
+
+# Sandbox/proxy containers (backend/docker/claude-docker) run on Docker's default
+# bridge network — no custom network is created — so this is the one network whose
+# gateway matters for embedded-mode Docker reachability (issue #1850).
+_DEFAULT_BRIDGE_NETWORK = "bridge"
 
 
 def get_wrapper_script_path() -> Path:
@@ -76,6 +82,74 @@ async def check_docker_available() -> dict:
             pass
 
     return result
+
+
+async def detect_docker_bridge_gateway(timeout: float = 5.0) -> str | None:
+    """Return Docker's default bridge network's gateway IP (typically 172.17.0.1
+    on Linux), or None if Docker isn't available or the network has no gateway.
+
+    This is a host-side check (`docker network inspect`, no container spawned) —
+    used by embedded-mode Backend (issue #1850) to decide whether to also bind
+    that address alongside loopback, so Docker sandbox containers on native
+    Docker Engine hosts can reach it. Failure here just means "don't add that
+    bind" — callers should treat None as "loopback only," not an error.
+
+    A tighter timeout than check_docker_available()'s (request-scoped, 10s) —
+    this runs on Backend's own startup path, and repeats on every crash-restart
+    (src/backend_supervisor.py), so a wedged Docker daemon shouldn't compound
+    into a long delay there.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "network", "inspect", _DEFAULT_BRIDGE_NETWORK,
+            "--format", "{{range .IPAM.Config}}{{.Gateway}}{{end}}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        if proc.returncode != 0:
+            return None
+        gateway = stdout.decode().strip()
+        return gateway or None
+    except FileNotFoundError:
+        logger.debug("Docker CLI not found on PATH; embedded Backend binds loopback only")
+        return None
+    except TimeoutError:
+        logger.warning("Docker bridge gateway detection timed out")
+        return None
+    except Exception as e:
+        logger.debug(f"Docker bridge gateway detection failed: {e}")
+        return None
+
+
+def build_embedded_sockets(port: int, bridge_gateway: str | None) -> list[socket.socket]:
+    """Bind loopback plus (if reachable on this host) the Docker bridge gateway —
+    never a wildcard bind.
+
+    Binding the gateway address fails harmlessly on hosts where Docker itself runs
+    inside a VM (Docker Desktop/Rancher — the address isn't a real interface on the
+    host there, and loopback already works fine due to their mirrored networking),
+    so that failure is caught and skipped rather than treated as an error.
+    """
+    addresses = ["127.0.0.1"]
+    if bridge_gateway and bridge_gateway != "127.0.0.1":
+        addresses.append(bridge_gateway)
+
+    sockets = []
+    for address in addresses:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((address, port))
+        except OSError:
+            logger.info("Embedded Backend: %s:%s not bindable on this host, skipping", address, port)
+            sock.close()
+            continue
+        sock.set_inheritable(True)
+        sockets.append(sock)
+        logger.info("Embedded Backend bound to %s:%s", address, port)
+
+    return sockets
 
 
 def resolve_docker_cli_path(

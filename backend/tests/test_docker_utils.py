@@ -2,13 +2,16 @@
 Tests for src/docker_utils.py — shared Docker /tmp helpers (issue #832).
 """
 
+import socket
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from backend.docker_utils import (
+    build_embedded_sockets,
     cleanup_session_tmp,
+    detect_docker_bridge_gateway,
     get_session_tmp_dir,
     resolve_docker_cli_path,
     translate_docker_tmp_path,
@@ -150,3 +153,116 @@ class TestResolveDockerCliPathProxy:
         _, env = resolve_docker_cli_path(docker_image="my-image")
         assert "CLAUDE_DOCKER_PROXY_IMAGE" not in env
         assert env == {"CLAUDE_DOCKER_IMAGE": "my-image"}
+
+
+# ---------------------------------------------------------------------------
+# detect_docker_bridge_gateway / build_embedded_sockets (issue #1850)
+# ---------------------------------------------------------------------------
+
+
+class TestDetectDockerBridgeGateway:
+    @pytest.mark.asyncio
+    async def test_returns_gateway_on_success(self):
+        proc = MagicMock()
+        proc.communicate = AsyncMock(return_value=(b"172.17.0.1\n", b""))
+        proc.returncode = 0
+        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+            result = await detect_docker_bridge_gateway()
+        assert result == "172.17.0.1"
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_docker_cli_missing(self):
+        with patch("asyncio.create_subprocess_exec", AsyncMock(side_effect=FileNotFoundError)):
+            result = await detect_docker_bridge_gateway()
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_nonzero_returncode(self):
+        proc = MagicMock()
+        proc.communicate = AsyncMock(return_value=(b"", b"no such network"))
+        proc.returncode = 1
+        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+            result = await detect_docker_bridge_gateway()
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_empty_gateway(self):
+        proc = MagicMock()
+        proc.communicate = AsyncMock(return_value=(b"\n", b""))
+        proc.returncode = 0
+        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+            result = await detect_docker_bridge_gateway()
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_timeout(self):
+        proc = MagicMock()
+        proc.communicate = AsyncMock(return_value=(b"172.17.0.1\n", b""))
+        proc.returncode = 0
+        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)), \
+             patch("asyncio.wait_for", AsyncMock(side_effect=TimeoutError)):
+            result = await detect_docker_bridge_gateway()
+        assert result is None
+
+
+class TestBuildEmbeddedSockets:
+    def _free_port(self) -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+
+    def test_binds_loopback_only_when_no_gateway(self):
+        port = self._free_port()
+        sockets = build_embedded_sockets(port, None)
+        try:
+            assert len(sockets) == 1
+            assert sockets[0].getsockname() == ("127.0.0.1", port)
+        finally:
+            for s in sockets:
+                s.close()
+
+    def test_binds_gateway_address_when_reachable(self):
+        # 127.0.0.2 is loopback-range and bindable on Linux without any Docker
+        # present — stands in for "the gateway address happens to be a real,
+        # bindable interface on this host" without depending on Docker actually
+        # being installed in the test environment.
+        port = self._free_port()
+        sockets = build_embedded_sockets(port, "127.0.0.2")
+        try:
+            addresses = {s.getsockname()[0] for s in sockets}
+            assert addresses == {"127.0.0.1", "127.0.0.2"}
+        finally:
+            for s in sockets:
+                s.close()
+
+    def test_skips_unbindable_gateway_address_without_raising(self):
+        # Simulates Docker Desktop/Rancher, where the bridge lives inside a VM, not
+        # the actual host — binding the "gateway" address fails there (issue #1850's
+        # Desktop-vs-Engine distinction). Force that deterministically (rather than
+        # relying on some real IP being unassigned on the test host) by patching
+        # socket.socket.bind to raise only for the gateway address under test.
+        port = self._free_port()
+        original_bind = socket.socket.bind
+
+        def fake_bind(self, address):
+            if address[0] == "203.0.113.5":  # TEST-NET-3 (RFC 5737), never a real interface
+                raise OSError("Cannot assign requested address")
+            return original_bind(self, address)
+
+        with patch.object(socket.socket, "bind", fake_bind):
+            sockets = build_embedded_sockets(port, "203.0.113.5")
+        try:
+            addresses = {s.getsockname()[0] for s in sockets}
+            assert addresses == {"127.0.0.1"}
+        finally:
+            for s in sockets:
+                s.close()
+
+    def test_gateway_equal_to_loopback_not_duplicated(self):
+        port = self._free_port()
+        sockets = build_embedded_sockets(port, "127.0.0.1")
+        try:
+            assert len(sockets) == 1
+        finally:
+            for s in sockets:
+                s.close()
