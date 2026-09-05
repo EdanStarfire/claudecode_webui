@@ -4,7 +4,11 @@ subprocess (issue #498, Phase 3).
 Used by main.py's lifespan when no --remote-backend-url is given: auto-starts
 Backend bound to 127.0.0.1 with an OS-assigned free port and a freshly
 generated backend-scoped token — the single-user self-hosted case needs zero
-manual configuration for this to work.
+manual configuration for this to work. Passes --embedded so backend/main.py
+also binds Docker's default bridge gateway (if reachable on this host) for
+Docker sidecar reachability on native Docker Engine hosts (issue #1850) —
+see backend/docker_utils.py's build_embedded_sockets() for how that bind set
+is constructed.
 """
 
 import asyncio
@@ -83,6 +87,9 @@ class BackendSupervisor:
             "--port", str(self.port),
             "--token", self.token,
             "--data-dir", str(self.data_dir),
+            # Tells backend/main.py it was auto-started by this supervisor, not run
+            # manually/remotely — see backend/main.py's --embedded help text (#1850).
+            "--embedded",
         ]
         if self.experimental:
             cmd.append("--experimental")

@@ -37,6 +37,9 @@ def test_build_command_includes_required_flags(tmp_path):
     assert "--port" in cmd and str(sup.port) in cmd
     assert "--token" in cmd and sup.token in cmd
     assert "--data-dir" in cmd and str(tmp_path) in cmd
+    # Tells backend/main.py it's auto-started, not a manual/remote invocation
+    # (issue #1850) — enables the loopback+Docker-bridge embedded bind set.
+    assert "--embedded" in cmd
     # Never spawned via "uv run" — see class docstring for why (SIGTERM propagation).
     assert cmd[0] != "uv"
 
