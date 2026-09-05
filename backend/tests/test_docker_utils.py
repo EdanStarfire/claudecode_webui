@@ -4,6 +4,8 @@ Tests for src/docker_utils.py — shared Docker /tmp helpers (issue #832).
 
 import asyncio
 import socket
+import subprocess
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -162,69 +164,69 @@ class TestResolveDockerCliPathProxy:
 
 
 class TestDetectDockerBridgeGateway:
+    """detect_docker_bridge_gateway() runs subprocess.run(timeout=...) in a worker
+    thread (asyncio.to_thread) rather than asyncio subprocess + asyncio.wait_for —
+    two earlier fix attempts using the latter both hung identically on live WSL2 +
+    Docker Desktop testing: the docker CLI's cross-boundary call into the
+    Windows-side daemon never actually responded to cooperative asyncio
+    cancellation. subprocess.run's own kill+reap is the stdlib's long-hardened
+    mechanism for exactly this; the outer asyncio.wait_for here only needs to stop
+    waiting on the thread's result, not interrupt anything itself."""
+
+    def _completed(self, returncode: int, stdout: bytes) -> subprocess.CompletedProcess:
+        return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=b"")
+
     @pytest.mark.asyncio
     async def test_returns_gateway_on_success(self):
-        proc = MagicMock()
-        proc.communicate = AsyncMock(return_value=(b"172.17.0.1\n", b""))
-        proc.returncode = 0
-        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+        completed = self._completed(0, b"172.17.0.1\n")
+        with patch("backend.docker_utils.subprocess.run", return_value=completed):
             result = await detect_docker_bridge_gateway()
         assert result == "172.17.0.1"
 
     @pytest.mark.asyncio
     async def test_returns_none_when_docker_cli_missing(self):
-        with patch("asyncio.create_subprocess_exec", AsyncMock(side_effect=FileNotFoundError)):
+        with patch("backend.docker_utils.subprocess.run", side_effect=FileNotFoundError):
             result = await detect_docker_bridge_gateway()
         assert result is None
 
     @pytest.mark.asyncio
     async def test_returns_none_on_nonzero_returncode(self):
-        proc = MagicMock()
-        proc.communicate = AsyncMock(return_value=(b"", b"no such network"))
-        proc.returncode = 1
-        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+        completed = self._completed(1, b"")
+        with patch("backend.docker_utils.subprocess.run", return_value=completed):
             result = await detect_docker_bridge_gateway()
         assert result is None
 
     @pytest.mark.asyncio
     async def test_returns_none_on_empty_gateway(self):
-        proc = MagicMock()
-        proc.communicate = AsyncMock(return_value=(b"\n", b""))
-        proc.returncode = 0
-        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+        completed = self._completed(0, b"\n")
+        with patch("backend.docker_utils.subprocess.run", return_value=completed):
             result = await detect_docker_bridge_gateway()
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_returns_none_on_timeout(self):
-        proc = MagicMock()
-        proc.communicate = AsyncMock(return_value=(b"172.17.0.1\n", b""))
-        proc.returncode = 0
-        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)), \
-             patch("asyncio.wait_for", AsyncMock(side_effect=TimeoutError)):
+    async def test_returns_none_when_subprocess_run_itself_times_out(self):
+        with patch(
+            "backend.docker_utils.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["docker"], timeout=5),
+        ):
             result = await detect_docker_bridge_gateway()
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_kills_leftover_process_when_it_hangs_past_the_timeout(self):
-        """Regression test: reproduced live on WSL2 + Docker Desktop, where `docker
-        network inspect` itself hung — the deadline must cover the whole operation
-        (not just reading output), and the hung process must not be left running."""
-        async def _hang(*_args, **_kwargs):
-            await asyncio.sleep(100)
+    async def test_bounded_even_if_the_underlying_call_never_returns(self):
+        """Regression test: two earlier fix attempts both relied on asyncio-level
+        cancellation to bound a hanging docker CLI call, and both still hung on
+        live WSL2 + Docker Desktop testing — the underlying call never responded
+        to cooperative cancellation at all. This proves the caller gets control
+        back within a bounded time regardless of what the blocking call does."""
+        def _hang_forever(*_args, **_kwargs):
+            time.sleep(2)
 
-        proc = MagicMock()
-        proc.returncode = None  # still running when the timeout fires
-        proc.kill = MagicMock()
-        proc.wait = AsyncMock(return_value=None)
-        proc.communicate = AsyncMock(side_effect=_hang)
-
-        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
-            result = await detect_docker_bridge_gateway(timeout=0.05)
-
+        with patch("backend.docker_utils.subprocess.run", side_effect=_hang_forever):
+            result = await asyncio.wait_for(
+                detect_docker_bridge_gateway(timeout=0.05), timeout=5
+            )
         assert result is None
-        proc.kill.assert_called_once()
-        proc.wait.assert_awaited_once()
 
 
 class TestBuildEmbeddedSockets:

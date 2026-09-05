@@ -8,11 +8,11 @@ Issue #1052: prepare_session_ssh() — SSH key tmpfs delivery for proxy-mode ses
 """
 
 import asyncio
-import contextlib
 import logging
 import os
 import shutil
 import socket
+import subprocess
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -85,6 +85,31 @@ async def check_docker_available() -> dict:
     return result
 
 
+def _inspect_bridge_gateway_sync(timeout: float) -> str | None:
+    """Synchronous half of detect_docker_bridge_gateway(), run in a worker thread.
+
+    subprocess.run(..., timeout=...) is the stdlib's own, long-hardened subprocess
+    timeout mechanism (kill + reap handled internally) — used here instead of
+    asyncio subprocess + asyncio.wait_for, which two earlier attempts at this
+    exact fix both used and which both still hung on live WSL2 + Docker Desktop
+    testing: cooperative asyncio cancellation never actually interrupted the
+    docker CLI's cross-boundary call into the Windows-side daemon.
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "network", "inspect", _DEFAULT_BRIDGE_NETWORK,
+             "--format", "{{range .IPAM.Config}}{{.Gateway}}{{end}}"],
+            capture_output=True,
+            timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    gateway = result.stdout.decode().strip()
+    return gateway or None
+
+
 async def detect_docker_bridge_gateway(timeout: float = 5.0) -> str | None:
     """Return Docker's default bridge network's gateway IP (typically 172.17.0.1
     on Linux), or None if Docker isn't available or the network has no gateway.
@@ -100,40 +125,19 @@ async def detect_docker_bridge_gateway(timeout: float = 5.0) -> str | None:
     (src/backend_supervisor.py), so a wedged Docker daemon shouldn't compound
     into a long delay there.
 
-    The whole operation (not just the read) is under one deadline: on WSL2 with
-    Docker Desktop, `docker network inspect` can itself hang past any reasonable
-    timeout (reproduced live — the CLI's cross-boundary call into the Windows-side
-    daemon stalled), and a timeout that only wrapped reading its output would
-    still leave the overall call unbounded. On timeout, the still-running process
-    is killed and reaped rather than left to leak.
+    Runs in a worker thread via asyncio.to_thread() so the caller is never
+    blocked beyond `timeout` (+ a small margin) even if the underlying blocking
+    call never returns at all — the outer asyncio.wait_for() here doesn't need
+    to actually interrupt anything, only stop waiting on the thread's result.
     """
-    proc: asyncio.subprocess.Process | None = None
-
-    async def _inspect() -> str | None:
-        nonlocal proc
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "network", "inspect", _DEFAULT_BRIDGE_NETWORK,
-            "--format", "{{range .IPAM.Config}}{{.Gateway}}{{end}}",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _stderr = await proc.communicate()
-        if proc.returncode != 0:
-            return None
-        gateway = stdout.decode().strip()
-        return gateway or None
-
     try:
-        return await asyncio.wait_for(_inspect(), timeout=timeout)
-    except FileNotFoundError:
-        logger.debug("Docker CLI not found on PATH; embedded Backend binds loopback only")
-        return None
+        # +1s margin over the inner subprocess.run() timeout, in case even the
+        # stdlib's own kill+reap doesn't return promptly on this platform.
+        return await asyncio.wait_for(
+            asyncio.to_thread(_inspect_bridge_gateway_sync, timeout), timeout=timeout + 1.0
+        )
     except TimeoutError:
         logger.warning("Docker bridge gateway detection timed out")
-        if proc is not None and proc.returncode is None:
-            proc.kill()
-            with contextlib.suppress(Exception):
-                await proc.wait()
         return None
     except Exception as e:
         logger.debug(f"Docker bridge gateway detection failed: {e}")
