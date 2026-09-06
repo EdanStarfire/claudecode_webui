@@ -987,6 +987,91 @@ describe('virtualizer offset model (#1748 stage: offset-model)', () => {
   })
 })
 
+// Issue #1848: findPrevTurnIndex/findNextTurnIndex — turn-boundary jump navigation exposed for
+// SessionStatusBar's prev/next buttons. A "turn boundary" is any displayableItems entry whose
+// message is user-authored, which covers both real user messages and inbound comms (comms are
+// delivered as user-role messages carrying metadata.comm — see UserMessage.vue's isComm check).
+describe('findPrevTurnIndex / findNextTurnIndex (#1848)', () => {
+  function stubScrollMechanics(scrollEl) {
+    Element.prototype.scrollTo = function (opts) {
+      const top = typeof opts === 'object' && opts !== null ? opts.top : undefined
+      if (typeof top === 'number') {
+        this.scrollTop = top
+        this.dispatchEvent(new Event('scroll'))
+      }
+    }
+    Object.defineProperty(scrollEl, 'scrollHeight', { configurable: true, get: () => 100000 })
+    Object.defineProperty(scrollEl, 'clientHeight', { configurable: true, get: () => 600 })
+  }
+
+  it('finds the nearest user/comm boundary above and below the current visible range', async () => {
+    const { pinia, wrapper, container } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    // index 0: user (boundary A), 1-49: system filler (type 'system' so each stays its own
+    // displayableItems entry — unlike 'assistant', it neither merges via
+    // mergeConsecutiveAssistantTurns nor counts as a turn boundary itself), index 50: inbound
+    // comm (boundary B, user-role), 51-99: system filler. Boundaries are spaced far enough apart
+    // (50 rows) that scrolling to the midpoint keeps both OUTSIDE the virtualizer's mounted
+    // range (visible rows + OVERSCAN_ROWS on each side, ~24 rows total) — visibleIndexRange
+    // reflects the current MOUNTED window, not just the pixel-visible viewport, so a small gap
+    // would leave both boundaries still "mounted" and make this test meaningless.
+    const messages = [
+      makeMessage({ id: 'msg-0', message_id: 'msg-0', type: 'user', content: 'First user message', timestamp: 1700000000 }),
+      ...Array.from({ length: 49 }, (_, i) =>
+        makeMessage({ id: `msg-a${i}`, message_id: `msg-a${i}`, type: 'system', content: `Filler ${i}`, timestamp: 1700000001 + i })
+      ),
+      makeMessage({
+        id: 'msg-comm', message_id: 'msg-comm', type: 'user', content: 'Inbound comm', timestamp: 1700000050,
+        metadata: { comm: { from_name: 'minion-a', from_display_name: 'Minion A' } }
+      }),
+      ...Array.from({ length: 49 }, (_, i) =>
+        makeMessage({ id: `msg-b${i}`, message_id: `msg-b${i}`, type: 'system', content: `Filler ${i}`, timestamp: 1700000051 + i })
+      )
+    ]
+    messageStore.messagesBySession.set(SESSION_ID, messages)
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+    await new Promise(r => setTimeout(r, 50))
+
+    stubScrollMechanics(container.querySelector('.messages-area'))
+
+    // Scroll to the midpoint (index 25) — equidistant from both boundaries, well outside the
+    // mounted window in either direction.
+    await wrapper.vm.scrollToItemIndex(25, { align: 'start', behavior: 'auto' })
+    await new Promise(r => setTimeout(r, 20))
+
+    expect(wrapper.vm.findPrevTurnIndex()).toBe(0)
+    expect(wrapper.vm.findNextTurnIndex()).toBe(50)
+  })
+
+  it('returns null when there is no boundary above/below (first/last message in view)', async () => {
+    const { pinia, wrapper, container } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    // Single user message — no other boundary to jump to in either direction.
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({ type: 'user', content: 'Only message' })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+    await new Promise(r => setTimeout(r, 50))
+
+    stubScrollMechanics(container.querySelector('.messages-area'))
+
+    expect(wrapper.vm.findPrevTurnIndex()).toBeNull()
+    expect(wrapper.vm.findNextTurnIndex()).toBeNull()
+  })
+})
+
 // Issue #1748 (stage: windowing): overscan is now a real, small value (OVERSCAN_ROWS) instead of
 // the full item count — these tests exercise the actual culling/remount/jump behavior that stage
 // 1 deliberately kept dormant (see MessageList.vue's virtualizerOptions comment).

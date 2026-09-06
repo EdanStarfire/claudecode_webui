@@ -66,8 +66,26 @@
         <small :class="contextTextClass">{{ contextPct }}%</small>
       </div>
 
-      <!-- Right side: Read Aloud + Autoscroll -->
+      <!-- Right side: Turn navigation + Read Aloud + Autoscroll -->
       <div class="d-flex gap-2">
+        <button
+          class="btn btn-sm btn-outline-secondary"
+          @click="jumpToPrevTurn"
+          :disabled="!hasPrevTurn || isJumpingTurn"
+          aria-label="Jump to previous turn"
+          title="Jump to previous user message or comm"
+        >
+          ⏮️ <span class="button-label">Prev</span>
+        </button>
+        <button
+          class="btn btn-sm btn-outline-secondary"
+          @click="jumpToNextTurn"
+          :disabled="!hasNextTurn || isJumpingTurn"
+          aria-label="Jump to next turn"
+          title="Jump to next user message or comm"
+        >
+          ⏭️ <span class="button-label">Next</span>
+        </button>
         <button
           class="btn btn-sm"
           :class="uiStore.ttsReadAloudEnabled ? 'btn-primary' : 'btn-outline-secondary'"
@@ -98,7 +116,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
@@ -108,6 +126,10 @@ const props = defineProps({
   sessionId: {
     type: String,
     required: true
+  },
+  virtualNav: {
+    type: Object,
+    default: null
   }
 })
 
@@ -229,6 +251,34 @@ const hasRateLimitData = computed(() =>
   uiStore.rateLimits?.five_hour?.used_percentage != null ||
   uiStore.rateLimits?.seven_day?.used_percentage != null
 )
+
+// Issue #1848: jump to previous/next turn-boundary message (user message or inbound comm).
+// virtualNav is MessageList's exposed API, forwarded down as a prop from SessionView.vue the
+// same way it already is to PermissionQueue — provide/inject doesn't reach siblings.
+const isJumpingTurn = ref(false)
+
+const hasPrevTurn = computed(() => props.virtualNav?.findPrevTurnIndex?.() != null)
+const hasNextTurn = computed(() => props.virtualNav?.findNextTurnIndex?.() != null)
+
+async function jumpToTurn(findIndex) {
+  if (isJumpingTurn.value) return
+  const index = findIndex?.()
+  if (index == null) return
+  isJumpingTurn.value = true
+  try {
+    await props.virtualNav.scrollToItemIndex(index, { align: 'start', behavior: 'auto' })
+  } finally {
+    isJumpingTurn.value = false
+  }
+}
+
+function jumpToPrevTurn() {
+  return jumpToTurn(props.virtualNav?.findPrevTurnIndex)
+}
+
+function jumpToNextTurn() {
+  return jumpToTurn(props.virtualNav?.findNextTurnIndex)
+}
 
 </script>
 
