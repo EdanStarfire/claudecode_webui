@@ -50,32 +50,59 @@ CREATE INDEX IF NOT EXISTS idx_audit_session_turn
     ON audit_events(session_id, turn_id);
 
 CREATE TABLE IF NOT EXISTS turn_usage (
-  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id          TEXT    NOT NULL,
-  turn_seq            INTEGER NOT NULL,
-  model               TEXT,
-  input_tokens        INTEGER NOT NULL DEFAULT 0,
-  output_tokens       INTEGER NOT NULL DEFAULT 0,
-  cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
-  cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
-  sdk_total_cost_usd  REAL,
-  ts                  REAL    NOT NULL,
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id            TEXT    NOT NULL,
+  turn_seq              INTEGER NOT NULL,
+  model                 TEXT,
+  input_tokens          INTEGER NOT NULL DEFAULT 0,
+  output_tokens         INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens    INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens_5m INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens_1h INTEGER NOT NULL DEFAULT 0,
+  is_subagent           INTEGER NOT NULL DEFAULT 0,
+  sdk_total_cost_usd    REAL,
+  ts                    REAL    NOT NULL,
   UNIQUE(session_id, turn_seq)
 );
 CREATE INDEX IF NOT EXISTS idx_turn_session ON turn_usage(session_id);
 
 CREATE TABLE IF NOT EXISTS session_usage (
-  session_id          TEXT PRIMARY KEY,
-  model               TEXT,
-  turn_count          INTEGER NOT NULL DEFAULT 0,
-  input_tokens        INTEGER NOT NULL DEFAULT 0,
-  output_tokens       INTEGER NOT NULL DEFAULT 0,
-  cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
-  cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
-  sdk_total_cost_usd  REAL,
-  last_updated        REAL    NOT NULL
+  session_id            TEXT PRIMARY KEY,
+  model                 TEXT,
+  turn_count            INTEGER NOT NULL DEFAULT 0,
+  input_tokens          INTEGER NOT NULL DEFAULT 0,
+  output_tokens         INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens    INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens_5m INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens_1h INTEGER NOT NULL DEFAULT 0,
+  sdk_total_cost_usd    REAL,
+  last_updated          REAL    NOT NULL
 );
 """
+
+# Issue #1840: columns added after the initial schema. _DDL's CREATE TABLE IF NOT
+# EXISTS only benefits brand-new database files; existing on-disk databases need
+# these ALTER TABLE statements applied explicitly, guarded so re-running on every
+# startup doesn't raise on an already-added column.
+_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    ("turn_usage", "cache_write_tokens_5m", "INTEGER NOT NULL DEFAULT 0"),
+    ("turn_usage", "cache_write_tokens_1h", "INTEGER NOT NULL DEFAULT 0"),
+    ("turn_usage", "is_subagent", "INTEGER NOT NULL DEFAULT 0"),
+    ("session_usage", "cache_write_tokens_5m", "INTEGER NOT NULL DEFAULT 0"),
+    ("session_usage", "cache_write_tokens_1h", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+
+def _migrate_add_column_if_missing(
+    conn: sqlite3.Connection, table: str, column: str, ddl_fragment: str
+) -> None:
+    """Add `column` to `table` via ALTER TABLE, unless it already exists."""
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column in existing:
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_fragment}")
 
 
 class AnalyticsDB:
@@ -119,6 +146,8 @@ class AnalyticsDB:
         self._write_conn.execute("PRAGMA journal_mode=WAL")
         self._write_conn.execute("PRAGMA busy_timeout=5000")
         self._write_conn.executescript(_DDL)
+        for table, column, ddl_fragment in _MIGRATIONS:
+            _migrate_add_column_if_missing(self._write_conn, table, column, ddl_fragment)
         self._write_conn.commit()
 
         self._read_conn = sqlite3.connect(str(self._path), check_same_thread=False)

@@ -119,6 +119,8 @@ def build_router(webui) -> APIRouter:
             "output_tokens": aggregate.get("output_tokens", 0),
             "cache_write_tokens": aggregate.get("cache_write_tokens", 0),
             "cache_read_tokens": aggregate.get("cache_read_tokens", 0),
+            "cache_write_tokens_5m": aggregate.get("cache_write_tokens_5m", 0),
+            "cache_write_tokens_1h": aggregate.get("cache_write_tokens_1h", 0),
             "sdk_reported_cost_usd": aggregate.get("sdk_total_cost_usd"),
             "rates_known": rates_known,
         }

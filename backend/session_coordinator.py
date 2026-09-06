@@ -261,6 +261,36 @@ def _delta_from_baseline(
     return delta, delta_cost, baseline
 
 
+def _accumulate_subagent_usage(
+    accum: dict[str, float] | None,
+    usage: dict,
+) -> dict[str, float]:
+    """Sum one subagent AssistantMessage's usage into a running per-session accumulator.
+
+    Unlike the main thread's cumulative-since-subprocess-start snapshots (see
+    `_delta_from_baseline`), each subagent `AssistantMessage.usage` is already a
+    per-call delta for that individual API call — it must be summed directly,
+    never baseline-diffed (diffing would silently zero out everything after the
+    first call, since there's no shared cumulative counter to diff against).
+    """
+    accum = dict(accum or {})
+    cache_creation = usage.get("cache_creation") or {}
+    cache_5m = int(cache_creation.get("ephemeral_5m_input_tokens") or 0)
+    cache_1h = int(cache_creation.get("ephemeral_1h_input_tokens") or 0)
+    accum["input_tokens"] = accum.get("input_tokens", 0) + int(usage.get("input_tokens") or 0)
+    accum["output_tokens"] = accum.get("output_tokens", 0) + int(usage.get("output_tokens") or 0)
+    accum["cache_read_input_tokens"] = accum.get("cache_read_input_tokens", 0) + int(
+        usage.get("cache_read_input_tokens") or 0
+    )
+    accum["cache_write_tokens_5m"] = accum.get("cache_write_tokens_5m", 0) + cache_5m
+    accum["cache_write_tokens_1h"] = accum.get("cache_write_tokens_1h", 0) + cache_1h
+    # Flat total, kept in sync with the two TTL tiers above so callers never need
+    # to re-derive it — AnalyticsStore.record_turn()/compute_cost() key off of this
+    # flat name (or "cache_creation_input_tokens"), not the TTL-tier split.
+    accum["cache_write_tokens"] = accum.get("cache_write_tokens", 0) + cache_5m + cache_1h
+    return accum
+
+
 def _tail_read_lines(path: "Path", limit: int) -> list[str]:
     """Read the last `limit` lines from a file efficiently using a deque."""
     from collections import deque
@@ -554,6 +584,14 @@ class SessionCoordinator:
         # synthetic/error result) correctly yields no fallback instead of a stale
         # value from a previous turn.
         self._last_turn_model_by_session: dict[str, str] = {}
+        # Issue #1840: running sum of subagent (Task/Agent tool) usage for the
+        # in-flight turn, keyed by session. Each subagent AssistantMessage's usage
+        # is a per-call delta (unlike the main thread's cumulative snapshots), so
+        # it's summed directly rather than run through _delta_from_baseline().
+        # Popped and merged into the turn's usage_delta on 'result', or flushed as
+        # a catch-up row on session termination if a run_in_background subagent
+        # outlives its originating turn.
+        self._subagent_usage_by_session: dict[str, dict[str, float]] = {}
         # Callback for broadcasting usage_updated events (injected by web_server)
         self._usage_broadcast_callback: Callable[[str, dict], None] | None = None
 
@@ -2045,6 +2083,19 @@ class SessionCoordinator:
 
             return False
 
+    async def _next_turn_seq(self, session_id: str) -> int:
+        """Return the next turn_seq for `session_id`, lazily seeding from the DB's
+        turn_count on first use after a restart (`_turn_seq_by_session` is in-memory
+        only). Shared by the normal per-turn recording path and the #1840
+        termination-time subagent-usage catch-up flush, which both need a unique
+        turn_seq from the same counter.
+        """
+        if session_id not in self._turn_seq_by_session:
+            db_count = await self.analytics_store.get_turn_count(session_id)
+            self._turn_seq_by_session[session_id] = db_count
+        self._turn_seq_by_session[session_id] += 1
+        return self._turn_seq_by_session[session_id]
+
     async def terminate_session(self, session_id: str) -> bool:
         """Terminate a session and cleanup resources"""
         try:
@@ -2080,6 +2131,31 @@ class SessionCoordinator:
             if self.litellm_proxy_manager is not None:
                 self.litellm_proxy_manager.unregister_session_key(session_id)
                 self.litellm_proxy_manager.unregister_session_routing(session_id)
+
+            # Issue #1840: flush any unflushed subagent (Task/Agent tool) usage —
+            # e.g. a run_in_background subagent still emitting usage after its
+            # originating turn's ResultMessage already fired and popped the
+            # accumulator. Termination is the last chance to persist it: no further
+            # 'result' message will ever arrive for this session to trigger the
+            # normal merge. (delete_session() doesn't need this — it wipes all
+            # analytics rows for the session immediately after, so persisting here
+            # first would accomplish nothing.)
+            _sub_accum = self._subagent_usage_by_session.pop(session_id, None)
+            if _sub_accum and self.analytics_store:
+                try:
+                    turn_seq = await self._next_turn_seq(session_id)
+                    _model = self._last_turn_model_by_session.pop(session_id, None)
+                    _flushed = await self.analytics_store.record_turn(
+                        session_id, turn_seq, _model, _sub_accum, None, is_subagent=True
+                    )
+                    if not _flushed:
+                        # Don't lose it — restore so a future flush/merge can retry.
+                        self._subagent_usage_by_session[session_id] = _sub_accum
+                except Exception:
+                    logger.exception(
+                        f"Failed to flush subagent usage on termination for session {session_id}"
+                    )
+                    self._subagent_usage_by_session[session_id] = _sub_accum
 
             # Terminate session through manager
             success = await self.session_manager.terminate_session(session_id)
@@ -2452,6 +2528,11 @@ class SessionCoordinator:
                 coord_logger.info(f"Session {session_id} deleted")
                 # Issue #1831: Clear any in-flight-turn model tracked for this session
                 self._last_turn_model_by_session.pop(session_id, None)
+                # Issue #1840: drop any unflushed subagent usage without persisting it —
+                # delete_session() wipes all analytics rows for this session a few lines
+                # below, so writing a catch-up row first would accomplish nothing. This
+                # purely avoids a stale in-memory dict entry outliving the session.
+                self._subagent_usage_by_session.pop(session_id, None)
                 # Issue #1125: Remove analytics rows for deleted session
                 if self.analytics_store:
                     try:
@@ -4983,12 +5064,7 @@ class SessionCoordinator:
                                 _model = self._last_turn_model_by_session.pop(session_id, None)
                             else:
                                 self._last_turn_model_by_session.pop(session_id, None)
-                            # Lazily initialise turn_seq from DB on first use after restart
-                            if session_id not in self._turn_seq_by_session:
-                                db_count = await self.analytics_store.get_turn_count(session_id)
-                                self._turn_seq_by_session[session_id] = db_count
-                            self._turn_seq_by_session[session_id] += 1
-                            turn_seq = self._turn_seq_by_session[session_id]
+                            turn_seq = await self._next_turn_seq(session_id)
                             # Issue #1838: usage/total_cost_usd are cumulative snapshots
                             # since subprocess start, not per-turn values — convert to
                             # true per-turn deltas before recording.
@@ -4996,11 +5072,45 @@ class SessionCoordinator:
                             usage_delta, cost_delta, new_baseline = _delta_from_baseline(
                                 usage, sdk_cost, baseline
                             )
+                            # Issue #1840: fold in any subagent (Task/Agent tool) usage
+                            # accumulated during this turn — structurally disjoint from
+                            # the top-level ResultMessage's own usage above, so this is
+                            # pure addition, never double-counted against it.
+                            _sub_accum = self._subagent_usage_by_session.pop(session_id, None)
+                            if _sub_accum:
+                                for _k, _v in _sub_accum.items():
+                                    usage_delta[_k] = usage_delta.get(_k, 0) + _v
+                                # The subagent's flat cache-write total must also fold
+                                # into the pre-existing cache_creation_input_tokens field
+                                # that record_turn()/compute_cost() key off of first —
+                                # otherwise, whenever the main thread's own turn already
+                                # has a non-zero cache_creation_input_tokens, record_turn's
+                                # `usage.get("cache_creation_input_tokens") or usage.get
+                                # ("cache_write_tokens")` fallback would never reach the
+                                # generic per-key copy above and the subagent's flat total
+                                # would be silently dropped from cost estimation.
+                                _sub_cache_write = _sub_accum.get("cache_write_tokens", 0)
+                                if _sub_cache_write:
+                                    usage_delta["cache_creation_input_tokens"] = (
+                                        usage_delta.get("cache_creation_input_tokens", 0)
+                                        + _sub_cache_write
+                                    )
                             turn_recorded = await self.analytics_store.record_turn(
                                 session_id, turn_seq, _model, usage_delta, cost_delta
                             )
                             if turn_recorded:
                                 self._usage_baseline_by_session[session_id] = new_baseline
+                            elif _sub_accum:
+                                # Don't lose the subagent's contribution on a failed
+                                # write — restore it (merged with anything that may have
+                                # accumulated during the await above) so the next
+                                # successful turn absorbs it instead of dropping it.
+                                _pending = self._subagent_usage_by_session.get(session_id)
+                                if _pending:
+                                    for _k, _v in _sub_accum.items():
+                                        _pending[_k] = _pending.get(_k, 0) + _v
+                                else:
+                                    self._subagent_usage_by_session[session_id] = _sub_accum
                             # else: leave the baseline un-advanced — the next successful
                             # write computes its delta against the stale baseline, so this
                             # turn's un-recorded usage/cost is naturally absorbed into that
@@ -5035,6 +5145,14 @@ class SessionCoordinator:
                     _msg_model = _msg_meta.get('model')
                     if _msg_model and not _msg_meta.get('parent_tool_use_id'):
                         self._last_turn_model_by_session[session_id] = _msg_model
+                    elif _msg_meta.get('parent_tool_use_id'):
+                        # Issue #1840: subagent (Task/Agent tool) message — accumulate its
+                        # usage instead of using it as a top-level model fallback.
+                        _sub_usage = _msg_meta.get('usage')
+                        if _sub_usage:
+                            self._subagent_usage_by_session[session_id] = _accumulate_subagent_usage(
+                                self._subagent_usage_by_session.get(session_id), _sub_usage
+                            )
 
                 # Reset processing state on interrupt_success
                 elif parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'interrupt_success':

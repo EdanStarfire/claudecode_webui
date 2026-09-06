@@ -673,6 +673,12 @@ class AssistantMessageHandler(MessageHandler):
         if parent_tool_use_id:
             extracted["metadata"]["parent_tool_use_id"] = parent_tool_use_id
 
+        # Issue #1840: extract per-message usage (needed for subagent usage accumulation;
+        # top-level assistant messages carry it too but it's not consumed by that path)
+        usage = message_data.get("usage") or getattr(message_data.get("sdk_message"), "usage", None)
+        if usage:
+            extracted["metadata"]["usage"] = dict(usage)
+
         return extracted
 
 
