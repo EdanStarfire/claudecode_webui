@@ -27,6 +27,7 @@ from starlette.routing import Route
 from shared.event_queue import EventQueue
 
 from .backend_client import BackendClient
+from .backend_reachability import to_http_exception
 from .backend_supervisor import BackendSupervisor
 from .poll_relay import PollRelay
 
@@ -213,7 +214,15 @@ class ClaudeWebUI:
             return False
 
         async def _handler(request: Request):
-            return await self.backend_client.relay(request, path)
+            # Not wrapped by @handle_exceptions (this is a raw Starlette Route, not
+            # a FastAPI route handler) — must pre-empt a Backend-unreachable failure
+            # itself, same as the default /oauth/callback path in src/routers/relay.py,
+            # or it falls straight through to Starlette's default unhandled-exception
+            # traceback logging on every hit (issue #1844 review finding).
+            try:
+                return await self.backend_client.relay(request, path)
+            except httpx.RequestError as e:
+                raise to_http_exception(e) from e
 
         self.app.router.routes.insert(0, Route(path, _handler, methods=["GET"]))
         AuthMiddleware.EXEMPT_PATHS.add(path)
@@ -240,7 +249,13 @@ class ClaudeWebUI:
         """
         try:
             body = await self.backend_client.get_json("/api/internal/oauth-callback-paths")
-        except httpx.HTTPError:
+        except httpx.RequestError:
+            # No local log here — BackendClient.get_json() already recorded this
+            # failure via its shared reachability tracker (issue #1844); this runs
+            # every _OAUTH_RESYNC_INTERVAL_SECONDS, so logging it again here too
+            # would re-flood error.log with a full traceback for the whole outage.
+            return
+        except httpx.HTTPStatusError:
             logger.exception("Failed to resync OAuth callback paths from Backend")
             return
         desired = set(body.get("paths", [])) - {"/oauth/callback"}

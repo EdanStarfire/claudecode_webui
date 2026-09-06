@@ -173,6 +173,28 @@ async def test_dynamic_callback_route_actually_relays():
     assert call_args[0][1] == "/custom/callback"
 
 
+@pytest.mark.asyncio
+async def test_issue_1844_dynamic_callback_route_backend_unreachable_returns_500():
+    """This handler is a raw Starlette Route, not a FastAPI route — it isn't
+    wrapped by @handle_exceptions, so it must pre-empt a Backend-unreachable
+    failure itself (like the default /oauth/callback path in
+    src/routers/relay.py) or an httpx.RequestError falls straight through to
+    Starlette's default unhandled-exception traceback logging on every hit
+    (builder-review finding for issue #1844)."""
+    import httpx
+
+    webui = _make_webui()
+    webui.backend_client.relay = AsyncMock(side_effect=httpx.ConnectError("refused"))
+
+    webui._add_oauth_callback_relay_route("/custom/callback")
+
+    async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+        resp = await client.get("/custom/callback?code=abc123")
+
+    assert resp.status_code == 500
+    assert resp.json() == {"detail": "An internal error occurred"}
+
+
 class TestReservedPathCollision:
     """Regression tests for issue #498 review finding: Backend's own OAuth
     callback path collision guard (oauth_callback_path_conflicts_with_app_route,

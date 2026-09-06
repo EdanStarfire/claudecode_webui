@@ -13,8 +13,10 @@ Includes regression tests for two bugs found during builder-review:
 """
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from shared.event_queue import EventQueue
@@ -164,3 +166,69 @@ async def test_ui_relay_has_no_idle_timeout():
         assert call_count > 1  # kept polling — no idle timeout applies to the UI stream
 
         await relay.stop()
+
+
+# --- issue #1844: RequestError vs HTTPStatusError split ---
+
+
+@pytest.mark.asyncio
+async def test_issue_1844_request_error_retries_silently_without_local_log(caplog):
+    """A connection-level failure (Backend unreachable) must retry without a
+    local log line — BackendClient.get_json() already recorded it via the
+    shared reachability tracker; logging it again here on every 2s retry
+    would re-flood error.log for the whole outage."""
+    call_count = 0
+
+    async def side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise httpx.ConnectError("refused")
+        await asyncio.sleep(100)
+
+    relay, backend_client, ui_queue, _ = _make_relay(get_json_side_effect=side_effect)
+
+    with caplog.at_level(logging.WARNING, logger="src.poll_relay"):
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("src.poll_relay._ERROR_BACKOFF_SECONDS", 0.01)
+            relay.start_ui_relay()
+            for _ in range(200):
+                if call_count >= 2:
+                    break
+                await asyncio.sleep(0.01)
+            await relay.stop()
+
+    assert call_count >= 2  # retried past the failure
+    assert "unreachable" not in caplog.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_issue_1844_http_status_error_logs_full_traceback_and_retries(caplog):
+    """A genuine backend-side error response (Backend up, but its own poll
+    endpoint 500ing) is not a reachability concern — keep today's
+    full-traceback treatment so it stays visible as a real bug."""
+    call_count = 0
+
+    async def side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise httpx.HTTPStatusError(
+                "500", request=MagicMock(), response=MagicMock(status_code=500)
+            )
+        await asyncio.sleep(100)
+
+    relay, backend_client, ui_queue, _ = _make_relay(get_json_side_effect=side_effect)
+
+    with caplog.at_level(logging.ERROR, logger="src.poll_relay"):
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("src.poll_relay._ERROR_BACKOFF_SECONDS", 0.01)
+            relay.start_ui_relay()
+            for _ in range(200):
+                if call_count >= 2:
+                    break
+                await asyncio.sleep(0.01)
+            await relay.stop()
+
+    assert call_count >= 2  # retried past the failure
+    assert "Backend returned an error response" in caplog.text
