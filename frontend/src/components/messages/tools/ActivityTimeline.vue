@@ -151,7 +151,7 @@ function toggleDetail(toolId) {
 .timeline-row {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 4px;
   padding: 2px 0;
 }
