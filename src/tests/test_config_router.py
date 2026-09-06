@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -98,6 +99,33 @@ async def test_put_config_mixed_body_splits_between_both(tmp_path):
     )
     on_disk = json.loads(config_file.read_text())
     assert on_disk["networking"]["acknowledged_risk"] is True
+
+
+@pytest.mark.asyncio
+async def test_issue_1844_get_config_backend_unreachable_returns_500(tmp_path):
+    """A connection failure to Backend must still surface as a 500 to the
+    browser with the same detail-construction as before (issue #1844) —
+    only the logging behind the scenes changed, not the response contract."""
+    app, _, webui = _make_app(tmp_path)
+    webui.backend_client.get_json = AsyncMock(side_effect=httpx.ConnectError("refused"))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/config")
+
+    assert resp.status_code == 500
+    assert resp.json() == {"detail": "An internal error occurred"}
+
+
+@pytest.mark.asyncio
+async def test_issue_1844_put_config_backend_unreachable_returns_500(tmp_path):
+    app, _, webui = _make_app(tmp_path)
+    webui.backend_client.request_json = AsyncMock(side_effect=httpx.ConnectError("refused"))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.put("/api/config", json={"features": {"skill_sync_enabled": False}})
+
+    assert resp.status_code == 500
+    assert resp.json() == {"detail": "An internal error occurred"}
 
 
 @pytest.mark.asyncio

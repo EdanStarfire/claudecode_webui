@@ -20,6 +20,8 @@ from fastapi import APIRouter, HTTPException
 from shared.exception_handlers import handle_exceptions
 from shared.logging_config import get_logger
 
+from ..backend_reachability import to_http_exception
+
 _polling_logger = get_logger('polling', category='POLL')
 
 
@@ -58,6 +60,8 @@ def build_router(webui) -> APIRouter:
                 if e.response.status_code == 404:
                     raise HTTPException(status_code=404, detail="Session not found") from e
                 raise
+            except httpx.RequestError as e:
+                raise to_http_exception(e) from e
             return {"cursor": 0}  # session exists but queue not yet initialized
         return {"cursor": webui.session_queues[session_id].current_cursor}
 
@@ -72,6 +76,8 @@ def build_router(webui) -> APIRouter:
                 if e.response.status_code == 404:
                     raise HTTPException(status_code=404, detail="Session not found") from e
                 raise
+            except httpx.RequestError as e:
+                raise to_http_exception(e) from e
         webui.poll_relay.ensure_session_relay(session_id)
         queue = webui.session_queues[session_id]
 

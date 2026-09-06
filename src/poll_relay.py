@@ -103,8 +103,13 @@ class PollRelay:
                 cursor = next_cursor
             except asyncio.CancelledError:
                 raise
-            except httpx.HTTPError:
-                logger.warning("Poll-relay for %s: Backend unreachable, retrying", path)
+            except httpx.RequestError:
+                # No local log here — BackendClient.get_json() already recorded this
+                # failure via its shared reachability tracker (issue #1844); logging
+                # it again here on every 2s retry would just re-flood error.log.
+                await asyncio.sleep(_ERROR_BACKOFF_SECONDS)
+            except httpx.HTTPStatusError:
+                logger.exception("Poll-relay for %s: Backend returned an error response", path)
                 await asyncio.sleep(_ERROR_BACKOFF_SECONDS)
             except Exception:
                 logger.exception("Poll-relay for %s: unexpected error, retrying", path)

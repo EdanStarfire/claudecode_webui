@@ -11,6 +11,8 @@ import httpx
 from fastapi import Request
 from fastapi.responses import Response
 
+from .backend_reachability import BackendReachabilityTracker
+
 logger = logging.getLogger(__name__)
 
 # Headers that must not be forwarded verbatim between the two hops.
@@ -25,6 +27,7 @@ class BackendClient:
         self.base_url = base_url.rstrip("/")
         self._token = token
         self._client = httpx.AsyncClient(base_url=self.base_url, timeout=timeout)
+        self.reachability = BackendReachabilityTracker()
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -48,13 +51,18 @@ class BackendClient:
         headers = self._auth_headers(headers)
         body = await request.body()
 
-        backend_resp = await self._client.request(
-            request.method,
-            path,
-            params=request.query_params,
-            content=body,
-            headers=headers,
-        )
+        try:
+            backend_resp = await self._client.request(
+                request.method,
+                path,
+                params=request.query_params,
+                content=body,
+                headers=headers,
+            )
+        except httpx.RequestError as e:
+            self.reachability.record_failure(e)
+            raise
+        self.reachability.record_success()
 
         response_headers = {
             k: v for k, v in backend_resp.headers.items()
@@ -76,13 +84,23 @@ class BackendClient:
         network latency/scheduling jitter on top of an at-the-ceiling server response
         turns a normal idle poll into a client-side ReadTimeout (issue #498 review finding).
         """
-        resp = await self._client.get(path, params=params, headers=self._auth_headers(), timeout=timeout)
+        try:
+            resp = await self._client.get(path, params=params, headers=self._auth_headers(), timeout=timeout)
+        except httpx.RequestError as e:
+            self.reachability.record_failure(e)
+            raise
+        self.reachability.record_success()
         resp.raise_for_status()
         return resp.json()
 
     async def request_json(self, method: str, path: str, json: dict | None = None) -> dict:
         """Call a JSON endpoint on Backend and return the decoded body. Raises on non-2xx."""
-        resp = await self._client.request(method, path, json=json, headers=self._auth_headers())
+        try:
+            resp = await self._client.request(method, path, json=json, headers=self._auth_headers())
+        except httpx.RequestError as e:
+            self.reachability.record_failure(e)
+            raise
+        self.reachability.record_success()
         resp.raise_for_status()
         return resp.json()
 
@@ -90,14 +108,18 @@ class BackendClient:
         """Best-effort liveness check — never raises."""
         try:
             resp = await self._client.get("/health", timeout=2.0)
-            return resp.status_code == 200
-        except httpx.HTTPError:
+        except httpx.RequestError as e:
+            self.reachability.record_failure(e)
             return False
+        self.reachability.record_success()
+        return resp.status_code == 200
 
     async def ready(self) -> bool:
         """Best-effort readiness check — never raises."""
         try:
             resp = await self._client.get("/ready", timeout=2.0)
-            return resp.status_code == 200 and resp.json().get("ready") is True
-        except httpx.HTTPError:
+        except httpx.RequestError as e:
+            self.reachability.record_failure(e)
             return False
+        self.reachability.record_success()
+        return resp.status_code == 200 and resp.json().get("ready") is True
