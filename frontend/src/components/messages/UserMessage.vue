@@ -7,7 +7,7 @@
       :participant-session-id="commSenderSessionId"
       :comm-type="message.metadata.comm.comm_type"
       :summary="message.metadata.comm.summary"
-      :content="message.metadata.comm.content"
+      :content="commContent"
       :body-content="message.content"
       :timestamp="message.timestamp"
       :attachments="attachmentsForCard"
@@ -114,6 +114,18 @@ const sessionStore = useSessionStore()
 // Issue #1843: stable scope key for the CommCard expand/collapse Pinia map — survives
 // virtualized-list remount the same way thinkingBlockExpanded's scope keys do.
 const commScopeKey = computed(() => props.message.id || props.message.message_id)
+
+// Issue #1843 follow-up: comms persisted before this deploy have no `content` key at all
+// in metadata.comm (only from_name/from_display_name/from_minion_id/comm_type existed).
+// Distinguish that absence from a *new* comm's legitimately empty content (summary-only
+// comms, by design) via key presence, not truthiness — otherwise old comms render
+// permanently collapsed ("(no summary)", expand disabled) even though the full text is
+// still sitting right there in message.content.
+const commContent = computed(() => {
+  const comm = props.message.metadata?.comm
+  if (!comm) return ''
+  return 'content' in comm ? comm.content : props.message.content
+})
 
 // Issue #1714: jump-link to the sender's session when it still exists (from_minion_id
 // added in comm_router.py). No fallback to name-based lookup — avoids drift if the

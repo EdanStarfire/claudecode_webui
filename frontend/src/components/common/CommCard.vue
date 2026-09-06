@@ -47,6 +47,20 @@
     </div>
     <div v-if="expanded && hasContent" class="comm-card-body">
       <MarkdownView :content="resolvedBodyContent" :self-agent-id="selfAgentId" />
+      <button
+        class="copy-markdown-btn"
+        @click.stop="copyMarkdown"
+        :title="copyFeedback ? 'Copied!' : 'Copy markdown'"
+        aria-label="Copy raw markdown"
+      >
+        <svg v-if="copyFeedback" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+      </button>
     </div>
     <div v-if="hasResult && isError" class="comm-card-failure-detail">
       <div class="tool-section">
@@ -66,7 +80,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { getAgentColor, getAssistantRowColor, slugifyAgentName } from '@/composables/useAgentColor'
 import { useResourceImages } from '@/composables/useResourceImages'
 import { useResourceStore } from '@/stores/resource'
@@ -141,6 +155,20 @@ function handleHeaderClick() {
   if (!hasContent.value) return
   emit('toggle-expand')
 }
+
+// Hover-revealed copy-markdown button, mirrors UserMessage.vue's plain-bubble affordance
+// (lost when comm-type messages started rendering through this shared card instead).
+const copyFeedback = ref(false)
+let copyTimer = null
+
+async function copyMarkdown() {
+  await navigator.clipboard.writeText(resolvedBodyContent.value)
+  copyFeedback.value = true
+  clearTimeout(copyTimer)
+  copyTimer = setTimeout(() => { copyFeedback.value = false }, 2000)
+}
+
+onUnmounted(() => clearTimeout(copyTimer))
 
 const resourceStore = useResourceStore()
 function openAttachmentPreview(att) {
@@ -292,6 +320,7 @@ useResourceImages(cardRef, currentSessionId)
 }
 
 .comm-card-body {
+  position: relative;
   font-size: 14px;
   line-height: 1.5;
   color: var(--bs-body-color);
@@ -301,6 +330,34 @@ useResourceImages(cardRef, currentSessionId)
   padding-top: 8px;
   margin-top: 6px;
   border-top: 1px solid var(--bs-border-color-translucent);
+}
+
+.copy-markdown-btn {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  background: var(--bs-body-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 6px;
+  padding: 3px 5px;
+  cursor: pointer;
+  color: var(--bs-secondary-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.copy-markdown-btn:hover {
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-body-color);
+  border-color: var(--bs-border-color);
+}
+
+.comm-card-body:hover .copy-markdown-btn {
+  opacity: 1;
 }
 
 .comm-card-body :deep(*) {

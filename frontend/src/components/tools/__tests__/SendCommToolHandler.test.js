@@ -145,4 +145,29 @@ describe('SendCommToolHandler', () => {
 
     expect(wrapper.find('.comm-card-failure-detail').exists()).toBe(false)
   })
+
+  it('issue #1843 follow-up: expanded card has a copy-markdown button that copies the body content', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+
+    const toolCall = {
+      id: 'use-1',
+      session_id: 'sender-1',
+      name: 'send_comm',
+      input: { to_minion_name: 'database-optimizer', content: 'the delivered body text', comm_type: 'info' },
+      status: 'completed',
+    }
+
+    const { wrapper } = renderWithStores(SendCommToolHandler, { props: { toolCall }, stubs: { MarkdownView: MarkdownViewStub } })
+    await seedSessions(wrapper, [
+      { session_id: 'sender-1', project_id: 'proj-1', slug: 'sender', name: 'Sender' },
+    ])
+
+    await wrapper.find('.comm-card-header').trigger('click')
+    const copyBtn = wrapper.find('.copy-markdown-btn')
+    expect(copyBtn.exists()).toBe(true)
+
+    await copyBtn.trigger('click')
+    expect(writeText).toHaveBeenCalledWith('the delivered body text')
+  })
 })
