@@ -1,15 +1,23 @@
 <template>
   <div class="msg-wrapper msg-user" data-testid="user-message">
-    <div
-      class="msg-bubble"
-      :class="isComm ? 'msg-bubble-comm' : 'msg-bubble-user'"
-      :style="isComm ? { background: gradientBg, borderLeftColor: commColor.accent } : {}"
-    >
+    <CommCard
+      v-if="isComm"
+      direction="inbound"
+      :participant-name="commSenderName"
+      :participant-session-id="commSenderSessionId"
+      :comm-type="message.metadata.comm.comm_type"
+      :summary="message.metadata.comm.summary"
+      :content="message.metadata.comm.content"
+      :body-content="message.content"
+      :timestamp="message.timestamp"
+      :attachments="attachmentsForCard"
+      :expanded="messageStore.isCommExpanded(commScopeKey)"
+      :self-agent-id="commSenderId"
+      @toggle-expand="messageStore.toggleCommExpanded(commScopeKey)"
+    />
+    <div v-else class="msg-bubble msg-bubble-user">
       <div class="msg-meta">
-        <span class="msg-role" :style="isComm ? { color: commColor.accent } : {}">
-          <a v-if="commSenderSessionId" :href="`#/session/${commSenderSessionId}`" class="msg-role-link">{{ commSenderName }}</a>
-          <template v-else>{{ isComm ? commSenderName : 'user' }}</template>
-        </span>
+        <span class="msg-role">user</span>
         <span class="msg-time">{{ formattedTimestamp }}</span>
       </div>
 
@@ -77,13 +85,13 @@
 <script setup>
 import { computed, ref, onUnmounted, inject } from 'vue'
 import { formatTimestamp } from '@/utils/time'
-import { getAgentColor, getAssistantRowColor } from '@/composables/useAgentColor'
 import { useResourceImages } from '@/composables/useResourceImages'
 import { useSessionStore } from '@/stores/session'
 import { useResourceStore } from '@/stores/resource'
 import { useMessageStore } from '@/stores/message'
 import { getFileIcon } from '@/utils/fileTypes'
 import AttachmentChip from '@/components/common/AttachmentChip.vue'
+import CommCard from '@/components/common/CommCard.vue'
 import MarkdownView from '@/components/common/MarkdownView.vue'
 import HookPillStrip from './HookPillStrip.vue'
 
@@ -99,16 +107,13 @@ const formattedTimestamp = computed(() => {
 })
 
 const isComm = computed(() => !!props.message.metadata?.comm)
-const commColor = computed(() => isComm.value ? getAgentColor(props.message.metadata.comm.from_name) : null)
 const commSenderName = computed(() => props.message.metadata?.comm?.from_display_name || 'agent')
 
-// Issue #1755: the receiving side is always "this session, as assistant" in its own transcript
-const recipientColor = computed(() => getAssistantRowColor())
-const gradientBg = computed(() => isComm.value
-  ? `linear-gradient(to right, ${commColor.value.bg} 0%, ${recipientColor.value.bg} 30%, ${recipientColor.value.bg} 100%)`
-  : null)
-
 const sessionStore = useSessionStore()
+
+// Issue #1843: stable scope key for the CommCard expand/collapse Pinia map — survives
+// virtualized-list remount the same way thinkingBlockExpanded's scope keys do.
+const commScopeKey = computed(() => props.message.id || props.message.message_id)
 
 // Issue #1714: jump-link to the sender's session when it still exists (from_minion_id
 // added in comm_router.py). No fallback to name-based lookup — avoids drift if the
@@ -218,6 +223,17 @@ const attachmentItems = computed(() => {
   return parseAttachmentsFromContent(props.message?.content ?? '')
 })
 
+// CommCard's attachment shape mirrors SendCommToolHandler's (per-item sessionId, size,
+// mimeType) — inbound comm metadata never carries size/mimeType (see comm_router.py),
+// so those are left null here, same as the previous plain-bubble AttachmentChip usage.
+const attachmentsForCard = computed(() => attachmentItems.value.map(item => ({
+  filename: item.filename,
+  resourceId: item.resourceId,
+  sessionId: sessionStore.currentSessionId,
+  size: null,
+  mimeType: null,
+})))
+
 function openPreview(item) {
   if (!item.resourceId) return
   resourceStore.openFullViewById(item.resourceId, sessionStore.currentSessionId)
@@ -281,17 +297,6 @@ function truncate(text, maxLength) {
   color: var(--agent-color-user-accent);
 }
 
-.msg-role-link {
-  color: inherit;
-  text-decoration: underline;
-  text-decoration-style: dotted;
-  text-underline-offset: 2px;
-}
-
-.msg-role-link:hover {
-  text-decoration-style: solid;
-}
-
 .msg-time {
   font-size: 11px;
   color: var(--bs-secondary-color);
@@ -307,11 +312,6 @@ function truncate(text, maxLength) {
 
 .msg-bubble-user {
   /* Accent/wash now come from .msg-bubble; no additional styling needed */
-}
-
-/* Comm-injected messages: agent-colored left accent (background/border-color set inline) */
-.msg-bubble-comm {
-  border-left-width: 4px;
 }
 
 .msg-text {

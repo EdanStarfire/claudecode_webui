@@ -369,6 +369,67 @@ class TestCommRouter:
         assert attachments[0]["resource_id"] == "res-abc123"
 
     @pytest.mark.asyncio
+    async def test_issue_1843_comm_metadata_includes_summary_and_trailing_instruction(self, comm_router):
+        """Regression test: _send_to_minion must expose comm.summary, comm.content, and
+        the trailing send_comm instruction as structured metadata fields for the frontend
+        CommCard UI, WITHOUT altering the model-delivered `message` text (AC5/T4)."""
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_user=True,
+            to_minion_id="test-minion-123",
+            summary="Investigate slow query",
+            content="Please look into the slow query on orders.",
+            comm_type=CommType.TASK,
+        )
+
+        result = await comm_router._send_to_minion(comm)
+        assert result is True
+
+        send_message_mock = comm_router.system.session_coordinator.send_message
+        send_message_mock.assert_called_once()
+        call_kwargs = send_message_mock.call_args.kwargs
+
+        metadata = call_kwargs.get("metadata")
+        assert metadata is not None
+        comm_meta = metadata["comm"]
+        assert comm_meta["summary"] == "Investigate slow query"
+        assert comm_meta["content"] == "Please look into the slow query on orders."
+        assert comm_meta["trailing_instruction"] == "Always send messages to Minion #user using the `send_comm` tool."
+
+        expected_message = (
+            "**📋 Task from Minion #user:** Investigate slow query\n\n"
+            "Please look into the slow query on orders.\n\n"
+            "---\n"
+            "Always send messages to Minion #user using the `send_comm` tool."
+        )
+        assert call_kwargs.get("message") == expected_message, (
+            "Delivered message text must be byte-identical to before this change - "
+            "metadata additions must never alter what the SDK receives"
+        )
+
+    @pytest.mark.asyncio
+    async def test_issue_1843_comm_metadata_empty_summary_is_empty_string(self, comm_router):
+        """Regression test: when comm.summary is unset, metadata['comm']['summary'] must be
+        an empty string (not None, not omitted) so the frontend fallback logic can reliably
+        distinguish 'empty' from 'missing'."""
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_user=True,
+            to_minion_id="test-minion-123",
+            content="No summary provided for this one.",
+            comm_type=CommType.INFO,
+        )
+
+        result = await comm_router._send_to_minion(comm)
+        assert result is True
+
+        send_message_mock = comm_router.system.session_coordinator.send_message
+        call_kwargs = send_message_mock.call_args.kwargs
+        comm_meta = call_kwargs["metadata"]["comm"]
+        assert comm_meta["summary"] == ""
+        assert comm_meta["content"] == "No summary provided for this one."
+
+    @pytest.mark.asyncio
     async def test_issue_1730_route_comm_persists_non_null_resource_id(self, comm_router, tmp_path):
         """Regression test: route_comm() delivers attachments (resolving
         resource_id) before persisting the Comm, so timeline.jsonl carries the
