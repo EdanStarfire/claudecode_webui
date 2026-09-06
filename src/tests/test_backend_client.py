@@ -142,6 +142,39 @@ async def test_issue_1844_request_json_records_success_before_raise_for_status()
     assert client.reachability.is_unreachable is False
 
 
+@pytest.mark.asyncio
+async def test_issue_1847_request_json_omits_timeout_kwarg_when_not_given():
+    """Existing callers (e.g. config.py's PUT /api/config) must keep this client's
+    normal per-request default — explicitly passing `timeout=None` to httpx disables
+    the timeout entirely rather than falling back to the client default, so the
+    kwarg must be omitted outright, not passed as None."""
+    client = _make_client()
+    resp = MagicMock()
+    resp.json.return_value = {"ok": True}
+    client._client.request = AsyncMock(return_value=resp)
+
+    await client.request_json("PUT", "/api/config", json={"a": 1})
+
+    _, kwargs = client._client.request.call_args
+    assert "timeout" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_issue_1847_request_json_forwards_explicit_timeout():
+    """Callers awaiting a Backend operation with its own long synchronous work
+    budget (e.g. the restart endpoint's git operations + uv sync) must be able to
+    give the client-side call matching headroom."""
+    client = _make_client()
+    resp = MagicMock()
+    resp.json.return_value = {"ok": True}
+    client._client.request = AsyncMock(return_value=resp)
+
+    await client.request_json("POST", "/api/system/restart", json={}, timeout=210.0)
+
+    _, kwargs = client._client.request.call_args
+    assert kwargs["timeout"] == 210.0
+
+
 # --- health() / ready() ---
 
 
