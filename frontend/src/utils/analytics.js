@@ -51,6 +51,18 @@ export function presetToRange(label) {
   return { since: until - preset.seconds, until }
 }
 
+/**
+ * Format a model identifier for display, flagging unpriced models.
+ * `(unknown)` is reserved for a missing/null model; a present-but-unpriced
+ * model keeps its raw identifier with an `unknown ` prefix instead of being
+ * collapsed into the same generic bucket.
+ */
+export function formatModelLabel(model, ratesKnown) {
+  if (!model) return '(unknown)'
+  if (ratesKnown === false) return `unknown ${model}`
+  return model
+}
+
 /** Format a bucket_ts (Unix seconds) as a readable label. */
 export function formatBucketLabel(ts, groupBy) {
   if (!ts) return ''
