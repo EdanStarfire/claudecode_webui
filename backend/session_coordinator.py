@@ -548,6 +548,12 @@ class SessionCoordinator:
         # used to compute true per-turn deltas from the SDK's cumulative-since-
         # subprocess-start counters. Reset at every new-SDK-creation epoch boundary.
         self._usage_baseline_by_session: dict[str, dict[str, float]] = {}
+        # Issue #1831: SDK-reported model from the most recent assistant message of
+        # the current in-flight turn. Cleared once consumed by that turn's result
+        # handler, so a turn with no assistant message (e.g. an immediate
+        # synthetic/error result) correctly yields no fallback instead of a stale
+        # value from a previous turn.
+        self._last_turn_model_by_session: dict[str, str] = {}
         # Callback for broadcasting usage_updated events (injected by web_server)
         self._usage_broadcast_callback: Callable[[str, dict], None] | None = None
 
@@ -2444,6 +2450,8 @@ class SessionCoordinator:
 
             if success:
                 coord_logger.info(f"Session {session_id} deleted")
+                # Issue #1831: Clear any in-flight-turn model tracked for this session
+                self._last_turn_model_by_session.pop(session_id, None)
                 # Issue #1125: Remove analytics rows for deleted session
                 if self.analytics_store:
                     try:
@@ -4968,6 +4976,13 @@ class SessionCoordinator:
                                 _model = _resolve_analytics_model_label(_eff)
                             else:
                                 _model = None
+                            # Issue #1831: fall back to the current turn's SDK-reported
+                            # model when no configured override resolved a label. Pop
+                            # unconditionally so the cache never leaks into the next turn.
+                            if _model is None:
+                                _model = self._last_turn_model_by_session.pop(session_id, None)
+                            else:
+                                self._last_turn_model_by_session.pop(session_id, None)
                             # Lazily initialise turn_seq from DB on first use after restart
                             if session_id not in self._turn_seq_by_session:
                                 db_count = await self.analytics_store.get_turn_count(session_id)
@@ -5010,6 +5025,16 @@ class SessionCoordinator:
                         await self.session_manager.update_processing_state(session_id, True)
                     except Exception:
                         logger.exception(f"Failed to set processing state for session {session_id}")
+
+                    # Issue #1831: Track the SDK-reported model for this in-flight turn as
+                    # a fallback for when no configured override resolves a label. Skip
+                    # sub-agent (Task tool) messages — they carry parent_tool_use_id and
+                    # would otherwise clobber the top-level turn's model with whatever
+                    # model the sub-agent happened to use.
+                    _msg_meta = parsed_message.metadata or {}
+                    _msg_model = _msg_meta.get('model')
+                    if _msg_model and not _msg_meta.get('parent_tool_use_id'):
+                        self._last_turn_model_by_session[session_id] = _msg_model
 
                 # Reset processing state on interrupt_success
                 elif parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'interrupt_success':
