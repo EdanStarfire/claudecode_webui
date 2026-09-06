@@ -27,6 +27,8 @@ Tests:
 import subprocess
 from unittest.mock import AsyncMock, patch
 
+from backend.routers.system import _do_restart
+
 
 class TestHealth:
     async def test_health_check(self, api_integration_env):
@@ -464,6 +466,49 @@ class TestRestartCustomPath:
         finally:
             for p in patches:
                 p.stop()
+
+
+class TestDoRestartReExec:
+    """Issue #1847 review finding: found via a live remote-mode smoke test, not by
+    any mocked-os.execv unit test (none of the existing ones let the re-exec'd
+    process actually start). _do_restart must reconstruct a module-mode
+    (`-m backend.main`) invocation — reusing `sys.argv` as-is re-execs as a plain
+    script instead, whose auto-prepended own directory (`backend/`) shadows the
+    third-party `mcp` package with this repo's own `backend/mcp/` subpackage,
+    crash-looping the restarted process. See _do_restart's docstring for detail."""
+
+    async def test_reexecs_via_module_mode_not_raw_argv(self, api_integration_env):
+        webui = api_integration_env["webui"]
+
+        with (
+            patch("backend.routers.system.asyncio.sleep", AsyncMock()),
+            patch("backend.routers.system.os.execv") as mock_execv,
+            patch.object(webui.coordinator, "cleanup", AsyncMock()),
+            patch(
+                "backend.routers.system.sys.argv",
+                ["/repo/backend/main.py", "--host", "127.0.0.1", "--port", "58471", "--embedded"],
+            ),
+            patch("backend.routers.system.sys.executable", "/venv/bin/python3"),
+        ):
+            await _do_restart(webui)
+
+        mock_execv.assert_called_once_with(
+            "/venv/bin/python3",
+            ["/venv/bin/python3", "-m", "backend.main",
+             "--host", "127.0.0.1", "--port", "58471", "--embedded"],
+        )
+
+    async def test_cleanup_failure_does_not_block_reexec(self, api_integration_env):
+        webui = api_integration_env["webui"]
+
+        with (
+            patch("backend.routers.system.asyncio.sleep", AsyncMock()),
+            patch("backend.routers.system.os.execv") as mock_execv,
+            patch.object(webui.coordinator, "cleanup", AsyncMock(side_effect=RuntimeError("boom"))),
+        ):
+            await _do_restart(webui)
+
+        mock_execv.assert_called_once()
 
 
 class TestFilesystem:

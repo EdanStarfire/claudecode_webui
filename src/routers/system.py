@@ -20,8 +20,10 @@ import os
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -30,10 +32,117 @@ from shared.git_restart import run_git_command, validate_git_ref_component
 
 logger = logging.getLogger(__name__)
 
+# Per-phase timeout for polling a remote Backend back to healthy, then ready, after
+# triggering its restart. Each phase gets its OWN full budget below (not one shared
+# deadline) — mirrors BackendSupervisor.wait_ready()'s own two-phase-deadline fix in
+# src/backend_supervisor.py: a shared deadline can starve the second phase for a
+# Backend slow to pass the first. Matches the 60s ceiling RestartModal.vue already
+# uses for its own post-restart health poll, for consistency.
+_BACKEND_RESTART_TIMEOUT = 60.0
+_BACKEND_RESTART_POLL_INTERVAL = 0.5
+# Grace period before the first poll. Backend's own restart re-execs ~0.5s after
+# responding (backend/routers/system.py's _do_restart), so polling immediately risks
+# observing the still-alive pre-restart process and declaring success without ever
+# having seen it go down and come back.
+_BACKEND_RESTART_GRACE_SECONDS = 1.0
+# Margin above Backend's own worst-case synchronous restart-trigger work (git
+# checkout/fetch/reset up to ~75s, then uv sync up to 120s — both run before Backend
+# even responds). The client-side timeout for triggering the restart must have
+# headroom above that budget, not equal or below it — same discipline as
+# BackendClient.get_json()'s own docstring (issue #498 review finding).
+_BACKEND_RESTART_TRIGGER_TIMEOUT = 210.0
+
 
 class RestartRequest(BaseModel):
-    branch: str | None = None
-    commit: str | None = None
+    branch: str | None = None       # Frontend's own target (unchanged meaning)
+    commit: str | None = None       # Frontend's own target (unchanged meaning)
+    backend_branch: str | None = None   # remote mode only — Backend's target
+    backend_commit: str | None = None   # remote mode only — Backend's target
+
+
+@dataclass
+class BackendRestartOutcome:
+    status: str  # "restarted" | "failed" | "unreachable"
+    detail: str
+
+    @property
+    def ok(self) -> bool:
+        return self.status == "restarted"
+
+
+async def _restart_remote_backend(webui, payload: "RestartRequest") -> BackendRestartOutcome:
+    """Orchestrate a remote Backend's own restart before Frontend restarts itself.
+
+    Only called in remote mode (webui.backend_supervisor is None). Backend's own
+    POST /api/system/restart (backend/routers/system.py) already fully implements
+    this exact {branch, commit} target contract, already validates/fetches/
+    checks-out/resets against its own repo, and already waits, re-execs, and comes
+    back up on its own — this is orchestration glue, not new restart machinery.
+
+    Note: Backend's own git checkout/reset runs synchronously, before it even
+    responds to the trigger request below — so once Backend accepts the request at
+    all, its repo has already changed regardless of what happens next. A "failed"/
+    "unreachable" outcome from this function only guarantees Frontend hasn't touched
+    its own state; it does not mean Backend's is unchanged too.
+    """
+    if not await webui.backend_client.health():
+        return BackendRestartOutcome(
+            status="unreachable",
+            detail="Backend was already unreachable before this restart was attempted.",
+        )
+
+    backend_payload = {"branch": payload.backend_branch, "commit": payload.backend_commit}
+    try:
+        await webui.backend_client.request_json(
+            "POST", "/api/system/restart", json=backend_payload,
+            timeout=_BACKEND_RESTART_TRIGGER_TIMEOUT,
+        )
+    except httpx.HTTPStatusError as e:
+        detail = e.response.text
+        try:
+            detail = e.response.json().get("detail", detail)
+        except (ValueError, AttributeError, TypeError):
+            pass
+        return BackendRestartOutcome(status="failed", detail=detail)
+    except httpx.RequestError as e:
+        return BackendRestartOutcome(
+            status="unreachable",
+            detail=f"Backend became unreachable while triggering its restart: {e}",
+        )
+
+    # Backend returned 202 and is now restarting asynchronously (fire-and-forget,
+    # same pattern as Frontend's own _finish_restart). Give it a moment to actually
+    # start tearing down before polling (see _BACKEND_RESTART_GRACE_SECONDS), then
+    # poll it back to healthy, then ready. health()/ready() route connection failures
+    # through BackendReachabilityTracker automatically, so repeated failures during
+    # the expected outage window collapse into the existing suppressed-warning
+    # behavior (#1844) instead of spamming error.log.
+    await asyncio.sleep(_BACKEND_RESTART_GRACE_SECONDS)
+
+    async def _poll_until(check) -> bool:
+        deadline = time.monotonic() + _BACKEND_RESTART_TIMEOUT
+        while time.monotonic() < deadline:
+            if await check():
+                return True
+            await asyncio.sleep(_BACKEND_RESTART_POLL_INTERVAL)
+        return False
+
+    if not await _poll_until(webui.backend_client.health):
+        return BackendRestartOutcome(
+            status="failed",
+            detail=f"Backend did not become healthy within {int(_BACKEND_RESTART_TIMEOUT)}s of restarting.",
+        )
+
+    if not await _poll_until(webui.backend_client.ready):
+        return BackendRestartOutcome(
+            status="failed",
+            detail=(
+                f"Backend became healthy but did not report ready within the "
+                f"{int(_BACKEND_RESTART_TIMEOUT)}s restart window."
+            ),
+        )
+
+    return BackendRestartOutcome(status="restarted", detail="Backend restarted and is ready.")
 
 
 async def _restart_to_target(project_root: Path, payload: "RestartRequest") -> str:
@@ -180,10 +289,19 @@ def build_router(webui) -> APIRouter:
         would keep running under a supervisor that's about to stop watching
         it, orphaned, while a second, fresh Backend also starts on re-exec.)
 
-        Remote mode (webui.backend_supervisor is None): only Frontend is
-        restarted. A remote Backend is a separate deployment this action does
-        not attempt to manage — coordinated split-repo restart/rollback for
-        that case is tracked separately.
+        Remote mode (webui.backend_supervisor is None): Backend is restarted
+        first via _restart_remote_backend() — defaulting to "pull latest" on
+        Backend too when backend_branch/backend_commit are both absent, or an
+        explicit independent target otherwise. Frontend's own restart only
+        proceeds once Backend reports healthy+ready again; a Backend-side
+        failure reported by that step (already unreachable, rejected target,
+        never came back healthy+ready) aborts before Frontend touches its own
+        git state or restarts. Note this guarantees Frontend is untouched on
+        such a failure, not that Backend is too: Backend's own git checkout/
+        reset runs synchronously before it even responds, so a request Backend
+        *accepts* has already changed Backend's repo regardless of what
+        happens afterward — full two-tier atomicity (e.g. if Frontend's own
+        subsequent git operations then fail) is out of scope for this stage.
         """
         now = time.time()
         if now - webui._last_restart_time < 30:
@@ -194,8 +312,29 @@ def build_router(webui) -> APIRouter:
             )
         webui._last_restart_time = now
 
+        payload = payload or RestartRequest()
         project_root = Path(__file__).parent.parent.parent
-        has_custom_target = payload is not None and (payload.branch or payload.commit)
+
+        # Validate Frontend's own target up front, before Backend is touched at all —
+        # a malformed/malicious ref here must not trigger Backend's restart only to
+        # then have Frontend itself reject the request (also re-checked inside
+        # _restart_to_target(), which remains the authoritative check for its own
+        # direct callers/tests).
+        for value, field_name in ((payload.branch, "branch"), (payload.commit, "commit")):
+            if value is not None:
+                validate_git_ref_component(value, field_name)
+
+        has_custom_target = bool(payload.branch or payload.commit)
+
+        backend_outcome = None
+        if webui.backend_supervisor is None:
+            outcome = await _restart_remote_backend(webui, payload)
+            if not outcome.ok:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Backend restart failed ({outcome.status}): {outcome.detail}",
+                )
+            backend_outcome = {"status": outcome.status, "detail": outcome.detail}
 
         if not has_custom_target:
             try:
@@ -257,6 +396,7 @@ def build_router(webui) -> APIRouter:
             "message": "Server is pulling latest code and restarting...",
             "pull_output": pull_output,
             "sync_output": sync_output,
+            "backend": backend_outcome,
         }
 
     return router

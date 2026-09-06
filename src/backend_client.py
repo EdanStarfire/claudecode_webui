@@ -93,10 +93,23 @@ class BackendClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def request_json(self, method: str, path: str, json: dict | None = None) -> dict:
-        """Call a JSON endpoint on Backend and return the decoded body. Raises on non-2xx."""
+    async def request_json(
+        self, method: str, path: str, json: dict | None = None, timeout: float | None = None
+    ) -> dict:
+        """Call a JSON endpoint on Backend and return the decoded body. Raises on non-2xx.
+
+        Pass `timeout` explicitly for callers awaiting a Backend operation with its own
+        long synchronous work budget (e.g. the restart endpoint's git operations + uv
+        sync, up to ~180s) — the client-side timeout must have margin above that budget,
+        same discipline as get_json() (issue #498 review finding). Omitted entirely
+        (not just falsy) when not given, so existing callers keep this client's normal
+        per-request default instead of an explicit `timeout=None` disabling it outright.
+        """
+        kwargs = {"json": json, "headers": self._auth_headers()}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
         try:
-            resp = await self._client.request(method, path, json=json, headers=self._auth_headers())
+            resp = await self._client.request(method, path, **kwargs)
         except httpx.RequestError as e:
             self.reachability.record_failure(e)
             raise

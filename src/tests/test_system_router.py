@@ -11,6 +11,7 @@ intercepts this one route itself instead of falling through to the generic relay
 import subprocess
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -27,6 +28,12 @@ def _make_webui(backend_supervisor=None):
     webui.backend_supervisor = backend_supervisor
     webui.poll_relay.stop = AsyncMock()
     webui.backend_client.aclose = AsyncMock()
+    # Remote-mode Backend orchestration defaults (#1847) — sane "everything's fine"
+    # mocks so pre-existing tests exercising remote mode (backend_supervisor=None)
+    # without caring about Backend orchestration don't need to know about it.
+    webui.backend_client.health = AsyncMock(return_value=True)
+    webui.backend_client.ready = AsyncMock(return_value=True)
+    webui.backend_client.request_json = AsyncMock(return_value={"status": "restarting"})
     webui.ui_queue.append = MagicMock()
     return webui
 
@@ -102,6 +109,10 @@ class TestRestartCustomTarget:
             resp = await client.post("/api/system/restart", json={"branch": "--upload-pack=/bin/sh"})
 
         assert resp.status_code == 400
+        # Malformed Frontend target must be rejected before Backend is touched at
+        # all (issue #1847 review finding) — not just before Frontend's own git ops.
+        webui.backend_client.health.assert_not_awaited()
+        webui.backend_client.request_json.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_uncommitted_changes_returns_409(self):
@@ -220,3 +231,190 @@ class TestFinishRestart:
         mock_execv.assert_called_once_with(
             "/usr/bin/python3", ["/usr/bin/python3", "main.py", "--port", "8000"]
         )
+
+
+def _http_status_error(status_code, detail):
+    request = httpx.Request("POST", "http://backend/api/system/restart")
+    response = httpx.Response(status_code, json={"detail": detail}, request=request)
+    return httpx.HTTPStatusError(str(status_code), request=request, response=response)
+
+
+def _default_run_side_effect(cmd, **kwargs):
+    if cmd == ["git", "pull"]:
+        return _fake_completed(stdout="Already up to date.\n")
+    if cmd == ["uv", "sync"]:
+        return _fake_completed(stdout="Synced\n")
+    raise AssertionError(f"Unexpected subprocess.run call: {cmd}")
+
+
+def _no_subprocess_expected(cmd, **kwargs):
+    raise AssertionError(f"Frontend must not touch its own git state: {cmd}")
+
+
+class TestRestartRemoteBackendOrchestration:
+    """Remote mode (webui.backend_supervisor is None) Backend-orchestration step (#1847)."""
+
+    @pytest.mark.asyncio
+    async def test_no_explicit_targets_both_tiers_restart(self):
+        webui = _make_webui(backend_supervisor=None)
+        # health/ready/request_json defaults ("everything's fine") come from _make_webui.
+
+        with (
+            patch("src.routers.system._BACKEND_RESTART_GRACE_SECONDS", 0),
+            patch("src.routers.system.subprocess.run", side_effect=_default_run_side_effect),
+        ):
+            async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+                resp = await client.post("/api/system/restart")
+
+        assert resp.status_code == 202
+        body = resp.json()
+        assert body["backend"] == {"status": "restarted", "detail": "Backend restarted and is ready."}
+        assert body["pull_output"] == "Already up to date."
+        webui.backend_client.request_json.assert_awaited_once_with(
+            "POST", "/api/system/restart", json={"branch": None, "commit": None}, timeout=210.0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_independent_per_tier_targets(self):
+        webui = _make_webui(backend_supervisor=None)
+        # health/ready/request_json defaults ("everything's fine") come from _make_webui.
+
+        async def run_git_command_side_effect(args, cwd, allow_nonzero=False):
+            if args == ["git", "status", "--porcelain"]:
+                return ""
+            if args == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+                return "main"
+            if args == ["git", "rev-parse", "--verify", "--quiet", "refs/heads/frontend-branch"]:
+                return "abc123"
+            if args == ["git", "rev-parse", "--short", "HEAD"]:
+                return "def4567"
+            raise AssertionError(f"Unexpected run_git_command call: {args}")
+
+        def run_side_effect(cmd, **kwargs):
+            if cmd == ["git", "checkout", "frontend-branch"]:
+                return _fake_completed()
+            if cmd == ["git", "reset", "--hard", "origin/frontend-branch"]:
+                return _fake_completed()
+            if cmd == ["uv", "sync"]:
+                return _fake_completed(stdout="Synced\n")
+            raise AssertionError(f"Unexpected subprocess.run call: {cmd}")
+
+        with (
+            patch("src.routers.system.run_git_command", AsyncMock(side_effect=run_git_command_side_effect)),
+            patch("src.routers.system.subprocess.run", side_effect=run_side_effect),
+            patch("src.routers.system.asyncio.create_subprocess_exec", AsyncMock()),
+            patch("src.routers.system._BACKEND_RESTART_GRACE_SECONDS", 0),
+        ):
+            async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/api/system/restart",
+                    json={"branch": "frontend-branch", "backend_branch": "backend-branch"},
+                )
+
+        assert resp.status_code == 202
+        assert "Switched to frontend-branch" in resp.json()["pull_output"]
+        webui.backend_client.request_json.assert_awaited_once_with(
+            "POST", "/api/system/restart", json={"branch": "backend-branch", "commit": None}, timeout=210.0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_backend_rejects_target_synchronously(self):
+        webui = _make_webui(backend_supervisor=None)
+        webui.backend_client.health = AsyncMock(return_value=True)
+        webui.backend_client.request_json = AsyncMock(
+            side_effect=_http_status_error(409, "Uncommitted changes present.")
+        )
+
+        with patch("src.routers.system.subprocess.run", side_effect=_no_subprocess_expected):
+            async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+                resp = await client.post("/api/system/restart")
+
+        assert resp.status_code == 502
+        assert "Uncommitted changes present." in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_backend_already_unreachable_fails_fast(self):
+        webui = _make_webui(backend_supervisor=None)
+        webui.backend_client.health = AsyncMock(return_value=False)
+        webui.backend_client.request_json = AsyncMock()
+
+        with patch("src.routers.system.subprocess.run", side_effect=_no_subprocess_expected):
+            async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+                resp = await client.post("/api/system/restart")
+
+        assert resp.status_code == 502
+        assert "already unreachable" in resp.json()["detail"]
+        webui.backend_client.request_json.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_backend_never_becomes_healthy_times_out(self):
+        webui = _make_webui(backend_supervisor=None)
+
+        # health() is called once for the initial "already unreachable?" fail-fast
+        # check (must be True/reachable here) and then repeatedly inside the poll
+        # loop (must stay False forever to exercise the timeout path).
+        calls = {"n": 0}
+
+        async def health_side_effect():
+            calls["n"] += 1
+            return calls["n"] == 1
+
+        webui.backend_client.health = AsyncMock(side_effect=health_side_effect)
+        webui.backend_client.request_json = AsyncMock(return_value={"status": "restarting"})
+
+        with (
+            patch("src.routers.system._BACKEND_RESTART_TIMEOUT", 0.2),
+            patch("src.routers.system._BACKEND_RESTART_POLL_INTERVAL", 0.05),
+            patch("src.routers.system._BACKEND_RESTART_GRACE_SECONDS", 0),
+            patch("src.routers.system.subprocess.run", side_effect=_no_subprocess_expected),
+        ):
+            async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+                resp = await client.post("/api/system/restart")
+
+        assert resp.status_code == 502
+        assert "did not become healthy" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_health_and_ready_each_get_independent_timeout_budget(self):
+        """Regression guard (#1847 review finding): health and ready must each get
+        their OWN full timeout budget, not one shared deadline split between them —
+        mirrors the bug BackendSupervisor.wait_ready() already fixed for startup."""
+        webui = _make_webui(backend_supervisor=None)
+        # First health() call is the initial "already unreachable?" fail-fast check
+        # (True/reachable); the next 4 are the health-poll phase, taking ~4 polls
+        # (~0.2s) to succeed — enough to exhaust a *shared* 0.3s deadline before
+        # ready() ever got a turn under the old (buggy) design.
+        webui.backend_client.health = AsyncMock(side_effect=[True, False, False, False, True])
+        webui.backend_client.ready = AsyncMock(side_effect=[False, False, True])
+        webui.backend_client.request_json = AsyncMock(return_value={"status": "restarting"})
+
+        with (
+            patch("src.routers.system._BACKEND_RESTART_TIMEOUT", 0.3),
+            patch("src.routers.system._BACKEND_RESTART_POLL_INTERVAL", 0.05),
+            patch("src.routers.system._BACKEND_RESTART_GRACE_SECONDS", 0),
+            patch("src.routers.system.subprocess.run", side_effect=_default_run_side_effect),
+        ):
+            async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+                resp = await client.post("/api/system/restart")
+
+        assert resp.status_code == 202
+        assert resp.json()["backend"] == {"status": "restarted", "detail": "Backend restarted and is ready."}
+
+    @pytest.mark.asyncio
+    async def test_embedded_mode_regression_unaffected(self):
+        """Regression: embedded mode must not execute any of the new remote-mode
+        orchestration code — no Backend health/ready/request_json calls at all."""
+        webui = _make_webui(backend_supervisor=MagicMock(stop=AsyncMock()))
+        webui.backend_client.health = AsyncMock()
+        webui.backend_client.ready = AsyncMock()
+        webui.backend_client.request_json = AsyncMock()
+
+        with patch("src.routers.system.subprocess.run", side_effect=_default_run_side_effect):
+            async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+                resp = await client.post("/api/system/restart")
+
+        assert resp.status_code == 202
+        assert resp.json()["backend"] is None
+        webui.backend_client.health.assert_not_awaited()
+        webui.backend_client.ready.assert_not_awaited()
+        webui.backend_client.request_json.assert_not_awaited()
