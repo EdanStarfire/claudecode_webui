@@ -28,7 +28,13 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from shared.exception_handlers import handle_exceptions
-from shared.git_restart import run_git_command, validate_git_ref_component
+from shared.git_restart import (
+    get_git_branches_info,
+    get_git_commits_info,
+    get_git_status_info,
+    run_git_command,
+    validate_git_ref_component,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +277,47 @@ async def _finish_restart(webui) -> None:
 
 def build_router(webui) -> APIRouter:
     router = APIRouter()
+
+    @router.get("/api/system/frontend-git-status")
+    @handle_exceptions("get frontend git status")
+    async def get_frontend_git_status():
+        """Return Frontend's own repo status (issue #1847 — remote-mode drift display).
+
+        Distinct from the relayed /api/system/git-status (always Backend's repo,
+        which in embedded mode happens to be the same checkout). This route describes
+        Frontend's own checkout, which only differs from Backend's in remote mode.
+        """
+        project_root = str(Path(__file__).parent.parent.parent)
+        return await get_git_status_info(project_root)
+
+    @router.get("/api/system/frontend-git-branches")
+    @handle_exceptions("get frontend git branches")
+    async def get_frontend_git_branches():
+        """Return Frontend's own local + origin branches (issue #1847)."""
+        project_root = str(Path(__file__).parent.parent.parent)
+        return await get_git_branches_info(project_root)
+
+    @router.get("/api/system/frontend-git-commits")
+    @handle_exceptions("get frontend git commits")
+    async def get_frontend_git_commits(branch: str):
+        """Return up to 50 one-line commit summaries for a branch in Frontend's own repo (issue #1847)."""
+        project_root = str(Path(__file__).parent.parent.parent)
+        return await get_git_commits_info(project_root, branch)
+
+    @router.get("/api/system/frontend-mode")
+    @handle_exceptions("get frontend mode")
+    async def get_frontend_mode():
+        """Return whether Frontend is running in remote-Backend mode (issue #1847).
+
+        Authoritative signal for RestartModal.vue's dual-tier UI — reflects the actual live
+        wiring (webui.backend_supervisor is None means Backend was pointed to via
+        --remote-backend-url/--remote-backend-token rather than auto-started), not
+        config.json's persisted backend_connection.remote_backend_url alone, which misses
+        deployments where those were passed as CLI-only flags and never written to disk
+        (review finding: main.py's `args.remote_backend_url or frontend_config...` falls
+        through to the CLI value without ever persisting it back).
+        """
+        return {"remote_mode": webui.backend_supervisor is None}
 
     @router.post("/api/system/restart", status_code=202)
     @handle_exceptions("restart server")

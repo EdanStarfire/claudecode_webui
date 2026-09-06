@@ -1,4 +1,5 @@
-"""Tests for src/routers/system.py's /api/system/restart (issue #498).
+"""Tests for src/routers/system.py's /api/system/restart (issue #498) and the
+Frontend-side git-status/branches/commits endpoints (issue #1847).
 
 Regression coverage for the bug found in manual testing: POST /api/system/restart
 lived only in backend/routers/system.py after the split (a straight relocation of
@@ -6,6 +7,11 @@ the pre-#498 unified router), so the browser's "Restart Server" button restarted
 Backend only via os.execv — Frontend kept running its old process image forever,
 silently never applying pulled changes to src/, main.py, or shared/. Frontend now
 intercepts this one route itself instead of falling through to the generic relay.
+
+The git-status/branches/commits endpoints (issue #1847) close a related gap: those
+routes had no Frontend-side handler at all and fell through to the generic relay,
+so they always described Backend's repo, never Frontend's own — in embedded mode
+this happened to look correct only because it's the same checkout.
 """
 
 import subprocess
@@ -418,3 +424,162 @@ class TestRestartRemoteBackendOrchestration:
         webui.backend_client.health.assert_not_awaited()
         webui.backend_client.ready.assert_not_awaited()
         webui.backend_client.request_json.assert_not_awaited()
+
+
+def _fake_async_proc(returncode=0):
+    proc = AsyncMock()
+    proc.communicate = AsyncMock(return_value=(b"", b""))
+    proc.returncode = returncode
+    return proc
+
+
+class TestFrontendGitStatusEndpoints:
+    """Frontend's own git-status/branches/commits (issue #1847) — distinct from the
+    relayed /api/system/git-status etc., which describe Backend's repo instead."""
+
+    @pytest.mark.asyncio
+    async def test_frontend_git_status_shape(self):
+        webui = _make_webui()
+
+        async def run_git_command_side_effect(args, cwd, allow_nonzero=False):
+            if args == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+                return "main"
+            if args == ["git", "log", "-1", "--format=%H"]:
+                return "abc123fullhash"
+            if args == ["git", "log", "-1", "--format=%s"]:
+                return "Local commit subject"
+            if args == ["git", "status", "--porcelain"]:
+                return ""
+            if args == ["git", "rev-parse", "--verify", "origin/main"]:
+                return "def456"
+            if args == ["git", "log", "-1", "--format=%H", "origin/main"]:
+                return "def456fullhash"
+            if args == ["git", "log", "-1", "--format=%s", "origin/main"]:
+                return "Remote commit subject"
+            if args == ["git", "rev-list", "--count", "HEAD..origin/main"]:
+                return "2"
+            raise AssertionError(f"Unexpected run_git_command call: {args}")
+
+        with (
+            patch("shared.git_restart.run_git_command", AsyncMock(side_effect=run_git_command_side_effect)),
+            patch(
+                "shared.git_restart.asyncio.create_subprocess_exec",
+                AsyncMock(return_value=_fake_async_proc()),
+            ),
+        ):
+            async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+                resp = await client.get("/api/system/frontend-git-status")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["branch"] == "main"
+        assert body["last_commit_hash"] == "abc123fullhash"
+        assert body["has_uncommitted_changes"] is False
+        assert body["remote_commit_hash"] == "def456fullhash"
+        assert body["commits_behind"] == 2
+        assert body["remote_fetch_failed"] is False
+
+    @pytest.mark.asyncio
+    async def test_frontend_git_branches_shape(self):
+        webui = _make_webui()
+
+        async def run_git_command_side_effect(args, cwd, allow_nonzero=False):
+            if args == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+                return "main"
+            if args == ["git", "for-each-ref", "refs/heads", "--format=%(refname:short)"]:
+                return "main\nfeature-x"
+            if args == ["git", "for-each-ref", "refs/remotes/origin", "--format=%(refname:short)"]:
+                return "origin/HEAD\norigin/main\norigin/remote-only"
+            raise AssertionError(f"Unexpected run_git_command call: {args}")
+
+        with (
+            patch("shared.git_restart.run_git_command", AsyncMock(side_effect=run_git_command_side_effect)),
+            patch("shared.git_restart.asyncio.create_subprocess_exec", AsyncMock()),
+        ):
+            async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+                resp = await client.get("/api/system/frontend-git-branches")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        names = {b["name"] for b in body["branches"]}
+        assert names == {"main", "feature-x", "remote-only"}
+        current = next(b for b in body["branches"] if b["name"] == "main")
+        assert current["is_current"] is True
+        assert current["is_local"] is True
+        remote_only = next(b for b in body["branches"] if b["name"] == "remote-only")
+        assert remote_only["is_remote_only"] is True
+        assert remote_only["is_local"] is False
+
+    @pytest.mark.asyncio
+    async def test_frontend_git_commits_shape(self):
+        webui = _make_webui()
+
+        async def run_git_command_side_effect(args, cwd, allow_nonzero=False):
+            if args == ["git", "rev-parse", "--verify", "--quiet", "refs/heads/main"]:
+                return "abc123"
+            if args[:2] == ["git", "log"]:
+                return "hash1\x1fh1\x1fSubject one\x1fauthor\x1f2026-01-01T00:00:00+00:00"
+            raise AssertionError(f"Unexpected run_git_command call: {args}")
+
+        with patch("shared.git_restart.run_git_command", AsyncMock(side_effect=run_git_command_side_effect)):
+            async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+                resp = await client.get("/api/system/frontend-git-commits", params={"branch": "main"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["branch"] == "main"
+        assert len(body["commits"]) == 1
+        assert body["commits"][0]["short_hash"] == "h1"
+        assert body["truncated"] is False
+
+    @pytest.mark.asyncio
+    async def test_frontend_git_commits_missing_branch_param(self):
+        webui = _make_webui()
+
+        async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+            resp = await client.get("/api/system/frontend-git-commits")
+
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_frontend_git_commits_unknown_branch(self):
+        webui = _make_webui()
+
+        async def run_git_command_side_effect(args, cwd, allow_nonzero=False):
+            if args[0:4] == ["git", "rev-parse", "--verify", "--quiet"]:
+                return None
+            raise AssertionError(f"Unexpected run_git_command call: {args}")
+
+        with patch("shared.git_restart.run_git_command", AsyncMock(side_effect=run_git_command_side_effect)):
+            async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+                resp = await client.get(
+                    "/api/system/frontend-git-commits", params={"branch": "definitely-not-a-real-branch"}
+                )
+
+        assert resp.status_code == 404
+
+
+class TestFrontendModeEndpoint:
+    """Authoritative embedded-vs-remote signal (issue #1847 review finding): reflects live
+    wiring (webui.backend_supervisor), not config.json alone — CLI-only --remote-backend-url
+    never persists to config.json, so a config-based check would misreport such a deployment."""
+
+    @pytest.mark.asyncio
+    async def test_embedded_mode_reports_false(self):
+        webui = _make_webui(backend_supervisor=MagicMock())
+
+        async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+            resp = await client.get("/api/system/frontend-mode")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"remote_mode": False}
+
+    @pytest.mark.asyncio
+    async def test_remote_mode_reports_true(self):
+        webui = _make_webui(backend_supervisor=None)
+
+        async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+            resp = await client.get("/api/system/frontend-mode")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"remote_mode": True}
