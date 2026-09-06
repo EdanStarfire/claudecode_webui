@@ -94,4 +94,51 @@ describe('UserMessage', () => {
     const text = screen.getByText('user')
     expect(text.tagName).not.toBe('A')
   })
+
+  it('issue #1843 follow-up: falls back to message.content for comms persisted before this feature (metadata.comm has no content key at all)', async () => {
+    const message = {
+      id: 'msg-legacy-1',
+      type: 'user',
+      content: '**📋 Task from Minion #Overseer:** Old comm\n\nThis is old delivered text.\n\n---\nAlways send messages to Minion #Overseer using the `send_comm` tool.',
+      timestamp: 1700000000,
+      metadata: {
+        // No summary/content/trailing_instruction keys - simulates data stored before #1843.
+        comm: { from_name: 'overseer', from_display_name: 'Overseer', comm_type: 'task' },
+      },
+    }
+
+    const { wrapper } = renderWithStores(UserMessage, { props: { message }, stubs: { MarkdownView: MarkdownViewStub } })
+
+    // Card must NOT be permanently disabled - the legacy record's full text is recoverable
+    // from message.content even though metadata.comm.content was never populated for it.
+    const card = wrapper.find('.comm-card')
+    expect(card.classes()).not.toContain('no-body')
+    expect(wrapper.find('.comm-summary-row').classes()).not.toContain('is-empty-state')
+
+    await wrapper.find('.comm-card-header').trigger('click')
+    expect(wrapper.find('.comm-card-body').exists()).toBe(true)
+  })
+
+  it('issue #1843 follow-up: a new comm with genuinely empty content (summary-only, by design) still disables expand', async () => {
+    const message = {
+      id: 'msg-new-1',
+      type: 'user',
+      content: '**📋 Task from Minion #Overseer:** Just the summary\n\n\n\n---\nAlways send messages to Minion #Overseer using the `send_comm` tool.',
+      timestamp: 1700000000,
+      metadata: {
+        comm: {
+          from_name: 'overseer', from_display_name: 'Overseer', comm_type: 'task',
+          summary: 'Just the summary', content: '', trailing_instruction: 'Always send messages to Minion #Overseer using the `send_comm` tool.',
+        },
+      },
+    }
+
+    const { wrapper } = renderWithStores(UserMessage, { props: { message }, stubs: { MarkdownView: MarkdownViewStub } })
+
+    const card = wrapper.find('.comm-card')
+    expect(card.classes()).toContain('no-body')
+
+    await wrapper.find('.comm-card-header').trigger('click')
+    expect(wrapper.find('.comm-card-body').exists()).toBe(false)
+  })
 })

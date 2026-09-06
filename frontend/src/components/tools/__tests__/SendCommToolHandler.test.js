@@ -81,7 +81,7 @@ describe('SendCommToolHandler', () => {
       { session_id: 'sender-1', project_id: 'proj-1', slug: 'sender', name: 'Sender' },
     ])
 
-    const recipient = wrapper.find('.outbound-comm-recipient')
+    const recipient = wrapper.find('.participant-name')
     expect(recipient.text()).toContain('ghost-agent')
     expect(recipient.find('a').exists()).toBe(false)
   })
@@ -101,7 +101,7 @@ describe('SendCommToolHandler', () => {
       { session_id: 'recipient-1', project_id: 'proj-2', slug: 'database-optimizer', name: 'Database Optimizer' },
     ])
 
-    const recipient = wrapper.find('.outbound-comm-recipient')
+    const recipient = wrapper.find('.participant-name')
     expect(recipient.text()).toContain('database-optimizer')
     expect(recipient.find('a').exists()).toBe(false)
   })
@@ -121,7 +121,7 @@ describe('SendCommToolHandler', () => {
       { session_id: 'sender-1', project_id: 'proj-1', slug: 'sender', name: 'Sender' },
     ])
 
-    const detail = wrapper.find('.outbound-comm-failure-detail')
+    const detail = wrapper.find('.comm-card-failure-detail')
     expect(detail.exists()).toBe(true)
     expect(detail.text()).toContain('to_minion_name')
     expect(detail.text()).toContain('database-optimizer')
@@ -143,6 +143,31 @@ describe('SendCommToolHandler', () => {
       { session_id: 'sender-1', project_id: 'proj-1', slug: 'sender', name: 'Sender' },
     ])
 
-    expect(wrapper.find('.outbound-comm-failure-detail').exists()).toBe(false)
+    expect(wrapper.find('.comm-card-failure-detail').exists()).toBe(false)
+  })
+
+  it('issue #1843 follow-up: expanded card has a copy-markdown button that copies the body content', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+
+    const toolCall = {
+      id: 'use-1',
+      session_id: 'sender-1',
+      name: 'send_comm',
+      input: { to_minion_name: 'database-optimizer', content: 'the delivered body text', comm_type: 'info' },
+      status: 'completed',
+    }
+
+    const { wrapper } = renderWithStores(SendCommToolHandler, { props: { toolCall }, stubs: { MarkdownView: MarkdownViewStub } })
+    await seedSessions(wrapper, [
+      { session_id: 'sender-1', project_id: 'proj-1', slug: 'sender', name: 'Sender' },
+    ])
+
+    await wrapper.find('.comm-card-header').trigger('click')
+    const copyBtn = wrapper.find('.copy-markdown-btn')
+    expect(copyBtn.exists()).toBe(true)
+
+    await copyBtn.trigger('click')
+    expect(writeText).toHaveBeenCalledWith('the delivered body text')
   })
 })

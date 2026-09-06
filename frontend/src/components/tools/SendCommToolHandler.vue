@@ -1,74 +1,34 @@
 <template>
   <div class="outbound-comm-wrapper">
-    <div
-      class="outbound-comm-bubble"
-      :style="{
-        background: gradientBg,
-        borderLeftColor: senderColor.accent,
-      }"
-    >
-      <div class="outbound-comm-meta">
-        <span class="outbound-comm-recipient" :style="{ color: recipientColor.accent }">
-          →
-          <a v-if="recipientSessionId" :href="`#/session/${recipientSessionId}`" class="outbound-comm-recipient-link">{{ recipientName }}</a>
-          <template v-else>{{ recipientName }}</template>
-        </span>
-        <span v-if="commType" class="badge outbound-comm-type-badge" :class="commTypeBadgeClass">
-          {{ commType }}
-        </span>
-        <span v-if="interruptPriority && interruptPriority !== 'none'" class="badge bg-danger outbound-comm-priority">
-          {{ interruptPriority }}
-        </span>
-        <span v-if="attachments.length > 0" class="badge text-bg-info outbound-comm-attach-badge">
-          📎 {{ attachments.length }}
-        </span>
-        <span class="outbound-comm-time">{{ formattedTimestamp }}</span>
-        <span v-if="hasResult" class="outbound-comm-result" :class="isError ? 'result-error' : 'result-success'">
-          {{ isError ? '✗ Failed' : '✓ Delivered' }}
-        </span>
-      </div>
-      <MarkdownView class="outbound-comm-content" ref="contentRef" :content="contentForRender" :self-agent-id="senderSessionId" />
-      <div v-if="hasResult && isError" class="outbound-comm-failure-detail">
-        <div class="tool-section">
-          <div class="tool-label">Raw Input:</div>
-          <div class="tool-code-block">
-            <pre class="tool-code">{{ formattedInput }}</pre>
-          </div>
-        </div>
-        <div class="tool-section">
-          <div class="tool-label">Error:</div>
-          <div class="tool-code-block tool-error">
-            <pre class="tool-code">{{ resultContent }}</pre>
-          </div>
-        </div>
-      </div>
-      <div v-if="attachments.length > 0" class="outbound-comm-attachments">
-        <AttachmentChip
-          v-for="(att, idx) in attachments"
-          :key="idx"
-          :filename="att.filename"
-          :resource-id="att.resourceId"
-          :session-id="att.sessionId"
-          :size="att.size"
-          :mime-type="att.mimeType"
-          @preview="openAttachmentPreview(att)"
-        />
-      </div>
-    </div>
+    <CommCard
+      direction="outbound"
+      :participant-name="recipientName"
+      :participant-session-id="recipientSessionId"
+      :comm-type="commType"
+      :interrupt-priority="interruptPriority"
+      :summary="summaryText"
+      :content="content"
+      :timestamp="toolCall.timestamp"
+      :attachments="attachments"
+      :expanded="messageStore.isCommExpanded(toolCall.id)"
+      :self-agent-id="senderSessionId"
+      :has-result="hasResult"
+      :is-error="isError"
+      :result-content="resultContent"
+      :formatted-input="formattedInput"
+      @toggle-expand="messageStore.toggleCommExpanded(toolCall.id)"
+    />
   </div>
 </template>
 
 <script setup>
-import { computed, ref, toRef } from 'vue'
-import { useResourceImages } from '@/composables/useResourceImages'
+import { computed, toRef } from 'vue'
 import { useToolResult } from '@/composables/useToolResult'
-import { getAgentColor, getAssistantRowColor, slugifyAgentName } from '@/composables/useAgentColor'
 import { resolveAgentByIdentifier } from '@/utils/agentMentions'
-import { formatTimestamp } from '@/utils/time'
 import { useSessionStore } from '@/stores/session'
 import { useResourceStore } from '@/stores/resource'
-import AttachmentChip from '@/components/common/AttachmentChip.vue'
-import MarkdownView from '@/components/common/MarkdownView.vue'
+import { useMessageStore } from '@/stores/message'
+import CommCard from '@/components/common/CommCard.vue'
 
 const props = defineProps({
   toolCall: { type: Object, required: true }
@@ -80,21 +40,10 @@ const content = computed(() => props.toolCall.input?.content || '')
 const summaryText = computed(() => props.toolCall.input?.summary || '')
 const commType = computed(() => props.toolCall.input?.comm_type || '')
 const interruptPriority = computed(() => props.toolCall.input?.interrupt_priority || '')
-const formattedTimestamp = computed(() => formatTimestamp(props.toolCall.timestamp))
-
-const commTypeBadgeClass = computed(() => {
-  const map = {
-    task: 'bg-primary',
-    question: 'bg-info',
-    info: 'bg-secondary',
-    report: 'bg-success',
-    system: 'bg-dark',
-  }
-  return map[commType.value] || 'bg-secondary'
-})
 
 const sessionStore = useSessionStore()
 const resourceStore = useResourceStore()
+const messageStore = useMessageStore()
 
 const attachments = computed(() => {
   // Issue #1593: prefer backend-resolved sender_attachments (reliable resource_id)
@@ -137,26 +86,6 @@ const attachments = computed(() => {
   }
 })
 
-function openAttachmentPreview(att) {
-  if (att.resourceId) {
-    resourceStore.openFullViewById(att.resourceId, att.sessionId)
-  }
-}
-
-// Agent color from recipient name
-const recipientColor = computed(() => getAgentColor(slugifyAgentName(recipientName.value)))
-
-// Issue #1755: the sending side is always "this session, as assistant" in its own transcript
-const senderColor = computed(() => getAssistantRowColor())
-const gradientBg = computed(() => `linear-gradient(to right, ${senderColor.value.bg} 0%, ${recipientColor.value.bg} 30%, ${recipientColor.value.bg} 100%)`)
-
-const contentForRender = computed(() => content.value || summaryText.value)
-
-// Inline resource image click-to-open
-const contentRef = ref(null)
-const currentSessionId = computed(() => sessionStore.currentSessionId)
-useResourceImages(contentRef, currentSessionId)
-
 // Issue #1714: resolve the recipient's session id (slug-first, then display-name
 // fallback) scoped to the sender's project, so the recipient name can jump-link.
 const senderSessionId = computed(() => props.toolCall.session_id || sessionStore.currentSessionId)
@@ -187,144 +116,13 @@ defineExpose({ summary, params, result })
 </script>
 
 <style scoped>
+/* Bubble/meta/content/attachment styling now lives in CommCard.vue (issue #1843) —
+   this wrapper only provides the flex-column alignment context CommCard is dropped into. */
 .outbound-comm-wrapper {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   align-self: stretch;
   padding: 4px 0;
-}
-
-.outbound-comm-meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
-}
-
-.outbound-comm-time {
-  font-size: 11px;
-  color: var(--bs-secondary-color);
-}
-
-.outbound-comm-recipient {
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.outbound-comm-recipient-link {
-  color: inherit;
-  text-decoration: underline;
-  text-decoration-style: dotted;
-  text-underline-offset: 2px;
-}
-
-.outbound-comm-recipient-link:hover {
-  text-decoration-style: solid;
-}
-
-.outbound-comm-type-badge {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 8px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
-.outbound-comm-priority {
-  font-size: 10px;
-  font-weight: 700;
-  padding: 1px 6px;
-  border-radius: 8px;
-  text-transform: uppercase;
-}
-
-.outbound-comm-bubble {
-  align-self: stretch;
-  margin: 0 -16px;
-  padding: 9px 16px;
-  border-left: 4px solid;
-}
-
-.outbound-comm-content {
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--bs-body-color);
-  white-space: pre-wrap;
-  word-wrap: break-word;
-}
-
-/* Markdown styling */
-.outbound-comm-content :deep(*) {
-  margin-bottom: 0;
-}
-
-.outbound-comm-content :deep(p) {
-  margin-bottom: 0;
-}
-
-.outbound-comm-content :deep(p + p) {
-  margin-top: 0.5em;
-}
-
-.outbound-comm-content :deep(pre) {
-  background: var(--bs-tertiary-bg);
-  padding: 0.75rem;
-  border-radius: 6px;
-  overflow-x: auto;
-  margin: 0.5rem 0;
-}
-
-.outbound-comm-content :deep(code) {
-  background: var(--bs-secondary-bg);
-  padding: 0.15rem 0.35rem;
-  border-radius: 3px;
-  font-family: 'Courier New', monospace;
-  font-size: 0.9em;
-}
-
-.outbound-comm-content :deep(pre code) {
-  background: transparent;
-  padding: 0;
-}
-
-/* Result indicator */
-.outbound-comm-result {
-  font-size: 11px;
-  font-weight: 600;
-  margin-left: auto;
-}
-
-.outbound-comm-result.result-success {
-  color: var(--bs-success);
-}
-
-.outbound-comm-result.result-error {
-  color: var(--bs-danger);
-}
-
-.outbound-comm-attach-badge {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 8px;
-}
-
-.outbound-comm-attachments {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 0.75rem;
-  padding-top: 0.5rem;
-  border-top: 1px solid var(--bs-border-color-translucent);
-}
-
-/* Mobile: tighter row padding (16px -> 12px per spec §4.5), mirrors UserMessage.vue */
-@media (max-width: 768px) {
-  .outbound-comm-bubble {
-    padding: 9px 12px;
-    margin: 0 -12px;
-  }
 }
 </style>

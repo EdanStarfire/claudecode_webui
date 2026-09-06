@@ -428,7 +428,8 @@ class CommRouter:
                     formatted_message += "\n\n---\nAttached files (use Read tool to access, or embed via markdown URL):\n"
                     formatted_message += "\n".join(attachment_lines)
 
-            formatted_message += f"\n\n---\nAlways send messages to {from_name} using the `send_comm` tool."
+            trailing_instruction = f"Always send messages to {from_name} using the `send_comm` tool."
+            formatted_message += f"\n\n---\n{trailing_instruction}"
 
             # Build comm metadata for frontend styling
             from_name_slug = self._slugify(from_name.replace("Minion #", ""))
@@ -439,6 +440,12 @@ class CommRouter:
                     "from_display_name": from_display,
                     "from_minion_id": comm.from_minion_id,
                     "comm_type": comm.comm_type.value if hasattr(comm.comm_type, 'value') else str(comm.comm_type),
+                    # Issue #1843: structured fields for the collapsible CommCard UI,
+                    # exposed alongside (not instead of) formatted_message so the
+                    # frontend never needs to reconstruct or re-derive delivered text.
+                    "summary": comm.summary or "",
+                    "content": comm.content or "",
+                    "trailing_instruction": trailing_instruction,
                 }
             }
 

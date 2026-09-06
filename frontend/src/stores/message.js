@@ -609,6 +609,47 @@ export const useMessageStore = defineStore('message', () => {
     if (changed) thinkingBlockExpanded.value = new Map(thinkingBlockExpanded.value)
   }
 
+  // Issue #1843: collapsible CommCard expand/collapse toggle, store-backed for the same
+  // remount-survival reason as thinkingBlockExpanded/expandedTimelineTool above (a comm
+  // card is rendered inside a virtualized message row and unmounts/remounts on scroll).
+  // scopeKey is toolCall.id for outbound comms, message.id || message.message_id for
+  // inbound comms — a simple boolean toggle, mirrors thinkingBlockExpanded exactly.
+  const expandedComms = ref(new Map()) // Map<scopeKey, boolean>
+
+  function isCommExpanded(scopeKey) {
+    if (scopeKey == null) return false
+    return !!expandedComms.value.get(scopeKey)
+  }
+
+  function toggleCommExpanded(scopeKey) {
+    if (scopeKey == null) return
+    expandedComms.value.set(scopeKey, !isCommExpanded(scopeKey))
+    expandedComms.value = new Map(expandedComms.value)
+  }
+
+  // Prunes against both message ids and tool_use ids (like pruneExpandedTimelineToolForSession)
+  // since expandedComms scope keys come from both id shapes depending on direction.
+  function pruneExpandedCommsForSession(sessionId) {
+    const messages = messagesBySession.value.get(sessionId) || []
+    const knownIds = new Set()
+    for (const msg of messages) {
+      if (msg.id) knownIds.add(msg.id)
+      if (msg.message_id) knownIds.add(msg.message_id)
+      for (const t of msg.metadata?.tool_uses || []) {
+        if (t.id) knownIds.add(t.id)
+      }
+    }
+    if (knownIds.size === 0) return
+    let changed = false
+    for (const key of expandedComms.value.keys()) {
+      if (knownIds.has(key)) {
+        expandedComms.value.delete(key)
+        changed = true
+      }
+    }
+    if (changed) expandedComms.value = new Map(expandedComms.value)
+  }
+
   /**
    * Issue #1746 (stage: subagents): "needs attention" — true when a leg has an open permission
    * request on one of its own child tool calls. Resolved from already-available store data (no
@@ -1506,6 +1547,7 @@ export const useMessageStore = defineStore('message', () => {
     // Issue #1748 review fix: prune before messages are gone (both read messagesBySession)
     pruneExpandedTimelineToolForSession(sessionId)
     pruneThinkingBlockExpandedForSession(sessionId)
+    pruneExpandedCommsForSession(sessionId)
     messagesBySession.value.delete(sessionId)
     toolCallsBySession.value.delete(sessionId)
     toolSignatureToId.value.delete(sessionId)
@@ -1929,6 +1971,7 @@ export const useMessageStore = defineStore('message', () => {
   function clearArchiveMessages(sessionId) {
     pruneExpandedTimelineToolForSession(sessionId)  // Issue #1748 review fix
     pruneThinkingBlockExpandedForSession(sessionId)
+    pruneExpandedCommsForSession(sessionId)
     messagesBySession.value.delete(sessionId)
     toolCallsBySession.value.delete(sessionId)
   }
@@ -2108,6 +2151,8 @@ export const useMessageStore = defineStore('message', () => {
     setExpandedTimelineTool,
     isThinkingBlockExpanded,
     toggleThinkingBlockExpanded,
+    isCommExpanded,
+    toggleCommExpanded,
     hasOpenPermissionForTask,
     openPermissionsForSession,
 
