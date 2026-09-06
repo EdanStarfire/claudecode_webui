@@ -319,6 +319,48 @@ function resolveSubagentPrimaryIndex(taskId, legIndex) {
   return indexMaps.value.toolUseIndex.get(toolUseId) ?? null
 }
 
+// Issue #1848: turn-boundary indices for the status bar's prev/next jump buttons. A "turn
+// boundary" is any displayableItems entry whose underlying message is user-authored — this
+// already covers both real user messages and inbound comms (comms are delivered as user-role
+// messages carrying metadata.comm, see UserMessage.vue's isComm check), and it runs over the
+// same post-filter array everything else here reads, so hidden items (e.g. subagent-prompt
+// user messages, already filtered out by shouldDisplayMessage) are automatically excluded.
+const turnBoundaryIndices = computed(() => {
+  const arr = []
+  displayableItems.value.forEach((item, index) => {
+    if (item.type === 'message' && item.message?.type === 'user') arr.push(index)
+  })
+  return arr
+})
+
+// Current on-screen range, derived from renderedRows (not a second getVirtualItems() call) —
+// same mounted-rows source, reactive to scroll for free.
+const visibleIndexRange = computed(() => {
+  const rows = renderedRows.value
+  if (!rows.length) return null
+  return { top: rows[0].virtualRow.index, bottom: rows[rows.length - 1].virtualRow.index }
+})
+
+function findPrevTurnIndex() {
+  const range = visibleIndexRange.value
+  if (!range) return null
+  const arr = turnBoundaryIndices.value
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (arr[i] < range.top) return arr[i]
+  }
+  return null
+}
+
+function findNextTurnIndex() {
+  const range = visibleIndexRange.value
+  if (!range) return null
+  const arr = turnBoundaryIndices.value
+  for (let i = 0; i < arr.length; i++) {
+    if (arr[i] > range.bottom) return arr[i]
+  }
+  return null
+}
+
 // Issue #1748 (stage: windowing) follow-up (user feedback): a row is the virtualization
 // UNIT, but a launch/terminal anchor can sit anywhere inside its row (e.g. a Task call below a
 // Thinking block, or partway down a merged multi-turn run) — using the row's own start/end
@@ -409,6 +451,8 @@ defineExpose({
   scrollToItemIndex: virtualNav.scrollToItemIndex,
   resolveToolAnchorIndex,
   resolveSubagentPrimaryIndex,
+  findPrevTurnIndex,
+  findNextTurnIndex,
 })
 
 function timestampForItem(item) {

@@ -31,7 +31,11 @@
     <div ref="bottomStackRef" class="bottom-input-stack">
       <InputArea ref="inputAreaRef" :is-archived="isArchiveMode" />
       <SessionStateStatusLine v-if="currentSession && !isArchiveMode" :session-id="props.sessionId" />
-      <SessionStatusBar v-if="currentSession && !isArchiveMode" :session-id="props.sessionId" />
+      <SessionStatusBar
+        v-if="currentSession && !isArchiveMode"
+        :session-id="props.sessionId"
+        :virtual-nav="messageListRef"
+      />
     </div>
 
     <!-- Floating permission queue (Issue #1746, stage: permissions) -->
