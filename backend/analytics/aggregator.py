@@ -159,7 +159,7 @@ async def aggregate_by_time(
         counts = {f: row.get(f) or 0 for f in _TOKEN_FIELDS}
         for f in _TOKEN_FIELDS:
             bucket["by_token_type"][f] += counts[f]
-        rates, _ = pricing.get_rates(row["model"])
+        rates, rates_known = pricing.get_rates(row["model"])
         if rates is not None:
             breakdown = compute_cost_breakdown(rates, counts)
             for k, v in breakdown.items():
@@ -172,6 +172,7 @@ async def aggregate_by_time(
                 "model": row["model"],
                 **counts,
                 "estimated_cost_usd": estimated_cost,
+                "rates_known": rates_known,
             }
         )
 

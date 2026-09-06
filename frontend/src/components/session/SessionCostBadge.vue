@@ -119,6 +119,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useUsageStore } from '@/stores/usage'
+import { formatModelLabel } from '@/utils/analytics'
 
 const props = defineProps({
   sessionId: {
@@ -155,7 +156,10 @@ const badgeLabel = computed(() => {
 const estimatedCostLabel = computed(() => {
   if (!usage.value) return '—'
   const cost = usage.value.estimated_cost_usd
-  if (cost == null || !usage.value.rates_known) return '~$? (unknown model)'
+  if (cost == null || !usage.value.rates_known) {
+    if (!usage.value.model) return '~$? (unknown model)'
+    return `~$? (${formatModelLabel(usage.value.model, false)})`
+  }
   return `~$${cost.toFixed(4)}`
 })
 

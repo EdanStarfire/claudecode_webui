@@ -239,6 +239,20 @@ async def test_time_by_model_breakdown(db):
     assert models == {_SONNET, _HAIKU}
 
 
+async def test_time_by_model_rates_known(db):
+    """rates_known must be exposed per by_model entry, correct for priced vs. unpriced models (issue #1830)."""
+    pricing_no_default = PricingConfig(rates={_SONNET: _PRICING.rates[_SONNET]}, default_model=_UNKNOWN)
+    await _seed(db, [
+        {"session_id": "s1", "turn_seq": 1, "model": _SONNET, "input_tokens": 1000, "ts": _BASE_TS},
+        {"session_id": "s2", "turn_seq": 1, "model": _UNKNOWN, "input_tokens": 500, "ts": _BASE_TS + 60},
+    ])
+    buckets = await aggregate_by_time(db, pricing_no_default, "hour", _BASE_TS - 1, _BASE_TS + _DAY)
+    assert len(buckets) == 1
+    by_model = {m["model"]: m for m in buckets[0]["by_model"]}
+    assert by_model[_SONNET]["rates_known"] is True
+    assert by_model[_UNKNOWN]["rates_known"] is False
+
+
 async def test_time_token_type_matches_model_sum(db):
     """Per-token-type total must equal the sum of per-model totals for the same bucket."""
     await _seed(db, [

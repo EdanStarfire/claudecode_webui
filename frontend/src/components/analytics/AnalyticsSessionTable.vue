@@ -37,7 +37,7 @@
               <span class="session-name" :title="row.session_name">{{ row.session_name || row.session_id.slice(0, 8) }}</span>
               <span v-if="row.is_minion" class="badge bg-secondary ms-1" title="Minion session">minion</span>
             </td>
-            <td class="model-cell">{{ row.model || '—' }}</td>
+            <td class="model-cell">{{ row.model ? formatModelLabel(row.model, row.rates_known) : '—' }}</td>
             <td class="text-end">{{ row.turn_count }}</td>
             <td class="text-end">{{ formatTokens(row.input_tokens) }}</td>
             <td class="text-end">{{ formatTokens(row.output_tokens) }}</td>
@@ -60,7 +60,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useAnalyticsStore } from '@/stores/analytics'
-import { formatCost, formatTokens } from '@/utils/analytics'
+import { formatCost, formatTokens, formatModelLabel } from '@/utils/analytics'
 
 const store = useAnalyticsStore()
 

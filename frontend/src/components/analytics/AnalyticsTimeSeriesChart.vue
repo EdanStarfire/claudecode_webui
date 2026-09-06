@@ -47,7 +47,9 @@ import { readCssVar } from '@/utils/analytics'
 const store = useAnalyticsStore()
 const uiStore = useUIStore()
 const chartReady = ref(false)
+const MAX_LEGEND_LABEL_LENGTH = 40
 let Bar = null
+let ChartJS = null
 
 onMounted(async () => {
   try {
@@ -56,6 +58,7 @@ onMounted(async () => {
     await import('chartjs-adapter-date-fns')
     Chart.register(...registerables)
     Bar = BarComponent
+    ChartJS = Chart
     chartReady.value = true
   } catch {
     chartReady.value = false
@@ -73,7 +76,19 @@ const chartOptions = computed(() => {
     maintainAspectRatio: false,
     plugins: {
       legend: {
-        labels: { color: tickColor, font: { size: 11 } },
+        labels: {
+          color: tickColor,
+          font: { size: 11 },
+          generateLabels(chart) {
+            const items = ChartJS ? ChartJS.defaults.plugins.legend.labels.generateLabels(chart) : []
+            items.forEach(item => {
+              if (item.text && item.text.length > MAX_LEGEND_LABEL_LENGTH) {
+                item.text = `${item.text.slice(0, MAX_LEGEND_LABEL_LENGTH - 1)}…`
+              }
+            })
+            return items
+          },
+        },
       },
       tooltip: { mode: 'index', intersect: false },
     },

@@ -1,7 +1,7 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { api } from '@/utils/api'
-import { presetToRange, selectBucketSize, formatBucketLabel, TIME_PRESETS, readCssVar } from '@/utils/analytics'
+import { presetToRange, selectBucketSize, formatBucketLabel, formatModelLabel, TIME_PRESETS, readCssVar } from '@/utils/analytics'
 import { useUIStore } from '@/stores/ui'
 
 export const useAnalyticsStore = defineStore('analytics', () => {
@@ -102,10 +102,12 @@ export const useAnalyticsStore = defineStore('analytics', () => {
     let colorIdx = 0
     const datasets = [...allModels].map(modelName => {
       const color = modelColors[colorIdx++ % modelColors.length]
+      const entries = bkts.map(b => b.by_model.find(m => m.model === modelName))
+      const ratesKnown = entries.find(e => e)?.rates_known
       return {
-        label: modelName || '(unknown)',
-        data: bkts.map(b => {
-          const entry = b.by_model.find(m => m.model === modelName)
+        label: formatModelLabel(modelName, ratesKnown),
+        data: bkts.map((b, i) => {
+          const entry = entries[i]
           const v = !entry
             ? 0
             : metric === 'cost'
