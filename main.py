@@ -62,7 +62,9 @@ def main():
     )
     parser.add_argument(
         '--remote-backend-token', type=str, default=None,
-        help='Backend-scoped bearer token for --remote-backend-url.'
+        help='Backend-scoped bearer token for --remote-backend-url. Grants full control '
+             'of the Backend API — generate with secrets.token_urlsafe(32) or equivalent '
+             'and rotate it like any other deployment secret. See README.md.'
     )
 
     # Experimental features / mock SDK — passed through to an auto-started Backend
