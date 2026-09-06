@@ -116,6 +116,38 @@ async def _restart_to_target(webui, project_root: Path, payload: "RestartRequest
     return f"Switched to {branch} @ {short_hash or reset_target}"
 
 
+async def _do_restart(webui) -> None:
+    """Clean up, then re-exec this process via os.execv.
+
+    Runs as a fire-and-forget background task after the HTTP response has already
+    been sent — extracted to a standalone function so it's directly awaitable from
+    tests instead of only reachable via the scheduled task (mirrors
+    src/routers/system.py's _finish_restart for the same reason).
+
+    Reconstructs a module-mode (`-m backend.main`) invocation rather than reusing
+    `sys.argv` as-is (issue #1847 review finding, found via a live remote-mode
+    smoke test — not caught by mocked-os.execv unit tests, since none of them let
+    the re-exec'd process actually start). When originally launched via
+    `-m backend.main`, `sys.argv[0]` is main.py's resolved absolute path, not
+    `-m backend.main` — re-exec'ing with that argv as-is runs main.py as a plain
+    script instead, which makes Python prepend *its own* directory (`backend/`) to
+    sys.path before backend/main.py's own `sys.path.insert(0, project_root)` runs.
+    `backend/mcp/` (a real subpackage of this repo) then shadows the third-party
+    `mcp` distribution `claude_agent_sdk` needs, crash-looping the restarted
+    process with `ModuleNotFoundError: No module named 'mcp.types'`. This is only
+    reachable via this endpoint completing its own restart — src/backend_supervisor.py
+    always spawns Backend fresh via `[sys.executable, "-m", "backend.main", ...]`
+    (_build_command()), never through this path, so embedded mode was never affected.
+    """
+    await asyncio.sleep(0.5)
+    logger.info("Executing os.execv restart...")
+    try:
+        await webui.coordinator.cleanup()
+    except Exception as e:
+        logger.warning(f"Cleanup error during restart: {e}")
+    os.execv(sys.executable, [sys.executable, "-m", "backend.main"] + sys.argv[1:])
+
+
 def build_router(webui) -> APIRouter:
     router = APIRouter()
 
@@ -418,16 +450,7 @@ def build_router(webui) -> APIRouter:
         webui._broadcast_server_restarting(pull_output, sync_output)
 
         # Schedule the actual restart after response is sent
-        async def _do_restart():
-            await asyncio.sleep(0.5)
-            logger.info("Executing os.execv restart...")
-            try:
-                await webui.coordinator.cleanup()
-            except Exception as e:
-                logger.warning(f"Cleanup error during restart: {e}")
-            os.execv(sys.executable, [sys.executable] + sys.argv)
-
-        asyncio.get_event_loop().create_task(_do_restart())
+        asyncio.get_event_loop().create_task(_do_restart(webui))
 
         return {
             "status": "restarting",
