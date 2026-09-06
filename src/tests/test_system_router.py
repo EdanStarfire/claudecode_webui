@@ -14,6 +14,7 @@ so they always described Backend's repo, never Frontend's own — in embedded mo
 this happened to look correct only because it's the same checkout.
 """
 
+import logging
 import subprocess
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -424,6 +425,68 @@ class TestRestartRemoteBackendOrchestration:
         webui.backend_client.health.assert_not_awaited()
         webui.backend_client.ready.assert_not_awaited()
         webui.backend_client.request_json.assert_not_awaited()
+
+
+class TestRestartLogging:
+    """Regression coverage for the observability gap (#1847 finding 4): before this,
+    restart_server() never logged what was requested or, in remote mode, what Backend
+    reported back — that information only ever reached the HTTP response body."""
+
+    @pytest.mark.asyncio
+    async def test_embedded_mode_logs_requested_target(self, caplog):
+        webui = _make_webui()
+
+        with (
+            patch("src.routers.system.subprocess.run", side_effect=_default_run_side_effect),
+            caplog.at_level(logging.INFO, logger="src.routers.system"),
+        ):
+            async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+                resp = await client.post("/api/system/restart")
+
+        assert resp.status_code == 202
+        assert any(
+            "Restart requested" in r.message and "branch=None commit=None" in r.message
+            for r in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_remote_mode_success_logs_backend_outcome(self, caplog):
+        webui = _make_webui(backend_supervisor=None)
+
+        with (
+            patch("src.routers.system._BACKEND_RESTART_GRACE_SECONDS", 0),
+            patch("src.routers.system.subprocess.run", side_effect=_default_run_side_effect),
+            caplog.at_level(logging.INFO, logger="src.routers.system"),
+        ):
+            async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+                resp = await client.post("/api/system/restart")
+
+        assert resp.status_code == 202
+        assert any(
+            "backend outcome" in r.message and "'status': 'restarted'" in r.message
+            for r in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_remote_mode_failure_still_logs_backend_outcome(self, caplog):
+        webui = _make_webui(backend_supervisor=None)
+        webui.backend_client.health = AsyncMock(return_value=True)
+        webui.backend_client.request_json = AsyncMock(
+            side_effect=_http_status_error(409, "Uncommitted changes present.")
+        )
+
+        with (
+            patch("src.routers.system.subprocess.run", side_effect=_no_subprocess_expected),
+            caplog.at_level(logging.INFO, logger="src.routers.system"),
+        ):
+            async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+                resp = await client.post("/api/system/restart")
+
+        assert resp.status_code == 502
+        assert any(
+            "backend outcome" in r.message and "'status': 'failed'" in r.message
+            for r in caplog.records
+        )
 
 
 def _fake_async_proc(returncode=0):

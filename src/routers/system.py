@@ -376,12 +376,23 @@ def build_router(webui) -> APIRouter:
         backend_outcome = None
         if webui.backend_supervisor is None:
             outcome = await _restart_remote_backend(webui, payload)
+            backend_outcome = {"status": outcome.status, "detail": outcome.detail}
+            logger.info(
+                "Restart requested (frontend: branch=%s commit=%s | backend: branch=%s "
+                "commit=%s) — backend outcome: %s",
+                payload.branch, payload.commit, payload.backend_branch, payload.backend_commit,
+                backend_outcome,
+            )
             if not outcome.ok:
                 raise HTTPException(
                     status_code=502,
                     detail=f"Backend restart failed ({outcome.status}): {outcome.detail}",
                 )
-            backend_outcome = {"status": outcome.status, "detail": outcome.detail}
+        else:
+            logger.info(
+                "Restart requested (frontend: branch=%s commit=%s)",
+                payload.branch, payload.commit,
+            )
 
         if not has_custom_target:
             try:

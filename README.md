@@ -204,6 +204,25 @@ Remote access is disabled by default. You must enable it via the following proce
 2. Launch the app via `uv run python main.py --host=0.0.0.0`
 3. When starting up, it'll output a token to use to authenticate the web app and API. Once networking listening is active, it'll require entering the randomized token to authenticate to the server, preventing open network access. NOTE: This can be set to a specific value with `--token=` CLI argument.
 
+### Remote Backend Deployment
+
+`--remote-backend-url`/`--remote-backend-token` point Frontend at a manually-run or
+genuinely remote Backend instead of auto-starting one locally.
+
+- **Backend-scoped token.** The value passed to `--remote-backend-token` grants full
+  control of Backend's entire API surface — every session, every project, all config,
+  and server restarts. Generate it the same way `main.py` generates its own browser
+  auth token (`secrets.token_urlsafe(32)` or equivalent), and rotate it the same way
+  you'd rotate any other deployment secret.
+- **Binding Frontend to localhost with a remote Backend.** Frontend's own
+  authentication is disabled by default when `--host` is `127.0.0.1`/`localhost`/`::1`
+  (see "Network Access" above), independently of whether it's pointed at a remote
+  Backend. Binding Frontend to localhost while `--remote-backend-url` points at a
+  genuinely remote host leaves that Frontend's browser-facing auth **disabled by
+  default**, the same as the fully-local case — anyone who can reach it can trigger
+  restarts and other actions against the remote Backend. Pass `--force-auth` for this
+  specific combination.
+
 ---
 
 **Key technologies**: Vue 3.4 · Pinia 2.1 · Vite 7.1 · Bootstrap 5.3 · FastAPI · uvicorn · JSONL/JSON storage · HTTP long-polling
