@@ -178,11 +178,42 @@ export async function getGitCommits(branch) {
   return apiGet('/api/system/git-commits', { params: { branch } })
 }
 
-export async function restartServer(target = undefined) {
+// Frontend's own repo status (issue #1847) — distinct from getGitStatus()/getGitBranches()/
+// getGitCommits() above, which describe Backend's repo (relayed; same checkout in embedded
+// mode, potentially a different one in remote mode).
+export async function getFrontendGitStatus() {
+  return apiGet('/api/system/frontend-git-status')
+}
+
+export async function getFrontendGitBranches() {
+  return apiGet('/api/system/frontend-git-branches')
+}
+
+export async function getFrontendGitCommits(branch) {
+  return apiGet('/api/system/frontend-git-commits', { params: { branch } })
+}
+
+// Authoritative embedded-vs-remote signal (issue #1847) — reflects whether Backend was
+// auto-started, not config.json's persisted value (which misses CLI-only --remote-backend-url).
+export async function getFrontendMode() {
+  return apiGet('/api/system/frontend-mode')
+}
+
+export async function restartServer(target = undefined, backendTarget = undefined) {
   // Issue #1760: `target` must stay `undefined` (not `null`) for the default path — apiPost
   // does JSON.stringify(data) unconditionally, and JSON.stringify(undefined) omits the body
   // entirely while JSON.stringify(null) would send a literal "null" body.
-  return apiPost('/api/system/restart', target)
+  // Issue #1847: backendTarget carries Backend's independent branch/commit in remote mode —
+  // merged into the same request body as backend_branch/backend_commit, both optional.
+  if (target === undefined && backendTarget === undefined) {
+    return apiPost('/api/system/restart', undefined)
+  }
+  return apiPost('/api/system/restart', {
+    branch: target?.branch ?? null,
+    commit: target?.commit ?? null,
+    backend_branch: backendTarget?.branch ?? null,
+    backend_commit: backendTarget?.commit ?? null,
+  })
 }
 
 /**
