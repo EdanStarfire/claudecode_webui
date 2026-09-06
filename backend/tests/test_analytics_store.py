@@ -158,3 +158,174 @@ async def test_record_turn_returns_false_on_write_failure(store, monkeypatch):
     # No row should have been recorded.
     agg = await store.get_session_usage("sid-9")
     assert agg is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #1840: subagent usage TTL-tier columns + is_subagent flag
+# ---------------------------------------------------------------------------
+
+
+async def test_cache_write_tokens_ttl_tiers_are_persisted(store):
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "cache_write_tokens_5m": 20,
+        "cache_write_tokens_1h": 7,
+    }
+    await store.record_turn("sid-10", 1, "claude-sonnet-4-6", usage, None)
+
+    agg = await store.get_session_usage("sid-10")
+    assert agg["cache_write_tokens_5m"] == 20
+    assert agg["cache_write_tokens_1h"] == 7
+
+
+async def test_ttl_tiers_default_to_zero_when_absent(store):
+    """AC4: a turn with no subagent contribution must not introduce non-zero
+    TTL-tier values."""
+    await store.record_turn("sid-11", 1, None, {"input_tokens": 10}, None)
+
+    agg = await store.get_session_usage("sid-11")
+    assert agg["cache_write_tokens_5m"] == 0
+    assert agg["cache_write_tokens_1h"] == 0
+
+
+async def test_ttl_tiers_aggregate_across_multiple_turns(store):
+    usage1 = {"cache_write_tokens_5m": 10, "cache_write_tokens_1h": 1}
+    usage2 = {"cache_write_tokens_5m": 5, "cache_write_tokens_1h": 2}
+    await store.record_turn("sid-12", 1, None, usage1, None)
+    await store.record_turn("sid-12", 2, None, usage2, None)
+
+    agg = await store.get_session_usage("sid-12")
+    assert agg["cache_write_tokens_5m"] == 15
+    assert agg["cache_write_tokens_1h"] == 3
+
+
+async def test_is_subagent_catch_up_row_is_recorded(store):
+    usage = {"input_tokens": 3, "cache_write_tokens_5m": 1}
+    result = await store.record_turn(
+        "sid-13", 1, None, usage, None, is_subagent=True
+    )
+    assert result is True
+
+    rows = await store._db.execute_read(
+        "SELECT is_subagent FROM turn_usage WHERE session_id = ?", ("sid-13",)
+    )
+    assert rows[0]["is_subagent"] == 1
+
+
+async def test_is_subagent_defaults_to_false(store):
+    await store.record_turn("sid-14", 1, None, {"input_tokens": 1}, None)
+
+    rows = await store._db.execute_read(
+        "SELECT is_subagent FROM turn_usage WHERE session_id = ?", ("sid-14",)
+    )
+    assert rows[0]["is_subagent"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Issue #1840: migration of a pre-existing DB file with the old schema
+# ---------------------------------------------------------------------------
+
+
+async def test_migration_adds_missing_columns_to_existing_db(tmp_path):
+    """A DB file created before #1840 (no cache_write_tokens_5m/1h/is_subagent
+    columns) must be upgraded in place on initialize(), without raising and
+    without losing existing rows."""
+    import sqlite3
+
+    from backend.analytics.database import AnalyticsDB
+
+    db_path = tmp_path / "legacy_analytics.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE turn_usage (
+          id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id          TEXT    NOT NULL,
+          turn_seq            INTEGER NOT NULL,
+          model               TEXT,
+          input_tokens        INTEGER NOT NULL DEFAULT 0,
+          output_tokens       INTEGER NOT NULL DEFAULT 0,
+          cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
+          cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
+          sdk_total_cost_usd  REAL,
+          ts                  REAL    NOT NULL,
+          UNIQUE(session_id, turn_seq)
+        );
+        CREATE TABLE session_usage (
+          session_id          TEXT PRIMARY KEY,
+          model               TEXT,
+          turn_count          INTEGER NOT NULL DEFAULT 0,
+          input_tokens        INTEGER NOT NULL DEFAULT 0,
+          output_tokens       INTEGER NOT NULL DEFAULT 0,
+          cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
+          cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
+          sdk_total_cost_usd  REAL,
+          last_updated        REAL    NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO turn_usage (session_id, turn_seq, input_tokens, ts) VALUES (?, ?, ?, ?)",
+        ("legacy-sid", 1, 42, 0.0),
+    )
+    conn.execute(
+        "INSERT INTO session_usage (session_id, input_tokens, last_updated) VALUES (?, ?, ?)",
+        ("legacy-sid", 42, 0.0),
+    )
+    conn.commit()
+    conn.close()
+
+    db = AnalyticsDB(db_path)
+    await db.initialize()
+    try:
+        store = AnalyticsStore(db)
+        agg = await store.get_session_usage("legacy-sid")
+        assert agg is not None
+        assert agg["input_tokens"] == 42, "pre-existing row must survive the migration"
+        assert agg["cache_write_tokens_5m"] == 0
+        assert agg["cache_write_tokens_1h"] == 0
+
+        # New writes against the upgraded schema must work normally.
+        await store.record_turn(
+            "legacy-sid", 2, None, {"cache_write_tokens_5m": 9}, None
+        )
+        agg2 = await store.get_session_usage("legacy-sid")
+        assert agg2["cache_write_tokens_5m"] == 9
+    finally:
+        await db.close()
+
+
+async def test_get_turn_count_includes_subagent_catch_up_rows_for_turn_seq_reseed(store):
+    """Regression: get_turn_count() feeds SessionCoordinator's turn_seq reseed
+    after a restart and must count is_subagent=1 catch-up rows too, even though
+    they're excluded from the displayed session_usage.turn_count — otherwise a
+    reseeded turn_seq would collide with a turn_seq already used by a catch-up
+    row (INSERT OR IGNORE would then silently drop that turn's real usage)."""
+    await store.record_turn("sid-15", 1, "claude-sonnet-4-6", {"input_tokens": 1}, None)
+    await store.record_turn("sid-15", 2, "claude-sonnet-4-6", {"input_tokens": 1}, None)
+    await store.record_turn(
+        "sid-15", 3, None, {"input_tokens": 1}, None, is_subagent=True
+    )
+
+    agg = await store.get_session_usage("sid-15")
+    assert agg["turn_count"] == 2  # display value excludes the catch-up row
+
+    next_seq_source = await store.get_turn_count("sid-15")
+    assert next_seq_source == 3, "must count all 3 rows so the next turn_seq is 4, not 3"
+
+
+async def test_migration_is_idempotent_across_multiple_initialize_calls(tmp_path):
+    """Re-running the migration on an already-upgraded DB (e.g. process restart)
+    must not raise 'duplicate column' errors."""
+    from backend.analytics.database import AnalyticsDB
+
+    db_path = tmp_path / "analytics.db"
+    db = AnalyticsDB(db_path)
+    await db.initialize()
+    await db.close()
+
+    # Second initialize() against the same file, simulating a restart.
+    db2 = AnalyticsDB(db_path)
+    await db2.initialize()
+    await db2.close()

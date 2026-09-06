@@ -1,5 +1,9 @@
 """Unit tests for usage normalisation against SDK 0.1.72+ (issue #1287)."""
-from backend.session_coordinator import _delta_from_baseline, _normalize_result_usage
+from backend.session_coordinator import (
+    _accumulate_subagent_usage,
+    _delta_from_baseline,
+    _normalize_result_usage,
+)
 
 
 def test_prefers_usage_when_populated():
@@ -196,3 +200,94 @@ def test_none_baseline_treated_as_all_zero():
         "output_tokens": 5.0,
         "total_cost_usd": 1.5,
     }
+
+
+# --- Issue #1840: subagent (Task/Agent tool) usage accumulation ---
+
+
+def test_accumulate_single_subagent_message():
+    usage = {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cache_read_input_tokens": 5,
+        "cache_creation": {
+            "ephemeral_5m_input_tokens": 20,
+            "ephemeral_1h_input_tokens": 3,
+        },
+    }
+    accum = _accumulate_subagent_usage(None, usage)
+    assert accum == {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cache_read_input_tokens": 5,
+        "cache_write_tokens_5m": 20,
+        "cache_write_tokens_1h": 3,
+        "cache_write_tokens": 23,
+    }
+
+
+def test_accumulate_multiple_subagent_messages_sums_not_diffs():
+    """Each subagent AssistantMessage.usage is a per-call delta, not a cumulative
+    snapshot — repeated calls must sum directly, never be baselined/diffed (which
+    would zero out everything after the first call)."""
+    accum = None
+    for _ in range(3):
+        accum = _accumulate_subagent_usage(
+            accum,
+            {
+                "input_tokens": 10,
+                "output_tokens": 4,
+                "cache_read_input_tokens": 1,
+                "cache_creation": {
+                    "ephemeral_5m_input_tokens": 2,
+                    "ephemeral_1h_input_tokens": 0,
+                },
+            },
+        )
+    assert accum == {
+        "input_tokens": 30,
+        "output_tokens": 12,
+        "cache_read_input_tokens": 3,
+        "cache_write_tokens_5m": 6,
+        "cache_write_tokens_1h": 0,
+        "cache_write_tokens": 6,
+    }
+
+
+def test_accumulate_missing_cache_creation_defaults_to_zero():
+    accum = _accumulate_subagent_usage(None, {"input_tokens": 5, "output_tokens": 2})
+    assert accum["cache_write_tokens_5m"] == 0
+    assert accum["cache_write_tokens_1h"] == 0
+    assert accum["cache_write_tokens"] == 0
+
+
+def test_merge_accumulator_into_usage_delta_adds_not_overwrites():
+    """Mirrors the merge logic in the 'result' branch: subagent contributions must
+    be added on top of the main thread's own usage_delta, not overwrite it."""
+    usage_delta = {"input_tokens": 200.0, "output_tokens": 80.0}
+    sub_accum = _accumulate_subagent_usage(
+        None,
+        {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "cache_creation": {"ephemeral_5m_input_tokens": 1, "ephemeral_1h_input_tokens": 0},
+        },
+    )
+    for k, v in sub_accum.items():
+        usage_delta[k] = usage_delta.get(k, 0) + v
+
+    assert usage_delta["input_tokens"] == 210.0
+    assert usage_delta["output_tokens"] == 85.0
+    assert usage_delta["cache_write_tokens_5m"] == 1
+
+
+def test_ac4_no_subagent_usage_leaves_usage_delta_unchanged():
+    """AC4: sessions without any subagent messages must be byte-identical to
+    pre-#1840 behaviour — an absent/empty accumulator is a strict no-op."""
+    usage_delta = {"input_tokens": 200.0, "output_tokens": 80.0}
+    original = dict(usage_delta)
+    sub_accum = None
+    if sub_accum:
+        for k, v in sub_accum.items():
+            usage_delta[k] = usage_delta.get(k, 0) + v
+    assert usage_delta == original

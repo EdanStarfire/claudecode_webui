@@ -1000,3 +1000,94 @@ class TestIssue1486MessageIdPropagation:
         }
         parsed = handler.parse(message_data)
         assert parsed.metadata.get("message_id") == "msg_stored456"
+
+
+class TestIssue1840UsageExtraction:
+    """Regression tests for issue #1840: subagent (Task/Agent tool) usage capture.
+
+    `claude_agent_sdk.claude_sdk._convert_sdk_message()` already copies `usage` off
+    every raw SDK message dict that has it, including subagent AssistantMessages
+    (tagged with `parent_tool_use_id`) — the only gap was that
+    AssistantMessageHandler never extracted it into parsed metadata.
+    """
+
+    def test_usage_extracted_for_top_level_assistant_message(self):
+        handler = AssistantMessageHandler()
+        usage = {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 5,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": 20,
+                "ephemeral_1h_input_tokens": 0,
+            },
+        }
+        message_data = {
+            "type": "assistant",
+            "model": "claude-sonnet-4-6",
+            "usage": usage,
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+        assert parsed.metadata.get("usage") == usage
+
+    def test_usage_extracted_for_subagent_assistant_message(self):
+        """A parent_tool_use_id-tagged message extracts usage the same way — no
+        subagent-specific parsing path, just the same field the handler already
+        has access to."""
+        handler = AssistantMessageHandler()
+        usage = {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": 3,
+                "ephemeral_1h_input_tokens": 7,
+            },
+        }
+        message_data = {
+            "type": "assistant",
+            "model": "claude-haiku-4-5",
+            "parent_tool_use_id": "toolu_subagent_1",
+            "usage": usage,
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+        assert parsed.metadata.get("parent_tool_use_id") == "toolu_subagent_1"
+        assert parsed.metadata.get("usage") == usage
+        assert parsed.metadata["usage"]["cache_creation"]["ephemeral_1h_input_tokens"] == 7
+
+    def test_usage_extracted_from_sdk_message_object(self):
+        """usage is also read off a real AssistantMessage SDK object, not just the
+        top-level dict copy claude_sdk.py makes."""
+        from claude_agent_sdk import AssistantMessage
+        from claude_agent_sdk.types import TextBlock
+
+        usage = {"input_tokens": 1, "output_tokens": 1}
+        sdk_msg = AssistantMessage(
+            content=[TextBlock(text="hi")],
+            model="claude-sonnet-4-6",
+            usage=usage,
+        )
+        message_data = {
+            "type": "assistant",
+            "sdk_message": sdk_msg,
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+        }
+        handler = AssistantMessageHandler()
+        parsed = handler.parse(message_data)
+        assert parsed.metadata.get("usage") == usage
+
+    def test_usage_absent_when_not_present(self):
+        handler = AssistantMessageHandler()
+        message_data = {
+            "type": "assistant",
+            "model": "claude-sonnet-4-6",
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+        assert "usage" not in parsed.metadata
