@@ -356,12 +356,27 @@ class CommRouter:
                 )
 
                 if not success:
-                    legion_logger.error(f"Failed to auto-start minion {comm.to_minion_id}")
+                    reason = None
+                    try:
+                        failed_info = await self.system.session_coordinator.session_manager.get_session_info(
+                            comm.to_minion_id
+                        )
+                        reason = failed_info.error_message if failed_info else None
+                    except Exception:
+                        legion_logger.exception(
+                            f"Failed to retrieve failure reason for minion {comm.to_minion_id}"
+                        )
+
+                    detail = reason or f"state: {target_minion.state}"
+                    legion_logger.error(
+                        f"Failed to auto-start minion {comm.to_minion_id}: {detail}"
+                    )
                     # Send error comm back to sender
                     if comm.from_minion_id:
+                        comm.metadata["delivery_failure_reason"] = reason
                         await self._send_system_error_comm(
                             to_minion_id=comm.from_minion_id,
-                            error_message=f"Failed to deliver message: Could not auto-start target minion (state: {target_minion.state})",
+                            error_message=f"Failed to deliver message: Could not auto-start target minion ({detail})",
                             original_comm_id=comm.comm_id
                         )
                     return False

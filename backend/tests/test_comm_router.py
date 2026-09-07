@@ -515,3 +515,206 @@ class TestCommRouter:
         assert not (tmp_path / "sessions" / "nonexistent-minion").exists(), (
             "No attachment directory should be created for a nonexistent target minion"
         )
+
+
+class TestAutoStartFailureReason:
+    """Issue #1839: auto-start failure should surface the real error_message
+    (re-fetched from SessionInfo) instead of only the generic state text."""
+
+    def _make_minion(self, state, error_message=None):
+        from backend.session_manager import SessionInfo, SessionState
+
+        mock = Mock(spec=SessionInfo)
+        mock.session_id = "test-minion-123"
+        mock.name = "TestMinion"
+        mock.project_id = "test-legion-456"
+        mock.state = state if state is not None else SessionState.CREATED
+        mock.error_message = error_message
+        return mock
+
+    @pytest.mark.asyncio
+    async def test_auto_start_failure_surfaces_error_message(self, comm_router):
+        """T1-equivalent: a freshly computed error_message on the re-fetched
+        SessionInfo is included in both the error Comm and the log line."""
+        from backend.session_manager import SessionState
+
+        sm = comm_router.system.session_coordinator.session_manager
+        initial_minion = self._make_minion(SessionState.CREATED)
+        failed_minion = self._make_minion(
+            SessionState.ERROR, error_message="Docker sandbox unavailable: image not found"
+        )
+        sm.get_session_info = AsyncMock(side_effect=[initial_minion, failed_minion])
+        comm_router.system.session_coordinator.start_session = AsyncMock(return_value=False)
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="sender-minion",
+            to_minion_id="test-minion-123",
+            content="Test message",
+            comm_type=CommType.TASK,
+        )
+
+        with patch.object(comm_router, '_send_system_error_comm', new=AsyncMock()) as mock_error_comm, \
+                patch('backend.legion.comm_router.legion_logger') as mock_logger:
+            result = await comm_router._send_to_minion(comm)
+
+        assert result is False
+        mock_error_comm.assert_called_once()
+        error_message_arg = mock_error_comm.call_args.kwargs["error_message"]
+        assert "Docker sandbox unavailable: image not found" in error_message_arg
+        assert comm.metadata["delivery_failure_reason"] == "Docker sandbox unavailable: image not found"
+
+        logged = "".join(str(call) for call in mock_logger.error.call_args_list)
+        assert "Docker sandbox unavailable: image not found" in logged
+
+    @pytest.mark.asyncio
+    async def test_auto_start_failure_surfaces_stale_error_message(self, comm_router):
+        """T2-equivalent: session already in ERROR state from a prior failure
+        (no fresh error computed this call) still surfaces its stale-but-relevant
+        error_message via the re-fetch."""
+        from backend.session_manager import SessionState
+
+        sm = comm_router.system.session_coordinator.session_manager
+        initial_minion = self._make_minion(SessionState.CREATED)
+        failed_minion = self._make_minion(
+            SessionState.ERROR, error_message="Previous failure: connection refused"
+        )
+        sm.get_session_info = AsyncMock(side_effect=[initial_minion, failed_minion])
+        comm_router.system.session_coordinator.start_session = AsyncMock(return_value=False)
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="sender-minion",
+            to_minion_id="test-minion-123",
+            content="Test message",
+            comm_type=CommType.TASK,
+        )
+
+        with patch.object(comm_router, '_send_system_error_comm', new=AsyncMock()) as mock_error_comm:
+            result = await comm_router._send_to_minion(comm)
+
+        assert result is False
+        error_message_arg = mock_error_comm.call_args.kwargs["error_message"]
+        assert "Previous failure: connection refused" in error_message_arg
+
+    @pytest.mark.asyncio
+    async def test_auto_start_failure_degrades_gracefully_when_session_info_none(self, comm_router):
+        """Degrade-gracefully case: get_session_info() returns None on the
+        re-fetch — falls back to the existing state-based text, no exception."""
+        from backend.session_manager import SessionState
+
+        sm = comm_router.system.session_coordinator.session_manager
+        initial_minion = self._make_minion(SessionState.CREATED)
+        sm.get_session_info = AsyncMock(side_effect=[initial_minion, None])
+        comm_router.system.session_coordinator.start_session = AsyncMock(return_value=False)
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="sender-minion",
+            to_minion_id="test-minion-123",
+            content="Test message",
+            comm_type=CommType.TASK,
+        )
+
+        with patch.object(comm_router, '_send_system_error_comm', new=AsyncMock()) as mock_error_comm:
+            result = await comm_router._send_to_minion(comm)
+
+        assert result is False
+        error_message_arg = mock_error_comm.call_args.kwargs["error_message"]
+        assert f"state: {SessionState.CREATED}" in error_message_arg
+        assert comm.metadata["delivery_failure_reason"] is None
+
+    @pytest.mark.asyncio
+    async def test_auto_start_failure_degrades_gracefully_when_lookup_raises(self, comm_router):
+        """Degrade-gracefully case: get_session_info() raises on the re-fetch —
+        falls back to the existing state-based text, no exception escapes."""
+        from backend.session_manager import SessionState
+
+        sm = comm_router.system.session_coordinator.session_manager
+        initial_minion = self._make_minion(SessionState.CREATED)
+
+        async def raise_on_second_call(*_args, **_kwargs):
+            raise RuntimeError("db unavailable")
+
+        call_count = {"n": 0}
+
+        async def side_effect(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return initial_minion
+            return await raise_on_second_call()
+
+        sm.get_session_info = AsyncMock(side_effect=side_effect)
+        comm_router.system.session_coordinator.start_session = AsyncMock(return_value=False)
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="sender-minion",
+            to_minion_id="test-minion-123",
+            content="Test message",
+            comm_type=CommType.TASK,
+        )
+
+        with patch.object(comm_router, '_send_system_error_comm', new=AsyncMock()) as mock_error_comm:
+            result = await comm_router._send_to_minion(comm)
+
+        assert result is False
+        error_message_arg = mock_error_comm.call_args.kwargs["error_message"]
+        assert f"state: {SessionState.CREATED}" in error_message_arg
+        assert comm.metadata["delivery_failure_reason"] is None
+
+    @pytest.mark.asyncio
+    async def test_target_not_found_message_unchanged(self, comm_router):
+        """AC4 regression: target-not-found failure keeps its existing
+        generic message, byte-for-byte, untouched by this change."""
+        sm = comm_router.system.session_coordinator.session_manager
+        sm.get_session_info = AsyncMock(return_value=None)
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="sender-minion",
+            to_minion_id="nonexistent-minion",
+            content="Test message",
+            comm_type=CommType.TASK,
+        )
+
+        with patch.object(comm_router, '_send_system_error_comm', new=AsyncMock()) as mock_error_comm:
+            result = await comm_router._send_to_minion(comm)
+
+        assert result is False
+        mock_error_comm.assert_called_once_with(
+            to_minion_id="sender-minion",
+            error_message="Failed to deliver message: Target minion not found",
+            original_comm_id=comm.comm_id,
+        )
+        assert "delivery_failure_reason" not in comm.metadata
+
+    @pytest.mark.asyncio
+    async def test_send_message_rejection_message_unchanged(self, comm_router):
+        """AC4 regression: send_message() rejection (post auto-start-success
+        path) keeps its existing generic message unchanged."""
+        from backend.session_manager import SessionState
+
+        sm = comm_router.system.session_coordinator.session_manager
+        active_minion = self._make_minion(SessionState.ACTIVE)
+        sm.get_session_info = AsyncMock(return_value=active_minion)
+        comm_router.system.session_coordinator.send_message = AsyncMock(return_value=False)
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="sender-minion",
+            to_minion_id="test-minion-123",
+            content="Test message",
+            comm_type=CommType.TASK,
+        )
+
+        with patch.object(comm_router, '_send_system_error_comm', new=AsyncMock()) as mock_error_comm:
+            result = await comm_router._send_to_minion(comm)
+
+        assert result is False
+        mock_error_comm.assert_called_once_with(
+            to_minion_id="sender-minion",
+            error_message="Failed to deliver message: SDK rejected the message",
+            original_comm_id=comm.comm_id,
+        )
+        assert "delivery_failure_reason" not in comm.metadata
