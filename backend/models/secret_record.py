@@ -249,8 +249,15 @@ class SecretRecord:
                 raise ValueError("injection.param_name is required when location == query_param")
         if self.refresh is not None and self.type != SecretType.OAUTH2:
             raise ValueError("refresh may only be set when type == oauth2")
-        if self.type == SecretType.OAUTH2 and self.scrub is None:
-            raise ValueError("scrub is required for oauth2 type (needed to capture refreshed token values)")
+        has_working_refresh = bool(
+            self.refresh and self.refresh.token_url and self.refresh.refresh_token_secret_name
+        )
+        if self.type == SecretType.OAUTH2 and self.scrub is None and not has_working_refresh:
+            raise ValueError(
+                "oauth2 type requires at least one of scrub (response capture) or "
+                "refresh (proactive OAuth refresh, with token_url and "
+                "refresh_token_secret_name set) to keep the token current"
+            )
         if self.username is not None and self.type != SecretType.BASIC_AUTH:
             raise ValueError("username may only be set when type == basic_auth")
         if self.public_key_openssh is not None and self.type != SecretType.SSH_KEY:
