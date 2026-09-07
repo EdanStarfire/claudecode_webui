@@ -93,6 +93,21 @@ async def test_start_flow_confidential_client_sets_auth_method_and_persists(tmp_
 
 
 @pytest.mark.asyncio
+async def test_start_flow_confidential_client_requests_offline_refresh(tmp_path: Path):
+    """Google never issues a refresh_token without access_type=offline, and won't
+    re-issue one for an already-granted app without prompt=consent — both must be in
+    the authorization URL for a confidential (client_secret-bearing) request, or
+    refresh silently can never work (issue #1867's "No refresh token was stored"
+    symptom, found during live testing against real Google OAuth)."""
+    manager = OAuthFlowManager(tmp_path)
+
+    auth_url = await _start_flow_pre_registered(manager, client_secret="s3cr3t")
+
+    assert "access_type=offline" in auth_url
+    assert "prompt=consent" in auth_url
+
+
+@pytest.mark.asyncio
 async def test_start_flow_public_client_unchanged_but_now_persists(tmp_path: Path):
     """Public pre-registered client (Slack-shaped): auth_method stays 'none', no secret,
     but client_info is now persisted (closes the refresh-persistence gap for issue #1867).
@@ -109,6 +124,19 @@ async def test_start_flow_public_client_unchanged_but_now_persists(tmp_path: Pat
     assert client_info.client_id == "pre-registered-id"
     assert client_info.client_secret is None
     assert client_info.token_endpoint_auth_method == "none"
+
+
+@pytest.mark.asyncio
+async def test_start_flow_public_client_omits_offline_params(tmp_path: Path):
+    """Slack (and any other public pre-registered client) must not get
+    access_type=offline/prompt=consent — those are scoped to confidential clients only,
+    to keep the public-client request byte-for-byte unchanged."""
+    manager = OAuthFlowManager(tmp_path)
+
+    auth_url = await _start_flow_pre_registered(manager, client_secret=None)
+
+    assert "access_type" not in auth_url
+    assert "prompt" not in auth_url
 
 
 # ---------------------------------------------------------------------------

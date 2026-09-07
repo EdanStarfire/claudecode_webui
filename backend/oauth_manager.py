@@ -199,6 +199,8 @@ class OAuthFlowManager:
         resolved from the vault by the caller), the pre-registered client is treated as
         confidential (token_endpoint_auth_method="client_secret_post") instead of public
         — required for servers like Google that reject public-client token exchanges.
+        The authorization request also adds access_type=offline + prompt=consent in this
+        case, since Google never issues a refresh_token without them.
 
         Steps performed:
           1. Protected resource metadata discovery (RFC 9728)
@@ -350,6 +352,16 @@ class OAuthFlowManager:
             }
             if requested_scopes:
                 params["scope"] = " ".join(requested_scopes)
+            if client_secret:
+                # Google-specific but widely-supported params, required to ever receive a
+                # refresh_token for a confidential client: Google only issues one when
+                # access_type=offline is requested, and only re-issues it on an already-
+                # granted app when prompt=consent forces the consent screen again — issue
+                # #1867's "No refresh token was stored" symptom. Scoped to client_secret
+                # (confidential) requests only so the public-client (Slack) path is
+                # unaffected.
+                params["access_type"] = "offline"
+                params["prompt"] = "consent"
             auth_url = f"{auth_endpoint}?{urlencode(params)}"
 
             # --- Step 6: Persist pending state ---
