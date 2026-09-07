@@ -29,7 +29,7 @@ class TestGetSessionLinks:
     async def test_issue_1530_get_links_returns_registered(self, api_integration_env):
         """After upsert_link on the coordinator, GET returns the link."""
         client = api_integration_env["client"]
-        coordinator = api_integration_env["session_coordinator"]
+        coordinator = api_integration_env["coordinator"]
         session = await _create_session(api_integration_env)
         sid = session["session_id"]
 
@@ -51,7 +51,7 @@ class TestGetSessionLinks:
 
     async def test_issue_1530_links_survive_message_clear(self, api_integration_env):
         """Links on session_info are not affected by clearing messages.jsonl directly."""
-        coordinator = api_integration_env["session_coordinator"]
+        coordinator = api_integration_env["coordinator"]
         client = api_integration_env["client"]
         session = await _create_session(api_integration_env)
         sid = session["session_id"]
