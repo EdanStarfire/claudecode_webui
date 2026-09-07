@@ -19,6 +19,7 @@ def _mcp_config(
     url: str | None = None,
     command: str | None = None,
     args: list[str] | None = None,
+    oauth_client_secret: str | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         env=env or {},
@@ -26,6 +27,7 @@ def _mcp_config(
         url=url,
         command=command,
         args=args or [],
+        oauth_client_secret=oauth_client_secret,
     )
 
 
@@ -63,10 +65,30 @@ def test_mcp_config_refs_detected_in_all_fields():
         _mcp_config(url="https://example.com/${secret:api-key}"),
         _mcp_config(command="run --token=${secret:api-key}"),
         _mcp_config(args=["--key", "${secret:api-key}"]),
+        _mcp_config(oauth_client_secret="${secret:api-key}"),
     ]
     usage = compute_secret_usage(secrets, [], [], [], mcp_configs)
-    assert usage["api-key"]["mcp_servers"] == 5
-    assert usage["api-key"]["total"] == 5
+    assert usage["api-key"]["mcp_servers"] == 6
+    assert usage["api-key"]["total"] == 6
+
+
+def test_issue_1867_oauth_client_secret_ref_counted_as_mcp_usage():
+    """A confidential OAuth MCP server's ${secret:NAME} client secret must show up in
+    usage counts — otherwise a user could delete/rotate a secret an MCP server's OAuth
+    token exchange depends on with no "in use by" warning (issue #1867 follow-up)."""
+    secrets = [_secret("google-client-secret")]
+    mcp_configs = [_mcp_config(oauth_client_secret="${secret:google-client-secret}")]
+    usage = compute_secret_usage(secrets, [], [], [], mcp_configs)
+    assert usage["google-client-secret"]["mcp_servers"] == 1
+    assert usage["google-client-secret"]["total"] == 1
+
+
+def test_oauth_client_secret_none_does_not_error():
+    """Most MCP configs have no oauth_client_secret (None) — must not raise."""
+    secrets = [_secret("unrelated")]
+    mcp_configs = [_mcp_config(oauth_client_secret=None)]
+    usage = compute_secret_usage(secrets, [], [], [], mcp_configs)
+    assert usage["unrelated"]["mcp_servers"] == 0
 
 
 def test_mcp_config_same_secret_referenced_twice_counts_once():

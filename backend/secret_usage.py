@@ -63,7 +63,7 @@ def compute_secret_usage(
     `sessions`/`templates`/`profiles` are objects exposing a `.config` dict
     (profiles are expected to already be filtered to the area that carries
     `assigned_secrets`). `mcp_configs` are objects exposing `.env`, `.headers`,
-    `.url`, `.command`, `.args`.
+    `.url`, `.command`, `.args`, `.oauth_client_secret`.
 
     Returns {slugify_secret(name): {sessions, templates, profiles, mcp_servers,
     oauth2_dependents, total}}.
@@ -84,6 +84,7 @@ def compute_secret_usage(
         ref_names.update(find_secret_ref_names(mcp_config.command))
         for arg in mcp_config.args:
             ref_names.update(find_secret_ref_names(arg))
+        ref_names.update(find_secret_ref_names(mcp_config.oauth_client_secret))
         for name in ref_names:
             slug = slugify_secret(name)
             if slug in usage:
