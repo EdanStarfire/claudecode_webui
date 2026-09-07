@@ -53,6 +53,9 @@ class McpServerConfig:
     oauth_enabled: bool = False
     # CLI-managed OAuth (issue #1109)
     oauth_client_id: str | None = None
+    # Confidential-client secret (issue #1867) — a ${secret:NAME} vault reference,
+    # resolved via secret_resolver.resolve_secret_refs_in_str(), never stored plaintext here.
+    oauth_client_secret: str | None = None
     oauth_callback_port: int | None = None
     # Issue #1484: route through a single shared upstream connection (opt-in)
     shared_connection: bool = False
@@ -81,6 +84,7 @@ class McpServerConfig:
         data.setdefault('enabled', True)
         data.setdefault('oauth_enabled', False)
         data.setdefault('oauth_client_id', None)
+        data.setdefault('oauth_client_secret', None)
         data.setdefault('oauth_callback_port', None)
         data.setdefault('shared_connection', False)
         data.setdefault('oauth_custom_callback_path', None)
@@ -186,6 +190,7 @@ class McpConfigManager:
         enabled: bool = True,
         oauth_enabled: bool = False,
         oauth_client_id: str | None = None,
+        oauth_client_secret: str | None = None,
         oauth_callback_port: int | None = None,
         shared_connection: bool = False,
         oauth_custom_callback_path: str | None = None,
@@ -235,6 +240,7 @@ class McpConfigManager:
             enabled=enabled,
             oauth_enabled=oauth_enabled,
             oauth_client_id=oauth_client_id,
+            oauth_client_secret=oauth_client_secret,
             oauth_callback_port=oauth_callback_port,
             shared_connection=shared_connection,
             oauth_custom_callback_path=oauth_custom_callback_path,
@@ -320,6 +326,7 @@ class McpConfigManager:
         enabled: bool | None = None,
         oauth_enabled: bool | None = None,
         oauth_client_id=_UNSET,
+        oauth_client_secret=_UNSET,
         oauth_callback_port=_UNSET,
         shared_connection: bool | None = None,
         oauth_custom_callback_path=_UNSET,
@@ -393,6 +400,12 @@ class McpConfigManager:
             config.oauth_enabled = oauth_enabled
         if oauth_client_id is not _UNSET:
             config.oauth_client_id = (oauth_client_id.strip() or None) if isinstance(oauth_client_id, str) else oauth_client_id
+        if oauth_client_secret is not _UNSET:
+            config.oauth_client_secret = (
+                (oauth_client_secret.strip() or None)
+                if isinstance(oauth_client_secret, str)
+                else oauth_client_secret
+            )
         if oauth_callback_port is not _UNSET:
             config.oauth_callback_port = oauth_callback_port
         if shared_connection is not None:

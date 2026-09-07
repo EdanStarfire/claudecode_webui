@@ -29,7 +29,7 @@ from src.web_server import create_app
 _BACKEND_DEBUG_FLAGS = [
     'sdk', 'permissions', 'storage', 'parser', 'legion', 'session-manager',
     'template-manager', 'skill-manager', 'queue-manager', 'queue-processor',
-    'archive', 'project-manager', 'profile-manager',
+    'archive', 'project-manager', 'profile-manager', 'oauth',
 ]
 
 

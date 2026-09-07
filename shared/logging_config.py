@@ -157,6 +157,7 @@ def configure_logging(
     debug_archive: bool = False,
     debug_project_manager: bool = False,
     debug_profile_manager: bool = False,
+    debug_oauth: bool = False,
     debug_all: bool = False,
     log_dir: str = "data/logs"
 ) -> None:
@@ -179,6 +180,7 @@ def configure_logging(
         debug_archive: Enable archive manager debugging
         debug_project_manager: Enable project manager debugging
         debug_profile_manager: Enable profile manager debugging
+        debug_oauth: Enable OAuth flow + shared-MCP-connection debugging
         debug_all: Enable all debug logging (excludes debug_all_polling due to excessive noise)
         log_dir: Directory for log files
 
@@ -218,6 +220,7 @@ def configure_logging(
         'debug_archive': debug_archive or debug_all,
         'debug_project_manager': debug_project_manager or debug_all,
         'debug_profile_manager': debug_profile_manager or debug_all,
+        'debug_oauth': debug_oauth or debug_all,
         'log_dir': log_dir
     }
 
@@ -337,6 +340,23 @@ def configure_logging(
             'file': f"{log_dir}/profile_manager.log",
             'enabled': _log_config['debug_profile_manager'],
             'console': _log_config['debug_profile_manager'],
+            'level': logging.DEBUG
+        },
+        # oauth_manager.py/oauth_callback_listener_manager.py/shared_connection_manager.py
+        # already call get_logger('oauth'/'mcp_shared', category=...) — without an entry
+        # here, get_logger() returns a bare, unconfigured logger that inherits root's
+        # WARNING level and root's ERROR-only handlers, so every .info()/.debug() call
+        # (and even .warning()) is silently dropped regardless of --debug-all (issue #1867).
+        'oauth': {
+            'file': f"{log_dir}/oauth.log",
+            'enabled': _log_config['debug_oauth'],
+            'console': _log_config['debug_oauth'],
+            'level': logging.DEBUG
+        },
+        'mcp_shared': {
+            'file': f"{log_dir}/mcp_shared.log",
+            'enabled': _log_config['debug_oauth'],
+            'console': _log_config['debug_oauth'],
             'level': logging.DEBUG
         }
     }

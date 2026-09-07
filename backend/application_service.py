@@ -310,6 +310,7 @@ class ApplicationService:
         enabled: bool = True,
         oauth_enabled: bool = False,
         oauth_client_id: str | None = None,
+        oauth_client_secret: str | None = None,
         oauth_callback_port: int | None = None,
         shared_connection: bool = False,
         oauth_custom_callback_path: str | None = None,
@@ -326,6 +327,7 @@ class ApplicationService:
             enabled=enabled,
             oauth_enabled=oauth_enabled,
             oauth_client_id=oauth_client_id,
+            oauth_client_secret=oauth_client_secret,
             oauth_callback_port=oauth_callback_port,
             shared_connection=shared_connection,
             oauth_custom_callback_path=oauth_custom_callback_path,
@@ -559,15 +561,23 @@ class ApplicationService:
         redirect_uri: str,
         client_name: str,
     ) -> str | None:
+        from .mcp.secret_resolver import resolve_secret_refs_in_str
+
         config = await self.coordinator.mcp_config_manager.get_config(config_id)
         if not config:
             return None
+        client_secret = None
+        if config.oauth_client_secret:
+            client_secret = await resolve_secret_refs_in_str(
+                config.oauth_client_secret, self.coordinator.credential_vault
+            )
         return await self.coordinator.oauth_manager.start_flow(
             server_id=config_id,
             server_url=server_url,
             redirect_uri=redirect_uri,
             client_name=client_name,
             pre_registered_client_id=config.oauth_client_id or None,
+            client_secret=client_secret,
         )
 
     async def oauth_disconnect(self, config_id: str) -> bool:

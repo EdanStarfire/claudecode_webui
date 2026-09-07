@@ -383,6 +383,7 @@ class McpConfigCreateRequest(BaseModel):
     enabled: bool = True
     oauth_enabled: bool = False
     oauth_client_id: str | None = None
+    oauth_client_secret: str | None = None
     oauth_callback_port: int | None = None
     shared_connection: bool = False
     oauth_custom_callback_path: str | None = None
@@ -400,6 +401,7 @@ class McpConfigUpdateRequest(BaseModel):
     enabled: bool | None = None
     oauth_enabled: bool | None = None
     oauth_client_id: str | None = None
+    oauth_client_secret: str | None = None
     oauth_callback_port: int | None = None
     shared_connection: bool | None = None
     oauth_custom_callback_path: str | None = None

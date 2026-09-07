@@ -233,6 +233,33 @@ class TestIndividualDebugFlags:
         sdk_logger = logging.getLogger('sdk_debug')
         assert len(sdk_logger.handlers) >= 3
 
+    def test_debug_oauth_flag_enables_oauth_and_mcp_shared_logging(self, temp_log_dir):
+        """Issue #1867: debug_oauth must enable both the 'oauth' and 'mcp_shared'
+        loggers — previously neither was registered at all, so oauth_manager.py's and
+        shared_connection_manager.py's .info()/.debug() calls were silently dropped
+        regardless of any debug flag."""
+        configure_logging(debug_oauth=True, log_dir=temp_log_dir)
+
+        oauth_logger = logging.getLogger('oauth')
+        mcp_shared_logger = logging.getLogger('mcp_shared')
+        assert len(oauth_logger.handlers) >= 3
+        assert len(mcp_shared_logger.handlers) >= 3
+
+        oauth_logger.debug('oauth debug message')
+        mcp_shared_logger.debug('mcp_shared debug message')
+
+        oauth_log = Path(temp_log_dir) / 'oauth.log'
+        mcp_shared_log = Path(temp_log_dir) / 'mcp_shared.log'
+        assert 'oauth debug message' in oauth_log.read_text()
+        assert 'mcp_shared debug message' in mcp_shared_log.read_text()
+
+    def test_debug_all_enables_oauth_logging(self, temp_log_dir):
+        """debug_all must also enable oauth/mcp_shared logging (issue #1867)."""
+        configure_logging(debug_all=True, log_dir=temp_log_dir)
+
+        assert len(logging.getLogger('oauth').handlers) >= 3
+        assert len(logging.getLogger('mcp_shared').handlers) >= 3
+
 
 class TestLogFileCreation:
     """Test log file creation behavior."""

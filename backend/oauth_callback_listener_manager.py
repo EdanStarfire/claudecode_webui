@@ -35,7 +35,10 @@ if TYPE_CHECKING:
 
     from .oauth_manager import OAuthFlowManager
 
+from shared.logging_config import get_logger
+
 logger = logging.getLogger(__name__)
+debug_logger = get_logger('oauth', category='OAUTH_CALLBACK')
 
 CompleteFlowFn = Callable[[str, str], Awaitable[str]]
 
@@ -74,9 +77,18 @@ async def render_oauth_callback(request: Request, complete_flow: CompleteFlowFn)
 
     if error:
         error_desc = request.query_params.get("error_description", error)
+        # Always visible: the authorization server's own rejection (e.g. Google's
+        # "invalid_client" for a misconfigured confidential client) previously only ever
+        # appeared in the ephemeral browser popup — if the user didn't read it before the
+        # popup closed, there was zero server-side trace of why the flow failed.
+        logger.error("OAuth callback received error=%s description=%s", error, error_desc)
         return HTMLResponse(content=_error_html(error_desc), status_code=400)
 
     if not code or not state:
+        debug_logger.debug(
+            "OAuth callback missing code and/or state (code_present=%s, state_present=%s)",
+            bool(code), bool(state),
+        )
         return HTMLResponse(
             content=_error_html(
                 "Authorization code or state parameter missing.", title="Missing Parameters"
@@ -84,8 +96,10 @@ async def render_oauth_callback(request: Request, complete_flow: CompleteFlowFn)
             status_code=400,
         )
 
+    debug_logger.debug("OAuth callback received: state=%s…", state[:8])
     try:
-        await complete_flow(state, code)
+        server_id = await complete_flow(state, code)
+        debug_logger.info("OAuth callback completed successfully for server %s", server_id)
         return HTMLResponse(content=_success_html())
     except Exception as e:
         logger.exception("OAuth callback error")
