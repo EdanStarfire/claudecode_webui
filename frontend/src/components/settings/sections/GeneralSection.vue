@@ -111,6 +111,15 @@
           </div>
         </div>
 
+        <div v-if="templateChanged && entity?.state === 'active'" class="field-row">
+          <label class="field-label"></label>
+          <div class="field-control">
+            <div class="text-muted small">
+              Assigning a template to an active session requires a restart for its settings to take effect.
+            </div>
+          </div>
+        </div>
+
         <!-- Profile bindings inherited from bound template (read-only) -->
         <div v-if="boundTemplate" class="field-row field-row--bindings">
           <label class="field-label field-label--top">Profile Bindings</label>
@@ -266,6 +275,11 @@ const templateChipTooltip = computed(() => {
   return currentTemplateId.value
     ? `Template: ${boundTemplate.value?.name || currentTemplateId.value}`
     : 'No template bound'
+})
+
+// Session mode: has the draft's template_id diverged from the persisted value?
+const templateChanged = computed(() => {
+  return isSessionMode.value && currentTemplateId.value !== (entity.value?.template_id || '')
 })
 
 // Session mode: current name (from draft or entity)

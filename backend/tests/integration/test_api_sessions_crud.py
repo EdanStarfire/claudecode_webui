@@ -19,6 +19,8 @@ Tests:
 
 import uuid
 
+from backend.session_config import SessionConfig
+
 
 class TestCreateSession:
     async def test_create_session(self, api_integration_env):
@@ -276,6 +278,152 @@ class TestPatchSession:
         assert resp.status_code == 422, (
             f"Expected 422 for session_overrides, got {resp.status_code}: {resp.text}"
         )
+
+    async def test_patch_response_includes_persisted_session(self, api_integration_env):
+        """PATCH response must return the persisted session, not just {"success": True} (issue #1842)."""
+        create_project = api_integration_env["create_test_project"]
+        create_session = api_integration_env["create_test_session"]
+        client = api_integration_env["client"]
+
+        project = await create_project("Patch Response")
+        session = await create_session(project["project_id"], "Responder")
+        sid = session["session_id"]
+
+        resp = await client.patch(f"/api/sessions/{sid}", json={"role": "Reviewer"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        assert body["session"]["session_id"] == sid
+        assert body["session"]["role"] == "Reviewer"
+
+    async def test_patch_template_id_set_on_templateless_session(self, api_integration_env):
+        """Issue #1842: assigning a template_id to a templateless session must persist."""
+        coordinator = api_integration_env["coordinator"]
+        create_project = api_integration_env["create_test_project"]
+        create_session = api_integration_env["create_test_session"]
+        client = api_integration_env["client"]
+
+        template = await coordinator.template_manager.create_template(name="Reviewer Template", config=SessionConfig())
+
+        project = await create_project("Template Assign")
+        session = await create_session(project["project_id"], "Templateless")
+        sid = session["session_id"]
+        assert session["template_id"] is None
+
+        resp = await client.patch(f"/api/sessions/{sid}", json={"template_id": template.template_id})
+        assert resp.status_code == 200
+        assert resp.json()["session"]["template_id"] == template.template_id
+
+        # Persisted — a fresh GET reflects it too (not just the PATCH response)
+        resp = await client.get(f"/api/sessions/{sid}")
+        assert resp.json()["session"]["template_id"] == template.template_id
+
+    async def test_patch_template_id_switch(self, api_integration_env):
+        """Issue #1842: switching from template A to template B must persist the new id."""
+        coordinator = api_integration_env["coordinator"]
+        create_project = api_integration_env["create_test_project"]
+        client = api_integration_env["client"]
+
+        template_a = await coordinator.template_manager.create_template(name="Template A", config=SessionConfig())
+        template_b = await coordinator.template_manager.create_template(name="Template B", config=SessionConfig())
+
+        project = await create_project("Template Switch")
+        resp = await client.post("/api/sessions", json={
+            "project_id": project["project_id"],
+            "name": "Switcher",
+            "template_id": template_a.template_id,
+        })
+        assert resp.status_code == 200
+        sid = resp.json()["session_id"]
+
+        resp = await client.patch(f"/api/sessions/{sid}", json={"template_id": template_b.template_id})
+        assert resp.status_code == 200
+        assert resp.json()["session"]["template_id"] == template_b.template_id
+
+        resp = await client.get(f"/api/sessions/{sid}")
+        assert resp.json()["session"]["template_id"] == template_b.template_id
+
+    async def test_patch_template_id_clear_to_null(self, api_integration_env):
+        """Issue #1842: explicitly clearing template_id back to null must persist (not be dropped)."""
+        coordinator = api_integration_env["coordinator"]
+        create_project = api_integration_env["create_test_project"]
+        client = api_integration_env["client"]
+
+        template = await coordinator.template_manager.create_template(name="To Be Cleared", config=SessionConfig())
+
+        project = await create_project("Template Clear")
+        resp = await client.post("/api/sessions", json={
+            "project_id": project["project_id"],
+            "name": "Clearable",
+            "template_id": template.template_id,
+        })
+        assert resp.status_code == 200
+        sid = resp.json()["session_id"]
+
+        resp = await client.patch(f"/api/sessions/{sid}", json={"template_id": None})
+        assert resp.status_code == 200
+        assert resp.json()["session"]["template_id"] is None
+
+        resp = await client.get(f"/api/sessions/{sid}")
+        assert resp.json()["session"]["template_id"] is None
+
+    async def test_patch_omitted_template_id_leaves_existing_value_unchanged(self, api_integration_env):
+        """Issue #1842: omitting template_id entirely from the PATCH body must not clear it —
+        model_fields_set must distinguish 'omitted' from 'explicit null'."""
+        coordinator = api_integration_env["coordinator"]
+        create_project = api_integration_env["create_test_project"]
+        client = api_integration_env["client"]
+
+        template = await coordinator.template_manager.create_template(name="Untouched", config=SessionConfig())
+
+        project = await create_project("Template Omit")
+        resp = await client.post("/api/sessions", json={
+            "project_id": project["project_id"],
+            "name": "Untouched Session",
+            "template_id": template.template_id,
+        })
+        assert resp.status_code == 200
+        sid = resp.json()["session_id"]
+
+        # PATCH some other field, deliberately not mentioning template_id at all
+        resp = await client.patch(f"/api/sessions/{sid}", json={"role": "Bystander"})
+        assert resp.status_code == 200
+        assert resp.json()["session"]["template_id"] == template.template_id
+
+    async def test_patch_survives_concurrent_delete_race(self, api_integration_env):
+        """If the session is deleted between update_session() succeeding and the
+        follow-up get_session_info() re-fetch, the PATCH must not 500 — the update
+        itself already succeeded (issue #1842 code review finding)."""
+        create_project = api_integration_env["create_test_project"]
+        create_session = api_integration_env["create_test_session"]
+        client = api_integration_env["client"]
+        coordinator = api_integration_env["coordinator"]
+
+        project = await create_project("Race Test")
+        session = await create_session(project["project_id"], "Racer")
+        sid = session["session_id"]
+
+        original_get_session_info = coordinator.session_manager.get_session_info
+        call_count = 0
+
+        async def deleting_get_session_info(session_id):
+            # First call is the handler's initial existence check — let it through normally.
+            # Second call is the post-update re-fetch — simulate a concurrent delete
+            # landing right before it runs.
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                coordinator.session_manager.get_session_info = original_get_session_info
+                del coordinator.session_manager._active_sessions[session_id]
+            return await original_get_session_info(session_id)
+
+        coordinator.session_manager.get_session_info = deleting_get_session_info
+
+        resp = await client.patch(f"/api/sessions/{sid}", json={"role": "Doomed"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        assert "session" not in body
 
 
 class TestDeleteSession:

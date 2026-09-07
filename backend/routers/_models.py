@@ -62,6 +62,7 @@ class SessionUpdateRequest(BaseModel):
     allowed_tools: list[str] | None = None  # List of tool names to allow
     disallowed_tools: list[str] | None = None  # Issue #461: tools to deny
     role: str | None = None
+    template_id: str | None = None  # Issue #1842: assign/switch/clear a session's template
     system_prompt: str | None = None
     override_system_prompt: bool | None = None
     capabilities: list[str] | None = None
