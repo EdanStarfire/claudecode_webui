@@ -293,6 +293,7 @@
 
         <!-- oauth2 scrub block -->
         <div class="sub-section-header">Response Capture (Scrub)</div>
+        <div class="field-helper">Optional if OAuth2 Token Refresh is configured above — only needed to capture tokens rotated via live proxied traffic.</div>
         <div class="field-row">
           <label class="field-label">URL Path Pattern</label>
           <div class="field-control">
@@ -626,11 +627,21 @@ function buildPayload() {
       buffer_seconds: draftField('refresh_buffer_seconds') ?? entity.value?.refresh?.buffer_seconds ?? 60,
       expires_at: expiresAtRaw ? new Date(expiresAtRaw).toISOString() : null,
     }
-    payload.scrub = {
-      url_path: draftField('scrub_url_path') ?? entity.value?.scrub?.url_path ?? null,
-      matcher_jsonpath: draftField('scrub_matcher_jsonpath') ?? entity.value?.scrub?.matcher_jsonpath ?? null,
-      matcher_regex: draftField('scrub_matcher_regex') ?? entity.value?.scrub?.matcher_regex ?? null,
-      update_on_change: draftField('scrub_update_on_change') ?? entity.value?.scrub?.update_on_change !== false,
+    const scrubUrlPath = draftField('scrub_url_path') ?? entity.value?.scrub?.url_path ?? null
+    const scrubJsonpath = draftField('scrub_matcher_jsonpath') ?? entity.value?.scrub?.matcher_jsonpath ?? null
+    const scrubRegex = draftField('scrub_matcher_regex') ?? entity.value?.scrub?.matcher_regex ?? null
+    // Only omit an empty scrub on create. On edit, the backend's PATCH merge treats a
+    // null scrub as "leave unchanged" (not "clear it"), so sending null here would
+    // silently fail to remove an existing scrub config instead of clearing it.
+    if (scrubUrlPath || scrubJsonpath || scrubRegex || !isNew.value) {
+      payload.scrub = {
+        url_path: scrubUrlPath,
+        matcher_jsonpath: scrubJsonpath,
+        matcher_regex: scrubRegex,
+        update_on_change: draftField('scrub_update_on_change') ?? entity.value?.scrub?.update_on_change !== false,
+      }
+    } else {
+      payload.scrub = null
     }
   }
 

@@ -7,7 +7,7 @@ Tests: GET /api/secrets, POST /api/secrets, PATCH /api/secrets/{name},
 Keyring is mocked so tests run without OS keyring.
 """
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -32,6 +32,11 @@ def mock_keyring():
         patch("backend.credential_vault.set_secret_value", side_effect=_set),
         patch("backend.credential_vault.get_secret_value", side_effect=_get),
         patch("backend.credential_vault.delete_secret_value", side_effect=_del),
+        # backend.application_service._refresh_secret_impl() imports directly from
+        # backend.secrets_keyring (not backend.credential_vault) — patch both call
+        # sites so a mocked oauth2 refresh round-trip reads/writes the same store.
+        patch("backend.secrets_keyring.set_secret_value", side_effect=_set),
+        patch("backend.secrets_keyring.get_secret_value", side_effect=_get),
     ):
         yield _store
 
@@ -355,3 +360,117 @@ async def test_issue_1240_create_slug_collision_returns_400(api_integration_env,
     )
     assert r2.status_code == 400
     assert "already exists" in r2.text
+
+
+@pytest.mark.asyncio
+async def test_issue_1867_create_refresh_only_oauth2_secret_succeeds(api_integration_env, mock_keyring):
+    """POST /api/secrets creates an oauth2 secret with refresh set and scrub omitted.
+
+    Issue #1867 stage 2: a standalone oauth2 secret used only for proactive
+    background refresh (no live proxied traffic to scrub) must not be forced
+    to invent an unused scrub matcher.
+    """
+    client = api_integration_env["client"]
+
+    await client.post(
+        "/api/secrets",
+        json={
+            "name": "refresh-only-refresh-token",
+            "type": "generic",
+            "target_hosts": ["example.com"],
+            "value": "initial-refresh-token",
+        },
+    )
+
+    resp = await client.post(
+        "/api/secrets",
+        json={
+            "name": "refresh-only-oauth",
+            "type": "oauth2",
+            "target_hosts": ["example.com"],
+            "value": "initial-access-token",
+            "refresh": {
+                "token_url": "https://example.com/token",
+                "client_id": "client-id",
+                "refresh_token_secret_name": "refresh-only-refresh-token",
+            },
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["type"] == "oauth2"
+
+
+@pytest.mark.asyncio
+async def test_issue_1867_create_oauth2_secret_without_scrub_or_refresh_returns_400(
+    api_integration_env, mock_keyring
+):
+    """POST /api/secrets rejects an oauth2 secret with neither scrub nor refresh."""
+    client = api_integration_env["client"]
+
+    resp = await client.post(
+        "/api/secrets",
+        json={
+            "name": "bare-oauth",
+            "type": "oauth2",
+            "target_hosts": ["example.com"],
+            "value": "initial-access-token",
+        },
+    )
+    assert resp.status_code == 400
+    assert "oauth2 type requires at least one of scrub" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_issue_1867_refresh_only_oauth2_secret_refreshes_successfully(
+    api_integration_env, mock_keyring
+):
+    """A refresh-only oauth2 secret (no scrub) can be manually refreshed end-to-end.
+
+    Mocks the token endpoint POST; asserts the new access_token is written to
+    the keyring and last_refresh_status is recorded as success.
+    """
+    client = api_integration_env["client"]
+
+    await client.post(
+        "/api/secrets",
+        json={
+            "name": "e2e-refresh-token",
+            "type": "generic",
+            "target_hosts": ["example.com"],
+            "value": "initial-refresh-token",
+        },
+    )
+    create_resp = await client.post(
+        "/api/secrets",
+        json={
+            "name": "e2e-oauth",
+            "type": "oauth2",
+            "target_hosts": ["example.com"],
+            "value": "initial-access-token",
+            "refresh": {
+                "token_url": "https://example.com/token",
+                "client_id": "client-id",
+                "refresh_token_secret_name": "e2e-refresh-token",
+            },
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+
+    token_response = MagicMock()
+    token_response.raise_for_status = MagicMock()
+    token_response.json = MagicMock(
+        return_value={"access_token": "refreshed-access-token", "expires_in": 3600}
+    )
+
+    mock_http_client = AsyncMock()
+    mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+    mock_http_client.__aexit__ = AsyncMock(return_value=False)
+    mock_http_client.post = AsyncMock(return_value=token_response)
+
+    with patch("httpx.AsyncClient", return_value=mock_http_client):
+        refresh_resp = await client.post("/api/secrets/e2e-oauth/refresh")
+
+    assert refresh_resp.status_code == 200, refresh_resp.text
+    data = refresh_resp.json()
+    assert data["refresh"]["last_refresh_status"] == "success"
+    assert mock_keyring["e2e-oauth"] == "refreshed-access-token"
