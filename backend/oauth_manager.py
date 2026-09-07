@@ -179,12 +179,18 @@ class OAuthFlowManager:
         redirect_uri: str,
         client_name: str = "Claude Code WebUI",
         pre_registered_client_id: str | None = None,
+        client_secret: str | None = None,
     ) -> str:
         """Initiate an OAuth 2.1 authorization code flow.
 
         If pre_registered_client_id is supplied (from McpServerConfig.oauth_client_id),
         DCR is skipped entirely and the provided client_id is used directly. This is
         required for servers like Slack that do not support Dynamic Client Registration.
+
+        If client_secret is also supplied (from McpServerConfig.oauth_client_secret,
+        resolved from the vault by the caller), the pre-registered client is treated as
+        confidential (token_endpoint_auth_method="client_secret_post") instead of public
+        — required for servers like Google that reject public-client token exchanges.
 
         Steps performed:
           1. Protected resource metadata discovery (RFC 9728)
@@ -255,13 +261,19 @@ class OAuthFlowManager:
             store = self.get_token_store(server_id)
 
             if pre_registered_client_id:
-                # Pre-registered app (e.g. Slack): skip DCR and use the configured client_id.
-                # Servers that don't support RFC 7591 DCR must be handled this way.
+                # Pre-registered app (e.g. Slack, Google): skip DCR and use the configured
+                # client_id. Servers that don't support RFC 7591 DCR must be handled this way.
+                auth_method = "client_secret_post" if client_secret else "none"
                 client_info = OAuthClientInformationFull(
                     client_id=pre_registered_client_id,
+                    client_secret=client_secret,
                     redirect_uris=[redirect_uri],  # type: ignore[arg-type]
-                    token_endpoint_auth_method="none",
+                    token_endpoint_auth_method=auth_method,
                 )
+                # Persist so refresh_token() can read client_id/secret back later — previously
+                # only the DCR branch below did this, leaving refresh_token() unable to find
+                # client info for any pre-registered client (issue #1867's latent bug).
+                await store.set_client_info(client_info)
                 logger.info("OAuth: using pre-registered client_id for MCP server %s", server_id)
             else:
                 client_info = await store.get_client_info()
@@ -346,6 +358,13 @@ class OAuthFlowManager:
         redirect_uri: str = pending["redirect_uri"]
         requested_scopes: list[str] | None = pending.get("requested_scopes")
 
+        # Confidential clients (issue #1867) must include client_secret in the token
+        # exchange body. start_flow() persists client_info for both the pre-registered
+        # and DCR branches; DCR clients never have a secret so this is a no-op for them.
+        store = self.get_token_store(server_id)
+        client_info = await store.get_client_info()
+        client_secret = client_info.client_secret if client_info else None
+
         token_data = {
             "grant_type": "authorization_code",
             "code": code,
@@ -355,6 +374,8 @@ class OAuthFlowManager:
         }
         if requested_scopes:
             token_data["scope"] = " ".join(requested_scopes)
+        if client_secret:
+            token_data["client_secret"] = client_secret
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
         async with httpx.AsyncClient() as http:
@@ -366,7 +387,6 @@ class OAuthFlowManager:
                 )
             token = await handle_token_response_scopes(resp)
 
-        store = self.get_token_store(server_id)
         await store.set_tokens(token)
         # Issue #976: Persist token endpoint so refresh_token() can use it later.
         store.set_token_endpoint(token_endpoint)
@@ -413,6 +433,8 @@ class OAuthFlowManager:
             "refresh_token": token.refresh_token,
             "client_id": client_info.client_id,
         }
+        if client_info.client_secret:
+            refresh_data["client_secret"] = client_info.client_secret
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
         try:

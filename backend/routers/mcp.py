@@ -51,6 +51,7 @@ def build_router(webui) -> APIRouter:
             enabled=request.enabled,
             oauth_enabled=request.oauth_enabled,
             oauth_client_id=request.oauth_client_id,
+            oauth_client_secret=request.oauth_client_secret,
             oauth_callback_port=request.oauth_callback_port,
             shared_connection=request.shared_connection,
             oauth_custom_callback_path=request.oauth_custom_callback_path,
@@ -116,9 +117,9 @@ def build_router(webui) -> APIRouter:
         # omitted, where Pydantic defaults to None) would silently wipe an existing custom
         # callback on any partial update that doesn't happen to resend it (e.g. `{"enabled":
         # false}`), tearing down its listener/route as an unintended side effect.
-        custom_callback_kwargs = {}
+        sparse_update_kwargs = {}
         if "oauth_custom_callback_path" in request.model_fields_set:
-            custom_callback_kwargs["oauth_custom_callback_path"] = request.oauth_custom_callback_path
+            sparse_update_kwargs["oauth_custom_callback_path"] = request.oauth_custom_callback_path
             if request.oauth_custom_callback_path and webui.oauth_callback_path_conflicts_with_app_route(
                 request.oauth_custom_callback_path
             ):
@@ -130,7 +131,13 @@ def build_router(webui) -> APIRouter:
                     ),
                 )
         if "oauth_custom_callback_port" in request.model_fields_set:
-            custom_callback_kwargs["oauth_custom_callback_port"] = request.oauth_custom_callback_port
+            sparse_update_kwargs["oauth_custom_callback_port"] = request.oauth_custom_callback_port
+        # Issue #1867: same hazard as oauth_custom_callback_path/port above — only forward
+        # oauth_client_secret when the caller actually set it, so a partial update (e.g.
+        # {"enabled": false}) can't silently wipe a confidential client's stored secret via
+        # Pydantic's None default.
+        if "oauth_client_secret" in request.model_fields_set:
+            sparse_update_kwargs["oauth_client_secret"] = request.oauth_client_secret
 
         result = await webui.service.update_mcp_config(
             config_id,
@@ -146,7 +153,7 @@ def build_router(webui) -> APIRouter:
             oauth_client_id=request.oauth_client_id,
             oauth_callback_port=request.oauth_callback_port,
             shared_connection=request.shared_connection,
-            **custom_callback_kwargs,
+            **sparse_update_kwargs,
         )
         # Issue #1789: wire the custom callback route/listener synchronously with the write
         # (covers enable/disable too, since that's just enabled=False via this same endpoint).
@@ -183,11 +190,14 @@ def build_router(webui) -> APIRouter:
         )
 
     @router.post("/api/mcp-configs/{config_id}/oauth/initiate")
-    @handle_exceptions("initiate MCP OAuth")
+    @handle_exceptions("initiate MCP OAuth", value_error_status=400)
     async def initiate_mcp_oauth(config_id: str, request: McpOAuthInitiateRequest):
         """Initiate OAuth 2.1 flow for an MCP server.
 
-        Returns the authorization URL the frontend should open in a popup.
+        Returns the authorization URL the frontend should open in a popup. Issue #1867:
+        value_error_status=400 surfaces SharedSecretResolutionError (a ValueError) with an
+        actionable message when oauth_client_secret's ${secret:NAME} reference can't be
+        resolved, instead of a generic 500.
         """
         config = await webui.service.get_mcp_config(config_id)
         if not config:

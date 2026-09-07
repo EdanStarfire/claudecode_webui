@@ -169,6 +169,40 @@ def test_issue_1109_from_dict_round_trip():
 
 
 # ---------------------------------------------------------------------------
+# oauth_client_secret — Issue #1867 (confidential-client support)
+# ---------------------------------------------------------------------------
+
+
+def test_issue_1867_oauth_client_secret_defaults_to_none():
+    """oauth_client_secret defaults to None when not specified."""
+    cfg = _http_config()
+    assert cfg.oauth_client_secret is None
+
+
+def test_issue_1867_from_dict_backward_compat_no_client_secret():
+    """Loading a dict without oauth_client_secret defaults it to None."""
+    data = {
+        "id": "abc",
+        "name": "legacy-server",
+        "slug": "legacy-server",
+        "type": "http",
+        "url": "https://example.com",
+    }
+    cfg = McpServerConfig.from_dict(data)
+    assert cfg.oauth_client_secret is None
+
+
+def test_issue_1867_from_dict_round_trip_preserves_client_secret():
+    """to_dict() → from_dict() preserves the ${secret:NAME} reference string verbatim."""
+    original = _http_config(
+        oauth_client_id="google-client-id",
+        oauth_client_secret="${secret:my-google-client-secret}",
+    )
+    restored = McpServerConfig.from_dict(original.to_dict())
+    assert restored.oauth_client_secret == "${secret:my-google-client-secret}"
+
+
+# ---------------------------------------------------------------------------
 # shared_connection — Issue #1484
 # ---------------------------------------------------------------------------
 
@@ -233,6 +267,38 @@ async def _http_manager_config(manager, name="server", **kwargs):
         shared_connection=True,
         **kwargs,
     )
+
+
+async def test_issue_1867_create_config_persists_client_secret(manager):
+    cfg = await _http_manager_config(
+        manager, oauth_client_id="cid", oauth_client_secret="${secret:google-secret}"
+    )
+    assert cfg.oauth_client_secret == "${secret:google-secret}"
+
+
+async def test_issue_1867_update_config_sets_client_secret(manager):
+    cfg = await _http_manager_config(manager, oauth_client_id="cid")
+    assert cfg.oauth_client_secret is None
+
+    updated = await manager.update_config(cfg.id, oauth_client_secret="${secret:new-secret}")
+    assert updated.oauth_client_secret == "${secret:new-secret}"
+
+
+async def test_issue_1867_update_config_omitted_leaves_client_secret_unchanged(manager):
+    """_UNSET sentinel: omitting oauth_client_secret from update_config() must not clear it."""
+    cfg = await _http_manager_config(
+        manager, oauth_client_id="cid", oauth_client_secret="${secret:keep-me}"
+    )
+    updated = await manager.update_config(cfg.id, name="renamed")
+    assert updated.oauth_client_secret == "${secret:keep-me}"
+
+
+async def test_issue_1867_update_config_explicit_none_clears_client_secret(manager):
+    cfg = await _http_manager_config(
+        manager, oauth_client_id="cid", oauth_client_secret="${secret:to-clear}"
+    )
+    updated = await manager.update_config(cfg.id, oauth_client_secret=None)
+    assert updated.oauth_client_secret is None
 
 
 async def test_custom_callback_accepted_with_shared_connection(manager):

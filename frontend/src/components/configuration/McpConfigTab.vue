@@ -300,6 +300,15 @@
               placeholder="e.g., 1601185624273.8899143856786"
             />
           </div>
+          <div class="mb-1">
+            <label class="form-label mb-0">Client Secret <span class="text-muted fw-normal">(confidential clients only, e.g. Google)</span></label>
+            <input
+              type="text"
+              class="form-control form-control-sm"
+              v-model="form.oauth_client_secret"
+              placeholder="${secret:my-google-client-secret}"
+            />
+          </div>
           <div>
             <label class="form-label mb-0">Callback Port</label>
             <input
@@ -507,6 +516,7 @@ const form = reactive({
   oauth_enabled: false,
   oauth_scope: '',
   oauth_client_id: '',
+  oauth_client_secret: '',
   oauth_callback_port: null,
   oauth_custom_callback_path: '',
   oauth_custom_callback_port: null,
@@ -778,6 +788,7 @@ function resetForm() {
   form.oauth_enabled = false
   form.oauth_scope = ''
   form.oauth_client_id = ''
+  form.oauth_client_secret = ''
   form.oauth_callback_port = null
   form.oauth_custom_callback_path = ''
   form.oauth_custom_callback_port = null
@@ -809,6 +820,7 @@ function editConfig(config) {
   form.oauth_enabled = config.oauth_enabled || false
   form.oauth_scope = config.oauth_scope || ''
   form.oauth_client_id = config.oauth_client_id || ''
+  form.oauth_client_secret = config.oauth_client_secret || ''
   form.oauth_callback_port = config.oauth_callback_port || null
   form.oauth_custom_callback_path = config.oauth_custom_callback_path || ''
   form.oauth_custom_callback_port = config.oauth_custom_callback_port || null
@@ -867,6 +879,7 @@ async function saveForm() {
         data.oauth_scope = form.oauth_scope.trim()
       }
       data.oauth_client_id = form.oauth_client_id.trim() || null
+      data.oauth_client_secret = form.oauth_client_secret.trim() || null
       data.oauth_callback_port = form.oauth_callback_port ? parseInt(form.oauth_callback_port, 10) : null
       data.oauth_custom_callback_path = form.oauth_custom_callback_path.trim() || null
       data.oauth_custom_callback_port = form.oauth_custom_callback_port
