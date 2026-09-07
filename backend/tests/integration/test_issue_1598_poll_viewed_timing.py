@@ -52,23 +52,41 @@ class TestPollViewedTiming:
             queue.wait_for_events = original_wait
 
     async def test_completion_during_poll_window_stays_unread(self, api_integration_env):
-        """Issue #1598: Completion arriving after mark_viewed surfaces as unread."""
+        """Issue #1598: a NEW completion arriving after a session was already caught up
+        (last_viewed_at >= last_completion_at) must still surface as unread once the
+        poll whose wait window overlaps it returns.
+
+        Note: this scenario requires prior completion+view history. A session with NO
+        prior completion at all cannot be used here — mark_viewed()'s no-op guard for
+        that case is intentional (see test_no_prior_completion_mark_viewed_is_noop in
+        this same file, and the equivalent guard tests in TestMarkUnread/TestMarkRead in
+        test_session_manager.py) and mark_viewed() cannot retroactively record a baseline
+        for a completion that hasn't happened yet.
+        """
         client = api_integration_env["client"]
         webui = api_integration_env["webui"]
         project = await api_integration_env["create_test_project"]()
         session = await api_integration_env["create_test_session"](project["project_id"])
         sid = session["session_id"]
 
-        # Simulate: completion arrives AFTER mark_viewed runs but BEFORE wait returns.
-        # Patch wait_for_events to inject the completion mid-poll.
+        session_mgr = webui.coordinator.session_manager
         queue = webui.session_queues[sid]
         original_wait = queue.wait_for_events
-        session_mgr = webui.coordinator.session_manager
 
+        # Establish baseline: an initial completion, then a poll that catches
+        # last_viewed_at up to it (guard B's "already caught up" state).
+        first_ts = datetime.now(UTC)
+        await session_mgr.mark_completion(sid, first_ts)
+        resp = await client.get(f"/api/poll/session/{sid}?since=0&timeout=0")
+        assert resp.status_code == 200
+        baseline_viewed_at = session_mgr._active_sessions[sid].last_viewed_at
+        assert baseline_viewed_at is not None
+
+        # Simulate: a NEW completion arrives after mark_viewed runs (no-ops, since the
+        # session is already caught up) but before wait_for_events returns.
         async def patched_wait_with_completion(since, timeout):
-            # Record a completion now — after mark_viewed has already recorded viewed_at
-            future_ts = datetime.now(UTC)
-            await session_mgr.mark_completion(sid, future_ts)
+            new_ts = datetime.now(UTC)
+            await session_mgr.mark_completion(sid, new_ts)
             return await original_wait(since, timeout)
 
         queue.wait_for_events = patched_wait_with_completion
@@ -79,7 +97,10 @@ class TestPollViewedTiming:
             info = session_mgr._active_sessions.get(sid)
             assert info is not None
             assert info.last_completion_at is not None, "Expected last_completion_at to be set"
-            assert info.last_viewed_at is not None, "Expected last_viewed_at to be set"
+            assert info.last_viewed_at == baseline_viewed_at, (
+                "mark_viewed must no-op mid-poll: the session was already caught up "
+                "when it ran, before the new completion landed"
+            )
             assert info.last_completion_at > info.last_viewed_at, (
                 "Completion after mark_viewed must be unread: "
                 f"last_completion_at={info.last_completion_at}, "
