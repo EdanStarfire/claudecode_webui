@@ -101,6 +101,70 @@ describe('session store', () => {
     expect(store.getInput('sess-1')).toBe('hello')
   })
 
+  describe('patchSession (#1842)', () => {
+    it('merges from response.session when present, not from the request payload', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useSessionStore()
+
+      store.sessions.set('sess-1', makeSession({ session_id: 'sess-1', template_id: null }))
+      apiMock.patch.mockResolvedValue({
+        success: true,
+        session: makeSession({ session_id: 'sess-1', template_id: 'tmpl-server-confirmed' })
+      })
+
+      await store.patchSession('sess-1', { template_id: 'tmpl-requested' })
+
+      // The backend's persisted value wins, not the outgoing request payload
+      expect(store.sessions.get('sess-1').template_id).toBe('tmpl-server-confirmed')
+    })
+
+    it('falls back to the request payload if response.session is absent', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useSessionStore()
+
+      store.sessions.set('sess-1', makeSession({ session_id: 'sess-1', role: 'Old Role' }))
+      apiMock.patch.mockResolvedValue({ success: true })
+
+      await store.patchSession('sess-1', { role: 'New Role' })
+
+      expect(store.sessions.get('sess-1').role).toBe('New Role')
+    })
+
+    it('does not clobber unrelated live fields (e.g. is_processing) not present in the request', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useSessionStore()
+
+      // A poll-driven state_change event already flipped is_processing to false locally.
+      store.sessions.set('sess-1', makeSession({ session_id: 'sess-1', is_processing: false, role: 'Old Role' }))
+      // The PATCH response's session snapshot was captured before that happened, so it
+      // still reflects the stale is_processing=true.
+      apiMock.patch.mockResolvedValue({
+        success: true,
+        session: makeSession({ session_id: 'sess-1', is_processing: true, role: 'New Role' })
+      })
+
+      await store.patchSession('sess-1', { role: 'New Role' })
+
+      expect(store.sessions.get('sess-1').role).toBe('New Role')
+      expect(store.sessions.get('sess-1').is_processing).toBe(false)
+    })
+
+    it('falls back per-field to the request payload for keys the backend does not echo back', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useSessionStore()
+
+      // Mirrors stores/polling.js's context_update handler, which patches ephemeral
+      // display-only fields the backend does not persist or return.
+      store.sessions.set('sess-1', makeSession({ session_id: 'sess-1' }))
+      apiMock.patch.mockResolvedValue({ success: true, message: 'No fields to update' })
+
+      await store.patchSession('sess-1', { context_input_tokens: 42, context_window: 1000 })
+
+      expect(store.sessions.get('sess-1').context_input_tokens).toBe(42)
+      expect(store.sessions.get('sess-1').context_window).toBe(1000)
+    })
+  })
+
   describe('isUnreviewed active-session suppression (#1598)', () => {
     it('returns false for the currently selected session even when completion > viewed', async () => {
       const { useSessionStore } = await import('@/stores/session')

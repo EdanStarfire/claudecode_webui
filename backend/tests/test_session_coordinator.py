@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+from backend.config_resolution import resolve_effective_config
 from backend.session_config import SessionConfig
 from backend.session_coordinator import SessionCoordinator
 from backend.session_manager import SessionState
@@ -3012,3 +3013,60 @@ class TestIssue1838RecordTurnFailurePreservesBaseline:
         # And the baseline is now correctly advanced to the latest cumulative value.
         assert coordinator._usage_baseline_by_session[session_id]["input_tokens"] == 250
         assert coordinator._usage_baseline_by_session[session_id]["total_cost_usd"] == 22.5
+
+
+class TestIssue1842TemplateIdPatchResolutionParity:
+    """resolve_effective_config() must resolve identically whether template_id was set at
+    session creation time or PATCHed in afterward (issue #1842, AC2/T2)."""
+
+    @pytest.mark.asyncio
+    async def test_created_with_template_vs_patched_in_template_resolve_identically(
+        self, temp_coordinator
+    ):
+        import uuid
+
+        coordinator = temp_coordinator
+
+        project = await coordinator.project_manager.create_project(
+            name="Test Project", working_directory="/tmp/test_1842_parity"
+        )
+
+        template = await coordinator.template_manager.create_template(
+            name="Parity Template",
+            config=SessionConfig(permission_mode="bypassPermissions", model="opus"),
+        )
+
+        # (a) session created with template_id set at creation
+        created_session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=created_session_id,
+            project_id=project.project_id,
+            config=SessionConfig(template_id=template.template_id),
+        )
+
+        # (b) templateless session that later has template_id PATCHed in
+        patched_session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=patched_session_id,
+            project_id=project.project_id,
+            config=SessionConfig(),
+        )
+        await coordinator.session_manager.update_session(
+            patched_session_id,
+            template_manager=coordinator.template_manager,
+            template_id=template.template_id,
+        )
+
+        created_info = await coordinator.session_manager.get_session_info(created_session_id)
+        patched_info = await coordinator.session_manager.get_session_info(patched_session_id)
+
+        created_resolved = await resolve_effective_config(
+            created_info, coordinator.template_manager
+        )
+        patched_resolved = await resolve_effective_config(
+            patched_info, coordinator.template_manager
+        )
+
+        assert created_resolved.permission_mode == patched_resolved.permission_mode
+        assert created_resolved.model == patched_resolved.model
+        assert created_resolved.model_dump() == patched_resolved.model_dump()

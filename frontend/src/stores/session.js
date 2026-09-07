@@ -605,8 +605,17 @@ export const useSessionStore = defineStore('session', () => {
    */
   async function patchSession(sessionId, updates) {
     try {
-      await api.patch(`/api/sessions/${sessionId}`, updates)
-      updateSession(sessionId, updates)
+      const response = await api.patch(`/api/sessions/${sessionId}`, updates)
+      // Merge only the fields actually requested, preferring the server-confirmed value for
+      // each — this avoids clobbering unrelated live fields (e.g. is_processing) with a
+      // response snapshot, and preserves the fallback-to-request behavior for callers that
+      // pass fields the backend doesn't recognize/persist (e.g. context stat updates).
+      const confirmed = response?.session ?? {}
+      const merged = {}
+      for (const key of Object.keys(updates)) {
+        merged[key] = key in confirmed ? confirmed[key] : updates[key]
+      }
+      updateSession(sessionId, merged)
       console.log(`Updated session ${sessionId}:`, updates)
     } catch (error) {
       console.error('Failed to update session:', error)

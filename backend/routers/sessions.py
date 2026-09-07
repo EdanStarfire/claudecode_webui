@@ -245,6 +245,11 @@ def build_router(webui) -> APIRouter:
         if request.role is not None:
             updates["role"] = request.role
 
+        # Handle template_id update (issue #1842). Uses model_fields_set (not `is not None`)
+        # since explicit null (clear template) and omitted field both parse to None.
+        if "template_id" in request.model_fields_set:
+            updates["template_id"] = request.template_id
+
         # Handle system_prompt update
         if request.system_prompt is not None:
             updates["system_prompt"] = request.system_prompt
@@ -345,7 +350,12 @@ def build_router(webui) -> APIRouter:
         if not success:
             raise HTTPException(status_code=500, detail="Failed to update session")
 
-        return {"success": success}
+        session_info = await webui.coordinator.session_manager.get_session_info(session_id)
+        if session_info is None:
+            # Session was concurrently deleted between the update above and this lookup;
+            # the update itself already succeeded against the (now-gone) session.
+            return {"success": True}
+        return {"success": True, "session": session_info.to_dict()}
 
     @router.delete("/api/sessions/{session_id}")
     @handle_exceptions("delete session")
