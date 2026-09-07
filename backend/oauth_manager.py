@@ -34,7 +34,15 @@ from mcp.client.auth.utils import (
 from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
 from mcp.shared.auth_utils import calculate_token_expiry
 
+from shared.logging_config import get_logger
+
+# Dual-logger pattern (see shared/logging_config.py's module docstring): `logger` is for
+# conditions that should always be visible (error.log + console) with no flag required;
+# `debug_logger` is opt-in verbose tracing, gated behind --debug-oauth (issue #1867 —
+# previously oauth logging used only a bare, unregistered module logger and was
+# completely invisible regardless of --debug-all).
 logger = logging.getLogger(__name__)
+debug_logger = get_logger('oauth', category='OAUTH')
 
 
 class FernetTokenStore:
@@ -74,7 +82,7 @@ class FernetTokenStore:
             decrypted = self._fernet.decrypt(encrypted)
             return OAuthToken.model_validate_json(decrypted)
         except Exception:
-            logger.warning("Failed to decrypt token for MCP server %s", self._server_id)
+            logger.error("Failed to decrypt token for MCP server %s", self._server_id)
             return None
 
     async def set_tokens(self, tokens: OAuthToken) -> None:
@@ -114,7 +122,7 @@ class FernetTokenStore:
             decrypted = self._fernet.decrypt(encrypted)
             return OAuthClientInformationFull.model_validate_json(decrypted)
         except Exception:
-            logger.warning("Failed to decrypt client info for MCP server %s", self._server_id)
+            logger.error("Failed to decrypt client info for MCP server %s", self._server_id)
             return None
 
     async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
@@ -202,6 +210,11 @@ class OAuthFlowManager:
 
         Returns the authorization URL the browser should navigate to.
         """
+        debug_logger.debug(
+            "start_flow: server_id=%s server_url=%s pre_registered_client_id=%s "
+            "confidential=%s",
+            server_id, server_url, pre_registered_client_id, bool(client_secret),
+        )
         async with httpx.AsyncClient() as http:
             # --- Step 1: Protected resource metadata ---
             prm = None
@@ -215,8 +228,12 @@ class OAuthFlowManager:
                         if prm.authorization_servers:
                             auth_server_url = str(prm.authorization_servers[0])
                         break
-                except Exception:
+                except Exception as exc:
+                    debug_logger.debug("PRM discovery at %s failed: %s", url, exc)
                     continue
+            debug_logger.debug(
+                "PRM discovery result: found=%s auth_server_url=%s", bool(prm), auth_server_url
+            )
 
             # --- Step 2: Authorization server metadata ---
             oauth_metadata = None
@@ -231,9 +248,12 @@ class OAuthFlowManager:
                         oauth_metadata = meta
                         break
                     if not ok:
+                        debug_logger.debug("AS metadata discovery at %s rejected (not ok)", url)
                         break
-                except Exception:
+                except Exception as exc:
+                    debug_logger.debug("AS metadata discovery at %s failed: %s", url, exc)
                     continue
+            debug_logger.debug("AS metadata discovery result: found=%s", bool(oauth_metadata))
 
             # --- Derive requested scopes from discovery metadata ---
             # Prefer PRM scopes (RFC 9728) as they represent what the resource needs.
@@ -257,6 +277,11 @@ class OAuthFlowManager:
             else:
                 auth_endpoint = f"{base}/authorize"
 
+            debug_logger.debug(
+                "Endpoints derived: token_endpoint=%s auth_endpoint=%s",
+                token_endpoint, auth_endpoint,
+            )
+
             # --- Step 3: Dynamic Client Registration ---
             store = self.get_token_store(server_id)
 
@@ -274,7 +299,10 @@ class OAuthFlowManager:
                 # only the DCR branch below did this, leaving refresh_token() unable to find
                 # client info for any pre-registered client (issue #1867's latent bug).
                 await store.set_client_info(client_info)
-                logger.info("OAuth: using pre-registered client_id for MCP server %s", server_id)
+                debug_logger.info(
+                    "OAuth: using pre-registered client_id for MCP server %s (auth_method=%s)",
+                    server_id, auth_method,
+                )
             else:
                 client_info = await store.get_client_info()
 
@@ -293,9 +321,9 @@ class OAuthFlowManager:
                     reg_resp = await http.send(reg_req)
                     client_info = await handle_registration_response(reg_resp)
                     await store.set_client_info(client_info)
-                    logger.info("DCR succeeded for MCP server %s", server_id)
+                    debug_logger.info("DCR succeeded for MCP server %s", server_id)
                 except Exception as exc:
-                    logger.warning(
+                    debug_logger.warning(
                         "DCR failed for MCP server %s (%s); no pre-registered client_id available",
                         server_id,
                         exc,
@@ -334,7 +362,7 @@ class OAuthFlowManager:
                 "requested_scopes": requested_scopes,
             }
 
-            logger.info(
+            debug_logger.info(
                 "OAuth flow started for MCP server %s (state=%s…)", server_id, state[:8]
             )
             return auth_url
@@ -347,8 +375,21 @@ class OAuthFlowManager:
 
         Returns server_id on success; raises ValueError on failure.
         """
+        debug_logger.debug(
+            "complete_flow: state=%s…, %d pending flow(s) in memory",
+            state[:8], len(self._pending),
+        )
         pending = self._pending.pop(state, None)
         if not pending:
+            # Common causes: backend process restarted between start_flow() and this
+            # callback (in-memory _pending is wiped on restart), or a replayed/duplicate
+            # callback for a state already consumed. Always logged (not gated behind
+            # --debug-oauth) since it fully explains an otherwise-mysterious OAuth failure.
+            logger.error(
+                "complete_flow: no pending OAuth flow for state=%s… — either the backend "
+                "restarted since start_flow() was called, or this callback was already "
+                "consumed", state[:8],
+            )
             raise ValueError(f"No pending OAuth flow for state={state!r}")
 
         server_id: str = pending["server_id"]
@@ -390,7 +431,10 @@ class OAuthFlowManager:
         await store.set_tokens(token)
         # Issue #976: Persist token endpoint so refresh_token() can use it later.
         store.set_token_endpoint(token_endpoint)
-        logger.info("OAuth flow complete for MCP server %s", server_id)
+        debug_logger.info(
+            "OAuth flow complete for MCP server %s (confidential=%s)",
+            server_id, bool(client_secret),
+        )
         return server_id
 
     async def refresh_token(self, server_id: str) -> OAuthToken | None:
@@ -408,22 +452,25 @@ class OAuthFlowManager:
         # Read stored token
         token = await store.get_tokens()
         if token is None:
-            logger.debug("No stored token for MCP server %s — cannot refresh", server_id)
+            debug_logger.debug("No stored token for MCP server %s — cannot refresh", server_id)
             return None
         if not token.refresh_token:
-            logger.debug("No refresh_token for MCP server %s — cannot refresh", server_id)
+            debug_logger.debug("No refresh_token for MCP server %s — cannot refresh", server_id)
             return None
 
         # Read stored client info for client_id
         client_info = await store.get_client_info()
         if client_info is None:
-            logger.warning("No stored client info for MCP server %s — cannot refresh", server_id)
+            # Always visible (not gated behind --debug-oauth): this means the token can
+            # never be refreshed until the user re-authenticates — a silent, otherwise
+            # invisible cause of "it worked once, now it doesn't" (issue #1867).
+            logger.error("No stored client info for MCP server %s — cannot refresh", server_id)
             return None
 
         # Retrieve persisted token endpoint
         token_endpoint = store.get_token_endpoint()
         if not token_endpoint:
-            logger.warning(
+            logger.error(
                 "No stored token endpoint for MCP server %s — cannot refresh", server_id
             )
             return None
@@ -442,7 +489,7 @@ class OAuthFlowManager:
                 resp = await http.post(token_endpoint, data=refresh_data, headers=headers)
                 if resp.status_code != 200:
                     body = await resp.aread()
-                    logger.warning(
+                    logger.error(
                         "OAuth refresh failed for MCP server %s (%s): %s",
                         server_id,
                         resp.status_code,
@@ -453,7 +500,7 @@ class OAuthFlowManager:
                     return None
                 new_token = await handle_token_response_scopes(resp)
         except Exception as exc:
-            logger.warning("OAuth refresh request failed for MCP server %s: %s", server_id, exc)
+            logger.error("OAuth refresh request failed for MCP server %s: %s", server_id, exc)
             return None
 
         # RFC 6749 §6: refresh response may omit refresh_token — keep the old one if so
@@ -467,10 +514,10 @@ class OAuthFlowManager:
             )
 
         await store.set_tokens(new_token)
-        logger.info("OAuth token refreshed for MCP server %s", server_id)
+        debug_logger.info("OAuth token refreshed for MCP server %s", server_id)
         return new_token
 
     async def disconnect(self, server_id: str) -> None:
         """Clear stored tokens and client info for a server."""
         await self.get_token_store(server_id).clear()
-        logger.info("OAuth disconnected for MCP server %s", server_id)
+        debug_logger.info("OAuth disconnected for MCP server %s", server_id)

@@ -300,6 +300,49 @@ async def test_e2e_confidential_client_full_flow(tmp_path: Path):
     assert refresh_body["client_secret"] == "google-secret"
 
 
+# ---------------------------------------------------------------------------
+# Always-visible error logging (issue #1867 — oauth logging was previously
+# completely invisible regardless of --debug-all; see shared/logging_config.py)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_refresh_token_missing_client_info_logs_error(tmp_path: Path, caplog):
+    """A token with no persisted client_info can never be refreshed — this must be
+    logged at ERROR (always visible) rather than the old invisible WARNING, since it's
+    a silent, otherwise-undiagnosable dead end."""
+    from mcp.shared.auth import OAuthToken
+
+    manager = OAuthFlowManager(tmp_path)
+    store = manager.get_token_store("srv1")
+    await store.set_tokens(
+        OAuthToken(access_token="old", token_type="Bearer", refresh_token="old_refresh")
+    )
+    # Intentionally no store.set_client_info() call.
+
+    with caplog.at_level("ERROR", logger="backend.oauth_manager"):
+        result = await manager.refresh_token("srv1")
+
+    assert result is None
+    assert any(
+        "cannot refresh" in r.message and r.levelname == "ERROR" for r in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_complete_flow_unknown_state_logs_error(tmp_path: Path, caplog):
+    """An unrecognized state (e.g. backend restarted since start_flow()) must be logged
+    at ERROR — this fully explains an otherwise-mysterious "it worked once" OAuth
+    failure and must not require --debug-oauth to see."""
+    manager = OAuthFlowManager(tmp_path)
+
+    with caplog.at_level("ERROR", logger="backend.oauth_manager"):
+        with pytest.raises(ValueError, match="No pending OAuth flow"):
+            await manager.complete_flow("nonexistent_state", "code")
+
+    assert any(r.levelname == "ERROR" for r in caplog.records)
+
+
 @pytest.mark.asyncio
 async def test_e2e_public_client_no_regression(tmp_path: Path):
     """Slack-shaped public client: no client_secret key appears anywhere, ever.
