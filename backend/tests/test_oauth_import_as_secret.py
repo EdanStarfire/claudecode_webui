@@ -6,7 +6,10 @@ Uses mocked FernetTokenStore + in-memory vault (via tmp_path + mocked keyring).
 
 from __future__ import annotations
 
+import json
 import time
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,7 +19,8 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from backend.application_service import ApplicationService
 from backend.credential_vault import SecretsVault
 from backend.mcp_config_manager import McpServerConfig, McpServerType
-from backend.oauth_manager import FernetTokenStore
+from backend.models.secret_record import SecretRecord, SecretType
+from backend.oauth_manager import FernetTokenStore, OAuthFlowManager
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -44,15 +48,12 @@ def _make_client_info(
     client_id: str = "my_client_id",
     client_secret: str | None = "my_client_secret",
 ) -> OAuthClientInformationFull:
-    info = OAuthClientInformationFull(
+    return OAuthClientInformationFull(
         client_id=client_id,
+        client_secret=client_secret,
         redirect_uris=["http://localhost/oauth/callback"],  # type: ignore[arg-type]
         token_endpoint_auth_method="none",
     )
-    # OAuthClientInformationFull may not expose client_secret via constructor;
-    # use model_copy or attribute assignment to attach it for tests.
-    object.__setattr__(info, "client_secret", client_secret)
-    return info
 
 
 def _make_mcp_config(
@@ -60,6 +61,7 @@ def _make_mcp_config(
     url: str | None = _MCP_URL,
     headers: dict | None = None,
     oauth_client_id: str | None = None,
+    oauth_client_secret: str | None = None,
 ) -> McpServerConfig:
     cfg = McpServerConfig.__new__(McpServerConfig)
     cfg.id = config_id
@@ -74,6 +76,7 @@ def _make_mcp_config(
     cfg.enabled = True
     cfg.oauth_enabled = True
     cfg.oauth_client_id = oauth_client_id
+    cfg.oauth_client_secret = oauth_client_secret
     cfg.oauth_callback_port = None
     cfg.oauth_scope = None
     return cfg
@@ -602,3 +605,220 @@ async def test_issue_1381_import_idempotent_after_disconnect_and_reauth(
     creds_dir = tmp_path / "credentials"
     assert (creds_dir / "first_oauth.json").exists()
     assert (creds_dir / "second_oauth.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Issue #1867 stage 3: full-chain import-as-secret integration test
+#
+# Stage 1's live manual testing against a real Google OAuth confidential client
+# already exercised "Import as Proxy Secret" successfully (see PR #1870). This
+# test is the automated, repeatable equivalent of that one-time manual pass —
+# same shape (confidential client, real refresh token), mocked HTTP instead of
+# a real provider — not a re-run of the manual verification itself.
+# ---------------------------------------------------------------------------
+
+
+class _FakeKeyring:
+    """In-memory stand-in for the OS keyring shared across every call site.
+
+    `credential_vault.py` and `application_service._refresh_secret_impl` each
+    import `get_secret_value`/`set_secret_value` independently (the latter via a
+    function-local import), so both must be patched onto the same backing dict
+    for a value written during import to be readable during refresh.
+    """
+
+    def __init__(self) -> None:
+        self._store: dict[str, str] = {}
+
+    def set_value(self, name: str, value: str) -> None:
+        self._store[name] = value
+
+    def get_value(self, name: str) -> str | None:
+        return self._store.get(name)
+
+    def delete_value(self, name: str) -> None:
+        self._store.pop(name, None)
+
+
+@contextmanager
+def _patched_keyring(fake: _FakeKeyring):
+    with (
+        patch("backend.credential_vault.set_secret_value", side_effect=fake.set_value),
+        patch("backend.credential_vault.get_secret_value", side_effect=fake.get_value),
+        patch("backend.credential_vault.delete_secret_value", side_effect=fake.delete_value),
+        patch("backend.secrets_keyring.set_secret_value", side_effect=fake.set_value),
+        patch("backend.secrets_keyring.get_secret_value", side_effect=fake.get_value),
+        patch("backend.secrets_keyring.delete_secret_value", side_effect=fake.delete_value),
+    ):
+        yield
+
+
+def _http_response(body: bytes, status_code: int = 200) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status_code
+
+    async def _aread():
+        return body
+
+    resp.aread = _aread
+    return resp
+
+
+@pytest.mark.asyncio
+async def test_issue_1867_import_as_secret_full_chain_confidential_client(tmp_path: Path):
+    """Full chain without mocking client_info.client_secret at the field level:
+
+    real vault secret (oauth_client_secret) -> oauth_initiate_flow() (asserts
+    access_type=offline/prompt=consent per Stage 1's fix) -> (mocked HTTP)
+    oauth_complete_flow() -> import_oauth_as_secret() creates all 3 secrets,
+    correctly wired -> refresh_secret() against a mocked token endpoint includes
+    client_secret sourced from the imported sibling.
+    """
+    fake_keyring = _FakeKeyring()
+    config_id = "cfg-google-1867"
+    mcp_url = "https://mcp.example.com/v1/mcp"
+
+    coordinator = MagicMock()
+    oauth_manager = OAuthFlowManager(tmp_path)
+    coordinator.oauth_manager = oauth_manager
+
+    with _patched_keyring(fake_keyring):
+        vault = SecretsVault(tmp_path)
+        coordinator.credential_vault = vault
+
+        # Real vault secret backing oauth_client_secret="${secret:test-google-secret}"
+        now = datetime.now(UTC)
+        client_secret_plain = "google-confidential-secret-value"
+        await vault.create_secret(
+            SecretRecord(
+                name="test-google-secret",
+                type=SecretType.GENERIC,
+                target_hosts=["accounts.google.com"],
+                created_at=now,
+                updated_at=now,
+            ),
+            client_secret_plain,
+        )
+
+        cfg = _make_mcp_config(
+            config_id=config_id,
+            url=mcp_url,
+            oauth_client_id="google-client-id",
+            oauth_client_secret="${secret:test-google-secret}",
+        )
+
+        async def _get_config(cid):
+            return cfg
+
+        async def _update_config(cid, **kwargs):
+            if "headers" in kwargs:
+                cfg.headers = kwargs["headers"]
+            return cfg
+
+        coordinator.mcp_config_manager.get_config = _get_config
+        coordinator.mcp_config_manager.update_config = _update_config
+
+        service = ApplicationService(coordinator)
+
+        # --- oauth_initiate_flow(): resolves the vault secret, drives start_flow() ---
+        with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
+            client_instance = AsyncMock()
+            client_instance.__aenter__ = AsyncMock(return_value=client_instance)
+            client_instance.__aexit__ = AsyncMock(return_value=False)
+            # PRM (path + root) + AS metadata discovery all 404 -> path-derived endpoints
+            client_instance.send = AsyncMock(
+                side_effect=[
+                    MagicMock(status_code=404),
+                    MagicMock(status_code=404),
+                    MagicMock(status_code=404),
+                ]
+            )
+            mock_client.return_value = client_instance
+
+            auth_url = await service.oauth_initiate_flow(
+                config_id=config_id,
+                server_url=mcp_url,
+                redirect_uri="http://localhost/oauth/callback",
+                client_name="Test Client",
+            )
+
+        assert auth_url is not None
+        assert "access_type=offline" in auth_url
+        assert "prompt=consent" in auth_url
+
+        # start_flow() persisted client_info with the real resolved secret value.
+        store = oauth_manager.get_token_store(config_id)
+        persisted_client_info = await store.get_client_info()
+        assert persisted_client_info.client_secret == client_secret_plain
+
+        state = next(iter(oauth_manager._pending))
+
+        # --- (mocked HTTP) complete_flow(): token exchange includes client_secret ---
+        token_response_body = json.dumps(
+            {
+                "access_token": "google_access_token",
+                "token_type": "Bearer",
+                "refresh_token": "google_refresh_token",
+                "expires_in": 3600,
+            }
+        ).encode()
+
+        with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
+            client_instance = AsyncMock()
+            client_instance.__aenter__ = AsyncMock(return_value=client_instance)
+            client_instance.__aexit__ = AsyncMock(return_value=False)
+            client_instance.post = AsyncMock(return_value=_http_response(token_response_body))
+            mock_client.return_value = client_instance
+
+            returned_config_id = await service.oauth_complete_flow(state, code="auth_code_123")
+            exchange_body = client_instance.post.call_args[1]["data"]
+
+        assert returned_config_id == config_id
+        assert exchange_body["client_secret"] == client_secret_plain
+
+        client_info_after_exchange = await store.get_client_info()
+        assert client_info_after_exchange.client_secret == client_secret_plain
+
+        # --- import_oauth_as_secret(): all 3 secrets created & correctly wired ---
+        result = await service.import_oauth_as_secret(config_id, "google_oauth")
+
+        assert set(result["secrets_created"]) == {
+            "google_oauth",
+            "google_oauth_refresh",
+            "google_oauth_client_secret",
+        }
+        assert result["auto_refresh_enabled"] is True
+
+        primary_meta = await vault.get_secret("google_oauth")
+        assert primary_meta["refresh"]["client_secret_secret_name"] == "google_oauth_client_secret"
+        assert primary_meta["refresh"]["refresh_token_secret_name"] == "google_oauth_refresh"
+
+        assert fake_keyring.get_value("google_oauth_client_secret") == client_secret_plain
+        assert fake_keyring.get_value("google_oauth_refresh") == "google_refresh_token"
+        assert fake_keyring.get_value("google_oauth") == "google_access_token"
+
+        # --- refresh_secret(): refresh POST body includes client_secret from the sibling ---
+        refresh_response_json = {
+            "access_token": "google_access_token_2",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+        }
+
+        with patch("httpx.AsyncClient") as mock_client:
+            client_instance = AsyncMock()
+            client_instance.__aenter__ = AsyncMock(return_value=client_instance)
+            client_instance.__aexit__ = AsyncMock(return_value=False)
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.raise_for_status = MagicMock()
+            resp.json = MagicMock(return_value=refresh_response_json)
+            client_instance.post = AsyncMock(return_value=resp)
+            mock_client.return_value = client_instance
+
+            refresh_result = await service.refresh_secret("google_oauth")
+            refresh_body = client_instance.post.call_args[1]["data"]
+
+        assert refresh_result is not None
+        assert refresh_body["client_secret"] == client_secret_plain
+        assert refresh_body["grant_type"] == "refresh_token"
+        assert fake_keyring.get_value("google_oauth") == "google_access_token_2"
