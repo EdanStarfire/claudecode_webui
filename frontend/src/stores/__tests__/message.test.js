@@ -315,6 +315,72 @@ describe('message store', () => {
     const contents = store.messagesBySession.get('sess-1').map(m => m.content)
     expect(contents).toEqual(['seed', 'page1', 'page2'])
   })
+
+  it('syncMessages skips a message whose message_id already exists (#1877 regression)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.addMessage('sess-1', makeMessage({
+      content: 'seed', timestamp: 1700000000, message_id: 'msg-dup'
+    }))
+    apiMock.get.mockReset()
+
+    apiMock.get.mockResolvedValueOnce({
+      messages: [makeMessage({ content: 'seed', timestamp: 1700000100, message_id: 'msg-dup' })],
+      total_count: 1,
+      has_more: false
+    })
+
+    const result = await store.syncMessages('sess-1')
+
+    expect(result.syncedCount).toBe(0)
+    expect(store.messagesBySession.get('sess-1').length).toBe(1)
+  })
+
+  it('syncMessages still syncs a genuinely new message_id (#1877)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.addMessage('sess-1', makeMessage({
+      content: 'seed', timestamp: 1700000000, message_id: 'msg-1'
+    }))
+    apiMock.get.mockReset()
+
+    apiMock.get.mockResolvedValueOnce({
+      messages: [makeMessage({ content: 'new', timestamp: 1700000100, message_id: 'msg-2' })],
+      total_count: 2,
+      has_more: false
+    })
+
+    const result = await store.syncMessages('sess-1')
+
+    expect(result.syncedCount).toBe(1)
+    const contents = store.messagesBySession.get('sess-1').map(m => m.content)
+    expect(contents).toEqual(['seed', 'new'])
+  })
+
+  it('syncMessages passes through multiple keyless messages without deduping them against each other (#1877 AC4)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.addMessage('sess-1', makeMessage({ content: 'seed', timestamp: 1700000000 }))
+    apiMock.get.mockReset()
+
+    apiMock.get.mockResolvedValueOnce({
+      messages: [
+        makeMessage({ type: 'system', content: 'sys-a', timestamp: 1700000100 }),
+        makeMessage({ type: 'system', content: 'sys-b', timestamp: 1700000200 })
+      ],
+      total_count: 3,
+      has_more: false
+    })
+
+    const result = await store.syncMessages('sess-1')
+
+    expect(result.syncedCount).toBe(2)
+    const contents = store.messagesBySession.get('sess-1').map(m => m.content)
+    expect(contents).toEqual(['seed', 'sys-a', 'sys-b'])
+  })
 })
 
 // Helpers shared by streaming merge tests

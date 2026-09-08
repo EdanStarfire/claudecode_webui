@@ -1635,8 +1635,11 @@ export const useMessageStore = defineStore('message', () => {
       const existingMessages = messagesBySession.value.get(sessionId) || []
 
       // Deduplicate by message ID (in case of overlap)
-      const existingIds = new Set(existingMessages.map(m => m.id).filter(Boolean))
-      const uniqueNewMessages = newMessages.filter(m => !m.id || !existingIds.has(m.id))
+      const existingIds = new Set(existingMessages.map(m => m.message_id || m.id).filter(Boolean))
+      const uniqueNewMessages = newMessages.filter(m => {
+        const key = m.message_id || m.id
+        return !key || !existingIds.has(key)
+      })
 
       console.log(`After deduplication: ${uniqueNewMessages.length} unique new messages`)
 
