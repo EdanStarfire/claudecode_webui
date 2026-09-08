@@ -27,6 +27,24 @@ describe('message store', () => {
     expect(store.messagesBySession.get('sess-1')[0].content).toBe('hi')
   })
 
+  it('addMessage skips a duplicate user message redelivered with the same message_id (#1845)', async () => {
+    // Regression test: backend/message_parser.py's UserMessageHandler now propagates
+    // the stable message_id assigned at persistence time, so a user message redelivered
+    // live via the poll stream (the jsonl-write/queue-push race #1845 describes) carries
+    // the same message_id as its already-loaded counterpart and this dedup catches it.
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.addMessage('sess-1', makeMessage({
+      type: 'user', content: 'Please help me', message_id: 'msg-user-dup'
+    }))
+    store.addMessage('sess-1', makeMessage({
+      type: 'user', content: 'Please help me', message_id: 'msg-user-dup'
+    }))
+
+    expect(store.messagesBySession.get('sess-1').length).toBe(1)
+  })
+
   it('loadMessages stores messages from paged API response', async () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()

@@ -1080,6 +1080,17 @@ class UserMessageHandler(MessageHandler):
                 if key in orig_meta:
                     extracted["metadata"][key] = orig_meta[key]
 
+        # Issue #1845: capture the stable message_id assigned by
+        # data_storage.append_message() (top-level on the persisted dict, mirroring
+        # the live-broadcast dict since append_message mutates it in place before the
+        # message callback fires) so a live-polled user message carries the same id as
+        # its REST-loaded counterpart, letting frontend dedup catch redelivery races.
+        message_id = message_data.get("message_id")
+        if not message_id and isinstance(orig_meta, dict):
+            message_id = orig_meta.get("message_id")
+        if message_id:
+            extracted["metadata"]["message_id"] = message_id
+
         return extracted
 
 
