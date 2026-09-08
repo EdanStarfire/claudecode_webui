@@ -58,7 +58,7 @@ import { useAnalyticsStore } from '@/stores/analytics'
 import { formatCost, formatTokens } from '@/utils/analytics'
 
 const store = useAnalyticsStore()
-const totals = computed(() => store.totals)
+const totals = computed(() => store.filteredTotals)
 const totalTokens = computed(() => {
   if (!totals.value) return null
   return (totals.value.input_tokens || 0) + (totals.value.output_tokens || 0)
