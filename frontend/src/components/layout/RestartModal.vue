@@ -84,6 +84,9 @@
                 </button>
 
                 <div v-if="showPicker" class="border rounded p-2 mt-1">
+                  <div v-if="branchesFetchFailed" class="text-warning small mb-2">
+                    <small>Could not fetch remote info — branch/commit list may be stale. Close and reopen this dialog to retry, or pull manually for the latest.</small>
+                  </div>
                   <div v-if="branchesLoading" class="text-center py-2">
                     <div class="spinner-border spinner-border-sm" role="status"></div>
                     <span class="ms-2 small">Loading branches...</span>
@@ -241,6 +244,7 @@ let countdownInterval = null
 const showPicker = ref(false)
 const branches = ref([])
 const branchesLoading = ref(false)
+const branchesFetchFailed = ref(false)
 const selectedBranch = ref(null)
 const commits = ref([])
 const commitsLoading = ref(false)
@@ -269,6 +273,7 @@ function createTier(fetchStatusFn, fetchBranchesFn, fetchCommitsFn) {
     showPicker: false,
     branches: [],
     branchesLoading: false,
+    branchesFetchFailed: false,
     selectedBranch: null,
     commits: [],
     commitsLoading: false,
@@ -325,10 +330,12 @@ function createTier(fetchStatusFn, fetchBranchesFn, fetchCommitsFn) {
   async function fetchBranchesList() {
     const gen = generation
     state.branchesLoading = true
+    state.branchesFetchFailed = false
     try {
       const result = await fetchBranchesFn()
       if (gen !== generation) return
       state.branches = result.branches || []
+      state.branchesFetchFailed = !!result.remote_fetch_failed
       state.selectedBranch = state.status?.branch || state.branches.find(b => b.is_current)?.name || null
       if (state.selectedBranch) {
         await fetchCommitsList(state.selectedBranch)
@@ -363,6 +370,7 @@ function createTier(fetchStatusFn, fetchBranchesFn, fetchCommitsFn) {
     state.showPicker = false
     state.branches = []
     state.branchesLoading = false
+    state.branchesFetchFailed = false
     state.selectedBranch = null
     state.commits = []
     state.commitsLoading = false
@@ -445,10 +453,12 @@ async function fetchGitStatus() {
 async function fetchBranches() {
   const generation = modalGeneration
   branchesLoading.value = true
+  branchesFetchFailed.value = false
   try {
     const result = await getGitBranches()
     if (generation !== modalGeneration) return // modal was reset/closed while this was in flight
     branches.value = result.branches || []
+    branchesFetchFailed.value = !!result.remote_fetch_failed
     selectedBranch.value = gitStatus.value?.branch || branches.value.find(b => b.is_current)?.name || null
     if (selectedBranch.value) {
       await fetchCommits(selectedBranch.value)
@@ -601,6 +611,7 @@ function resetState() {
   reconnectCountdown.value = 60
   showPicker.value = false
   branches.value = []
+  branchesFetchFailed.value = false
   selectedBranch.value = null
   commits.value = []
   commitsTruncated.value = false

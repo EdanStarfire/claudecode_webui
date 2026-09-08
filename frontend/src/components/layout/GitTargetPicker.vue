@@ -52,6 +52,9 @@
       </button>
 
       <div v-if="state.showPicker" class="border rounded p-2 mt-1">
+        <div v-if="state.branchesFetchFailed" class="text-warning small mb-2">
+          <small>Could not fetch remote info — {{ label }} branch/commit list may be stale. Close and reopen this dialog to retry, or pull manually for the latest.</small>
+        </div>
         <div v-if="state.branchesLoading" class="text-center py-2">
           <div class="spinner-border spinner-border-sm" role="status"></div>
           <span class="ms-2 small">Loading branches...</span>
