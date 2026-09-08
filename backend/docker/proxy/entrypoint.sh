@@ -242,9 +242,14 @@ iptables -A OUTPUT -p udp -j DROP
 # PID 1 (this shell) remains as the container's init process and forwards
 # SIGTERM/SIGINT to the child processes for clean shutdown.
 # Issue #1214: Truncate SOCKS5 log at sidecar start so each session begins clean.
+# Issue #1846: Also truncate+re-own mitm.flows — mitmdump opens it itself after
+# dropping to uid 9999, so a pre-existing file owned by another uid (e.g. after
+# a filesystem/mount migration) would otherwise fail with Permission denied.
 if [ -d "$LOG_DIR" ]; then
     : > "$LOG_DIR/socks5.log"
     chown 9999:9999 "$LOG_DIR/socks5.log"
+    : > "$LOG_DIR/mitm.flows"
+    chown 9999:9999 "$LOG_DIR/mitm.flows"
 fi
 
 echo "Starting mitmdump (transparent + SOCKS5) on :8080 / 127.0.0.1:1080..."
