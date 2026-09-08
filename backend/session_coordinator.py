@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from backend.docker_utils import cleanup_session_tmp
+from backend.docker_utils import classify_docker_output, cleanup_session_tmp
 from backend.legion.minion_system_prompts import get_legion_guide_only
 from shared.logging_config import get_logger
 
@@ -55,10 +55,6 @@ from .timestamp_utils import get_unix_timestamp
 coord_logger = get_logger('coordinator', category='COORDINATOR')
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)
-
-# Issue #871: Docker wrapper startup noise filtering
-_DOCKER_WRAPPER_PREFIX = '[claude-docker] '
-_DOCKER_ERROR_KEYWORDS = ('exited with code', 'was killed', 'crashed')
 
 # Issue #1375: Regex for ${secret:<name>} references in MCP server header values.
 _SECRET_REF_RE = re.compile(r"\$\{secret:([^}]+)\}")
@@ -5274,23 +5270,25 @@ class SessionCoordinator:
 
         Issue #517: Each stderr line becomes a system message with subtype 'stderr',
         persisted to messages.jsonl and broadcast to the frontend via WebSocket.
-        Issue #871: Docker wrapper informational lines are filtered out (they are
-        already logged) to avoid spurious red warning pills on successful Docker startup.
+        Issue #871/#1837: Routine Docker/BuildKit progress output (both this app's own
+        wrapper informational lines and raw, non-wrapper-prefixed `docker build`/`pull` CLI
+        output) is logged at low severity and never forwarded to the frontend, so it can't
+        produce spurious warning-styled pills for a successful build/run/pull. Only output
+        classified as an actual failure is logged loud and still reaches the frontend.
         """
         message_callback = self._create_message_callback(session_id)
 
         async def callback(output: str):
             try:
-                coord_logger.warning(f"[STDERR] Session {session_id}: {output}")
+                classification = classify_docker_output(output)
 
-                # Issue #871: Skip Docker wrapper informational diagnostics.
-                # Lines like "[claude-docker] Container: ..., Image: ..., PID: ..."
-                # are startup metadata, not errors. They are already logged above.
-                # Keep lines containing error keywords (exit codes, kills, crashes).
-                if output.startswith(_DOCKER_WRAPPER_PREFIX) and not any(
-                    kw in output for kw in _DOCKER_ERROR_KEYWORDS
-                ):
-                    return
+                if classification == "failure":
+                    coord_logger.warning(f"[STDERR] Session {session_id}: {output}")
+                elif classification == "routine":
+                    coord_logger.debug(f"[STDERR] Session {session_id}: {output}")
+                    return  # Issue #871/#1837: known-safe progress noise — do not forward
+                else:  # ambiguous
+                    coord_logger.info(f"[STDERR] Session {session_id}: {output}")
 
                 stderr_message = {
                     "type": "system",

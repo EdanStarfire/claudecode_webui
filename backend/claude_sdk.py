@@ -16,6 +16,7 @@ from typing import Any
 from shared.logging_config import get_logger
 
 from .data_storage import DataStorageManager
+from .docker_utils import classify_docker_output
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import sdk_message_to_stored
 from .models.permission_mode import PermissionMode
@@ -1112,7 +1113,13 @@ class ClaudeSDK:
         # Add stderr handler to capture SDK CLI errors (issue #517)
         def stderr_handler(output: str) -> None:
             """Capture and log stderr output from Claude Code CLI."""
-            logger.error(f"[SDK_STDERR] {self.session_id}: {output}")
+            classification = classify_docker_output(output)
+            if classification == "failure":
+                logger.error(f"[SDK_STDERR] {self.session_id}: {output}")
+            elif classification == "routine":
+                sdk_logger.debug(f"[SDK_STDERR] {self.session_id}: {output}")
+            else:  # ambiguous
+                sdk_logger.info(f"[SDK_STDERR] {self.session_id}: {output}")
             self._stderr_buffer.append(output)
             if self.stderr_callback:
                 try:

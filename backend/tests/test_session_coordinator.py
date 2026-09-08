@@ -3301,3 +3301,52 @@ class TestIssue1842TemplateIdPatchResolutionParity:
         assert created_resolved.permission_mode == patched_resolved.permission_mode
         assert created_resolved.model == patched_resolved.model
         assert created_resolved.model_dump() == patched_resolved.model_dump()
+
+
+class TestIssue1837StderrCallbackClassification:
+    """_create_stderr_callback gates both log severity and frontend forwarding by
+    classify_docker_output()'s classification (issue #1837)."""
+
+    @pytest.mark.asyncio
+    async def test_routine_line_not_forwarded(self, temp_coordinator):
+        coordinator = temp_coordinator
+        session_id = "test-stderr-session"
+        mock_message_callback = AsyncMock()
+
+        with patch.object(coordinator, "_create_message_callback", return_value=mock_message_callback):
+            stderr_callback = coordinator._create_stderr_callback(session_id)
+            await stderr_callback("#17 DONE 6.9s")
+
+        mock_message_callback.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_failure_line_forwarded_as_stderr_message(self, temp_coordinator):
+        coordinator = temp_coordinator
+        session_id = "test-stderr-session"
+        mock_message_callback = AsyncMock()
+
+        with patch.object(coordinator, "_create_message_callback", return_value=mock_message_callback):
+            stderr_callback = coordinator._create_stderr_callback(session_id)
+            await stderr_callback("Container exited with code 137")
+
+        mock_message_callback.assert_called_once()
+        forwarded = mock_message_callback.call_args[0][0]
+        assert forwarded["subtype"] == "stderr"
+        assert forwarded["content"] == "Container exited with code 137"
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_line_still_forwarded(self, temp_coordinator):
+        """Documents the deliberate judgment call: unclassified output stays visible
+        rather than risking a real, unrecognized failure going silent."""
+        coordinator = temp_coordinator
+        session_id = "test-stderr-session"
+        mock_message_callback = AsyncMock()
+
+        with patch.object(coordinator, "_create_message_callback", return_value=mock_message_callback):
+            stderr_callback = coordinator._create_stderr_callback(session_id)
+            await stderr_callback("#5 [2/8] RUN pip install -r requirements.txt")
+
+        mock_message_callback.assert_called_once()
+        forwarded = mock_message_callback.call_args[0][0]
+        assert forwarded["subtype"] == "stderr"
+        assert forwarded["content"] == "#5 [2/8] RUN pip install -r requirements.txt"
