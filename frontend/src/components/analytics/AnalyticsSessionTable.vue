@@ -19,6 +19,9 @@
             <th @click="setSort('output_tokens')" class="sortable text-end">
               Output <span class="sort-icon">{{ sortIcon('output_tokens') }}</span>
             </th>
+            <th @click="setSort('cache_write_tokens')" class="sortable text-end d-none d-md-table-cell">
+              Cache Write <span class="sort-icon">{{ sortIcon('cache_write_tokens') }}</span>
+            </th>
             <th @click="setSort('cache_read_tokens')" class="sortable text-end d-none d-md-table-cell">
               Cache Read <span class="sort-icon">{{ sortIcon('cache_read_tokens') }}</span>
             </th>
@@ -41,6 +44,7 @@
             <td class="text-end">{{ row.turn_count }}</td>
             <td class="text-end">{{ formatTokens(row.input_tokens) }}</td>
             <td class="text-end">{{ formatTokens(row.output_tokens) }}</td>
+            <td class="text-end d-none d-md-table-cell">{{ formatTokens(row.cache_write_tokens) }}</td>
             <td class="text-end d-none d-md-table-cell">{{ formatTokens(row.cache_read_tokens) }}</td>
             <td class="text-end cost-cell">
               <span :class="{ 'unknown-rate': !row.rates_known }">
