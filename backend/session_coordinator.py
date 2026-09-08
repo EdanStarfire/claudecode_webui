@@ -5947,41 +5947,42 @@ class SessionCoordinator:
             logger.exception("Error during session coordinator cleanup")
 
     async def _init_session_overrides(self, session_id: str, config: "SessionConfig") -> None:
-        """Compute and store initial session_overrides for a template-linked session.
+        """Compute and store initial session.config overrides for a template-linked session.
 
-        Called at create time so that fields the user customised in the Create Session
-        dialog (before hitting Create) survive restarts instead of being overwritten
-        by the template defaults at resolve_effective_config time (#1079).
+        Called at create time so that fields the caller explicitly customised (present in
+        config.model_fields_set) survive restarts and later template edits, instead of being
+        silently dropped or, conversely, having merely-inherited values incorrectly frozen
+        (#1875). Always runs (even producing an empty override set) so it also clears out any
+        false-positive CONFIG_FIELDS entries create_session()'s cruder class-default-only
+        heuristic may have just written into session.config moments earlier.
         """
         if not config.template_id:
             return
         try:
             from backend.config_resolution import CONFIG_FIELDS, resolve_template_config
+            from backend.session_config import DEFAULTS
 
             template = await self.template_manager.get_template(config.template_id)
-            if template is None:
-                return
-
-            template_values = await resolve_template_config(template, self.profile_manager)
+            template_values = (
+                await resolve_template_config(template, self.profile_manager)
+                if template is not None
+                else {}  # invalid/deleted template_id — nothing to inherit from, fall
+                # through so the loop below still clears create_session()'s false positives
+            )
 
             overrides: dict = {}
             for field_name in CONFIG_FIELDS:
-                if not hasattr(config, field_name):
-                    continue
+                if field_name not in config.model_fields_set:
+                    continue  # caller never touched this field — not a customization
                 config_value = getattr(config, field_name)
                 if config_value is None:
-                    continue  # None = not set by user; never freeze as an override
-                template_value = template_values.get(field_name)
+                    continue  # explicit None = "inherit"; never freeze as an override
+                template_value = template_values.get(field_name, DEFAULTS.get(field_name))
                 if config_value != template_value:
                     overrides[field_name] = config_value
 
+            await self.session_manager.update_session(session_id, _replace_config=overrides)
             if overrides:
-                # Write directly — no template_manager so _track_overrides is skipped
-                # (we ARE the source of truth here, not a field mutation to track).
-                await self.session_manager.update_session(
-                    session_id,
-                    session_overrides=overrides,
-                )
                 coord_logger.debug(
                     f"Session {session_id} initial overrides computed: {list(overrides.keys())}"
                 )

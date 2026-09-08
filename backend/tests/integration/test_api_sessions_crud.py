@@ -95,6 +95,42 @@ class TestCreateSession:
         })
         assert resp.status_code == 404
 
+    async def test_issue_1875_template_customization_matching_class_default_survives(
+        self, api_integration_env
+    ):
+        """POST /api/sessions with template_id + one explicit customized CONFIG_FIELDS
+        value must survive the full SessionCreateRequest -> model_copy() ->
+        coordinator.create_session() -> _init_session_overrides() chain, even when the
+        customization coincides with SessionConfig's class default (issue #1875 Case A)."""
+        client = api_integration_env["client"]
+        coordinator = api_integration_env["coordinator"]
+        create_project = api_integration_env["create_test_project"]
+
+        project = await create_project("Router 1875")
+        pid = project["project_id"]
+
+        template = await coordinator.template_manager.create_template(
+            name="Router Template 1875",
+            config=SessionConfig(permission_mode="plan"),
+        )
+
+        resp = await client.post("/api/sessions", json={
+            "project_id": pid,
+            "name": "Router Customized Session",
+            "template_id": template.template_id,
+            # Coincides with the SessionConfig class default, differs from the
+            # template's "plan" — the Case A regression, exercised end-to-end.
+            "permission_mode": "acceptEdits",
+        })
+        assert resp.status_code == 200
+        sid = resp.json()["session_id"]
+
+        resp2 = await client.get(f"/api/sessions/{sid}")
+        session = resp2.json()["session"]
+        assert session["config"].get("permission_mode") == "acceptEdits", (
+            "Explicit customization via the router must survive the full request chain"
+        )
+
 
 class TestListSessions:
     async def test_list_empty(self, api_integration_env):
