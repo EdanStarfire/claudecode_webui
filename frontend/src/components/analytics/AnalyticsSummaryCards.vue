@@ -1,6 +1,6 @@
 <template>
-  <div class="row g-3 mb-3">
-    <div class="col-6 col-md-3">
+  <div class="row row-cols-2 row-cols-lg-5 g-3 mb-3">
+    <div class="col">
       <div class="card summary-card h-100">
         <div class="card-body">
           <div class="card-label">Total Cost</div>
@@ -8,7 +8,7 @@
         </div>
       </div>
     </div>
-    <div class="col-6 col-md-3">
+    <div class="col">
       <div class="card summary-card h-100">
         <div class="card-body">
           <div class="card-label">Total Tokens</div>
@@ -20,7 +20,15 @@
         </div>
       </div>
     </div>
-    <div class="col-6 col-md-3">
+    <div class="col">
+      <div class="card summary-card h-100">
+        <div class="card-body">
+          <div class="card-label">Cache Write</div>
+          <div class="card-value">{{ formatTokens(totals?.cache_write_tokens) }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col">
       <div class="card summary-card h-100">
         <div class="card-body">
           <div class="card-label">Sessions</div>
@@ -28,7 +36,7 @@
         </div>
       </div>
     </div>
-    <div class="col-6 col-md-3">
+    <div class="col">
       <div class="card summary-card h-100">
         <div class="card-body">
           <div class="card-label">Top Spender</div>
