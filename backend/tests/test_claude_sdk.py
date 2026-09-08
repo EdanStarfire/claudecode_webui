@@ -3,7 +3,7 @@
 import asyncio
 import contextlib
 import tempfile
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -673,3 +673,48 @@ class TestSessionState:
         assert SessionState.COMPLETED.value == "completed"
         assert SessionState.FAILED.value == "failed"
         assert SessionState.TERMINATED.value == "terminated"
+
+
+class TestStderrHandlerClassification:
+    """Issue #1837: stderr_handler severity is gated by classify_docker_output()."""
+
+    @pytest.fixture
+    def sdk_and_handler(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sdk = ClaudeSDK(
+                session_id="test-stderr-session",
+                working_directory=temp_dir,
+                config=SessionConfig(),
+            )
+            opts = sdk._get_sdk_options()
+            yield sdk, opts.stderr
+
+    def test_routine_line_does_not_log_error(self, sdk_and_handler):
+        sdk, stderr_handler = sdk_and_handler
+
+        with patch("backend.claude_sdk.logger") as mock_logger, \
+                patch("backend.claude_sdk.sdk_logger") as mock_sdk_logger:
+            stderr_handler("#17 DONE 6.9s")
+
+        mock_logger.error.assert_not_called()
+        mock_sdk_logger.debug.assert_called_once()
+        assert sdk._stderr_buffer == ["#17 DONE 6.9s"]
+
+    def test_failure_line_logs_error_with_sdk_stderr_marker(self, sdk_and_handler):
+        sdk, stderr_handler = sdk_and_handler
+
+        with patch("backend.claude_sdk.logger") as mock_logger:
+            stderr_handler("Container exited with code 137")
+
+        mock_logger.error.assert_called_once()
+        (message,), _kwargs = mock_logger.error.call_args
+        assert "[SDK_STDERR]" in message
+        assert sdk._stderr_buffer == ["Container exited with code 137"]
+
+    def test_buffer_accumulates_both_routine_and_failure_lines(self, sdk_and_handler):
+        sdk, stderr_handler = sdk_and_handler
+
+        stderr_handler("#4 CACHED")
+        stderr_handler("Container was killed")
+
+        assert sdk._stderr_buffer == ["#4 CACHED", "Container was killed"]

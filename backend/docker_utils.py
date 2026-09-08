@@ -10,6 +10,7 @@ Issue #1052: prepare_session_ssh() — SSH key tmpfs delivery for proxy-mode ses
 import asyncio
 import logging
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -24,6 +25,78 @@ DEFAULT_DOCKER_IMAGE = "claude-code:local"
 # bridge network — no custom network is created — so this is the one network whose
 # gateway matters for embedded-mode Docker reachability (issue #1850).
 _DEFAULT_BRIDGE_NETWORK = "bridge"
+
+# Issue #871/#1837: this app's own claude-docker wrapper script prefixes its own
+# informational status lines with this marker (container name/image/PID, etc.).
+DOCKER_WRAPPER_PREFIX = '[claude-docker] '
+
+# Issue #871/#1837: substrings that indicate the line is reporting an actual failure,
+# whether from the wrapper script's own container-exit reporting or from raw Docker/
+# BuildKit CLI output. Kept as substring checks (not full parsing) to match the existing
+# issue #871 precedent and stay resilient to minor format drift.
+DOCKER_FAILURE_KEYWORDS = (
+    'exited with code',            # wrapper: container exit reporting
+    'was killed',                  # wrapper: container killed
+    'crashed',                     # wrapper: container crash
+    'ERROR:',                      # BuildKit step failure marker, e.g. "#5 ERROR: process ..."
+    'failed to solve',             # BuildKit terminal failure summary
+    'did not complete successfully',  # BuildKit RUN-step failure detail line
+)
+
+# Issue #1837: BuildKit's numbered build-step progress format, e.g.:
+#   "#4 CACHED"
+#   "#17 exporting manifest sha256:... done"
+#   "#17 naming to docker.io/library/claude-proxy:local done"
+#   "#17 unpacking to docker.io/library/claude-proxy:local done"
+#   "#17 DONE 6.9s"
+#   "#3 transferring dockerfile: 32B done"
+# Matches only lines whose payload signals a *completed* step ("done"/"cached", case-
+# insensitive, or the "#N DONE <time>s" summary line — "done" matches that too). A bare
+# "#N [2/8] RUN ..." step-start announcement (no completion signal yet) does NOT match —
+# it falls through to the "ambiguous" bucket below, which is still low-noise/non-error but
+# isn't asserted as known-safe.
+_BUILDKIT_ROUTINE_RE = re.compile(r'^#\d+\s.*\b(?:done|cached)\b', re.IGNORECASE)
+
+# Issue #1837: classic (non-BuildKit) `docker pull` layer-progress output, e.g.:
+#   "a2318d6c47ec: Pulling fs layer"
+#   "a2318d6c47ec: Waiting"
+#   "a2318d6c47ec: Downloading [===>   ]  3.2MB/50MB"
+#   "a2318d6c47ec: Pull complete"
+#   "latest: Pulling from library/claude-proxy"
+#   "Digest: sha256:..."
+#   "Status: Downloaded newer image for claude-proxy:local"
+_DOCKER_PULL_ROUTINE_RE = re.compile(
+    r'^[0-9a-f]{12}:\s+(?:Already exists|Pulling fs layer|Waiting|Downloading|'
+    r'Verifying Checksum|Download complete|Extracting|Pull complete)\b'
+    r'|^(?:Digest: sha256:|Status: (?:Downloaded newer image|Image is up to date)|'
+    r'.+: Pulling from )'
+)
+
+
+def classify_docker_output(output: str) -> str:
+    """Classify one line of Docker/BuildKit-sourced stderr output (issue #1837).
+
+    Returns one of:
+      - "failure": matches a known failure signal (wrapper container-exit reporting, or a
+        BuildKit build failure). Callers must log this loud (error.log/console-visible) and
+        may forward/style it as a warning/error in the UI.
+      - "routine": recognized as normal wrapper/BuildKit/pull progress — not a failure.
+        Callers should log this at low severity (e.g. DEBUG) and must NOT forward it to the
+        frontend as a warning/error-styled message.
+      - "ambiguous": matches neither known-failure nor known-routine patterns. Per issue
+        #1837's edge-case guidance this is still logged at low severity (e.g. INFO, not
+        ERROR/WARNING) to avoid re-introducing log flooding, but — unlike "routine" — is not
+        asserted as safe, so existing frontend-forwarding behavior for this bucket is left
+        unchanged (still visible to the user) rather than risking real, unrecognized failures
+        going invisible.
+    """
+    if any(kw in output for kw in DOCKER_FAILURE_KEYWORDS):
+        return "failure"
+    if output.startswith(DOCKER_WRAPPER_PREFIX):
+        return "routine"
+    if _BUILDKIT_ROUTINE_RE.match(output) or _DOCKER_PULL_ROUTINE_RE.match(output):
+        return "routine"
+    return "ambiguous"
 
 
 def get_wrapper_script_path() -> Path:

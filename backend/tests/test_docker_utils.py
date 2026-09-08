@@ -13,6 +13,7 @@ import pytest
 
 from backend.docker_utils import (
     build_embedded_sockets,
+    classify_docker_output,
     cleanup_session_tmp,
     detect_docker_bridge_gateway,
     get_session_tmp_dir,
@@ -290,3 +291,71 @@ class TestBuildEmbeddedSockets:
         finally:
             for s in sockets:
                 s.close()
+
+
+# ---------------------------------------------------------------------------
+# classify_docker_output (issue #1837)
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyDockerOutput:
+    def test_wrapper_informational_line_is_routine(self):
+        line = "[claude-docker] Container: abc123, Image: claude-code:local, PID: 123"
+        assert classify_docker_output(line) == "routine"
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "[claude-docker] Container exited with code 137",
+            "[claude-docker] Container was killed",
+            "[claude-docker] Container crashed",
+        ],
+    )
+    def test_wrapper_failure_lines_are_failure(self, line):
+        assert classify_docker_output(line) == "failure"
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "#17 exporting manifest sha256:abcd1234 done",
+            "#17 naming to docker.io/library/claude-proxy:local done",
+            "#17 unpacking to docker.io/library/claude-proxy:local done",
+            "#17 DONE 6.9s",
+            "#4 CACHED",
+        ],
+    )
+    def test_buildkit_completed_step_lines_are_routine(self, line):
+        assert classify_docker_output(line) == "routine"
+
+    def test_buildkit_step_start_without_completion_is_ambiguous(self):
+        line = "#5 [2/8] RUN pip install -r requirements.txt"
+        assert classify_docker_output(line) == "ambiguous"
+
+    def test_buildkit_failure_line_wins_over_step_prefix(self):
+        line = (
+            '#5 ERROR: process "/bin/sh -c pip install -r requirements.txt" '
+            "did not complete successfully: exit code 1"
+        )
+        assert classify_docker_output(line) == "failure"
+
+    def test_buildkit_terminal_failure_summary_is_failure(self):
+        line = "failed to solve: process \"/bin/sh -c pip install\" did not complete successfully"
+        assert classify_docker_output(line) == "failure"
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "a2318d6c47ec: Pulling fs layer",
+            "a2318d6c47ec: Waiting",
+            "a2318d6c47ec: Downloading [===>   ]  3.2MB/50MB",
+            "a2318d6c47ec: Pull complete",
+            "latest: Pulling from library/claude-proxy",
+            "Digest: sha256:abc123",
+            "Status: Downloaded newer image for claude-proxy:local",
+        ],
+    )
+    def test_docker_pull_layer_lines_are_routine(self, line):
+        assert classify_docker_output(line) == "routine"
+
+    def test_unrelated_output_is_ambiguous(self):
+        assert classify_docker_output("Traceback (most recent call last):") == "ambiguous"
