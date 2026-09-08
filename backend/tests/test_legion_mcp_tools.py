@@ -611,6 +611,71 @@ async def test_issue_1730_same_filename_resolves_distinct_resource_ids_across_ca
     assert resolved_ids == ["res-v1", "res-v2", "res-v3"]
 
 
+# ── send_comm delivery-failure-reason tests (Issue #1839) ──
+
+
+@pytest.mark.asyncio
+async def test_issue_1839_send_comm_surfaces_delivery_failure_reason(tmp_path):
+    """When route_comm() fails and stamps comm.metadata['delivery_failure_reason'],
+    _handle_send_comm's error text includes that reason."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    session_id = "sender-session-failure"
+    mock_system = _make_send_comm_system(session_id, docker_enabled=False, data_dir=tmp_path)
+
+    async def failing_route_comm(comm, **kwargs):
+        comm.metadata["delivery_failure_reason"] = "Docker sandbox unavailable: image not found"
+        return False
+
+    mock_system.comm_router = MagicMock()
+    mock_system.comm_router.route_comm = AsyncMock(side_effect=failing_route_comm)
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_send_comm({
+        "_from_minion_id": session_id,
+        "to_minion_name": "user",
+        "summary": "test",
+        "content": "body",
+        "comm_type": "report",
+    })
+
+    assert result["is_error"] is True
+    text = result["content"][0]["text"]
+    assert "Failed to send message to user" in text
+    assert "Docker sandbox unavailable: image not found" in text
+
+
+@pytest.mark.asyncio
+async def test_issue_1839_send_comm_generic_text_unchanged_without_reason(tmp_path):
+    """AC4 regression: when route_comm() fails without setting
+    delivery_failure_reason (a non-auto-start failure), the original generic
+    error text is preserved byte-for-byte."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    session_id = "sender-session-failure-generic"
+    mock_system = _make_send_comm_system(session_id, docker_enabled=False, data_dir=tmp_path)
+
+    mock_system.comm_router = MagicMock()
+    mock_system.comm_router.route_comm = AsyncMock(return_value=False)
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_send_comm({
+        "_from_minion_id": session_id,
+        "to_minion_name": "user",
+        "summary": "test",
+        "content": "body",
+        "comm_type": "report",
+    })
+
+    assert result["is_error"] is True
+    text = result["content"][0]["text"]
+    assert text == "Failed to send message to user"
+
+
 # ── queue_task handler tests (Issue #1114) ──
 
 

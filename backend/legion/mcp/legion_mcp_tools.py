@@ -745,6 +745,9 @@ class LegionMCPTools:
                     "is_error": False
                 }
             else:
+                reason = comm.metadata.get("delivery_failure_reason")
+                if reason:
+                    return self._err(f"Failed to send message to {to_minion_name}: {reason}")
                 return self._err(f"Failed to send message to {to_minion_name}")
         except Exception as e:
             return self._err(f"Error sending message: {str(e)}")
