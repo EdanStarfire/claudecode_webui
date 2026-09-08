@@ -26,6 +26,11 @@ export const useSessionStore = defineStore('session', () => {
   // Session init data (for info modal)
   const initData = ref(new Map())
 
+  // Archive-scoped session init data (for info modal in archived session views) — kept
+  // separate from initData so a live session's current init payload never leaks into a
+  // historical archive view (or vice versa).
+  const archiveInitData = ref(new Map())
+
   // Issue #1059: Effective config and template metadata per session
   // Populated by fetchSessionDetails(); null means not yet fetched or legacy session.
   const effectiveConfigBySession = ref(new Map())   // sessionId → effective_config dict | null
@@ -568,6 +573,7 @@ export const useSessionStore = defineStore('session', () => {
         inputCache.value.delete(deletedId)
         attachmentCache.value.delete(deletedId)
         initData.value.delete(deletedId)
+        archiveInitData.value.delete(deletedId)
         scrollPositions.value.delete(deletedId)
       }
 
@@ -750,6 +756,18 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
+  /**
+   * Store init data for an archived session view. Does NOT sync permission mode
+   * (storeInitData does) since archived data must never mutate live session state.
+   */
+  function storeArchiveInitData(sessionId, data) {
+    archiveInitData.value.set(sessionId, data)
+  }
+
+  function clearArchiveInitData(sessionId) {
+    archiveInitData.value.delete(sessionId)
+  }
+
   // ========== SCROLL POSITION ACTIONS ==========
 
   function saveScrollPosition(sessionId, position) {
@@ -865,6 +883,7 @@ export const useSessionStore = defineStore('session', () => {
     inputCache,
     attachmentCache,
     initData,
+    archiveInitData,
     deletingSessions,
     ghostAgents,
     lastViewedArchive,
@@ -901,6 +920,8 @@ export const useSessionStore = defineStore('session', () => {
     terminateSession,
     getSession,
     storeInitData,
+    storeArchiveInitData,
+    clearArchiveInitData,
     eraseHistory,
     eraseArchives,
     checkHistoryArchivesStatus,
