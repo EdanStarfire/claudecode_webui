@@ -1002,6 +1002,68 @@ class TestIssue1486MessageIdPropagation:
         assert parsed.metadata.get("message_id") == "msg_stored456"
 
 
+class TestIssue1845UserMessageIdPropagation:
+    """Regression tests for issue #1845 reload-duplicated-user-message bug.
+
+    Root cause: UserMessageHandler never copied the stable message_id (assigned by
+    data_storage.append_message() at persistence time, before the same dict is passed
+    to the live message callback) into ParsedMessage.metadata. AssistantMessageHandler
+    already does this (issue #1486). Without it, a user message redelivered live via
+    the poll stream during the jsonl-write/queue-push race carries no id, so the
+    frontend's message_id-keyed dedup can't catch it and it renders twice.
+
+    Fix: UserMessageHandler now captures message_data["message_id"] (top-level, where
+    append_message() puts it) into metadata, with a fallback to a nested metadata
+    message_id for re-parsed stored dicts.
+    """
+
+    def test_user_message_id_captured_from_raw_dict(self):
+        """message_id set at the top level (live path, set by append_message()) is surfaced in parsed metadata."""
+        handler = UserMessageHandler()
+        message_data = {
+            "type": "user",
+            "content": "Please help me",
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+            "message_id": "msg_user_abc123",
+        }
+        parsed = handler.parse(message_data)
+
+        assert parsed.metadata.get("message_id") == "msg_user_abc123", (
+            "Top-level message_id must be propagated so a live-polled user message "
+            "carries the same id as its REST-loaded counterpart"
+        )
+
+    def test_user_message_id_absent_when_none(self):
+        """metadata message_id is absent when no message_id is present anywhere."""
+        handler = UserMessageHandler()
+        message_data = {
+            "type": "user",
+            "content": "Please help me",
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+
+        assert "message_id" not in parsed.metadata or parsed.metadata["message_id"] is None
+
+    def test_user_message_id_restored_from_stored_dict(self):
+        """message_id is restored when re-parsing a stored user message that has it nested in metadata."""
+        handler = UserMessageHandler()
+        message_data = {
+            "type": "user",
+            "content": "Please help me",
+            "metadata": {
+                "message_id": "msg_user_stored456",
+            },
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+
+        assert parsed.metadata.get("message_id") == "msg_user_stored456"
+
+
 class TestIssue1840UsageExtraction:
     """Regression tests for issue #1840: subagent (Task/Agent tool) usage capture.
 
