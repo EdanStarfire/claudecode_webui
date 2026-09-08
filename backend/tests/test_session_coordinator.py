@@ -1546,6 +1546,237 @@ class TestIssue1115SessionConfigStorage:
 
 
 # ---------------------------------------------------------------------------
+# Issue #1875 — _init_session_overrides() false-negative/false-positive fix
+# ---------------------------------------------------------------------------
+
+
+class TestIssue1875InitSessionOverrides:
+    """Regression tests for issue #1875 — _init_session_overrides() must use
+    model_fields_set to detect genuine customization, not is-not-None / class-default
+    comparisons, and must persist via _replace_config (not the dead session_overrides=
+    kwarg)."""
+
+    async def _make_project(self, coordinator, suffix=""):
+        return await coordinator.project_manager.create_project(
+            name=f"Test Project {suffix}", working_directory="/tmp/test_1875"
+        )
+
+    async def test_false_negative_customization_matching_class_default_survives(
+        self, temp_coordinator
+    ):
+        """Case A: an explicit customization that happens to equal SessionConfig's class
+        default (but differs from the template's value) must be stored immediately, and
+        must still be honored after a later template edit."""
+        import uuid
+
+        coordinator = temp_coordinator
+        project = await self._make_project(coordinator, "case-a")
+
+        # Template sets permission_mode="plan" (differs from class default "acceptEdits").
+        template = await coordinator.template_manager.create_template(
+            name="Case A Template",
+            config=SessionConfig(permission_mode="plan"),
+        )
+
+        session_id = str(uuid.uuid4())
+        # Caller explicitly customizes permission_mode to "acceptEdits" — coincides with
+        # the SessionConfig class default, but is a real, explicit customization.
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(
+                template_id=template.template_id, permission_mode="acceptEdits"
+            ),
+        )
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.config.get("permission_mode") == "acceptEdits", (
+            "Explicit customization coinciding with the class default must survive "
+            "immediately at creation time"
+        )
+        resolved = await resolve_effective_config(session_info, coordinator.template_manager)
+        assert resolved.permission_mode == "acceptEdits"
+
+        # Editing the template afterward must NOT clobber the stored customization.
+        await coordinator.template_manager.update_template(
+            template.template_id, config={"permission_mode": "bypassPermissions"}
+        )
+        session_info2 = await coordinator.session_manager.get_session_info(session_id)
+        resolved2 = await resolve_effective_config(session_info2, coordinator.template_manager)
+        assert resolved2.permission_mode == "acceptEdits", (
+            "Customization must still win over the template's new value after a later edit"
+        )
+
+    async def test_invalid_template_id_still_clears_create_session_false_positives(
+        self, temp_coordinator
+    ):
+        """A template_id that doesn't resolve to a real template (deleted/invalid) must
+        not leave create_session()'s cruder class-default-diff false positives stuck in
+        session.config. Reproduces the real trigger: a request subclass like
+        MinionCreateRequest overrides permission_mode's own default away from
+        SessionConfig's ("manual" vs "acceptEdits"), so a value the caller never touched
+        (absent from model_fields_set) still differs from DEFAULTS and gets written by
+        session_manager.create_session()'s heuristic — model_construct with an empty
+        _fields_set reproduces that exact shape without needing the real subclass."""
+        import uuid
+
+        coordinator = temp_coordinator
+        project = await self._make_project(coordinator, "invalid-template")
+
+        session_id = str(uuid.uuid4())
+        config = SessionConfig.model_construct(
+            _fields_set=set(), permission_mode="manual", template_id="nonexistent-template-id"
+        )
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=config,
+        )
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert "permission_mode" not in session_info.config, (
+            "An invalid template_id must not leave create_session()'s false-positive "
+            f"permission_mode frozen in session.config; got: {session_info.config}"
+        )
+
+    async def test_pure_inheritance_unaffected(self, temp_coordinator):
+        """A session created with template_id set and no CONFIG_FIELDS passed must not
+        have any CONFIG_FIELDS keys frozen into session.config, and must track template
+        edits automatically."""
+        import uuid
+
+        coordinator = temp_coordinator
+        project = await self._make_project(coordinator, "pure-inherit")
+
+        template = await coordinator.template_manager.create_template(
+            name="Pure Inherit Template",
+            config=SessionConfig(permission_mode="plan", model="opus"),
+        )
+
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(template_id=template.template_id),
+        )
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        from backend.config_resolution import CONFIG_FIELDS
+        stored_config_fields = set(session_info.config or {}) & CONFIG_FIELDS
+        assert stored_config_fields == set(), (
+            f"Pure inheritance must not freeze any CONFIG_FIELDS, got: {stored_config_fields}"
+        )
+
+        resolved = await resolve_effective_config(session_info, coordinator.template_manager)
+        assert resolved.permission_mode == "plan"
+        assert resolved.model == "opus"
+
+        # Template edit must propagate since nothing is frozen.
+        await coordinator.template_manager.update_template(
+            template.template_id, config={"permission_mode": "plan", "model": "haiku"}
+        )
+        session_info2 = await coordinator.session_manager.get_session_info(session_id)
+        resolved2 = await resolve_effective_config(session_info2, coordinator.template_manager)
+        assert resolved2.model == "haiku"
+
+    async def test_false_positive_value_matching_template_not_recorded_as_override(
+        self, temp_coordinator
+    ):
+        """Case B: a CONFIG_FIELDS value explicitly passed that happens to equal the
+        template's own value is not a real customization — it must not be frozen, and a
+        later template edit to that field must propagate."""
+        import uuid
+
+        coordinator = temp_coordinator
+        project = await self._make_project(coordinator, "case-b")
+
+        template = await coordinator.template_manager.create_template(
+            name="Case B Template",
+            config=SessionConfig(docker_enabled=True),
+        )
+
+        session_id = str(uuid.uuid4())
+        # Caller passes docker_enabled=True explicitly — matches the template's own
+        # value, so it is NOT a real customization.
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(template_id=template.template_id, docker_enabled=True),
+        )
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert "docker_enabled" not in session_info.config, (
+            "A value merely matching the template must not be recorded as an override"
+        )
+
+        # Editing the template must propagate since nothing was frozen.
+        await coordinator.template_manager.update_template(
+            template.template_id, config={"docker_enabled": False}
+        )
+        session_info2 = await coordinator.session_manager.get_session_info(session_id)
+        resolved2 = await resolve_effective_config(session_info2, coordinator.template_manager)
+        assert resolved2.docker_enabled is False, (
+            "Template edit must propagate to a session with no real override recorded"
+        )
+
+    async def test_spawn_minion_only_genuine_divergence_frozen(self, temp_coordinator):
+        """OverseerController.spawn_minion() passes nearly every CONFIG_FIELDS name
+        explicitly (by design). Only fields that genuinely diverge from the resolved
+        template value (parent-inheritance fallbacks) should end up in the child's
+        session.config — not every field spawn_minion happened to pass."""
+        import uuid
+
+        from backend.session_config import DEFAULTS
+
+        coordinator = temp_coordinator
+        project = await self._make_project(coordinator, "spawn-minion")
+
+        # Template sets docker_enabled=True; leaves thinking_mode unset (class default None).
+        template = await coordinator.template_manager.create_template(
+            name="Spawn Template",
+            config=SessionConfig(docker_enabled=True),
+        )
+
+        # Parent session (plain, no template) that can spawn minions.
+        parent_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=parent_id,
+            project_id=project.project_id,
+            config=SessionConfig(),
+        )
+
+        # Mirror legion_mcp_tools.py's spawn_minion construction: pass essentially every
+        # CONFIG_FIELDS name explicitly. docker_enabled=True matches the template's own
+        # value (should be pruned); thinking_mode="think" is a genuine parent-inheritance
+        # fallback that diverges from the template's (class-default) value and must be
+        # frozen.
+        spawn_kwargs = dict(DEFAULTS)
+        spawn_kwargs["docker_enabled"] = True
+        spawn_kwargs["thinking_mode"] = "think"
+        spawn_config = SessionConfig(**spawn_kwargs, template_id=template.template_id)
+
+        result = await coordinator.legion_system.overseer_controller.spawn_minion(
+            parent_overseer_id=parent_id,
+            name="Child Minion",
+            role="Worker",
+            config=spawn_config,
+        )
+        child_id = result["minion_id"]
+
+        child_info = await coordinator.session_manager.get_session_info(child_id)
+        from backend.config_resolution import CONFIG_FIELDS
+        stored_config_fields = set(child_info.config or {}) & CONFIG_FIELDS
+        assert stored_config_fields == {"thinking_mode"}, (
+            "Only the genuine parent-inheritance-fallback field (thinking_mode) should be "
+            f"frozen, not every field spawn_minion happened to pass; got: {stored_config_fields}"
+        )
+        assert child_info.config.get("thinking_mode") == "think", (
+            "thinking_mode diverges from the template's (class-default) value — "
+            "a genuine parent-inheritance fallback that must be frozen"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Issue #1425 — Problem A: OAuth MCP credential bypass (5 scenarios)
 # ---------------------------------------------------------------------------
 
