@@ -4,6 +4,11 @@
     <div v-if="isArchiveMode" class="archive-banner">
       <span class="archive-badge">ARCHIVED</span>
       <span class="archive-label">Read-only archived session</span>
+      <button
+        type="button"
+        class="btn btn-sm btn-link archive-info-btn"
+        @click="uiStore.showModal('session-info', { sessionId: props.sessionId, isArchive: true })"
+      >Info</button>
     </div>
 
     <!-- Ephemeral Session Banner (schedule-managed, not yet fired) -->
@@ -259,6 +264,13 @@ onUnmounted(() => {
 .archive-label {
   font-size: 12px;
   color: #664d03;
+}
+
+.archive-info-btn {
+  font-size: 12px;
+  padding: 0 0 0 4px;
+  color: #664d03;
+  text-decoration: underline;
 }
 
 .ephemeral-banner {

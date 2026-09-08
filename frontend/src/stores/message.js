@@ -1951,8 +1951,15 @@ export const useMessageStore = defineStore('message', () => {
       // Filter SystemMessage entries with no displayable content
       if (msg.type === 'system') {
         const subtype = msg.subtype || msg.metadata?.subtype
-        if (subtype === 'init' && !msg.content) {
-          return
+        if (subtype === 'init') {
+          // Issue #1829: capture init data for the archive-scoped Info modal view
+          // before the (possibly early) return below discards this message.
+          if (msg.metadata?.init_data) {
+            sessionStore.storeArchiveInitData(sessionId, msg.metadata.init_data)
+          }
+          if (!msg.content) {
+            return
+          }
         }
         // Issue #1486: internal SDK state transitions are not displayable
         if (subtype === 'status' && msg.metadata?.init_data?.status === 'requesting') {
@@ -1977,6 +1984,7 @@ export const useMessageStore = defineStore('message', () => {
     pruneExpandedCommsForSession(sessionId)
     messagesBySession.value.delete(sessionId)
     toolCallsBySession.value.delete(sessionId)
+    sessionStore.clearArchiveInitData(sessionId)
   }
 
   // ========== HOOK CORRELATION (Issue #1350) ==========

@@ -14,21 +14,28 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
+          <!-- Session ID (archive mode: shown unconditionally here, since the loading/error/
+               webui-config chain below is entirely live-only and never applies to archives) -->
+          <div v-if="isArchiveView" class="mb-3">
+            <h6 class="text-muted">Session ID</h6>
+            <div class="font-monospace small">{{ sessionId }}</div>
+          </div>
+
           <!-- Loading state -->
-          <div v-if="isLoading" class="text-center py-4">
+          <div v-if="!isArchiveView && isLoading" class="text-center py-4">
             <div class="spinner-border spinner-border-sm me-2" role="status"></div>
             Loading session info...
           </div>
 
           <!-- Error state -->
-          <div v-else-if="fetchError" class="text-danger small py-2">{{ fetchError }}</div>
+          <div v-else-if="!isArchiveView && fetchError" class="text-danger small py-2">{{ fetchError }}</div>
 
           <!-- No data -->
-          <div v-else-if="!displayData" class="text-center text-muted py-4">
+          <div v-else-if="!isArchiveView && !displayData" class="text-center text-muted py-4">
             No session configuration data available
           </div>
 
-          <div v-else>
+          <div v-else-if="!isArchiveView">
             <!-- Session ID -->
             <div class="mb-3">
               <h6 class="text-muted">Session ID</h6>
@@ -251,9 +258,39 @@
               >{{ JSON.stringify(sessionData, null, 2) }}</pre>
             </div>
           </div>
+
+          <!-- Actual Agent Configuration (issue #1829): the SDK/CLI process's own most recent
+               init message data, distinct from the webui-config sections above. -->
+          <div v-if="sessionId" class="mb-3">
+            <h6 class="text-muted">
+              Actual Agent Configuration
+              <button
+                v-if="actualInitConfig"
+                type="button"
+                class="btn btn-sm btn-outline-secondary ms-2"
+                @click="showActualInitData = !showActualInitData"
+                :aria-expanded="showActualInitData"
+              >
+                {{ showActualInitData ? 'Hide' : 'Show' }}
+              </button>
+            </h6>
+            <p class="text-muted small mb-2">
+              Reported by the agent process itself in its most recent <code>init</code> message —
+              distinct from the webui's own session configuration{{ isArchiveView ? '' : ' above' }}.
+            </p>
+            <div v-if="!actualInitConfig" class="text-muted small">
+              No init message received yet for this session.
+            </div>
+            <pre
+              v-else-if="showActualInitData"
+              class="bg-body-secondary p-2 rounded small"
+              style="max-height: 300px; overflow-y: auto;"
+            >{{ JSON.stringify(actualInitConfig, null, 2) }}</pre>
+          </div>
         </div>
         <div class="modal-footer">
           <button
+            v-if="!isArchiveView"
             class="btn btn-outline-secondary btn-sm"
             @click="fetchSessionInfo(sessionId)"
             :disabled="isLoading || !sessionId"
@@ -293,6 +330,8 @@ const fetchError = ref(null)
 const newDirectory = ref('')
 const isAddingDirectory = ref(false)
 const addDirectoryError = ref(null)
+const isArchiveView = ref(false)
+const showActualInitData = ref(false)
 let modalInstance = null
 
 // Model display names mapping
@@ -302,6 +341,20 @@ const modelDisplayNames = {
   'haiku': 'Haiku',
   'opusplan': 'OpusPlan (Opus + Sonnet)'
 }
+
+// Raw init-message data for this view: archive-scoped map when viewing a historical
+// snapshot, live map otherwise. Never derived from the webui's own session API response.
+function getInitDataForView() {
+  if (!sessionId.value) return null
+  if (isArchiveView.value) {
+    return sessionStore.archiveInitData.get(sessionId.value) || null
+  }
+  return sessionStore.initData.get(sessionId.value) || null
+}
+
+// The actual configuration the SDK/CLI process reported at its most recent startup
+// (issue #1829) — independent of whether the webui's own session API call succeeded.
+const actualInitConfig = computed(() => getInitDataForView())
 
 // Derive display data from API response, falling back to Pinia initData
 const displayData = computed(() => {
@@ -319,7 +372,7 @@ const displayData = computed(() => {
   }
   // Fallback: Pinia initData (populated from SDK init message)
   if (!sessionId.value) return null
-  return sessionStore.initData.get(sessionId.value) || null
+  return getInitDataForView()
 })
 
 // 'default' is the legacy stored value for the manual permission mode; both display as 'Manual'.
@@ -336,7 +389,7 @@ const additionalDirectories = computed(() => {
   const fromApi = sessionData.value?.session?.config?.additional_directories
   if (fromApi) return fromApi
   if (!sessionId.value) return []
-  return sessionStore.initData.get(sessionId.value)?.additional_directories || []
+  return getInitDataForView()?.additional_directories || []
 })
 
 const isDockerEnabled = computed(() => {
@@ -497,6 +550,8 @@ function resetState() {
   fetchError.value = null
   newDirectory.value = ''
   addDirectoryError.value = null
+  isArchiveView.value = false
+  showActualInitData.value = false
 }
 
 // Handle modal hidden event
@@ -512,11 +567,13 @@ watch(
     if (modal?.name === 'session-info' && modalInstance) {
       const data = modal.data || {}
       sessionId.value = data.sessionId
+      isArchiveView.value = !!data.isArchive
       sessionData.value = null
       showRawData.value = false
+      showActualInitData.value = false
       newDirectory.value = ''
       addDirectoryError.value = null
-      if (data.sessionId) {
+      if (data.sessionId && !isArchiveView.value) {
         fetchSessionInfo(data.sessionId)
         // Fetch MCP status if session is active
         const session = sessionStore.sessions.get(data.sessionId)
