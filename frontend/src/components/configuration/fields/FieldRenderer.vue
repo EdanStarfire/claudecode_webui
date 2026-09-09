@@ -159,6 +159,15 @@
         @update:value="$emit('update:value', $event)"
       />
 
+      <RuleListWidget
+        v-else-if="field.widget === 'rule-list'"
+        :value="value"
+        :disabled="isDisabled"
+        :placeholder="field.placeholder || 'Add...'"
+        :warn-if-no-defaults="field.warnIfNoDefaults || false"
+        @update:value="$emit('update:value', $event)"
+      />
+
       <ProviderSelectWidget
         v-else-if="field.widget === 'provider-select'"
         :value="value"
@@ -196,6 +205,7 @@ import SandboxSubSectionWidget from './SandboxSubSectionWidget.vue'
 import TagListField from './TagListField.vue'
 import MultiSelectField from './MultiSelectField.vue'
 import KeyValueListWidget from './KeyValueListWidget.vue'
+import RuleListWidget from './RuleListWidget.vue'
 import ProviderSelectWidget from './ProviderSelectWidget.vue'
 import ProviderModelSelectWidget from './ProviderModelSelectWidget.vue'
 import SourceMarker from '../../settings/SourceMarker.vue'

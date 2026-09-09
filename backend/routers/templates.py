@@ -59,6 +59,12 @@ def build_router(webui) -> APIRouter:
             permission_mode=request.permission_mode,
             allowed_tools=request.allowed_tools,
             disallowed_tools=request.disallowed_tools,
+            # Auto Mode classifier config (issue #1884)
+            auto_mode_environment=request.auto_mode_environment,
+            auto_mode_allow=request.auto_mode_allow,
+            auto_mode_soft_deny=request.auto_mode_soft_deny,
+            auto_mode_hard_deny=request.auto_mode_hard_deny,
+            auto_mode_classify_all_shell=request.auto_mode_classify_all_shell,
             role=request.role,
             system_prompt=request.system_prompt,
             description=request.description,

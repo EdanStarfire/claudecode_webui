@@ -1,6 +1,7 @@
 <template>
   <div>
     <template v-for="field in visibleFields" :key="field.key">
+      <div v-if="field.sectionHeader" class="field-section-header">{{ field.sectionHeader }}</div>
       <FieldRenderer
         :field="field"
         :value="config[field.key]"
@@ -48,3 +49,16 @@ const visibleFields = computed(() => {
   })
 })
 </script>
+
+<style scoped>
+.field-section-header {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--bs-secondary-color);
+  padding-top: 16px;
+  margin-top: 6px;
+  border-top: 1px dashed var(--bs-border-color);
+}
+</style>

@@ -242,6 +242,11 @@ class ClaudeSDK:
         self.effort = config.effort
         self.auto_memory_mode = config.auto_memory_mode
         self.auto_memory_directory = config.auto_memory_directory
+        self.auto_mode_environment = config.auto_mode_environment
+        self.auto_mode_allow = config.auto_mode_allow
+        self.auto_mode_soft_deny = config.auto_mode_soft_deny
+        self.auto_mode_hard_deny = config.auto_mode_hard_deny
+        self.auto_mode_classify_all_shell = config.auto_mode_classify_all_shell
         self.enable_claudeai_mcp_servers = config.enable_claudeai_mcp_servers
         self.enable_streaming_text = config.enable_streaming_text
         self.strict_mcp_config = config.strict_mcp_config
@@ -275,6 +280,8 @@ class ClaudeSDK:
 
         # Temp file for system prompt (cleaned up after init message received)
         self._system_prompt_temp_file: str | None = None
+        # Temp file for merged settings payload (auto-memory + autoMode; issue #1884)
+        self._settings_temp_file: str | None = None
 
         # Initialize MessageProcessor for unified message handling
         self._message_parser = MessageParser()
@@ -1019,11 +1026,21 @@ class ClaudeSDK:
         if extra_args:
             options_kwargs["extra_args"] = extra_args
 
-        # Issue #906/#1401: Auto-memory directory via settings JSON.
-        # "claude" + optional user-set dir, or "session" (dir forced upstream in session_coordinator).
+        # Issue #906/#1401/#1884: Merge auto-memory-directory and autoMode into a single
+        # settings payload delivered via one temp JSON file (ClaudeAgentOptions.settings
+        # expects a file path, not inline JSON — confirmed against claude_agent_sdk's
+        # own types.py docstring). Both features share this one options_kwargs["settings"]
+        # slot, so they must be merged rather than each independently assigning it.
+        settings_payload: dict = {}
         if self.auto_memory_directory and self.auto_memory_mode in ("claude", "session"):
-            options_kwargs["settings"] = json.dumps({"autoMemoryDirectory": self.auto_memory_directory})
+            settings_payload["autoMemoryDirectory"] = self.auto_memory_directory
             sdk_logger.info(f"Auto-memory directory for session {self.session_id}: {self.auto_memory_directory}")
+        auto_mode_block = self._build_auto_mode_block()
+        if auto_mode_block:
+            settings_payload["autoMode"] = auto_mode_block
+        if settings_payload:
+            self._settings_temp_file = self._create_settings_temp_file(settings_payload)
+            options_kwargs["settings"] = self._settings_temp_file
 
         # Only add can_use_tool callback if permission callback is provided and SDK classes are available
         perm_logger.debug("Callback registration check:")
@@ -1273,6 +1290,8 @@ class ClaudeSDK:
 
                 # Issue #382: Clean up temp system prompt file after init message received
                 self._cleanup_system_prompt_temp_file()
+                # Issue #1884: Clean up temp settings file after init message received
+                self._cleanup_settings_temp_file()
 
             # Issue #899: Handle RateLimitEvent before generic conversion
             if RateLimitEvent and isinstance(sdk_message, RateLimitEvent):
@@ -1719,6 +1738,9 @@ class ClaudeSDK:
             # Cleanup system prompt temp file (issue #382)
             self._cleanup_system_prompt_temp_file()
 
+            # Cleanup settings temp file (issue #1884)
+            self._cleanup_settings_temp_file()
+
             sdk_logger.info("Claude Code SDK session terminated successfully")
             return True
 
@@ -2074,4 +2096,69 @@ class ClaudeSDK:
                 self._system_prompt_temp_file = None
             except Exception as e:
                 logger.warning(f"Failed to cleanup system prompt temp file: {e}")
+
+    def _build_auto_mode_block(self) -> dict | None:
+        """
+        Build the resolved autoMode settings block from the 5 auto-mode fields.
+
+        Issue #1884: Returns None when nothing is configured anywhere in the
+        S->T->P chain (AC4) — omitting a key entirely (rather than emitting
+        `null`/empty values) lets Auto Mode's stock built-in defaults apply.
+
+        Uses `is not None` (not truthiness) for every field so an explicit
+        empty list — e.g. a session clearing every row of `hard_deny` without
+        adding a "$defaults" row — is honored as "no rules at all" instead of
+        being indistinguishable from "never configured" and silently falling
+        back to the built-in defaults.
+        """
+        block: dict = {}
+        if self.auto_mode_environment is not None:
+            block["environment"] = self.auto_mode_environment
+        if self.auto_mode_allow is not None:
+            block["allow"] = self.auto_mode_allow
+        if self.auto_mode_soft_deny is not None:
+            block["soft_deny"] = self.auto_mode_soft_deny
+        if self.auto_mode_hard_deny is not None:
+            block["hard_deny"] = self.auto_mode_hard_deny
+        if self.auto_mode_classify_all_shell is not None:
+            block["classifyAllShell"] = self.auto_mode_classify_all_shell
+        return block or None
+
+    def _create_settings_temp_file(self, payload: dict) -> str:
+        """
+        Create a temporary JSON file containing the merged settings payload.
+
+        Issue #1884: Shared temp-file delivery mechanism for auto-memory-directory
+        and autoMode config, mirroring the system-prompt temp-file pattern (#382)
+        so `ClaudeAgentOptions.settings` (a file path) is never handed inline JSON.
+
+        Args:
+            payload: The settings dict to write to the temp file.
+
+        Returns:
+            str: Path to the temporary file.
+        """
+        try:
+            fd, path = tempfile.mkstemp(prefix=f"claude_settings_{self.session_id[:8]}_", suffix=".json")
+            with Path(path).open("w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            import os
+            os.close(fd)
+            sdk_logger.debug(f"Created settings temp file: {path}")
+            return path
+        except Exception:
+            logger.exception("Failed to create settings temp file")
+            raise
+
+    def _cleanup_settings_temp_file(self):
+        """Clean up the temporary settings file after session initialization (issue #1884)."""
+        if self._settings_temp_file:
+            try:
+                temp_path = Path(self._settings_temp_file)
+                if temp_path.exists():
+                    temp_path.unlink()
+                    sdk_logger.debug(f"Cleaned up settings temp file: {self._settings_temp_file}")
+                self._settings_temp_file = None
+            except Exception as e:
+                logger.warning(f"Failed to cleanup settings temp file: {e}")
 

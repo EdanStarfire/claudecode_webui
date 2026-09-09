@@ -33,6 +33,8 @@ PROFILE_AREAS: dict[str, set[str]] = {
     "permissions": {
         "permission_mode", "allowed_tools", "disallowed_tools",
         "additional_directories", "setting_sources",
+        "auto_mode_environment", "auto_mode_allow", "auto_mode_soft_deny",
+        "auto_mode_hard_deny", "auto_mode_classify_all_shell",
     },
     "system_prompt": {
         "system_prompt", "override_system_prompt",
@@ -80,6 +82,8 @@ _LIST_FIELDS: frozenset[str] = frozenset({
     "allowed_tools", "disallowed_tools", "additional_directories",
     "setting_sources", "mcp_server_ids", "docker_extra_mounts",
     "assigned_secrets", "docker_proxy_allowlist_domains",
+    "auto_mode_environment", "auto_mode_allow", "auto_mode_soft_deny",
+    "auto_mode_hard_deny",
 })
 
 
