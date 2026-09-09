@@ -215,6 +215,167 @@ class TestClaudeSDK:
         assert opts.strict_mcp_config is False
         assert "strict-mcp-config" not in (opts.extra_args or {})
 
+    def test_build_auto_mode_block_none_when_unset(self, temp_dir, session_id):
+        """Issue #1884 AC4: _build_auto_mode_block returns None when nothing is configured."""
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(),
+        )
+        assert sdk._build_auto_mode_block() is None
+
+    def test_build_auto_mode_block_partial(self, temp_dir, session_id):
+        """_build_auto_mode_block returns only the populated keys."""
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(
+                auto_mode_hard_deny=["$defaults", "Never touch prod"],
+                auto_mode_classify_all_shell=False,
+            ),
+        )
+        block = sdk._build_auto_mode_block()
+        assert block == {
+            "hard_deny": ["$defaults", "Never touch prod"],
+            "classifyAllShell": False,
+        }
+
+    def test_build_auto_mode_block_full(self, temp_dir, session_id):
+        """_build_auto_mode_block includes all 5 fields when all are set."""
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(
+                auto_mode_environment=["*.internal.acme.corp"],
+                auto_mode_allow=["$defaults"],
+                auto_mode_soft_deny=["$defaults"],
+                auto_mode_hard_deny=["$defaults"],
+                auto_mode_classify_all_shell=True,
+            ),
+        )
+        block = sdk._build_auto_mode_block()
+        assert block == {
+            "environment": ["*.internal.acme.corp"],
+            "allow": ["$defaults"],
+            "soft_deny": ["$defaults"],
+            "hard_deny": ["$defaults"],
+            "classifyAllShell": True,
+        }
+
+    def test_build_auto_mode_block_explicit_empty_list_is_honored(self, temp_dir, session_id):
+        """Regression: an explicit empty list must be distinguished from unset (None).
+
+        A session that clears every row of hard_deny (no "$defaults" row added back)
+        means "no hard-deny rules at all" — the built-ins must NOT silently apply,
+        which a truthy check (`if self.auto_mode_hard_deny:`) would incorrectly do
+        since `[]` and `None` are both falsy.
+        """
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(auto_mode_hard_deny=[]),
+        )
+        block = sdk._build_auto_mode_block()
+        assert block == {"hard_deny": []}
+
+    def test_get_sdk_options_no_settings_key_when_nothing_configured(self, temp_dir, session_id):
+        """Issue #1884 AC4: neither auto-memory nor autoMode configured -> no settings key at all."""
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(),
+        )
+        opts = sdk._get_sdk_options()
+        assert opts.settings is None
+        assert sdk._settings_temp_file is None
+
+    def test_get_sdk_options_settings_is_file_path_not_inline_json(self, temp_dir, session_id):
+        """`ClaudeAgentOptions.settings` must receive a file path, not inline JSON content."""
+        import json
+        from pathlib import Path
+
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(auto_mode_allow=["$defaults", "always allow tests"]),
+        )
+        opts = sdk._get_sdk_options()
+
+        assert opts.settings is not None
+        assert Path(opts.settings).exists()
+        with Path(opts.settings).open() as f:
+            payload = json.load(f)
+        assert payload == {"autoMode": {"allow": ["$defaults", "always allow tests"]}}
+        sdk._cleanup_settings_temp_file()
+
+    def test_get_sdk_options_merges_auto_memory_and_auto_mode(self, temp_dir, session_id):
+        """Regression: auto-memory-directory and autoMode must merge into one settings file,
+        not silently clobber each other via a shared options_kwargs["settings"] assignment."""
+        import json
+        from pathlib import Path
+
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(
+                auto_memory_mode="claude",
+                auto_memory_directory="/tmp/my-memory",
+                auto_mode_hard_deny=["$defaults", "Never delete backups"],
+            ),
+        )
+        opts = sdk._get_sdk_options()
+
+        assert opts.settings is not None
+        with Path(opts.settings).open() as f:
+            payload = json.load(f)
+        assert payload == {
+            "autoMemoryDirectory": "/tmp/my-memory",
+            "autoMode": {"hard_deny": ["$defaults", "Never delete backups"]},
+        }
+        sdk._cleanup_settings_temp_file()
+
+    def test_get_sdk_options_auto_memory_only_still_writes_temp_file(self, temp_dir, session_id):
+        """Regression guard: pre-existing auto-memory-directory path still works after the
+        settings-payload refactor (issue #1884), including now going through a temp file
+        rather than inline JSON."""
+        import json
+        from pathlib import Path
+
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(
+                auto_memory_mode="claude",
+                auto_memory_directory="/tmp/my-memory",
+            ),
+        )
+        opts = sdk._get_sdk_options()
+
+        assert opts.settings is not None
+        assert Path(opts.settings).exists()
+        with Path(opts.settings).open() as f:
+            payload = json.load(f)
+        assert payload == {"autoMemoryDirectory": "/tmp/my-memory"}
+        sdk._cleanup_settings_temp_file()
+
+    def test_cleanup_settings_temp_file_removes_file(self, temp_dir, session_id):
+        """_cleanup_settings_temp_file deletes the temp file and clears the tracked path."""
+        from pathlib import Path
+
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(auto_mode_allow=["$defaults"]),
+        )
+        opts = sdk._get_sdk_options()
+        temp_path = Path(opts.settings)
+        assert temp_path.exists()
+
+        sdk._cleanup_settings_temp_file()
+
+        assert not temp_path.exists()
+        assert sdk._settings_temp_file is None
+
     def test_convert_sdk_message_deferred_tool_use(self, sdk_instance):
         """Test that ResultMessage.deferred_tool_use is serialized to a plain dict."""
         from claude_agent_sdk import DeferredToolUse, ResultMessage

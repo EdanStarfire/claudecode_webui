@@ -68,6 +68,15 @@ class SessionConfig(BaseModel):
     # Permission
     permission_mode: str = "acceptEdits"
 
+    # Auto Mode classifier config (issue #1884)
+    auto_mode_environment: list[str] | None = None
+    auto_mode_allow: list[str] | None = None
+    auto_mode_soft_deny: list[str] | None = None
+    auto_mode_hard_deny: list[str] | None = None
+    # Deliberately bool | None (not bool = False): AC4 requires distinguishing
+    # "nobody configured this" from "explicitly set to False" across S->T->P.
+    auto_mode_classify_all_shell: bool | None = None
+
     # Prompt
     system_prompt: str | None = None
     override_system_prompt: bool = False
@@ -154,7 +163,10 @@ class SessionConfig(BaseModel):
 # profile_ids), lifecycle fields (created_at, updated_at),
 # and session-only fields (working_directory).
 CONFIG_FIELDS: set[str] = {
-    "permission_mode", "system_prompt", "override_system_prompt",
+    "permission_mode",
+    "auto_mode_environment", "auto_mode_allow", "auto_mode_soft_deny",
+    "auto_mode_hard_deny", "auto_mode_classify_all_shell",
+    "system_prompt", "override_system_prompt",
     "allowed_tools", "disallowed_tools", "model",
     "thinking_mode", "thinking_budget_tokens", "effort",
     "additional_directories", "cli_path", "process_wrapper", "setting_sources",

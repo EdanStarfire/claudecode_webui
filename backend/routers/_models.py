@@ -281,6 +281,12 @@ class TemplateUpdateRequest(BaseModel):
     permission_mode: str | None = None
     allowed_tools: list[str] | None = None
     disallowed_tools: list[str] | None = None  # Issue #461: tools to deny
+    # Auto Mode classifier config (issue #1884)
+    auto_mode_environment: list[str] | None = None
+    auto_mode_allow: list[str] | None = None
+    auto_mode_soft_deny: list[str] | None = None
+    auto_mode_hard_deny: list[str] | None = None
+    auto_mode_classify_all_shell: bool | None = None
     role: str | None = None
     system_prompt: str | None = None
     description: str | None = None

@@ -1070,3 +1070,110 @@ class TestIssue1779TimestampInjectionResolution:
         assert result.inject_timestamps_enabled is False
         assert result.timestamp_injection_frequency == "every_message"
         assert result.timestamp_injection_timezone == "UTC"
+
+
+@pytest.mark.asyncio
+class TestIssue1884AutoModeResolution:
+    """Precedence tests for the Auto Mode classifier config fields (issue #1884)."""
+
+    def test_fields_registered_in_permissions_area(self):
+        for field_name in (
+            "auto_mode_environment",
+            "auto_mode_allow",
+            "auto_mode_soft_deny",
+            "auto_mode_hard_deny",
+            "auto_mode_classify_all_shell",
+        ):
+            assert FIELD_TO_AREA.get(field_name) == "permissions"
+            assert field_name in PROFILE_AREAS["permissions"]
+
+    async def test_profile_only_override(self):
+        """Profile value is used when template does not set the field."""
+        profile = _make_profile(area="permissions", config={
+            "auto_mode_environment": ["*.internal.acme.corp"],
+            "auto_mode_allow": ["$defaults"],
+            "auto_mode_hard_deny": ["$defaults", "Never modify prod database credentials"],
+            "auto_mode_classify_all_shell": False,
+        })
+        pm = _make_profile_manager([profile])
+        template = _make_template(profile_ids={"permissions": profile.profile_id})
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm, pm)
+
+        assert result.auto_mode_environment == ["*.internal.acme.corp"]
+        assert result.auto_mode_allow == ["$defaults"]
+        assert result.auto_mode_hard_deny == ["$defaults", "Never modify prod database credentials"]
+        assert result.auto_mode_classify_all_shell is False
+
+    async def test_template_overrides_profile(self):
+        """Template config value wins over profile value, per field (not per-block)."""
+        profile = _make_profile(area="permissions", config={
+            "auto_mode_hard_deny": ["$defaults"],
+            "auto_mode_allow": ["$defaults"],
+        })
+        pm = _make_profile_manager([profile])
+        template = _make_template(
+            profile_ids={"permissions": profile.profile_id},
+            template_overrides={"auto_mode_hard_deny": ["Never touch infra/terraform/prod/"]},
+        )
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm, pm)
+
+        assert result.auto_mode_hard_deny == ["Never touch infra/terraform/prod/"]
+        assert result.auto_mode_allow == ["$defaults"]  # Untouched field still inherits from profile
+
+    async def test_session_overrides_template_and_profile(self):
+        """Session config value wins over template and profile values."""
+        profile = _make_profile(area="permissions", config={"auto_mode_allow": ["$defaults"]})
+        pm = _make_profile_manager([profile])
+        template = _make_template(
+            profile_ids={"permissions": profile.profile_id},
+            template_overrides={"auto_mode_allow": ["from-template"]},
+        )
+        session = _make_session(
+            template_id="tmpl-001",
+            session_overrides={"auto_mode_allow": ["$defaults", "from-session"]},
+        )
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm, pm)
+
+        assert result.auto_mode_allow == ["$defaults", "from-session"]
+
+    async def test_classify_all_shell_tristate_unset_is_none(self):
+        """AC4: unset anywhere in the chain resolves to None, not False."""
+        template = _make_template()
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm)
+
+        assert result.auto_mode_classify_all_shell is None
+
+    async def test_classify_all_shell_explicit_false_distinguishable_from_unset(self):
+        """AC4: explicit False must resolve differently from unset (None)."""
+        template = _make_template(auto_mode_classify_all_shell=False)
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm)
+
+        assert result.auto_mode_classify_all_shell is False
+
+    async def test_no_override_anywhere_all_fields_none(self):
+        """No autoMode config anywhere in S->T->P resolves all 5 fields to unset (AC4)."""
+        template = _make_template()
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm)
+
+        assert result.auto_mode_environment is None
+        assert result.auto_mode_allow is None
+        assert result.auto_mode_soft_deny is None
+        assert result.auto_mode_hard_deny is None
+        assert result.auto_mode_classify_all_shell is None
