@@ -37,12 +37,15 @@ def test_route_count_unchanged():
     from backend.web_server import create_app
     app = create_app()
     api_routes_count = _count_api_routes(app)
-    assert api_routes_count == 155, (
-        f"Expected 155 Backend routes post-#498 split (core.py's 3 browser routes "
+    assert api_routes_count == 158, (
+        f"Expected 158 Backend routes post-#498 split (core.py's 3 browser routes "
         f"stayed Frontend-side only; config.py now has its own 2 backend-owned routes "
         f"here PLUS 2 more on the Frontend side doing merged-read/split-write; poll.py's "
         f"4 routes are duplicated into backend/routers/poll.py since Backend owns the "
         f"EventQueues; interrupt + permission-response relocated here from core.py; "
-        f"+1 /api/internal/oauth-callback-paths from Phase 3), "
+        f"+1 /api/internal/oauth-callback-paths from Phase 3; "
+        f"+3 standalone OAuth2 vault-secret guided-authorization routes from issue #1871 — "
+        f"POST /api/secrets/oauth/initiate, POST /api/secrets/{{name}}/oauth/reconnect-initiate, "
+        f"POST /api/secrets/oauth/{{flow_id}}/cancel), "
         f"got {api_routes_count}. A route was added or removed."
     )

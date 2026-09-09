@@ -473,6 +473,32 @@ class SecretUpdateRequest(BaseModel):
     refresh: dict | None = None
 
 
+# Standalone OAuth2 vault secret guided-authorization requests (issue #1871)
+class SecretOAuthInitiateRequest(BaseModel):
+    """Start the guided flow for a brand-new standalone oauth2 secret."""
+    base_name: str
+    authorization_endpoint: str
+    token_endpoint: str
+    client_id: str
+    redirect_uri: str
+    client_secret_secret_name: str | None = None
+    scopes: list[str] | None = None
+    custom_callback_path: str | None = None
+    custom_callback_port: int | None = None
+
+
+class SecretOAuthReconnectInitiateRequest(BaseModel):
+    """Start Reconnect for an existing guided-flow oauth2 secret."""
+    authorization_endpoint: str
+    token_endpoint: str
+    client_id: str
+    redirect_uri: str
+    client_secret_secret_name: str | None = None
+    scopes: list[str] | None = None
+    custom_callback_path: str | None = None
+    custom_callback_port: int | None = None
+
+
 class PermissionResponseRequest(BaseModel):
     decision: str
     apply_suggestions: bool = False

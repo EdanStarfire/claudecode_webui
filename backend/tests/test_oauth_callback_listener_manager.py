@@ -112,6 +112,10 @@ async def test_render_oauth_callback_exception_from_complete_flow():
 def oauth_manager():
     mgr = AsyncMock()
     mgr.complete_flow.return_value = "cfg-1"
+    # Issue #1871: get_pending_context() is consulted to route MCP vs standalone flows
+    # before completing/denying them — None means "not a standalone flow" (the MCP case
+    # every test in this file exercises).
+    mgr.get_pending_context.return_value = None
     return mgr
 
 
@@ -263,3 +267,110 @@ async def test_shutdown_stops_all_listeners(manager):
 
     assert manager._listeners == {}
     assert manager._registrations == {}
+
+
+# ── Issue #1871: standalone (vault-secret) guided-authorization flow routing ────
+
+
+@pytest.mark.asyncio
+async def test_register_transient_starts_listener_keyed_by_flow_id(manager):
+    """register_transient()/unregister_transient() reuse the same underlying
+    registration mechanism as apply_config()/remove_config(), just keyed by an
+    ephemeral flow_id instead of a persisted MCP config_id."""
+    mock_uvicorn, _ = _mock_uvicorn(started=True)
+    with patch.dict("sys.modules", {"uvicorn": mock_uvicorn}):
+        await manager.register_transient("flow-abc", 8765, "/oauth/callback")
+        assert manager.is_port_active(8765)
+        assert manager._listeners[8765].paths == frozenset({"/oauth/callback"})
+
+        await manager.unregister_transient("flow-abc")
+
+    assert not manager.is_port_active(8765)
+    assert 8765 not in manager._listeners
+
+
+@pytest.mark.asyncio
+async def test_register_transient_shares_port_with_mcp_config(manager):
+    """A standalone flow's transient listener and an MCP config's persistent one can
+    share the same port via distinct paths, same as two MCP configs already do."""
+    mock_uvicorn, _ = _mock_uvicorn(started=True)
+    with patch.dict("sys.modules", {"uvicorn": mock_uvicorn}):
+        cfg = _config(oauth_custom_callback_port=8765, oauth_custom_callback_path="/callback-mcp")
+        await manager.apply_config(cfg)
+        await manager.register_transient("flow-xyz", 8765, "/callback-flow")
+
+        assert manager._listeners[8765].paths == frozenset({"/callback-mcp", "/callback-flow"})
+
+        await manager.unregister_transient("flow-xyz")
+        assert manager._listeners[8765].paths == frozenset({"/callback-mcp"})
+
+        await manager.remove_config(cfg.id)
+
+    assert 8765 not in manager._listeners
+
+
+@pytest.mark.asyncio
+async def test_complete_and_broadcast_routes_standalone_flow_to_standalone_handler(manager, oauth_manager):
+    """A pending flow whose context.flow_type is standalone routes to the injected
+    standalone completion handler instead of oauth_manager.complete_flow()."""
+    oauth_manager.get_pending_context.return_value = {"flow_type": "standalone_secret"}
+    standalone_complete = AsyncMock(return_value="my-secret")
+    manager.set_standalone_callbacks(standalone_complete, AsyncMock())
+
+    result = await manager.complete_and_broadcast("state-1", "code-1")
+
+    standalone_complete.assert_awaited_once_with("state-1", "code-1")
+    oauth_manager.complete_flow.assert_not_called()
+    assert result == "my-secret"
+
+
+@pytest.mark.asyncio
+async def test_complete_and_broadcast_falls_through_to_mcp_for_mcp_flow(manager, oauth_manager):
+    """A pending flow with no context (or a non-standalone flow_type) still uses the
+    existing MCP complete_flow() + broadcast path unchanged."""
+    standalone_complete = AsyncMock()
+    manager.set_standalone_callbacks(standalone_complete, AsyncMock())
+    broadcast = MagicMock()
+    manager.set_broadcast_callback(broadcast)
+
+    result = await manager.complete_and_broadcast("state-1", "code-1")
+
+    standalone_complete.assert_not_called()
+    oauth_manager.complete_flow.assert_awaited_once_with("state-1", "code-1")
+    broadcast.assert_called_once_with("cfg-1")
+    assert result == "cfg-1"
+
+
+@pytest.mark.asyncio
+async def test_denied_and_broadcast_routes_standalone_denial(manager, oauth_manager):
+    oauth_manager.get_pending_context.return_value = {"flow_type": "standalone_reconnect"}
+    standalone_denied = AsyncMock()
+    manager.set_standalone_callbacks(AsyncMock(), standalone_denied)
+
+    await manager.denied_and_broadcast("state-1", "access_denied", "User denied access")
+
+    standalone_denied.assert_awaited_once_with("state-1", "access_denied", "User denied access")
+
+
+@pytest.mark.asyncio
+async def test_denied_and_broadcast_noop_for_mcp_flow(manager, oauth_manager):
+    """MCP flows have no denial hook — matches existing behavior of only logging
+    server-side, no broadcast."""
+    standalone_denied = AsyncMock()
+    manager.set_standalone_callbacks(AsyncMock(), standalone_denied)
+
+    await manager.denied_and_broadcast("state-1", "access_denied", "User denied access")
+
+    standalone_denied.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_denied_and_broadcast_noop_without_state(manager):
+    """A malformed callback with no state at all can't be routed anywhere — must not
+    raise."""
+    standalone_denied = AsyncMock()
+    manager.set_standalone_callbacks(AsyncMock(), standalone_denied)
+
+    await manager.denied_and_broadcast(None, "access_denied", "denied")
+
+    standalone_denied.assert_not_called()

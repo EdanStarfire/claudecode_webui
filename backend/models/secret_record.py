@@ -75,6 +75,11 @@ class RefreshSpec:
     last_refresh_at: str | None = None         # ISO8601 timestamp of last refresh attempt
     last_refresh_status: str | None = None     # "success" | "failed" | null
     last_refresh_error: str | None = None      # error string when last_refresh_status == "failed"
+    # Issue #1871: set only for secrets created/reconnected via the guided browser-
+    # authorization flow. Marks guided-flow provenance (vs. manual paste-in) and
+    # supplies the Reconnect form's pre-fill value. Not used by the refresh POST
+    # itself (refresh only needs token_url).
+    authorization_endpoint: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -87,6 +92,7 @@ class RefreshSpec:
             "last_refresh_at": self.last_refresh_at,
             "last_refresh_status": self.last_refresh_status,
             "last_refresh_error": self.last_refresh_error,
+            "authorization_endpoint": self.authorization_endpoint,
         }
 
     @classmethod
@@ -104,6 +110,7 @@ class RefreshSpec:
             last_refresh_at=data.get("last_refresh_at"),
             last_refresh_status=data.get("last_refresh_status"),
             last_refresh_error=data.get("last_refresh_error"),
+            authorization_endpoint=data.get("authorization_endpoint"),
         )
 
 

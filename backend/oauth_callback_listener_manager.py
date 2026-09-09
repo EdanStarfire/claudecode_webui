@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 debug_logger = get_logger('oauth', category='OAUTH_CALLBACK')
 
 CompleteFlowFn = Callable[[str, str], Awaitable[str]]
+DeniedFn = Callable[[str | None, str, str], Awaitable[None]]
 
 
 def _error_html(message: str, title: str = "Authorization Failed") -> str:
@@ -63,11 +64,24 @@ def _success_html() -> str:
 </body></html>"""
 
 
-async def render_oauth_callback(request: Request, complete_flow: CompleteFlowFn) -> HTMLResponse:
+async def render_oauth_callback(
+    request: Request,
+    complete_flow: CompleteFlowFn,
+    on_denied: DeniedFn | None = None,
+) -> HTMLResponse:
     """Parse code/state/error from an OAuth redirect and render the result page.
 
     `complete_flow` is an async `(state, code) -> server_id` callable that performs the
     token exchange and any post-completion broadcast; it should raise on failure.
+
+    `on_denied` (issue #1871) is an optional async `(state, error, error_description) ->
+    None` callable invoked when the provider redirects back with an `error` param
+    (user denied consent, or a provider-side error like invalid_client) — before the
+    error page is returned. MCP flows pass None (unchanged behavior: no server-side
+    trace beyond the log line below). Standalone vault-secret flows use this to
+    broadcast the denial to the still-open settings panel, since a "popup closed before
+    completing authorization" never reaches this route at all (the browser closes the
+    popup while it's still showing the *provider's* page) and so needs no such hook.
     """
     from starlette.responses import HTMLResponse
 
@@ -82,6 +96,11 @@ async def render_oauth_callback(request: Request, complete_flow: CompleteFlowFn)
         # appeared in the ephemeral browser popup — if the user didn't read it before the
         # popup closed, there was zero server-side trace of why the flow failed.
         logger.error("OAuth callback received error=%s description=%s", error, error_desc)
+        if on_denied is not None:
+            try:
+                await on_denied(state, error, error_desc)
+            except Exception:
+                logger.exception("Error in OAuth on_denied callback")
         return HTMLResponse(content=_error_html(error_desc), status_code=400)
 
     if not code or not state:
@@ -98,8 +117,11 @@ async def render_oauth_callback(request: Request, complete_flow: CompleteFlowFn)
 
     debug_logger.debug("OAuth callback received: state=%s…", state[:8])
     try:
-        server_id = await complete_flow(state, code)
-        debug_logger.info("OAuth callback completed successfully for server %s", server_id)
+        # Issue #1871: `result_id` is an MCP server_id for MCP flows but a vault
+        # secret base_name for standalone flows — labeled generically since this
+        # helper doesn't know which.
+        result_id = await complete_flow(state, code)
+        debug_logger.info("OAuth callback completed successfully (id=%s)", result_id)
         return HTMLResponse(content=_success_html())
     except Exception as e:
         logger.exception("OAuth callback error")
@@ -109,10 +131,17 @@ async def render_oauth_callback(request: Request, complete_flow: CompleteFlowFn)
 class OAuthCallbackListener:
     """A single uvicorn listener serving one or more OAuth callback paths on one port."""
 
-    def __init__(self, host: str, port: int, complete_flow: CompleteFlowFn):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        complete_flow: CompleteFlowFn,
+        on_denied: DeniedFn | None = None,
+    ):
         self._host = host
         self._port = port
         self._complete_flow = complete_flow
+        self._on_denied = on_denied
         self._paths: set[str] = set()
         self._app = None
         self._server = None
@@ -167,9 +196,10 @@ class OAuthCallbackListener:
         from starlette.routing import Route
 
         complete_flow = self._complete_flow
+        on_denied = self._on_denied
 
         async def _handle(request):
-            return await render_oauth_callback(request, complete_flow)
+            return await render_oauth_callback(request, complete_flow, on_denied)
 
         routes = [Route(path, _handle, methods=["GET"]) for path in sorted(self._paths)]
         return Starlette(routes=routes)
@@ -227,20 +257,60 @@ class OAuthCallbackListenerManager:
         self._oauth_manager = oauth_manager
         self._host = host
         self._broadcast_complete: Callable[[str], None] | None = None
+        # Issue #1871: standalone (vault-secret) flow completion/denial handlers,
+        # injected post-construction like _broadcast_complete above. None until
+        # web_server.py wires them — MCP-only deployments never set these.
+        self._standalone_complete: CompleteFlowFn | None = None
+        self._standalone_denied: DeniedFn | None = None
         self._listeners: dict[int, OAuthCallbackListener] = {}
-        self._registrations: dict[str, tuple[int, str]] = {}  # config_id -> (port, path)
+        # config_id (MCP) or flow_id (standalone, issue #1871) -> (port, path). The two
+        # id spaces never collide: MCP config ids and OAuth `state` flow ids come from
+        # unrelated ID generators, and each registration is independently keyed.
+        self._registrations: dict[str, tuple[int, str]] = {}
         self._lock = asyncio.Lock()
 
     def set_broadcast_callback(self, callback: Callable[[str], None]) -> None:
         self._broadcast_complete = callback
 
+    def set_standalone_callbacks(
+        self, complete_fn: CompleteFlowFn, denied_fn: DeniedFn
+    ) -> None:
+        """Issue #1871: inject the standalone vault-secret flow completion/denial
+        handlers. complete_and_broadcast()/denied_and_broadcast() route to these
+        instead of the MCP path whenever the pending flow's context.flow_type is a
+        standalone one."""
+        self._standalone_complete = complete_fn
+        self._standalone_denied = denied_fn
+
+    async def _is_standalone_flow(self, state: str) -> bool:
+        context = await self._oauth_manager.get_pending_context(state)
+        return bool(context) and context.get("flow_type") in (
+            "standalone_secret", "standalone_reconnect",
+        )
+
     async def complete_and_broadcast(self, state: str, code: str) -> str:
         """Exchange the auth code for tokens, then notify the UI. Shared by every
-        OAuth callback entry point (static route, dynamic route, listener routes)."""
+        OAuth callback entry point (static route, dynamic route, listener routes).
+
+        Issue #1871: routes to the standalone completion handler instead of the MCP
+        path when the pending flow's context marks it as a standalone vault-secret
+        flow — peeked before popping so the routing decision doesn't consume the
+        pending entry itself.
+        """
+        if await self._is_standalone_flow(state) and self._standalone_complete is not None:
+            return await self._standalone_complete(state, code)
         server_id = await self._oauth_manager.complete_flow(state, code)
         if self._broadcast_complete is not None:
             self._broadcast_complete(server_id)
         return server_id
+
+    async def denied_and_broadcast(self, state: str | None, error: str, error_description: str) -> None:
+        """Issue #1871: notify a standalone flow's caller of a provider-side denial
+        or error. No-op for MCP flows (and for malformed callbacks with no state) —
+        matches existing MCP behavior of only logging server-side."""
+        if not state or self._standalone_denied is None or not await self._is_standalone_flow(state):
+            return
+        await self._standalone_denied(state, error, error_description)
 
     def is_port_active(self, port: int) -> bool:
         listener = self._listeners.get(port)
@@ -266,6 +336,20 @@ class OAuthCallbackListenerManager:
         """Tear down any custom-port registration for a deleted config."""
         async with self._lock:
             await self._remove_registration_locked(config_id)
+
+    async def register_transient(self, flow_id: str, port: int, path: str) -> None:
+        """Issue #1871: register a *transient*, flow_id-keyed custom-port callback
+        listener for a standalone OAuth flow — the same underlying registration
+        mechanism as apply_config(), just keyed by an ephemeral flow_id instead of a
+        persisted MCP config_id."""
+        async with self._lock:
+            await self._add_registration_locked(flow_id, port, path)
+
+    async def unregister_transient(self, flow_id: str) -> None:
+        """Tear down a standalone flow's transient listener registration (completion,
+        cancellation, or denial) — idempotent no-op if none was registered."""
+        async with self._lock:
+            await self._remove_registration_locked(flow_id)
 
     async def shutdown(self) -> None:
         async with self._lock:
@@ -293,7 +377,9 @@ class OAuthCallbackListenerManager:
         is_new_listener = port not in self._listeners
         listener = self._listeners.get(port)
         if listener is None:
-            listener = OAuthCallbackListener(self._host, port, self.complete_and_broadcast)
+            listener = OAuthCallbackListener(
+                self._host, port, self.complete_and_broadcast, self.denied_and_broadcast
+            )
         listener.add_path(path)
         try:
             if listener.is_running:

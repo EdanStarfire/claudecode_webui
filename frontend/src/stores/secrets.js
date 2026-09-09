@@ -119,6 +119,87 @@ export const useSecretsStore = defineStore('secrets', () => {
     fetchSecrets()
   }
 
+  // ========== Issue #1871: Standalone OAuth2 guided-authorization flow ==========
+
+  /** flow_id -> true while a guided-authorization popup is open and awaiting completion. */
+  const pendingOAuthFlows = ref(new Map())
+
+  /** flow_id -> {success, secretName, error, errorCode} once secret_oauth_complete
+   * arrives. Consumed (and removed) by the panel component via consumeOAuthFlowResult(). */
+  const oauthFlowResults = ref(new Map())
+
+  /**
+   * Build the redirect_uri for a standalone OAuth flow, honoring a custom callback
+   * path/port (issue #1789's callback customization, extended to standalone secrets).
+   * Mirrors mcpConfig.js's buildRedirectUri() — built from protocol + hostname (not
+   * window.location.origin) so a custom port override doesn't pick up the browser's
+   * *current* port when the operator's OAuth app is registered against a different one.
+   */
+  function buildOAuthRedirectUri(customCallbackPath, customCallbackPort) {
+    const protocol = window.location.protocol
+    const hostname = window.location.hostname
+    const path = customCallbackPath || '/oauth/callback'
+    const authority = customCallbackPort ? `${hostname}:${customCallbackPort}` : window.location.host
+    return `${protocol}//${authority}${path}`
+  }
+
+  async function initiateOAuth(payload) {
+    const result = await api.post('/api/secrets/oauth/initiate', payload)
+    pendingOAuthFlows.value = new Map(pendingOAuthFlows.value.set(result.flow_id, true))
+    return result
+  }
+
+  async function initiateReconnect(secretName, payload) {
+    const result = await api.post(
+      `/api/secrets/${encodeURIComponent(secretName)}/oauth/reconnect-initiate`,
+      payload
+    )
+    pendingOAuthFlows.value = new Map(pendingOAuthFlows.value.set(result.flow_id, true))
+    return result
+  }
+
+  async function cancelOAuthFlow(flowId) {
+    if (!flowId) return
+    const next = new Map(pendingOAuthFlows.value)
+    next.delete(flowId)
+    pendingOAuthFlows.value = next
+    try {
+      await api.post(`/api/secrets/oauth/${encodeURIComponent(flowId)}/cancel`, {})
+    } catch (e) {
+      console.error('Failed to cancel standalone OAuth flow:', e)
+    }
+  }
+
+  /** Handle secret_oauth_complete UI poll event — fires on both success and failure
+   * (unlike mcp_oauth_complete) since the panel has no other way to learn the outcome
+   * of a flow completed in a cross-origin popup. */
+  function handleSecretOAuthComplete(payload) {
+    const flowId = payload?.flow_id
+    if (!flowId) return
+    const next = new Map(pendingOAuthFlows.value)
+    next.delete(flowId)
+    pendingOAuthFlows.value = next
+    oauthFlowResults.value = new Map(oauthFlowResults.value.set(flowId, {
+      success: !!payload.success,
+      secretName: payload.secret_name || null,
+      error: payload.error || null,
+      errorCode: payload.error_code || null,
+    }))
+    if (payload.success) fetchSecrets()
+  }
+
+  /** Read and remove a completed flow's result — called once by the panel watching
+   * for its own flow_id, so a stale result can't be "seen" twice. */
+  function consumeOAuthFlowResult(flowId) {
+    const result = oauthFlowResults.value.get(flowId)
+    if (result) {
+      const next = new Map(oauthFlowResults.value)
+      next.delete(flowId)
+      oauthFlowResults.value = next
+    }
+    return result || null
+  }
+
   return {
     secrets,
     activeBackend,
@@ -136,5 +217,13 @@ export const useSecretsStore = defineStore('secrets', () => {
     healthFor,
     handleSecretRefreshed,
     handleSecretRefreshFailed,
+    pendingOAuthFlows,
+    oauthFlowResults,
+    buildOAuthRedirectUri,
+    initiateOAuth,
+    initiateReconnect,
+    cancelOAuthFlow,
+    handleSecretOAuthComplete,
+    consumeOAuthFlowResult,
   }
 })

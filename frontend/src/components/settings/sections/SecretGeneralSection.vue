@@ -1,8 +1,8 @@
 <template>
   <div class="settings-section">
     <SettingsToolbar
-      :title="isNew ? 'New Secret' : 'General'"
-      :show-save-cancel="isNew || isDirty"
+      :title="panelTitle"
+      :show-save-cancel="!isGuidedActive && (isNew || isDirty)"
       :saving="saving"
       :save-disabled="!canSave"
       @save="handleSave"
@@ -55,8 +55,24 @@
         </div>
       </div>
 
-      <!-- Target Hosts (not for ssh_key) -->
-      <div v-if="typeValue !== 'ssh_key'" class="field-row">
+      <!-- Issue #1871: Guided Authorization / Manual Entry tabs (new oauth2 secrets only) -->
+      <div v-if="showGuidedTabs" class="oauth-mode-tabs">
+        <button
+          type="button"
+          class="oauth-mode-tab"
+          :class="{ 'oauth-mode-tab--active': oauthTab === 'guided' }"
+          @click="oauthTab = 'guided'"
+        >Guided Authorization <span class="oauth-mode-tab-badge">NEW</span></button>
+        <button
+          type="button"
+          class="oauth-mode-tab"
+          :class="{ 'oauth-mode-tab--active': oauthTab === 'manual' }"
+          @click="oauthTab = 'manual'"
+        >Manual Entry</button>
+      </div>
+
+      <!-- Target Hosts (not for ssh_key; derived automatically by the guided flow) -->
+      <div v-if="typeValue !== 'ssh_key' && !isGuidedActive" class="field-row">
         <label class="field-label">Target Hosts</label>
         <div class="field-control">
           <input
@@ -86,8 +102,8 @@
         </div>
       </div>
 
-      <!-- Value / Password / Private Key -->
-      <div class="field-row">
+      <!-- Value / Password / Private Key (guided oauth2 flow supplies this itself) -->
+      <div v-if="!isGuidedActive" class="field-row">
         <label class="field-label">{{ valueLabel }}</label>
         <div class="field-control">
           <textarea
@@ -211,8 +227,8 @@
         </template>
       </template>
 
-      <!-- oauth2 refresh block -->
-      <template v-if="typeValue === 'oauth2'">
+      <!-- oauth2 refresh block (Manual Entry — unchanged, hidden during guided flow) -->
+      <template v-if="typeValue === 'oauth2' && !isGuidedActive">
         <div class="sub-section-header">OAuth2 Token Refresh</div>
         <div class="field-row">
           <label class="field-label">Token URL</label>
@@ -346,7 +362,125 @@
         </div>
       </template>
 
-      <!-- Common injection section -->
+      <!-- Issue #1871: Guided Authorization / Reconnect panel -->
+      <template v-if="isGuidedActive">
+        <div class="section-note">
+          Complete the provider's consent screen in a popup; on success the access + refresh
+          token pair (and client secret, if any) are stored automatically as sibling secrets —
+          the same pattern the MCP server OAuth "Connect" flow already uses.
+        </div>
+
+        <div class="row2">
+          <div class="field-row field-row--stacked">
+            <label class="field-label">Authorization Endpoint <span class="field-label-hint">(provider's consent URL)</span></label>
+            <div class="field-control">
+              <input
+                type="text"
+                class="field-input field-input--mono"
+                v-model.trim="gAuthzEndpoint"
+                placeholder="https://provider.example.com/oauth/authorize"
+              />
+            </div>
+          </div>
+          <div class="field-row field-row--stacked">
+            <label class="field-label">Token Endpoint</label>
+            <div class="field-control">
+              <input
+                type="text"
+                class="field-input field-input--mono"
+                v-model.trim="gTokenEndpoint"
+                placeholder="https://provider.example.com/oauth/token"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div class="row2">
+          <div class="field-row field-row--stacked">
+            <label class="field-label">Client ID</label>
+            <div class="field-control">
+              <input
+                type="text"
+                class="field-input field-input--mono"
+                v-model.trim="gClientId"
+              />
+            </div>
+          </div>
+          <div class="field-row field-row--stacked">
+            <label class="field-label">Scopes <span class="field-label-hint">(space-separated, optional)</span></label>
+            <div class="field-control">
+              <input
+                type="text"
+                class="field-input"
+                v-model="gScopes"
+                placeholder="read write offline_access"
+              />
+            </div>
+          </div>
+        </div>
+
+        <details class="advanced-details">
+          <summary>Advanced — Confidential client &amp; callback customization</summary>
+          <div class="advanced-details-body">
+            <div class="field-row field-row--stacked">
+              <label class="field-label">Client Secret <span class="field-label-hint">(only for confidential clients, e.g. Google)</span></label>
+              <div class="field-control">
+                <select class="field-input" v-model="gClientSecretSelect" @change="onClientSecretSelectChange">
+                  <option value="">-- none (public client) --</option>
+                  <option v-for="s in otherSecrets" :key="s.name" :value="s.name">{{ s.name }}</option>
+                  <option value="__new__">+ New secret…</option>
+                </select>
+                <div v-if="gShowNewSecretForm" class="inline-secret-form">
+                  <div class="row2">
+                    <div class="field-row field-row--stacked">
+                      <label class="field-label field-label--sm">New secret name</label>
+                      <input type="text" class="field-input field-input--mono" v-model.trim="gNewSecretName" placeholder="my-provider-client-secret" />
+                    </div>
+                    <div class="field-row field-row--stacked">
+                      <label class="field-label field-label--sm">Secret value</label>
+                      <input type="password" class="field-input" v-model="gNewSecretValue" placeholder="Paste client secret value" autocomplete="new-password" />
+                    </div>
+                  </div>
+                  <div class="inline-secret-actions">
+                    <button type="button" class="btn-secondary-sm" @click="createInlineSecret">Create &amp; Use</button>
+                    <button type="button" class="btn-link-sm" @click="cancelInlineSecret">Cancel</button>
+                  </div>
+                </div>
+                <div class="field-helper">Reference an existing vault secret, or create one inline without leaving this panel.</div>
+              </div>
+            </div>
+            <div class="row2">
+              <div class="field-row field-row--stacked">
+                <label class="field-label">Custom callback path <span class="field-label-hint">(optional)</span></label>
+                <input type="text" class="field-input field-input--mono" v-model.trim="gCustomCallbackPath" placeholder="/oauth/callback" />
+              </div>
+              <div class="field-row field-row--stacked">
+                <label class="field-label">Custom callback port <span class="field-label-hint">(optional)</span></label>
+                <input type="number" class="field-input" v-model="gCustomCallbackPort" placeholder="8090" />
+              </div>
+            </div>
+            <div class="field-helper">Same callback customization already supported for MCP server OAuth connections — for providers with non-standard registered redirect requirements.</div>
+          </div>
+        </details>
+
+        <div v-if="gBanner" class="oauth-banner" :class="`oauth-banner--${gBanner.type}`">{{ gBanner.message }}</div>
+
+        <div class="oauth-authorize-row">
+          <button
+            type="button"
+            class="btn-primary-authorize"
+            :disabled="authorizing || !!currentFlowId || !canAuthorize"
+            @click="startAuthorize"
+          >
+            <span v-if="authorizing" class="authorize-spinner"></span>
+            {{ isReconnect ? 'Reconnect with Provider' : 'Authorize with Provider' }}
+          </button>
+        </div>
+      </template>
+
+      <!-- Common injection section (not shown during the guided flow — it drives its
+           own initiate/complete calls rather than a metadata PATCH/POST payload) -->
+      <template v-if="!isGuidedActive">
       <div class="sub-section-header">Injection</div>
       <div class="field-row">
         <label class="field-label">Inject Env Var</label>
@@ -415,12 +549,13 @@
           </div>
         </div>
       </template>
+      </template>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import { useSecretsStore } from '@/stores/secrets'
@@ -459,20 +594,22 @@ const canSave = computed(() => {
   if (isNew.value) {
     const name = draftField('name') ?? ''
     if (!name.trim()) return false
-    if (typeValue.value !== 'ssh_key') {
+    if (typeValue.value !== 'ssh_key' && !isGuidedActive.value) {
       const hosts = (draftField('target_hosts_raw') ?? '').trim()
       if (!hosts) return false
     }
-    const val = draftField('value') ?? ''
-    if (typeValue.value === 'basic_auth') {
-      if (!val && !(draftField('username') ?? '').trim()) return false
-    } else if (!val) {
-      return false
+    if (!isGuidedActive.value) {
+      const val = draftField('value') ?? ''
+      if (typeValue.value === 'basic_auth') {
+        if (!val && !(draftField('username') ?? '').trim()) return false
+      } else if (!val) {
+        return false
+      }
     }
     if (typeValue.value === 'api_key' && injectionLocation.value === 'query_param') {
       if (!(draftField('injection_param_name') ?? '').trim()) return false
     }
-    if (typeValue.value === 'oauth2') {
+    if (typeValue.value === 'oauth2' && !isGuidedActive.value) {
       if (!(draftField('refresh_token_url') ?? '').trim()) return false
       if (!(draftField('refresh_client_id') ?? '').trim()) return false
       if (!(draftField('refresh_token_secret_name') ?? '')) return false
@@ -485,6 +622,209 @@ const canSave = computed(() => {
 const otherSecrets = computed(() =>
   secretsStore.secrets.filter(s => s.name !== secretName.value)
 )
+
+// ── Issue #1871: Guided Authorization / Reconnect state ──────────────────────
+
+const canReconnect = computed(() => !!entity.value?.refresh?.authorization_endpoint)
+const isReconnect = computed(() => !isNew.value && route.query.reconnect === '1' && canReconnect.value)
+const showGuidedTabs = computed(() => isNew.value && typeValue.value === 'oauth2')
+const oauthTab = ref('guided')
+const isGuidedActive = computed(() => isReconnect.value || (showGuidedTabs.value && oauthTab.value === 'guided'))
+
+const panelTitle = computed(() => {
+  if (isReconnect.value) return `Reconnect — ${secretName.value}`
+  if (isNew.value) return 'New Secret'
+  return 'General'
+})
+
+const gAuthzEndpoint = ref('')
+const gTokenEndpoint = ref('')
+const gClientId = ref('')
+const gScopes = ref('')
+const gClientSecretSelect = ref('')
+const gShowNewSecretForm = ref(false)
+const gNewSecretName = ref('')
+const gNewSecretValue = ref('')
+const gCustomCallbackPath = ref('')
+const gCustomCallbackPort = ref('')
+const gBanner = ref(null)
+const authorizing = ref(false)
+const currentFlowId = ref(null)
+let popupRef = null
+let popupWatchTimer = null
+
+const canAuthorize = computed(() => {
+  if (!isReconnect.value && !(draftField('name') ?? '').trim()) return false
+  return !!(gAuthzEndpoint.value.trim() && gTokenEndpoint.value.trim() && gClientId.value.trim())
+})
+
+function seedGuidedFieldsForReconnect() {
+  if (!isReconnect.value || !entity.value) return
+  const r = entity.value.refresh || {}
+  gAuthzEndpoint.value = r.authorization_endpoint || ''
+  gTokenEndpoint.value = r.token_url || ''
+  gClientId.value = r.client_id || ''
+  gClientSecretSelect.value = r.client_secret_secret_name || ''
+}
+
+watch(entity, seedGuidedFieldsForReconnect, { immediate: true })
+
+function onClientSecretSelectChange() {
+  gShowNewSecretForm.value = gClientSecretSelect.value === '__new__'
+  if (gShowNewSecretForm.value) gClientSecretSelect.value = ''
+}
+
+function cancelInlineSecret() {
+  gShowNewSecretForm.value = false
+  gNewSecretName.value = ''
+  gNewSecretValue.value = ''
+}
+
+async function createInlineSecret() {
+  const name = gNewSecretName.value.trim()
+  const value = gNewSecretValue.value
+  if (!name || !value) return
+  let targetHosts = []
+  try {
+    if (gTokenEndpoint.value) targetHosts = [new URL(gTokenEndpoint.value).hostname]
+  } catch {
+    targetHosts = []
+  }
+  try {
+    await secretsStore.createSecret({ name, type: 'generic', target_hosts: targetHosts, value })
+  } catch (err) {
+    gBanner.value = { type: 'danger', message: err.message || 'Failed to create secret' }
+    return
+  }
+  gClientSecretSelect.value = name
+  cancelInlineSecret()
+}
+
+function oauthErrorMessage(result) {
+  if (result.errorCode === 'no_refresh_token') {
+    return result.error || 'Authorization succeeded, but the provider did not issue a refresh token.'
+  }
+  if (result.error) return result.error
+  return 'Authorization failed. No secret was created' + (isReconnect.value ? ' and the existing secret is unchanged.' : '.')
+}
+
+function stopWatchingPopup() {
+  if (popupWatchTimer) {
+    clearInterval(popupWatchTimer)
+    popupWatchTimer = null
+  }
+}
+
+function watchPopupClosed() {
+  stopWatchingPopup()
+  // Capture which flow this particular watch call is for — the grace-window
+  // setTimeout below fires later and must not act on a *different*, newer flow
+  // that was started in the meantime (re-authorize while this one was winding down).
+  const watchedFlowId = currentFlowId.value
+  popupWatchTimer = setInterval(() => {
+    if (!popupRef || popupRef.closed) {
+      stopWatchingPopup()
+      // The completion event may already be in flight (popup closing itself after a
+      // successful redirect) — give it a brief grace window before treating this as
+      // "closed before completing".
+      setTimeout(() => {
+        if (currentFlowId.value !== watchedFlowId) return
+        if (watchedFlowId && secretsStore.pendingOAuthFlows.get(watchedFlowId)) {
+          gBanner.value = {
+            type: 'warn',
+            message: 'Popup was closed before completing authorization. No secret was created'
+              + (isReconnect.value ? ' and the existing secret is unchanged.' : '.')
+              + ' Nothing is left in a partial/broken state — try again when ready.',
+          }
+          secretsStore.cancelOAuthFlow(watchedFlowId)
+          currentFlowId.value = null
+        }
+      }, 1200)
+    }
+  }, 500)
+}
+
+async function startAuthorize() {
+  gBanner.value = null
+  authorizing.value = true
+  try {
+    const scopesArr = gScopes.value.trim() ? gScopes.value.trim().split(/\s+/) : null
+    const customPath = gCustomCallbackPath.value.trim() || null
+    const customPort = gCustomCallbackPort.value ? Number(gCustomCallbackPort.value) : null
+    const redirectUri = secretsStore.buildOAuthRedirectUri(customPath, customPort)
+    const payload = {
+      authorization_endpoint: gAuthzEndpoint.value.trim(),
+      token_endpoint: gTokenEndpoint.value.trim(),
+      client_id: gClientId.value.trim(),
+      redirect_uri: redirectUri,
+      client_secret_secret_name: gClientSecretSelect.value || null,
+      scopes: scopesArr,
+      custom_callback_path: customPath,
+      custom_callback_port: customPort,
+    }
+
+    let result
+    if (isReconnect.value) {
+      result = await secretsStore.initiateReconnect(secretName.value, payload)
+    } else {
+      result = await secretsStore.initiateOAuth({ ...payload, base_name: (draftField('name') ?? '').trim() })
+    }
+
+    currentFlowId.value = result.flow_id
+    // No 'noopener'/'noreferrer' here (unlike McpConfigTab.vue's fire-and-forget
+    // connectOAuth()): both make window.open() return null, which would make
+    // watchPopupClosed() below see "already closed" on its very first tick and
+    // cancel the flow immediately. Detecting manual popup closure is a hard
+    // requirement here (mockup's "popup closed before completing" state).
+    popupRef = window.open(result.auth_url, '_blank')
+    gBanner.value = { type: 'info', message: 'Waiting for authorization in the popup window…' }
+    watchPopupClosed()
+  } catch (err) {
+    gBanner.value = { type: 'danger', message: err.message || 'Failed to start authorization' }
+  } finally {
+    authorizing.value = false
+  }
+}
+
+watch(
+  () => currentFlowId.value && secretsStore.oauthFlowResults.get(currentFlowId.value),
+  (found) => {
+    const flowId = currentFlowId.value
+    if (!found || !flowId) return
+    const result = secretsStore.consumeOAuthFlowResult(flowId)
+    if (!result) return
+    stopWatchingPopup()
+    currentFlowId.value = null
+    if (result.success) {
+      gBanner.value = {
+        type: 'success',
+        message: isReconnect.value
+          ? 'Reconnected successfully. Proactive background refresh is active.'
+          : `Secret "${result.secretName}" created successfully. A sibling refresh-token secret was created alongside it.`,
+      }
+      if (!isReconnect.value) {
+        // The "name" field is a settingsStore draft (set via setField('name', ...))
+        // and was never saved through handleSave()'s normal markClean() call — the
+        // guided flow's own initiate/complete calls are what actually persisted the
+        // secret. Mark it clean before navigating so the dirty-guard modal doesn't
+        // block this automatic redirect.
+        settingsStore.markClean(areaKey.value)
+        setTimeout(() => {
+          router.push(`/settings/secret/${encodeURIComponent(result.secretName)}/general`)
+        }, 1500)
+      }
+    } else {
+      gBanner.value = { type: 'danger', message: oauthErrorMessage(result) }
+    }
+  }
+)
+
+onBeforeUnmount(() => {
+  stopWatchingPopup()
+  if (currentFlowId.value) {
+    secretsStore.cancelOAuthFlow(currentFlowId.value)
+  }
+})
 
 // ── Derived display values ───────────────────────────────────────────────────
 
@@ -891,5 +1231,201 @@ async function copyToClipboard(text) {
   gap: 8px;
   font-size: 13px;
   cursor: pointer;
+}
+
+/* ── Issue #1871: Guided Authorization / Manual Entry tabs ──────────────────── */
+.oauth-mode-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--bs-border-color);
+  margin: 4px 0 8px;
+}
+
+.oauth-mode-tab {
+  padding: 8px 14px;
+  border: none;
+  background: none;
+  border-bottom: 2px solid transparent;
+  color: var(--bs-secondary-color);
+  font-weight: 500;
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+
+.oauth-mode-tab:hover {
+  color: var(--bs-emphasis-color);
+}
+
+.oauth-mode-tab--active {
+  color: #06b6d4;
+  border-bottom-color: #06b6d4;
+}
+
+.oauth-mode-tab-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  margin-left: 4px;
+  border-radius: 8px;
+  font-size: 9px;
+  font-weight: 700;
+  background: rgba(6, 182, 212, 0.15);
+  color: #06b6d4;
+}
+
+.section-note {
+  font-size: 12px;
+  color: var(--bs-tertiary-color);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+
+.row2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+@container settings-area (max-width: 599px) {
+  .row2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.field-row--stacked {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+  border-bottom: none;
+}
+
+.field-label-hint {
+  font-weight: 400;
+  color: var(--bs-tertiary-color);
+}
+
+.field-label--sm {
+  font-size: 11px;
+  padding-top: 0;
+}
+
+.advanced-details {
+  border: 1px dashed var(--bs-border-color);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 8px 0 16px;
+}
+
+.advanced-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--bs-emphasis-color);
+}
+
+.advanced-details-body {
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.inline-secret-form {
+  margin-top: 8px;
+  padding: 10px;
+  background: var(--bs-tertiary-bg);
+  border-radius: 6px;
+}
+
+.inline-secret-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.btn-secondary-sm {
+  padding: 3px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--bs-border-color);
+  background: none;
+  color: var(--bs-secondary-color);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.btn-secondary-sm:hover {
+  background: rgba(6, 182, 212, 0.1);
+  border-color: #06b6d4;
+  color: #06b6d4;
+}
+
+.btn-link-sm {
+  border: none;
+  background: none;
+  color: #06b6d4;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.oauth-banner {
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 13px;
+  margin: 8px 0 14px;
+  line-height: 1.5;
+}
+
+.oauth-banner--info    { background: rgba(6, 182, 212, 0.1); color: #06b6d4; border: 1px solid rgba(6, 182, 212, 0.3); }
+.oauth-banner--success { background: rgba(34, 197, 94, 0.1); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.3); }
+.oauth-banner--warn    { background: rgba(210, 153, 34, 0.12); color: #d29922; border: 1px solid rgba(210, 153, 34, 0.3); }
+.oauth-banner--danger  { background: rgba(248, 113, 113, 0.1); color: #f87171; border: 1px solid rgba(248, 113, 113, 0.3); }
+
+.oauth-authorize-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.btn-primary-authorize {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 16px;
+  border-radius: 6px;
+  border: none;
+  background: #06b6d4;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.btn-primary-authorize:hover:not(:disabled) {
+  background: #0891b2;
+}
+
+.btn-primary-authorize:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.authorize-spinner {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  animation: authorize-spin 0.7s linear infinite;
+  display: inline-block;
+}
+
+@keyframes authorize-spin {
+  to { transform: rotate(360deg); }
 }
 </style>

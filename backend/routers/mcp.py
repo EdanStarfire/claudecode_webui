@@ -186,7 +186,9 @@ def build_router(webui) -> APIRouter:
         (issue #1789) via render_oauth_callback().
         """
         return await render_oauth_callback(
-            request, webui.coordinator.oauth_callback_listener_manager.complete_and_broadcast
+            request,
+            webui.coordinator.oauth_callback_listener_manager.complete_and_broadcast,
+            webui.coordinator.oauth_callback_listener_manager.denied_and_broadcast,
         )
 
     @router.post("/api/mcp-configs/{config_id}/oauth/initiate")

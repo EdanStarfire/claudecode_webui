@@ -554,6 +554,19 @@ export const usePollingStore = defineStore('polling', () => {
         break
       }
 
+      case 'secret_oauth_complete': {
+        // Issue #1871: standalone vault-secret guided-authorization flow finished
+        // (success or failure) — mirrors mcp_oauth_complete, but fires on failure
+        // too since the settings panel has no other way to learn the outcome of a
+        // flow completed in a cross-origin popup.
+        if (payload.flow_id) {
+          import('./secrets').then(({ useSecretsStore }) => {
+            useSecretsStore().handleSecretOAuthComplete(payload)
+          })
+        }
+        break
+      }
+
       case 'schedule_updated':
         import('./schedule').then(({ useScheduleStore }) => {
           const scheduleStore = useScheduleStore()
