@@ -198,6 +198,7 @@ export const FIELD_SCHEMAS = {
       key: 'auto_mode_environment',
       label: 'Auto Mode: Trusted Environment',
       widget: 'rule-list',
+      sectionHeader: 'Auto Mode Classifier',
       placeholder: 'e.g. github.com/acme-org/*, *.internal.acme.corp',
       description: 'Repos, domains, buckets, services the Auto Mode classifier treats as trusted. No built-in defaults — plain add/remove list.',
       defaultValue: null,

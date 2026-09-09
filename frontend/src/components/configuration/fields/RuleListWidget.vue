@@ -41,9 +41,11 @@
     </div>
     <div v-if="showWarning" class="rule-warning mt-2">
       <span class="rule-warning-icon">&#9888;</span>
-      No <code>"$defaults"</code> row present, so this fully replaces the built-in rules for
-      this field &mdash; only the rule(s) listed above will apply. Add a row containing
-      literally <code>"$defaults"</code> to keep the built-ins too.
+      <span class="rule-warning-text">
+        No <code>"$defaults"</code> row present, so this fully replaces the built-in rules for
+        this field &mdash; only the rule(s) listed above will apply. Add a row containing
+        literally <code>"$defaults"</code> to keep the built-ins too.
+      </span>
     </div>
   </div>
 </template>
@@ -115,5 +117,10 @@ function updateRule(index, text) {
 
 .rule-warning-icon {
   flex-shrink: 0;
+}
+
+.rule-warning-text {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 </style>
