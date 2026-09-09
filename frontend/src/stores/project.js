@@ -4,6 +4,13 @@ import { api } from '../utils/api'
 import { compareAgents } from '../utils/agentSort'
 
 /**
+ * Issue #1828: shared reason ordering for the cross-project attention badge, used by both
+ * getAttentionSummary() below and BreadcrumbNavHeader.vue's dot-cluster rendering so the two
+ * can't drift out of sync.
+ */
+export const ATTENTION_REASON_ORDER = ['waiting', 'unread', 'error']
+
+/**
  * Project Store - Manages project state and operations
  */
 export const useProjectStore = defineStore('project', () => {
@@ -397,6 +404,33 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   /**
+   * Issue #1828: Cross-project attention summary for the breadcrumb caret badge.
+   * Returns [{ projectId, name, reasons }] for every project other than excludeProjectId
+   * that has at least one session in a qualifying state (waiting/unread/error), reusing
+   * getStatusBarSegments so the qualification logic isn't duplicated.
+   */
+  function getAttentionSummary(sessionStore, sortMode, excludeProjectId) {
+    const summary = []
+    for (const project of orderedProjects.value) {
+      if (project.project_id === excludeProjectId) continue
+      const segments = getStatusBarSegments(project.project_id, sessionStore, sortMode)
+      const present = new Set()
+      for (const seg of segments) {
+        if (seg.status === 'waiting') present.add('waiting')
+        if (seg.status === 'error') present.add('error')
+        if (seg.unread) present.add('unread')
+      }
+      if (present.size === 0) continue
+      summary.push({
+        projectId: project.project_id,
+        name: project.name,
+        reasons: ATTENTION_REASON_ORDER.filter(r => present.has(r)),
+      })
+    }
+    return summary
+  }
+
+  /**
    * Issue #1513: True if any session in this project has unreviewed completion.
    */
   function projectHasUnreviewed(projectId, sessionStore) {
@@ -471,6 +505,7 @@ export const useProjectStore = defineStore('project', () => {
     assignSessionKanbanGroup,
     getProject,
     getStatusBarSegments,
+    getAttentionSummary,
     projectHasUnreviewed,
     selectProject,
     clearProjectSelection,
