@@ -79,6 +79,15 @@
                   :class="expiryChipClass(secret)"
                   :title="expiryTitle(secret)"
                 >{{ expiryLabel(secret) }}</span>
+                <!-- Issue #1871: guided-flow vs manual-paste-in provenance chip -->
+                <span
+                  v-if="secret.type === 'oauth2'"
+                  class="provenance-chip"
+                  :class="secret.refresh?.authorization_endpoint ? 'provenance-chip--guided' : 'provenance-chip--manual'"
+                  :title="secret.refresh?.authorization_endpoint
+                    ? 'Created via the guided browser-authorization flow'
+                    : 'Created by pasting in externally-obtained tokens'"
+                >{{ secret.refresh?.authorization_endpoint ? 'guided flow' : 'manual paste-in' }}</span>
                 <!-- Usage chip -->
                 <span
                   class="usage-chip"
@@ -88,6 +97,15 @@
               </div>
             </div>
             <div class="row-right">
+              <!-- Issue #1871: Reconnect — guided-flow oauth2 secrets only. Manually
+                   paste-in secrets can never gain this action (delete-and-recreate is
+                   the only route onto the guided flow — locked in during mockup review). -->
+              <button
+                v-if="secret.type === 'oauth2' && secret.refresh?.authorization_endpoint"
+                class="row-reconnect-btn"
+                title="Re-run authorization for this secret"
+                @click.stop="openReconnect(secret)"
+              >Reconnect</button>
               <!-- Manual oauth2 refresh -->
               <button
                 v-if="secret.type === 'oauth2'"
@@ -143,6 +161,10 @@ function secretsByType(typeKey) {
 
 function openEdit(secret) {
   router.push(`/settings/secret/${encodeURIComponent(secret.name)}/general`)
+}
+
+function openReconnect(secret) {
+  router.push(`/settings/secret/${encodeURIComponent(secret.name)}/general?reconnect=1`)
 }
 
 function quickCreate(typeKey) {
@@ -461,6 +483,18 @@ onMounted(() => {
 .expiry-chip--warn    { background: rgba(210, 153, 34, 0.2); color: #d29922; }
 .expiry-chip--expired { background: rgba(248, 113, 113, 0.2); color: #f87171; }
 
+/* ── Issue #1871: guided-flow vs manual-paste-in provenance chip ────────────── */
+.provenance-chip {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.provenance-chip--guided { background: rgba(6, 182, 212, 0.15); color: #06b6d4; }
+.provenance-chip--manual { background: var(--bs-tertiary-bg); color: var(--bs-tertiary-color); }
+
 .usage-chip {
   display: inline-block;
   padding: 1px 6px;
@@ -525,6 +559,23 @@ onMounted(() => {
 }
 
 .row-refresh-btn:hover:not(:disabled) {
+  background: rgba(6, 182, 212, 0.1);
+  border-color: #06b6d4;
+  color: #06b6d4;
+}
+
+.row-reconnect-btn {
+  padding: 3px 9px;
+  border-radius: 5px;
+  border: 1px solid var(--bs-border-color);
+  background: none;
+  color: var(--bs-secondary-color);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.row-reconnect-btn:hover {
   background: rgba(6, 182, 212, 0.1);
   border-color: #06b6d4;
   color: #06b6d4;

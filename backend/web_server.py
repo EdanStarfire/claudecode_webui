@@ -276,6 +276,13 @@ class BackendApp:
         )
         logger.info("OAuth completion broadcast callback injected into OAuthCallbackListenerManager")
 
+        # Issue #1871: Inject standalone (vault-secret) guided-authorization completion/
+        # denial handlers into OAuthCallbackListenerManager, alongside the MCP ones above.
+        self.coordinator.oauth_callback_listener_manager.set_standalone_callbacks(
+            self._standalone_oauth_complete, self._standalone_oauth_denied
+        )
+        logger.info("Standalone OAuth callbacks injected into OAuthCallbackListenerManager")
+
         # Issue #1387: Wire vault refresh manager service + broadcast callback
         self.coordinator.vault_refresh_manager.set_service(self.service)
         self.coordinator.vault_refresh_manager.set_broadcast_callback(self._broadcast_vault_secret_event)
@@ -411,6 +418,69 @@ class BackendApp:
         except Exception:
             logger.exception("Error appending mcp_oauth_complete")
 
+    # ── Issue #1871: standalone (vault-secret) guided-authorization flow completion ────
+
+    def _broadcast_secret_oauth_complete(
+        self,
+        flow_id: str,
+        *,
+        success: bool,
+        secret_name: str | None = None,
+        error: str | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        """Emit secret_oauth_complete to the global UI poll queue — mirrors
+        mcp_oauth_complete, but (unlike it) fires on failure too, since the settings
+        panel has no other way to learn the outcome of a flow completed in a
+        cross-origin popup (see render_oauth_callback()'s on_denied docstring)."""
+        try:
+            self.ui_queue.append({
+                "type": "secret_oauth_complete",
+                "flow_id": flow_id,
+                "success": success,
+                "secret_name": secret_name,
+                "error": error,
+                "error_code": error_code,
+            })
+        except Exception:
+            logger.exception("Error appending secret_oauth_complete")
+
+    async def _standalone_oauth_complete(self, state: str, code: str) -> str:
+        """Complete a standalone guided-authorization flow and broadcast the outcome.
+
+        Injected into OAuthCallbackListenerManager as the standalone completion
+        handler (see set_standalone_callbacks() above) — invoked instead of the MCP
+        complete_flow() path whenever the pending flow's context marks it standalone.
+        """
+        from .application_service import NoRefreshTokenError
+
+        try:
+            result = await self.service.standalone_oauth_complete(state, code)
+        except NoRefreshTokenError as e:
+            self._broadcast_secret_oauth_complete(
+                state, success=False, error=str(e), error_code="no_refresh_token"
+            )
+            await self.remove_standalone_oauth_callback(state)
+            raise
+        except Exception as e:
+            self._broadcast_secret_oauth_complete(state, success=False, error=str(e))
+            await self.remove_standalone_oauth_callback(state)
+            raise
+        self._broadcast_secret_oauth_complete(state, success=True, secret_name=result["base_name"])
+        await self.remove_standalone_oauth_callback(state)
+        return result["base_name"]
+
+    async def _standalone_oauth_denied(self, state: str, error: str, error_description: str) -> None:
+        """Handle a provider-side denial/error for a standalone flow: broadcast the
+        specific reason to the settings panel and clean up — the pending flow will
+        never reach _standalone_oauth_complete() since render_oauth_callback() returns
+        early on the `error` query param without ever calling complete_flow()."""
+        await self.coordinator.oauth_manager.cancel_pending(state)
+        self._broadcast_secret_oauth_complete(
+            state, success=False, error=error_description or error, error_code=error
+        )
+        await self.remove_standalone_oauth_callback(state)
+
     # ── Issue #1789: custom OAuth callback path/port for Shared MCP servers ────────────
 
     def oauth_callback_path_conflicts_with_app_route(self, path: str) -> bool:
@@ -427,10 +497,11 @@ class BackendApp:
         from starlette.routing import Route
 
         complete_flow = self.coordinator.oauth_callback_listener_manager.complete_and_broadcast
+        denied = self.coordinator.oauth_callback_listener_manager.denied_and_broadcast
 
         async def _handler(request):
             from .oauth_callback_listener_manager import render_oauth_callback
-            return await render_oauth_callback(request, complete_flow)
+            return await render_oauth_callback(request, complete_flow, denied)
 
         self.app.router.routes.insert(0, Route(path, _handler, methods=["GET"]))
         AuthMiddleware.EXEMPT_PATHS.add(path)
@@ -481,6 +552,41 @@ class BackendApp:
         if path is not None:
             self._remove_dynamic_oauth_route(path)
         await self.coordinator.oauth_callback_listener_manager.remove_config(config_id)
+
+    # ── Issue #1871: transient OAuth callback routing for standalone vault-secret flows ──
+
+    async def sync_standalone_oauth_callback(
+        self, flow_id: str, custom_callback_path: str | None, custom_callback_port: int | None
+    ) -> None:
+        """Wire a transient (flow_id-keyed) callback route/listener for one standalone
+        guided-authorization flow, mirroring _sync_oauth_callback_for_config()'s dynamic-
+        route-vs-dedicated-listener decision but keyed by an ephemeral flow_id instead of
+        a persisted MCP config_id. No-ops when the flow uses the default callback (no
+        custom path/port) — the shared static /oauth/callback route already handles that
+        case with zero extra wiring, exactly like MCP flows without a custom callback.
+        """
+        if not (custom_callback_path or custom_callback_port):
+            return
+        wants_listener = (
+            custom_callback_port is not None and custom_callback_port != self.port
+        )
+        path = custom_callback_path or "/oauth/callback"
+        if wants_listener:
+            await self.coordinator.oauth_callback_listener_manager.register_transient(
+                flow_id, custom_callback_port, path
+            )
+        elif self._dynamic_oauth_routes.get(flow_id) != path:
+            self._add_dynamic_oauth_route(path)
+            self._dynamic_oauth_routes[flow_id] = path
+
+    async def remove_standalone_oauth_callback(self, flow_id: str) -> None:
+        """Tear down any transient route/listener for a completed/cancelled/denied
+        standalone flow. Idempotent — safe to call even when no custom callback was
+        ever registered for this flow_id."""
+        path = self._dynamic_oauth_routes.pop(flow_id, None)
+        if path is not None:
+            self._remove_dynamic_oauth_route(path)
+        await self.coordinator.oauth_callback_listener_manager.unregister_transient(flow_id)
 
     def _broadcast_vault_secret_event(self, secret_name: str, error: str | None) -> None:
         """Issue #1387: Emit secret_refreshed or secret_refresh_failed to the UI poll queue."""

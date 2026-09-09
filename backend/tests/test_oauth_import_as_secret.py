@@ -822,3 +822,53 @@ async def test_issue_1867_import_as_secret_full_chain_confidential_client(tmp_pa
         assert refresh_body["client_secret"] == client_secret_plain
         assert refresh_body["grant_type"] == "refresh_token"
         assert fake_keyring.get_value("google_oauth") == "google_access_token_2"
+
+
+# ---------------------------------------------------------------------------
+# Issue #1871: replace=True (Reconnect) — regression test for a pre-existing bug
+#
+# _replace_oauth_secret_bundle() never accepted SecretRecord/SecretType kwargs, but
+# import_oauth_as_secret()'s replace=True branch passed them anyway — every Reconnect
+# call for an MCP OAuth-imported secret raised TypeError before this issue's refactor
+# extracted a correctly-called shared helper. No prior test exercised replace=True,
+# so this went unnoticed.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_issue_1871_replace_true_updates_bundle_in_place(
+    tmp_path: Path, tmp_store: FernetTokenStore, keyring_patch
+):
+    """Reconnect (replace=True) updates the existing bundle instead of raising
+    TypeError on an unexpected keyword argument."""
+    token = _make_token(access_token="access_v1", refresh_token="refresh_v1")
+    await tmp_store.set_tokens(token)
+    tmp_store.set_token_endpoint(_TOKEN_URL)
+    await tmp_store.set_client_info(_make_client_info())
+
+    service = _make_service(tmp_path, _make_mcp_config(), tmp_store)
+    with (
+        patch("backend.credential_vault.set_secret_value"),
+        patch("backend.credential_vault.get_secret_value", return_value="value"),
+        patch("backend.credential_vault.delete_secret_value"),
+    ):
+        first = await service.import_oauth_as_secret(_CONFIG_ID, "jira_oauth")
+    assert set(first["secrets_created"]) == {
+        "jira_oauth", "jira_oauth_refresh", "jira_oauth_client_secret",
+    }
+
+    # Simulate re-authorizing: fresh tokens under the same config_id/base_name.
+    token2 = _make_token(access_token="access_v2", refresh_token="refresh_v2")
+    await tmp_store.set_tokens(token2)
+
+    with (
+        patch("backend.credential_vault.set_secret_value"),
+        patch("backend.credential_vault.get_secret_value", return_value="value"),
+        patch("backend.credential_vault.delete_secret_value"),
+    ):
+        result = await service.import_oauth_as_secret(_CONFIG_ID, "jira_oauth", replace=True)
+
+    assert set(result["secrets_updated"]) == {
+        "jira_oauth", "jira_oauth_refresh", "jira_oauth_client_secret",
+    }
+    assert result["auto_refresh_enabled"] is True

@@ -15,6 +15,7 @@ Token storage uses Fernet symmetric encryption:
 
 import logging
 import secrets
+import time
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
@@ -43,6 +44,11 @@ from shared.logging_config import get_logger
 # completely invisible regardless of --debug-all).
 logger = logging.getLogger(__name__)
 debug_logger = get_logger('oauth', category='OAUTH')
+
+# Issue #1871: how long an unfinished flow (MCP or standalone) may sit in `_pending`
+# before a lazy sweep discards it. Existing behavior (no TTL at all) is preserved for
+# the lifetime of a normal flow — this only reclaims abandoned ones.
+_PENDING_TTL_SECONDS = 600
 
 
 class FernetTokenStore:
@@ -169,7 +175,7 @@ class OAuthFlowManager:
     def __init__(self, data_dir: Path):
         self._data_dir = data_dir
         # Keyed by OAuth `state` token: {server_id, token_endpoint, client_id,
-        # code_verifier, redirect_uri}
+        # code_verifier, redirect_uri, created_at, context}
         self._pending: dict[str, dict] = {}
 
     def get_token_store(self, server_id: str) -> FernetTokenStore:
@@ -179,6 +185,41 @@ class OAuthFlowManager:
     async def get_stored_token(self, server_id: str) -> OAuthToken | None:
         """Return the persisted OAuthToken for a server, or None if not authenticated."""
         return await self.get_token_store(server_id).get_tokens()
+
+    def _sweep_expired_pending(self) -> None:
+        """Issue #1871: lazily discard `_pending` entries older than the TTL.
+
+        Called on every start_flow()/start_flow_with_endpoints() rather than via a
+        background task — cheap, and abandoned flows (MCP or standalone) only need to
+        be reclaimed eventually, not immediately. A standalone flow's transient
+        callback listener (if any) is torn down separately by the caller when it
+        detects the flow can no longer be completed; this only frees the in-memory
+        bookkeeping.
+        """
+        now = time.time()
+        expired = [
+            state for state, pending in self._pending.items()
+            if now - pending.get("created_at", now) > _PENDING_TTL_SECONDS
+        ]
+        for state in expired:
+            debug_logger.info("Discarding expired pending OAuth flow (state=%s…)", state[:8])
+            del self._pending[state]
+
+    async def get_pending_context(self, state: str) -> dict | None:
+        """Peek (without popping) the caller-supplied `context` dict for a pending
+        flow, or None if no such pending flow exists. Used to route a callback to the
+        right completion handler (MCP vs standalone) before completing it. Async for
+        consistency with every other public method here, though the lookup itself is
+        synchronous."""
+        pending = self._pending.get(state)
+        return pending.get("context") if pending else None
+
+    async def cancel_pending(self, state: str) -> dict | None:
+        """Remove a pending flow without completing it (user cancellation, or a
+        provider-side denial/error that will never reach complete_flow()). Returns
+        the removed context dict, or None if no such pending flow existed."""
+        pending = self._pending.pop(state, None)
+        return pending.get("context") if pending else None
 
     async def start_flow(
         self,
@@ -217,6 +258,7 @@ class OAuthFlowManager:
             "confidential=%s",
             server_id, server_url, pre_registered_client_id, bool(client_secret),
         )
+        self._sweep_expired_pending()
         async with httpx.AsyncClient() as http:
             # --- Step 1: Protected resource metadata ---
             prm = None
@@ -372,6 +414,8 @@ class OAuthFlowManager:
                 "code_verifier": pkce.code_verifier,
                 "redirect_uri": redirect_uri,
                 "requested_scopes": requested_scopes,
+                "created_at": time.time(),
+                "context": {"flow_type": "mcp"},
             }
 
             debug_logger.info(
@@ -379,13 +423,88 @@ class OAuthFlowManager:
             )
             return auth_url
 
-    async def complete_flow(self, state: str, code: str) -> str:
+    async def start_flow_with_endpoints(
+        self,
+        *,
+        authorization_endpoint: str,
+        token_endpoint: str,
+        client_id: str,
+        redirect_uri: str,
+        client_secret: str | None = None,
+        scopes: list[str] | None = None,
+        persist: bool = False,
+        context: dict | None = None,
+    ) -> tuple[str, str]:
+        """Initiate a no-discovery OAuth 2.1 authorization code flow (issue #1871).
+
+        Unlike start_flow(), this skips RFC 9728/8414 discovery and RFC 7591 DCR
+        entirely — the caller already knows authorization_endpoint, token_endpoint,
+        and client_id (standalone vault-secret guided authorization has no MCP server
+        URL to discover from). MCP flows are unaffected; they keep using the
+        discovery-based start_flow() above.
+
+        `context` is an opaque caller-supplied dict stashed alongside the pending flow
+        and returned verbatim by complete_flow(persist=False) — used to carry
+        flow-routing info (e.g. flow_type, base_name) the caller needs on completion.
+
+        Returns (auth_url, state) — state doubles as the flow_id for standalone
+        callers since it's already globally unique (secrets.token_urlsafe(32)).
+        """
+        self._sweep_expired_pending()
+        pkce = PKCEParameters.generate()
+        state = secrets.token_urlsafe(32)
+
+        params = {
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "state": state,
+            "code_challenge": pkce.code_challenge,
+            "code_challenge_method": "S256",
+        }
+        if scopes:
+            params["scope"] = " ".join(scopes)
+        if client_secret:
+            # Mirrors start_flow()'s confidential-client handling above — needed for
+            # providers (e.g. Google) that only issue a refresh_token with these set.
+            params["access_type"] = "offline"
+            params["prompt"] = "consent"
+        auth_url = f"{authorization_endpoint}?{urlencode(params)}"
+
+        self._pending[state] = {
+            "server_id": None,
+            "token_endpoint": token_endpoint,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code_verifier": pkce.code_verifier,
+            "redirect_uri": redirect_uri,
+            "requested_scopes": scopes,
+            "created_at": time.time(),
+            "persist": persist,
+            "context": context or {},
+        }
+        debug_logger.info("Standalone OAuth flow started (state=%s…)", state[:8])
+        return auth_url, state
+
+    async def complete_flow(
+        self, state: str, code: str, persist: bool = True
+    ) -> str | tuple[OAuthToken, dict]:
         """Complete an OAuth flow by exchanging the authorization code for tokens.
 
         Reads token_endpoint and client_id from the pending state stored by
         start_flow() — these values are never recomputed here.
 
-        Returns server_id on success; raises ValueError on failure.
+        `persist` (issue #1871): when True (the default — every existing MCP caller
+        omits this, so their behavior is unchanged byte-for-byte), tokens are written
+        to FernetTokenStore and the return value is server_id, exactly as before. When
+        False (standalone vault-secret flows only), FernetTokenStore is never touched —
+        the caller-supplied `client_secret` stashed at start_flow_with_endpoints() time
+        is used directly instead of reading it back from a token store, and the return
+        value is `(token, context)`: the raw exchanged OAuthToken plus whatever context
+        dict the caller stashed at initiate time, for the caller to persist itself
+        (via the vault, not FernetTokenStore — that store stays MCP-exclusive).
+
+        Raises ValueError on failure.
         """
         debug_logger.debug(
             "complete_flow: state=%s…, %d pending flow(s) in memory",
@@ -404,19 +523,37 @@ class OAuthFlowManager:
             )
             raise ValueError(f"No pending OAuth flow for state={state!r}")
 
-        server_id: str = pending["server_id"]
         token_endpoint: str = pending["token_endpoint"]
         client_id: str = pending["client_id"]
         code_verifier: str = pending["code_verifier"]
         redirect_uri: str = pending["redirect_uri"]
         requested_scopes: list[str] | None = pending.get("requested_scopes")
 
-        # Confidential clients (issue #1867) must include client_secret in the token
-        # exchange body. start_flow() persists client_info for both the pre-registered
-        # and DCR branches; DCR clients never have a secret so this is a no-op for them.
-        store = self.get_token_store(server_id)
-        client_info = await store.get_client_info()
-        client_secret = client_info.client_secret if client_info else None
+        store = None
+        if persist:
+            server_id: str | None = pending["server_id"]
+            if server_id is None:
+                # A standalone flow (server_id is always None — see
+                # start_flow_with_endpoints()) reaching here means a caller invoked
+                # complete_flow() without persist=False, bypassing
+                # OAuthCallbackListenerManager's flow-type routing. Fail loudly rather
+                # than silently reading/writing FernetTokenStore under a literal
+                # "None" server_id — that store is MCP-exclusive.
+                raise ValueError(
+                    f"complete_flow(persist=True) called for a standalone flow "
+                    f"(state={state[:8]}…) — this would corrupt FernetTokenStore; "
+                    f"the caller must pass persist=False for non-MCP flows"
+                )
+            # Confidential clients (issue #1867) must include client_secret in the token
+            # exchange body. start_flow() persists client_info for both the pre-registered
+            # and DCR branches; DCR clients never have a secret so this is a no-op for them.
+            store = self.get_token_store(server_id)
+            client_info = await store.get_client_info()
+            client_secret = client_info.client_secret if client_info else None
+        else:
+            # Standalone flows have no FernetTokenStore-backed server_id to read a
+            # client_secret back from — start_flow_with_endpoints() stashed it directly.
+            client_secret = pending.get("client_secret")
 
         token_data = {
             "grant_type": "authorization_code",
@@ -439,6 +576,10 @@ class OAuthFlowManager:
                     f"Token exchange failed ({resp.status_code}): {body.decode()}"
                 )
             token = await handle_token_response_scopes(resp)
+
+        if not persist:
+            debug_logger.info("Standalone OAuth flow completed (state=%s…)", state[:8])
+            return token, pending.get("context") or {}
 
         await store.set_tokens(token)
         # Issue #976: Persist token endpoint so refresh_token() can use it later.
