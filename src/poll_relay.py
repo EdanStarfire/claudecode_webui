@@ -87,7 +87,7 @@ class PollRelay:
         )
 
     async def _relay_loop(self, path: str, queue: EventQueue, session_id: str | None = None) -> None:
-        cursor = 0
+        cursor = queue.current_cursor
         while not self._stopped:
             if session_id is not None:
                 last_activity = self._session_last_activity.get(session_id, 0.0)
@@ -98,8 +98,14 @@ class PollRelay:
                     return
             try:
                 events, next_cursor = await self._poll_once(path, cursor)
-                for event in events:
-                    queue.append(event)
+                # Backend's events_since() guarantees a returned batch is contiguous
+                # (either a slice of retained events or the full retained window), so
+                # this formula recovers each event's real Backend cursor exactly —
+                # adopting it keeps the local queue in Backend's own cursor space
+                # instead of generating an independent numbering (issue #1886).
+                start_cursor = next_cursor - len(events) + 1
+                for i, event in enumerate(events):
+                    queue.append(event, cursor=start_cursor + i)
                 cursor = next_cursor
             except asyncio.CancelledError:
                 raise

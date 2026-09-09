@@ -232,3 +232,143 @@ async def test_issue_1844_http_status_error_logs_full_traceback_and_retries(capl
 
     assert call_count >= 2  # retried past the failure
     assert "Backend returned an error response" in caplog.text
+
+
+# --- issue #1886: Backend-cursor passthrough (local queue adopts Backend's numbering) ---
+
+
+@pytest.mark.asyncio
+async def test_relay_restart_seeds_from_local_queue_cursor_not_zero():
+    """A relay task restarting after an idle-stop must resume from the local
+    queue's own cursor (now Backend's real numbering) instead of re-fetching
+    Backend's entire backlog from since=0 and re-numbering it independently."""
+    first_batch_done = asyncio.Event()
+
+    async def first_side_effect(*args, **kwargs):
+        if not first_batch_done.is_set():
+            first_batch_done.set()
+            return {"events": [{"n": 1}, {"n": 2}], "next_cursor": 2}
+        await asyncio.sleep(0.005)  # yield control — avoid starving the event loop
+        return {"events": [], "next_cursor": 2}
+
+    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=first_side_effect)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("src.poll_relay._SESSION_IDLE_TIMEOUT_SECONDS", 0.05)
+        relay.ensure_session_relay("sess-restart")
+        task = relay._session_tasks["sess-restart"]
+
+        for _ in range(300):
+            if task.done():
+                break
+            await asyncio.sleep(0.01)
+
+        queue = session_queues["sess-restart"]
+        assert task.done()
+        assert queue.current_cursor == 2  # matches Backend's next_cursor exactly
+
+        seen_since_values = []
+        reconnect_done = asyncio.Event()
+
+        async def second_side_effect(*args, **kwargs):
+            seen_since_values.append(kwargs["params"]["since"])
+            if not reconnect_done.is_set():
+                reconnect_done.set()
+                return {"events": [{"n": 3}], "next_cursor": 3}
+            await asyncio.sleep(0.005)  # yield control — avoid starving the event loop
+            return {"events": [], "next_cursor": 3}
+
+        backend_client.get_json.side_effect = second_side_effect
+
+        # Simulate a browser tab reconnecting after the idle-stop.
+        relay.ensure_session_relay("sess-restart")
+
+        for _ in range(300):
+            if queue.current_cursor == 3:
+                break
+            await asyncio.sleep(0.01)
+
+        assert queue.current_cursor == 3
+        events, next_cursor = queue.events_since(0)
+        assert [e["n"] for e in events] == [1, 2, 3]  # no gap, no redelivery
+        assert next_cursor == 3
+        assert seen_since_values[0] == 2  # seeded from the local queue, not 0
+
+        await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_end_to_end_backend_cursor_resolves_correctly_against_local_queue():
+    """A Backend-space event_cursor value (as GET /api/sessions/{id}/messages
+    would return) must resolve correctly against the local relay-fed queue via
+    events_since() — the whole point of adopting Backend's real numbering."""
+    first_batch_done = asyncio.Event()
+
+    async def side_effect(*args, **kwargs):
+        if not first_batch_done.is_set():
+            first_batch_done.set()
+            return {"events": [{"n": 1}, {"n": 2}, {"n": 3}], "next_cursor": 3}
+        await asyncio.sleep(100)
+
+    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
+    relay.ensure_session_relay("sess-e2e")
+
+    for _ in range(300):
+        if session_queues["sess-e2e"].current_cursor == 3:
+            break
+        await asyncio.sleep(0.01)
+
+    queue = session_queues["sess-e2e"]
+    assert queue.current_cursor == 3  # what GET /messages' event_cursor would report
+
+    # A browser that just bootstrapped via GET /messages resumes from that
+    # exact Backend-space cursor — no gap, no redelivery.
+    events, next_cursor = queue.events_since(3)
+    assert events == []
+    assert next_cursor == 3
+
+    events, next_cursor = queue.events_since(1)
+    assert [e["n"] for e in events] == [2, 3]
+    assert next_cursor == 3
+
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_backend_restart_regression_delivers_next_event_exactly_once():
+    """Simulates a Backend process restart mid-poll: backend/web_server.py
+    recreates a fresh EventQueue() (cursor 0) for the session, so the relay
+    starts seeing low Backend cursor numbers again while the local queue still
+    holds the old, higher range. Must not raise, and the first genuinely new
+    event past the restart must be delivered exactly once — not dropped as a
+    false-duplicate, not delivered twice."""
+    call_count = 0
+
+    async def side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return {"events": [{"n": "pre-1"}, {"n": "pre-2"}], "next_cursor": 100}
+        if call_count == 2:
+            # Backend restarted: fresh queue, no events yet, low current cursor.
+            return {"events": [], "next_cursor": 0}
+        if call_count == 3:
+            # First genuinely new event generated after the restart.
+            return {"events": [{"n": "post-1"}], "next_cursor": 1}
+        await asyncio.sleep(0.005)  # yield control — avoid starving the event loop
+        return {"events": [], "next_cursor": 1}
+
+    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
+    relay.ensure_session_relay("sess-regress")
+
+    for _ in range(300):
+        if session_queues["sess-regress"].current_cursor == 1:
+            break
+        await asyncio.sleep(0.01)
+
+    queue = session_queues["sess-regress"]
+    events, next_cursor = queue.events_since(0)
+    assert [e["n"] for e in events] == ["post-1"]  # stale pre-restart history dropped
+    assert next_cursor == 1
+
+    await relay.stop()
