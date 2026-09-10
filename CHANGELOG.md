@@ -6,6 +6,60 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-09-10
+
+### Backend/Frontend Process Split
+The app now runs as two processes: Frontend API (public-facing, relays every request) and Backend (owns all session execution — SessionCoordinator, ClaudeSDK, Legion, MCP tools). For the default single-user setup, Frontend auto-starts and supervises a local Backend transparently — no CLI or config changes are needed to upgrade. A genuinely remote Backend is supported via `--remote-backend-url`/`--remote-backend-token` (#1834, supersedes the reverted LOCAL/REMOTE dual-mode design from #1821/#1826)
+
+### Auto Mode & Docker Session Config
+- Customizable Auto Mode classifier config — `environment`/`allow`/`soft_deny`/`hard_deny`/`classifyAllShell` rules (#1891)
+- Fixed Docker sessions failing to start when auto-memory-directory or Auto Mode settings were configured — the settings file wasn't being mounted into the container (#1895)
+- Docker/BuildKit stderr classified before logging or forwarding, instead of surfacing as raw noise (#1881)
+- Auto-started Backend reachable from Docker on native Docker Engine hosts; dynamic LiteLLM proxy port allocation (#1850, #1851, #1853)
+- `mitm.flows` truncated and re-owned at proxy sidecar start to prevent stale-state buildup (#1879)
+
+### OAuth & Shared MCP Servers
+- Guided initial-authorization flow for standalone OAuth2 vault secrets (#1892)
+- Confidential OAuth client support for pre-registered MCP servers; refresh-only OAuth2 vault secrets no longer require a mandatory scrub (#1870, #1872)
+- Per-server custom OAuth callback path/port for Shared MCP servers; live tool list view and test-connect for MCP servers in Library settings (#1798, #1802, #1808)
+- Token-refresh reconnect serialized against the reopen path; per-config open-lock scoping; connection-leak race on first-ever open closed (#1804, #1810, #1811)
+
+### Remote Backend & Restart
+- Dual-tier git drift display with independent restart targets; Backend restart now orchestrated before Frontend restarts (#1863, #1865)
+- `remote_fetch_failed` warning surfaced in the restart branch/commit picker (#1880)
+- Backend-unreachable log cascade collapsed into one suppressed notice; auto-start failure reasons propagated through `send_comm` errors (#1861, #1876)
+
+### Analytics & Session Info
+- Cache Write tokens surfaced in the analytics table and summary cards; per-turn usage/cost now computed as deltas instead of summed cumulative SDK snapshots (#1883, #1852)
+- Analytics chart and summary cards correctly scoped to the active session/model filter (#1887)
+- Session Info modal shows the actual SDK init-message config; real model identifiers shown instead of collapsing to "(unknown)"; model falls back to the SDK-reported value when no config override resolves (#1885, #1862, #1859)
+- Subagent (Agent tool) token usage now captured in analytics (#1864)
+
+### Messaging & Sync
+- Live-polled user messages propagate `message_id` to close a reload dedup gap; `syncMessages()` dedupes by `message_id` instead of `id`; Frontend's local poll queue adopts Backend's real event cursor (#1888, #1878, #1889)
+- Session-poll stall-heal liveness now derives from its own heartbeat (#1797)
+- Collapsible comm cards with a summary header for `send_comm` (#1868)
+
+### UI Polish
+- Cross-project attention state surfaced in the breadcrumb nav header (#1893)
+- Full-screen diff view for Edit entries in the Edits sidebar (#1855)
+- Jump to previous/next turn-boundary message near autoscroll/read-aloud controls (#1856)
+- Tool parameter/result panels overflow width instead of scrolling/wrapping; chrome header icons made visually consistent and semantically accurate (#1857, #1854)
+- Agent breadcrumb session dropdown always fully expands (#1813)
+
+### Session Config & Reliability
+- Session `template_id` changes made after creation now persist; genuine session config customization detected via `model_fields_set` (#1874, #1882)
+- CLI entrypoint crash fixed — replaced removed FastAPI `add_event_handler` with lifespan wiring (#1823)
+- `legion_id` included in broadcasted schedule events (#1801)
+
+### Message List & Performance
+- Message list offset model and real DOM culling continue the virtual-scrolling work from 1.5.0; configurable delay between Resume All batches (#1792, #1793, #1794)
+
+### Dependencies
+- `aiohttp` bumped to 3.14.0; `vitest` bumped to 4.1.8; transitive dependencies upgraded to close Dependabot security alerts (#1624, #1622, #1816)
+
+[1.6.0]: https://github.com/EdanStarfire/claudecode_webui/releases/tag/v1.6.0
+
 ## [1.5.0] - 2026-08-20
 
 ### Message List, Subagents & Performance
