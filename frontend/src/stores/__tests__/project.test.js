@@ -272,4 +272,123 @@ describe('project store', () => {
       expect(store.projects.get('p1').kanban_group_assignments).toEqual({})
     })
   })
+
+  describe('getAttentionSummary (issue #1828)', () => {
+    function unreadSession(overrides = {}) {
+      return makeSession({
+        last_completion_at: '2026-01-01T00:00:00.000Z',
+        last_viewed_at: null,
+        ...overrides
+      })
+    }
+
+    it('returns [] when no non-browsing project has a qualifying session (T2)', async () => {
+      const { useProjectStore } = await import('@/stores/project')
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useProjectStore()
+      const sessionStore = useSessionStore()
+
+      const session = makeSession({ session_id: 'sess-1', state: 'active' })
+      sessionStore.sessions.set('sess-1', session)
+      store.projects.set('p1', makeProject({ project_id: 'p1', session_ids: ['sess-1'] }))
+
+      expect(store.getAttentionSummary(sessionStore, 'creation', null)).toEqual([])
+    })
+
+    it('returns one entry with reasons: [waiting] for a single background project with a paused session (T1)', async () => {
+      const { useProjectStore } = await import('@/stores/project')
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useProjectStore()
+      const sessionStore = useSessionStore()
+
+      const session = makeSession({ session_id: 'sess-1', state: 'paused' })
+      sessionStore.sessions.set('sess-1', session)
+      store.projects.set('p1', makeProject({ project_id: 'p1', name: 'Data Pipeline', session_ids: ['sess-1'] }))
+
+      const summary = store.getAttentionSummary(sessionStore, 'creation', 'other-project')
+      expect(summary).toEqual([{ projectId: 'p1', name: 'Data Pipeline', reasons: ['waiting'] }])
+    })
+
+    it('a project with two sessions in different qualifying states returns one entry with both reasons', async () => {
+      const { useProjectStore } = await import('@/stores/project')
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useProjectStore()
+      const sessionStore = useSessionStore()
+
+      const paused = makeSession({ session_id: 'sess-1', state: 'paused' })
+      const unread = unreadSession({ session_id: 'sess-2', state: 'active' })
+      sessionStore.sessions.set('sess-1', paused)
+      sessionStore.sessions.set('sess-2', unread)
+      store.projects.set('p1', makeProject({ project_id: 'p1', name: 'Data Pipeline', session_ids: ['sess-1', 'sess-2'] }))
+
+      const summary = store.getAttentionSummary(sessionStore, 'creation', null)
+      expect(summary).toEqual([{ projectId: 'p1', name: 'Data Pipeline', reasons: ['waiting', 'unread'] }])
+    })
+
+    it('excludes the project matching excludeProjectId even if it has qualifying sessions', async () => {
+      const { useProjectStore } = await import('@/stores/project')
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useProjectStore()
+      const sessionStore = useSessionStore()
+
+      const session = makeSession({ session_id: 'sess-1', state: 'paused' })
+      sessionStore.sessions.set('sess-1', session)
+      store.projects.set('p1', makeProject({ project_id: 'p1', session_ids: ['sess-1'] }))
+
+      expect(store.getAttentionSummary(sessionStore, 'creation', 'p1')).toEqual([])
+    })
+
+    it('returns multiple entries, one per affected project, when several background projects qualify (T4)', async () => {
+      const { useProjectStore } = await import('@/stores/project')
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useProjectStore()
+      const sessionStore = useSessionStore()
+
+      sessionStore.sessions.set('sess-1', makeSession({ session_id: 'sess-1', state: 'paused' }))
+      sessionStore.sessions.set('sess-2', unreadSession({ session_id: 'sess-2', state: 'active' }))
+      sessionStore.sessions.set('sess-3', makeSession({ session_id: 'sess-3', state: 'error' }))
+      store.projects.set('p1', makeProject({ project_id: 'p1', name: 'Data Pipeline', session_ids: ['sess-1'] }))
+      store.projects.set('p2', makeProject({ project_id: 'p2', name: 'Mobile App', session_ids: ['sess-2'] }))
+      store.projects.set('p3', makeProject({ project_id: 'p3', name: 'Docs Site', session_ids: ['sess-3'] }))
+
+      const summary = store.getAttentionSummary(sessionStore, 'creation', null)
+      expect(summary).toEqual([
+        { projectId: 'p1', name: 'Data Pipeline', reasons: ['waiting'] },
+        { projectId: 'p2', name: 'Mobile App', reasons: ['unread'] },
+        { projectId: 'p3', name: 'Docs Site', reasons: ['error'] },
+      ])
+    })
+
+    it('includes error state as a qualifying reason', async () => {
+      const { useProjectStore } = await import('@/stores/project')
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useProjectStore()
+      const sessionStore = useSessionStore()
+
+      sessionStore.sessions.set('sess-1', makeSession({ session_id: 'sess-1', state: 'error' }))
+      store.projects.set('p1', makeProject({ project_id: 'p1', name: 'Docs Site', session_ids: ['sess-1'] }))
+
+      const summary = store.getAttentionSummary(sessionStore, 'creation', null)
+      expect(summary).toEqual([{ projectId: 'p1', name: 'Docs Site', reasons: ['error'] }])
+    })
+
+    it('entry disappears once the qualifying session state clears (mirrors T3 live-clear)', async () => {
+      const { useProjectStore } = await import('@/stores/project')
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useProjectStore()
+      const sessionStore = useSessionStore()
+
+      const session = makeSession({ session_id: 'sess-1', state: 'paused' })
+      sessionStore.sessions.set('sess-1', session)
+      store.projects.set('p1', makeProject({ project_id: 'p1', name: 'Data Pipeline', session_ids: ['sess-1'] }))
+
+      expect(store.getAttentionSummary(sessionStore, 'creation', null)).toEqual([
+        { projectId: 'p1', name: 'Data Pipeline', reasons: ['waiting'] }
+      ])
+
+      sessionStore.sessions.get('sess-1').state = 'active'
+
+      expect(store.getAttentionSummary(sessionStore, 'creation', null)).toEqual([])
+    })
+  })
 })

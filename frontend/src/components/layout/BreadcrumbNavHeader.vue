@@ -42,9 +42,28 @@
           role="button"
           aria-label="Switch project"
           @click.stop="toggleProjectDropdown"
+          @mouseenter="showAttentionTip"
+          @mouseleave="hideAttentionTip"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          <span v-if="attentionReasonsPresent.length" class="crumb-caret-dots">
+            <span
+              v-for="reason in attentionReasonsPresent"
+              :key="reason"
+              class="dot"
+              :class="reason"
+            ></span>
+          </span>
         </span>
+        <div v-if="attentionTipVisible && attentionSummary.length" class="attention-tip">
+          <div class="attention-tip-title">{{ attentionSummary.length }} project{{ attentionSummary.length > 1 ? 's' : '' }} need attention</div>
+          <div v-for="entry in attentionSummary" :key="entry.projectId" class="attention-tip-row">
+            <span class="attention-tip-name">{{ truncate(entry.name) }}</span>
+            <span class="attention-tip-tags">
+              <span v-for="reason in entry.reasons" :key="reason" class="attention-tag" :class="reason">{{ reason }}</span>
+            </span>
+          </div>
+        </div>
         <BreadcrumbProjectDropdown v-if="projectDropdownOpen" @close="projectDropdownOpen = false" />
       </div>
 
@@ -93,7 +112,7 @@
 <script setup>
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { useProjectStore } from '@/stores/project'
+import { useProjectStore, ATTENTION_REASON_ORDER } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { useScheduleStore } from '@/stores/schedule'
 import { useUIStore } from '@/stores/ui'
@@ -111,6 +130,7 @@ const uiStore = useUIStore()
 const headerEl = ref(null)
 const projectDropdownOpen = ref(false)
 const sessionDropdownOpen = ref(false)
+const attentionTipVisible = ref(false)
 
 const orderedProjects = computed(() => projectStore.orderedProjects)
 const browsingProjectId = computed(() => uiStore.browsingProjectId)
@@ -144,6 +164,17 @@ const projectStatusSegments = computed(() => {
 
 const truncatedProjectName = computed(() => truncate(browsingProject.value?.name))
 
+// Issue #1828: cross-project attention badge on the project-switcher caret.
+const attentionSummary = computed(() =>
+  projectStore.getAttentionSummary(sessionStore, uiStore.agentSort, browsingProjectId.value)
+)
+
+const attentionReasonsPresent = computed(() => {
+  const present = new Set()
+  attentionSummary.value.forEach(entry => entry.reasons.forEach(r => present.add(r)))
+  return ATTENTION_REASON_ORDER.filter(r => present.has(r))
+})
+
 const currentSession = computed(() => sessionStore.currentSession)
 
 const currentSessionInBrowsingProject = computed(() =>
@@ -176,11 +207,20 @@ function truncate(str) {
 function toggleProjectDropdown() {
   projectDropdownOpen.value = !projectDropdownOpen.value
   sessionDropdownOpen.value = false
+  attentionTipVisible.value = false
 }
 
 function toggleSessionDropdown() {
   sessionDropdownOpen.value = !sessionDropdownOpen.value
   projectDropdownOpen.value = false
+}
+
+function showAttentionTip() {
+  attentionTipVisible.value = true
+}
+
+function hideAttentionTip() {
+  attentionTipVisible.value = false
 }
 
 function goToProjectOverview() {
@@ -293,7 +333,82 @@ onUnmounted(() => {
   cursor: pointer;
   color: var(--bs-secondary-color);
   flex-shrink: 0;
+  position: relative;
 }
+
+.crumb-caret-dots {
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bs-tertiary-bg);
+  border: 1.5px solid var(--bs-secondary-bg);
+  border-radius: 8px;
+  padding: 2px 3px;
+  pointer-events: none;
+}
+
+.crumb-caret-dots .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.crumb-caret-dots .dot.waiting { background: #f59e0b; }
+.crumb-caret-dots .dot.unread { background: var(--color-unread); }
+.crumb-caret-dots .dot.error { background: #ef4444; }
+
+.attention-tip {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  background: var(--bs-body-bg);
+  color: var(--bs-emphasis-color);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 6px;
+  padding: 8px 11px;
+  font-size: 11.5px;
+  white-space: nowrap;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  z-index: 65;
+  line-height: 1.7;
+}
+
+.attention-tip-title {
+  font-weight: 700;
+  margin-bottom: 4px;
+  color: var(--bs-emphasis-color);
+}
+
+.attention-tip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.attention-tip-name {
+  color: var(--bs-emphasis-color);
+  font-weight: 500;
+}
+
+.attention-tip-tags {
+  display: flex;
+  gap: 3px;
+}
+
+.attention-tag {
+  font-size: 9px;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-weight: 700;
+}
+
+.attention-tag.waiting { background: rgba(245, 158, 11, 0.18); color: #fbbf24; }
+.attention-tag.unread { background: rgba(249, 115, 22, 0.18); color: #fb923c; }
+.attention-tag.error { background: rgba(239, 68, 68, 0.18); color: #f87171; }
 
 .crumb-caret svg {
   transition: transform 0.15s;
