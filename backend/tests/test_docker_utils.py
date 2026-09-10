@@ -17,6 +17,7 @@ from backend.docker_utils import (
     cleanup_session_tmp,
     detect_docker_bridge_gateway,
     get_session_tmp_dir,
+    get_wrapper_script_path,
     resolve_docker_cli_path,
     translate_docker_tmp_path,
 )
@@ -359,3 +360,19 @@ class TestClassifyDockerOutput:
 
     def test_unrelated_output_is_ambiguous(self):
         assert classify_docker_output("Traceback (most recent call last):") == "ambiguous"
+
+
+# ---------------------------------------------------------------------------
+# claude-docker wrapper script: file-mount scan (issue #1894)
+# ---------------------------------------------------------------------------
+
+
+class TestWrapperScriptFileMountFlags:
+    def test_settings_flag_is_mounted_alongside_system_prompt_flags(self):
+        script_text = get_wrapper_script_path().read_text()
+        condition_line = next(
+            (line for line in script_text.splitlines() if "--system-prompt-file" in line), None
+        )
+        assert condition_line is not None, "file-mount scan condition not found in wrapper script"
+        assert "--append-system-prompt-file" in condition_line
+        assert "--settings" in condition_line

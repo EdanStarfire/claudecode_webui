@@ -139,11 +139,11 @@ while IFS='=' read -r name value; do
 done < <(env)
 
 # Scan arguments for file-based flags that need host files mounted into container
-# The SDK passes --append-system-prompt-file or --system-prompt-file with a temp file path
+# The SDK passes --append-system-prompt-file, --system-prompt-file, or --settings with a temp file path
 FILE_MOUNT_FLAGS=""
 PREV_ARG=""
 for arg in "$@"; do
-    if [ "$PREV_ARG" = "--append-system-prompt-file" ] || [ "$PREV_ARG" = "--system-prompt-file" ]; then
+    if [ "$PREV_ARG" = "--append-system-prompt-file" ] || [ "$PREV_ARG" = "--system-prompt-file" ] || [ "$PREV_ARG" = "--settings" ]; then
         if [ -f "$arg" ]; then
             FILE_MOUNT_FLAGS="$FILE_MOUNT_FLAGS -v $arg:$arg:ro"
         fi
