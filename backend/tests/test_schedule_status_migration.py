@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from backend.legion.scheduler_service import SchedulerService
+from backend.legion.scheduler_service import ScheduleOwnershipError, SchedulerService
 from backend.models.schedule_models import Schedule, ScheduleStatus
 
 
@@ -229,7 +229,7 @@ class TestDeleteScheduleMCPTool:
             schedule_id="sched-mcp-1", legion_id="leg-1", name="MySchedule",
             cron_expression="0 * * * *", prompt="p", minion_id="minion-mcp-1",
         )
-        scheduler.get_schedule = AsyncMock(return_value=schedule)
+        scheduler.resolve_schedule_for_minion = AsyncMock(return_value=schedule)
         scheduler.delete_schedule = AsyncMock(return_value=True)
         system.scheduler_service = scheduler
 
@@ -254,7 +254,7 @@ class TestDeleteScheduleMCPTool:
             schedule_id="sched-mcp-2", legion_id="leg-1", name="OtherSchedule",
             cron_expression="0 * * * *", prompt="p", minion_id="other-minion",
         )
-        scheduler.get_schedule = AsyncMock(return_value=schedule)
+        scheduler.resolve_schedule_for_minion = AsyncMock(side_effect=ScheduleOwnershipError(schedule))
         scheduler.delete_schedule = AsyncMock()
         system.scheduler_service = scheduler
 
