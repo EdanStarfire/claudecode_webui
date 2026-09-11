@@ -16,7 +16,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from backend.legion.scheduler_service import SchedulerService, _ScheduleAutoDeletedError
+from backend.legion.scheduler_service import (
+    ScheduleAmbiguousNameError,
+    ScheduleNotFoundError,
+    ScheduleOwnershipError,
+    SchedulerService,
+    _ScheduleAutoDeletedError,
+)
 from backend.models.schedule_models import Schedule, ScheduleStatus, get_next_run
 
 # ---------------------------------------------------------------------------
@@ -78,11 +84,12 @@ def _make_schedule(
     minion_id: str = "sess-1",
     repeat_count: int | None = None,
     fire_count: int = 0,
+    name: str = "Test Schedule",
 ) -> Schedule:
     return Schedule(
         schedule_id=schedule_id,
         legion_id=legion_id,
-        name="Test Schedule",
+        name=name,
         cron_expression="*/1 * * * *",
         prompt="do something",
         minion_id=minion_id,
@@ -263,3 +270,84 @@ async def test_update_schedule_set_repeat_count_to_unlimited():
 
     assert updated.repeat_count is None
     assert schedule.schedule_id in svc._schedules
+
+
+# ---------------------------------------------------------------------------
+# 7. resolve_schedule_for_minion (issue #1817)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_by_id_success():
+    svc = _make_svc()
+    schedule = _make_schedule(schedule_id="sched-1", minion_id="sess-1")
+    svc._schedules[schedule.schedule_id] = schedule
+
+    resolved = await svc.resolve_schedule_for_minion("sess-1", schedule_id="sched-1")
+
+    assert resolved is schedule
+
+
+@pytest.mark.asyncio
+async def test_resolve_by_id_not_found():
+    svc = _make_svc()
+
+    with pytest.raises(ScheduleNotFoundError):
+        await svc.resolve_schedule_for_minion("sess-1", schedule_id="does-not-exist")
+
+
+@pytest.mark.asyncio
+async def test_resolve_by_id_wrong_owner():
+    svc = _make_svc()
+    schedule = _make_schedule(schedule_id="sched-1", minion_id="sess-owner")
+    svc._schedules[schedule.schedule_id] = schedule
+
+    with pytest.raises(ScheduleOwnershipError):
+        await svc.resolve_schedule_for_minion("sess-other", schedule_id="sched-1")
+
+
+@pytest.mark.asyncio
+async def test_resolve_by_name_success():
+    svc = _make_svc()
+    schedule = _make_schedule(schedule_id="sched-1", minion_id="sess-1", name="Daily Report")
+    svc._schedules[schedule.schedule_id] = schedule
+
+    resolved = await svc.resolve_schedule_for_minion("sess-1", schedule_name="Daily Report")
+
+    assert resolved is schedule
+
+
+@pytest.mark.asyncio
+async def test_resolve_by_name_not_found():
+    svc = _make_svc()
+    schedule = _make_schedule(schedule_id="sched-1", minion_id="sess-1", name="Daily Report")
+    svc._schedules[schedule.schedule_id] = schedule
+
+    with pytest.raises(ScheduleNotFoundError):
+        await svc.resolve_schedule_for_minion("sess-1", schedule_name="Nonexistent")
+
+
+@pytest.mark.asyncio
+async def test_resolve_by_name_ambiguous():
+    svc = _make_svc()
+    s1 = _make_schedule(schedule_id="sched-1", minion_id="sess-1", name="Duplicate")
+    s2 = _make_schedule(schedule_id="sched-2", minion_id="sess-1", name="Duplicate")
+    svc._schedules[s1.schedule_id] = s1
+    svc._schedules[s2.schedule_id] = s2
+
+    with pytest.raises(ScheduleAmbiguousNameError) as exc_info:
+        await svc.resolve_schedule_for_minion("sess-1", schedule_name="Duplicate")
+
+    assert exc_info.value.count == 2
+
+
+@pytest.mark.asyncio
+async def test_resolve_by_name_scoped_away_from_other_minions_same_named_schedule():
+    """A name collision with another minion's schedule must surface as not-found,
+    never resolve to the other minion's schedule."""
+    svc = _make_svc()
+    other_schedule = _make_schedule(schedule_id="sched-other", minion_id="sess-other", name="Shared Name")
+    svc._schedules[other_schedule.schedule_id] = other_schedule
+
+    with pytest.raises(ScheduleNotFoundError):
+        await svc.resolve_schedule_for_minion("sess-1", schedule_name="Shared Name")

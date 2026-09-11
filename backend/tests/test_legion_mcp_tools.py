@@ -973,6 +973,7 @@ def _make_update_schedule_tools(
     from unittest.mock import AsyncMock, MagicMock
 
     from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from backend.legion.scheduler_service import ScheduleNotFoundError, ScheduleOwnershipError
     from backend.models.schedule_models import ScheduleStatus
 
     if schedule is None:
@@ -988,6 +989,15 @@ def _make_update_schedule_tools(
     mock_svc = MagicMock()
     resolved_get = schedule if get_schedule_return is _SENTINEL else get_schedule_return
     mock_svc.get_schedule = AsyncMock(return_value=resolved_get)
+
+    async def _resolve_side_effect(minion_id, schedule_id=None, schedule_name=None):
+        if not resolved_get:
+            raise ScheduleNotFoundError("ID" if schedule_id else "name", schedule_id or schedule_name)
+        if resolved_get.minion_id != minion_id:
+            raise ScheduleOwnershipError(resolved_get)
+        return resolved_get
+
+    mock_svc.resolve_schedule_for_minion = AsyncMock(side_effect=_resolve_side_effect)
 
     if update_side_effect is not None:
         mock_svc.update_schedule = AsyncMock(side_effect=update_side_effect)
@@ -1640,3 +1650,213 @@ async def test_issue_1433_list_minions_parent_unknown_fallback():
     assert result.get("is_error") is False, f"Got error: {result}"
     text = result["content"][0]["text"]
     assert "Parent: unknown" in text, f"Should show 'Parent: unknown'; got:\n{text}"
+
+
+# ── Schedule name-based lookup tests (Issue #1817) ──
+
+
+def _make_schedule_mock(schedule_id="sched-abc", minion_id="minion-123", name="My Schedule"):
+    from unittest.mock import MagicMock
+
+    from backend.models.schedule_models import ScheduleStatus
+
+    schedule = MagicMock()
+    schedule.schedule_id = schedule_id
+    schedule.minion_id = minion_id
+    schedule.schedule_type = "prompt"
+    schedule.name = name
+    schedule.cron_expression = "0 8 * * *"
+    schedule.next_run = None
+    schedule.status = ScheduleStatus.ACTIVE
+    schedule.execution_count = 0
+    schedule.failure_count = 0
+    return schedule
+
+
+def _make_mutation_tools(resolve_return=None, resolve_side_effect=None):
+    """Build LegionMCPTools with a mocked scheduler_service for mutation-handler tests."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    mock_svc = MagicMock()
+    if resolve_side_effect is not None:
+        mock_svc.resolve_schedule_for_minion = AsyncMock(side_effect=resolve_side_effect)
+    else:
+        mock_svc.resolve_schedule_for_minion = AsyncMock(return_value=resolve_return)
+    mock_svc.pause_schedule = AsyncMock(return_value=resolve_return)
+    mock_svc.resume_schedule = AsyncMock(return_value=resolve_return)
+    mock_svc.delete_schedule = AsyncMock(return_value=True)
+    mock_svc.update_schedule = AsyncMock(return_value=resolve_return)
+
+    mock_system = MagicMock()
+    mock_system.scheduler_service = mock_svc
+    return LegionMCPTools(mock_system), mock_svc
+
+
+@pytest.mark.asyncio
+async def test_issue_1817_list_schedules_shows_full_uuid():
+    """AC1/T1: list_schedules output must contain the full untruncated schedule_id."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    full_id = "11111111-2222-3333-4444-555555555555"
+    schedule = _make_schedule_mock(schedule_id=full_id, minion_id="minion-123")
+
+    session = MagicMock()
+    session.project_id = "legion-1"
+    session_manager = MagicMock()
+    session_manager.get_session_info = AsyncMock(return_value=session)
+    session_coordinator = MagicMock()
+    session_coordinator.session_manager = session_manager
+
+    scheduler_service = MagicMock()
+    scheduler_service.list_schedules = AsyncMock(return_value=[schedule])
+
+    mock_system = MagicMock()
+    mock_system.session_coordinator = session_coordinator
+    mock_system.scheduler_service = scheduler_service
+
+    tools = LegionMCPTools(mock_system)
+    result = await tools._handle_list_schedules({"_from_minion_id": "minion-123"})
+
+    assert result.get("is_error") is False
+    text = result["content"][0]["text"]
+    assert full_id in text
+    assert f"{full_id[:8]}..." not in text
+
+
+@pytest.mark.asyncio
+async def test_issue_1817_pause_schedule_by_name():
+    """T3: pause_schedule resolves by schedule_name and pauses the resolved ID."""
+    schedule = _make_schedule_mock(schedule_id="sched-abc", name="Daily Report")
+    tools, svc = _make_mutation_tools(resolve_return=schedule)
+
+    result = await tools._handle_pause_schedule({
+        "_from_minion_id": "minion-123",
+        "schedule_name": "Daily Report",
+    })
+
+    assert result.get("is_error") is False, f"Got error: {result}"
+    svc.resolve_schedule_for_minion.assert_awaited_once_with(
+        "minion-123", schedule_id=None, schedule_name="Daily Report"
+    )
+    svc.pause_schedule.assert_awaited_once_with("sched-abc")
+
+
+@pytest.mark.asyncio
+async def test_issue_1817_resume_schedule_by_name():
+    """T3: resume_schedule resolves by schedule_name and resumes the resolved ID."""
+    schedule = _make_schedule_mock(schedule_id="sched-abc", name="Daily Report")
+    tools, svc = _make_mutation_tools(resolve_return=schedule)
+
+    result = await tools._handle_resume_schedule({
+        "_from_minion_id": "minion-123",
+        "schedule_name": "Daily Report",
+    })
+
+    assert result.get("is_error") is False, f"Got error: {result}"
+    svc.resume_schedule.assert_awaited_once_with("sched-abc")
+
+
+@pytest.mark.asyncio
+async def test_issue_1817_delete_schedule_by_name():
+    """T4: delete_schedule resolves by schedule_name and deletes the resolved ID."""
+    schedule = _make_schedule_mock(schedule_id="sched-abc", name="Daily Report")
+    tools, svc = _make_mutation_tools(resolve_return=schedule)
+
+    result = await tools._handle_delete_schedule({
+        "_from_minion_id": "minion-123",
+        "schedule_name": "Daily Report",
+    })
+
+    assert result.get("is_error") is False, f"Got error: {result}"
+    svc.delete_schedule.assert_awaited_once_with("sched-abc")
+
+
+@pytest.mark.asyncio
+async def test_issue_1817_update_schedule_by_name_and_rename_together():
+    """AC5/T5: update_schedule accepts schedule_name (lookup) and name (rename) together,
+    passing only the rename value 'name' through to the service, not the lookup key."""
+    schedule = _make_schedule_mock(schedule_id="sched-abc", name="Old Name")
+    tools, svc = _make_mutation_tools(resolve_return=schedule)
+
+    result = await tools._handle_update_schedule({
+        "_from_minion_id": "minion-123",
+        "schedule_name": "Old Name",
+        "name": "New Name",
+    })
+
+    assert result.get("is_error") is False, f"Got error: {result}"
+    svc.resolve_schedule_for_minion.assert_awaited_once_with(
+        "minion-123", schedule_id=None, schedule_name="Old Name"
+    )
+    svc.update_schedule.assert_awaited_once_with("sched-abc", name="New Name")
+
+
+@pytest.mark.asyncio
+async def test_issue_1817_missing_both_identifiers_returns_error():
+    """Missing both schedule_id and schedule_name → is_error=True; resolver not called."""
+    tools, svc = _make_mutation_tools()
+
+    result = await tools._handle_pause_schedule({"_from_minion_id": "minion-123"})
+
+    assert result.get("is_error") is True
+    assert "schedule_id" in result["content"][0]["text"] or "schedule_name" in result["content"][0]["text"]
+    svc.resolve_schedule_for_minion.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_issue_1817_not_found_by_name_error_references_name():
+    """T6/AC7: not-found-by-name error text must reference the name, not a raw UUID."""
+    from backend.legion.scheduler_service import ScheduleNotFoundError
+
+    tools, svc = _make_mutation_tools(
+        resolve_side_effect=ScheduleNotFoundError("name", "Nonexistent Schedule")
+    )
+
+    result = await tools._handle_pause_schedule({
+        "_from_minion_id": "minion-123",
+        "schedule_name": "Nonexistent Schedule",
+    })
+
+    assert result.get("is_error") is True
+    assert "Nonexistent Schedule" in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_issue_1817_ambiguous_name_error():
+    """AC6: ambiguous schedule_name match surfaces a distinct error, not a silent pick."""
+    from backend.legion.scheduler_service import ScheduleAmbiguousNameError
+
+    tools, svc = _make_mutation_tools(
+        resolve_side_effect=ScheduleAmbiguousNameError("Daily Report", 2)
+    )
+
+    result = await tools._handle_pause_schedule({
+        "_from_minion_id": "minion-123",
+        "schedule_name": "Daily Report",
+    })
+
+    assert result.get("is_error") is True
+    assert "Daily Report" in result["content"][0]["text"]
+    svc.pause_schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_issue_1817_ownership_error_keeps_action_specific_wording():
+    """T7: ownership failures keep each handler's existing action-specific wording."""
+    from backend.legion.scheduler_service import ScheduleOwnershipError
+
+    schedule = _make_schedule_mock(schedule_id="sched-abc", minion_id="minion-OTHER")
+    tools, svc = _make_mutation_tools(resolve_side_effect=ScheduleOwnershipError(schedule))
+
+    result = await tools._handle_delete_schedule({
+        "_from_minion_id": "minion-123",
+        "schedule_id": "sched-abc",
+    })
+
+    assert result.get("is_error") is True
+    assert "own schedules" in result["content"][0]["text"].lower()
+    svc.delete_schedule.assert_not_called()

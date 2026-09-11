@@ -48,6 +48,37 @@ class _ScheduleAutoDeletedError(Exception):
         super().__init__("schedule auto-deleted")
         self.schedule = schedule
 
+
+class ScheduleLookupError(Exception):
+    """Base class for resolve_schedule_for_minion() failures."""
+
+
+class ScheduleNotFoundError(ScheduleLookupError):
+    """No schedule matched the given identifier."""
+
+    def __init__(self, identifier_type: str, identifier: str):
+        super().__init__(f"Schedule not found by {identifier_type}: {identifier}")
+        self.identifier_type = identifier_type
+        self.identifier = identifier
+
+
+class ScheduleAmbiguousNameError(ScheduleLookupError):
+    """More than one of the caller's own schedules share the given name."""
+
+    def __init__(self, schedule_name: str, count: int):
+        super().__init__(f"Ambiguous schedule name '{schedule_name}': {count} matches")
+        self.schedule_name = schedule_name
+        self.count = count
+
+
+class ScheduleOwnershipError(ScheduleLookupError):
+    """The resolved schedule is not owned by the calling minion."""
+
+    def __init__(self, schedule: "Schedule"):
+        super().__init__(f"Schedule {schedule.schedule_id} is not owned by the caller")
+        self.schedule = schedule
+
+
 TICK_INTERVAL = 30  # seconds between scheduler evaluations
 
 
@@ -221,6 +252,42 @@ class SchedulerService:
     async def get_schedule(self, schedule_id: str) -> Schedule | None:
         """Get a single schedule by ID."""
         return self._schedules.get(schedule_id)
+
+    async def resolve_schedule_for_minion(
+        self,
+        minion_id: str,
+        schedule_id: str | None = None,
+        schedule_name: str | None = None,
+    ) -> Schedule:
+        """Resolve a schedule owned by minion_id, by ID or by name.
+
+        ID lookups are global-then-ownership-checked. Name lookups are pre-scoped
+        to the calling minion's own schedules, so a name collision with another
+        minion's schedule is invisible — it surfaces as not-found, never as
+        someone else's schedule.
+
+        Raises:
+            ScheduleNotFoundError: No schedule matched the given identifier.
+            ScheduleAmbiguousNameError: More than one of the caller's schedules share the name.
+            ScheduleOwnershipError: The ID-resolved schedule belongs to a different minion.
+        """
+        if schedule_id:
+            schedule = self._schedules.get(schedule_id)
+            if not schedule:
+                raise ScheduleNotFoundError("ID", schedule_id)
+            if schedule.minion_id != minion_id:
+                raise ScheduleOwnershipError(schedule)
+            return schedule
+
+        matches = [
+            s for s in self._schedules.values()
+            if s.minion_id == minion_id and s.name == schedule_name
+        ]
+        if not matches:
+            raise ScheduleNotFoundError("name", schedule_name)
+        if len(matches) > 1:
+            raise ScheduleAmbiguousNameError(schedule_name, len(matches))
+        return matches[0]
 
     async def update_schedule(self, schedule_id: str, **fields) -> Schedule:
         """Update mutable schedule fields (name, cron_expression, prompt, max_retries, timeout_seconds).

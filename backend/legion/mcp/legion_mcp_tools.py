@@ -335,10 +335,12 @@ class LegionMCPTools:
         @tool(
             "pause_schedule",
             "Pause one of your active schedules. The schedule will stop firing until resumed."
-            "\n\nParameters:"
-            "\n- schedule_id: The ID of the schedule to pause",
+            "\n\nParameters (provide exactly one of schedule_id/schedule_name):"
+            "\n- schedule_id: The ID of the schedule to pause"
+            "\n- schedule_name: The name of the schedule to pause (must be one of your own schedules)",
             {
                 "schedule_id": str,
+                "schedule_name": str,
             }
         )
         async def pause_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -350,10 +352,12 @@ class LegionMCPTools:
             "resume_schedule",
             "Resume one of your paused schedules. The schedule will start firing again "
             "from the next cron window."
-            "\n\nParameters:"
-            "\n- schedule_id: The ID of the schedule to resume",
+            "\n\nParameters (provide exactly one of schedule_id/schedule_name):"
+            "\n- schedule_id: The ID of the schedule to resume"
+            "\n- schedule_name: The name of the schedule to resume (must be one of your own schedules)",
             {
                 "schedule_id": str,
+                "schedule_name": str,
             }
         )
         async def resume_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -364,10 +368,12 @@ class LegionMCPTools:
         @tool(
             "delete_schedule",
             "Delete one of your schedules permanently."
-            "\n\nParameters:"
-            "\n- schedule_id: The ID of the schedule to delete",
+            "\n\nParameters (provide exactly one of schedule_id/schedule_name):"
+            "\n- schedule_id: The ID of the schedule to delete"
+            "\n- schedule_name: The name of the schedule to delete (must be one of your own schedules)",
             {
                 "schedule_id": str,
+                "schedule_name": str,
             }
         )
         async def delete_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -383,13 +389,17 @@ class LegionMCPTools:
             "it is bound to, or its session configuration via this tool. You can "
             "only update schedules that belong to you."
             "\n\nParameters:"
-            "\n- schedule_id: The ID of the schedule to update"
+            "\n- schedule_id: The ID of the schedule to update (provide exactly one of schedule_id/schedule_name)"
+            "\n- schedule_name: The name of the schedule to update, used to find it "
+            "(must be one of your own schedules). This is independent of 'name' below — "
+            "'schedule_name' looks the schedule up, 'name' renames it."
             "\n- name (optional): New display name for the schedule"
             "\n- prompt (optional): New prompt text. Only valid for prompt-type schedules. Must be non-empty"
             "\n- cron_expression (optional): New cron expression (5-field standard cron). "
             "Examples: '0 8 * * 1-5' (weekdays 8am), '*/30 * * * *' (every 30 min)",
             {
                 "schedule_id": str,
+                "schedule_name": str,
                 "name": str,
                 "prompt": str,
                 "cron_expression": str,
@@ -1993,7 +2003,7 @@ class LegionMCPTools:
                         "%Y-%m-%d %H:%M %Z"
                     )
                 lines.append(
-                    f"\n- **{s.name}** (ID: {s.schedule_id[:8]}...)\n"
+                    f"\n- **{s.name}** (ID: {s.schedule_id})\n"
                     f"  - Cron: `{s.cron_expression}`\n"
                     f"  - Status: {s.status.value}\n"
                     f"  - Next run: {next_run_str}\n"
@@ -2007,25 +2017,54 @@ class LegionMCPTools:
         except Exception as e:
             return self._err(f"Unexpected error listing schedules: {e}")
 
+    async def _resolve_schedule_for_args(
+        self, from_minion_id: str, args: dict[str, Any], action_verb: str
+    ) -> tuple[Any, dict[str, Any] | None]:
+        """Resolve a schedule from args' schedule_id/schedule_name for a mutation handler.
+
+        Returns (schedule, None) on success, or (None, error_result) on failure —
+        callers should `return` the error_result directly when it is not None.
+        """
+        from backend.legion.scheduler_service import (
+            ScheduleAmbiguousNameError,
+            ScheduleNotFoundError,
+            ScheduleOwnershipError,
+        )
+
+        schedule_id = (args.get("schedule_id") or "").strip()
+        schedule_name = (args.get("schedule_name") or "").strip()
+        if not schedule_id and not schedule_name:
+            return None, self._err("Error: Provide either schedule_id or schedule_name")
+
+        try:
+            schedule = await self.system.scheduler_service.resolve_schedule_for_minion(
+                from_minion_id,
+                schedule_id=schedule_id or None,
+                schedule_name=schedule_name or None,
+            )
+            return schedule, None
+        except ScheduleNotFoundError as e:
+            return None, self._err(f"Error: Schedule {e.identifier} not found")
+        except ScheduleAmbiguousNameError as e:
+            return None, self._err(
+                f"Error: Multiple schedules named '{e.schedule_name}' found ({e.count}). "
+                "Use schedule_id to disambiguate."
+            )
+        except ScheduleOwnershipError:
+            return None, self._err(f"Error: You can only {action_verb} your own schedules")
+
     async def _handle_pause_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
         """Handle pause_schedule tool call."""
         from_minion_id = args.get("_from_minion_id")
-        schedule_id = args.get("schedule_id", "").strip()
-
         if not from_minion_id:
             return self._err("Error: Unable to determine minion ID")
-        if not schedule_id:
-            return self._err("Error: schedule_id is required")
 
-        # Validate ownership
-        schedule = await self.system.scheduler_service.get_schedule(schedule_id)
-        if not schedule:
-            return self._err(f"Error: Schedule {schedule_id} not found")
-        if schedule.minion_id != from_minion_id:
-            return self._err("Error: You can only pause your own schedules")
+        schedule, err = await self._resolve_schedule_for_args(from_minion_id, args, "pause")
+        if err:
+            return err
 
         try:
-            await self.system.scheduler_service.pause_schedule(schedule_id)
+            await self.system.scheduler_service.pause_schedule(schedule.schedule_id)
             return {
                 "content": [{"type": "text", "text": f"Schedule '{schedule.name}' paused successfully."}],
                 "is_error": False,
@@ -2038,21 +2077,15 @@ class LegionMCPTools:
     async def _handle_resume_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
         """Handle resume_schedule tool call."""
         from_minion_id = args.get("_from_minion_id")
-        schedule_id = args.get("schedule_id", "").strip()
-
         if not from_minion_id:
             return self._err("Error: Unable to determine minion ID")
-        if not schedule_id:
-            return self._err("Error: schedule_id is required")
 
-        schedule = await self.system.scheduler_service.get_schedule(schedule_id)
-        if not schedule:
-            return self._err(f"Error: Schedule {schedule_id} not found")
-        if schedule.minion_id != from_minion_id:
-            return self._err("Error: You can only resume your own schedules")
+        schedule, err = await self._resolve_schedule_for_args(from_minion_id, args, "resume")
+        if err:
+            return err
 
         try:
-            updated = await self.system.scheduler_service.resume_schedule(schedule_id)
+            updated = await self.system.scheduler_service.resume_schedule(schedule.schedule_id)
 
             from datetime import datetime
             next_run_str = "N/A"
@@ -2076,21 +2109,15 @@ class LegionMCPTools:
     async def _handle_delete_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
         """Handle delete_schedule tool call."""
         from_minion_id = args.get("_from_minion_id")
-        schedule_id = args.get("schedule_id", "").strip()
-
         if not from_minion_id:
             return self._err("Error: Unable to determine minion ID")
-        if not schedule_id:
-            return self._err("Error: schedule_id is required")
 
-        schedule = await self.system.scheduler_service.get_schedule(schedule_id)
-        if not schedule:
-            return self._err(f"Error: Schedule {schedule_id} not found")
-        if schedule.minion_id != from_minion_id:
-            return self._err("Error: You can only delete your own schedules")
+        schedule, err = await self._resolve_schedule_for_args(from_minion_id, args, "delete")
+        if err:
+            return err
 
         try:
-            await self.system.scheduler_service.delete_schedule(schedule_id)
+            await self.system.scheduler_service.delete_schedule(schedule.schedule_id)
             return {
                 "content": [{"type": "text", "text": f"Schedule '{schedule.name}' deleted."}],
                 "is_error": False,
@@ -2103,18 +2130,12 @@ class LegionMCPTools:
     async def _handle_update_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
         """Handle update_schedule tool call."""
         from_minion_id = args.get("_from_minion_id")
-        schedule_id = args.get("schedule_id", "").strip()
-
         if not from_minion_id:
             return self._err("Error: Unable to determine minion ID")
-        if not schedule_id:
-            return self._err("Error: schedule_id is required")
 
-        schedule = await self.system.scheduler_service.get_schedule(schedule_id)
-        if not schedule:
-            return self._err(f"Error: Schedule {schedule_id} not found")
-        if schedule.minion_id != from_minion_id:
-            return self._err("Error: You can only update your own schedules")
+        schedule, err = await self._resolve_schedule_for_args(from_minion_id, args, "update")
+        if err:
+            return err
 
         name = args.get("name")
         prompt = args.get("prompt")
@@ -2146,9 +2167,9 @@ class LegionMCPTools:
         from backend.legion.scheduler_service import _ScheduleAutoDeletedError
 
         try:
-            updated = await self.system.scheduler_service.update_schedule(schedule_id, **fields)
+            updated = await self.system.scheduler_service.update_schedule(schedule.schedule_id, **fields)
         except _ScheduleAutoDeletedError:
-            return self._err(f"Schedule {schedule_id} was auto-deleted (repeat count exhausted)")
+            return self._err(f"Schedule {schedule.schedule_id} was auto-deleted (repeat count exhausted)")
         except ValueError as e:
             return self._err(f"Error: {e}")
 
