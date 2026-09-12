@@ -1,14 +1,20 @@
 <template>
   <div class="app-shell" data-testid="app-root">
     <!-- Row 1: Dark app chrome bar -->
-    <HeaderRow1 />
+    <HeaderRow1 v-if="!isStandaloneViewerRoute" />
 
     <!-- Row 2+3: Legacy project pills + agent strip, or experimental breadcrumb nav header (#1723) -->
-    <template v-if="!uiStore.experimentalNavHeader">
-      <ProjectPillBar v-show="!isSettingsRoute" />
-      <AgentStrip v-show="!isSettingsRoute" />
+    <!-- The standalone viewer route (#1896) is only ever reached via window.open() in a fresh
+         tab, never in-app navigation, so gating this whole block with v-if (rather than folding
+         another `&& !isStandaloneViewerRoute` into each v-show below) is safe and avoids
+         mounting the pill-bar/strip's store watchers for a tab that renders none of it. -->
+    <template v-if="!isStandaloneViewerRoute">
+      <template v-if="!uiStore.experimentalNavHeader">
+        <ProjectPillBar v-show="!isSettingsRoute" />
+        <AgentStrip v-show="!isSettingsRoute" />
+      </template>
+      <BreadcrumbNavHeader v-else v-show="!isSettingsRoute" />
     </template>
-    <BreadcrumbNavHeader v-else v-show="!isSettingsRoute" />
 
     <!-- Main Content (chat + right panel) -->
     <div class="main-layout">
@@ -31,6 +37,7 @@
       <!-- Right Panel: On desktop, v-show controls in-flow visibility;
            on mobile/tablet, overlay CSS handles transform-based slide -->
       <RightSidebar
+        v-if="!isStandaloneViewerRoute"
         v-show="!isFullWidthRoute && (rightPanelVisible || isTabletOrMobile)"
         :class="{ 'panel-overlay': isTabletOrMobile, 'panel-visible': rightPanelVisible }"
       />
@@ -112,6 +119,9 @@ const isFullWidthRoute = computed(() =>
 // Settings routes suppress the project pill bar and agent strip
 const isSettingsRoute = computed(() => route.path.startsWith('/settings/'))
 
+// Standalone resource viewer (issue #1896) — chrome-free popped-out tab, no app shell
+const isStandaloneViewerRoute = computed(() => route.name === 'resource-view')
+
 // KeepAlive config: only SessionView benefits from DOM preservation.
 // All other views (ProjectOverview, NoSessionSelected, analytics, settings) pass through uncached.
 const cacheableViewNames = ['SessionView']
@@ -167,6 +177,12 @@ onMounted(async () => {
     }
   } catch {
     // If auth check fails, try to proceed (server may be down)
+  }
+
+  // Issue #1896: the standalone resource viewer is a single-document reader tab —
+  // it needs none of projects/sessions/poll-cursor/UI-polling, so skip the fetch fleet.
+  if (isStandaloneViewerRoute.value) {
+    return
   }
 
   initializeApp()
