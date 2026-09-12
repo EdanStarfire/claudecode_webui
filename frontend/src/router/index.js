@@ -6,6 +6,7 @@ import ProjectOverview from '../components/project/ProjectOverview.vue'
 import AuditView from '../components/audit/AuditView.vue'
 import AnalyticsView from '../components/analytics/AnalyticsView.vue'
 import SettingsLayout from '../components/settings/SettingsLayout.vue'
+import ResourceStandaloneView from '../components/common/ResourceStandaloneView.vue'
 
 const routes = [
   {
@@ -22,6 +23,11 @@ const routes = [
     path: '/analytics',
     name: 'analytics',
     component: AnalyticsView
+  },
+  {
+    path: '/resource-view',
+    name: 'resource-view',
+    component: ResourceStandaloneView
   },
   {
     path: '/project/:projectId',

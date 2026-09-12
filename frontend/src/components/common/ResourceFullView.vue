@@ -162,6 +162,8 @@
                 {{ formatTimestamp(currentResource.timestamp) }}
               </span>
             </div>
+            <!-- Pop-out button -->
+            <PopoutButton class="popout-btn-overlay" @click="popoutResource" />
           </div>
         </div>
 
@@ -198,14 +200,7 @@
               >Source</button>
             </div>
             <!-- Pop-out button -->
-            <button class="popout-btn" @click.stop="popoutHtml" title="Open in new tab">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-                <polyline points="15 3 21 3 21 9"></polyline>
-                <line x1="10" y1="14" x2="21" y2="3"></line>
-              </svg>
-              Pop out
-            </button>
+            <PopoutButton @click="popoutResource" />
           </div>
           <!-- HTML Body -->
           <div class="html-body">
@@ -275,6 +270,8 @@
               :display-mode="displayMode"
               @click="printContent"
             />
+            <!-- Pop-out button -->
+            <PopoutButton @click="popoutResource" />
           </div>
 
           <!-- Text Body -->
@@ -345,9 +342,11 @@
 <script setup>
 import { computed, watch, ref, nextTick, onUnmounted } from 'vue'
 import { useResourceStore } from '@/stores/resource'
+import { getAuthToken } from '@/utils/api'
 import MarkdownView from './MarkdownView.vue'
 import CopyButton from './CopyButton.vue'
 import ExportPdfButton from './ExportPdfButton.vue'
+import PopoutButton from './PopoutButton.vue'
 
 const resourceStore = useResourceStore()
 const overlayRef = ref(null)
@@ -517,9 +516,26 @@ function handleKeydown(event) {
   }
 }
 
-function popoutHtml() {
+function popoutResource() {
   if (!currentResource.value) return
-  window.open(getResourceUrl(currentResource.value.resource_id), '_blank', 'noopener,noreferrer')
+  const id = currentResource.value.resource_id || currentResource.value.image_id
+  const url = getResourceUrl(id)
+  if (isCurrentHtml.value || isCurrentImage.value) {
+    window.open(url, '_blank', 'noopener,noreferrer')
+    return
+  }
+  const title = currentResource.value.title
+    || currentResource.value.original_filename
+    || currentResource.value.original_name
+    || 'Resource'
+  const hashParams = new URLSearchParams({ src: url, title })
+  const token = getAuthToken()
+  const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : ''
+  window.open(
+    `${window.location.pathname}${tokenQuery}#/resource-view?${hashParams.toString()}`,
+    '_blank',
+    'noopener,noreferrer'
+  )
 }
 
 async function copyDirectContent() {
@@ -1205,6 +1221,21 @@ function handleImageError(event) {
 .popout-btn:hover {
   background: var(--bs-tertiary-bg);
   color: var(--bs-emphasis-color);
+}
+
+/* Image container sits on a dark overlay regardless of theme — override for contrast,
+   same treatment .close-btn/.nav-btn already get via explicit rgba(...) values */
+.popout-btn-overlay {
+  display: inline-flex;
+  margin: 12px auto 0;
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: white;
+}
+
+.popout-btn-overlay:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
 }
 
 /* ===== Modal Transition ===== */
