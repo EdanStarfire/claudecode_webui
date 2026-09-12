@@ -5861,7 +5861,8 @@ class SessionCoordinator:
         Args:
             session_id: Session ID that owns the resource
             file_path: Absolute path to the uploaded file
-            title: Optional title for the resource (defaults to filename)
+            title: Title for the resource (required — the underlying MCP handler
+                rejects an empty title, issue #1912)
             description: Optional description
 
         Returns:

@@ -20,29 +20,39 @@ pytestmark = pytest.mark.slow
 @pytest.mark.asyncio
 async def test_spawn_minion_minimal(legion_test_env):
     """
-    Test spawn_minion with minimal parameters.
+    Test spawn_minion with minimal parameters (name/role/system_prompt/template_name).
+
+    Issue #1912: template_name is now a required parameter — minions can only be
+    spawned from a template, so this test supplies one instead of exercising the
+    (now removed) templateless default-permissions path.
 
     Verifies:
     - Tool returns success with child_minion_id
     - Child session created with ACTIVE state
     - Parent marked as overseer with child in child_minion_ids
     - SPAWN comm logged to timeline
-    - Default permissions applied
     """
     env = legion_test_env
     legion_system = env["legion_system"]
     data_dir = env["data_dir"]
     legion_id = env["legion_id"]
+    template_manager = env["template_manager"]
 
     # Create parent minion (will wait for ACTIVE state)
     parent = await env["create_minion"]("parent", role="Parent")
+
+    templates = await template_manager.list_templates()
+    if not templates:
+        pytest.skip("No templates available for testing")
+    template_name = templates[0].name
 
     # Spawn child via MCP tool handler
     result = await legion_system.mcp_tools._handle_spawn_minion({
         "_parent_overseer_id": parent.session_id,
         "name": "child",
         "role": "Child Worker",
-        "system_prompt": "You are a test child minion for integration testing."
+        "system_prompt": "You are a test child minion for integration testing.",
+        "template_name": template_name,
     })
 
     # Verify success response (not an error)
@@ -116,8 +126,27 @@ async def test_spawn_minion_minimal(legion_test_env):
     assert spawn_comm["to_user"] is True  # SPAWN comms are sent to user
     assert "child" in spawn_comm["content"]
 
-    # SIDE EFFECT 5: Default permissions applied
-    assert child_info.current_permission_mode == "default"
+
+@pytest.mark.asyncio
+async def test_spawn_minion_without_template_fails(legion_test_env):
+    """
+    Issue #1912: template_name is now required — spawn_minion must reject a call
+    that omits it instead of silently applying restricted default permissions.
+    """
+    env = legion_test_env
+    legion_system = env["legion_system"]
+
+    parent = await env["create_minion"]("parent", role="Parent")
+
+    result = await legion_system.mcp_tools._handle_spawn_minion({
+        "_parent_overseer_id": parent.session_id,
+        "name": "child",
+        "role": "Child Worker",
+        "system_prompt": "You are a test child minion for integration testing.",
+    })
+
+    assert result.get("is_error") is True
+    assert "template_name" in result["content"][0]["text"]
 
 
 @pytest.mark.asyncio
@@ -276,9 +305,14 @@ async def test_spawn_minion_with_capabilities(legion_test_env):
     """
     env = legion_test_env
     legion_system = env["legion_system"]
+    template_manager = env["template_manager"]
 
     # Create parent minion
     parent = await env["create_minion"]("parent", role="Parent")
+
+    templates = await template_manager.list_templates()
+    if not templates:
+        pytest.skip("No templates available for testing")
 
     # Spawn child with capabilities
     result = await legion_system.mcp_tools._handle_spawn_minion({
@@ -286,6 +320,7 @@ async def test_spawn_minion_with_capabilities(legion_test_env):
         "name": "child",
         "role": "Data Scientist",
         "system_prompt": "Test child with capabilities.",
+        "template_name": templates[0].name,
         "capabilities": ["python", "data analysis", "machine learning"]
     })
 
@@ -345,16 +380,23 @@ async def test_spawn_minion_error_duplicate_name(legion_test_env):
     """
     env = legion_test_env
     legion_system = env["legion_system"]
+    template_manager = env["template_manager"]
 
     # Create parent minion
     parent = await env["create_minion"]("parent", role="Parent")
+
+    templates = await template_manager.list_templates()
+    if not templates:
+        pytest.skip("No templates available for testing")
+    template_name = templates[0].name
 
     # Spawn first child
     result1 = await legion_system.mcp_tools._handle_spawn_minion({
         "_parent_overseer_id": parent.session_id,
         "name": "duplicate",
         "role": "Worker",
-        "system_prompt": "First test child."
+        "system_prompt": "First test child.",
+        "template_name": template_name,
     })
     assert result1.get("is_error") is not True
 
@@ -363,7 +405,8 @@ async def test_spawn_minion_error_duplicate_name(legion_test_env):
         "_parent_overseer_id": parent.session_id,
         "name": "duplicate",
         "role": "Worker",
-        "system_prompt": "Second test child (should fail)."
+        "system_prompt": "Second test child (should fail).",
+        "template_name": template_name,
     })
 
     # Verify error response
@@ -419,15 +462,21 @@ async def test_dispose_minion_direct_child(legion_test_env):
     legion_system = env["legion_system"]
     data_dir = env["data_dir"]
     legion_id = env["legion_id"]
+    template_manager = env["template_manager"]
 
     # Create parent and child
     parent = await env["create_minion"]("parent", role="Parent")
+
+    templates = await template_manager.list_templates()
+    if not templates:
+        pytest.skip("No templates available for testing")
 
     spawn_result = await legion_system.mcp_tools._handle_spawn_minion({
         "_parent_overseer_id": parent.session_id,
         "name": "child",
         "role": "Worker",
-        "system_prompt": "Test child for disposal."
+        "system_prompt": "Test child for disposal.",
+        "template_name": templates[0].name,
     })
     assert spawn_result.get("is_error") is not True
 
@@ -508,16 +557,23 @@ async def test_dispose_minion_with_descendants(legion_test_env):
     """
     env = legion_test_env
     legion_system = env["legion_system"]
+    template_manager = env["template_manager"]
 
     # Create parent, child, and grandchild
     parent = await env["create_minion"]("parent", role="Parent")
+
+    templates = await template_manager.list_templates()
+    if not templates:
+        pytest.skip("No templates available for testing")
+    template_name = templates[0].name
 
     # Spawn child
     child_result = await legion_system.mcp_tools._handle_spawn_minion({
         "_parent_overseer_id": parent.session_id,
         "name": "child",
         "role": "Worker",
-        "system_prompt": "Test child for recursive disposal."
+        "system_prompt": "Test child for recursive disposal.",
+        "template_name": template_name,
     })
     assert child_result.get("is_error") is not True
 
@@ -551,7 +607,8 @@ async def test_dispose_minion_with_descendants(legion_test_env):
         "_parent_overseer_id": child_id,
         "name": "grandchild",
         "role": "Sub-worker",
-        "system_prompt": "Test grandchild for recursive disposal."
+        "system_prompt": "Test grandchild for recursive disposal.",
+        "template_name": template_name,
     })
     assert grandchild_result.get("is_error") is not True
 
@@ -637,15 +694,21 @@ async def test_dispose_minion_error_not_your_child(legion_test_env):
     """
     env = legion_test_env
     legion_system = env["legion_system"]
+    template_manager = env["template_manager"]
 
     # Create parent1 and child
     parent1 = await env["create_minion"]("parent1", role="Parent 1")
+
+    templates = await template_manager.list_templates()
+    if not templates:
+        pytest.skip("No templates available for testing")
 
     spawn_result = await legion_system.mcp_tools._handle_spawn_minion({
         "_parent_overseer_id": parent1.session_id,
         "name": "child",
         "role": "Worker",
-        "system_prompt": "Test child for permission test."
+        "system_prompt": "Test child for permission test.",
+        "template_name": templates[0].name,
     })
     assert spawn_result.get("is_error") is not True
 

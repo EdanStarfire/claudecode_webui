@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from mcp.types import ListToolsRequest
 
 from backend.mcp.links_mcp_tools import (
     MAX_LABEL_LENGTH,
@@ -11,6 +12,13 @@ from backend.mcp.links_mcp_tools import (
     LinksMCPTools,
     _validate_url,
 )
+
+
+async def _get_tools_by_name(server_config):
+    """Introspect a session MCP server's registered tool schemas (issue #1912)."""
+    handler = server_config["instance"].request_handlers[ListToolsRequest]
+    result = await handler(ListToolsRequest(method="tools/list"))
+    return {t.name: t for t in result.root.tools}
 
 # ---------------------------------------------------------------------------
 # _validate_url
@@ -184,3 +192,19 @@ class TestHandleListLinks:
         tools = LinksMCPTools(session_coordinator=coordinator)
         result = await tools._handle_list_links("missing-sid", {})
         assert result["is_error"] is True
+
+
+# ---------------------------------------------------------------------------
+# Schema shape (issue #1912) — regression guard: links_mcp_tools is unchanged
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_schema_negative_control_unchanged():
+    tools = _make_tools()
+    server_config = tools.create_mcp_server_for_session("sess1")
+    tools_by_name = await _get_tools_by_name(server_config)
+
+    assert set(tools_by_name["register_link"].inputSchema.get("required", [])) == {
+        "label", "url"
+    }
+    assert list(tools_by_name["list_links"].inputSchema.get("required", [])) == []

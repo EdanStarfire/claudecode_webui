@@ -50,6 +50,22 @@ def _make_session(session_id, name, project_id="legion-1", parent_id=None, child
     return s
 
 
+def _make_template(name="TestTemplate"):
+    """Helper to create a mock Template (issue #1912: template_name is now required).
+
+    Sets an explicit permission_mode so resolve_template_config doesn't need to fall
+    back to parent_session.current_permission_mode (an unset Mock attribute in these tests).
+    """
+    t = Mock()
+    t.name = name
+    t.role = None
+    t.capabilities = []
+    t.profile_ids = {}
+    t.config = {"permission_mode": "default"}
+    t.template_id = "template-id"
+    return t
+
+
 @pytest.fixture
 def mock_system():
     """Create a mock LegionSystem with required components."""
@@ -107,13 +123,14 @@ class TestSpawnWithParentName:
             return_value={"minion_id": "child-id"}
         )
         session_map["child-id"] = child_session
-        mock_system.template_manager.get_template_by_name = AsyncMock(return_value=None)
+        mock_system.template_manager.get_template_by_name = AsyncMock(return_value=_make_template())
 
         args = {
             "_parent_overseer_id": "gp-id",
             "name": "Child",
             "role": "Worker",
             "system_prompt": "Do work",
+            "template_name": "TestTemplate",
             "parent_name": "Parent",
         }
 
@@ -177,13 +194,14 @@ class TestSpawnWithParentName:
         mock_system.overseer_controller.spawn_minion = AsyncMock(
             return_value={"minion_id": "child-id"}
         )
-        mock_system.template_manager.get_template_by_name = AsyncMock(return_value=None)
+        mock_system.template_manager.get_template_by_name = AsyncMock(return_value=_make_template())
 
         args = {
             "_parent_overseer_id": "caller-id",
             "name": "Child",
             "role": "Worker",
             "system_prompt": "Do work",
+            "template_name": "TestTemplate",
             # No parent_name
         }
 
@@ -244,13 +262,14 @@ class TestSpawnWithParentName:
         mock_system.overseer_controller.spawn_minion = AsyncMock(
             return_value={"minion_id": "child-id"}
         )
-        mock_system.template_manager.get_template_by_name = AsyncMock(return_value=None)
+        mock_system.template_manager.get_template_by_name = AsyncMock(return_value=_make_template())
 
         args = {
             "_parent_overseer_id": "caller-id",
             "name": "Child",
             "role": "Worker",
             "system_prompt": "Do work",
+            "template_name": "TestTemplate",
             "parent_name": "Caller",
         }
 

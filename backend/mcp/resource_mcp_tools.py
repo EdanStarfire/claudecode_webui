@@ -15,7 +15,7 @@ import json
 import logging
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 try:
     from claude_agent_sdk import create_sdk_mcp_server, tool
@@ -30,6 +30,21 @@ if TYPE_CHECKING:
     from backend.session_coordinator import SessionCoordinator
 
 logger = logging.getLogger(__name__)
+
+
+class RegisterResourceInput(TypedDict):
+    file_path: str                     # Absolute path to file (required)
+    title: str                         # Short caption (required)
+    description: NotRequired[str]      # Detailed description (optional)
+
+
+class ListResourcesInput(TypedDict):
+    format_filter: NotRequired[str]    # Optional filter: "image" or specific format
+
+
+class GetResourceInput(TypedDict):
+    resource_id: NotRequired[str]      # Optional: exact resource ID
+    filename: NotRequired[str]         # Optional: original filename (case-insensitive)
 
 # Constants
 MAX_RESOURCE_SIZE_BYTES = 10 * 1024 * 1024  # 10MB limit per resource
@@ -174,7 +189,7 @@ INLINE DISPLAY: For image resources, the response includes a `markdown` field wi
 ready-to-use markdown. To display the image inline in your response, paste the markdown
 from the `markdown` field directly into your message text.
 
-USAGE: Provide the absolute path to a file. The backend reads it directly.
+USAGE: Provide the absolute path to a file and a short title. The backend reads the file directly.
 
 Examples:
   register_resource(file_path="/home/user/screenshot.png", title="Login Page")
@@ -184,11 +199,7 @@ Examples:
 
 Supported types: Text, Code, Config, Images, Videos (webm, mp4), Data files
 Maximum size: 10MB per resource""",
-            {
-                "file_path": str,      # Absolute path to file (required)
-                "title": str,          # Short caption (optional, default: filename)
-                "description": str     # Detailed description (optional)
-            }
+            RegisterResourceInput,
         )
         async def register_resource_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Register a resource for display in the task panel."""
@@ -202,11 +213,7 @@ Maximum size: 10MB per resource""",
 DEPRECATED: Use register_resource() instead - it supports all file types.
 
 This tool is kept for backward compatibility but simply calls register_resource.""",
-            {
-                "file_path": str,
-                "title": str,
-                "description": str
-            }
+            RegisterResourceInput,
         )
         async def register_image_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Register an image (backward compatibility wrapper)."""
@@ -231,9 +238,7 @@ Each resource includes:
 
 Optional: Use format_filter to filter by format type (e.g. "image" for images only,
 or a specific extension like "png", "json").""",
-            {
-                "format_filter": str,  # Optional filter: "image" or specific format
-            }
+            ListResourcesInput,
         )
         async def list_resources_tool(args: dict[str, Any]) -> dict[str, Any]:
             """List all session resources with metadata."""
@@ -246,11 +251,8 @@ or a specific extension like "png", "json").""",
 Returns a single resource with its metadata and markdown URL for inline embedding.
 Provide either resource_id or filename (case-insensitive match on original filename).
 
-At least one of resource_id or filename must be provided.""",
-            {
-                "resource_id": str,  # Optional: exact resource ID
-                "filename": str,    # Optional: original filename (case-insensitive)
-            }
+Provide exactly one of resource_id or filename.""",
+            GetResourceInput,
         )
         async def get_resource_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Get a specific resource by ID or filename."""
@@ -299,6 +301,15 @@ At least one of resource_id or filename must be provided.""",
                     "content": [{
                         "type": "text",
                         "text": "Error: 'file_path' parameter is required and cannot be empty"
+                    }],
+                    "is_error": True
+                }
+
+            if not title:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": "Error: 'title' parameter is required and cannot be empty"
                     }],
                     "is_error": True
                 }
@@ -405,10 +416,6 @@ At least one of resource_id or filename must be provided.""",
 
             # Generate unique resource ID
             resource_id = str(uuid.uuid4())
-
-            # Use filename as default title if not provided
-            if not title:
-                title = file_path.name
 
             # Create resource metadata
             from backend.timestamp_utils import get_unix_timestamp
@@ -583,6 +590,12 @@ At least one of resource_id or filename must be provided.""",
             if not resource_id and not filename:
                 return {
                     "content": [{"type": "text", "text": "Error: Provide at least one of 'resource_id' or 'filename'"}],
+                    "is_error": True
+                }
+
+            if resource_id and filename:
+                return {
+                    "content": [{"type": "text", "text": "Error: provide only one of 'resource_id' or 'filename', not both."}],
                     "is_error": True
                 }
 
