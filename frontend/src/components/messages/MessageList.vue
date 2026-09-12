@@ -573,7 +573,7 @@ function injectDateSeparators(items) {
   for (const item of items) {
     const ts = timestampForItem(item)
     const key = ts ? localDateKey(ts) : null
-    if (prevKey !== null && key !== null && key !== prevKey) {
+    if (key !== null && key !== prevKey) {
       out.push({ type: 'date_separator', label: formatDateSeparatorLabel(ts) })
     }
     out.push(item)
