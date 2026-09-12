@@ -810,11 +810,13 @@ describe('virtualizer offset model (#1748 stage: offset-model)', () => {
     expect(lane).toBeTruthy()
     const top = parseFloat(lane.style.top)
     const height = parseFloat(lane.style.height)
-    // The launch row (index 0, unmocked) measures at the ResizeObserver stub's default height
-    // (600, see mockResizeObserver.js) — that becomes the terminal row's own start offset in the
-    // virtualizer's coordinate system. bottom = that start + the anchor's own offset within its
-    // row (1036 - 1000 = 36), NOT the row's full bottom (1400 - 1000 = 400).
-    expect(top + height).toBeCloseTo(600 + 36, 0)
+    // Issue #1911: a leading date-separator row now precedes the launch row (both messages fall
+    // on the same calendar day), adding one more unmocked row at the ResizeObserver stub's
+    // default height (600) ahead of it. The launch row (index 1, unmocked) then measures at that
+    // same default height — together the two unmocked rows become the terminal row's own start
+    // offset in the virtualizer's coordinate system. bottom = that start + the anchor's own
+    // offset within its row (1036 - 1000 = 36), NOT the row's full bottom (1400 - 1000 = 400).
+    expect(top + height).toBeCloseTo(600 + 600 + 36, 0)
   })
 
   it('scrolls to the new bottom when a message is appended while sticky-to-bottom (§7)', async () => {
@@ -875,7 +877,9 @@ describe('virtualizer offset model (#1748 stage: offset-model)', () => {
     // a single assistant message growing token-by-token. This is the explicit wiring point (the
     // virtualizer's onChange, not an outer content-box ResizeObserver) plan §7 calls out as easy
     // to silently regress.
-    const tailRow = document.querySelector('[data-index="0"]')
+    // Issue #1911: index 0 is now the leading date separator (the message's default timestamp is
+    // a real date), so the message itself — the row whose growth this test is about — is index 1.
+    const tailRow = document.querySelector('[data-index="1"]')
     expect(tailRow).toBeTruthy()
     resizeObserverStub.triggerResize(tailRow, { height: 900 })
 
@@ -1013,10 +1017,12 @@ describe('findPrevTurnIndex / findNextTurnIndex (#1848)', () => {
     const { useMessageStore } = await import('@/stores/message')
     const messageStore = useMessageStore(pinia)
 
-    // index 0: user (boundary A), 1-49: system filler (type 'system' so each stays its own
+    // Issue #1911: a leading date-separator row now precedes index 0 (all messages fall on the
+    // same calendar day), shifting every index below by one: index 0: the new leading separator,
+    // index 1: user (boundary A), 2-50: system filler (type 'system' so each stays its own
     // displayableItems entry — unlike 'assistant', it neither merges via
-    // mergeConsecutiveAssistantTurns nor counts as a turn boundary itself), index 50: inbound
-    // comm (boundary B, user-role), 51-99: system filler. Boundaries are spaced far enough apart
+    // mergeConsecutiveAssistantTurns nor counts as a turn boundary itself), index 51: inbound
+    // comm (boundary B, user-role), 52-100: system filler. Boundaries are spaced far enough apart
     // (50 rows) that scrolling to the midpoint keeps both OUTSIDE the virtualizer's mounted
     // range (visible rows + OVERSCAN_ROWS on each side, ~24 rows total) — visibleIndexRange
     // reflects the current MOUNTED window, not just the pixel-visible viewport, so a small gap
@@ -1045,8 +1051,8 @@ describe('findPrevTurnIndex / findNextTurnIndex (#1848)', () => {
     await wrapper.vm.scrollToItemIndex(25, { align: 'start', behavior: 'auto' })
     await new Promise(r => setTimeout(r, 20))
 
-    expect(wrapper.vm.findPrevTurnIndex()).toBe(0)
-    expect(wrapper.vm.findNextTurnIndex()).toBe(50)
+    expect(wrapper.vm.findPrevTurnIndex()).toBe(1)
+    expect(wrapper.vm.findNextTurnIndex()).toBe(51)
   })
 
   it('returns null when there is no boundary above/below (first/last message in view)', async () => {
@@ -1271,5 +1277,82 @@ describe('windowing — real overscan (#1748 stage: windowing)', () => {
     await new Promise(r => setTimeout(r, 20))
     expect(document.querySelector(`[data-index="${saved.itemIndex}"]`)).toBeTruthy()
     expect(document.querySelector('[data-index="0"]')).toBeFalsy()
+  })
+})
+
+describe('leading date separator (#1911)', () => {
+  it('renders exactly one separator, positioned before the first message, for a single-day session', async () => {
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: {
+        MessageItem: { template: '<div role="article" data-testid="msg-item">{{ message.content }}</div>', props: ['message', 'attachedTools'] },
+        TruncationBanner: true,
+        SubagentTimeline: true
+      }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    // timestamp close to "now" so formatDateSeparatorLabel() labels it "Today", matching the
+    // existing test fixture convention (see CompactionEventGroup.test.js's RECENT_TS).
+    const recentTs = Date.now() / 1000
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({ type: 'assistant', content: 'First message', timestamp: recentTs }),
+      makeMessage({ type: 'user', content: 'Second message', timestamp: recentTs })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    const separators = screen.getAllByRole('separator')
+    expect(separators.length).toBe(1)
+    expect(separators[0].querySelector('.date-separator-label').textContent).toBe('Today')
+
+    // Positioned before the first message: row 0 is the separator, matching the file's existing
+    // data-index="0" idiom for asserting fixed row positions.
+    expect(document.querySelector('[data-index="0"]').querySelector('[role="separator"]')).toBeTruthy()
+  })
+
+  it('renders a separator above every day, including the first, for a multi-day session', async () => {
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: {
+        MessageItem: { template: '<div role="article" data-testid="msg-item">{{ message.content }}</div>', props: ['message', 'attachedTools'] },
+        TruncationBanner: true,
+        SubagentTimeline: true
+      }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    // 2 days apart (UTC) so each boundary is unambiguous regardless of local TZ — reusing the
+    // pattern from the "does not merge across a date separator" test above.
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({ type: 'assistant', content: 'Day one', timestamp: 1704067200 }),
+      makeMessage({ type: 'user', content: 'Day three', timestamp: 1704240000 }),
+      makeMessage({ type: 'assistant', content: 'Day five', timestamp: 1704412800 })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(screen.getAllByRole('separator').length).toBe(3)
+  })
+
+  it('renders no separator for a zero-message session', async () => {
+    renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: {
+        MessageItem: true,
+        TruncationBanner: true,
+        SubagentTimeline: true
+      }
+    })
+
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(screen.queryAllByRole('separator').length).toBe(0)
   })
 })
