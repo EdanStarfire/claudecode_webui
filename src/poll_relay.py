@@ -23,6 +23,16 @@ defeating #1598's unread-detection fix. ensure_session_relay() is called on
 every local poll request and refreshes the last-activity timestamp; the loop
 checks it and stops itself once idle, restarting lazily next time a real
 browser poll arrives.
+
+_relay_loop's append discipline differs by stream (issue #1890): session
+queues adopt Backend's own cursor numbering (required — see event_cursor
+handoff in backend/routers/sessions.py and frontend/src/stores/message.js),
+while the UI queue uses plain auto-increment, since no REST contract ever
+exposes a Backend-derived cursor for that stream to the browser. The UI
+queue also has a second local writer (src/routers/system.py's restart
+notice); mixing cursor-adoption and auto-increment on one EventQueue
+instance violates the queue's one-discipline-per-instance invariant and can
+silently drop or wipe events.
 """
 
 import asyncio
@@ -98,14 +108,28 @@ class PollRelay:
                     return
             try:
                 events, next_cursor = await self._poll_once(path, cursor)
-                # Backend's events_since() guarantees a returned batch is contiguous
-                # (either a slice of retained events or the full retained window), so
-                # this formula recovers each event's real Backend cursor exactly —
-                # adopting it keeps the local queue in Backend's own cursor space
-                # instead of generating an independent numbering (issue #1886).
-                start_cursor = next_cursor - len(events) + 1
-                for i, event in enumerate(events):
-                    queue.append(event, cursor=start_cursor + i)
+                if session_id is not None:
+                    # Session queues: local numbering must match Backend's real cursor
+                    # space — GET /api/sessions/{id}/messages hands the browser a
+                    # Backend-space event_cursor it later polls
+                    # /api/poll/session/{id}?since= against (issue #1886/#1889).
+                    # Backend's events_since() guarantees a returned batch is
+                    # contiguous, so this formula recovers each event's real Backend
+                    # cursor exactly.
+                    start_cursor = next_cursor - len(events) + 1
+                    for i, event in enumerate(events):
+                        queue.append(event, cursor=start_cursor + i)
+                else:
+                    # UI queue: no Backend-derived cursor is ever exposed to the
+                    # browser for this stream (no REST endpoint hands out a "global
+                    # event cursor"), so there is no contract requiring this queue's
+                    # numbering to match Backend's. Plain auto-increment keeps this
+                    # queue on the SAME discipline /api/system/restart's direct local
+                    # write already uses (src/routers/system.py) — mixing disciplines
+                    # on one queue caused #1890 (a local auto-increment bump colliding
+                    # with/desyncing Backend's adopted cursor space).
+                    for event in events:
+                        queue.append(event)
                 cursor = next_cursor
             except asyncio.CancelledError:
                 raise

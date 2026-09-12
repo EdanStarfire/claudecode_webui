@@ -17,6 +17,18 @@ class EventQueue:
         self._waiters: list[asyncio.Event] = []
 
     def append(self, event: dict, cursor: int | None = None) -> int:
+        """Append an event, either auto-incrementing the local cursor (cursor=None)
+        or adopting an externally-authoritative cursor value.
+
+        A given queue instance must pick exactly one discipline and stick to it:
+        the `cursor` param's contiguity/reset logic below assumes every write to
+        this instance comes from the same authoritative numbering scheme. Mixing
+        an auto-incrementing writer with a cursor-adopting writer on the same
+        instance breaks that assumption — an auto-increment bump can collide with
+        or desync the adopted cursor space, causing a dropped event (dedup branch)
+        or a full local-history wipe (reset branch) on the next adopted write
+        (issue #1890).
+        """
         if cursor is not None:
             if self._events and cursor == self._cursor:
                 return self._cursor  # exact redelivery of the last-known event — idempotent skip
