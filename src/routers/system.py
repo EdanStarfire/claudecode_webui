@@ -437,6 +437,11 @@ def build_router(webui) -> APIRouter:
 
         # Append restart notice to the local UI poll queue — same event shape Backend
         # already used for its own restart broadcast, so no frontend JS change is needed.
+        # This write and poll_relay.py's _ui_task both intentionally use the
+        # auto-increment discipline (no cursor= arg) for ui_queue (issue #1890) — do
+        # not reintroduce cursor adoption on one writer without also revisiting the
+        # other, since mixing disciplines on one EventQueue instance can silently
+        # drop or wipe events.
         try:
             webui.ui_queue.append({
                 "type": "server_restarting",

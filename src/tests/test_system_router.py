@@ -14,6 +14,7 @@ so they always described Backend's repo, never Frontend's own — in embedded mo
 this happened to look correct only because it's the same checkout.
 """
 
+import asyncio
 import logging
 import subprocess
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -23,6 +24,8 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from shared.event_queue import EventQueue
+from src.poll_relay import PollRelay
 from src.routers.system import _finish_restart, build_router
 
 
@@ -105,6 +108,95 @@ class TestRestartDefaultPath:
 
         assert first.status_code == 202
         assert second.status_code == 429
+
+
+class TestRestartNoticeAgainstLiveQueue:
+    """Issue #1890: every other test in this file mocks webui.ui_queue.append
+    entirely (see _make_webui), so the restart-notice write never touches real
+    EventQueue state — exactly how the original ui_queue local-write/relay-cursor
+    collision shipped untested. This exercises the real EventQueue plus a running
+    (mocked-backend) UI relay task sharing that same instance."""
+
+    @pytest.mark.asyncio
+    async def test_restart_notice_survives_concurrent_relay_delivery(self):
+        # Embedded mode: skips _restart_remote_backend's health()/ready()/
+        # request_json() awaits entirely, so restart_server's own body runs with
+        # no internal await before its ui_queue.append call — needed so the
+        # relay's release below deterministically lands AFTER the restart
+        # notice, not racing it via an unrelated await point.
+        webui = _make_webui(backend_supervisor=MagicMock(stop=AsyncMock()))
+        webui.ui_queue = EventQueue()
+
+        release_relay = asyncio.Event()
+        delivered = asyncio.Event()
+
+        async def get_json_side_effect(*args, **kwargs):
+            await release_relay.wait()
+            if not delivered.is_set():
+                delivered.set()
+                # Chosen so pre-#1890-fix cursor-adoption arithmetic would land
+                # exactly on the cursor the restart notice's auto-increment write
+                # already bumped ui_queue to (1), triggering the old dedup-skip
+                # branch instead of appending this event.
+                return {"events": [{"type": "message", "n": "relay-1"}], "next_cursor": 1}
+            await asyncio.sleep(100)
+
+        backend_client = MagicMock()
+        backend_client.get_json = AsyncMock(side_effect=get_json_side_effect)
+        relay = PollRelay(backend_client, webui.ui_queue, {})
+        relay.start_ui_relay()
+
+        def run_side_effect(cmd, **kwargs):
+            if cmd == ["git", "pull"]:
+                return _fake_completed(stdout="Already up to date.\n")
+            if cmd == ["uv", "sync"]:
+                return _fake_completed(stdout="Synced\n")
+            raise AssertionError(f"Unexpected subprocess.run call: {cmd}")
+
+        finish_restart_task = None
+        try:
+            with (
+                patch("src.routers.system.subprocess.run", side_effect=run_side_effect),
+                patch("src.routers.system.os.execv"),
+            ):
+                async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+                    resp = await client.post("/api/system/restart")
+
+                assert resp.status_code == 202
+                assert webui.ui_queue.current_cursor == 1  # restart notice landed via auto-increment
+
+                # restart_server() scheduled _finish_restart fire-and-forget — it's
+                # irrelevant to this test's ui_queue collision scenario, and letting
+                # its background 0.5s-later real-os.execv call race this test's own
+                # polling below (rather than being cancelled outright) would make
+                # safety depend on incidental timing instead of being deterministic.
+                for task in asyncio.all_tasks():
+                    if getattr(task.get_coro(), "__name__", "") == "_finish_restart":
+                        finish_restart_task = task
+                        task.cancel()
+
+                # Only now let the relay deliver its event, guaranteeing the collision
+                # ordering: local write first, adopted-cursor-shaped relay write second.
+                release_relay.set()
+
+                for _ in range(300):
+                    events, _ = webui.ui_queue.events_since(0)
+                    if len(events) >= 2:
+                        break
+                    await asyncio.sleep(0.01)
+
+            events, _ = webui.ui_queue.events_since(0)
+            markers = [(e.get("type"), e.get("n")) for e in events]
+            assert ("server_restarting", None) in markers
+            assert ("message", "relay-1") in markers
+            assert len(events) == 2  # neither writer's event was dropped or wiped
+        finally:
+            await relay.stop()
+            if finish_restart_task is not None:
+                try:
+                    await finish_restart_task
+                except asyncio.CancelledError:
+                    pass
 
 
 class TestRestartCustomTarget:

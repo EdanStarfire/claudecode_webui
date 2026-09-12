@@ -372,3 +372,76 @@ async def test_backend_restart_regression_delivers_next_event_exactly_once():
     assert next_cursor == 1
 
     await relay.stop()
+
+
+# --- issue #1890: ui_queue local-write / relay-cursor collision ---
+
+
+@pytest.mark.asyncio
+async def test_ui_relay_uses_auto_increment_not_backend_cursor():
+    """The UI queue has no Backend-derived cursor contract — no REST endpoint
+    ever hands the browser a "global event cursor" to resolve against
+    (unlike sessions' event_cursor). The relay must number ui_queue events
+    with its own auto-increment, not adopt Backend's next_cursor verbatim."""
+    first_batch_done = asyncio.Event()
+
+    async def side_effect(*args, **kwargs):
+        if not first_batch_done.is_set():
+            first_batch_done.set()
+            return {"events": [{"type": "message", "n": 1}], "next_cursor": 500}
+        await asyncio.sleep(100)
+
+    relay, backend_client, ui_queue, _ = _make_relay(get_json_side_effect=side_effect)
+    relay.start_ui_relay()
+
+    for _ in range(300):
+        if ui_queue.current_cursor:
+            break
+        await asyncio.sleep(0.01)
+
+    assert ui_queue.current_cursor == 1  # local auto-increment, not Backend's next_cursor=500
+    events, next_cursor = ui_queue.events_since(0)
+    assert [e["n"] for e in events] == [1]
+    assert next_cursor == 1
+
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_ui_queue_local_write_and_relay_write_do_not_collide():
+    """Core regression test for #1890: a direct local write (simulating
+    /api/system/restart's ui_queue.append) and a relay-delivered event on the
+    SAME EventQueue instance must not collide. Under the pre-fix
+    cursor-adoption behavior, a relay event whose computed Backend-derived
+    cursor happened to equal the queue's already-bumped local cursor would be
+    silently dropped as a duplicate (shared/event_queue.py's dedup branch)."""
+    first_batch_done = asyncio.Event()
+
+    async def side_effect(*args, **kwargs):
+        if not first_batch_done.is_set():
+            first_batch_done.set()
+            # Chosen so pre-fix cursor-adoption arithmetic (next_cursor - len + 1)
+            # would land exactly on 1 — the cursor the direct write below already
+            # bumped to, triggering the dedup-skip branch and dropping this event.
+            return {"events": [{"type": "message", "n": "relay-1"}], "next_cursor": 1}
+        await asyncio.sleep(100)
+
+    relay, backend_client, ui_queue, _ = _make_relay(get_json_side_effect=side_effect)
+
+    # Simulate /api/system/restart's direct local write happening first.
+    ui_queue.append({"type": "server_restarting", "n": "restart-notice"})
+    assert ui_queue.current_cursor == 1
+
+    relay.start_ui_relay()
+
+    for _ in range(300):
+        events, _ = ui_queue.events_since(0)
+        if len(events) >= 2:
+            break
+        await asyncio.sleep(0.01)
+
+    events, next_cursor = ui_queue.events_since(0)
+    assert [e["n"] for e in events] == ["restart-notice", "relay-1"]  # no drop, no reset
+    assert next_cursor == 2
+
+    await relay.stop()
