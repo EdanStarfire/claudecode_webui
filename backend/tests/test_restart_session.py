@@ -69,6 +69,15 @@ async def test_issue_680_restart_missing_session_id(mcp_tools):
 
 
 @pytest.mark.asyncio
+async def test_issue_1912_restart_requires_reason(mcp_tools):
+    """Issue #1912: reason is now required — restart_session must reject an empty reason."""
+    result = await mcp_tools._handle_restart_session({"_from_minion_id": "session-1"})
+
+    assert result["is_error"] is True
+    assert "reason" in result["content"][0]["text"].lower()
+
+
+@pytest.mark.asyncio
 async def test_issue_680_restart_session_not_found(mcp_tools):
     """Tool returns error when session doesn't exist."""
     mcp_tools.system.session_coordinator.session_manager.get_session_info = AsyncMock(
@@ -77,7 +86,7 @@ async def test_issue_680_restart_session_not_found(mcp_tools):
 
     result = await mcp_tools._handle_restart_session({
         "_from_minion_id": "nonexistent",
-        "reason": "",
+        "reason": "testing",
     })
 
     assert result["is_error"] is True
@@ -94,7 +103,7 @@ async def test_issue_680_restart_session_not_active(mcp_tools):
 
     result = await mcp_tools._handle_restart_session({
         "_from_minion_id": "session-1",
-        "reason": "",
+        "reason": "testing",
     })
 
     assert result["is_error"] is True

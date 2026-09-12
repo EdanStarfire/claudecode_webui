@@ -1,8 +1,16 @@
 """Tests for video resource support in ResourceMCPTools (issue #1546)."""
 
 import pytest
+from mcp.types import ListToolsRequest
 
 from backend.mcp.resource_mcp_tools import MIME_TYPES, VIDEO_EXTENSIONS, ResourceMCPTools
+
+
+async def _get_tools_by_name(server_config):
+    """Introspect a session MCP server's registered tool schemas (issue #1912)."""
+    handler = server_config["instance"].request_handlers[ListToolsRequest]
+    result = await handler(ListToolsRequest(method="tools/list"))
+    return {t.name: t for t in result.root.tools}
 
 # Minimal WebM bytes: EBML header magic + padding
 VALID_WEBM_BYTES = b'\x1a\x45\xdf\xa3' + b'\x00' * 100
@@ -101,7 +109,7 @@ async def test_register_valid_webm(tmp_path, tools, storage):
     webm_file = tmp_path / "recording.webm"
     webm_file.write_bytes(VALID_WEBM_BYTES)
 
-    result = await tools._handle_register_resource("sess1", {"file_path": str(webm_file)})
+    result = await tools._handle_register_resource("sess1", {"file_path": str(webm_file), "title": "Recording"})
 
     assert not result["is_error"]
     assert storage.appended_resources
@@ -118,7 +126,7 @@ async def test_register_valid_mp4(tmp_path, tools, storage):
     mp4_file = tmp_path / "video.mp4"
     mp4_file.write_bytes(VALID_MP4_BYTES)
 
-    result = await tools._handle_register_resource("sess1", {"file_path": str(mp4_file)})
+    result = await tools._handle_register_resource("sess1", {"file_path": str(mp4_file), "title": "Video"})
 
     assert not result["is_error"]
     meta = storage.appended_resources[0]
@@ -132,7 +140,7 @@ async def test_register_invalid_video_bytes_rejected(tmp_path, tools):
     bad_file = tmp_path / "fake.mp4"
     bad_file.write_bytes(INVALID_VIDEO_BYTES)
 
-    result = await tools._handle_register_resource("sess1", {"file_path": str(bad_file)})
+    result = await tools._handle_register_resource("sess1", {"file_path": str(bad_file), "title": "Fake Video"})
 
     assert result["is_error"]
     assert "valid video" in result["content"][0]["text"]
@@ -144,7 +152,7 @@ async def test_register_oversized_video_rejected(tmp_path, tools):
     # 11 MB — just over the 10 MB limit
     big_file.write_bytes(b'x' * (11 * 1024 * 1024))
 
-    result = await tools._handle_register_resource("sess1", {"file_path": str(big_file)})
+    result = await tools._handle_register_resource("sess1", {"file_path": str(big_file), "title": "Big Video"})
 
     assert result["is_error"]
     assert "too large" in result["content"][0]["text"].lower()
@@ -155,7 +163,7 @@ async def test_register_mov_rejected(tmp_path, tools):
     mov_file = tmp_path / "video.mov"
     mov_file.write_bytes(VALID_MP4_BYTES)
 
-    result = await tools._handle_register_resource("sess1", {"file_path": str(mov_file)})
+    result = await tools._handle_register_resource("sess1", {"file_path": str(mov_file), "title": "Movie"})
 
     assert result["is_error"]
     assert "Unsupported file extension" in result["content"][0]["text"]
@@ -240,3 +248,51 @@ def test_register_resource_description_mentions_versioning():
     description = captured["register_resource"]
     assert "version" in description.lower()
     assert "_v2" in description or "_final" in description
+
+
+# ---- Schema shape (issue #1912) ----
+
+@pytest.mark.asyncio
+async def test_schema_required_fields():
+    """Issue #1912: declared `required` sets must match actual handler behavior."""
+    coordinator = FakeSessionCoordinator(FakeStorageManager())
+    t = ResourceMCPTools(coordinator)
+    server_config = t.create_mcp_server_for_session("sess1")
+    tools_by_name = await _get_tools_by_name(server_config)
+
+    assert set(tools_by_name["register_resource"].inputSchema.get("required", [])) == {
+        "file_path", "title"
+    }
+    assert set(tools_by_name["register_image"].inputSchema.get("required", [])) == {
+        "file_path", "title"
+    }
+    assert list(tools_by_name["list_resources"].inputSchema.get("required", [])) == []
+    # get_resource's "exactly one of" constraint is handler-only, not schema-expressible.
+    assert list(tools_by_name["get_resource"].inputSchema.get("required", [])) == []
+
+
+# ---- register_resource/register_image title required (issue #1912) ----
+
+@pytest.mark.asyncio
+async def test_register_resource_without_title_fails(tmp_path, tools):
+    file_path = tmp_path / "screenshot.png"
+    file_path.write_bytes(b'\x89PNG\r\n\x1a\n' + b'\x00' * 100)
+
+    result = await tools._handle_register_resource("sess1", {"file_path": str(file_path)})
+
+    assert result["is_error"] is True
+    assert "title" in result["content"][0]["text"].lower()
+
+
+# ---- get_resource exactly-one-of (issue #1912) ----
+
+@pytest.mark.asyncio
+async def test_get_resource_both_ids_provided_fails():
+    t = _tools_with_fixed_resources([
+        {"resource_id": "r1", "original_name": "report.md", "timestamp": 100},
+    ])
+
+    result = await t._handle_get_resource("sess1", {"resource_id": "r1", "filename": "report.md"})
+
+    assert result["is_error"] is True
+    assert "only one" in result["content"][0]["text"].lower()

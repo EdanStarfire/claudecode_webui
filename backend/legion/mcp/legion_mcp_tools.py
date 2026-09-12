@@ -16,7 +16,7 @@ Tools are exposed to minions with names like: mcp__legion__send_comm
 import asyncio
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 try:
     from claude_agent_sdk import create_sdk_mcp_server, tool
@@ -36,6 +36,83 @@ legion_logger = get_logger('legion', 'MCP_TOOLS')
 
 if TYPE_CHECKING:
     from backend.legion_system import LegionSystem
+
+
+class SendCommInput(TypedDict):
+    to_minion_name: str                    # Exact name of target minion (case-sensitive)
+    summary: NotRequired[str]              # Specific one-sentence update (actionable)
+    content: NotRequired[str]              # Details only if summary needs elaboration (supports markdown)
+    comm_type: NotRequired[str]            # One of: task, question, report, info
+    interrupt_priority: NotRequired[str]   # Optional: "none", "halt", or "pivot" (default: "none")
+    attachments: NotRequired[str]          # Optional: JSON array of absolute file paths to attach
+
+
+class SpawnMinionInput(TypedDict):
+    name: str                              # Unique name for new minion
+    role: str                              # Human-readable role description
+    system_prompt: str                     # System prompt defining expertise
+    template_name: str                     # Template to apply for permissions (required)
+    working_directory: NotRequired[str]    # Custom working directory (optional)
+    sandbox_enabled: NotRequired[bool]     # Enable OS-level sandboxing (optional, default: False)
+    parent_name: NotRequired[str]          # Name of existing descendant to be parent (optional)
+
+
+class DisposeMinionInput(TypedDict):
+    minion_name: str                # Name of child minion to dispose
+    delete: NotRequired[bool]       # If True, fully delete after archive (default: False = soft dispose)
+
+
+class UpdateExpertiseInput(TypedDict):
+    capability: str                             # Capability keyword (lowercase with underscores)
+    expertise_score: NotRequired[float | None]  # 0.0-1.0 score (default: 0.5 if None)
+
+
+class CreateScheduleInput(TypedDict):
+    name: str
+    cron_expression: str
+    prompt: NotRequired[str]
+    script: NotRequired[str]
+    script_timeout_seconds: NotRequired[int]
+    reset_session: NotRequired[bool]
+    max_retries: NotRequired[int]
+    timeout_seconds: NotRequired[int]
+
+
+class ListSchedulesInput(TypedDict):
+    status: NotRequired[str]
+
+
+class PauseScheduleInput(TypedDict):
+    schedule_id: NotRequired[str]
+    schedule_name: NotRequired[str]
+
+
+class ResumeScheduleInput(TypedDict):
+    schedule_id: NotRequired[str]
+    schedule_name: NotRequired[str]
+
+
+class DeleteScheduleInput(TypedDict):
+    schedule_id: NotRequired[str]
+    schedule_name: NotRequired[str]
+
+
+class UpdateScheduleInput(TypedDict):
+    schedule_id: NotRequired[str]
+    schedule_name: NotRequired[str]
+    name: NotRequired[str]
+    prompt: NotRequired[str]
+    cron_expression: NotRequired[str]
+
+
+class RestartSessionInput(TypedDict):
+    reason: str
+
+
+class QueueTaskInput(TypedDict):
+    session_id: str
+    content: str
+    reset_session: NotRequired[bool]
 
 
 class LegionMCPTools:
@@ -99,15 +176,9 @@ class LegionMCPTools:
             "\n\n**File Attachments (optional):**"
             "\nPass `attachments` as a list of absolute file paths to share files with the recipient. "
             "Files are copied into the recipient's session and registered for auto-approve Read. "
-            "Max 10MB per file. Supported extensions: text, code, config, image, and data files.",
-            {
-                "to_minion_name": str,       # Exact name of target minion (case-sensitive)
-                "summary": str,              # Specific one-sentence update (actionable)
-                "content": str,              # Details only if summary needs elaboration (supports markdown)
-                "comm_type": str,            # One of: task, question, report, info
-                "interrupt_priority": str,   # Optional: "none", "halt", or "pivot" (default: "none")
-                "attachments": str           # Optional: JSON array of absolute file paths to attach
-            }
+            "Max 10MB per file. Supported extensions: text, code, config, image, and data files."
+            "\n\n**Note:** At least one of `summary` or `content` must be provided.",
+            SendCommInput,
         )
         async def send_comm_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Send communication to another minion."""
@@ -126,15 +197,11 @@ class LegionMCPTools:
             "\n\nWorkflow:"
             "\n1. spawn_minion(name='Helper', template_name='Code Expert', system_prompt='Review auth code')"
             "\n2. send_comm(to_minion_name='Helper', summary='Begin task', content='Task details...', comm_type='task')"
-            "\n\n**Using Templates (Recommended):**"
-            "\nUse a template to spawn with specific permissions:"
+            "\n\n**Using Templates (Required):**"
+            "\nEvery minion must be spawned from a template — there is no templateless option:"
             "\n- First, use list_templates() to see available templates"
             "\n- Then spawn: spawn_minion(name='Helper', template_name='Code Expert', system_prompt='Review auth code')"
             "\n- Template enforces permission_mode and allowed_tools (secure, user-controlled)"
-            "\n\n**Without Template:**"
-            "\nIf no template specified, child gets default restricted permissions:"
-            "\n- permission_mode='manual' (prompts for every tool use)"
-            "\n- allowed_tools=[] (no pre-authorized tools)"
             "\n\n**Working Directory (Optional):**"
             "\nSpecify a custom working directory for git worktrees or multi-repo workflows:"
             "\n- working_directory='/path/to/worktree' - Use absolute or relative path"
@@ -148,15 +215,7 @@ class LegionMCPTools:
             "\n- parent_name='TeamLead' - The new minion becomes a child of TeamLead instead of you"
             "\n- The named parent must be one of your descendants (or yourself)"
             "\n- If omitted, the new minion is your direct child (default behavior)",
-            {
-                "name": str,                           # Unique name for new minion
-                "role": str,                           # Human-readable role description
-                "system_prompt": str,                   # System prompt defining expertise
-                "template_name": str,                  # Template to apply for permissions (optional)
-                "working_directory": str,              # Custom working directory (optional)
-                "sandbox_enabled": bool,               # Enable OS-level sandboxing (optional, default: False)
-                "parent_name": str                     # Name of existing descendant to be parent (optional)
-            }
+            SpawnMinionInput,
         )
         async def spawn_minion_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Spawn a new child minion."""
@@ -171,10 +230,7 @@ class LegionMCPTools:
             "Use delete=True to permanently remove the minion (their data is archived first). "
             "Use delete=False (default) for soft dispose - the minion can be restarted later "
             "by sending it a comm.",
-            {
-                "minion_name": str,  # Name of child minion to dispose
-                "delete": bool       # If True, fully delete after archive (default: False = soft dispose)
-            }
+            DisposeMinionInput,
         )
         async def dispose_minion_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Dispose of a child minion."""
@@ -253,10 +309,7 @@ class LegionMCPTools:
             "\n- update_expertise('jwt_authentication', 0.7)"
             "\n- update_expertise('postgresql', 0.9)"
             "\n- update_expertise('docker')  # Uses default 0.5",
-            {
-                "capability": str,                    # Capability keyword (lowercase with underscores)
-                "expertise_score": float | None       # 0.0-1.0 score (default: 0.5 if None)
-            }
+            UpdateExpertiseInput,
         )
         async def update_expertise_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Update minion's expertise for a capability."""
@@ -301,16 +354,7 @@ class LegionMCPTools:
             "\n- reset_session (optional, default false): Reset session before each execution for clean context"
             "\n- max_retries (optional, default 3): Max delivery retries on failure"
             "\n- timeout_seconds (optional, default 3600): Delivery timeout",
-            {
-                "name": str,
-                "cron_expression": str,
-                "prompt": str,
-                "script": str,
-                "script_timeout_seconds": int,
-                "reset_session": bool,
-                "max_retries": int,
-                "timeout_seconds": int,
-            }
+            CreateScheduleInput,
         )
         async def create_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Create a recurring schedule for the calling minion."""
@@ -323,9 +367,7 @@ class LegionMCPTools:
             "and status. Optionally filter by status."
             "\n\nParameters:"
             "\n- status (optional): Filter by 'active', 'paused', or 'cancelled'",
-            {
-                "status": str,
-            }
+            ListSchedulesInput,
         )
         async def list_schedules_tool(args: dict[str, Any]) -> dict[str, Any]:
             """List schedules for the calling minion."""
@@ -338,10 +380,7 @@ class LegionMCPTools:
             "\n\nParameters (provide exactly one of schedule_id/schedule_name):"
             "\n- schedule_id: The ID of the schedule to pause"
             "\n- schedule_name: The name of the schedule to pause (must be one of your own schedules)",
-            {
-                "schedule_id": str,
-                "schedule_name": str,
-            }
+            PauseScheduleInput,
         )
         async def pause_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Pause a schedule owned by the calling minion."""
@@ -355,10 +394,7 @@ class LegionMCPTools:
             "\n\nParameters (provide exactly one of schedule_id/schedule_name):"
             "\n- schedule_id: The ID of the schedule to resume"
             "\n- schedule_name: The name of the schedule to resume (must be one of your own schedules)",
-            {
-                "schedule_id": str,
-                "schedule_name": str,
-            }
+            ResumeScheduleInput,
         )
         async def resume_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Resume a schedule owned by the calling minion."""
@@ -371,10 +407,7 @@ class LegionMCPTools:
             "\n\nParameters (provide exactly one of schedule_id/schedule_name):"
             "\n- schedule_id: The ID of the schedule to delete"
             "\n- schedule_name: The name of the schedule to delete (must be one of your own schedules)",
-            {
-                "schedule_id": str,
-                "schedule_name": str,
-            }
+            DeleteScheduleInput,
         )
         async def delete_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Delete a schedule owned by the calling minion."""
@@ -397,13 +430,7 @@ class LegionMCPTools:
             "\n- prompt (optional): New prompt text. Only valid for prompt-type schedules. Must be non-empty"
             "\n- cron_expression (optional): New cron expression (5-field standard cron). "
             "Examples: '0 8 * * 1-5' (weekdays 8am), '*/30 * * * *' (every 30 min)",
-            {
-                "schedule_id": str,
-                "schedule_name": str,
-                "name": str,
-                "prompt": str,
-                "cron_expression": str,
-            }
+            UpdateScheduleInput,
         )
         async def update_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Update a schedule owned by the calling minion."""
@@ -420,10 +447,9 @@ class LegionMCPTools:
             "Do not execute any more tools or produce further output. The system will "
             "restart your session and send a continuation message so you can resume."
             "\n\nParameters:"
-            "\n- reason (optional): Why you need to restart (logged for audit)",
-            {
-                "reason": str,
-            }
+            "\n- reason (required): Why you need to restart (logged for audit and included "
+            "in your post-restart continuation message)",
+            RestartSessionInput,
         )
         async def restart_session_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Request a session restart."""
@@ -446,11 +472,7 @@ class LegionMCPTools:
             "Returns queue_id and position for your own bookkeeping.\n\n"
             "Note: queue_task is not hierarchy-scoped — you may queue into any session "
             "whose ID you know, not just your own children.",
-            {
-                "session_id": str,
-                "content": str,
-                "reset_session": bool,
-            }
+            QueueTaskInput,
         )
         async def queue_task_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Enqueue a prompt for deferred delivery to a session."""
@@ -621,6 +643,9 @@ class LegionMCPTools:
         content = args.get("content", "")
         summary = args.get("summary", "")
 
+        if not (summary or "").strip() and not (content or "").strip():
+            return self._err("Error: provide at least one of 'summary' or 'content'.")
+
         # Fallback: If summary is empty, auto-generate from first 50 chars of content
         if not summary and content:
             summary = content[:50] + ("..." if len(content) > 50 else "")
@@ -767,7 +792,7 @@ class LegionMCPTools:
         Handle spawn_minion tool call from a minion.
 
         Security Model:
-        - Minions can ONLY use templates or default restricted permissions
+        - Minions can ONLY spawn from a template (template_name is required)
         - NO ad-hoc permission specification allowed (prevents privilege escalation)
         - Templates are user-controlled and enforce specific permission sets
 
@@ -777,7 +802,7 @@ class LegionMCPTools:
                 "name": str,
                 "role": str,
                 "system_prompt": str,
-                "template_name": str,  # Optional - if provided, enforces template permissions
+                "template_name": str,  # Required - enforces template permissions
                 "capabilities": List[str]  # Optional
             }
 
@@ -850,141 +875,119 @@ class LegionMCPTools:
         if not system_prompt:
             return self._err("Error: 'system_prompt' parameter is required and cannot be empty. Provide clear instructions for what this minion should do.")
 
-        # SECURITY: Apply template permissions or use safe defaults
-        # Minions cannot specify custom permissions directly
+        if not template_name:
+            return self._err(
+                "Error: 'template_name' parameter is required — minions can only be "
+                "spawned from a template. Use list_templates() to see available templates."
+            )
+
+        # SECURITY: Apply template permissions (no ad-hoc overrides allowed)
         permission_mode = None
         allowed_tools = None
         disallowed_tools = None
         template_applied = None
 
-        if template_name:
-            # Template specified - look up and apply (no overrides allowed)
-            try:
-                template = await self.system.template_manager.get_template_by_name(template_name)
+        # Template specified - look up and apply (no overrides allowed)
+        try:
+            template = await self.system.template_manager.get_template_by_name(template_name)
 
-                if not template:
-                    return self._err(f"❌ Error: Template '{template_name}' not found. Use list_templates() to see available templates.")
+            if not template:
+                return self._err(f"❌ Error: Template '{template_name}' not found. Use list_templates() to see available templates.")
 
-                template_applied = template
+            template_applied = template
 
-                profile_manager = getattr(self.system.session_coordinator, 'profile_manager', None)
-                resolved = await resolve_template_config(template, profile_manager)
+            profile_manager = getattr(self.system.session_coordinator, 'profile_manager', None)
+            resolved = await resolve_template_config(template, profile_manager)
 
-                # Apply resolved values (enforced, no overrides)
-                # Use resolved config with parent fallback for missing fields.
-                permission_mode = resolved.get('permission_mode') or parent_session.current_permission_mode
-                allowed_tools = resolved.get('allowed_tools')
-                disallowed_tools = resolved.get('disallowed_tools')
+            # Apply resolved values (enforced, no overrides)
+            # Use resolved config with parent fallback for missing fields.
+            permission_mode = resolved.get('permission_mode') or parent_session.current_permission_mode
+            allowed_tools = resolved.get('allowed_tools')
+            disallowed_tools = resolved.get('disallowed_tools')
 
-                # Use template's role if role not provided
-                if not role and template.role:
-                    role = template.role
+            # Use template's role if role not provided
+            if not role and template.role:
+                role = template.role
 
-                # Prepend template's system_prompt if exists
-                _tpl_sp = template.config.get("system_prompt")
-                if _tpl_sp:
-                    system_prompt = f"{_tpl_sp}\n\n{system_prompt}"
+            # Prepend template's system_prompt if exists
+            _tpl_sp = template.config.get("system_prompt")
+            if _tpl_sp:
+                system_prompt = f"{_tpl_sp}\n\n{system_prompt}"
 
-                # Apply model from resolved config if set
-                model = resolved.get('model') or None
+            # Apply model from resolved config if set
+            model = resolved.get('model') or None
 
-                # Apply capabilities from template (merge with any provided)
-                if template.capabilities:
-                    template_caps = list(template.capabilities)
-                    for cap in capabilities:
-                        if cap not in template_caps:
-                            template_caps.append(cap)
-                    capabilities = template_caps
+            # Apply capabilities from template (merge with any provided)
+            if template.capabilities:
+                template_caps = list(template.capabilities)
+                for cap in capabilities:
+                    if cap not in template_caps:
+                        template_caps.append(cap)
+                capabilities = template_caps
 
-                # Apply override_system_prompt from resolved config
-                override_system_prompt = resolved.get(
-                    'override_system_prompt', template.config.get('override_system_prompt', False)
-                )
+            # Apply override_system_prompt from resolved config
+            override_system_prompt = resolved.get(
+                'override_system_prompt', template.config.get('override_system_prompt', False)
+            )
 
-                # Apply sandbox_enabled from resolved config
-                if resolved.get('sandbox_enabled'):
-                    sandbox_enabled = True
+            # Apply sandbox_enabled from resolved config
+            if resolved.get('sandbox_enabled'):
+                sandbox_enabled = True
 
-                # Apply cli_path from resolved config (issue #489)
-                # SECURITY: cli_path flows only through user-controlled templates
-                cli_path = resolved.get('cli_path')
+            # Apply cli_path from resolved config (issue #489)
+            # SECURITY: cli_path flows only through user-controlled templates
+            cli_path = resolved.get('cli_path')
 
-                # Apply process_wrapper from resolved config (issue #1672)
-                # SECURITY: process_wrapper flows only through user-controlled templates
-                process_wrapper = resolved.get('process_wrapper')
+            # Apply process_wrapper from resolved config (issue #1672)
+            # SECURITY: process_wrapper flows only through user-controlled templates
+            process_wrapper = resolved.get('process_wrapper')
 
-                # Apply Docker isolation from resolved config (issue #496)
-                # SECURITY: Docker config flows only through user-controlled templates
-                docker_enabled = resolved.get('docker_enabled', False)
-                docker_image = resolved.get('docker_image')
-                docker_extra_mounts = resolved.get('docker_extra_mounts')
+            # Apply Docker isolation from resolved config (issue #496)
+            # SECURITY: Docker config flows only through user-controlled templates
+            docker_enabled = resolved.get('docker_enabled', False)
+            docker_image = resolved.get('docker_image')
+            docker_extra_mounts = resolved.get('docker_extra_mounts')
 
-                # Extract additional config fields, falling back to parent session
-                # (issue #762: ensure all SessionConfig fields propagate through spawn path)
-                _pc = parent_session.config
-                thinking_mode = resolved.get('thinking_mode') or _pc.get('thinking_mode')
-                thinking_budget_tokens = (
-                    resolved.get('thinking_budget_tokens') or _pc.get('thinking_budget_tokens')
-                )
-                effort = resolved.get('effort') or _pc.get('effort')
-                setting_sources = resolved.get('setting_sources') or _pc.get('setting_sources')
-                additional_directories = (
-                    resolved.get('additional_directories') or _pc.get('additional_directories')
-                )
-                sandbox_config = resolved.get('sandbox_config') or _pc.get('sandbox_config')
-                docker_home_directory = (
-                    resolved.get('docker_home_directory') or _pc.get('docker_home_directory')
-                )
-                # Booleans: fall back to SessionConfig defaults when neither resolved nor
-                # parent config has the field (post-#1230 config dicts omit default values).
-                history_distillation_enabled = resolved.get(
-                    'history_distillation_enabled',
-                    _pc.get('history_distillation_enabled', _SESSION_DEFAULTS['history_distillation_enabled']),
-                )
-                auto_memory_mode = resolved.get('auto_memory_mode') or _pc.get('auto_memory_mode') or _SESSION_DEFAULTS['auto_memory_mode']
-                skill_creating_enabled = resolved.get(
-                    'skill_creating_enabled',
-                    _pc.get('skill_creating_enabled', _SESSION_DEFAULTS['skill_creating_enabled']),
-                )
-                mcp_server_ids = resolved.get('mcp_server_ids') or _pc.get('mcp_server_ids')
-                enable_claudeai_mcp_servers = resolved.get(
-                    'enable_claudeai_mcp_servers',
-                    _pc.get('enable_claudeai_mcp_servers', _SESSION_DEFAULTS['enable_claudeai_mcp_servers']),
-                )
-                strict_mcp_config = resolved.get(
-                    'strict_mcp_config',
-                    _pc.get('strict_mcp_config', _SESSION_DEFAULTS['strict_mcp_config']),
-                )
-
-            except Exception as e:
-                legion_logger.error(f"Error applying template: {e}", exc_info=True)
-                return self._err(f"❌ Error applying template: {str(e)}")
-        else:
-            # No template - use safe default restricted permissions
-            permission_mode = "manual"  # Prompts for most actions
-            allowed_tools = []  # No pre-authorized tools (user must approve each tool use)
-            model = None
-            override_system_prompt = False
-            cli_path = None
-            process_wrapper = None
+            # Extract additional config fields, falling back to parent session
+            # (issue #762: ensure all SessionConfig fields propagate through spawn path)
             _pc = parent_session.config
-            docker_enabled = _pc.get('docker_enabled', False)
-            docker_image = _pc.get('docker_image')
-            docker_extra_mounts = _pc.get('docker_extra_mounts')
-            # Inherit operational config from parent (issue #762)
-            thinking_mode = _pc.get('thinking_mode')
-            thinking_budget_tokens = _pc.get('thinking_budget_tokens')
-            effort = _pc.get('effort')
-            setting_sources = _pc.get('setting_sources')
-            additional_directories = _pc.get('additional_directories') or []
-            sandbox_config = _pc.get('sandbox_config')
-            docker_home_directory = _pc.get('docker_home_directory')
-            history_distillation_enabled = _pc.get('history_distillation_enabled', _SESSION_DEFAULTS['history_distillation_enabled'])
-            auto_memory_mode = _pc.get('auto_memory_mode') or _SESSION_DEFAULTS['auto_memory_mode']
-            skill_creating_enabled = _pc.get('skill_creating_enabled', _SESSION_DEFAULTS['skill_creating_enabled'])
-            mcp_server_ids = _pc.get('mcp_server_ids')
-            enable_claudeai_mcp_servers = _pc.get('enable_claudeai_mcp_servers', _SESSION_DEFAULTS['enable_claudeai_mcp_servers'])
-            strict_mcp_config = _pc.get('strict_mcp_config', _SESSION_DEFAULTS['strict_mcp_config'])
+            thinking_mode = resolved.get('thinking_mode') or _pc.get('thinking_mode')
+            thinking_budget_tokens = (
+                resolved.get('thinking_budget_tokens') or _pc.get('thinking_budget_tokens')
+            )
+            effort = resolved.get('effort') or _pc.get('effort')
+            setting_sources = resolved.get('setting_sources') or _pc.get('setting_sources')
+            additional_directories = (
+                resolved.get('additional_directories') or _pc.get('additional_directories')
+            )
+            sandbox_config = resolved.get('sandbox_config') or _pc.get('sandbox_config')
+            docker_home_directory = (
+                resolved.get('docker_home_directory') or _pc.get('docker_home_directory')
+            )
+            # Booleans: fall back to SessionConfig defaults when neither resolved nor
+            # parent config has the field (post-#1230 config dicts omit default values).
+            history_distillation_enabled = resolved.get(
+                'history_distillation_enabled',
+                _pc.get('history_distillation_enabled', _SESSION_DEFAULTS['history_distillation_enabled']),
+            )
+            auto_memory_mode = resolved.get('auto_memory_mode') or _pc.get('auto_memory_mode') or _SESSION_DEFAULTS['auto_memory_mode']
+            skill_creating_enabled = resolved.get(
+                'skill_creating_enabled',
+                _pc.get('skill_creating_enabled', _SESSION_DEFAULTS['skill_creating_enabled']),
+            )
+            mcp_server_ids = resolved.get('mcp_server_ids') or _pc.get('mcp_server_ids')
+            enable_claudeai_mcp_servers = resolved.get(
+                'enable_claudeai_mcp_servers',
+                _pc.get('enable_claudeai_mcp_servers', _SESSION_DEFAULTS['enable_claudeai_mcp_servers']),
+            )
+            strict_mcp_config = resolved.get(
+                'strict_mcp_config',
+                _pc.get('strict_mcp_config', _SESSION_DEFAULTS['strict_mcp_config']),
+            )
+
+        except Exception as e:
+            legion_logger.error(f"Error applying template: {e}", exc_info=True)
+            return self._err(f"❌ Error applying template: {str(e)}")
 
         # Validate role is set (from parameter or template)
         if not role:
@@ -1034,7 +1037,7 @@ class LegionMCPTools:
                 mcp_server_ids=mcp_server_ids,
                 enable_claudeai_mcp_servers=enable_claudeai_mcp_servers,
                 strict_mcp_config=strict_mcp_config,
-                template_id=template_applied.template_id if template_applied else None,
+                template_id=template_applied.template_id,
             )
             spawn_result = await self.system.overseer_controller.spawn_minion(
                 parent_overseer_id=parent_overseer_id,
@@ -1051,21 +1054,13 @@ class LegionMCPTools:
             child_slug = child_session.slug if child_session else name
 
             # Build success message with permission info
-            perm_info = ""
-            if template_applied:
-                _tpl_tools = template_applied.config.get("allowed_tools") or []
-                tools_str = ", ".join(_tpl_tools) if _tpl_tools else "all"
-                perm_info = (
-                    f"\n**Permissions** (from template '{template_applied.name}'):\n"
-                    f"  - Permission Mode: {template_applied.config.get('permission_mode', 'manual')}\n"
-                    f"  - Allowed Tools: {tools_str}"
-                )
-            else:
-                perm_info = (
-                    "\n**Permissions** (safe defaults):\n"
-                    "  - Permission Mode: manual\n"
-                    "  - Allowed Tools: none (user must approve each tool use)"
-                )
+            _tpl_tools = template_applied.config.get("allowed_tools") or []
+            tools_str = ", ".join(_tpl_tools) if _tpl_tools else "all"
+            perm_info = (
+                f"\n**Permissions** (from template '{template_applied.name}'):\n"
+                f"  - Permission Mode: {template_applied.config.get('permission_mode', 'manual')}\n"
+                f"  - Allowed Tools: {tools_str}"
+            )
 
             # Add working directory info if specified
             wd_info = ""
@@ -2208,6 +2203,9 @@ class LegionMCPTools:
 
         if not session_id:
             return self._err("Error: Unable to determine session ID")
+
+        if not reason:
+            return self._err("Error: 'reason' parameter is required.")
 
         # Check session exists and is active
         session_info = await self.system.session_coordinator.session_manager.get_session_info(

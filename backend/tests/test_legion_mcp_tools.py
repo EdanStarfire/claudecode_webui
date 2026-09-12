@@ -5,8 +5,16 @@ Tests for Legion MCP tools with SDK integration.
 from unittest.mock import Mock
 
 import pytest
+from mcp.types import ListToolsRequest
 
 from backend.legion_system import LegionSystem
+
+
+async def _get_tools_by_name(server_config):
+    """Introspect a session MCP server's registered tool schemas (issue #1912)."""
+    handler = server_config["instance"].request_handlers[ListToolsRequest]
+    result = await handler(ListToolsRequest(method="tools/list"))
+    return {t.name: t for t in result.root.tools}
 
 
 @pytest.fixture
@@ -48,6 +56,52 @@ def test_create_mcp_server_for_session(legion_system):
     # If None, SDK not available in test environment (expected)
 
 
+@pytest.mark.asyncio
+async def test_schema_required_fields_for_modified_tools(mcp_tools):
+    """Issue #1912: declared `required` sets must match actual handler behavior."""
+    server_config = mcp_tools.create_mcp_server_for_session("test-session")
+    tools_by_name = await _get_tools_by_name(server_config)
+
+    assert set(tools_by_name["pause_schedule"].inputSchema.get("required", [])) == set()
+    assert set(tools_by_name["resume_schedule"].inputSchema.get("required", [])) == set()
+    assert set(tools_by_name["delete_schedule"].inputSchema.get("required", [])) == set()
+    assert set(tools_by_name["create_schedule"].inputSchema.get("required", [])) == {
+        "name", "cron_expression"
+    }
+    assert set(tools_by_name["send_comm"].inputSchema.get("required", [])) == {"to_minion_name"}
+    assert set(tools_by_name["spawn_minion"].inputSchema.get("required", [])) == {
+        "name", "role", "system_prompt", "template_name"
+    }
+    assert set(tools_by_name["dispose_minion"].inputSchema.get("required", [])) == {"minion_name"}
+    assert set(tools_by_name["update_expertise"].inputSchema.get("required", [])) == {"capability"}
+    assert set(tools_by_name["update_schedule"].inputSchema.get("required", [])) == set()
+    assert set(tools_by_name["restart_session"].inputSchema.get("required", [])) == {"reason"}
+    assert set(tools_by_name["queue_task"].inputSchema.get("required", [])) == {
+        "session_id", "content"
+    }
+    assert set(tools_by_name["list_schedules"].inputSchema.get("required", [])) == set()
+
+
+@pytest.mark.asyncio
+async def test_schema_negative_controls_untouched_tools(mcp_tools):
+    """Issue #1912: tools not part of this fix must keep their existing schemas exactly."""
+    server_config = mcp_tools.create_mcp_server_for_session("test-session")
+    tools_by_name = await _get_tools_by_name(server_config)
+
+    assert set(tools_by_name["search_capability"].inputSchema.get("required", [])) == {
+        "capability"
+    }
+    assert list(tools_by_name["list_minions"].inputSchema.get("required", [])) == []
+    assert set(tools_by_name["get_minion_info"].inputSchema.get("required", [])) == {
+        "minion_name"
+    }
+    assert list(tools_by_name["list_templates"].inputSchema.get("required", [])) == []
+    assert list(tools_by_name["whoami"].inputSchema.get("required", [])) == []
+    assert set(tools_by_name["reparent_minion"].inputSchema.get("required", [])) == {
+        "subject_name", "new_parent_name"
+    }
+
+
 def test_tool_handler_methods_exist(mcp_tools):
     """Test that all tool handler methods are defined."""
     handler_methods = [
@@ -82,6 +136,19 @@ async def test_send_comm_handler_requires_sender_id(mcp_tools):
     # Expect error about missing sender ID
     assert "sender minion id" in result["content"][0]["text"].lower()
     assert result.get("is_error") is True
+
+
+@pytest.mark.asyncio
+async def test_send_comm_requires_summary_or_content(mcp_tools):
+    """Issue #1912: send_comm must reject calls where both summary and content are blank."""
+    result = await mcp_tools._handle_send_comm({
+        "_from_minion_id": "sender-id",
+        "to_minion_name": "user",
+        "comm_type": "info",
+    })
+
+    assert result.get("is_error") is True
+    assert "at least one" in result["content"][0]["text"].lower()
 
 
 @pytest.mark.asyncio
@@ -538,6 +605,44 @@ async def test_issue_1730_send_comm_embeds_resolved_resource_id_per_attachment(t
         {"name": "a.txt", "resource_id": "res-a", "size": 9, "mime_type": "text/plain"},
         {"name": "b.txt", "resource_id": "res-b", "size": 10, "mime_type": "text/plain"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_send_comm_summary_only_succeeds(tmp_path):
+    """Issue #1912: summary alone (no content) satisfies the at-least-one requirement."""
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    session_id = "sender-summary-only"
+    mock_system = _make_send_comm_system_with_router(session_id, tmp_path, resource_ids=[])
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_send_comm({
+        "_from_minion_id": session_id,
+        "to_minion_name": "user",
+        "summary": "Task complete",
+        "comm_type": "report",
+    })
+
+    assert result["is_error"] is False
+
+
+@pytest.mark.asyncio
+async def test_send_comm_content_only_succeeds(tmp_path):
+    """Issue #1912: content alone (no summary) satisfies the at-least-one requirement."""
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    session_id = "sender-content-only"
+    mock_system = _make_send_comm_system_with_router(session_id, tmp_path, resource_ids=[])
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_send_comm({
+        "_from_minion_id": session_id,
+        "to_minion_name": "user",
+        "content": "Detailed report body",
+        "comm_type": "report",
+    })
+
+    assert result["is_error"] is False
 
 
 @pytest.mark.asyncio
@@ -1454,10 +1559,22 @@ async def test_issue_1581_spawn_parent_name_large_subtree():
         "slug": "newchild",
     })
 
+    # Issue #1912: template_name is now required for spawn_minion.
+    template = MagicMock()
+    template.name = "TestTemplate"
+    template.role = None
+    template.capabilities = []
+    template.profile_ids = {}
+    template.config = {"permission_mode": "default"}
+    template.template_id = "template-id"
+    template_manager = MagicMock()
+    template_manager.get_template_by_name = AsyncMock(return_value=template)
+
     mock_system = MagicMock()
     mock_system.session_coordinator = session_coordinator
     mock_system.legion_coordinator = legion_coordinator
     mock_system.overseer_controller = overseer_controller
+    mock_system.template_manager = template_manager
 
     mcp_tools = LegionMCPTools(mock_system)
 
@@ -1466,6 +1583,7 @@ async def test_issue_1581_spawn_parent_name_large_subtree():
         "name": "NewChild",
         "role": "Worker",
         "system_prompt": "Do work.",
+        "template_name": "TestTemplate",
         "parent_name": "NamedParent",
     })
 
