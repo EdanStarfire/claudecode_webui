@@ -16,6 +16,7 @@ import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -23,7 +24,7 @@ from backend.docker_utils import classify_docker_output, cleanup_session_tmp
 from backend.legion.minion_system_prompts import get_legion_guide_only
 from shared.logging_config import get_logger
 
-from .claude_sdk import ClaudeSDK
+from .claude_sdk import ClaudeSDK, ResultError
 from .config_resolution import resolve_effective_config
 from .data_storage import DataStorageManager
 from .hooks.pretooluse_handler import InternalPermissionHandler
@@ -2006,12 +2007,37 @@ class SessionCoordinator:
                 # Get the error message from the SDK
                 raw_error_message = getattr(sdk.info, 'error_message', 'Unknown error occurred while starting Claude Code')
 
+                # Issue #1902: sdk.start() already mirrors a caught ResultError's structured
+                # fields onto sdk.info (_apply_result_error_fields) before returning False —
+                # reconstruct that ResultError shape here so this fallback stays consistent
+                # with what error_callback("startup_failed", ...) already computed, instead
+                # of downgrading it back to plain substring-matched text.
+                mirrored_result_error = SimpleNamespace(
+                    subtype=getattr(sdk.info, 'error_subtype', None),
+                    terminal_reason=getattr(sdk.info, 'error_terminal_reason', None),
+                    api_error_status=getattr(sdk.info, 'error_api_error_status', None),
+                    errors=getattr(sdk.info, 'error_list', None) or [],
+                    result=getattr(sdk.info, 'error_result', None),
+                )
+                is_result_error = bool(
+                    mirrored_result_error.subtype
+                    or mirrored_result_error.terminal_reason
+                    or mirrored_result_error.errors
+                    or mirrored_result_error.result
+                )
+                result_error = mirrored_result_error if is_result_error else None
+                structured_error_kwargs = (
+                    self._result_error_structured_kwargs(result_error) if result_error else {}
+                )
+
                 # Extract user-friendly error message
-                error_message = self._extract_claude_cli_error(raw_error_message)
+                error_message = self._extract_claude_cli_error(raw_error_message, result_error)
 
                 # Update session state to ERROR and reset processing state
                 try:
-                    await self.session_manager.update_session_state(session_id, SessionState.ERROR, error_message)
+                    await self.session_manager.update_session_state(
+                        session_id, SessionState.ERROR, error_message, **structured_error_kwargs
+                    )
                     # Also ensure processing state is reset when going to error state
                     await self.session_manager.update_processing_state(session_id, False)
                     await self._notify_state_change(session_id, SessionState.ERROR)
@@ -2020,7 +2046,9 @@ class SessionCoordinator:
                     logger.exception("Failed to update session state to ERROR")
 
                 # Send system message explaining the failure (with raw details)
-                await self._send_session_failure_message(session_id, error_message, raw_error_message)
+                await self._send_session_failure_message(
+                    session_id, error_message, raw_error_message, **structured_error_kwargs
+                )
 
                 # Clean up the failed SDK
                 if session_id in self._active_sdks:
@@ -5229,11 +5257,22 @@ class SessionCoordinator:
 
                     # Extract user-friendly error message, preserve raw for details
                     raw_error_str = str(error)
-                    user_error_message = self._extract_claude_cli_error(raw_error_str)
+                    # Issue #1902: branch on the SDK's structured ResultError before
+                    # falling back to substring-matching — existing generic-error
+                    # handling (below) still applies unchanged for non-ResultError failures.
+                    result_error = error if isinstance(error, ResultError) else None
+                    structured_error_kwargs = (
+                        self._result_error_structured_kwargs(result_error)
+                        if result_error is not None
+                        else {}
+                    )
+                    user_error_message = self._extract_claude_cli_error(raw_error_str, result_error)
 
                     # Update session state to ERROR and reset processing state
                     try:
-                        await self.session_manager.update_session_state(session_id, SessionState.ERROR, user_error_message)
+                        await self.session_manager.update_session_state(
+                            session_id, SessionState.ERROR, user_error_message, **structured_error_kwargs
+                        )
                         # Also ensure processing state is reset when going to error state
                         await self.session_manager.update_processing_state(session_id, False)
                         await self._notify_state_change(session_id, SessionState.ERROR)
@@ -5242,7 +5281,9 @@ class SessionCoordinator:
                         logger.exception("Failed to update session state to ERROR")
 
                     # Send system message explaining the runtime failure (with raw details)
-                    await self._send_session_failure_message(session_id, user_error_message, raw_error_str)
+                    await self._send_session_failure_message(
+                        session_id, user_error_message, raw_error_str, **structured_error_kwargs
+                    )
 
                     # Clean up the failed SDK
                     if session_id in self._active_sdks:
@@ -5334,9 +5375,24 @@ class SessionCoordinator:
         except Exception:
             logger.exception(f"Failed to send client launched message for {session_id}")
 
-    async def _send_session_failure_message(self, session_id: str, error_message: str,
-                                               raw_error: str | None = None):
-        """Send a system message indicating the session failed to start"""
+    async def _send_session_failure_message(
+        self,
+        session_id: str,
+        error_message: str,
+        raw_error: str | None = None,
+        *,
+        error_subtype: str | None = None,
+        error_terminal_reason: str | None = None,
+        error_api_error_status: int | None = None,
+        error_list: list[str] | None = None,
+    ):
+        """Send a system message indicating the session failed to start.
+
+        error_subtype/error_terminal_reason/error_api_error_status/error_list are
+        optional structured ResultError fields (issue #1902) — additive keys on
+        the stored message, added to metadata only when present. Old callers that
+        don't pass them produce a message identical to today's.
+        """
         try:
             short_reason = self._format_failure_content(error_message, raw_error)
             raw_dump = raw_error or error_message
@@ -5352,6 +5408,14 @@ class SessionCoordinator:
                 "timestamp": get_unix_timestamp(),
                 "sdk_message_type": "SystemMessage",
             }
+            if error_subtype is not None:
+                message_data["error_subtype"] = error_subtype
+            if error_terminal_reason is not None:
+                message_data["error_terminal_reason"] = error_terminal_reason
+            if error_api_error_status is not None:
+                message_data["error_api_error_status"] = error_api_error_status
+            if error_list:
+                message_data["errors"] = error_list
 
             # Process and store message using unified MessageProcessor
             await self._store_processed_message(session_id, message_data)
@@ -5425,8 +5489,59 @@ class SessionCoordinator:
 
         return f"Session failed: {friendly_error}" if friendly_error else "Session process exited with error"
 
-    def _extract_claude_cli_error(self, error_message: str) -> str:
-        """Extract and format user-friendly error messages from Claude CLI output"""
+    def _result_error_structured_kwargs(self, e: Any) -> dict:
+        """Build the error_subtype/error_terminal_reason/error_api_error_status/error_list
+        kwargs shared by update_session_state() and _send_session_failure_message().
+
+        Accepts a real ResultError or any duck-typed object exposing the same
+        subtype/terminal_reason/api_error_status/errors attributes (the
+        sdk.info-mirrored shim used by start_session()'s startup-failure fallback
+        also satisfies this). Filters out the SDK's subtype=="success" sentinel
+        (set when the agent loop completed but the last turn was an API error) —
+        surfacing "success" as an error-subtype badge would be misleading.
+        """
+        subtype = getattr(e, "subtype", None)
+        errors = getattr(e, "errors", None)
+        return {
+            "error_subtype": subtype if subtype and subtype != "success" else None,
+            "error_terminal_reason": getattr(e, "terminal_reason", None),
+            "error_api_error_status": getattr(e, "api_error_status", None),
+            "error_list": list(errors) if errors else None,
+        }
+
+    def _format_result_error_friendly_message(self, e: Any, fallback: str | None = None) -> str:
+        """Build a friendly one-line message from a ResultError's structured fields.
+
+        Mirrors the SDK's own precedence in
+        claude_agent_sdk._internal.query._error_result_text: errors[] (joined),
+        then result text, then a non-success subtype, then the HTTP status.
+        Accepts a real ResultError or a duck-typed sdk.info-mirrored shim (see
+        _result_error_structured_kwargs).
+        """
+        errors = getattr(e, "errors", None)
+        if errors:
+            return "; ".join(errors)
+        result = getattr(e, "result", None)
+        if result and result.strip():
+            return result.strip()
+        subtype = getattr(e, "subtype", None)
+        if subtype and subtype != "success":
+            return subtype.replace("_", " ")
+        api_error_status = getattr(e, "api_error_status", None)
+        if api_error_status is not None:
+            return f"API error (HTTP {api_error_status})"
+        return fallback if fallback is not None else str(e)
+
+    def _extract_claude_cli_error(self, error_message: str, result_error: ResultError | None = None) -> str:
+        """Extract and format user-friendly error messages from Claude CLI output.
+
+        Issue #1902: when result_error is provided, prefer its structured
+        terminal_reason/subtype/errors over the substring patterns below — those
+        remain the unchanged fallback for non-ResultError failures (container
+        crashes, generic process errors, etc.).
+        """
+        if result_error is not None:
+            return self._format_result_error_friendly_message(result_error, fallback=error_message)
         try:
             error_str = str(error_message).strip()
 

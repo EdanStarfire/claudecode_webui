@@ -202,6 +202,8 @@ class TestSessionCoordinator:
     @pytest.mark.asyncio
     async def test_start_session_sdk_failure(self, temp_coordinator, sample_session_config):
         """Test starting session when SDK start fails."""
+        from backend.claude_sdk import SessionInfo as SdkSessionInfo
+
         coordinator = temp_coordinator
 
         # Create session first
@@ -211,15 +213,27 @@ class TestSessionCoordinator:
         mock_sdk_instance = AsyncMock()
         mock_sdk_instance.start.return_value = False
         mock_sdk_instance.is_running.return_value = False
-        # Add info attribute with error_message for error handling
-        mock_sdk_instance.info = Mock()
-        mock_sdk_instance.info.error_message = "Test SDK start failure"
+        # Real SessionInfo (not a bare Mock) — matches production shape so the
+        # issue #1902 structured-field mirror read (sdk.info.error_subtype et al)
+        # sees genuine None defaults instead of Mock-synthesized truthy attributes.
+        mock_sdk_instance.info = SdkSessionInfo(
+            session_id=session_id,
+            working_directory="/test",
+            error_message="Test SDK start failure",
+        )
         mock_factory = Mock(return_value=mock_sdk_instance)
         coordinator.set_sdk_factory(mock_factory)
 
         success = await coordinator.start_session(session_id)
 
         assert success is False
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.state == SessionState.ERROR
+        # Regression (issue #1902): a non-ResultError SDK-start failure must not be
+        # misclassified as a ResultError by the sdk.info-mirror reconstruction.
+        assert session_info.error_subtype is None
+        assert session_info.error_terminal_reason is None
+        assert session_info.error_list is None
 
     @pytest.mark.asyncio
     async def test_start_nonexistent_session(self, temp_coordinator):
@@ -3350,3 +3364,172 @@ class TestIssue1837StderrCallbackClassification:
         forwarded = mock_message_callback.call_args[0][0]
         assert forwarded["subtype"] == "stderr"
         assert forwarded["content"] == "#5 [2/8] RUN pip install -r requirements.txt"
+
+
+class TestIssue1902ResultErrorHandling:
+    """_create_error_callback branches on isinstance(error, ResultError) (issue #1902):
+    structured subtype/terminal_reason/api_error_status/errors are captured into
+    SessionInfo and the session_failed message's metadata, while non-ResultError
+    failures keep going through the existing substring-matching fallback unchanged."""
+
+    @pytest.mark.asyncio
+    async def test_result_error_captures_structured_fields(
+        self, temp_coordinator, sample_session_config
+    ):
+        from claude_agent_sdk import ResultError
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        result_error = ResultError(
+            "Claude Code returned an error result: max turns exceeded",
+            data={
+                "subtype": "error_max_turns",
+                "errors": ["max turns exceeded"],
+                "terminal_reason": "max_turns",
+                "api_error_status": None,
+            },
+        )
+
+        error_cb = coordinator._create_error_callback(session_id)
+        await error_cb("immediate_cli_failure", result_error)
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.state == SessionState.ERROR
+        assert session_info.error_subtype == "error_max_turns"
+        assert session_info.error_terminal_reason == "max_turns"
+        assert session_info.error_api_error_status is None
+        assert session_info.error_list == ["max turns exceeded"]
+        # Flat error_message fallback still populated (existing consumers unaffected)
+        assert session_info.error_message
+
+        storage_manager = coordinator._storage_managers[session_id]
+        messages = await storage_manager.read_messages()
+        failure_messages = [m for m in messages if m.get("metadata", {}).get("subtype") == "session_failed"]
+        assert len(failure_messages) == 1
+        metadata = failure_messages[0]["metadata"]
+        assert metadata["error_subtype"] == "error_max_turns"
+        assert metadata["error_terminal_reason"] == "max_turns"
+        assert metadata["errors"] == ["max turns exceeded"]
+        # Legacy fields still populated exactly as before (backward compat)
+        assert metadata["is_error"] is True
+        assert metadata["error_details"]
+
+    @pytest.mark.asyncio
+    async def test_non_result_error_leaves_structured_fields_none(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Regression for AC #2: existing generic-error handling still applies
+        as a fallback for non-ResultError failures — structured fields stay None."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        error_cb = coordinator._create_error_callback(session_id)
+        await error_cb("immediate_cli_failure", RuntimeError("Command failed with exit code 1"))
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.state == SessionState.ERROR
+        assert session_info.error_subtype is None
+        assert session_info.error_terminal_reason is None
+        assert session_info.error_api_error_status is None
+        assert session_info.error_list is None
+        assert session_info.error_message == "Claude Code command failed"
+
+        storage_manager = coordinator._storage_managers[session_id]
+        messages = await storage_manager.read_messages()
+        failure_messages = [m for m in messages if m.get("metadata", {}).get("subtype") == "session_failed"]
+        assert len(failure_messages) == 1
+        metadata = failure_messages[0]["metadata"]
+        assert "error_subtype" not in metadata
+        assert "error_terminal_reason" not in metadata
+        assert "errors" not in metadata
+
+    @pytest.mark.asyncio
+    async def test_api_error_success_subtype_uses_result_text_not_generic_label(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Code-review regression: a ResultError whose run completed the agent loop
+        but failed on the last API call arrives with subtype="success", empty
+        errors[], and the real "API Error: ..." prose in .result (per ResultError's
+        own docstring). The friendly message must prefer that real text over a
+        generic "api error (HTTP nnn)" label synthesized from terminal_reason —
+        mirrors claude_agent_sdk._internal.query._error_result_text's precedence
+        (errors[] -> result -> non-success subtype -> api_error_status)."""
+        from claude_agent_sdk import ResultError
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        result_error = ResultError(
+            "Claude Code returned an error result: API Error: Overloaded_error",
+            data={
+                "subtype": "success",
+                "errors": [],
+                "result": "API Error: Overloaded_error",
+                "terminal_reason": "api_error",
+                "api_error_status": 529,
+            },
+        )
+
+        error_cb = coordinator._create_error_callback(session_id)
+        await error_cb("immediate_cli_failure", result_error)
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.error_message == "API Error: Overloaded_error"
+        # subtype=="success" is the SDK's own non-informative sentinel for this
+        # case — must not leak into the structured field/UI badge.
+        assert session_info.error_subtype is None
+        assert session_info.error_terminal_reason == "api_error"
+        assert session_info.error_api_error_status == 529
+
+    @pytest.mark.asyncio
+    async def test_sdk_start_result_error_propagates_structured_fields_via_fallback(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Code-review regression: ClaudeSDK.start()'s except ResultError branch already
+        invokes error_callback("startup_failed", e) — which fully handles the structured
+        failure — before returning False. start_session()'s own `if not await sdk.start()`
+        fallback (unchanged code, driven only by sdk.info) must reconstruct the same
+        structured fields from sdk.info's mirror rather than downgrading the persisted
+        error_message/state back to plain substring-matched text."""
+        from backend.claude_sdk import SessionInfo as SdkSessionInfo
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        mock_sdk_instance = AsyncMock()
+        mock_sdk_instance.start.return_value = False
+        mock_sdk_instance.is_running.return_value = False
+        mock_sdk_instance.info = SdkSessionInfo(
+            session_id=session_id,
+            working_directory="/test",
+            error_message="Claude Code returned an error result: max turns exceeded",
+            error_subtype="error_max_turns",
+            error_terminal_reason="max_turns",
+            error_api_error_status=None,
+            error_list=["max turns exceeded"],
+            error_result=None,
+        )
+        coordinator.set_sdk_factory(Mock(return_value=mock_sdk_instance))
+
+        success = await coordinator.start_session(session_id)
+
+        assert success is False
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.state == SessionState.ERROR
+        assert session_info.error_subtype == "error_max_turns"
+        assert session_info.error_terminal_reason == "max_turns"
+        assert session_info.error_list == ["max turns exceeded"]
+        assert session_info.error_message == "max turns exceeded"
+
+        storage_manager = coordinator._storage_managers[session_id]
+        messages = await storage_manager.read_messages()
+        failure_messages = [m for m in messages if m.get("metadata", {}).get("subtype") == "session_failed"]
+        assert failure_messages, "expected at least one session_failed message"
+        metadata = failure_messages[-1]["metadata"]
+        assert metadata["error_subtype"] == "error_max_turns"
+        assert metadata["error_terminal_reason"] == "max_turns"
+        assert metadata["errors"] == ["max turns exceeded"]

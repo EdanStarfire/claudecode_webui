@@ -545,6 +545,17 @@ class SystemMessageHandler(MessageHandler):
             extracted["metadata"]["is_error"] = message_data.get("is_error", False)
             if extracted["metadata"]["is_error"]:
                 extracted["metadata"]["error_details"] = message_data.get("error_details")
+                # Issue #1902: structured ResultError fields, additive — only present
+                # when the failure originated from a ResultError; old messages/callers
+                # that never set these keys leave metadata identical to today.
+                if message_data.get("error_subtype") is not None:
+                    extracted["metadata"]["error_subtype"] = message_data.get("error_subtype")
+                if message_data.get("error_terminal_reason") is not None:
+                    extracted["metadata"]["error_terminal_reason"] = message_data.get("error_terminal_reason")
+                if message_data.get("error_api_error_status") is not None:
+                    extracted["metadata"]["error_api_error_status"] = message_data.get("error_api_error_status")
+                if message_data.get("errors"):
+                    extracted["metadata"]["errors"] = message_data.get("errors")
 
         return extracted
 

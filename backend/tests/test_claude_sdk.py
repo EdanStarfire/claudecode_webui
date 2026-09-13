@@ -934,6 +934,204 @@ class TestSetModel:
         assert errors_received[0][0] == "set_model_failed"
 
 
+class TestIssue1902ResultErrorHandling:
+    """A ResultError caught anywhere in the SDK wrapper must populate SessionInfo's
+    structured mirror fields (error_subtype/error_terminal_reason/error_api_error_status/
+    error_list) in addition to the existing flat error_message, and must reach
+    error_callback as the real exception object (not rewrapped into a bare Exception)."""
+
+    @pytest.fixture
+    def temp_dir(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            yield temp_dir
+
+    @pytest.fixture
+    def session_id(self):
+        return "test-session-1902"
+
+    def _make_result_error(self):
+        from claude_agent_sdk import ResultError
+
+        return ResultError(
+            "Claude Code returned an error result: max turns exceeded",
+            data={
+                "subtype": "error_max_turns",
+                "errors": ["max turns exceeded"],
+                "terminal_reason": "max_turns",
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_start_result_error_captures_structured_fields(self, temp_dir, session_id):
+        """ResultError raised during start() setup is caught before the generic
+        except Exception branch and mirrors its fields onto sdk.info."""
+        from claude_agent_sdk import ResultError
+
+        errors_received = []
+
+        def error_callback(error_type, exception):
+            errors_received.append((error_type, exception))
+
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            error_callback=error_callback,
+        )
+        result_error = self._make_result_error()
+
+        with patch.object(sdk, "_get_sdk_options", side_effect=result_error):
+            success = await sdk.start()
+
+        assert success is False
+        assert sdk.info.state == SessionState.FAILED
+        assert sdk.info.error_message == str(result_error)
+        assert sdk.info.error_subtype == "error_max_turns"
+        assert sdk.info.error_terminal_reason == "max_turns"
+        assert sdk.info.error_list == ["max turns exceeded"]
+
+        assert len(errors_received) == 1
+        error_type, exc = errors_received[0]
+        assert error_type == "startup_failed"
+        assert isinstance(exc, ResultError)
+        assert exc is result_error
+
+    @pytest.mark.asyncio
+    async def test_apply_result_error_fields_mirrors_result_text(self, temp_dir, session_id):
+        """_apply_result_error_fields must also mirror .result (issue #1902 code-review
+        follow-up) so session_coordinator's startup-failure fallback can reconstruct the
+        SDK's errors[]/result/subtype/api_error_status precedence from sdk.info alone,
+        without needing the original exception object."""
+        from claude_agent_sdk import ResultError
+
+        sdk = ClaudeSDK(session_id=session_id, working_directory=temp_dir)
+        result_error = ResultError(
+            "Claude Code returned an error result: API Error: Overloaded_error",
+            data={
+                "subtype": "success",
+                "errors": [],
+                "result": "API Error: Overloaded_error",
+                "terminal_reason": "api_error",
+                "api_error_status": 529,
+            },
+        )
+
+        sdk._apply_result_error_fields(result_error)
+
+        assert sdk.info.error_result == "API Error: Overloaded_error"
+        assert sdk.info.error_terminal_reason == "api_error"
+        assert sdk.info.error_api_error_status == 529
+        assert sdk.info.error_list is None
+
+    @pytest.mark.asyncio
+    async def test_start_non_result_error_leaves_structured_fields_none(self, temp_dir, session_id):
+        """Regression: a non-ResultError startup failure keeps existing behavior —
+        error_message is populated, but the new structured fields stay None."""
+        errors_received = []
+
+        def error_callback(error_type, exception):
+            errors_received.append((error_type, exception))
+
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            error_callback=error_callback,
+        )
+
+        with patch.object(sdk, "_get_sdk_options", side_effect=RuntimeError("boom")):
+            success = await sdk.start()
+
+        assert success is False
+        assert sdk.info.state == SessionState.FAILED
+        assert sdk.info.error_message == "boom"
+        assert sdk.info.error_subtype is None
+        assert sdk.info.error_terminal_reason is None
+        assert sdk.info.error_api_error_status is None
+        assert sdk.info.error_list is None
+
+        assert len(errors_received) == 1
+        error_type, exc = errors_received[0]
+        assert error_type == "startup_failed"
+        assert type(exc) is RuntimeError
+
+    @pytest.mark.asyncio
+    async def test_message_processing_loop_result_error_not_rewrapped(self, temp_dir, session_id):
+        """Issue #1902 core bug fix: the outer fatal-error handler must pass a caught
+        ResultError through to error_callback unflattened, not rewrapped into a bare
+        Exception — otherwise session_coordinator's isinstance(error, ResultError)
+        check downstream could never actually fire for this path."""
+
+        errors_received = []
+
+        async def error_callback(error_type, exception):
+            errors_received.append((error_type, exception))
+
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            error_callback=error_callback,
+        )
+        sdk._sdk_options = object()
+        result_error = self._make_result_error()
+
+        class _FailingClient:
+            async def __aenter__(self):
+                raise result_error
+
+            async def __aexit__(self, *args):
+                return False
+
+        with patch("backend.claude_sdk.ClaudeSDKClient", return_value=_FailingClient()):
+            await sdk._message_processing_loop()
+
+        assert sdk.info.state == SessionState.FAILED
+        assert sdk.info.error_message == str(result_error)
+        assert sdk.info.error_subtype == "error_max_turns"
+        assert sdk.info.error_terminal_reason == "max_turns"
+        assert sdk.info.error_list == ["max turns exceeded"]
+
+        assert len(errors_received) == 1
+        error_type, exc = errors_received[0]
+        assert error_type == "message_processing_loop_error"
+        assert exc is result_error, "ResultError must reach error_callback unflattened"
+
+    @pytest.mark.asyncio
+    async def test_message_processing_loop_generic_error_still_rewrapped(self, temp_dir, session_id):
+        """Regression: non-ResultError fatal errors keep the existing rewrap-into-bare-
+        Exception behavior (container-exit-code/stderr enrichment fallback path)."""
+        errors_received = []
+
+        async def error_callback(error_type, exception):
+            errors_received.append((error_type, exception))
+
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            error_callback=error_callback,
+        )
+        sdk._sdk_options = object()
+
+        class _FailingClient:
+            async def __aenter__(self):
+                raise RuntimeError("synthetic connection reset")
+
+            async def __aexit__(self, *args):
+                return False
+
+        with patch("backend.claude_sdk.ClaudeSDKClient", return_value=_FailingClient()):
+            await sdk._message_processing_loop()
+
+        assert sdk.info.state == SessionState.FAILED
+        assert sdk.info.error_subtype is None
+        assert sdk.info.error_terminal_reason is None
+        assert sdk.info.error_list is None
+
+        assert len(errors_received) == 1
+        error_type, exc = errors_received[0]
+        assert error_type == "message_processing_loop_error"
+        assert type(exc) is Exception  # rewrapped, not RuntimeError
+        assert "synthetic connection reset" in str(exc)
+
+
 class TestSessionInfo:
     """Test cases for SessionInfo dataclass."""
 
