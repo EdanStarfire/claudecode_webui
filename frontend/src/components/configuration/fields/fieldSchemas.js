@@ -365,6 +365,13 @@ export const FIELD_SCHEMAS = {
       defaultValue: false,
       description: 'Strips API keys and cloud credentials from subprocess environments.',
     },
+    {
+      key: 'restricted_mode',
+      label: 'Restricted mode',
+      widget: 'toggle',
+      defaultValue: false,
+      description: 'Removes Bash/code-execution tools and WebFetch, ignores project/user settings files, and confines file tools to the working directory. Not compatible with Bypass permission mode. Does not replace allowed_tools/disallowed_tools — allowed_tools cannot re-enable a tool restricted mode removes.',
+    },
   ],
 
   features: [

@@ -353,6 +353,7 @@ class TemplateManager:
         setting_sources: list[str] | None = None,
         bare_mode: bool | None = None,
         env_scrub_enabled: bool | None = None,
+        restricted_mode: bool | None = None,
         max_subagent_spawn_depth: int | None = None,
         enable_streaming_text: bool | None = None,  # Issue #1486
         # Non-secret direct env passthrough (issue #1396)
@@ -440,6 +441,7 @@ class TemplateManager:
             "setting_sources": setting_sources,
             "bare_mode": bare_mode,
             "env_scrub_enabled": env_scrub_enabled,
+            "restricted_mode": restricted_mode,
             "max_subagent_spawn_depth": max_subagent_spawn_depth,
             "enable_streaming_text": enable_streaming_text,
             "extra_env": extra_env,

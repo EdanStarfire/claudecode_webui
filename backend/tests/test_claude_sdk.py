@@ -266,6 +266,95 @@ class TestClaudeSDK:
         opts = sdk._get_sdk_options()
         assert "permission-prompts" not in (opts.extra_args or {})
 
+    def test_get_sdk_options_restricted_mode_enabled_emits_flag(self, temp_dir, session_id):
+        """Issue #1905: restricted_mode=True adds extra_args['restricted'] = None."""
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(restricted_mode=True, permission_mode="acceptEdits"),
+        )
+        opts = sdk._get_sdk_options()
+        assert (opts.extra_args or {}).get("restricted") is None
+        assert "restricted" in (opts.extra_args or {})
+
+    def test_get_sdk_options_restricted_mode_disabled_omits_flag(self, temp_dir, session_id):
+        """Issue #1905: default False leaves extra_args without the 'restricted' key."""
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(restricted_mode=False),
+        )
+        opts = sdk._get_sdk_options()
+        assert "restricted" not in (opts.extra_args or {})
+
+    def test_get_sdk_options_restricted_mode_omits_skip_permissions_flag(self, temp_dir, session_id):
+        """Issue #1905: the CLI rejects --restricted combined with
+        --allow-dangerously-skip-permissions, so restricted sessions must omit
+        the always-on #1027 flag entirely."""
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(restricted_mode=True, permission_mode="acceptEdits"),
+        )
+        opts = sdk._get_sdk_options()
+        assert "allow-dangerously-skip-permissions" not in (opts.extra_args or {})
+
+    def test_get_sdk_options_non_restricted_keeps_skip_permissions_flag(self, temp_dir, session_id):
+        """Issue #1027 regression guard: non-restricted sessions keep the
+        always-on allow-dangerously-skip-permissions flag."""
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(restricted_mode=False),
+        )
+        opts = sdk._get_sdk_options()
+        assert (opts.extra_args or {}).get("allow-dangerously-skip-permissions") is None
+        assert "allow-dangerously-skip-permissions" in (opts.extra_args or {})
+
+    def test_get_sdk_options_restricted_mode_with_bypass_permissions_fails_fast(self, temp_dir, session_id):
+        """Issue #1905: restricted_mode + bypassPermissions is rejected outright by
+        the CLI ('Error: bypassPermissions not supported in restricted mode').
+        Fail fast here with a clear message rather than letting that surface as an
+        opaque session-start failure."""
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(restricted_mode=True, permission_mode="bypassPermissions"),
+        )
+        with pytest.raises(ValueError, match="Restricted mode is not compatible with.*Bypass"):
+            sdk._get_sdk_options()
+
+    @pytest.mark.asyncio
+    async def test_set_permission_mode_restricted_session_rejects_bypass_mid_session(self, temp_dir, session_id):
+        """Issue #1905: the startup guard only covers the mode a restricted session
+        launches with — mid-session cycling into bypassPermissions (#1027) reaches
+        the CLI directly via set_permission_mode(), so it needs the same fail-fast
+        check rather than silently defeating restricted mode or hitting a raw CLI
+        rejection."""
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(restricted_mode=True, permission_mode="acceptEdits"),
+        )
+        with pytest.raises(ValueError, match="Restricted mode is not compatible with.*Bypass"):
+            await sdk.set_permission_mode("bypassPermissions")
+        # Rejected before touching the SDK client / persisting the mode change.
+        assert sdk.current_permission_mode == "acceptEdits"
+
+    @pytest.mark.asyncio
+    async def test_set_permission_mode_non_restricted_session_unaffected(self, temp_dir, session_id):
+        """Regression guard: the new restricted-mode check must not interfere with
+        the existing #1027 mid-session cycling behavior for non-restricted sessions."""
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(restricted_mode=False, permission_mode="acceptEdits"),
+        )
+        # No active SDK client in this unit test, so the call returns False after
+        # the restricted-mode check passes — it must not raise ValueError here.
+        result = await sdk.set_permission_mode("bypassPermissions")
+        assert result is False
+
     def test_build_auto_mode_block_none_when_unset(self, temp_dir, session_id):
         """Issue #1884 AC4: _build_auto_mode_block returns None when nothing is configured."""
         sdk = ClaudeSDK(

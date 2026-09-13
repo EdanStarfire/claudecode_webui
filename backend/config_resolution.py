@@ -48,7 +48,7 @@ PROFILE_AREAS: dict[str, set[str]] = {
         "docker_enabled", "docker_image", "docker_extra_mounts",
         "docker_home_directory", "docker_proxy_enabled", "docker_proxy_image",
         "docker_proxy_allowlist_domains",
-        "bare_mode", "env_scrub_enabled",
+        "bare_mode", "env_scrub_enabled", "restricted_mode",
         "assigned_secrets",
     },
     "features": {

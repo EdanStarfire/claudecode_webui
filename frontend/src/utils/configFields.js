@@ -46,6 +46,7 @@ export const CONFIG_FIELDS_LIST = Object.freeze([
   'assigned_secrets',
   'bare_mode',
   'env_scrub_enabled',
+  'restricted_mode',
   // features area
   'history_distillation_enabled',
   'auto_memory_mode',
@@ -98,6 +99,7 @@ export const FIELD_DEFAULTS = Object.freeze({
   strict_mcp_config: false,
   bare_mode: false,
   env_scrub_enabled: false,
+  restricted_mode: false,
   max_subagent_spawn_depth: 1,
   extra_env: null,
   inject_timestamps_enabled: false,
@@ -146,6 +148,7 @@ const _FIELD_TO_AREA = Object.freeze({
   assigned_secrets: 'isolation',
   bare_mode: 'isolation',
   env_scrub_enabled: 'isolation',
+  restricted_mode: 'isolation',
   // features
   history_distillation_enabled: 'features',
   auto_memory_mode: 'features',
