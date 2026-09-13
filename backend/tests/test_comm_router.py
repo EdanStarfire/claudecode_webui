@@ -717,4 +717,59 @@ class TestAutoStartFailureReason:
             error_message="Failed to deliver message: SDK rejected the message",
             original_comm_id=comm.comm_id,
         )
+
+
+class TestPausedTargetSkipsDelivery:
+    """Issue #1918: a target minion PAUSED mid-permission-wait (e.g. AskUserQuestion)
+    must not be force-started — that clobbers it into STARTING with no way back."""
+
+    @pytest.mark.asyncio
+    async def test_paused_target_not_force_started(self, comm_router, sample_minion):
+        from backend.session_manager import SessionState
+
+        sample_minion.state = SessionState.PAUSED
+        sm = comm_router.system.session_coordinator.session_manager
+        sm.get_session_info = AsyncMock(return_value=sample_minion)
+        comm_router.system.session_coordinator.start_session = AsyncMock()
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="sender-minion",
+            to_minion_id="test-minion-123",
+            content="Test message",
+            comm_type=CommType.TASK,
+        )
+
+        with patch.object(comm_router, '_send_system_error_comm', new=AsyncMock()) as mock_error_comm:
+            result = await comm_router._send_to_minion(comm)
+
+        assert result is False
+        comm_router.system.session_coordinator.start_session.assert_not_awaited()
+        mock_error_comm.assert_called_once()
+        error_message_arg = mock_error_comm.call_args.kwargs["error_message"]
+        assert "paused" in error_message_arg.lower()
+
+    @pytest.mark.asyncio
+    async def test_active_target_still_delivers_unchanged(self, comm_router, sample_minion):
+        """Regression: ACTIVE targets are unaffected by the PAUSED branch."""
+        from backend.session_manager import SessionState
+
+        sample_minion.state = SessionState.ACTIVE
+        sm = comm_router.system.session_coordinator.session_manager
+        sm.get_session_info = AsyncMock(return_value=sample_minion)
+        comm_router.system.session_coordinator.start_session = AsyncMock()
+        comm_router.system.session_coordinator.send_message = AsyncMock(return_value=True)
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="sender-minion",
+            to_minion_id="test-minion-123",
+            content="Test message",
+            comm_type=CommType.TASK,
+        )
+
+        result = await comm_router._send_to_minion(comm)
+
+        assert result is True
+        comm_router.system.session_coordinator.start_session.assert_not_awaited()
         assert "delivery_failure_reason" not in comm.metadata

@@ -330,6 +330,24 @@ class CommRouter:
                             original_comm_id=comm.comm_id
                         )
                     return False
+            elif target_minion.state == SessionState.PAUSED:
+                # Session is paused mid-permission-wait (e.g. AskUserQuestion) — do not
+                # force-start, which would clobber it into STARTING with no way back
+                # (issue #1918). No comm-delivery retry mechanism exists, so log and skip.
+                legion_logger.info(
+                    f"Target minion {comm.to_minion_id} is PAUSED (awaiting user input) — "
+                    "skipping delivery rather than force-starting"
+                )
+                if comm.from_minion_id:
+                    await self._send_system_error_comm(
+                        to_minion_id=comm.from_minion_id,
+                        error_message=(
+                            "Failed to deliver message: Target minion is paused awaiting "
+                            "user input and was not force-started"
+                        ),
+                        original_comm_id=comm.comm_id
+                    )
+                return False
             elif target_minion.state not in [SessionState.ACTIVE]:
                 legion_logger.info(f"Target minion {comm.to_minion_id} is in {target_minion.state} state - auto-starting")
 
