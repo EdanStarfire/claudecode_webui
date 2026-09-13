@@ -157,7 +157,7 @@ class SessionConfig(BaseModel):
     provider_opus_model_id: str | None = None
     provider_default_tier: str | None = None  # "haiku" | "sonnet" | "opus"
 
-    @field_validator("model", mode="before")
+    @field_validator("model")
     @classmethod
     def _normalize_model(cls, v):
         if v is None:

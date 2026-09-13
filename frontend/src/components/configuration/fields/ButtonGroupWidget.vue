@@ -29,14 +29,14 @@
       :value="value || ''"
       :disabled="disabled"
       placeholder="Enter model name..."
-      @input="$emit('update:value', $event.target.value)"
+      @input="emitValue($event.target.value)"
       @blur="handleCustomBlur"
     />
   </div>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 const props = defineProps({
   value: { type: [String, Array], default: null },
@@ -89,6 +89,7 @@ const isGroupDefault = computed(() => {
 })
 
 const manualCustomMode = ref(false)
+const lastEmitted = ref(props.value)
 
 const matchesAnyOption = computed(() =>
   props.options.some(opt => matchesOption(opt, props.value))
@@ -100,6 +101,23 @@ const isCustomValue = computed(() =>
 
 const customMode = computed(() => manualCustomMode.value || isCustomValue.value)
 
+// If the value changes to match a preset option from outside this widget (e.g. a
+// "reset to inherited" action elsewhere in the settings editor), drop manual custom
+// mode so the preset button reflects reality instead of leaving the custom input
+// stuck open. Self-initiated changes (typing, blur-trim) are tracked via lastEmitted
+// so mid-typing matches (e.g. typing "opus" into the custom box) don't close it.
+watch(() => props.value, (newVal) => {
+  if (newVal !== lastEmitted.value && matchesAnyOption.value) {
+    manualCustomMode.value = false
+  }
+  lastEmitted.value = newVal
+})
+
+function emitValue(v) {
+  lastEmitted.value = v
+  emit('update:value', v)
+}
+
 function handleClick(optValue) {
   manualCustomMode.value = false
   if (props.multiple) {
@@ -107,21 +125,21 @@ function handleClick(optValue) {
     const idx = arr.indexOf(optValue)
     if (idx >= 0) arr.splice(idx, 1)
     else arr.push(optValue)
-    emit('update:value', arr)
+    emitValue(arr)
   } else {
-    emit('update:value', optValue)
+    emitValue(optValue)
   }
 }
 
 function enableCustomMode() {
   manualCustomMode.value = true
   if (matchesAnyOption.value) {
-    emit('update:value', '')
+    emitValue('')
   }
 }
 
 function handleCustomBlur(e) {
   const trimmed = e.target.value.trim()
-  if (trimmed !== e.target.value) emit('update:value', trimmed)
+  if (trimmed !== e.target.value) emitValue(trimmed)
 }
 </script>
