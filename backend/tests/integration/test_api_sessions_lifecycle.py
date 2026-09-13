@@ -156,16 +156,53 @@ class TestModel:
         # Session should remain active — no restart triggered by a live model switch
         assert session_resp.json()["session"]["state"] == "active"
 
-    async def test_set_model_invalid(self, api_integration_env):
+    async def test_set_model_arbitrary_on_created_session(self, api_integration_env):
+        """Setting an arbitrary (non-alias) model on a created session is accepted (issue #1919)."""
         client = api_integration_env["client"]
         session = await _create_named_session(api_integration_env, "single_turn")
         sid = session["session_id"]
 
         resp = await client.post(
             f"/api/sessions/{sid}/model",
-            json={"model": "invalid_model"},
+            json={"model": "claude-sonnet-4-5-20250929"},
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 200
+
+        session_resp = await client.get(f"/api/sessions/{sid}")
+        assert session_resp.status_code == 200
+        assert session_resp.json()["session"]["current_model"] == "claude-sonnet-4-5-20250929"
+
+    async def test_set_model_arbitrary_on_active_session(self, api_integration_env):
+        """Setting an arbitrary (non-alias) model on an active session is accepted (issue #1919)."""
+        client = api_integration_env["client"]
+        session = await _create_named_session(api_integration_env, "single_turn")
+        sid = session["session_id"]
+
+        await client.post(f"/api/sessions/{sid}/start")
+        await _wait_for_state(client, sid, "active")
+
+        resp = await client.post(
+            f"/api/sessions/{sid}/model",
+            json={"model": "claude-sonnet-4-5-20250929"},
+        )
+        assert resp.status_code == 200
+
+        session_resp = await client.get(f"/api/sessions/{sid}")
+        assert session_resp.status_code == 200
+        assert session_resp.json()["session"]["current_model"] == "claude-sonnet-4-5-20250929"
+
+    async def test_set_model_empty_rejected(self, api_integration_env):
+        """Empty model is rejected with 422 — raised by ModelRequest's field_validator during
+        request parsing, before the route body runs, unlike the 400s elsewhere in this file."""
+        client = api_integration_env["client"]
+        session = await _create_named_session(api_integration_env, "single_turn")
+        sid = session["session_id"]
+
+        resp = await client.post(
+            f"/api/sessions/{sid}/model",
+            json={"model": ""},
+        )
+        assert resp.status_code == 422
 
 
 class TestSendMessage:

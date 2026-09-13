@@ -1,22 +1,42 @@
 <template>
-  <div class="model-btn-group" :class="{ 'model-btn-group--default': isGroupDefault }">
-    <button
-      v-for="opt in options"
-      :key="opt.value"
-      type="button"
-      class="model-btn"
-      :class="{
-        active: isActive(opt.value),
-        'active-default': isActiveDefault(opt.value),
-      }"
+  <div class="model-btn-group-wrapper">
+    <div class="model-btn-group" :class="{ 'model-btn-group--default': isGroupDefault }">
+      <button
+        v-for="opt in options"
+        :key="opt.value"
+        type="button"
+        class="model-btn"
+        :class="{
+          active: isActive(opt.value),
+          'active-default': isActiveDefault(opt.value),
+        }"
+        :disabled="disabled"
+        @click="handleClick(opt.value)"
+      >{{ opt.label }}</button>
+      <button
+        v-if="allowCustom"
+        type="button"
+        class="model-btn"
+        :class="{ active: customMode }"
+        :disabled="disabled"
+        @click="enableCustomMode"
+      >Custom...</button>
+    </div>
+    <input
+      v-if="allowCustom && customMode"
+      type="text"
+      class="form-control form-control-sm mt-2"
+      :value="value || ''"
       :disabled="disabled"
-      @click="handleClick(opt.value)"
-    >{{ opt.label }}</button>
+      placeholder="Enter model name..."
+      @input="emitValue($event.target.value)"
+      @blur="handleCustomBlur"
+    />
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 const props = defineProps({
   value: { type: [String, Array], default: null },
@@ -24,6 +44,7 @@ const props = defineProps({
   options: { type: Array, default: () => [] },
   multiple: { type: Boolean, default: false },
   defaultValue: { default: null },
+  allowCustom: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:value'])
@@ -67,15 +88,58 @@ const isGroupDefault = computed(() => {
   return noExplicitValue() && hasSchemaDefault()
 })
 
+const manualCustomMode = ref(false)
+const lastEmitted = ref(props.value)
+
+const matchesAnyOption = computed(() =>
+  props.options.some(opt => matchesOption(opt, props.value))
+)
+
+const isCustomValue = computed(() =>
+  props.allowCustom && !noExplicitValue() && !matchesAnyOption.value
+)
+
+const customMode = computed(() => manualCustomMode.value || isCustomValue.value)
+
+// If the value changes to match a preset option from outside this widget (e.g. a
+// "reset to inherited" action elsewhere in the settings editor), drop manual custom
+// mode so the preset button reflects reality instead of leaving the custom input
+// stuck open. Self-initiated changes (typing, blur-trim) are tracked via lastEmitted
+// so mid-typing matches (e.g. typing "opus" into the custom box) don't close it.
+watch(() => props.value, (newVal) => {
+  if (newVal !== lastEmitted.value && matchesAnyOption.value) {
+    manualCustomMode.value = false
+  }
+  lastEmitted.value = newVal
+})
+
+function emitValue(v) {
+  lastEmitted.value = v
+  emit('update:value', v)
+}
+
 function handleClick(optValue) {
+  manualCustomMode.value = false
   if (props.multiple) {
     const arr = Array.isArray(props.value) ? [...props.value] : []
     const idx = arr.indexOf(optValue)
     if (idx >= 0) arr.splice(idx, 1)
     else arr.push(optValue)
-    emit('update:value', arr)
+    emitValue(arr)
   } else {
-    emit('update:value', optValue)
+    emitValue(optValue)
   }
+}
+
+function enableCustomMode() {
+  manualCustomMode.value = true
+  if (matchesAnyOption.value) {
+    emitValue('')
+  }
+}
+
+function handleCustomBlur(e) {
+  const trimmed = e.target.value.trim()
+  if (trimmed !== e.target.value) emitValue(trimmed)
 }
 </script>

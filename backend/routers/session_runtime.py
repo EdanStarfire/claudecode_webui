@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from shared.exception_handlers import handle_exceptions
 
 from ..models.permission_mode import PermissionMode
-from ..session_manager import VALID_MODELS, SessionState
+from ..session_manager import SessionState
 from ._models import (
     AddDirectoryRequest,
     McpReconnectRequest,
@@ -102,9 +102,6 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("set model", value_error_status=400)
     async def set_model(session_id: str, request: ModelRequest):
         """Set the model for a session, live-switching if active (no restart required)"""
-        if request.model not in VALID_MODELS:
-            raise HTTPException(status_code=400, detail=f"Invalid model: {request.model}")
-
         success = await webui.coordinator.set_model(session_id, request.model)
         if not success:
             raise HTTPException(status_code=400, detail="Failed to set model")

@@ -576,13 +576,26 @@ class TestConfigDictUpdates:
         assert session.config.get("model") == "opus"
         assert session.current_model == "opus"
 
-    async def test_update_model_rejects_invalid_model(self, temp_session_manager):
-        """update_model returns False and does not persist an invalid model string."""
+    async def test_update_model_accepts_arbitrary_model(self, temp_session_manager):
+        """update_model accepts (trimmed) arbitrary model strings, not just the 4 aliases."""
         manager = temp_session_manager
         session_id = str(uuid.uuid4())
         await manager.create_session(session_id, config=SessionConfig())
 
-        result = await manager.update_model(session_id, "not-a-real-model")
+        result = await manager.update_model(session_id, "  not-a-real-model  ")
+
+        assert result is True
+        session = await manager.get_session_info(session_id)
+        assert session.config.get("model") == "not-a-real-model"
+        assert session.current_model == "not-a-real-model"
+
+    async def test_update_model_rejects_empty_model(self, temp_session_manager):
+        """update_model returns False and does not persist an empty/whitespace-only model."""
+        manager = temp_session_manager
+        session_id = str(uuid.uuid4())
+        await manager.create_session(session_id, config=SessionConfig())
+
+        result = await manager.update_model(session_id, "   ")
 
         assert result is False
         session = await manager.get_session_info(session_id)

@@ -21,7 +21,6 @@ from .message_parser import MessageParser, MessageProcessor
 from .models.messages import sdk_message_to_stored
 from .models.permission_mode import PermissionMode
 from .session_config import SessionConfig
-from .session_manager import VALID_MODELS
 from .task_utils import task_done_log_exception
 
 # Import SDK components
@@ -538,7 +537,7 @@ class ClaudeSDK:
         Set the model for the current session without restarting it.
 
         Args:
-            model: Model alias ("sonnet", "opus", "haiku", "opusplan")
+            model: Model identifier — one of the 4 CLI aliases, or an arbitrary model name/version
 
         Returns:
             True if model was set successfully, False otherwise
@@ -546,9 +545,9 @@ class ClaudeSDK:
         try:
             sdk_logger.info(f"Setting model to '{model}' for session {self.session_id}")
 
-            # Validate model
-            if model not in VALID_MODELS:
-                logger.error(f"Invalid model: {model}")
+            model = model.strip()
+            if not model:
+                logger.error("Invalid model: empty string")
                 return False
 
             # Check if we have an active SDK client

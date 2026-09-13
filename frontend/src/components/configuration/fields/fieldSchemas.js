@@ -102,7 +102,10 @@ export const FIELD_SCHEMAS = {
         { value: 'haiku', label: 'Haiku' },
         { value: 'opusplan', label: 'OpusPlan' },
       ],
+      allowCustom: true,
       showWhen: (config) => !config.provider_catalog_id,
+      description: 'Choose a quick alias, or select Custom to enter a specific model ' +
+                   'name/version to pass directly to the Anthropic API.',
     },
     {
       key: 'thinking_mode',

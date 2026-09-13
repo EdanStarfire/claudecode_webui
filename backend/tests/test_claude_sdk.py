@@ -767,14 +767,28 @@ class TestSetModel:
         assert sdk_instance.model == "opus"
 
     @pytest.mark.asyncio
-    async def test_set_model_invalid_model(self, sdk_instance):
-        """set_model() rejects unknown model aliases without touching the SDK client."""
+    async def test_set_model_accepts_arbitrary_model(self, sdk_instance):
+        """set_model() accepts (trimmed) arbitrary model strings, not just the 4 aliases."""
         from unittest.mock import AsyncMock
 
         sdk_instance.info.state = SessionState.RUNNING
         sdk_instance._sdk_client = AsyncMock()
 
-        result = await sdk_instance.set_model("not-a-real-model")
+        result = await sdk_instance.set_model("  not-a-real-model  ")
+
+        assert result is True
+        sdk_instance._sdk_client.set_model.assert_awaited_once_with("not-a-real-model")
+        assert sdk_instance.model == "not-a-real-model"
+
+    @pytest.mark.asyncio
+    async def test_set_model_rejects_empty_model(self, sdk_instance):
+        """set_model() still rejects an empty/whitespace-only model without touching the SDK client."""
+        from unittest.mock import AsyncMock
+
+        sdk_instance.info.state = SessionState.RUNNING
+        sdk_instance._sdk_client = AsyncMock()
+
+        result = await sdk_instance.set_model("   ")
 
         assert result is False
         sdk_instance._sdk_client.set_model.assert_not_awaited()
