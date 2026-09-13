@@ -1,22 +1,42 @@
 <template>
-  <div class="model-btn-group" :class="{ 'model-btn-group--default': isGroupDefault }">
-    <button
-      v-for="opt in options"
-      :key="opt.value"
-      type="button"
-      class="model-btn"
-      :class="{
-        active: isActive(opt.value),
-        'active-default': isActiveDefault(opt.value),
-      }"
+  <div class="model-btn-group-wrapper">
+    <div class="model-btn-group" :class="{ 'model-btn-group--default': isGroupDefault }">
+      <button
+        v-for="opt in options"
+        :key="opt.value"
+        type="button"
+        class="model-btn"
+        :class="{
+          active: isActive(opt.value),
+          'active-default': isActiveDefault(opt.value),
+        }"
+        :disabled="disabled"
+        @click="handleClick(opt.value)"
+      >{{ opt.label }}</button>
+      <button
+        v-if="allowCustom"
+        type="button"
+        class="model-btn"
+        :class="{ active: customMode }"
+        :disabled="disabled"
+        @click="enableCustomMode"
+      >Custom...</button>
+    </div>
+    <input
+      v-if="allowCustom && customMode"
+      type="text"
+      class="form-control form-control-sm mt-2"
+      :value="value || ''"
       :disabled="disabled"
-      @click="handleClick(opt.value)"
-    >{{ opt.label }}</button>
+      placeholder="Enter model name..."
+      @input="$emit('update:value', $event.target.value)"
+      @blur="handleCustomBlur"
+    />
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
 const props = defineProps({
   value: { type: [String, Array], default: null },
@@ -24,6 +44,7 @@ const props = defineProps({
   options: { type: Array, default: () => [] },
   multiple: { type: Boolean, default: false },
   defaultValue: { default: null },
+  allowCustom: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:value'])
@@ -67,7 +88,20 @@ const isGroupDefault = computed(() => {
   return noExplicitValue() && hasSchemaDefault()
 })
 
+const manualCustomMode = ref(false)
+
+const matchesAnyOption = computed(() =>
+  props.options.some(opt => matchesOption(opt, props.value))
+)
+
+const isCustomValue = computed(() =>
+  props.allowCustom && !noExplicitValue() && !matchesAnyOption.value
+)
+
+const customMode = computed(() => manualCustomMode.value || isCustomValue.value)
+
 function handleClick(optValue) {
+  manualCustomMode.value = false
   if (props.multiple) {
     const arr = Array.isArray(props.value) ? [...props.value] : []
     const idx = arr.indexOf(optValue)
@@ -77,5 +111,17 @@ function handleClick(optValue) {
   } else {
     emit('update:value', optValue)
   }
+}
+
+function enableCustomMode() {
+  manualCustomMode.value = true
+  if (matchesAnyOption.value) {
+    emit('update:value', '')
+  }
+}
+
+function handleCustomBlur(e) {
+  const trimmed = e.target.value.trim()
+  if (trimmed !== e.target.value) emit('update:value', trimmed)
 }
 </script>

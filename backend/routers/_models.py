@@ -58,7 +58,7 @@ class SessionUpdateRequest(BaseModel):
     name: str | None = None
     # Issue #1230: full config dict replacement (preferred over flat fields below)
     config: dict | None = None
-    model: str | None = None  # sonnet, opus, haiku, opusplan
+    model: str | None = None  # CLI alias or arbitrary model name/version
     allowed_tools: list[str] | None = None  # List of tool names to allow
     disallowed_tools: list[str] | None = None  # Issue #461: tools to deny
     role: str | None = None
@@ -156,6 +156,14 @@ class PermissionModeRequest(BaseModel):
 
 class ModelRequest(BaseModel):
     model: str
+
+    @field_validator("model")
+    @classmethod
+    def _validate_model(cls, v):
+        v = v.strip()
+        if not v:
+            raise ValueError("Model cannot be empty")
+        return v
 
 
 class McpToggleRequest(BaseModel):

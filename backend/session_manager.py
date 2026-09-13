@@ -33,14 +33,6 @@ session_logger = get_logger('session_manager', category='SESSION_MANAGER')
 logger = logging.getLogger(__name__)
 
 
-# Valid model identifiers (current API aliases)
-VALID_MODELS = {
-    "opus",
-    "sonnet",
-    "haiku",
-    "opusplan",
-}
-
 # Default model for new sessions
 DEFAULT_MODEL = "sonnet"
 
@@ -885,9 +877,9 @@ class SessionManager:
                     logger.error(f"Session {session_id} not found")
                     return False
 
-                # Validate model
-                if model not in VALID_MODELS:
-                    logger.error(f"Invalid model: {model}")
+                model = model.strip()
+                if not model:
+                    logger.error("Invalid model: empty string")
                     return False
 
                 session.current_model = model
@@ -1238,7 +1230,10 @@ class SessionManager:
 
                 for key, value in kwargs.items():
                     if key == "_replace_config":
-                        session.config = {k: v for k, v in value.items() if k in CONFIG_FIELDS}
+                        config = {k: v for k, v in value.items() if k in CONFIG_FIELDS}
+                        if isinstance(config.get("model"), str):
+                            config["model"] = config["model"].strip() or None
+                        session.config = config
                     elif key in CONFIG_FIELDS:
                         session.config[key] = value
                     elif hasattr(session, key):

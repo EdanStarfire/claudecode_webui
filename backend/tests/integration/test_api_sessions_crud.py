@@ -245,16 +245,31 @@ class TestPatchSession:
         resp = await client.get(f"/api/sessions/{sid}")
         assert resp.json()["session"]["role"] == "Code Reviewer"
 
-    async def test_patch_invalid_model(self, api_integration_env):
+    async def test_patch_arbitrary_model_accepted(self, api_integration_env):
         create_project = api_integration_env["create_test_project"]
         create_session = api_integration_env["create_test_session"]
         client = api_integration_env["client"]
 
-        project = await create_project("Invalid Model")
-        session = await create_session(project["project_id"], "Bad")
+        project = await create_project("Arbitrary Model")
+        session = await create_session(project["project_id"], "Custom")
         sid = session["session_id"]
 
         resp = await client.patch(f"/api/sessions/{sid}", json={"model": "gpt-4"})
+        assert resp.status_code == 200
+
+        resp = await client.get(f"/api/sessions/{sid}")
+        assert resp.json()["session"]["config"].get("model") == "gpt-4"
+
+    async def test_patch_empty_model_rejected(self, api_integration_env):
+        create_project = api_integration_env["create_test_project"]
+        create_session = api_integration_env["create_test_session"]
+        client = api_integration_env["client"]
+
+        project = await create_project("Empty Model")
+        session = await create_session(project["project_id"], "Bad")
+        sid = session["session_id"]
+
+        resp = await client.patch(f"/api/sessions/{sid}", json={"model": "   "})
         assert resp.status_code == 400
 
     async def test_patch_nonexistent(self, api_integration_env):
