@@ -198,7 +198,7 @@ describe('MessageList', () => {
         content: 'Top-level assistant reply',
         metadata: { has_tool_uses: false, tool_uses: [] }
       }),
-      // Forwarded subagent text (CLAUDE_CODE_FORWARD_SUBAGENT_TEXT) — must not leak as a top-level bubble
+      // Forwarded subagent text (forward_subagent_text, issue #1671/#1900) — must not leak as a top-level bubble
       makeMessage({
         type: 'assistant',
         content: 'Subagent thinking out loud',

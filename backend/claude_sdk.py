@@ -1118,12 +1118,18 @@ class ClaudeSDK:
         # stream as HookEventMessage objects. Without this flag, hook events are silently dropped.
         options_kwargs["include_hook_events"] = True
 
+        from .config_manager import load_config as _load_app_config
+        _app_cfg = _load_app_config()
+
         # Issue #1486: opt into SDK streaming when both per-session AND global flags allow
-        if self.enable_streaming_text:
-            from .config_manager import load_config as _load_app_config
-            _app_cfg = _load_app_config()
-            if _app_cfg.features.streaming_text_enabled:
-                options_kwargs["include_partial_messages"] = True
+        if self.enable_streaming_text and _app_cfg.features.streaming_text_enabled:
+            options_kwargs["include_partial_messages"] = True
+
+        # Issue #1900: forward_subagent_text via the typed ClaudeAgentOptions field (SDK 0.2.140+),
+        # replacing the CLAUDE_CODE_FORWARD_SUBAGENT_TEXT env var from issue #1671. Sent once via
+        # the initialize control-protocol handshake — only takes effect in streaming mode, which
+        # ClaudeSDKClient always uses (see claude_agent_sdk/client.py's is_streaming_mode=True).
+        options_kwargs["forward_subagent_text"] = _app_cfg.features.forward_subagent_text
 
         options_kwargs["env"] = self._resolve_env_vars()
 
@@ -1224,12 +1230,6 @@ class ClaudeSDK:
         max_subagents = app_cfg.features.max_subagents_per_session
         if max_subagents < 200:
             env_vars["CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION"] = str(max_subagents)
-
-        # Issue #1671: always-set (not opt-in) — WebUI default (on) diverges from CC's
-        # own CLI default (off), so omitting the var would silently disable forwarding.
-        env_vars["CLAUDE_CODE_FORWARD_SUBAGENT_TEXT"] = (
-            "1" if app_cfg.features.forward_subagent_text else "0"
-        )
 
         # Issue #496: Merge extra env vars (highest priority; e.g., CLAUDE_DOCKER_*)
         if self.extra_env:
