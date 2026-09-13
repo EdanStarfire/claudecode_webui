@@ -33,6 +33,7 @@ try:
         PermissionResultAllow,
         PermissionResultDeny,
         RateLimitEvent,
+        ResultError,
         ResultMessage,
         StreamEvent,
         SystemMessage,
@@ -55,6 +56,14 @@ except ImportError:
     UserMessage = None
     SystemMessage = None
     ResultMessage = None
+
+    class ResultError(Exception):
+        """Fallback stand-in when claude_agent_sdk is unavailable.
+
+        Keeps `except ResultError` valid syntax in this dev/test fallback path;
+        never actually raised since the SDK client itself is unavailable too.
+        """
+
     RateLimitEvent = None
     StreamEvent = None
     TaskStartedMessage = None
@@ -157,6 +166,15 @@ class SessionInfo:
     last_activity: float | None = None
     message_count: int = 0
     error_message: str | None = None
+    # Structured ResultError fields (issue #1902) — additive, mirror error_message
+    error_subtype: str | None = None
+    error_terminal_reason: str | None = None
+    error_api_error_status: int | None = None
+    error_list: list[str] | None = None
+    # Memory-only (never persisted) — lets session_coordinator's startup-failure
+    # fallback path reconstruct the SDK's own errors[]/result/subtype/api_error_status
+    # precedence without needing the original exception object.
+    error_result: str | None = None
 
 
 class ClaudeSDK:
@@ -394,6 +412,15 @@ class ClaudeSDK:
             # State will be changed to RUNNING in _message_processing_loop when SDK is ready
             sdk_logger.info("Claude Code SDK session task started - waiting for context manager initialization")
             return True
+
+        except ResultError as e:
+            logger.exception("Failed to start Claude Code SDK session (ResultError)")
+            self.info.state = SessionState.FAILED
+            self.info.error_message = str(e)
+            self._apply_result_error_fields(e)
+            if self.error_callback:
+                await self._safe_callback(self.error_callback, "startup_failed", e)
+            return False
 
         except Exception as e:
             logger.exception("Failed to start Claude Code SDK session")
@@ -750,6 +777,21 @@ class ClaudeSDK:
                             await self._process_sdk_message(response_message)
                             self._session_health_checks["total_responses_received"] += 1
                             self._session_health_checks["last_successful_response"] = time.time()
+                    except ResultError as consumer_err:
+                        if not self._shutdown_event.is_set() and not asyncio.current_task().cancelling() > 0:
+                            logger.exception("Error in global response consumer (ResultError)")
+                            # Issue #1902: structured result, no exit-code regex needed —
+                            # surface the real exception (with subtype/terminal_reason/etc.)
+                            # to the error callback instead of the container-crash fallback.
+                            self.info.state = SessionState.FAILED
+                            self.info.error_message = str(consumer_err)
+                            self._apply_result_error_fields(consumer_err)
+                            if self.error_callback:
+                                await self._safe_callback(
+                                    self.error_callback,
+                                    "immediate_cli_failure",
+                                    consumer_err,
+                                )
                     except Exception as consumer_err:
                         if not self._shutdown_event.is_set() and not asyncio.current_task().cancelling() > 0:
                             logger.exception("Error in global response consumer")
@@ -873,6 +915,38 @@ class ClaudeSDK:
             # Update health monitoring state
             self._session_health_checks["context_manager_active"] = False
             self._session_health_checks["client_object_valid"] = False
+
+        except ResultError as e:
+            fatal_error_time = time.time()
+            logger.exception(
+                f"FATAL ERROR in message processing loop at {fatal_error_time} (ResultError). "
+                f"Context: session={self.session_id}, cwd={self.working_directory}, "
+                f"state={self.info.state}, msg_count={self.info.message_count}, "
+                f"queue_size={self._message_queue.qsize()}, "
+                f"shutdown={self._shutdown_event.is_set()}, "
+                f"ctx_mgr_active={self._session_health_checks.get('context_manager_active', False)}, "
+                f"queries_sent={self._session_health_checks.get('total_queries_sent', 0)}, "
+                f"responses_received={self._session_health_checks.get('total_responses_received', 0)}"
+            )
+
+            self._session_health_checks["context_manager_active"] = False
+            self._session_health_checks["client_object_valid"] = False
+
+            try:
+                self._log_session_health(None, "fatal_error")
+            except Exception:
+                logger.exception("Health check failed during fatal error handling")
+
+            self.info.state = SessionState.FAILED
+            self._ready_event.set()  # Unblock any waiters even on fatal failure
+            # Issue #1902: structured result — no exit-code regex/stderr enrichment
+            # needed (the CLI already told us why), and critically: pass the real
+            # exception through unflattened (not rewrapped into a bare Exception)
+            # so error_callback can branch on isinstance(error, ResultError).
+            self.info.error_message = str(e)
+            self._apply_result_error_fields(e)
+            if self.error_callback:
+                await self._safe_callback(self.error_callback, "message_processing_loop_error", e)
 
         except Exception as e:
             fatal_error_time = time.time()
@@ -1547,6 +1621,19 @@ class ClaudeSDK:
         perm_logger.debug(f"No permission_callback provided. Denying tool use: '{tool_name}'")
         return PermissionResultDeny(message="No permission callback configured")
 
+
+    def _apply_result_error_fields(self, e: "ResultError") -> None:
+        """Mirror a caught ResultError's structured fields onto self.info (issue #1902).
+
+        Additive alongside the existing flat error_message (still populated by callers
+        via str(e), which the SDK constructs with the same errors[]/result/subtype
+        precedence — see claude_agent_sdk._internal.query._error_result_text).
+        """
+        self.info.error_subtype = e.subtype
+        self.info.error_terminal_reason = e.terminal_reason
+        self.info.error_api_error_status = e.api_error_status
+        self.info.error_list = list(e.errors) if e.errors else None
+        self.info.error_result = e.result
 
     async def _safe_callback(self, callback: Callable, *args, **kwargs):
         """Safely execute callback with error handling"""

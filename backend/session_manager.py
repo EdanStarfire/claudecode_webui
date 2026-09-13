@@ -84,6 +84,11 @@ class SessionInfo:
     current_model: str | None = None
     initial_model: str | None = None
     error_message: str | None = None
+    # Structured ResultError fields (issue #1902) — additive, mirror error_message
+    error_subtype: str | None = None
+    error_terminal_reason: str | None = None
+    error_api_error_status: int | None = None
+    error_list: list[str] | None = None
     claude_code_session_id: str | None = None
     is_processing: bool = False
     name: str | None = None
@@ -169,6 +174,10 @@ class SessionInfo:
             "current_model": self.current_model,
             "current_permission_mode": self.current_permission_mode,
             "error_message": self.error_message,
+            "error_subtype": self.error_subtype,
+            "error_terminal_reason": self.error_terminal_reason,
+            "error_api_error_status": self.error_api_error_status,
+            "error_list": self.error_list,
             "expertise_score": self.expertise_score,
             "initial_model": self.initial_model,
             "initial_permission_mode": self.initial_permission_mode,
@@ -253,6 +262,10 @@ class SessionInfo:
         data.setdefault("config", {})
         data.setdefault("links", [])
         data.setdefault("last_timestamp_injection_date", None)
+        data.setdefault("error_subtype", None)
+        data.setdefault("error_terminal_reason", None)
+        data.setdefault("error_api_error_status", None)
+        data.setdefault("error_list", None)
 
         # Drop any keys not in the post-#1230 schema (legacy flat CONFIG_FIELDS
         # and session_overrides are removed by migration before from_dict is called).
@@ -260,6 +273,7 @@ class SessionInfo:
             "session_id", "state", "created_at", "updated_at", "working_directory",
             "current_permission_mode", "initial_permission_mode",
             "current_model", "initial_model", "error_message",
+            "error_subtype", "error_terminal_reason", "error_api_error_status", "error_list",
             "claude_code_session_id", "is_processing", "name", "sdk_generated_name",
             "slug", "order", "project_id", "role", "is_overseer", "overseer_level",
             "parent_overseer_id", "child_minion_ids", "capabilities", "expertise_score",
@@ -632,11 +646,35 @@ class SessionManager:
                 await self._update_session_state(session_id, SessionState.ERROR, str(e))
                 return False
 
-    async def update_session_state(self, session_id: str, new_state: SessionState, error_message: str | None = None) -> bool:
-        """Update session state with optional error message"""
+    async def update_session_state(
+        self,
+        session_id: str,
+        new_state: SessionState,
+        error_message: str | None = None,
+        *,
+        error_subtype: str | None = None,
+        error_terminal_reason: str | None = None,
+        error_api_error_status: int | None = None,
+        error_list: list[str] | None = None,
+    ) -> bool:
+        """Update session state with optional error message.
+
+        error_subtype/error_terminal_reason/error_api_error_status/error_list are
+        optional structured fields populated when the failure originated from a
+        ResultError (issue #1902); they default to None so existing call sites are
+        unaffected.
+        """
         async with self._get_session_lock(session_id):
             try:
-                await self._update_session_state(session_id, new_state, error_message)
+                await self._update_session_state(
+                    session_id,
+                    new_state,
+                    error_message,
+                    error_subtype=error_subtype,
+                    error_terminal_reason=error_terminal_reason,
+                    error_api_error_status=error_api_error_status,
+                    error_list=error_list,
+                )
                 session_logger.info(f"Updated session {session_id} state to {new_state.value}")
                 return True
             except Exception as e:
@@ -711,7 +749,12 @@ class SessionManager:
         self,
         session_id: str,
         new_state: SessionState,
-        error_message: str | None = None
+        error_message: str | None = None,
+        *,
+        error_subtype: str | None = None,
+        error_terminal_reason: str | None = None,
+        error_api_error_status: int | None = None,
+        error_list: list[str] | None = None,
     ):
         """Update session state and persist changes"""
         session = self._active_sessions.get(session_id)
@@ -722,6 +765,14 @@ class SessionManager:
         session.updated_at = datetime.now(UTC)
         if error_message:
             session.error_message = error_message
+        if error_subtype is not None:
+            session.error_subtype = error_subtype
+        if error_terminal_reason is not None:
+            session.error_terminal_reason = error_terminal_reason
+        if error_api_error_status is not None:
+            session.error_api_error_status = error_api_error_status
+        if error_list is not None:
+            session.error_list = error_list
 
         await self._persist_session_state(session_id)
         await self._notify_state_change_callbacks(session_id, new_state)

@@ -57,10 +57,26 @@
     <div v-if="isHook && expanded" class="hook-detail">
       <pre class="hook-json">{{ hookJson }}</pre>
     </div>
+    <div
+      v-if="isSessionFailed && (sessionFailedSubtype || sessionFailedTerminalReason)"
+      class="session-failed-reason"
+    >
+      <span v-if="sessionFailedTerminalReason" class="pill-badge pill-badge-error-reason">
+        Terminal: {{ sessionFailedTerminalReason }}<template v-if="sessionFailedApiErrorStatus"> (HTTP {{ sessionFailedApiErrorStatus }})</template>
+      </span>
+      <span v-else-if="sessionFailedSubtype" class="pill-badge pill-badge-error-reason">
+        {{ sessionFailedSubtype }}
+      </span>
+    </div>
     <div v-if="isSessionFailed && sessionFailedDetails" class="session-failed-toggle">
       <button class="details-toggle-btn" @click.stop="toggleExpand">
         {{ expanded ? 'Hide details' : 'Show details' }}
       </button>
+    </div>
+    <div v-if="isSessionFailed && expanded && sessionFailedErrorList.length" class="result-errors">
+      <div v-for="(err, i) in sessionFailedErrorList" :key="i" class="result-error-item">
+        {{ err }}
+      </div>
     </div>
     <div v-if="isSessionFailed && expanded && sessionFailedDetails" class="session-failed-detail">
       <pre class="error-detail-pre">{{ sessionFailedDetails }}</pre>
@@ -181,6 +197,17 @@ const isSessionFailed = computed(() => subtype.value === 'session_failed')
 
 // Full error detail for session_failed expand section
 const sessionFailedDetails = computed(() => props.message.metadata?.error_details || null)
+
+// Issue #1902: structured ResultError fields — additive, only present on messages
+// produced after this change shipped. Old session_failed messages simply lack
+// these metadata keys, so these all resolve to null/[] and render nothing.
+const sessionFailedSubtype = computed(() => props.message.metadata?.error_subtype || null)
+const sessionFailedTerminalReason = computed(() => props.message.metadata?.error_terminal_reason || null)
+const sessionFailedApiErrorStatus = computed(() => props.message.metadata?.error_api_error_status ?? null)
+const sessionFailedErrorList = computed(() => {
+  if (!isSessionFailed.value) return []
+  return props.message.metadata?.errors || []
+})
 
 // Check if this is a hook message (hook_started or hook_response)
 const isHook = computed(() => {
@@ -467,6 +494,16 @@ function toggleExpand() {
   color: #991b1b;
   white-space: normal;
   word-break: break-word;
+}
+
+.session-failed-reason {
+  margin-top: 4px;
+}
+
+.pill-badge-error-reason {
+  background: var(--tool-error-bg, #fef2f2);
+  color: #991b1b;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 }
 
 .session-failed-toggle {

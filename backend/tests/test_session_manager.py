@@ -250,6 +250,63 @@ class TestSessionInfo:
         info = SessionInfo.from_dict(data)
         assert info.last_timestamp_injection_date is None
 
+    # --- Issue #1902: structured ResultError fields round trip / backward compat ---
+
+    def test_result_error_fields_default_none(self):
+        now = datetime.now(UTC)
+        info = SessionInfo(
+            session_id="test-resulterr-default",
+            state=SessionState.CREATED,
+            created_at=now,
+            updated_at=now,
+        )
+        assert info.error_subtype is None
+        assert info.error_terminal_reason is None
+        assert info.error_api_error_status is None
+        assert info.error_list is None
+
+    def test_result_error_fields_round_trip(self):
+        now = datetime.now(UTC)
+        info = SessionInfo(
+            session_id="test-resulterr-rt",
+            state=SessionState.CREATED,
+            created_at=now,
+            updated_at=now,
+            error_subtype="error_max_turns",
+            error_terminal_reason="max_turns",
+            error_api_error_status=529,
+            error_list=["max turns exceeded"],
+        )
+        data = info.to_dict()
+        assert data["error_subtype"] == "error_max_turns"
+        assert data["error_terminal_reason"] == "max_turns"
+        assert data["error_api_error_status"] == 529
+        assert data["error_list"] == ["max turns exceeded"]
+
+        restored = SessionInfo.from_dict(data)
+        assert restored.error_subtype == "error_max_turns"
+        assert restored.error_terminal_reason == "max_turns"
+        assert restored.error_api_error_status == 529
+        assert restored.error_list == ["max turns exceeded"]
+
+    def test_result_error_fields_backward_compat_old_state_json(self):
+        """An old state.json written before issue #1902 (missing these keys entirely)
+        must deserialize without error, defaulting the new fields to None."""
+        now = datetime.now(UTC)
+        data = {
+            "session_id": "test-resulterr-old-fixture",
+            "state": "error",
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+            "error_message": "Claude Code command failed",
+        }
+        info = SessionInfo.from_dict(data)
+        assert info.error_message == "Claude Code command failed"
+        assert info.error_subtype is None
+        assert info.error_terminal_reason is None
+        assert info.error_api_error_status is None
+        assert info.error_list is None
+
 
 class TestSessionManager:
     """Test SessionManager functionality."""
