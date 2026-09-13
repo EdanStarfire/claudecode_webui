@@ -361,4 +361,41 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     const lastFetchUrl = fetchSpy.mock.calls[fetchSpy.mock.calls.length - 1][0]
     expect(lastFetchUrl).toContain('since=12')
   })
+
+  it('B1 (#1917): aborts the in-flight fetch synchronously at the start of the heal sequence, before any await', async () => {
+    const { pollingStore, messageStore, sid } = await setup({ session_id: 'sess-b1', is_processing: false })
+
+    // A fetch that only ever settles via its abort signal — never resolves on its own —
+    // so we can prove the abort happens before syncMessages() is even awaited, not only
+    // later inside disconnectSession() (the pre-fix behavior this test guards against).
+    let capturedSignal
+    vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => {
+      capturedSignal = opts?.signal
+      return new Promise((_resolve, reject) => {
+        opts?.signal?.addEventListener('abort', () => {
+          const err = new Error('Aborted')
+          err.name = 'AbortError'
+          reject(err)
+        })
+      })
+    })
+
+    await pollingStore.connectSession(sid)
+    advanceTime(41000) // past STALL_TIMEOUT_MS (40s)
+
+    // syncMessages() deliberately never resolves during this assertion window.
+    let resolveSync
+    vi.spyOn(messageStore, 'syncMessages').mockImplementation(() => new Promise(resolve => { resolveSync = resolve }))
+
+    // Do not await yet — an async function runs synchronously up to its first `await`,
+    // so by the time this call returns control, B1's synchronous abort has already run.
+    const healPromise = pollingStore.checkSessionStall()
+
+    expect(capturedSignal.aborted).toBe(true)
+
+    // Let the heal sequence finish so it doesn't leak into later tests.
+    resolveSync({ syncedCount: 0, hasMore: false })
+    apiMock.get.mockResolvedValue({ cursor: 0 })
+    await healPromise
+  })
 })

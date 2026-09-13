@@ -227,10 +227,16 @@ export const usePollingStore = defineStore('polling', () => {
     // Fix 2: await loop exit with 3s budget (must exceed 2s catch-block sleep)
     if (sessionLoopExitPromise) {
       try {
-        await Promise.race([
-          sessionLoopExitPromise,
-          new Promise(resolve => setTimeout(resolve, 3000))
+        const TIMED_OUT = Symbol('timed-out')
+        const result = await Promise.race([
+          sessionLoopExitPromise.then(() => 'exited'),
+          new Promise(resolve => setTimeout(() => resolve(TIMED_OUT), 3000))
         ])
+        // Issue #1917 (Fix B2): a slow-to-exit old loop silently proceeding was previously
+        // invisible — surface it so this timing edge case can be diagnosed from logs.
+        if (result === TIMED_OUT) {
+          console.warn('[disconnectSession] old poll loop did not exit within 3s budget — proceeding anyway')
+        }
       } catch { /* ignore */ }
       sessionLoopExitPromise = null
     }
@@ -276,6 +282,14 @@ export const usePollingStore = defineStore('polling', () => {
     // Cooldown: prevent heal storms
     if (Date.now() - lastHealedAt < HEAL_COOLDOWN_MS) return
     lastHealedAt = Date.now()
+
+    // Issue #1917 (Fix B1): bump the generation and abort the in-flight fetch synchronously,
+    // before either await below. disconnectSession() does this too, but only after the two
+    // awaited REST calls that follow — leaving a window where a visibilitychange-resumed
+    // old-generation loop can still resolve and redeliver an already-processed event batch
+    // while this heal sequence is still in flight.
+    sessionPollGeneration++
+    sessionAbortController?.abort()
 
     console.warn(`[stall-heal] Session ${sid} stalled ${Math.round(stallMs / 1000)}s (is_processing=${session.is_processing}); re-syncing`)
 

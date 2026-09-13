@@ -653,6 +653,228 @@ describe('terminal-AM after finalized placeholder — Fix A (#1626)', () => {
   })
 })
 
+describe('Issue #1917: reassembly guard idempotency (redelivery hardening)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('requestAnimationFrame', () => 1)
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('normal (non-redelivered) turn is not dropped when the live terminal shares the same id as its own open placeholder', async () => {
+    // Regression guard: in real live delivery, the terminal AssistantMessage's top-level
+    // message_id equals metadata.message_id — both are the Anthropic streaming id (the
+    // backend's separately-generated storage UUID only appears once the message round-trips
+    // through storage/REST, e.g. syncMessages or a page reload — never on the live-pushed
+    // object). That means the terminal's dedupKey legitimately matches its OWN currently-open
+    // placeholder's message_id. The defer-branch dedup guard must not treat this normal,
+    // first-time match as "already exists" and silently drop the terminal (which would strip
+    // tool_uses/metadata from every real turn, not just redeliveries).
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1917-realshape'
+    const ANTHROPIC_ID = 'msg_1917_realshape'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ANTHROPIC_ID } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'I will edit the file.' } }))
+
+    // Realistic wire shape: message_id === metadata.message_id (both the Anthropic id).
+    store.addMessage(SID, {
+      type: 'assistant',
+      message_id: ANTHROPIC_ID,
+      content: 'I will edit the file.',
+      metadata: {
+        message_id: ANTHROPIC_ID,
+        has_tool_uses: true,
+        tool_uses: [{ id: 'toolReal', name: 'Edit', input: { file_path: '/tmp/foo.txt' } }],
+      },
+    })
+
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    const msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].streaming).toBe(false)
+    expect(msgs[0].metadata.has_tool_uses).toBe(true)
+    expect(msgs[0].metadata.tool_uses).toHaveLength(1)
+    expect(msgs[0].metadata.tool_uses[0].id).toBe('toolReal')
+  })
+
+  it('redelivery after finalization does not duplicate a turn using the realistic wire shape (message_id === metadata.message_id)', async () => {
+    // End-to-end companion to the test above: proves the whole redelivered sequence — not just
+    // the first delivery — resolves to exactly one message when the terminal's top-level
+    // message_id is the Anthropic id (as it is for every live-delivered turn), rather than the
+    // synthetic distinct-ids shape used by the other A1 test below.
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1917-realshape-redelivery'
+    const ANTHROPIC_ID = 'msg_1917_realshape_redelivery'
+
+    const terminal = {
+      type: 'assistant',
+      message_id: ANTHROPIC_ID,
+      content: 'hello world',
+      metadata: { message_id: ANTHROPIC_ID, has_thinking: false, thinking_content: '', has_tool_uses: false, tool_uses: [] },
+    }
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ANTHROPIC_ID } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'hello world' } }))
+    store.addMessage(SID, terminal)
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    let msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].message_id).toBe(ANTHROPIC_ID)
+
+    // Full redelivery of the same sequence after the turn already finalized.
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ANTHROPIC_ID } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'hello world' } }))
+    store.addMessage(SID, terminal)
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+  })
+
+  it('redelivery after finalization does not create a duplicate message (covers A1)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1917-a'
+    const ANTHROPIC_ID = 'msg_1917_a'
+    const BACKEND_UUID = 'am-1917-a-uuid'
+
+    const terminal = {
+      type: 'assistant',
+      message_id: BACKEND_UUID,
+      content: 'hello world',
+      metadata: { message_id: ANTHROPIC_ID, has_thinking: false, thinking_content: '', has_tool_uses: false, tool_uses: [] },
+    }
+
+    // First delivery: streams and finalizes normally, splicing in the terminal AM whose
+    // top-level message_id is the backend UUID (Anthropic id survives only in metadata).
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ANTHROPIC_ID } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'hello world' } }))
+    store.addMessage(SID, terminal)
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    let msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].message_id).toBe(BACKEND_UUID)
+    expect(msgs[0].metadata.message_id).toBe(ANTHROPIC_ID)
+
+    // Redelivery: the entire event sequence (message_start -> deltas -> terminal -> message_stop)
+    // arrives again for the same Anthropic id, after the turn already finalized and spliced.
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ANTHROPIC_ID } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'hello world' } }))
+    store.addMessage(SID, terminal)
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+  })
+
+  it('redelivered message_start while buffer still open does not create a second placeholder (covers A2)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1917-b'
+    const ANTHROPIC_ID = 'msg_1917_b'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ANTHROPIC_ID } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'partial ' } }))
+
+    // Redelivered message_start for the same id, mid-stream (before message_stop)
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ANTHROPIC_ID } }))
+
+    let msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].streaming).toBe(true)
+
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'response' } }))
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].content).toBe('partial response')
+  })
+
+  it('A3 safety net: message_stop splice refuses to double-commit a duplicate collected terminal', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1917-c'
+    const ANTHROPIC_ID = 'msg_1917_c'
+    const BACKEND_UUID = 'am-1917-c-uuid'
+
+    const terminal = {
+      type: 'assistant',
+      message_id: BACKEND_UUID,
+      content: 'result',
+      metadata: { message_id: ANTHROPIC_ID, has_thinking: false, thinking_content: '', has_tool_uses: false, tool_uses: [] },
+    }
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ANTHROPIC_ID } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'result' } }))
+
+    // Placeholder is still streaming, so both deliveries land on addMessage()'s "generalized
+    // defer" branch (message.js ~859-874). The second delivery is caught by that branch's own
+    // buf.collectedTerminalMessages dedup (part of this same A3 safety net) before it can ever
+    // reach the buffer, proving a duplicate can't accumulate there even across repeated calls.
+    store.addMessage(SID, terminal)
+    store.addMessage(SID, terminal)
+
+    // Buffer still open, nothing spliced into the visible list yet.
+    let msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].streaming).toBe(true)
+
+    // At message_stop, the A3 safety net must refuse to splice in the duplicate copy.
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].message_id).toBe(BACKEND_UUID)
+  })
+
+  it('placeholder is removed, not left as a stale empty bubble, when the real terminal already landed via a different path before message_stop', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1917-d'
+    const ANTHROPIC_ID = 'msg_1917_d'
+    const BACKEND_UUID = 'am-1917-d-uuid'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ANTHROPIC_ID } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'partial' } }))
+
+    // Simulate a concurrent syncMessages() REST backfill inserting the fully-persisted terminal
+    // directly into the array — syncMessages does a raw array merge independent of addMessage()
+    // and the open _deltaBuffers entry, so this can legitimately race a still-open stream.
+    store.messagesBySession.get(SID).push({
+      type: 'assistant',
+      message_id: BACKEND_UUID,
+      content: 'full response',
+      metadata: { message_id: ANTHROPIC_ID, has_thinking: false, thinking_content: '', has_tool_uses: false, tool_uses: [] },
+    })
+
+    // The live terminal event for the same turn also arrives via the normal path. addMessage()'s
+    // defer-branch dedup correctly refuses to add a second copy...
+    store.addMessage(SID, {
+      type: 'assistant',
+      message_id: BACKEND_UUID,
+      content: 'full response',
+      metadata: { message_id: ANTHROPIC_ID, has_thinking: false, thinking_content: '', has_tool_uses: false, tool_uses: [] },
+    })
+
+    // ...but message_stop must still clean up the now-superfluous placeholder instead of leaving
+    // it behind as a stale, empty/partial-content bubble alongside the real message.
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    const finalMsgs = store.messagesBySession.get(SID)
+    expect(finalMsgs.length).toBe(1)
+    expect(finalMsgs[0].message_id).toBe(BACKEND_UUID)
+    expect(finalMsgs[0].content).toBe('full response')
+  })
+})
+
 describe('addMessage metadata accumulation across same-message_id frames (#1765 confirmed root cause)', () => {
   // Reproduces a real user-provided repro (messages.jsonl from a live session): a single
   // Anthropic assistant message (one message_id) dispatching a run_in_background Task/Agent

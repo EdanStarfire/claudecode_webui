@@ -858,6 +858,23 @@ export const useMessageStore = defineStore('message', () => {
     // terminals whose IDs were absent or mismatched (e.g. extended-thinking multi-AM turns).
     if (message.type === 'assistant' && !message.streaming && _deltaBuffers.has(sessionId)) {
       const buf = _deltaBuffers.get(sessionId)
+      // Issue #1917 safety net: this defer path has no id-based dedup of its own — skip a
+      // terminal message that's already finalized elsewhere or already queued for this splice,
+      // so a redelivered event batch can't double-commit regardless of what caused the
+      // redelivery. Must exclude still-streaming entries from the "already exists" check: for a
+      // live-delivered terminal, message.message_id equals the CURRENTLY-OPEN placeholder's own
+      // message_id (both are the Anthropic streaming id — the backend's separately-generated
+      // storage UUID is never present on the live-pushed object, only on history/REST-reloaded
+      // ones), so matching against the open placeholder itself would wrongly treat every normal,
+      // first-time terminal delivery as a duplicate and silently drop it.
+      const dedupKey = message.message_id || message.id
+      if (dedupKey && (
+        messages.some(m => !m.streaming && (m.message_id || m.id) === dedupKey) ||
+        buf.collectedTerminalMessages?.some(m => (m.message_id || m.id) === dedupKey)
+      )) {
+        console.log(`Skipping duplicate deferred terminal message ${dedupKey}`)
+        return
+      }
       if (!buf.collectedTerminalMessages) buf.collectedTerminalMessages = []
       buf.collectedTerminalMessages.push(message)
       return
@@ -1760,7 +1777,16 @@ export const useMessageStore = defineStore('message', () => {
       messagesBySession.value.set(sessionId, [])
     }
     const messages = messagesBySession.value.get(sessionId)
-    if (messages.find(m => m.message_id === messageId)) return  // guard: no duplicate placeholder
+    // Issue #1917: guard against redelivery of a message_start whose turn already finalized —
+    // the finalized entry's top-level message_id is the backend's own UUID (assigned at splice
+    // time), while the Anthropic streaming id survives only in metadata.message_id, so both must
+    // be checked or a redelivered message_start for an already-completed turn silently passes
+    // the guard and spawns a brand-new placeholder/buffer.
+    if (messages.find(m => m.message_id === messageId || m.metadata?.message_id === messageId)) return
+    // Issue #1917: guard against redelivery of message_start while the buffer for this id is
+    // still open (mid-stream redelivery, before message_stop).
+    const openBuf = _deltaBuffers.get(sessionId)
+    if (openBuf && openBuf.messageId === messageId) return
 
     messages.push({
       id: messageId,
@@ -1867,14 +1893,40 @@ export const useMessageStore = defineStore('message', () => {
           if (messages) {
             const idx = messages.findIndex(m => m.message_id === buf.messageId)
             if (idx >= 0 && messages[idx].streaming) {
-              if (buf.collectedTerminalMessages?.length > 0) {
-                messages.splice(idx, 1, ...buf.collectedTerminalMessages.map(m => ({ ...m, streaming: false })))
+              // Issue #1917 safety net: drop any collected terminal that already exists
+              // elsewhere in the list (or is duplicated within this same batch) before
+              // splicing, so a redelivered batch can't double-commit a visible message.
+              const collected = buf.collectedTerminalMessages || []
+              const seenKeys = new Set()
+              const toSplice = collected.filter(m => {
+                const key = m.message_id || m.id
+                if (!key) return true
+                if (seenKeys.has(key) || messages.some((existing, i) => i !== idx && (existing.message_id || existing.id) === key)) {
+                  return false
+                }
+                seenKeys.add(key)
+                return true
+              })
+              if (toSplice.length > 0) {
+                messages.splice(idx, 1, ...toSplice.map(m => ({ ...m, streaming: false })))
                 // Issue #1614: apply side effects skipped by the generalized defer in addMessage.
-                buf.collectedTerminalMessages.forEach(m => {
+                toSplice.forEach(m => {
                   if (m.timestamp) lastReceivedTimestamp.value.set(sessionId, m.timestamp)
                   applyDisplayMetadata(sessionId, m)
                   handleRealtimeToolTracking(sessionId, m)
                 })
+              } else if (
+                collected.length > 0 ||
+                messages.some((existing, i) => i !== idx && existing.metadata?.message_id === buf.messageId)
+              ) {
+                // Issue #1917: this turn's real terminal already exists elsewhere in the list —
+                // either every collected terminal was filtered above as a pre-existing duplicate,
+                // or none was ever collected because addMessage()'s own dedup check (message.js
+                // ~865) blocked it at push time (e.g. a concurrent syncMessages() REST backfill
+                // already inserted it while this buffer was still open). Either way, remove the
+                // now-superfluous placeholder instead of leaving a stale, never-updated bubble
+                // (empty or partial streamed content) behind.
+                messages.splice(idx, 1)
               } else {
                 // No terminal AM collected — just stop the streaming caret
                 messages[idx] = { ...messages[idx], streaming: false }
