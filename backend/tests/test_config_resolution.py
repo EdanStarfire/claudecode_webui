@@ -166,6 +166,7 @@ class TestResolveNoTemplate:
             sandbox_enabled=True,
             history_distillation_enabled=False,
             bare_mode=True,
+            restricted_mode=True,
         )
         tm = _make_template_manager(None)
 
@@ -176,6 +177,7 @@ class TestResolveNoTemplate:
         assert result.sandbox_enabled is True
         assert result.history_distillation_enabled is False
         assert result.bare_mode is True
+        assert result.restricted_mode is True
 
 
 @pytest.mark.asyncio

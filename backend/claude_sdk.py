@@ -271,6 +271,7 @@ class ClaudeSDK:
         self.enable_streaming_text = config.enable_streaming_text
         self.strict_mcp_config = config.strict_mcp_config
         self.bare_mode = config.bare_mode if config else False
+        self.restricted_mode = config.restricted_mode if config else False
         self.env_scrub_enabled = config.env_scrub_enabled if config else False
         self.max_subagent_spawn_depth = config.max_subagent_spawn_depth if config else 1
         # Issue #1779: automatic timestamp injection into user messages
@@ -536,6 +537,16 @@ class ClaudeSDK:
             if mode not in PermissionMode._value2member_map_:
                 logger.error(f"Invalid permission mode: {mode}")
                 return False
+
+            # Issue #1905: the startup guard in _get_sdk_options() only covers the
+            # mode a restricted session launches with — mid-session cycling into
+            # bypassPermissions (#1027) reaches the CLI directly via this method
+            # instead, so it needs the same fail-fast check.
+            if self.restricted_mode and mode == "bypassPermissions":
+                raise ValueError(
+                    "Restricted mode is not compatible with the Bypass permission mode. "
+                    "Disable restricted mode or choose a different permission mode."
+                )
 
             # Check if we have an active SDK client
             if not self._sdk_client:
@@ -1077,10 +1088,30 @@ class ClaudeSDK:
         if self.deny_unattended_permission_prompts:
             extra_args["permission-prompts"] = "none"
 
+        # Issue #1905: CLI --restricted strips Bash/code-exec tools + WebFetch,
+        # ignores project/user settings files, and confines file tools to the
+        # working directory. Confirmed via live CLI testing that it's rejected
+        # outright when combined with bypassPermissions ("Error: bypassPermissions
+        # not supported in restricted mode") — fail fast here with a clear message
+        # instead of letting that surface as an opaque session-start failure.
+        if self.restricted_mode:
+            if self.current_permission_mode == "bypassPermissions":
+                raise ValueError(
+                    "Restricted mode is not compatible with the Bypass permission mode. "
+                    "Disable restricted mode or choose a different permission mode."
+                )
+            extra_args["restricted"] = None
+
         # Issue #1027: Always enable auto mode and allow mid-session mode cycling
         # Use None (not True) so the SDK transport emits bare flags without values.
         extra_args["enable-auto-mode"] = None
-        extra_args["allow-dangerously-skip-permissions"] = None
+        # Issue #1905: the CLI rejects allow-dangerously-skip-permissions combined
+        # with --restricted, so omit it for restricted sessions. This means
+        # mid-session cycling into bypassPermissions (#1027) is unavailable for
+        # the lifetime of a restricted session — enforced both here (at startup)
+        # and by the matching check in set_permission_mode() (mid-session switch).
+        if not self.restricted_mode:
+            extra_args["allow-dangerously-skip-permissions"] = None
 
         options_kwargs = {
             "cwd": str(self.working_directory),

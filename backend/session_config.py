@@ -85,6 +85,10 @@ class SessionConfig(BaseModel):
     # Tools
     allowed_tools: list[str] | None = None
     disallowed_tools: list[str] | None = None
+    # Issue #1905: CLI --restricted — strips Bash/code-exec tools + WebFetch,
+    # ignores project/user settings files, confines file tools to the working
+    # directory. Rejected outright by the CLI when combined with bypassPermissions.
+    restricted_mode: bool = False
 
     # Model
     model: str | None = None
@@ -176,7 +180,7 @@ CONFIG_FIELDS: set[str] = {
     "auto_mode_environment", "auto_mode_allow", "auto_mode_soft_deny",
     "auto_mode_hard_deny", "auto_mode_classify_all_shell",
     "system_prompt", "override_system_prompt",
-    "allowed_tools", "disallowed_tools", "model",
+    "allowed_tools", "disallowed_tools", "restricted_mode", "model",
     "thinking_mode", "thinking_budget_tokens", "effort",
     "additional_directories", "cli_path", "process_wrapper", "setting_sources",
     "sandbox_enabled", "sandbox_config",

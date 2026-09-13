@@ -339,6 +339,9 @@ class TemplateUpdateRequest(BaseModel):
     bare_mode: bool | None = None
     deny_unattended_permission_prompts: bool | None = None
     env_scrub_enabled: bool | None = None
+    # Issue #1905: CLI --restricted (strips Bash/code-exec tools + WebFetch,
+    # ignores project/user settings files, confines file tools to the working directory)
+    restricted_mode: bool | None = None
     # Issue #1669: max depth for nested subagent spawning (WebUI default: 1)
     max_subagent_spawn_depth: int | None = Field(None, ge=1, le=3)
     enable_streaming_text: bool | None = None  # Issue #1486 — opt-in streaming text rendering
