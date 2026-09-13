@@ -60,3 +60,18 @@ def test_provider_catalog_fields_in_config_fields():
 def test_provider_catalog_fields_in_defaults():
     assert DEFAULTS.get("provider_catalog_id") is None
     assert DEFAULTS.get("provider_model_id") is None
+
+
+# ── Issue #1903: deny_unattended_permission_prompts ─────────────────────────
+
+
+def test_deny_unattended_permission_prompts_defaults_false():
+    assert SessionConfig().deny_unattended_permission_prompts is False
+
+
+def test_deny_unattended_permission_prompts_in_config_fields():
+    assert "deny_unattended_permission_prompts" in CONFIG_FIELDS
+
+
+def test_deny_unattended_permission_prompts_in_defaults():
+    assert DEFAULTS.get("deny_unattended_permission_prompts") is False

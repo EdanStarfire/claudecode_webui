@@ -9,6 +9,7 @@
 export const CONFIG_FIELDS_LIST = Object.freeze([
   // permissions area
   'permission_mode',
+  'deny_unattended_permission_prompts',
   'allowed_tools',
   'disallowed_tools',
   'additional_directories',
@@ -60,6 +61,7 @@ export const CONFIG_FIELDS_LIST = Object.freeze([
 /** Default value for each CONFIG_FIELD — mirrors SessionConfig defaults. */
 export const FIELD_DEFAULTS = Object.freeze({
   permission_mode: 'acceptEdits',
+  deny_unattended_permission_prompts: false,
   system_prompt: null,
   override_system_prompt: false,
   allowed_tools: null,
@@ -112,6 +114,7 @@ const _FIELD_TO_AREA = Object.freeze({
   effort: 'model',
   // permissions
   permission_mode: 'permissions',
+  deny_unattended_permission_prompts: 'permissions',
   allowed_tools: 'permissions',
   disallowed_tools: 'permissions',
   additional_directories: 'permissions',

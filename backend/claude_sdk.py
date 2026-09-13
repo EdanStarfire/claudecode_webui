@@ -221,6 +221,9 @@ class ClaudeSDK:
         else:
             logger.warning("No permission callback provided to ClaudeSDK!")
         self.current_permission_mode = config.permission_mode
+        self.deny_unattended_permission_prompts = (
+            config.deny_unattended_permission_prompts if config else False
+        )
         self.system_prompt = config.system_prompt
         self.override_system_prompt = config.override_system_prompt
         self.tools = config.allowed_tools if config.allowed_tools is not None else []
@@ -995,6 +998,11 @@ class ClaudeSDK:
         # Issue #902: Bare mode skips hooks, LSP, plugin sync, skill walks
         if self.bare_mode:
             extra_args["bare"] = None
+
+        # Issue #1903: Auto-deny anything that would need a prompt, independent
+        # of permission_mode (which still decides what counts as "needs a prompt").
+        if self.deny_unattended_permission_prompts:
+            extra_args["permission-prompts"] = "none"
 
         # Issue #1027: Always enable auto mode and allow mid-session mode cycling
         # Use None (not True) so the SDK transport emits bare flags without values.

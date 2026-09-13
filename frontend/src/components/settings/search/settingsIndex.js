@@ -97,6 +97,7 @@ export const settingsIndex = [
   { section: 'edit-model-tuning', fieldKey: 'effort',                 label: 'Effort' },
 
   // Tools & Permissions section
+  { section: 'edit-tools-permissions', fieldKey: 'deny_unattended_permission_prompts', label: 'Deny Unattended Permission Prompts' },
   { section: 'edit-tools-permissions', fieldKey: 'allowed_tools',           label: 'Allowed Tools' },
   { section: 'edit-tools-permissions', fieldKey: 'disallowed_tools',        label: 'Disallowed Tools' },
   { section: 'edit-tools-permissions', fieldKey: 'setting_sources',         label: 'Settings Sources' },

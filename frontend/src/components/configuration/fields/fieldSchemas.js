@@ -160,6 +160,15 @@ export const FIELD_SCHEMAS = {
       profileOnly: true,
     },
     {
+      key: 'deny_unattended_permission_prompts',
+      label: 'Deny Unattended Permission Prompts',
+      widget: 'toggle',
+      defaultValue: false,
+      description: 'When on, any tool-permission prompt that would otherwise need a '
+        + 'human/host response is denied automatically instead (CLI --permission-prompts '
+        + 'none). Independent of Permission Mode — applies no matter which mode is set.',
+    },
+    {
       key: 'allowed_tools',
       label: 'Allowed Tools',
       widget: 'tag-input',

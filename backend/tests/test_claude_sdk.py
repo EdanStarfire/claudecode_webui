@@ -232,6 +232,26 @@ class TestClaudeSDK:
             opts = sdk._get_sdk_options()
         assert opts.forward_subagent_text is False
 
+    def test_get_sdk_options_deny_unattended_permission_prompts_enabled(self, temp_dir, session_id):
+        """Issue #1903: True adds extra_args['permission-prompts'] = 'none'."""
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(deny_unattended_permission_prompts=True),
+        )
+        opts = sdk._get_sdk_options()
+        assert (opts.extra_args or {}).get("permission-prompts") == "none"
+
+    def test_get_sdk_options_deny_unattended_permission_prompts_disabled(self, temp_dir, session_id):
+        """Issue #1903: default False leaves extra_args without the key (no behavior change)."""
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(deny_unattended_permission_prompts=False),
+        )
+        opts = sdk._get_sdk_options()
+        assert "permission-prompts" not in (opts.extra_args or {})
+
     def test_build_auto_mode_block_none_when_unset(self, temp_dir, session_id):
         """Issue #1884 AC4: _build_auto_mode_block returns None when nothing is configured."""
         sdk = ClaudeSDK(

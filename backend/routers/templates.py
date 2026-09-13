@@ -57,6 +57,7 @@ def build_router(webui) -> APIRouter:
             # Issue #1230: if config dict provided it replaces template.config entirely
             config=request.config,
             permission_mode=request.permission_mode,
+            deny_unattended_permission_prompts=request.deny_unattended_permission_prompts,
             allowed_tools=request.allowed_tools,
             disallowed_tools=request.disallowed_tools,
             # Auto Mode classifier config (issue #1884)
