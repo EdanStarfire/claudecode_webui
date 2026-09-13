@@ -1031,7 +1031,15 @@ class ClaudeSDK:
         # expects a file path, not inline JSON — confirmed against claude_agent_sdk's
         # own types.py docstring). Both features share this one options_kwargs["settings"]
         # slot, so they must be merged rather than each independently assigning it.
+        from .config_manager import load_config as _load_app_config
+        _app_cfg = _load_app_config()
+
         settings_payload: dict = {}
+        if _app_cfg.features.block_cross_session_inbound:
+            # Issue #1901 — force the CLI's own cross-session-inbound classifier to
+            # refuse outright, rather than relying on the incidental hold/timeout
+            # behavior of acceptEdits-mode minions.
+            settings_payload["crossSessionInbound"] = "refuse"
         if self.auto_memory_directory and self.auto_memory_mode in ("claude", "session"):
             settings_payload["autoMemoryDirectory"] = self.auto_memory_directory
             sdk_logger.info(f"Auto-memory directory for session {self.session_id}: {self.auto_memory_directory}")
@@ -1117,9 +1125,6 @@ class ClaudeSDK:
         # Issue #1299: Emit hook lifecycle events (hook_started/hook_response) into the message
         # stream as HookEventMessage objects. Without this flag, hook events are silently dropped.
         options_kwargs["include_hook_events"] = True
-
-        from .config_manager import load_config as _load_app_config
-        _app_cfg = _load_app_config()
 
         # Issue #1486: opt into SDK streaming when both per-session AND global flags allow
         if self.enable_streaming_text and _app_cfg.features.streaming_text_enabled:
