@@ -12,6 +12,11 @@ from backend.config_manager import AppConfig, FeaturesConfig
 from backend.session_config import SessionConfig
 
 
+def _features_config(block_cross_session_inbound: bool) -> AppConfig:
+    """AppConfig with block_cross_session_inbound pinned, all other features default."""
+    return AppConfig(features=FeaturesConfig(block_cross_session_inbound=block_cross_session_inbound))
+
+
 class TestClaudeSDK:
     """Test cases for ClaudeSDK class."""
 
@@ -296,13 +301,20 @@ class TestClaudeSDK:
         assert block == {"hard_deny": []}
 
     def test_get_sdk_options_no_settings_key_when_nothing_configured(self, temp_dir, session_id):
-        """Issue #1884 AC4: neither auto-memory nor autoMode configured -> no settings key at all."""
-        sdk = ClaudeSDK(
-            session_id=session_id,
-            working_directory=temp_dir,
-            config=SessionConfig(),
-        )
-        opts = sdk._get_sdk_options()
+        """Issue #1884 AC4: neither auto-memory nor autoMode configured -> no settings key at all.
+
+        Issue #1901: block_cross_session_inbound defaults to True app-wide, which would
+        otherwise always populate settings_payload. Pin it off here so this test keeps
+        verifying its original regression intent (auto-memory/autoMode absence) in isolation;
+        the on-by-default behavior is covered separately below.
+        """
+        with patch("backend.config_manager.load_config", return_value=_features_config(False)):
+            sdk = ClaudeSDK(
+                session_id=session_id,
+                working_directory=temp_dir,
+                config=SessionConfig(),
+            )
+            opts = sdk._get_sdk_options()
         assert opts.settings is None
         assert sdk._settings_temp_file is None
 
@@ -311,12 +323,13 @@ class TestClaudeSDK:
         import json
         from pathlib import Path
 
-        sdk = ClaudeSDK(
-            session_id=session_id,
-            working_directory=temp_dir,
-            config=SessionConfig(auto_mode_allow=["$defaults", "always allow tests"]),
-        )
-        opts = sdk._get_sdk_options()
+        with patch("backend.config_manager.load_config", return_value=_features_config(False)):
+            sdk = ClaudeSDK(
+                session_id=session_id,
+                working_directory=temp_dir,
+                config=SessionConfig(auto_mode_allow=["$defaults", "always allow tests"]),
+            )
+            opts = sdk._get_sdk_options()
 
         assert opts.settings is not None
         assert Path(opts.settings).exists()
@@ -331,21 +344,52 @@ class TestClaudeSDK:
         import json
         from pathlib import Path
 
-        sdk = ClaudeSDK(
-            session_id=session_id,
-            working_directory=temp_dir,
-            config=SessionConfig(
-                auto_memory_mode="claude",
-                auto_memory_directory="/tmp/my-memory",
-                auto_mode_hard_deny=["$defaults", "Never delete backups"],
-            ),
-        )
-        opts = sdk._get_sdk_options()
+        with patch("backend.config_manager.load_config", return_value=_features_config(False)):
+            sdk = ClaudeSDK(
+                session_id=session_id,
+                working_directory=temp_dir,
+                config=SessionConfig(
+                    auto_memory_mode="claude",
+                    auto_memory_directory="/tmp/my-memory",
+                    auto_mode_hard_deny=["$defaults", "Never delete backups"],
+                ),
+            )
+            opts = sdk._get_sdk_options()
 
         assert opts.settings is not None
         with Path(opts.settings).open() as f:
             payload = json.load(f)
         assert payload == {
+            "autoMemoryDirectory": "/tmp/my-memory",
+            "autoMode": {"hard_deny": ["$defaults", "Never delete backups"]},
+        }
+        sdk._cleanup_settings_temp_file()
+
+    def test_get_sdk_options_merges_cross_session_inbound_with_auto_memory_and_auto_mode(
+        self, temp_dir, session_id
+    ):
+        """Issue #1901: with the app-wide flag on (default), crossSessionInbound merges into
+        the same settings file as autoMemoryDirectory/autoMode rather than clobbering them."""
+        import json
+        from pathlib import Path
+
+        with patch("backend.config_manager.load_config", return_value=_features_config(True)):
+            sdk = ClaudeSDK(
+                session_id=session_id,
+                working_directory=temp_dir,
+                config=SessionConfig(
+                    auto_memory_mode="claude",
+                    auto_memory_directory="/tmp/my-memory",
+                    auto_mode_hard_deny=["$defaults", "Never delete backups"],
+                ),
+            )
+            opts = sdk._get_sdk_options()
+
+        assert opts.settings is not None
+        with Path(opts.settings).open() as f:
+            payload = json.load(f)
+        assert payload == {
+            "crossSessionInbound": "refuse",
             "autoMemoryDirectory": "/tmp/my-memory",
             "autoMode": {"hard_deny": ["$defaults", "Never delete backups"]},
         }
@@ -358,21 +402,44 @@ class TestClaudeSDK:
         import json
         from pathlib import Path
 
-        sdk = ClaudeSDK(
-            session_id=session_id,
-            working_directory=temp_dir,
-            config=SessionConfig(
-                auto_memory_mode="claude",
-                auto_memory_directory="/tmp/my-memory",
-            ),
-        )
-        opts = sdk._get_sdk_options()
+        with patch("backend.config_manager.load_config", return_value=_features_config(False)):
+            sdk = ClaudeSDK(
+                session_id=session_id,
+                working_directory=temp_dir,
+                config=SessionConfig(
+                    auto_memory_mode="claude",
+                    auto_memory_directory="/tmp/my-memory",
+                ),
+            )
+            opts = sdk._get_sdk_options()
 
         assert opts.settings is not None
         assert Path(opts.settings).exists()
         with Path(opts.settings).open() as f:
             payload = json.load(f)
         assert payload == {"autoMemoryDirectory": "/tmp/my-memory"}
+        sdk._cleanup_settings_temp_file()
+
+    def test_get_sdk_options_cross_session_inbound_refuse_when_nothing_else_configured(
+        self, temp_dir, session_id
+    ):
+        """Issue #1901: flag on (default) + nothing else configured -> settings file contains
+        only crossSessionInbound."""
+        import json
+        from pathlib import Path
+
+        with patch("backend.config_manager.load_config", return_value=_features_config(True)):
+            sdk = ClaudeSDK(
+                session_id=session_id,
+                working_directory=temp_dir,
+                config=SessionConfig(),
+            )
+            opts = sdk._get_sdk_options()
+
+        assert opts.settings is not None
+        with Path(opts.settings).open() as f:
+            payload = json.load(f)
+        assert payload == {"crossSessionInbound": "refuse"}
         sdk._cleanup_settings_temp_file()
 
     def test_cleanup_settings_temp_file_removes_file(self, temp_dir, session_id):

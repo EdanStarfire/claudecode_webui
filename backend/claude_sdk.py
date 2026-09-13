@@ -1032,6 +1032,13 @@ class ClaudeSDK:
         # own types.py docstring). Both features share this one options_kwargs["settings"]
         # slot, so they must be merged rather than each independently assigning it.
         settings_payload: dict = {}
+        from .config_manager import load_config as _load_app_config_for_features
+        _app_cfg = _load_app_config_for_features()
+        if _app_cfg.features.block_cross_session_inbound:
+            # Issue #1901 — force the CLI's own cross-session-inbound classifier to
+            # refuse outright, rather than relying on the incidental hold/timeout
+            # behavior of acceptEdits-mode minions.
+            settings_payload["crossSessionInbound"] = "refuse"
         if self.auto_memory_directory and self.auto_memory_mode in ("claude", "session"):
             settings_payload["autoMemoryDirectory"] = self.auto_memory_directory
             sdk_logger.info(f"Auto-memory directory for session {self.session_id}: {self.auto_memory_directory}")
