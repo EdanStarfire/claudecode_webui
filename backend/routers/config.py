@@ -77,6 +77,11 @@ def build_router(webui) -> APIRouter:
                 if not isinstance(val, bool):
                     raise ValueError("enable_experimental_nav_header must be a boolean")
                 config.features.enable_experimental_nav_header = val
+            if "block_cross_session_inbound" in features:
+                val = features["block_cross_session_inbound"]
+                if not isinstance(val, bool):
+                    raise ValueError("block_cross_session_inbound must be a boolean")
+                config.features.block_cross_session_inbound = val
 
         # Merge proxy section (issue #1050)
         if "proxy" in body:

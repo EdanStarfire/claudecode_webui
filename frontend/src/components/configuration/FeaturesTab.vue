@@ -188,6 +188,26 @@
       </small>
     </div>
 
+    <div class="form-check form-switch mb-3">
+      <input
+        class="form-check-input"
+        type="checkbox"
+        id="blockCrossSessionInbound"
+        :checked="config?.block_cross_session_inbound"
+        @change="toggleBlockCrossSessionInbound"
+      >
+      <label class="form-check-label" for="blockCrossSessionInbound">
+        Block inbound cross-session messages
+      </label>
+      <small class="form-text text-muted d-block">
+        Forces the CLI's own <code>crossSessionInbound</code> setting to "refuse" for
+        every session, so an inbound CLI-native cross-session message (unrelated to
+        Legion's own comms) is always rejected outright rather than held/auto-delivered
+        (default: on). Disable only for testing the cross-session-inbound mechanism
+        itself. Takes effect on the next session start, not mid-session.
+      </small>
+    </div>
+
     <hr class="my-3">
 
     <h6 class="mb-2">Legion</h6>
@@ -312,6 +332,13 @@ function toggleExperimentalNavHeader(event) {
   emit('update:config', {
     ...props.config,
     enable_experimental_nav_header: event.target.checked
+  })
+}
+
+function toggleBlockCrossSessionInbound(event) {
+  emit('update:config', {
+    ...props.config,
+    block_cross_session_inbound: event.target.checked
   })
 }
 
