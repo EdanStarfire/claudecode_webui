@@ -79,8 +79,8 @@
     <div class="sandbox-section-label">Credentials</div>
     <p class="cred-note ms-3">
       Masking rules for files/environment variables visible inside the <strong>CLI-native OS-level sandbox</strong>
-      (macOS/Linux bash sandboxing). This is <strong>unrelated to Docker-based isolation</strong> — it has no
-      effect on Docker-isolated sessions and does not use this project's own Docker proxy/credential vault.
+      (macOS/Linux bash sandboxing). This does not provide credentials but rather
+      <strong>redacts/masks them</strong> to the agent via the sandbox.
       Leave empty for no change in behavior.
     </p>
 
