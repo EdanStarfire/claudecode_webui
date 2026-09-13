@@ -78,10 +78,7 @@
     <!-- Credentials -->
     <div class="sandbox-section-label">Credentials</div>
     <p class="cred-note ms-3">
-      Masking rules for files/environment variables visible inside the <strong>CLI-native OS-level sandbox</strong>
-      (macOS/Linux bash sandboxing). This does not provide credentials but rather
-      <strong>redacts/masks them</strong> to the agent via the sandbox.
-      Leave empty for no change in behavior.
+      This <strong>redacts/masks credentials</strong> from the agent via the sandbox — it does not provide credentials.
     </p>
 
     <div class="ms-3 mb-1">
