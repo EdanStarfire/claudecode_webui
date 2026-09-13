@@ -31,7 +31,7 @@ from backend.models.schedule_models import (
     is_error_status,
     validate_cron_expression,
 )
-from backend.session_manager import SessionState
+from backend.session_manager import AUTO_START_STATES, SessionState
 from backend.task_utils import task_done_log_exception
 from shared.logging_config import get_logger
 
@@ -466,7 +466,7 @@ class SchedulerService:
                     schedule.ephemeral_agent_id
                 )
             )
-            if session_info and session_info.state.value in ("active", "starting"):
+            if session_info and session_info.state.value in ("active", "starting", "paused"):
                 raise RuntimeError(
                     f"Ephemeral agent {schedule.ephemeral_agent_id} is currently active"
                 )
@@ -647,11 +647,12 @@ class SchedulerService:
                 )
             )
 
-        # Guard: skip if agent is currently active/processing
-        if session_info and session_info.state.value in ("active", "starting"):
+        # Guard: skip unless agent is in an auto-start-eligible state (issue #1918 —
+        # must not force-start a session PAUSED mid-permission-wait)
+        if session_info and session_info.state not in AUTO_START_STATES:
             legion_logger.info(
                 f"Skipping ephemeral schedule {schedule.schedule_id} '{schedule.name}' — "
-                f"agent {agent_id} still active"
+                f"agent {agent_id} in state {session_info.state.value}"
             )
             schedule.next_run = get_next_run(schedule.cron_expression)
             schedule.updated_at = datetime.now(UTC).timestamp()
@@ -1447,6 +1448,11 @@ class SchedulerService:
                 schedule.ephemeral_agent_id = None
                 schedule.updated_at = datetime.now(UTC).timestamp()
                 recovered += 1
+
+            elif session_info.state == SessionState.PAUSED:
+                # Session paused mid-permission-wait (e.g. AskUserQuestion) — issue #1918:
+                # do not misclassify as an orphaned crash leftover and terminate it.
+                pass
 
             elif session_info.state.value in ("active", "starting"):
                 # Agent still running (crash leftover) — terminate it

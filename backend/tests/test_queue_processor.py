@@ -3,7 +3,7 @@
 import asyncio
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -245,3 +245,28 @@ class TestQueueProcessorBroadcast:
             assert callback.called
             calls = [c for c in callback.call_args_list if c[0][1] == "sent"]
             assert len(calls) >= 1
+
+
+class TestQueueProcessorPausedState:
+    """Issue #1918 regression: queue_processor.py already correctly excludes
+    PAUSED from AUTO_START_STATES — pin that a session paused mid-permission-wait
+    is not force-started by the queue processor."""
+
+    @pytest.mark.asyncio
+    async def test_paused_session_not_auto_started(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sdir = Path(tmp)
+            info = _make_session_info(state=SessionState.PAUSED)
+            coord = _make_coordinator(info, sdir)
+            proc = QueueProcessor(coord)
+            await coord.queue_manager.enqueue("s1", sdir, "paused mid-permission msg")
+
+            with patch("backend.queue_processor.asyncio.sleep", new=AsyncMock()):
+                proc.ensure_running("s1")
+                for _ in range(50):
+                    await asyncio.sleep(0)
+                    if not proc.is_running("s1"):
+                        break
+                proc.stop("s1")
+
+            coord.start_session.assert_not_called()
