@@ -160,6 +160,13 @@ export const FIELD_SCHEMAS = {
       profileOnly: true,
     },
     {
+      key: 'deny_unattended_permission_prompts',
+      label: 'Auto-deny Permission Prompts',
+      widget: 'toggle',
+      defaultValue: false,
+      description: 'Auto-deny anything that would have requested a prompt otherwise.',
+    },
+    {
       key: 'allowed_tools',
       label: 'Allowed Tools',
       widget: 'tag-input',

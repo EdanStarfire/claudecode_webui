@@ -379,6 +379,31 @@ class TestUpdateTemplate:
         assert reloaded.config.get("bare_mode") is True
         assert reloaded.config.get("env_scrub_enabled") is True
 
+    @pytest.mark.asyncio
+    async def test_issue_1903_update_deny_unattended_permission_prompts(self, manager):
+        """Regression #1903: the flat-kwarg update path (used by the settings UI's
+        template save when no fields are being reset) must persist this field —
+        it's easy to add a field to SessionConfig/CONFIG_FIELDS/the request schema
+        and forget the router->update_template flat-kwarg plumbing, which silently
+        drops anything not explicitly forwarded.
+        """
+        template = await manager.create_template(
+            name="Deny Unattended Test",
+            config=SessionConfig(permission_mode="default"),
+        )
+
+        updated = await manager.update_template(
+            template.template_id,
+            deny_unattended_permission_prompts=True,
+        )
+
+        assert updated.config.get("deny_unattended_permission_prompts") is True
+
+        manager2 = TemplateManager(manager.templates_dir.parent)
+        await manager2.load_templates()
+        reloaded = await manager2.get_template(template.template_id)
+        assert reloaded.config.get("deny_unattended_permission_prompts") is True
+
 
 # --- Signature parity test ---
 

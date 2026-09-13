@@ -67,6 +67,7 @@ class SessionConfig(BaseModel):
 
     # Permission
     permission_mode: str = "acceptEdits"
+    deny_unattended_permission_prompts: bool = False
 
     # Auto Mode classifier config (issue #1884)
     auto_mode_environment: list[str] | None = None
@@ -163,7 +164,7 @@ class SessionConfig(BaseModel):
 # profile_ids), lifecycle fields (created_at, updated_at),
 # and session-only fields (working_directory).
 CONFIG_FIELDS: set[str] = {
-    "permission_mode",
+    "permission_mode", "deny_unattended_permission_prompts",
     "auto_mode_environment", "auto_mode_allow", "auto_mode_soft_deny",
     "auto_mode_hard_deny", "auto_mode_classify_all_shell",
     "system_prompt", "override_system_prompt",
