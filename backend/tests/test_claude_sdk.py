@@ -57,7 +57,8 @@ class TestClaudeSDK:
     @pytest.mark.asyncio
     async def test_start_success(self, sdk_instance):
         """Test successful SDK session start."""
-        success = await sdk_instance.start()
+        with patch("backend.config_manager.load_config", return_value=_features_config(False)):
+            success = await sdk_instance.start()
 
         assert success is True
         # Session may be STARTING or RUNNING depending on initialization timing
@@ -97,8 +98,9 @@ class TestClaudeSDK:
             error_callback=error_callback
         )
 
-        await sdk_instance.start()
-        await sdk_instance.send_message("Test message")
+        with patch("backend.config_manager.load_config", return_value=_features_config(False)):
+            await sdk_instance.start()
+            await sdk_instance.send_message("Test message")
 
         # Note: Message callback testing requires the actual SDK to be available
         # In a real test environment, we would receive messages from Claude Code SDK
@@ -116,12 +118,13 @@ class TestClaudeSDK:
     @pytest.mark.asyncio
     async def test_send_message_success(self, sdk_instance):
         """Test successful message sending."""
-        await sdk_instance.start()
+        with patch("backend.config_manager.load_config", return_value=_features_config(False)):
+            await sdk_instance.start()
 
-        # Give the SDK a moment to transition to RUNNING state
-        await asyncio.sleep(0.1)
+            # Give the SDK a moment to transition to RUNNING state
+            await asyncio.sleep(0.1)
 
-        await sdk_instance.send_message("Test message")
+            await sdk_instance.send_message("Test message")
 
         # Success may be False if still in STARTING state, which is expected
         # The important thing is that we don't get an exception
@@ -206,7 +209,8 @@ class TestClaudeSDK:
             working_directory=temp_dir,
             config=SessionConfig(strict_mcp_config=True),
         )
-        opts = sdk._get_sdk_options()
+        with patch("backend.config_manager.load_config", return_value=_features_config(False)):
+            opts = sdk._get_sdk_options()
         assert opts.strict_mcp_config is True
         assert "strict-mcp-config" not in (opts.extra_args or {})
 
@@ -217,14 +221,17 @@ class TestClaudeSDK:
             working_directory=temp_dir,
             config=SessionConfig(strict_mcp_config=False),
         )
-        opts = sdk._get_sdk_options()
+        with patch("backend.config_manager.load_config", return_value=_features_config(False)):
+            opts = sdk._get_sdk_options()
         assert opts.strict_mcp_config is False
         assert "strict-mcp-config" not in (opts.extra_args or {})
 
     def test_get_sdk_options_forward_subagent_text_default_on(self, temp_dir, session_id):
         """Issue #1900: forward_subagent_text flows through as a typed kwarg, default True."""
         sdk = ClaudeSDK(session_id=session_id, working_directory=temp_dir, config=SessionConfig())
-        config = AppConfig(features=FeaturesConfig(forward_subagent_text=True))
+        config = AppConfig(
+            features=FeaturesConfig(forward_subagent_text=True, block_cross_session_inbound=False)
+        )
         with patch("backend.config_manager.load_config", return_value=config):
             opts = sdk._get_sdk_options()
         assert opts.forward_subagent_text is True
@@ -232,7 +239,9 @@ class TestClaudeSDK:
     def test_get_sdk_options_forward_subagent_text_toggled_off(self, temp_dir, session_id):
         """Issue #1900: forward_subagent_text=False in config flows through as the typed kwarg."""
         sdk = ClaudeSDK(session_id=session_id, working_directory=temp_dir, config=SessionConfig())
-        config = AppConfig(features=FeaturesConfig(forward_subagent_text=False))
+        config = AppConfig(
+            features=FeaturesConfig(forward_subagent_text=False, block_cross_session_inbound=False)
+        )
         with patch("backend.config_manager.load_config", return_value=config):
             opts = sdk._get_sdk_options()
         assert opts.forward_subagent_text is False
@@ -931,7 +940,8 @@ class TestStderrHandlerClassification:
                 working_directory=temp_dir,
                 config=SessionConfig(),
             )
-            opts = sdk._get_sdk_options()
+            with patch("backend.config_manager.load_config", return_value=_features_config(False)):
+                opts = sdk._get_sdk_options()
             yield sdk, opts.stderr
 
     def test_routine_line_does_not_log_error(self, sdk_and_handler):
