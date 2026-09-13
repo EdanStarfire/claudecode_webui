@@ -45,7 +45,7 @@ from .project_manager import ProjectInfo, ProjectManager
 from .queue_manager import QueueManager
 from .queue_processor import QueueProcessor
 from .session_config import SessionConfig
-from .session_manager import STOPPED_STATES, VALID_MODELS, SessionManager, SessionState
+from .session_manager import STOPPED_STATES, SessionManager, SessionState
 from .task_registry import TASK_LIFECYCLE_SUBTYPES, TaskLegRegistry
 from .task_utils import task_done_log_exception
 from .timestamp_injection import maybe_inject_timestamp
@@ -2814,9 +2814,9 @@ class SessionCoordinator:
         try:
             coord_logger.info(f"Setting model to '{model}' for session {session_id}")
 
-            # Validate model
-            if model not in VALID_MODELS:
-                logger.error(f"Invalid model: {model}")
+            model = model.strip()
+            if not model:
+                logger.error("Invalid model: empty string")
                 return False
 
             # Check session state

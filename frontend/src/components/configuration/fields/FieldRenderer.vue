@@ -66,6 +66,7 @@
         :options="field.options || []"
         :multiple="field.multiple || false"
         :default-value="field.defaultValue !== undefined ? field.defaultValue : null"
+        :allow-custom="field.allowCustom || false"
         @update:value="$emit('update:value', $event)"
       />
 

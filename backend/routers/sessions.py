@@ -225,13 +225,10 @@ def build_router(webui) -> APIRouter:
         # session is active). Live sessions should use POST /api/sessions/{id}/model
         # instead, which switches the model immediately without a restart (issue #1673).
         if request.model is not None:
-            valid_models = ["sonnet", "opus", "haiku", "opusplan"]
-            if request.model not in valid_models:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid model. Must be one of: {', '.join(valid_models)}"
-                )
-            updates["model"] = request.model
+            model = request.model.strip()
+            if not model:
+                raise HTTPException(status_code=400, detail="Model cannot be empty")
+            updates["model"] = model
 
         # Handle allowed_tools update (takes effect on next restart if session is active)
         if request.allowed_tools is not None:

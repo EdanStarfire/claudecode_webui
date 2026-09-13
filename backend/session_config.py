@@ -11,7 +11,7 @@ Issue #713: Reduce parameter sprawl across session creation APIs.
 
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 def validate_and_normalize_working_directory(
@@ -156,6 +156,14 @@ class SessionConfig(BaseModel):
     provider_opus_catalog_id: str | None = None
     provider_opus_model_id: str | None = None
     provider_default_tier: str | None = None  # "haiku" | "sonnet" | "opus"
+
+    @field_validator("model")
+    @classmethod
+    def _normalize_model(cls, v):
+        if v is None:
+            return None
+        v = v.strip()
+        return v or None
 
 
 # Fields that exist on both MinionTemplate and SessionConfig (the mergeable set).
