@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from backend.claude_sdk import ClaudeSDK, SessionInfo, SessionState
+from backend.config_manager import AppConfig, FeaturesConfig
 from backend.session_config import SessionConfig
 
 
@@ -214,6 +215,22 @@ class TestClaudeSDK:
         opts = sdk._get_sdk_options()
         assert opts.strict_mcp_config is False
         assert "strict-mcp-config" not in (opts.extra_args or {})
+
+    def test_get_sdk_options_forward_subagent_text_default_on(self, temp_dir, session_id):
+        """Issue #1900: forward_subagent_text flows through as a typed kwarg, default True."""
+        sdk = ClaudeSDK(session_id=session_id, working_directory=temp_dir, config=SessionConfig())
+        config = AppConfig(features=FeaturesConfig(forward_subagent_text=True))
+        with patch("backend.config_manager.load_config", return_value=config):
+            opts = sdk._get_sdk_options()
+        assert opts.forward_subagent_text is True
+
+    def test_get_sdk_options_forward_subagent_text_toggled_off(self, temp_dir, session_id):
+        """Issue #1900: forward_subagent_text=False in config flows through as the typed kwarg."""
+        sdk = ClaudeSDK(session_id=session_id, working_directory=temp_dir, config=SessionConfig())
+        config = AppConfig(features=FeaturesConfig(forward_subagent_text=False))
+        with patch("backend.config_manager.load_config", return_value=config):
+            opts = sdk._get_sdk_options()
+        assert opts.forward_subagent_text is False
 
     def test_build_auto_mode_block_none_when_unset(self, temp_dir, session_id):
         """Issue #1884 AC4: _build_auto_mode_block returns None when nothing is configured."""

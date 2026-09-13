@@ -1287,7 +1287,7 @@ function shouldDisplayMessage(message) {
     }
   }
 
-  // Issue #1671: Hide assistant messages forwarded from a subagent (CLAUDE_CODE_FORWARD_SUBAGENT_TEXT).
+  // Issue #1671/#1900: Hide assistant messages forwarded from a subagent (forward_subagent_text).
   // These carry parent_tool_use_id and would otherwise appear as stray top-level bubbles;
   // subagent activity already surfaces via the Task tool card.
   if (message.type === 'assistant') {
