@@ -1177,3 +1177,66 @@ class TestIssue1884AutoModeResolution:
         assert result.auto_mode_soft_deny is None
         assert result.auto_mode_hard_deny is None
         assert result.auto_mode_classify_all_shell is None
+
+
+@pytest.mark.asyncio
+class TestIssue1903DenyUnattendedPermissionPrompts:
+    """Tests for deny_unattended_permission_prompts cascade resolution (issue #1903)."""
+
+    def test_field_registered_in_permissions_area(self):
+        assert FIELD_TO_AREA.get("deny_unattended_permission_prompts") == "permissions"
+        assert "deny_unattended_permission_prompts" in PROFILE_AREAS["permissions"]
+
+    async def test_profile_only_override(self):
+        """Profile value is used when template does not set the field."""
+        profile = _make_profile(
+            area="permissions", config={"deny_unattended_permission_prompts": True}
+        )
+        pm = _make_profile_manager([profile])
+        template = _make_template(profile_ids={"permissions": profile.profile_id})
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm, pm)
+
+        assert result.deny_unattended_permission_prompts is True
+
+    async def test_template_overrides_profile(self):
+        """Template config value wins over profile value."""
+        profile = _make_profile(
+            area="permissions", config={"deny_unattended_permission_prompts": True}
+        )
+        pm = _make_profile_manager([profile])
+        template = _make_template(
+            profile_ids={"permissions": profile.profile_id},
+            template_overrides={"deny_unattended_permission_prompts": False},
+        )
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm, pm)
+
+        assert result.deny_unattended_permission_prompts is False
+
+    async def test_session_overrides_template(self):
+        """Session config value wins over template value."""
+        template = _make_template(deny_unattended_permission_prompts=False)
+        session = _make_session(
+            template_id="tmpl-001",
+            session_overrides={"deny_unattended_permission_prompts": True},
+        )
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm)
+
+        assert result.deny_unattended_permission_prompts is True
+
+    async def test_no_override_falls_back_to_default(self):
+        """With no profile/template/session override, resolves to the default of False."""
+        template = _make_template()
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm)
+
+        assert result.deny_unattended_permission_prompts is False

@@ -87,6 +87,43 @@ async def test_issue_1116_put_template_persists_runtime_flags(api_integration_en
 
 
 @pytest.mark.asyncio
+async def test_issue_1903_put_template_persists_deny_unattended_permission_prompts(
+    api_integration_env,
+):
+    """PUT /api/templates/{id} must persist deny_unattended_permission_prompts.
+
+    This is the exact same class of bug as issue #1116: the settings UI's template
+    save (with no fields being reset) PUTs only the changed flat fields, which hits
+    TemplateUpdateRequest -> routers/templates.py's flat-kwarg forwarding to
+    TemplateManager.update_template(). A field present on SessionConfig/CONFIG_FIELDS/
+    TemplateUpdateRequest but missing from that forwarding call is silently dropped.
+    """
+    client = api_integration_env["client"]
+
+    create_resp = await client.post(
+        "/api/templates",
+        json={
+            "name": "Deny Unattended Template",
+            "permission_mode": "default",
+        },
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    template_id = create_resp.json()["template_id"]
+
+    update_resp = await client.put(
+        f"/api/templates/{template_id}",
+        json={"deny_unattended_permission_prompts": True},
+    )
+    assert update_resp.status_code == 200, update_resp.text
+
+    get_resp = await client.get(f"/api/templates/{template_id}")
+    assert get_resp.status_code == 200, get_resp.text
+    t = get_resp.json()
+
+    assert t["config"].get("deny_unattended_permission_prompts") is True
+
+
+@pytest.mark.asyncio
 async def test_issue_1229_clear_docker_proxy_allowlist_domains(api_integration_env):
     """PUT with docker_proxy_allowlist_domains=[] must persist the empty list (not be dropped)."""
     client = api_integration_env["client"]
