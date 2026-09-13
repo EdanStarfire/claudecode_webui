@@ -31,7 +31,8 @@ PROFILE_AREAS: dict[str, set[str]] = {
         "provider_default_tier",
     },
     "permissions": {
-        "permission_mode", "allowed_tools", "disallowed_tools",
+        "permission_mode", "deny_unattended_permission_prompts",
+        "allowed_tools", "disallowed_tools",
         "additional_directories", "setting_sources",
         "auto_mode_environment", "auto_mode_allow", "auto_mode_soft_deny",
         "auto_mode_hard_deny", "auto_mode_classify_all_shell",

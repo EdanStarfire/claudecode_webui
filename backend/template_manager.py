@@ -315,6 +315,7 @@ class TemplateManager:
         config: dict[str, Any] | None = None,
         # Deprecated flat-field params — absorbed into config for backward compat
         permission_mode: str | None = None,
+        deny_unattended_permission_prompts: bool | None = None,
         allowed_tools: list[str] | None = None,
         disallowed_tools: list[str] | None = None,
         # Auto Mode classifier config (issue #1884)
@@ -402,6 +403,7 @@ class TemplateManager:
         flat_updates: dict[str, Any] = {}
         local_vars = {
             "permission_mode": permission_mode,
+            "deny_unattended_permission_prompts": deny_unattended_permission_prompts,
             "allowed_tools": allowed_tools,
             "disallowed_tools": disallowed_tools,
             "auto_mode_environment": auto_mode_environment,
