@@ -1147,7 +1147,7 @@ class ClaudeSDK:
         _app_cfg = _load_app_config()
 
         settings_payload: dict = {}
-        if _app_cfg.features.block_cross_session_inbound:
+        if _app_cfg.features.block_cross_session_messaging:
             # Issue #1901 — force the CLI's own cross-session-inbound classifier to
             # refuse outright, rather than relying on the incidental hold/timeout
             # behavior of acceptEdits-mode minions.

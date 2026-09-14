@@ -453,36 +453,36 @@ async def test_put_config_enable_experimental_nav_header_rejects_non_bool(tmp_pa
     assert resp.status_code == 400
 
 
-# ── GET/PUT /api/config — block_cross_session_inbound (issue #1901) ─────────
+# ── GET/PUT /api/config — block_cross_session_messaging (issue #1901/#1899) ─
 
 @pytest.mark.asyncio
-async def test_get_config_block_cross_session_inbound_default(tmp_path):
+async def test_get_config_block_cross_session_messaging_default(tmp_path):
     app, _ = _make_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/api/config")
     assert resp.status_code == 200
-    assert resp.json()["config"]["features"]["block_cross_session_inbound"] is True
+    assert resp.json()["config"]["features"]["block_cross_session_messaging"] is True
 
 
 @pytest.mark.asyncio
-async def test_put_config_block_cross_session_inbound_round_trip(tmp_path):
+async def test_put_config_block_cross_session_messaging_round_trip(tmp_path):
     app, _ = _make_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         put_resp = await client.put("/api/config", json={
-            "features": {"block_cross_session_inbound": False}
+            "features": {"block_cross_session_messaging": False}
         })
         assert put_resp.status_code == 200
-        assert put_resp.json()["config"]["features"]["block_cross_session_inbound"] is False
+        assert put_resp.json()["config"]["features"]["block_cross_session_messaging"] is False
 
         get_resp = await client.get("/api/config")
-    assert get_resp.json()["config"]["features"]["block_cross_session_inbound"] is False
+    assert get_resp.json()["config"]["features"]["block_cross_session_messaging"] is False
 
 
 @pytest.mark.asyncio
-async def test_put_config_block_cross_session_inbound_rejects_non_bool(tmp_path):
+async def test_put_config_block_cross_session_messaging_rejects_non_bool(tmp_path):
     app, _ = _make_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.put("/api/config", json={
-            "features": {"block_cross_session_inbound": "yes"}
+            "features": {"block_cross_session_messaging": "yes"}
         })
     assert resp.status_code == 400

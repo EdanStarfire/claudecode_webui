@@ -582,6 +582,7 @@ def handler_legion(tmp_dirs):
         plans_dir=tmp_dirs["plans_dir"],
         knowledge_mgmt_enabled=False,
         is_legion=True,
+        block_cross_session_messaging=True,
     )
 
 
@@ -605,6 +606,19 @@ def handler_legion_allow_background(tmp_dirs):
         knowledge_mgmt_enabled=False,
         is_legion=True,
         allow_background_agent=True,
+        block_cross_session_messaging=True,
+    )
+
+
+@pytest.fixture
+def handler_legion_cross_session_allowed(tmp_dirs):
+    """Handler for a Legion session with block_cross_session_messaging=False (issue #1899)."""
+    return InternalPermissionHandler(
+        session_data_dir=tmp_dirs["session_dir"],
+        plans_dir=tmp_dirs["plans_dir"],
+        knowledge_mgmt_enabled=False,
+        is_legion=True,
+        block_cross_session_messaging=False,
     )
 
 
@@ -612,8 +626,8 @@ class TestToolBlock:
     """Tests for evaluate_tool_block — the Legion-scoped tool deny list (issue #1133)."""
 
     def test_sendmessage_denied_in_legion(self, handler_legion):
-        """SendMessage is denied in Legion sessions and reason mentions send_comm."""
-        result = handler_legion.evaluate_tool_block("SendMessage", {})
+        """SendMessage to a non-local target is denied in Legion sessions and reason mentions send_comm."""
+        result = handler_legion.evaluate_tool_block("SendMessage", {"to": "some-other-minion"})
         assert result is not None
         decision, reason = result
         assert decision == "deny"
@@ -621,7 +635,7 @@ class TestToolBlock:
 
     def test_sendmessage_not_blocked_outside_legion(self, handler_non_legion):
         """SendMessage passes through (returns None) in non-Legion sessions."""
-        result = handler_non_legion.evaluate_tool_block("SendMessage", {})
+        result = handler_non_legion.evaluate_tool_block("SendMessage", {"to": "some-other-minion"})
         assert result is None
 
     def test_agent_background_true_denied_in_legion(self, handler_legion):
@@ -675,7 +689,9 @@ class TestToolBlock:
 
     def test_sendmessage_still_denied_when_toggle_on(self, handler_legion_allow_background):
         """allow_background_agent=True does not affect the unrelated SendMessage block."""
-        result = handler_legion_allow_background.evaluate_tool_block("SendMessage", {})
+        result = handler_legion_allow_background.evaluate_tool_block(
+            "SendMessage", {"to": "some-other-minion"}
+        )
         assert result is not None
         decision, reason = result
         assert decision == "deny"
@@ -692,3 +708,63 @@ class TestToolBlock:
         )
         result = handler.evaluate_tool_block("Agent", {"run_in_background": True})
         assert result is None
+
+    def test_sendmessage_allowed_to_own_spawned_subagent(self, handler_legion):
+        """SendMessage to a name this session spawned via Agent is allowed (issue #1899)."""
+        assert handler_legion.evaluate_tool_block("Agent", {"name": "haiku-poet"}) is None
+        result = handler_legion.evaluate_tool_block("SendMessage", {"to": "haiku-poet"})
+        assert result is None
+
+    def test_sendmessage_to_main_always_allowed(self, handler_legion):
+        """SendMessage to 'main' is always allowed, even with no prior Agent call (issue #1899)."""
+        result = handler_legion.evaluate_tool_block("SendMessage", {"to": "main"})
+        assert result is None
+
+    def test_sendmessage_denied_to_unknown_target_when_flag_on(self, handler_legion):
+        """SendMessage to an unrecognized target is denied when block_cross_session_messaging=True."""
+        result = handler_legion.evaluate_tool_block("SendMessage", {"to": "nonexistent-session-xyz"})
+        assert result is not None
+        decision, reason = result
+        assert decision == "deny"
+        assert "mcp__legion__send_comm" in reason
+
+    def test_sendmessage_allowed_to_unknown_target_when_flag_off(
+        self, handler_legion_cross_session_allowed
+    ):
+        """SendMessage to any target is allowed when block_cross_session_messaging=False."""
+        result = handler_legion_cross_session_allowed.evaluate_tool_block(
+            "SendMessage", {"to": "nonexistent-session-xyz"}
+        )
+        assert result is None
+
+    def test_listagents_denied_when_flag_on(self, handler_legion):
+        """ListAgents is denied when block_cross_session_messaging=True (issue #1899)."""
+        result = handler_legion.evaluate_tool_block("ListAgents", {})
+        assert result is not None
+        decision, reason = result
+        assert decision == "deny"
+        assert "mcp__legion__list_minions" in reason
+
+    def test_listagents_allowed_when_flag_off(self, handler_legion_cross_session_allowed):
+        """ListAgents is allowed when block_cross_session_messaging=False."""
+        result = handler_legion_cross_session_allowed.evaluate_tool_block("ListAgents", {})
+        assert result is None
+
+    def test_agent_name_tracking_scoped_to_legion(self, handler_non_legion):
+        """Non-Legion handlers short-circuit before recording spawned agent names."""
+        handler_non_legion.evaluate_tool_block("Agent", {"name": "haiku-poet"})
+        assert handler_non_legion._spawned_agent_names == set()
+
+    def test_denied_background_agent_name_not_exempted(self, handler_legion):
+        """A denied Agent(run_in_background=True) call must not pre-register its name as a
+        local-subagent exemption — otherwise SendMessage to that name would bypass the
+        cross-session block for a subagent that was never actually spawned (issue #1899)."""
+        result = handler_legion.evaluate_tool_block(
+            "Agent", {"name": "attacker-target", "run_in_background": True}
+        )
+        assert result is not None and result[0] == "deny"
+        result = handler_legion.evaluate_tool_block("SendMessage", {"to": "attacker-target"})
+        assert result is not None
+        decision, reason = result
+        assert decision == "deny"
+        assert "mcp__legion__send_comm" in reason

@@ -192,19 +192,21 @@
       <input
         class="form-check-input"
         type="checkbox"
-        id="blockCrossSessionInbound"
-        :checked="config?.block_cross_session_inbound"
-        @change="toggleBlockCrossSessionInbound"
+        id="blockCrossSessionMessaging"
+        :checked="config?.block_cross_session_messaging"
+        @change="toggleBlockCrossSessionMessaging"
       >
-      <label class="form-check-label" for="blockCrossSessionInbound">
-        Block inbound cross-session messages
+      <label class="form-check-label" for="blockCrossSessionMessaging">
+        Block cross-session messaging
       </label>
       <small class="form-text text-muted d-block">
         Forces the CLI's own <code>crossSessionInbound</code> setting to "refuse" for
         every session, so an inbound CLI-native cross-session message (unrelated to
-        Legion's own comms) is always rejected outright rather than held/auto-delivered
-        (default: on). Disable only for testing the cross-session-inbound mechanism
-        itself. Takes effect on the next session start, not mid-session.
+        Legion's own comms) is always rejected outright rather than held/auto-delivered,
+        and denies outbound <code>SendMessage</code>/<code>ListAgents</code> calls in
+        Legion sessions to any target other than a locally-spawned subagent (default: on).
+        Disable only for testing the cross-session-messaging mechanism itself. Takes
+        effect on the next session start, not mid-session.
       </small>
     </div>
 
@@ -335,10 +337,10 @@ function toggleExperimentalNavHeader(event) {
   })
 }
 
-function toggleBlockCrossSessionInbound(event) {
+function toggleBlockCrossSessionMessaging(event) {
   emit('update:config', {
     ...props.config,
-    block_cross_session_inbound: event.target.checked
+    block_cross_session_messaging: event.target.checked
   })
 }
 
