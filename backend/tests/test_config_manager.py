@@ -270,33 +270,33 @@ class TestBackgroundCallsConfig:
         assert config.background_calls.dont_inherit_env is False
 
 
-class TestBlockCrossSessionInbound:
+class TestBlockCrossSessionMessaging:
     def test_default_true(self):
         cfg = FeaturesConfig()
-        assert cfg.block_cross_session_inbound is True
+        assert cfg.block_cross_session_messaging is True
 
     def test_default_present_in_new_config_file(self, tmp_path):
         config_file = tmp_path / "config.json"
         ensure_config_file(config_file)
         data = json.loads(config_file.read_text())
-        assert data["features"]["block_cross_session_inbound"] is True
+        assert data["features"]["block_cross_session_messaging"] is True
 
     def test_round_trip_serialization(self):
         original = AppConfig(
-            features=FeaturesConfig(block_cross_session_inbound=False)
+            features=FeaturesConfig(block_cross_session_messaging=False)
         )
         restored = AppConfig.from_dict(original.to_dict())
-        assert restored.features.block_cross_session_inbound is False
+        assert restored.features.block_cross_session_messaging is False
 
     def test_missing_features_section_uses_default(self, tmp_path):
         config_file = tmp_path / "config.json"
         config_file.write_text(json.dumps({"networking": {}}))
         config = load_config(config_file)
-        assert config.features.block_cross_session_inbound is True
+        assert config.features.block_cross_session_messaging is True
 
     def test_partial_features_section_fills_missing_field(self, tmp_path):
         config_file = tmp_path / "config.json"
         config_file.write_text(json.dumps({"features": {"skill_sync_enabled": False}}))
         config = load_config(config_file)
         assert config.features.skill_sync_enabled is False
-        assert config.features.block_cross_session_inbound is True
+        assert config.features.block_cross_session_messaging is True

@@ -12,9 +12,9 @@ from backend.config_manager import AppConfig, FeaturesConfig
 from backend.session_config import SessionConfig
 
 
-def _features_config(block_cross_session_inbound: bool) -> AppConfig:
-    """AppConfig with block_cross_session_inbound pinned, all other features default."""
-    return AppConfig(features=FeaturesConfig(block_cross_session_inbound=block_cross_session_inbound))
+def _features_config(block_cross_session_messaging: bool) -> AppConfig:
+    """AppConfig with block_cross_session_messaging pinned, all other features default."""
+    return AppConfig(features=FeaturesConfig(block_cross_session_messaging=block_cross_session_messaging))
 
 
 class TestClaudeSDK:
@@ -230,7 +230,7 @@ class TestClaudeSDK:
         """Issue #1900: forward_subagent_text flows through as a typed kwarg, default True."""
         sdk = ClaudeSDK(session_id=session_id, working_directory=temp_dir, config=SessionConfig())
         config = AppConfig(
-            features=FeaturesConfig(forward_subagent_text=True, block_cross_session_inbound=False)
+            features=FeaturesConfig(forward_subagent_text=True, block_cross_session_messaging=False)
         )
         with patch("backend.config_manager.load_config", return_value=config):
             opts = sdk._get_sdk_options()
@@ -240,7 +240,7 @@ class TestClaudeSDK:
         """Issue #1900: forward_subagent_text=False in config flows through as the typed kwarg."""
         sdk = ClaudeSDK(session_id=session_id, working_directory=temp_dir, config=SessionConfig())
         config = AppConfig(
-            features=FeaturesConfig(forward_subagent_text=False, block_cross_session_inbound=False)
+            features=FeaturesConfig(forward_subagent_text=False, block_cross_session_messaging=False)
         )
         with patch("backend.config_manager.load_config", return_value=config):
             opts = sdk._get_sdk_options()
@@ -421,7 +421,7 @@ class TestClaudeSDK:
     def test_get_sdk_options_no_settings_key_when_nothing_configured(self, temp_dir, session_id):
         """Issue #1884 AC4: neither auto-memory nor autoMode configured -> no settings key at all.
 
-        Issue #1901: block_cross_session_inbound defaults to True app-wide, which would
+        Issue #1901: block_cross_session_messaging defaults to True app-wide, which would
         otherwise always populate settings_payload. Pin it off here so this test keeps
         verifying its original regression intent (auto-memory/autoMode absence) in isolation;
         the on-by-default behavior is covered separately below.

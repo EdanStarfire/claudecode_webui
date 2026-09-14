@@ -169,7 +169,7 @@ class FeaturesConfig:
     resume_batch_size: int = 10  # Issue #1733 — default batch size for throttled "Resume Sessions"
     resume_batch_delay_seconds: int = 5  # Issue #1791 — default pause between resume batches
     enable_experimental_nav_header: bool = False  # Issue #1723 — opt-in compact breadcrumb nav header
-    block_cross_session_inbound: bool = True  # Issue #1901 — force crossSessionInbound="refuse"
+    block_cross_session_messaging: bool = True  # Issue #1901/#1899 — force crossSessionInbound="refuse" and deny outbound SendMessage/ListAgents to non-local targets
 
 
 @dataclass
@@ -277,8 +277,8 @@ class AppConfig:
             enable_experimental_nav_header=features_data.get(
                 "enable_experimental_nav_header", False
             ),
-            block_cross_session_inbound=features_data.get(
-                "block_cross_session_inbound", True
+            block_cross_session_messaging=features_data.get(
+                "block_cross_session_messaging", True
             ),
         )
         proxy_data = data.get("proxy", {})
@@ -372,7 +372,7 @@ class AppConfig:
                 "resume_batch_size": self.features.resume_batch_size,
                 "resume_batch_delay_seconds": self.features.resume_batch_delay_seconds,
                 "enable_experimental_nav_header": self.features.enable_experimental_nav_header,
-                "block_cross_session_inbound": self.features.block_cross_session_inbound,
+                "block_cross_session_messaging": self.features.block_cross_session_messaging,
             },
             "proxy": {
                 "proxy_image": self.proxy.proxy_image,

@@ -25,8 +25,12 @@ _RESOLVE_CACHE: dict[str, str] = {}
 # Issue #1133: Reason strings for Legion tool blocks.
 # Tool names are hardcoded constants — if the SDK renames them, update here.
 _SENDMESSAGE_REDIRECT_REASON = (
-    "SendMessage is not available in Legion sessions. "
+    "SendMessage to another session is not available in Legion sessions. "
     "Use mcp__legion__send_comm to route communications to other minions."
+)
+_LISTAGENTS_REDIRECT_REASON = (
+    "ListAgents is not available in Legion sessions. "
+    "Use mcp__legion__list_minions, search_capability, or get_minion_info instead."
 )
 _BACKGROUND_AGENT_REDIRECT_REASON = (
     "Agent with run_in_background=true is not available in Legion sessions. "
@@ -142,10 +146,13 @@ class InternalPermissionHandler:
         working_directory: Path | None = None,
         is_legion: bool = False,
         allow_background_agent: bool = False,
+        block_cross_session_messaging: bool = True,
     ):
         self._skill_creating_enabled = skill_creating_enabled
         self._is_legion = is_legion
         self._allow_background_agent = allow_background_agent
+        self._block_cross_session_messaging = block_cross_session_messaging
+        self._spawned_agent_names: set[str] = set()
         self._rules = self._build_rules(
             session_data_dir, plans_dir, knowledge_mgmt_enabled, memory_dir,
             skill_creating_enabled, working_directory,
@@ -350,26 +357,53 @@ class InternalPermissionHandler:
         tool_name: str,
         tool_input: dict[str, Any] | None,
     ) -> tuple[PermissionDecision, str] | None:
-        """Block specific tools in Legion sessions (issue #1133).
+        """Block specific tools in Legion sessions (issue #1133, extended by #1899).
 
-        Returns (decision, reason) if the tool is blocked, None otherwise.
         Only active when is_legion=True — non-Legion sessions are unaffected.
 
-        The SendMessage block is unconditional. The background-Agent block is
-        conditional on the app-level `allow_background_agent` toggle (issue #1688):
-        when enabled, run_in_background=True Agent calls are allowed through.
+        Agent calls: run_in_background=True is denied unless allow_background_agent
+        is set (#1688, unchanged). An Agent call's `name` is recorded as a locally
+        spawned, always-addressable subagent only when the call itself isn't denied —
+        mirrors the CLI's own in-process agentNameRegistry, which our hook has no
+        visibility into otherwise. Recording it unconditionally (even when the
+        background-Agent deny fires) would let a denied Agent(name=X, run_in_background=True)
+        call pre-register X as exempt, then SendMessage(to=X) would bypass the
+        cross-session block for a subagent that was never actually spawned.
 
-        Checks run_in_background with `is True` (not truthiness) to avoid blocking
-        foreground Agent calls that pass False, 0, or a truthy string.
+        SendMessage: allowed unconditionally to "main" (a background subagent
+        replying to its own parent — inherently same-process, never cross-session)
+        and to any name this session itself spawned via Agent. Otherwise denied
+        when block_cross_session_messaging is True (default), redirecting to
+        send_comm; allowed when False, for symmetry with the inbound
+        crossSessionInbound policy (#1901).
+
+        ListAgents: same block_cross_session_messaging gate — cross-session
+        discovery has no "local subagent" analog worth exempting (a session
+        already knows what it spawned).
         """
         if not self._is_legion:
             return None
+
+        if tool_name == "Agent":
+            if tool_input and tool_input.get("run_in_background") is True:
+                if not self._allow_background_agent:
+                    return ("deny", _BACKGROUND_AGENT_REDIRECT_REASON)
+            name = tool_input.get("name") if tool_input else None
+            if name:
+                self._spawned_agent_names.add(name)
+            return None
+
         if tool_name == "SendMessage":
-            return ("deny", _SENDMESSAGE_REDIRECT_REASON)
-        if tool_name == "Agent" and tool_input and tool_input.get("run_in_background") is True:
-            if self._allow_background_agent:
+            to = (tool_input or {}).get("to")
+            if to == "main" or to in self._spawned_agent_names:
                 return None
-            return ("deny", _BACKGROUND_AGENT_REDIRECT_REASON)
+            if self._block_cross_session_messaging:
+                return ("deny", _SENDMESSAGE_REDIRECT_REASON)
+            return None
+
+        if tool_name == "ListAgents" and self._block_cross_session_messaging:
+            return ("deny", _LISTAGENTS_REDIRECT_REASON)
+
         return None
 
     def evaluate_suggestions(

@@ -1956,6 +1956,7 @@ class SessionCoordinator:
                 working_directory=Path(session_info.working_directory),
                 is_legion=("legion" in mcp_servers),
                 allow_background_agent=load_app_config().features.allow_background_agent,
+                block_cross_session_messaging=load_app_config().features.block_cross_session_messaging,
             )
 
             # extra_env merge order: user-set < docker wrapper vars < litellm routing.
@@ -4888,6 +4889,7 @@ class SessionCoordinator:
         working_directory: Path | None = None,
         is_legion: bool = False,
         allow_background_agent: bool = False,
+        block_cross_session_messaging: bool = True,
     ) -> InternalPermissionHandler:
         """Build internal permission handler with consistent path configuration (issue #707)."""
         memory_dir = session_dir / "memory" if auto_memory_mode == "session" else None
@@ -4900,6 +4902,7 @@ class SessionCoordinator:
             working_directory=working_directory,
             is_legion=is_legion,
             allow_background_agent=allow_background_agent,
+            block_cross_session_messaging=block_cross_session_messaging,
         )
 
     def _resolve_default_proxy_image(self) -> str:
