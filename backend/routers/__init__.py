@@ -17,6 +17,7 @@ from . import (
     files,
     filesystem,
     fleet,
+    hooks,
     legion,
     mcp,
     permissions,
@@ -56,6 +57,7 @@ def register_all(app: FastAPI, webui) -> None:
     app.include_router(queue.build_router(webui))
     app.include_router(legion.build_router(webui))
     app.include_router(mcp.build_router(webui))
+    app.include_router(hooks.build_router(webui))
     app.include_router(schedules.build_router(webui))
     app.include_router(system.build_router(webui))
     app.include_router(diff.build_router(webui))

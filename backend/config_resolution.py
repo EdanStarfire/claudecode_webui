@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from .profile_manager import ProfileManager
     from .session_manager import SessionInfo
 
-# 6 config areas — every field in CONFIG_FIELDS belongs to exactly one area.
+# 7 config areas — every field in CONFIG_FIELDS belongs to exactly one area.
 PROFILE_AREAS: dict[str, set[str]] = {
     "model": {
         "model", "thinking_mode", "thinking_budget_tokens", "effort",
@@ -42,6 +42,9 @@ PROFILE_AREAS: dict[str, set[str]] = {
     },
     "mcp": {
         "mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config",
+    },
+    "hooks": {
+        "hook_ids",
     },
     "isolation": {
         "cli_path", "process_wrapper", "sandbox_enabled", "sandbox_config",
@@ -81,7 +84,7 @@ assert set(FIELD_TO_AREA.keys()) == CONFIG_FIELDS, (
 # comma-separated strings (because TagInputWidget emits comma-separated values).
 _LIST_FIELDS: frozenset[str] = frozenset({
     "allowed_tools", "disallowed_tools", "additional_directories",
-    "setting_sources", "mcp_server_ids", "docker_extra_mounts",
+    "setting_sources", "mcp_server_ids", "hook_ids", "docker_extra_mounts",
     "assigned_secrets", "docker_proxy_allowlist_domains",
     "auto_mode_environment", "auto_mode_allow", "auto_mode_soft_deny",
     "auto_mode_hard_deny",

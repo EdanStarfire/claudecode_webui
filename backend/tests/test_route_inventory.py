@@ -9,7 +9,9 @@ backend/routers/poll.py (Backend owns the EventQueues); interrupt/permission-res
 moved from core.py into backend/routers/session_runtime.py (backend-owned state);
 Phase 3 added /api/internal/oauth-callback-paths (Frontend polls this to mirror
 Backend's dynamic custom-OAuth-callback routes as relay routes on its own app,
-since Backend usually isn't independently publicly reachable).
+since Backend usually isn't independently publicly reachable). Issue #1629 added
+5 hook-config CRUD routes (GET/POST /api/hook-configs, GET/PUT/DELETE
+/api/hook-configs/{config_id}), mirroring the MCP config router's shape.
 """
 
 
@@ -37,8 +39,8 @@ def test_route_count_unchanged():
     from backend.web_server import create_app
     app = create_app()
     api_routes_count = _count_api_routes(app)
-    assert api_routes_count == 158, (
-        f"Expected 158 Backend routes post-#498 split (core.py's 3 browser routes "
+    assert api_routes_count == 163, (
+        f"Expected 163 Backend routes post-#498 split (core.py's 3 browser routes "
         f"stayed Frontend-side only; config.py now has its own 2 backend-owned routes "
         f"here PLUS 2 more on the Frontend side doing merged-read/split-write; poll.py's "
         f"4 routes are duplicated into backend/routers/poll.py since Backend owns the "
@@ -46,6 +48,7 @@ def test_route_count_unchanged():
         f"+1 /api/internal/oauth-callback-paths from Phase 3; "
         f"+3 standalone OAuth2 vault-secret guided-authorization routes from issue #1871 — "
         f"POST /api/secrets/oauth/initiate, POST /api/secrets/{{name}}/oauth/reconnect-initiate, "
-        f"POST /api/secrets/oauth/{{flow_id}}/cancel), "
+        f"POST /api/secrets/oauth/{{flow_id}}/cancel; "
+        f"+5 hook-config CRUD routes from issue #1629), "
         f"got {api_routes_count}. A route was added or removed."
     )

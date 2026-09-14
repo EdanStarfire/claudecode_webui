@@ -4,6 +4,8 @@ Pydantic request models for all API endpoints.
 Moved from src/web_server.py to centralize model definitions.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 
 from ..mcp_config_manager import McpServerType
@@ -92,6 +94,8 @@ class SessionUpdateRequest(BaseModel):
     mcp_server_ids: list[str] | None = None
     enable_claudeai_mcp_servers: bool | None = None
     strict_mcp_config: bool | None = None
+    # Hook configuration (issue #1629)
+    hook_ids: list[str] | None = None
     bare_mode: bool | None = None
     deny_unattended_permission_prompts: bool | None = None
     enable_streaming_text: bool | None = None  # Issue #1486 — opt-in streaming text rendering
@@ -334,6 +338,8 @@ class TemplateUpdateRequest(BaseModel):
     # MCP toggle configuration (issue #786)
     enable_claudeai_mcp_servers: bool | None = None
     strict_mcp_config: bool | None = None
+    # Hook configuration (issue #1629)
+    hook_ids: list[str] | None = None
     # Runtime feature flags (issue #1116)
     setting_sources: list[str] | None = None
     bare_mode: bool | None = None
@@ -444,6 +450,34 @@ class McpConfigExportRequest(BaseModel):
 class McpConfigImportRequest(BaseModel):
     servers: dict[str, dict]  # Named dict: {serverName: {type, command, ...}}
     dry_run: bool = True
+
+
+# Hook config request models (issue #1629)
+
+
+class HookEntryModel(BaseModel):
+    id: str | None = None
+    events: list[str] = []
+    matcher: str | None = None
+    enabled: bool = True
+    type: Literal["command", "http"] = "command"
+    command: str | None = None
+    timeout: float | None = None
+    url: str | None = None
+    headers: dict[str, str] | None = None
+    allowed_env_vars: list[str] | None = None
+
+
+class HookConfigCreateRequest(BaseModel):
+    name: str
+    enabled: bool = True
+    hooks: list[HookEntryModel] = []
+
+
+class HookConfigUpdateRequest(BaseModel):
+    name: str | None = None
+    enabled: bool | None = None
+    hooks: list[HookEntryModel] | None = None
 
 
 # Proxy credential request models (issue #1053) — kept for backward compat during transition

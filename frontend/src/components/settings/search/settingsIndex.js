@@ -51,6 +51,13 @@ export const settingsIndex = [
   { section: 'mcp-servers', fieldKey: 'mcp_url',     label: 'URL' },
   { section: 'mcp-servers', fieldKey: 'oauth',       label: 'OAuth' },
 
+  // Hooks section (HookPanel)
+  { section: 'hooks', fieldKey: 'hooks',         label: 'Hooks' },
+  { section: 'hooks', fieldKey: 'hook_event',    label: 'Event' },
+  { section: 'hooks', fieldKey: 'hook_matcher',  label: 'Matcher' },
+  { section: 'hooks', fieldKey: 'hook_command',  label: 'Command' },
+  { section: 'hooks', fieldKey: 'hook_url',      label: 'URL' },
+
   // Templates section (LibraryTemplatesSection)
   { section: 'templates', fieldKey: 'template_name',        label: 'Template Name' },
   { section: 'templates', fieldKey: 'template_description', label: 'Description' },
@@ -108,6 +115,8 @@ export const settingsIndex = [
   { section: 'edit-mcp-servers', fieldKey: 'mcp_server_ids',              label: 'MCP Servers' },
   { section: 'edit-mcp-servers', fieldKey: 'enable_claudeai_mcp_servers', label: 'Claude AI MCP Servers' },
   { section: 'edit-mcp-servers', fieldKey: 'strict_mcp_config',           label: 'Strict MCP Config' },
+
+  { section: 'edit-hooks', fieldKey: 'hook_ids', label: 'Hooks' },
 
   // Features section
   { section: 'edit-features', fieldKey: 'history_distillation_enabled', label: 'History Distillation' },

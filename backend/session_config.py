@@ -130,6 +130,9 @@ class SessionConfig(BaseModel):
     timestamp_injection_frequency: str = "every_message"  # "every_message" | "once_per_day"
     timestamp_injection_timezone: str = "UTC"  # IANA tz name
 
+    # Hooks (issue #1629)
+    hook_ids: list[str] | None = None  # Global hook config IDs to attach, in order
+
     # MCP servers (issue #676)
     mcp_server_ids: list[str] | None = None  # Global MCP config IDs to attach
     enable_claudeai_mcp_servers: bool = True  # Toggle ENABLE_CLAUDEAI_MCP_SERVERS env var
@@ -190,6 +193,7 @@ CONFIG_FIELDS: set[str] = {
     "history_distillation_enabled", "auto_memory_mode", "auto_memory_directory",
     "skill_creating_enabled", "enable_streaming_text",
     "inject_timestamps_enabled", "timestamp_injection_frequency", "timestamp_injection_timezone",
+    "hook_ids",
     "mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config",
     "bare_mode", "env_scrub_enabled", "max_subagent_spawn_depth", "extra_env",
     "provider_catalog_id", "provider_model_id",

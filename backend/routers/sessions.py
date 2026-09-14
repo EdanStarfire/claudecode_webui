@@ -332,6 +332,9 @@ def build_router(webui) -> APIRouter:
             updates["enable_claudeai_mcp_servers"] = request.enable_claudeai_mcp_servers
         if request.strict_mcp_config is not None:
             updates["strict_mcp_config"] = request.strict_mcp_config
+        # Hook configuration (issue #1629)
+        if request.hook_ids is not None:
+            updates["hook_ids"] = request.hook_ids
         if request.bare_mode is not None:
             updates["bare_mode"] = request.bare_mode
         if request.enable_streaming_text is not None:

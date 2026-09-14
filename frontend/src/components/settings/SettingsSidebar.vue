@@ -230,6 +230,7 @@ const EDIT_SECTIONS = [
   { section: 'model-tuning',      icon: '🧠', label: 'Model Tuning',        sectionKey: 'edit-model-tuning' },
   { section: 'tools-permissions', icon: '🔧', label: 'Tools & Permissions', sectionKey: 'edit-tools-permissions' },
   { section: 'mcp-servers',       icon: '🔌', label: 'MCP Servers',         sectionKey: 'edit-mcp-servers' },
+  { section: 'hooks',             icon: '🪝', label: 'Hooks',               sectionKey: 'edit-hooks' },
   { section: 'features',          icon: '✨', label: 'Features',            sectionKey: 'edit-features' },
   { section: 'system-prompt',     icon: '💭', label: 'System Prompt',       sectionKey: 'edit-system-prompt' },
   { section: 'isolation',         icon: '🛡️', label: 'Isolation',           sectionKey: 'edit-isolation' },
@@ -240,6 +241,7 @@ const AREA_SECTION = {
   model:         'model-tuning',
   permissions:   'tools-permissions',
   mcp:           'mcp-servers',
+  hooks:         'hooks',
   features:      'features',
   system_prompt: 'system-prompt',
   isolation:     'isolation',
@@ -365,6 +367,7 @@ const libraryItems = [
   { to: '/settings/schedules',   icon: '⏰', label: 'Schedules',   sectionKey: 'schedules' },
   { to: '/settings/providers',   icon: '🛰',  label: 'Providers',   sectionKey: 'providers' },
   { to: '/settings/mcp-servers', icon: '🔌', label: 'MCP Servers', sectionKey: 'mcp-servers' },
+  { to: '/settings/hooks',       icon: '🪝', label: 'Hooks',       sectionKey: 'hooks' },
 ]
 
 const filteredAppItems = computed(() => {

@@ -31,6 +31,8 @@ export const CONFIG_FIELDS_LIST = Object.freeze([
   'mcp_server_ids',
   'enable_claudeai_mcp_servers',
   'strict_mcp_config',
+  // hooks area
+  'hook_ids',
   // isolation area
   'cli_path',
   'process_wrapper',
@@ -97,6 +99,7 @@ export const FIELD_DEFAULTS = Object.freeze({
   mcp_server_ids: null,
   enable_claudeai_mcp_servers: true,
   strict_mcp_config: false,
+  hook_ids: null,
   bare_mode: false,
   env_scrub_enabled: false,
   restricted_mode: false,
@@ -133,6 +136,8 @@ const _FIELD_TO_AREA = Object.freeze({
   mcp_server_ids: 'mcp',
   enable_claudeai_mcp_servers: 'mcp',
   strict_mcp_config: 'mcp',
+  // hooks
+  hook_ids: 'hooks',
   // isolation
   cli_path: 'isolation',
   process_wrapper: 'isolation',

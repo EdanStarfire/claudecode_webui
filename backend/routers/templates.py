@@ -98,6 +98,8 @@ def build_router(webui) -> APIRouter:
             mcp_server_ids=request.mcp_server_ids,
             enable_claudeai_mcp_servers=request.enable_claudeai_mcp_servers,
             strict_mcp_config=request.strict_mcp_config,
+            # Hook configuration (issue #1629)
+            hook_ids=request.hook_ids,
             # Runtime feature flags (issue #1116)
             setting_sources=request.setting_sources,
             bare_mode=request.bare_mode,

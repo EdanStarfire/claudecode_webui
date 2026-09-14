@@ -198,6 +198,7 @@ class ClaudeSDK:
         rate_limit_callback: Callable[[Any], None] | None = None,
         resume_session_id: str | None = None,
         mcp_servers: list[Any] | None = None,
+        hooks_settings: dict[str, Any] | None = None,
         experimental: bool = False,
         stderr_callback: Callable[[str], Any] | None = None,
         extra_env: dict[str, str] | None = None,
@@ -217,6 +218,10 @@ class ClaudeSDK:
             permission_callback: Called to check for tool permissions
             resume_session_id: SDK session ID to resume
             mcp_servers: List of MCP servers to attach (for multi-agent)
+            hooks_settings: Resolved {"hooks": {...}} settings.json block from the
+                session's attached global hook configs (issue #1629), already flattened
+                by HookConfigManager.to_sdk_hooks_payload(). Purely additive against
+                disk-based hooks; suppressed entirely when bare_mode is True.
             experimental: Enable experimental features like Agent Teams (issue #411)
             stderr_callback: Called with each stderr line from SDK subprocess (issue #517)
             extra_env: Extra environment variables (e.g., Docker wrapper config)
@@ -248,6 +253,7 @@ class ClaudeSDK:
         self.model = config.model
         self.resume_session_id = resume_session_id
         self.mcp_servers = mcp_servers if mcp_servers is not None else []
+        self.hooks_settings = hooks_settings
         self.sandbox_enabled = config.sandbox_enabled
         self.sandbox_config = config.sandbox_config
         self.setting_sources = config.setting_sources
@@ -1158,6 +1164,12 @@ class ClaudeSDK:
         auto_mode_block = self._build_auto_mode_block()
         if auto_mode_block:
             settings_payload["autoMode"] = auto_mode_block
+        # Issue #1629: WebUI-defined hook configs, always purely additive against any
+        # disk-based .claude/settings.json hooks. bare_mode (--bare) already skips all
+        # hooks at the CLI level, so honor that here too rather than shipping a hooks
+        # block the CLI would ignore anyway. setting_sources is never touched by this.
+        if self.hooks_settings and not self.bare_mode:
+            settings_payload.update(self.hooks_settings)
         if settings_payload:
             self._settings_temp_file = self._create_settings_temp_file(settings_payload)
             options_kwargs["settings"] = self._settings_temp_file
