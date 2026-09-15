@@ -21,6 +21,14 @@ from ..backend_reachability import to_http_exception
 # rather than waiting for the next Frontend restart.
 _MCP_CONFIG_MUTATION_METHODS = {"POST", "PUT", "DELETE"}
 
+# Issue #1933: halt-all can legitimately take longer than the default relay timeout
+# across a large fleet of sessions — give it headroom above that ceiling, same
+# "explicit margin above a known long-running operation" discipline as the
+# restart-trigger timeout in system.py. This is a safety margin, not the primary
+# fix — real per-session termination cost was cut at the source (blocking gc.collect()
+# removed from DataStorageManager.cleanup()).
+_HALT_ALL_TIMEOUT_SECONDS = 120.0
+
 
 def build_router(webui) -> APIRouter:
     router = APIRouter()
@@ -31,8 +39,9 @@ def build_router(webui) -> APIRouter:
     )
     @handle_exceptions("relay to backend")
     async def relay_to_backend(full_path: str, request: Request):
+        timeout = _HALT_ALL_TIMEOUT_SECONDS if full_path.endswith("/halt-all") else None
         try:
-            response = await webui.backend_client.relay(request, f"/api/{full_path}")
+            response = await webui.backend_client.relay(request, f"/api/{full_path}", timeout=timeout)
         except httpx.RequestError as e:
             raise to_http_exception(e) from e
         if full_path.startswith("mcp-configs") and request.method in _MCP_CONFIG_MUTATION_METHODS:
