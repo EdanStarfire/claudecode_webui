@@ -62,7 +62,19 @@
         <button class="btn btn-sm btn-outline-danger" @click="detachHook(id)">Detach</button>
       </div>
 
-      <button class="btn btn-sm btn-outline-secondary mt-1" @click="openAttachModal">+ Attach Hook</button>
+      <div class="input-group input-group-sm attach-select mt-1">
+        <select
+          class="form-select form-select-sm"
+          :disabled="attachableConfigs.length === 0"
+          v-model="pendingAttachId"
+          @change="handleAttachSelect"
+        >
+          <option value="">{{ attachableConfigs.length ? 'Attach hook…' : 'No hooks available' }}</option>
+          <option v-for="config in attachableConfigs" :key="config.id" :value="config.id">
+            {{ config.name }}{{ !config.enabled ? ' (disabled globally)' : '' }}
+          </option>
+        </select>
+      </div>
 
       <div class="field-help small text-muted mt-2">
         Drag to reorder — this controls execution order among your own WebUI hooks when two
@@ -79,37 +91,6 @@
         <span class="small text-muted">What gets written to the session's temp settings file at startup</span>
       </div>
       <pre class="json-preview">{{ jsonPreviewText }}</pre>
-
-      <!-- Attach modal -->
-      <div v-if="showAttachModal" class="modal-overlay" @click.self="closeAttachModal">
-        <div class="modal-box">
-          <div class="modal-header">
-            <h6 class="mb-0">Attach Hook</h6>
-            <button class="btn-close-x" @click="closeAttachModal">&times;</button>
-          </div>
-          <div class="modal-body">
-            <div v-if="attachableConfigs.length === 0" class="text-muted small py-2">
-              All hooks are already attached, or none exist yet.
-            </div>
-            <label v-for="config in attachableConfigs" :key="config.id" class="attach-item">
-              <input type="checkbox" v-model="pendingAttachIds" :value="config.id" />
-              <div>
-                <div class="fw-medium small">{{ config.name }}</div>
-                <div class="small text-muted">
-                  {{ (config.hooks || []).length }} hook{{ (config.hooks || []).length === 1 ? '' : 's' }}
-                  <span v-if="!config.enabled">&middot; currently disabled globally</span>
-                </div>
-              </div>
-            </label>
-          </div>
-          <div class="modal-footer">
-            <button class="btn btn-primary btn-sm" @click="confirmAttach" :disabled="pendingAttachIds.length === 0">
-              Attach Selected
-            </button>
-            <button class="btn btn-secondary btn-sm" @click="closeAttachModal">Cancel</button>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 </template>
@@ -321,26 +302,17 @@ function ordinal(n) {
   return n + (s[(v - 20) % 10] || s[v] || s[0])
 }
 
-// ── Attach modal ───────────────────────────────────────────────────────────
-const showAttachModal = ref(false)
-const pendingAttachIds = ref([])
+// ── Attach dropdown ────────────────────────────────────────────────────────
+const pendingAttachId = ref('')
 
 const attachableConfigs = computed(() =>
   hookStore.configList().filter(c => !attachedIds.value.includes(c.id))
 )
 
-function openAttachModal() {
-  pendingAttachIds.value = []
-  showAttachModal.value = true
-}
-
-function closeAttachModal() {
-  showAttachModal.value = false
-}
-
-function confirmAttach() {
-  handleField('hook_ids', [...attachedIds.value, ...pendingAttachIds.value])
-  closeAttachModal()
+function handleAttachSelect() {
+  if (!pendingAttachId.value) return
+  handleField('hook_ids', [...attachedIds.value, pendingAttachId.value])
+  pendingAttachId.value = ''
 }
 
 // ── JSON preview ───────────────────────────────────────────────────────────
@@ -528,62 +500,7 @@ onMounted(() => {
   margin: 0;
 }
 
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  z-index: 1000;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 40px 20px;
-}
-
-.modal-box {
-  background: var(--bs-secondary-bg);
-  border: 1px solid var(--bs-border-color);
-  border-radius: 10px;
-  width: 100%;
-  max-width: 480px;
-  max-height: 85vh;
-  overflow-y: auto;
-}
-
-.modal-header,
-.modal-footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
-}
-
-.modal-header {
-  justify-content: space-between;
-  border-bottom: 1px solid var(--bs-border-color);
-}
-
-.modal-body {
-  padding: 12px 16px;
-}
-
-.btn-close-x {
-  background: none;
-  border: none;
-  color: var(--bs-secondary-color);
-  font-size: 18px;
-  cursor: pointer;
-}
-
-.attach-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 4px;
-  border-bottom: 1px solid var(--bs-border-color);
-  cursor: pointer;
-}
-
-.attach-item:last-child {
-  border-bottom: none;
+.attach-select {
+  max-width: 320px;
 }
 </style>
