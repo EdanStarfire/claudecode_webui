@@ -3,8 +3,10 @@ Tests for issue #1831: analytics records NULL model when no configured override
 resolves, even though the SDK reported a real model for that turn.
 
 The fix tracks the most recent assistant-reported model for the current
-in-flight turn (`SessionCoordinator._last_turn_model_by_session`) and uses it as
-a fallback exactly when `_resolve_analytics_model_label()` yields None. These
+in-flight turn (`SessionCoordinator._last_turn_model_by_session`) and passes it
+into `_resolve_analytics_model_label()` as `sdk_reported_model`. As of issue
+#1929, that SDK-reported model takes priority over the configured generic tier
+alias (`cfg.model`) for non-catalog-routed sessions — see T2 below. These
 tests drive `coordinator._create_message_callback(session_id)` end-to-end,
 following the `TestIssue1838...` precedent in test_session_coordinator.py.
 """
@@ -76,8 +78,10 @@ class TestIssue1831AnalyticsModelFallback:
         assert model_arg == "claude-sonnet-4-6"
 
     @pytest.mark.asyncio
-    async def test_configured_override_wins_over_sdk_reported_model(self, temp_coordinator):
-        """T2: configured override still wins, unaffected by the fallback."""
+    async def test_sdk_reported_model_wins_over_configured_tier_alias(self, temp_coordinator):
+        """T2 (issue #1929): the SDK-reported model for the turn wins over the
+        configured generic tier alias, so analytics reflects the actual model
+        used rather than the session's configured tier."""
         coordinator = temp_coordinator
         session_id = await _make_session(
             coordinator, SessionConfig(model="claude-opus-4-configured")
@@ -100,7 +104,7 @@ class TestIssue1831AnalyticsModelFallback:
 
         analytics_store.record_turn.assert_awaited_once()
         _, _, model_arg, _, _ = analytics_store.record_turn.call_args.args
-        assert model_arg == "claude-opus-4-configured"
+        assert model_arg == "claude-sonnet-4-6"
 
     @pytest.mark.asyncio
     async def test_genuinely_modelless_turn_records_none_no_cross_turn_leak(
