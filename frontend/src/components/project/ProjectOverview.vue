@@ -617,7 +617,13 @@ function cancelStop() {
 
 // Issue #1933: bounded window to let Backend's still-running-in-the-background
 // halt-all catch up after the HTTP request itself failed/timed out client-side.
-const STOP_RECONCILE_TOTAL_MS = 20000
+// Aligned with (and a bit above) src/routers/relay.py's 120s halt-all relay
+// timeout — in the worst case the HTTP call doesn't fail until that ceiling,
+// so the reconciliation window has to be at least that long to have any chance
+// of observing Backend actually finish, not just of catching an early network
+// blip. The 2s poll interval stays cheap regardless of how long the window is:
+// each tick only reads already-live sessionStore state, no extra network calls.
+const STOP_RECONCILE_TOTAL_MS = 130000
 const STOP_RECONCILE_INTERVAL_MS = 2000
 
 function isSessionTerminated(sessionId) {

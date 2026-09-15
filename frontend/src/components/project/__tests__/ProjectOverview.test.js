@@ -187,7 +187,7 @@ describe('ProjectOverview - Stop All failure-path reconciliation (issue #1933)',
       await vi.advanceTimersByTimeAsync(0)
 
       // The request itself already failed — the UI must unlock immediately rather
-      // than staying spinner-locked for the whole (up to 20s) reconciliation window.
+      // than staying spinner-locked for the whole (up to 130s) reconciliation window.
       expect(screen.getByText('⏹ Stop All')).toBeTruthy()
       expect(screen.queryByText('Stopping…')).toBeFalsy()
 
@@ -203,7 +203,7 @@ describe('ProjectOverview - Stop All failure-path reconciliation (issue #1933)',
 
       // s2 never terminates, so the poll loop keeps running until the bounded
       // window's deadline; only then does the reconciled toast get set.
-      await vi.advanceTimersByTimeAsync(20000)
+      await vi.advanceTimersByTimeAsync(130000)
 
       expect(getStoppedSet('p1')).toEqual(['s1'])
       expect(screen.getByText(/1 of 2 sessions were confirmed stopped/)).toBeTruthy()
@@ -227,9 +227,41 @@ describe('ProjectOverview - Stop All failure-path reconciliation (issue #1933)',
       await fireEvent.click(screen.getByText('Confirm Stop All'))
       await vi.advanceTimersByTimeAsync(0)
 
-      await vi.advanceTimersByTimeAsync(20000)
+      await vi.advanceTimersByTimeAsync(130000)
 
       expect(getStoppedSet('p1')).toEqual([])
+      expect(screen.getByText(/✗ Stop All failed: network error/)).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reconciliation window is at least as long as the relay layer\'s 120s halt-all timeout', async () => {
+    // In the worst case the halt-all HTTP call doesn't fail client-side until it
+    // hits src/routers/relay.py's 120s timeout override — the reconciliation
+    // window has to outlast that, or it can never observe Backend actually
+    // finish in exactly the scenario it exists for.
+    const ids = ['s1']
+    const project = makeProject({ project_id: 'p1', session_ids: ids })
+    const sessions = ids.map(id => makeSession({ session_id: id, project_id: 'p1', state: 'ACTIVE' }))
+
+    apiMock.post.mockRejectedValue(new Error('network error'))
+
+    await mountForResume(project, sessions, { stoppedIds: [] })
+
+    vi.useFakeTimers()
+    try {
+      await fireEvent.click(screen.getByText('⏹ Stop All'))
+      await fireEvent.click(screen.getByText('Confirm Stop All'))
+      await vi.advanceTimersByTimeAsync(0)
+
+      // Just under the relay's 120s ceiling — reconciliation must still be
+      // in-flight, not have already given up and shown a final toast.
+      await vi.advanceTimersByTimeAsync(118000)
+      expect(screen.getByText(/checking which sessions actually stopped/)).toBeTruthy()
+
+      // Past the full window — now it should conclude.
+      await vi.advanceTimersByTimeAsync(15000)
       expect(screen.getByText(/✗ Stop All failed: network error/)).toBeTruthy()
     } finally {
       vi.useRealTimers()
@@ -256,7 +288,7 @@ describe('ProjectOverview - Stop All failure-path reconciliation (issue #1933)',
       await fireEvent.click(screen.getByText('⏹ Stop All'))
       await fireEvent.click(screen.getByText('Confirm Stop All'))
       await vi.advanceTimersByTimeAsync(0)
-      await vi.advanceTimersByTimeAsync(20000)
+      await vi.advanceTimersByTimeAsync(130000)
 
       // s3 must not be folded into stoppedSet just for already being terminated,
       // and the toast's "of M" denominator must reflect only the 2 real targets.
