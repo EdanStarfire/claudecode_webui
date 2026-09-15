@@ -170,6 +170,125 @@ describe('ProjectOverview - Throttled Resume Sessions (issue #1733)', () => {
   })
 })
 
+describe('ProjectOverview - Stop All failure-path reconciliation (issue #1933)', () => {
+  it('reconciles stopped sessions into stoppedSet when the halt-all request itself fails', async () => {
+    const ids = ['s1', 's2']
+    const project = makeProject({ project_id: 'p1', session_ids: ids })
+    const sessions = ids.map(id => makeSession({ session_id: id, project_id: 'p1', state: 'ACTIVE' }))
+
+    apiMock.post.mockRejectedValue(new Error('Stop All request timed out'))
+
+    const { sessionStore } = await mountForResume(project, sessions, { stoppedIds: [] })
+
+    vi.useFakeTimers()
+    try {
+      await fireEvent.click(screen.getByText('⏹ Stop All'))
+      await fireEvent.click(screen.getByText('Confirm Stop All'))
+      await vi.advanceTimersByTimeAsync(0)
+
+      // The request itself already failed — the UI must unlock immediately rather
+      // than staying spinner-locked for the whole (up to 20s) reconciliation window.
+      expect(screen.getByText('⏹ Stop All')).toBeTruthy()
+      expect(screen.queryByText('Stopping…')).toBeFalsy()
+
+      // Backend keeps terminating in the background — s1 reaches TERMINATED during
+      // the first reconciliation poll tick.
+      sessionStore.sessions.set('s1', { ...sessionStore.getSession('s1'), state: 'TERMINATED' })
+
+      await vi.advanceTimersByTimeAsync(2000)
+
+      // Written progressively — visible immediately after the tick that detects it,
+      // not only once the full bounded window elapses.
+      expect(getStoppedSet('p1')).toEqual(['s1'])
+
+      // s2 never terminates, so the poll loop keeps running until the bounded
+      // window's deadline; only then does the reconciled toast get set.
+      await vi.advanceTimersByTimeAsync(20000)
+
+      expect(getStoppedSet('p1')).toEqual(['s1'])
+      expect(screen.getByText(/1 of 2 sessions were confirmed stopped/)).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shows a bare failure toast when the reconciliation window elapses with nothing confirmed stopped', async () => {
+    const ids = ['s1']
+    const project = makeProject({ project_id: 'p1', session_ids: ids })
+    const sessions = ids.map(id => makeSession({ session_id: id, project_id: 'p1', state: 'ACTIVE' }))
+
+    apiMock.post.mockRejectedValue(new Error('network error'))
+
+    await mountForResume(project, sessions, { stoppedIds: [] })
+
+    vi.useFakeTimers()
+    try {
+      await fireEvent.click(screen.getByText('⏹ Stop All'))
+      await fireEvent.click(screen.getByText('Confirm Stop All'))
+      await vi.advanceTimersByTimeAsync(0)
+
+      await vi.advanceTimersByTimeAsync(20000)
+
+      expect(getStoppedSet('p1')).toEqual([])
+      expect(screen.getByText(/✗ Stop All failed: network error/)).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('excludes already-TERMINATED sessions from the reconciliation target set', async () => {
+    // s3 was stopped earlier for unrelated reasons — emergency_halt_all() on the
+    // backend excludes pre-TERMINATED sessions from its own target set
+    // (legion_coordinator.py), so the failure-path reconciliation must match.
+    const project = makeProject({ project_id: 'p1', session_ids: ['s1', 's2', 's3'] })
+    const sessions = [
+      makeSession({ session_id: 's1', project_id: 'p1', state: 'ACTIVE' }),
+      makeSession({ session_id: 's2', project_id: 'p1', state: 'ACTIVE' }),
+      makeSession({ session_id: 's3', project_id: 'p1', state: 'TERMINATED' }),
+    ]
+
+    apiMock.post.mockRejectedValue(new Error('network error'))
+
+    await mountForResume(project, sessions, { stoppedIds: [] })
+
+    vi.useFakeTimers()
+    try {
+      await fireEvent.click(screen.getByText('⏹ Stop All'))
+      await fireEvent.click(screen.getByText('Confirm Stop All'))
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(20000)
+
+      // s3 must not be folded into stoppedSet just for already being terminated,
+      // and the toast's "of M" denominator must reflect only the 2 real targets.
+      expect(getStoppedSet('p1')).toEqual([])
+      expect(screen.getByText(/✗ Stop All failed: network error/)).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('leaves the success-path stoppedSet/toast behavior unchanged when halt-all succeeds', async () => {
+    const ids = ['s1', 's2']
+    const project = makeProject({ project_id: 'p1', session_ids: ids })
+    const sessions = ids.map(id => makeSession({ session_id: id, project_id: 'p1', state: 'ACTIVE' }))
+
+    apiMock.post.mockResolvedValue({
+      stopped_session_ids: ids,
+      failed_sessions: [],
+      total_sessions: 2,
+    })
+
+    await mountForResume(project, sessions, { stoppedIds: [] })
+
+    await fireEvent.click(screen.getByText('⏹ Stop All'))
+    await fireEvent.click(screen.getByText('Confirm Stop All'))
+    await flush()
+
+    expect(getStoppedSet('p1')).toEqual(ids)
+    expect(screen.getByText(/✓ Stopped 2 sessions/)).toBeTruthy()
+  })
+})
+
 async function mountInCustomFlatMode(project, sessions) {
   const { useProjectStore } = await import('@/stores/project')
   const { useSessionStore } = await import('@/stores/session')

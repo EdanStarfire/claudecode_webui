@@ -5,10 +5,8 @@ Handles persistent storage of session data including activity logs,
 message history, and state persistence.
 """
 
-import gc
 import json
 import logging
-import os
 import uuid
 from pathlib import Path
 from typing import Any
@@ -179,35 +177,15 @@ class DataStorageManager:
             return False
 
     async def cleanup(self):
-        """Cleanup and ensure all file handles and directory references are closed"""
-        try:
-            # Force garbage collection to close any lingering file handles
-            gc.collect()
+        """Cleanup hook called on session termination.
 
-            # Final integrity update
-
-            # Additional cleanup to ensure file handles are released
-            # Python file handles should auto-close, but force GC again to be sure
-            gc.collect()
-
-            session_name = self.session_dir.name
-
-            # On Windows, clear the Path object references to release directory handles
-            if os.name == 'nt':  # Windows
-                # Clear all path references that might hold directory handles
-                self.session_dir = None
-                self.messages_file = None
-                self.state_file = None
-                self.resources_dir = None
-                self.resources_metadata_file = None
-                # Force another GC to clear the Path objects
-                gc.collect()
-
-            storage_logger.debug(f"Cleaned up storage for {session_name}")
-        except Exception:
-            logger.exception("Failed to cleanup storage")
-            # Still force GC even on error
-            gc.collect()
+        All file handles here are already closed deterministically via
+        `with open(...)` at every write site, so there is nothing left for a
+        forced `gc.collect()` pass to reclaim (issue #1933) — this used to run
+        up to 4 blocking gc.collect() calls per session, serializing
+        concurrent Stop All terminations onto the event loop.
+        """
+        storage_logger.debug(f"Cleaned up storage for {self.session_dir.name}")
 
     # =========================================================================
     # Resource Storage Methods
