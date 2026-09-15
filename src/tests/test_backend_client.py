@@ -78,6 +78,42 @@ async def test_issue_1844_relay_records_success_even_on_error_status_body():
     assert client.reachability.is_unreachable is False
 
 
+@pytest.mark.asyncio
+async def test_issue_1933_relay_omits_timeout_kwarg_when_not_given():
+    """Existing relay() callers must keep this client's normal per-request default —
+    explicitly passing `timeout=None` to httpx disables the timeout entirely rather
+    than falling back to the client default, so the kwarg must be omitted outright."""
+    client = _make_client()
+    backend_resp = MagicMock()
+    backend_resp.status_code = 200
+    backend_resp.headers = {}
+    backend_resp.content = b"{}"
+    client._client.request = AsyncMock(return_value=backend_resp)
+
+    await client.relay(_make_request(), "/api/sessions")
+
+    _, kwargs = client._client.request.call_args
+    assert "timeout" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_issue_1933_relay_forwards_explicit_timeout():
+    """Callers relaying to a known long-running Backend operation (e.g. halt-all
+    across a large fleet) must be able to give the client-side call matching
+    headroom above the default relay timeout."""
+    client = _make_client()
+    backend_resp = MagicMock()
+    backend_resp.status_code = 200
+    backend_resp.headers = {}
+    backend_resp.content = b"{}"
+    client._client.request = AsyncMock(return_value=backend_resp)
+
+    await client.relay(_make_request(), "/api/legions/legion-1/halt-all", timeout=120.0)
+
+    _, kwargs = client._client.request.call_args
+    assert kwargs["timeout"] == 120.0
+
+
 # --- get_json() ---
 
 

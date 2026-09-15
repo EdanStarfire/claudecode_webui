@@ -20,7 +20,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
-from backend.docker_utils import classify_docker_output, cleanup_session_tmp
+from backend.docker_utils import classify_docker_output, cleanup_session_tmp, get_session_tmp_dir
 from backend.legion.minion_system_prompts import get_legion_guide_only
 from shared.logging_config import get_logger
 
@@ -2213,7 +2213,17 @@ class SessionCoordinator:
             success = await self.session_manager.terminate_session(session_id)
 
             # Issue #820: Clean up session /tmp directory on session end
-            cleanup_session_tmp(session_id, self.session_manager.sessions_dir)
+            # Issue #1933: most sessions never write to /tmp, so check existence
+            # synchronously (cheap stat) and only dispatch the blocking rmtree to a
+            # thread when there's actually something to remove — avoids contending
+            # the shared default thread-pool executor (also used by analytics
+            # writes) with a thread-pool round trip for a no-op on every session
+            # during a large concurrent Stop All.
+            session_tmp_dir = get_session_tmp_dir(self.session_manager.sessions_dir / session_id)
+            if session_tmp_dir.exists():
+                await asyncio.to_thread(
+                    cleanup_session_tmp, session_id, self.session_manager.sessions_dir
+                )
 
             # Cleanup storage and callbacks
             if session_id in self._storage_managers:

@@ -615,12 +615,60 @@ function cancelStop() {
   stopState.value = 'default'
 }
 
+// Issue #1933: bounded window to let Backend's still-running-in-the-background
+// halt-all catch up after the HTTP request itself failed/timed out client-side.
+// Aligned with (and a bit above) src/routers/relay.py's 120s halt-all relay
+// timeout — in the worst case the HTTP call doesn't fail until that ceiling,
+// so the reconciliation window has to be at least that long to have any chance
+// of observing Backend actually finish, not just of catching an early network
+// blip. The 2s poll interval stays cheap regardless of how long the window is:
+// each tick only reads already-live sessionStore state, no extra network calls.
+const STOP_RECONCILE_TOTAL_MS = 130000
+const STOP_RECONCILE_INTERVAL_MS = 2000
+
+function isSessionTerminated(sessionId) {
+  const s = sessionStore.getSession(sessionId)
+  return s?.state?.toUpperCase?.() === 'TERMINATED'
+}
+
+function applyReconciledStopped(confirmedStopped, processingSnapshot) {
+  if (confirmedStopped.length === 0) return
+  addToStoppedSet(props.projectId, confirmedStopped)
+  const wasProcessing = confirmedStopped.filter(id => processingSnapshot.get(id))
+  setProcessingSet(props.projectId, wasProcessing)
+  refreshStoppedCount()
+}
+
+async function reconcileStopFailure(targetIds, processingSnapshot) {
+  const deadline = Date.now() + STOP_RECONCILE_TOTAL_MS
+  // Written progressively (not just once at the end) so Resume Sessions reflects
+  // newly-confirmed sessions as soon as each poll tick detects them, rather than
+  // making the operator wait out the full bounded window to see any result.
+  let confirmedStopped = targetIds.filter(isSessionTerminated)
+  applyReconciledStopped(confirmedStopped, processingSnapshot)
+
+  while (confirmedStopped.length < targetIds.length && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, STOP_RECONCILE_INTERVAL_MS))
+    confirmedStopped = targetIds.filter(isSessionTerminated)
+    applyReconciledStopped(confirmedStopped, processingSnapshot)
+  }
+
+  return confirmedStopped
+}
+
 async function confirmStop() {
   stopState.value = 'stopping'
   // Snapshot is_processing before termination — sessions may be mid-task
   const processingSnapshot = new Map(
     projectSessions.value.map(s => [s.session_id, !!s.is_processing])
   )
+  // Exclude already-TERMINATED sessions from the reconciliation target set —
+  // mirrors emergency_halt_all()'s own exclusion (legion_coordinator.py), so a
+  // session stopped earlier for unrelated reasons doesn't get folded into this
+  // Stop All's stoppedSet/Resume Sessions tracking on the failure-path.
+  const targetIds = projectSessions.value
+    .filter(s => s.state?.toUpperCase?.() !== 'TERMINATED')
+    .map(s => s.session_id)
   try {
     const result = await legionStore.haltAll(props.projectId)
     const stopped = result.stopped_session_ids ?? []
@@ -642,7 +690,18 @@ async function confirmStop() {
       setFleetToast('danger', `✗ Stopped ${stopped.length} of ${result.total_sessions} sessions. Failed: ${failedNames}. You can retry Stop All for remaining sessions.`, 0)
     }
   } catch (err) {
-    setFleetToast('danger', `✗ Stop All failed: ${err.message || err}`, 0)
+    setFleetToast('danger', `Stop All request failed (${err.message || err}) — checking which sessions actually stopped...`, 0)
+    // Unlock the UI now — the request itself already failed, and reconciliation
+    // below can take up to STOP_RECONCILE_TOTAL_MS. Leaving stopState 'stopping'
+    // for that whole window would keep Stop All spinner-locked and Resume
+    // Sessions disabled even as sessions get progressively confirmed.
+    stopState.value = 'default'
+    const confirmedStopped = await reconcileStopFailure(targetIds, processingSnapshot)
+    if (confirmedStopped.length > 0) {
+      setFleetToast('warning', `⚠ Stop All request timed out, but ${confirmedStopped.length} of ${targetIds.length} sessions were confirmed stopped. Click "Resume Sessions" to bring them back online.`, 0)
+    } else {
+      setFleetToast('danger', `✗ Stop All failed: ${err.message || err}`, 0)
+    }
   } finally {
     stopState.value = 'default'
   }

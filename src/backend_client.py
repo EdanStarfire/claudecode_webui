@@ -37,12 +37,16 @@ class BackendClient:
         headers["authorization"] = f"Bearer {self._token}"
         return headers
 
-    async def relay(self, request: Request, path: str) -> Response:
+    async def relay(self, request: Request, path: str, timeout: float | None = None) -> Response:
         """Forward an incoming FastAPI Request to Backend and return its response verbatim.
 
         Forwards method/path/query/body/headers (minus the browser's own auth,
         replaced with the backend-scoped credential) — Frontend never re-declares
         Backend's route contract, so it can't drift from it.
+
+        Pass `timeout` explicitly for callers relaying to a known long-running Backend
+        operation (e.g. halt-all across a large fleet) — same margin-above-the-operation
+        discipline as get_json()/request_json() (issue #1933).
         """
         headers = {
             k: v for k, v in request.headers.items()
@@ -51,6 +55,10 @@ class BackendClient:
         headers = self._auth_headers(headers)
         body = await request.body()
 
+        kwargs = {}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+
         try:
             backend_resp = await self._client.request(
                 request.method,
@@ -58,6 +66,7 @@ class BackendClient:
                 params=request.query_params,
                 content=body,
                 headers=headers,
+                **kwargs,
             )
         except httpx.RequestError as e:
             self.reachability.record_failure(e)

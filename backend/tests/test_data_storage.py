@@ -3,6 +3,7 @@
 import asyncio
 import json
 import tempfile
+import unittest.mock
 from pathlib import Path
 
 import pytest
@@ -248,6 +249,29 @@ class TestDataStorageManager:
 
         # Verify integrity file is updated
         # Integrity file removed - no longer used
+
+    @pytest.mark.asyncio
+    async def test_issue_1933_cleanup_does_not_force_gc(self, temp_storage_manager, monkeypatch):
+        """cleanup() must not block the event loop with gc.collect() (issue #1933)."""
+        import gc
+
+        mock_collect = unittest.mock.Mock(wraps=gc.collect)
+        monkeypatch.setattr(gc, "collect", mock_collect)
+
+        await temp_storage_manager.cleanup()
+
+        mock_collect.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_issue_1933_cleanup_is_fast(self, temp_storage_manager):
+        """cleanup() should complete near-instantly with no blocking work (issue #1933)."""
+        import time
+
+        start = time.monotonic()
+        await temp_storage_manager.cleanup()
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 0.05
 
     @pytest.mark.asyncio
     async def test_empty_file_handling(self, temp_storage_manager):

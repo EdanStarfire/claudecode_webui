@@ -267,6 +267,49 @@ class TestSessionCoordinator:
             assert session_id not in coordinator._error_callbacks
 
     @pytest.mark.asyncio
+    async def test_issue_1933_terminate_session_skips_thread_dispatch_when_no_tmp_dir(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Most sessions never write to /tmp — terminate_session() must not pay for a
+        thread-pool round trip (contending the shared default executor also used by
+        analytics writes) just to find nothing to remove."""
+        coordinator = temp_coordinator
+
+        session_id = await coordinator.create_session(**sample_session_config)
+        mock_sdk = AsyncMock()
+        coordinator._active_sdks[session_id] = mock_sdk
+
+        with (
+            patch.object(coordinator.session_manager, 'terminate_session', return_value=True),
+            patch('backend.session_coordinator.asyncio.to_thread') as mock_to_thread,
+        ):
+            success = await coordinator.terminate_session(session_id)
+
+            assert success is True
+            mock_to_thread.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_issue_1933_terminate_session_dispatches_thread_when_tmp_dir_exists(
+        self, temp_coordinator, sample_session_config
+    ):
+        """When a session's /tmp dir does exist, the blocking rmtree must still be
+        offloaded to a thread rather than run inline on the event loop."""
+        coordinator = temp_coordinator
+
+        session_id = await coordinator.create_session(**sample_session_config)
+        mock_sdk = AsyncMock()
+        coordinator._active_sdks[session_id] = mock_sdk
+
+        tmp_dir = coordinator.session_manager.sessions_dir / session_id / "tmp"
+        tmp_dir.mkdir(parents=True)
+
+        with patch.object(coordinator.session_manager, 'terminate_session', return_value=True):
+            success = await coordinator.terminate_session(session_id)
+
+            assert success is True
+            assert not tmp_dir.exists()
+
+    @pytest.mark.asyncio
     async def test_send_message(self, temp_coordinator, sample_session_config):
         """Test sending message through coordinator."""
         from backend.session_manager import SessionState
