@@ -372,13 +372,14 @@ def _build_model_map(cfg) -> dict[str, str]:
     return tier_map
 
 
-def _resolve_analytics_model_label(cfg) -> str | None:
+def _resolve_analytics_model_label(cfg, sdk_reported_model: str | None = None) -> str | None:
     """Return the model label to write to analytics.
 
     Priority:
       1. Single provider-catalog routing → catalog alias.
       2. Per-tier provider-catalog routing → default-tier alias.
-      3. SDK model field (default for non-catalog sessions).
+      3. SDK-reported model for the current turn, if available.
+      4. Configured model field (generic tier alias) as a last resort.
     """
     if cfg.provider_catalog_id and cfg.provider_model_id:
         return make_model_alias(cfg.provider_catalog_id, cfg.provider_model_id)
@@ -389,7 +390,7 @@ def _resolve_analytics_model_label(cfg) -> str | None:
         catalog_id = getattr(cfg, f"provider_{tier}_catalog_id")
         model_id = getattr(cfg, f"provider_{tier}_model_id")
         return make_model_alias(catalog_id, model_id)
-    return cfg.model
+    return sdk_reported_model if sdk_reported_model is not None else cfg.model
 
 
 class SessionCoordinator:
@@ -5102,21 +5103,17 @@ class SessionCoordinator:
                             if sdk_cost is None:
                                 sdk_cost = model_usage_cost
                             # Resolve model via effective config (supports template-linked sessions)
+                            # Issue #1929: pop unconditionally so the cache never leaks into
+                            # the next turn, regardless of which branch resolves the label.
+                            _sdk_model = self._last_turn_model_by_session.pop(session_id, None)
                             _sinfo = await self.session_manager.get_session_info(session_id)
                             if _sinfo:
                                 _eff = await resolve_effective_config(
                                     _sinfo, self.template_manager, self.profile_manager
                                 )
-                                _model = _resolve_analytics_model_label(_eff)
+                                _model = _resolve_analytics_model_label(_eff, _sdk_model)
                             else:
-                                _model = None
-                            # Issue #1831: fall back to the current turn's SDK-reported
-                            # model when no configured override resolved a label. Pop
-                            # unconditionally so the cache never leaks into the next turn.
-                            if _model is None:
-                                _model = self._last_turn_model_by_session.pop(session_id, None)
-                            else:
-                                self._last_turn_model_by_session.pop(session_id, None)
+                                _model = _sdk_model
                             turn_seq = await self._next_turn_seq(session_id)
                             # Issue #1838: usage/total_cost_usd are cumulative snapshots
                             # since subprocess start, not per-turn values — convert to

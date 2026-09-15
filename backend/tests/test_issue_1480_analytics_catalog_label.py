@@ -80,6 +80,16 @@ def test_plain_session_returns_sdk_model():
 
 
 # ---------------------------------------------------------------------------
+# Test 3b (issue #1929): sdk_reported_model wins over cfg.model for plain sessions
+# ---------------------------------------------------------------------------
+
+def test_plain_session_sdk_reported_model_wins_over_cfg_model():
+    cfg = _cfg(model="claude-sonnet-4-5")
+    result = _resolve_analytics_model_label(cfg, sdk_reported_model="claude-sonnet-4-6")
+    assert result == "claude-sonnet-4-6"
+
+
+# ---------------------------------------------------------------------------
 # Test 4: no catalog, no model → None preserved (NULL in analytics)
 # ---------------------------------------------------------------------------
 
@@ -101,6 +111,23 @@ def test_single_catalog_wins_over_tier():
     })
     result = _resolve_analytics_model_label(cfg)
     assert result == "direct--claude-opus-4"
+
+
+# ---------------------------------------------------------------------------
+# Test 5b (issue #1929): catalog/per-tier branches still win even when a
+# sdk_reported_model is supplied — no regression for routed sessions.
+# ---------------------------------------------------------------------------
+
+def test_single_catalog_wins_over_sdk_reported_model():
+    cfg = _cfg(provider_catalog_id="openrouter", provider_model_id="anthropic/claude-3.5-sonnet")
+    result = _resolve_analytics_model_label(cfg, sdk_reported_model="claude-sonnet-4-6")
+    assert result == "openrouter--anthropic/claude-3.5-sonnet"
+
+
+def test_per_tier_wins_over_sdk_reported_model():
+    cfg = _tier_cfg(default_tier="sonnet")
+    result = _resolve_analytics_model_label(cfg, sdk_reported_model="claude-sonnet-4-6")
+    assert result == "or--anthropic/claude-3-5-sonnet"
 
 
 # ---------------------------------------------------------------------------
