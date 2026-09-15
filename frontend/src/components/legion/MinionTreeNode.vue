@@ -5,8 +5,13 @@
       <div class="node-row">
         <!-- Left Column: Status + Name (30%) -->
         <div class="node-left">
-          <!-- Status Dot -->
-          <div class="status-dot me-2" :class="statusDotClass"></div>
+          <!-- Status Dot (issue #1934: doubles as batch-selection toggle) -->
+          <div
+            class="status-dot me-2"
+            :class="[statusDotClass, { 'is-selected': isSelectedForBatch }]"
+            :title="isSelectedForBatch ? 'Selected — click to deselect' : 'Click to select for batch actions'"
+            @click.stop="uiStore.toggleSessionSelection(minionData.id)"
+          ></div>
 
           <!-- Overseer Icon -->
           <span v-if="isOverseerWithChildren" class="me-2">👑</span>
@@ -246,6 +251,9 @@ const hasChildren = computed(() => {
 
 // Issue #1696: Collapse state for this node's children
 const isCollapsed = computed(() => uiStore.isMinionCollapsed(props.minionData.id))
+
+// Issue #1934: Batch-selection state for this node's status dot
+const isSelectedForBatch = computed(() => uiStore.isSessionSelected(props.minionData.id))
 
 // Auto-expand override: if the currently selected session is a descendant of this
 // node, show children even when collapsed, so deep-links/navigation stay visible.
@@ -569,6 +577,14 @@ function handleClick() {
   border-radius: 50%;
   border: 2px solid;
   flex-shrink: 0;
+  cursor: pointer;
+}
+
+/* Issue #1934: Selected = outline-only rendering of the dot's current status
+   color — fill removed, border thickened — so color-coding meaning is untouched. */
+.status-dot.is-selected {
+  background-color: transparent !important;
+  border-width: 3px;
 }
 
 .status-dot-grey {

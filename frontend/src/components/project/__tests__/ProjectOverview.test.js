@@ -421,3 +421,146 @@ describe('ProjectOverview - Custom kanban grouping (issue #1722)', () => {
     expect(screen.queryByText(/Delete "Unassigned"/)).toBeFalsy()
   })
 })
+
+describe('ProjectOverview - Selection-based batch Stop/Start (issue #1934)', () => {
+  it('Stop Selected terminates only the selected, non-terminated sessions and clears the selection', async () => {
+    const ids = ['s1', 's2', 's3']
+    const project = makeProject({ project_id: 'p1', session_ids: ids })
+    const sessions = [
+      makeSession({ session_id: 's1', project_id: 'p1', state: 'ACTIVE' }),
+      makeSession({ session_id: 's2', project_id: 'p1', state: 'ACTIVE' }),
+      makeSession({ session_id: 's3', project_id: 'p1', state: 'ACTIVE' }),
+    ]
+    apiMock.post.mockResolvedValue({})
+
+    const { uiStore, sessionStore } = await mountForResume(project, sessions, { stoppedIds: [] })
+    // Select s1 and s2 only — s3 stays untouched
+    uiStore.toggleSessionSelection('s1')
+    uiStore.toggleSessionSelection('s2')
+    await flush()
+
+    await fireEvent.click(screen.getByText('⏹ Stop Selected'))
+    await fireEvent.click(screen.getByText('Confirm Stop Selected'))
+    await flush()
+
+    expect(apiMock.post).toHaveBeenCalledWith('/api/sessions/s1/terminate')
+    expect(apiMock.post).toHaveBeenCalledWith('/api/sessions/s2/terminate')
+    expect(apiMock.post).not.toHaveBeenCalledWith('/api/sessions/s3/terminate')
+    expect(getStoppedSet('p1').sort()).toEqual(['s1', 's2'])
+    expect(uiStore.selectedSessionIds.size).toBe(0)
+    expect(sessionStore.getSession('s3').state).toBe('ACTIVE')
+    expect(screen.getByText(/✓ Stopped 2 of 2 selected/)).toBeTruthy()
+  })
+
+  it('Start Selected dispatches startSession for fresh stops and enqueues the resume message for mid-task stops', async () => {
+    const ids = ['s1', 's2']
+    const project = makeProject({ project_id: 'p1', session_ids: ids })
+    const sessions = [
+      makeSession({ session_id: 's1', project_id: 'p1', state: 'TERMINATED' }),
+      makeSession({ session_id: 's2', project_id: 'p1', state: 'TERMINATED' }),
+    ]
+    apiMock.post.mockResolvedValue({})
+
+    // s1 was mid-task when stopped (tracked in processingSet); s2 was a fresh stop
+    const { uiStore } = await mountForResume(project, sessions, { stoppedIds: ids, processingIds: ['s1'] })
+    uiStore.toggleSessionSelection('s1')
+    uiStore.toggleSessionSelection('s2')
+    await flush()
+
+    await fireEvent.click(screen.getByText('↻ Start Selected'))
+    await fireEvent.click(screen.getByText('Confirm Start Selected'))
+    await flush()
+
+    expect(apiMock.post).toHaveBeenCalledWith('/api/sessions/s2/start')
+    expect(apiMock.post).toHaveBeenCalledWith(
+      expect.stringMatching(/\/api\/sessions\/s1\/(queue|messages)/),
+      expect.anything()
+    )
+    expect(uiStore.selectedSessionIds.size).toBe(0)
+  })
+
+  it('excludes already-ACTIVE sessions from Stop Selected and surfaces the skipped count', async () => {
+    const ids = ['s1', 's2']
+    const project = makeProject({ project_id: 'p1', session_ids: ids })
+    const sessions = [
+      makeSession({ session_id: 's1', project_id: 'p1', state: 'ACTIVE' }),
+      makeSession({ session_id: 's2', project_id: 'p1', state: 'TERMINATED' }),
+    ]
+    apiMock.post.mockResolvedValue({})
+
+    const { uiStore } = await mountForResume(project, sessions, { stoppedIds: [] })
+    uiStore.toggleSessionSelection('s1')
+    uiStore.toggleSessionSelection('s2')
+    await flush()
+
+    await fireEvent.click(screen.getByText('⏹ Stop Selected'))
+    await fireEvent.click(screen.getByText('Confirm Stop Selected'))
+    await flush()
+
+    expect(apiMock.post).toHaveBeenCalledWith('/api/sessions/s1/terminate')
+    expect(apiMock.post).not.toHaveBeenCalledWith('/api/sessions/s2/terminate')
+    expect(screen.getByText(/✓ Stopped 1 of 2 selected \(1 already stopped\)/)).toBeTruthy()
+  })
+
+  it('excludes already-ACTIVE sessions from Start Selected and surfaces the skipped count', async () => {
+    const ids = ['s1', 's2']
+    const project = makeProject({ project_id: 'p1', session_ids: ids })
+    const sessions = [
+      makeSession({ session_id: 's1', project_id: 'p1', state: 'ACTIVE' }),
+      makeSession({ session_id: 's2', project_id: 'p1', state: 'TERMINATED' }),
+    ]
+    apiMock.post.mockResolvedValue({})
+
+    const { uiStore } = await mountForResume(project, sessions, { stoppedIds: ['s2'] })
+    uiStore.toggleSessionSelection('s1')
+    uiStore.toggleSessionSelection('s2')
+    await flush()
+
+    await fireEvent.click(screen.getByText('↻ Start Selected'))
+    await fireEvent.click(screen.getByText('Confirm Start Selected'))
+    await flush()
+
+    expect(apiMock.post).toHaveBeenCalledWith('/api/sessions/s2/start')
+    expect(apiMock.post).not.toHaveBeenCalledWith('/api/sessions/s1/start')
+    expect(screen.getByText(/✓ Started 1 of 2 selected \(1 already active\)/)).toBeTruthy()
+  })
+
+  it('using Stop All does not mutate a pending selection, and vice versa', async () => {
+    const ids = ['s1', 's2']
+    const project = makeProject({ project_id: 'p1', session_ids: ids })
+    const sessions = ids.map(id => makeSession({ session_id: id, project_id: 'p1', state: 'ACTIVE' }))
+    apiMock.post.mockResolvedValue({ stopped_session_ids: ['s1', 's2'], failed_sessions: [], total_sessions: 2 })
+
+    const { uiStore } = await mountForResume(project, sessions, { stoppedIds: [] })
+    uiStore.toggleSessionSelection('s1')
+    await flush()
+
+    await fireEvent.click(screen.getByText('⏹ Stop All'))
+    await fireEvent.click(screen.getByText('Confirm Stop All'))
+    await flush()
+
+    // Stop All's own success path doesn't touch selection state
+    expect(uiStore.selectedSessionIds.has('s1')).toBe(true)
+  })
+
+  it('project-switch watcher clears the selection', async () => {
+    const project1 = makeProject({ project_id: 'p1', session_ids: ['s1'] })
+    const project2 = makeProject({ project_id: 'p2', session_ids: ['s2'] })
+    const sessions = [
+      makeSession({ session_id: 's1', project_id: 'p1', state: 'ACTIVE' }),
+      makeSession({ session_id: 's2', project_id: 'p2', state: 'ACTIVE' }),
+    ]
+
+    const { pinia, wrapper, uiStore } = await mountForResume(project1, sessions, { stoppedIds: [] })
+    const { useProjectStore } = await import('@/stores/project')
+    useProjectStore(pinia).projects.set('p2', project2)
+
+    uiStore.toggleSessionSelection('s1')
+    expect(uiStore.selectedSessionIds.size).toBe(1)
+
+    await wrapper.setProps({ projectId: 'p2' })
+    await flush()
+
+    expect(uiStore.selectedSessionIds.size).toBe(0)
+  })
+})

@@ -119,6 +119,101 @@
             <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
             Resuming…
           </button>
+
+          <!-- Issue #1934: Batch selection controls — only shown while a selection is active -->
+          <template v-if="selectedCount > 0">
+            <span class="vr mx-1"></span>
+            <span class="badge bg-primary">{{ selectedCount }} selected</span>
+            <button class="btn btn-sm btn-outline-secondary" @click="uiStore.clearSessionSelection()">Clear</button>
+
+            <!-- Stop Selected: default state -->
+            <button
+              v-if="stopSelectedState === 'default'"
+              class="btn btn-sm btn-outline-danger"
+              :disabled="stoppableSelectedCount === 0"
+              :title="stoppableSelectedCount === 0 ? 'No selected sessions to stop' : `Stop ${stoppableSelectedCount} selected session${stoppableSelectedCount !== 1 ? 's' : ''}`"
+              @click="beginStopSelectedConfirm"
+            >
+              ⏹ Stop Selected
+              <span v-if="stoppableSelectedCount > 0" class="badge bg-light text-danger ms-1">{{ stoppableSelectedCount }}</span>
+            </button>
+
+            <!-- Stop Selected: inline confirmation -->
+            <div
+              v-else-if="stopSelectedState === 'confirming'"
+              class="d-inline-flex align-items-center gap-1 border border-danger rounded px-2 py-1"
+              style="background: rgba(var(--bs-danger-rgb), 0.12);"
+            >
+              <span class="text-danger small">⚠️ Stop {{ stoppableSelectedCount }} selected session{{ stoppableSelectedCount !== 1 ? 's' : '' }}?</span>
+              <button class="btn btn-sm btn-outline-secondary py-0" @click="cancelStopSelected">Cancel</button>
+              <button class="btn btn-sm btn-danger py-0" @click="confirmStopSelected">Confirm Stop Selected</button>
+            </div>
+
+            <!-- Stop Selected: stopping in progress -->
+            <button
+              v-else
+              class="btn btn-sm btn-danger"
+              disabled
+            >
+              <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+              Stopping…
+            </button>
+
+            <!-- Start Selected: default state -->
+            <button
+              v-if="startSelectedState === 'default'"
+              class="btn btn-sm btn-outline-warning"
+              :disabled="startableSelectedCount === 0"
+              :title="startableSelectedCount === 0 ? 'No selected sessions to start' : `Start ${startableSelectedCount} selected session${startableSelectedCount !== 1 ? 's' : ''}`"
+              @click="beginStartSelectedConfirm"
+            >
+              ↻ Start Selected
+              <span v-if="startableSelectedCount > 0" class="badge bg-light text-warning-emphasis ms-1">{{ startableSelectedCount }}</span>
+            </button>
+
+            <!-- Start Selected: inline confirmation with editable batch size -->
+            <div
+              v-else-if="startSelectedState === 'confirming'"
+              class="d-inline-flex align-items-center gap-1 border border-warning rounded px-2 py-1"
+              style="background: rgba(var(--bs-warning-rgb), 0.12);"
+            >
+              <span class="text-warning-emphasis small">Start {{ startableSelectedCount }} session{{ startableSelectedCount !== 1 ? 's' : '' }} in batches of</span>
+              <input
+                type="number"
+                class="form-control form-control-sm py-0"
+                style="width: 4.5rem;"
+                min="1"
+                step="1"
+                v-model.number="startSelectedBatchSizeInput"
+                @click.stop
+                aria-label="Start selected batch size"
+              >
+              <span class="text-warning-emphasis small">delay</span>
+              <input
+                type="number"
+                class="form-control form-control-sm py-0"
+                style="width: 4.5rem;"
+                min="0"
+                step="1"
+                v-model.number="startSelectedBatchDelayInput"
+                @click.stop
+                aria-label="Start selected batch delay in seconds"
+              >
+              <span class="text-warning-emphasis small">s</span>
+              <button class="btn btn-sm btn-outline-secondary py-0" @click="cancelStartSelected">Cancel</button>
+              <button class="btn btn-sm btn-warning py-0" @click="confirmStartSelected">Confirm Start Selected</button>
+            </div>
+
+            <!-- Start Selected: starting in progress -->
+            <button
+              v-else
+              class="btn btn-sm btn-warning"
+              disabled
+            >
+              <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+              Starting…
+            </button>
+          </template>
         </div>
       </div>
     </div>
@@ -580,6 +675,12 @@ const stoppedCount = ref(0)
 const fleetToast = ref(null)
 let fleetToastTimer = null
 
+// Issue #1934: Batch selection controls (Stop Selected / Start Selected)
+const stopSelectedState = ref('default') // 'default' | 'confirming' | 'stopping'
+const startSelectedState = ref('default') // 'default' | 'confirming' | 'starting'
+const startSelectedBatchSizeInput = ref(uiStore.resumeBatchSize)
+const startSelectedBatchDelayInput = ref(uiStore.resumeBatchDelaySeconds)
+
 function setFleetToast(type, message, autoDismissMs = 8000) {
   fleetToast.value = { type, message }
   clearTimeout(fleetToastTimer)
@@ -635,7 +736,11 @@ function applyReconciledStopped(confirmedStopped, processingSnapshot) {
   if (confirmedStopped.length === 0) return
   addToStoppedSet(props.projectId, confirmedStopped)
   const wasProcessing = confirmedStopped.filter(id => processingSnapshot.get(id))
-  setProcessingSet(props.projectId, wasProcessing)
+  // Merge (not overwrite): issue #1934's Stop Selected can write to this same
+  // per-project processingSet concurrently — overwriting would silently drop
+  // whatever it just added.
+  const mergedProcessing = new Set([...getProcessingSet(props.projectId), ...wasProcessing])
+  setProcessingSet(props.projectId, [...mergedProcessing])
   refreshStoppedCount()
 }
 
@@ -675,9 +780,13 @@ async function confirmStop() {
     const failed = result.failed_sessions ?? []
 
     addToStoppedSet(props.projectId, stopped)
-    // Record which stopped sessions were actively processing at halt time
+    // Record which stopped sessions were actively processing at halt time.
+    // Merge (not overwrite): issue #1934's Stop Selected can write to this same
+    // per-project processingSet concurrently — overwriting would silently drop
+    // whatever it just added.
     const wasProcessing = stopped.filter(id => processingSnapshot.get(id))
-    setProcessingSet(props.projectId, wasProcessing)
+    const mergedProcessing = new Set([...getProcessingSet(props.projectId), ...wasProcessing])
+    setProcessingSet(props.projectId, [...mergedProcessing])
     refreshStoppedCount()
 
     if (failed.length === 0) {
@@ -781,6 +890,167 @@ async function confirmResume() {
     setFleetToast('danger', `✗ Resume failed: ${err.message || err}`, 0)
   } finally {
     resumeState.value = 'default'
+  }
+}
+
+// --- Issue #1934: Selection-scoped batch Stop/Start ---
+// Eligibility is derived from the same live projectSessions computed used
+// throughout this file, so it's always recomputed from current sessionStore
+// data at click time rather than a stale snapshot taken at select-time.
+
+const selectedSessions = computed(() =>
+  projectSessions.value.filter(s => uiStore.selectedSessionIds.has(s.session_id))
+)
+
+// Live-pruned count: a session deleted via another UI surface (e.g.
+// DeletedAgentsModal) drops out of projectSessions but stays in the raw
+// uiStore.selectedSessionIds Set until explicitly cleared — deriving the
+// displayed count from selectedSessions (already filtered against live
+// projectSessions) instead of the Set's raw size keeps it accurate.
+const selectedCount = computed(() => selectedSessions.value.length)
+
+const stoppableSelectedSessions = computed(() =>
+  selectedSessions.value.filter(s => s.state?.toUpperCase?.() !== 'TERMINATED')
+)
+
+const startableSelectedSessions = computed(() =>
+  selectedSessions.value.filter(s => {
+    const state = s.state?.toUpperCase?.() || s.state
+    return state !== 'ACTIVE' && state !== 'STARTING'
+  })
+)
+
+const stoppableSelectedCount = computed(() => stoppableSelectedSessions.value.length)
+const startableSelectedCount = computed(() => startableSelectedSessions.value.length)
+
+function beginStopSelectedConfirm() {
+  if (stopSelectedState.value !== 'default' || stoppableSelectedCount.value === 0) return
+  stopSelectedState.value = 'confirming'
+  fleetToast.value = null
+}
+
+function cancelStopSelected() {
+  stopSelectedState.value = 'default'
+}
+
+async function confirmStopSelected() {
+  stopSelectedState.value = 'stopping'
+  fleetToast.value = null
+
+  const targets = stoppableSelectedSessions.value
+  const totalSelected = selectedSessions.value.length
+  const skipped = totalSelected - targets.length
+  const processingSnapshot = new Map(targets.map(s => [s.session_id, !!s.is_processing]))
+
+  try {
+    const settled = await Promise.allSettled(targets.map(s => sessionStore.terminateSession(s.session_id)))
+    const ids = targets.map(s => s.session_id)
+    const succeeded = ids.filter((_, i) => settled[i].status === 'fulfilled')
+    const failed = ids.filter((_, i) => settled[i].status === 'rejected')
+
+    if (succeeded.length > 0) {
+      // Fold into the same stoppedSet/processingSet Stop All uses, so Resume
+      // Sessions remains the single undo regardless of which path stopped a session.
+      addToStoppedSet(props.projectId, succeeded)
+      const wasProcessing = succeeded.filter(id => processingSnapshot.get(id))
+      const mergedProcessing = new Set([...getProcessingSet(props.projectId), ...wasProcessing])
+      setProcessingSet(props.projectId, [...mergedProcessing])
+      refreshStoppedCount()
+    }
+
+    uiStore.clearSessionSelection()
+
+    const notes = []
+    if (skipped > 0) notes.push(`${skipped} already stopped`)
+    if (failed.length > 0) notes.push(`${failed.length} failed`)
+    const suffix = notes.length > 0 ? ` (${notes.join(', ')})` : ''
+    setFleetToast(
+      failed.length > 0 ? 'danger' : 'success',
+      `${failed.length > 0 ? '✗' : '✓'} Stopped ${succeeded.length} of ${totalSelected} selected${suffix}.`
+    )
+  } catch (err) {
+    setFleetToast('danger', `✗ Stop Selected failed: ${err.message || err}`, 0)
+  } finally {
+    stopSelectedState.value = 'default'
+  }
+}
+
+function beginStartSelectedConfirm() {
+  if (startSelectedState.value !== 'default' || startableSelectedCount.value === 0) return
+  startSelectedBatchSizeInput.value = uiStore.resumeBatchSize
+  startSelectedBatchDelayInput.value = uiStore.resumeBatchDelaySeconds
+  startSelectedState.value = 'confirming'
+  fleetToast.value = null
+}
+
+function cancelStartSelected() {
+  startSelectedState.value = 'default'
+}
+
+async function confirmStartSelected() {
+  const batchSize = Math.max(1, parseInt(startSelectedBatchSizeInput.value, 10) || uiStore.resumeBatchSize)
+  const rawDelay = parseInt(startSelectedBatchDelayInput.value, 10)
+  const delaySeconds = Number.isFinite(rawDelay) && rawDelay >= 0
+    ? rawDelay
+    : uiStore.resumeBatchDelaySeconds
+  startSelectedState.value = 'starting'
+  fleetToast.value = null
+
+  const totalSelected = selectedSessions.value.length
+  const toStart = startableSelectedSessions.value.map(s => s.session_id)
+  const skipped = totalSelected - toStart.length
+  const processingSet = getProcessingSet(props.projectId)
+
+  try {
+    const settled = []
+    for (let i = 0; i < toStart.length; i += batchSize) {
+      const chunk = toStart.slice(i, i + batchSize)
+      const chunkSettled = await Promise.allSettled(
+        chunk.map(id =>
+          processingSet.has(id)
+            ? queueStore.enqueueMessage(id, RESUME_MESSAGE, false)
+            : sessionStore.startSession(id)
+        )
+      )
+      settled.push(...chunkSettled)
+
+      const isLastBatch = i + batchSize >= toStart.length
+      if (delaySeconds > 0 && !isLastBatch) {
+        await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000))
+      }
+    }
+
+    const succeeded = toStart.filter((_, i) => settled[i].status === 'fulfilled')
+    const failed = toStart.filter((_, i) => settled[i].status === 'rejected')
+    const succeededSet = new Set(succeeded)
+
+    if (succeeded.length > 0) {
+      // Same shared tracking as Resume Sessions: drop successfully-started ids,
+      // keep failed ones for retry via the existing Resume Sessions control.
+      // Re-read processingSet fresh rather than reusing the pre-loop snapshot —
+      // the batched loop above can span multiple delayed batches, during which
+      // another path (e.g. Stop Selected) may have written new entries that a
+      // stale-snapshot-based overwrite would silently drop.
+      removeFromStoppedSet(props.projectId, succeeded)
+      const remainingProcessing = [...getProcessingSet(props.projectId)].filter(id => !succeededSet.has(id))
+      setProcessingSet(props.projectId, remainingProcessing)
+      refreshStoppedCount()
+    }
+
+    uiStore.clearSessionSelection()
+
+    const notes = []
+    if (skipped > 0) notes.push(`${skipped} already active`)
+    if (failed.length > 0) notes.push(`${failed.length} failed`)
+    const suffix = notes.length > 0 ? ` (${notes.join(', ')})` : ''
+    setFleetToast(
+      failed.length > 0 ? 'danger' : 'success',
+      `${failed.length > 0 ? '✗' : '✓'} Started ${succeeded.length} of ${totalSelected} selected${suffix}.`
+    )
+  } catch (err) {
+    setFleetToast('danger', `✗ Start Selected failed: ${err.message || err}`, 0)
+  } finally {
+    startSelectedState.value = 'default'
   }
 }
 
@@ -1088,6 +1358,12 @@ onMounted(() => {
   // Clear session selection when viewing project overview
   sessionStore.currentSessionId = null
 
+  // Issue #1934: App.vue keys the routed component on route.path, so navigating
+  // between projects remounts this component rather than just updating
+  // props.projectId — the watch() below never fires for that case. Clearing here
+  // too is what actually makes "not preserved across a project switch" true.
+  uiStore.clearSessionSelection()
+
   // Restore stopped set from sessionStorage — read raw count without pruning,
   // since sessions may not be loaded yet when onMounted fires.
   // Pruning happens in refreshStoppedCount() after stop/resume actions.
@@ -1155,6 +1431,9 @@ watch(() => props.projectId, (newId) => {
   sessionStore.currentSessionId = null
   stopState.value = 'default'
   resumeState.value = 'default'
+  stopSelectedState.value = 'default'
+  startSelectedState.value = 'default'
+  uiStore.clearSessionSelection()
   fleetToast.value = null
   clearTimeout(fleetToastTimer)
   const restored = getStoppedSet(newId)

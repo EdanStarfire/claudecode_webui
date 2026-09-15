@@ -83,6 +83,10 @@ export const useUIStore = defineStore('ui', () => {
   // own convention. Not persisted — collapse state resets on reload by design.
   const collapsedMinionNodes = ref(new Set())
 
+  // Issue #1934: Session selection for batch Stop/Start actions in Project Overview.
+  // Not persisted — selection resets on reload/project switch by design.
+  const selectedSessionIds = ref(new Set())
+
   // Mobile detection (reactive to window size)
   const windowWidth = ref(window.innerWidth)
   const isMobile = computed(() => windowWidth.value < 768)
@@ -443,6 +447,23 @@ export const useUIStore = defineStore('ui', () => {
     return collapsedMinionNodes.value.has(minionId)
   }
 
+  // Session selection for batch Stop/Start (issue #1934)
+  function toggleSessionSelection(sessionId) {
+    const next = new Set(selectedSessionIds.value)
+    if (next.has(sessionId)) next.delete(sessionId); else next.add(sessionId)
+    selectedSessionIds.value = next
+  }
+
+  function isSessionSelected(sessionId) {
+    return selectedSessionIds.value.has(sessionId)
+  }
+
+  function clearSessionSelection() {
+    if (selectedSessionIds.value.size > 0) {
+      selectedSessionIds.value = new Set()
+    }
+  }
+
   // Right panel responsive toggle
   function toggleRightPanel() {
     rightPanelVisible.value = !rightPanelVisible.value
@@ -478,6 +499,7 @@ export const useUIStore = defineStore('ui', () => {
     browsingProjectId,
     expandedStacks,
     collapsedMinionNodes,
+    selectedSessionIds,
     windowWidth,
     isMobile,
     autoScrollEnabled,
@@ -519,6 +541,9 @@ export const useUIStore = defineStore('ui', () => {
     collapseAllStacks,
     toggleMinionCollapse,
     isMinionCollapsed,
+    toggleSessionSelection,
+    isSessionSelected,
+    clearSessionSelection,
     toggleRightPanel,
     setRightPanelVisible,
     setAutoScroll,
