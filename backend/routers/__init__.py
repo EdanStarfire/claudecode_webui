@@ -11,6 +11,7 @@ from . import (
     analytics,
     archives,
     audit,
+    client_debug,
     config,
     diff,
     edit_history,
@@ -42,6 +43,7 @@ def register_all(app: FastAPI, webui) -> None:
     """Register all backend domain routers with the FastAPI app."""
     app.include_router(analytics.build_router(webui))
     app.include_router(audit.build_router(webui))
+    app.include_router(client_debug.build_router(webui))
     app.include_router(config.build_router(webui))
     app.include_router(poll.build_router(webui))
     app.include_router(permissions.build_router(webui))

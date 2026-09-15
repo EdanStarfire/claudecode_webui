@@ -5,6 +5,7 @@ import { useSessionStore } from './session'
 import { useTaskStore } from './task'
 import { correlateHooks } from '../utils/hookCorrelation'
 import { getAgentColor, getAssistantRowColor, slugifyAgentName } from '../composables/useAgentColor'
+import { pushDebugEvent, flushDebugBuffer } from '../composables/useDebugBuffer'
 
 /**
  * Message Store - Manages messages and tool calls per session
@@ -756,6 +757,9 @@ export const useMessageStore = defineStore('message', () => {
 
     // Detect restart during real-time
     if (message.type === 'system' && message.metadata?.subtype === 'client_launched') {
+      pushDebugEvent('message', 'tool-tracking-reset', {
+        sessionId, reason: 'restart', openToolCount: openTools.size
+      })
       openTools.forEach(id => {
         markToolUseOrphaned(sessionId, id, 'Session was restarted')
       })
@@ -773,6 +777,9 @@ export const useMessageStore = defineStore('message', () => {
 
     // Detect interrupt during real-time
     if (message.type === 'system' && message.metadata?.subtype === 'interrupt') {
+      pushDebugEvent('message', 'tool-tracking-reset', {
+        sessionId, reason: 'interrupt', openToolCount: openTools.size
+      })
       openTools.forEach(id => {
         markToolUseOrphaned(sessionId, id, 'Session was interrupted')
       })
@@ -873,6 +880,7 @@ export const useMessageStore = defineStore('message', () => {
         buf.collectedTerminalMessages?.some(m => (m.message_id || m.id) === dedupKey)
       )) {
         console.log(`Skipping duplicate deferred terminal message ${dedupKey}`)
+        pushDebugEvent('message', 'dedup-skip-deferred', { sessionId, dedupKey })
         return
       }
       if (!buf.collectedTerminalMessages) buf.collectedTerminalMessages = []
@@ -906,6 +914,9 @@ export const useMessageStore = defineStore('message', () => {
             streaming: false,
           }
           messagesBySession.value = new Map(messagesBySession.value)
+          pushDebugEvent('message', 'placeholder-merge', {
+            sessionId, placeholderKey, branch: 'streaming-active-no-buffer'
+          })
           return
         }
         // Placeholder already finalized — merge terminal's metadata in.
@@ -922,6 +933,9 @@ export const useMessageStore = defineStore('message', () => {
           streaming: false,
         }
         messagesBySession.value = new Map(messagesBySession.value)
+        pushDebugEvent('message', 'placeholder-merge', {
+          sessionId, placeholderKey, branch: 'already-finalized'
+        })
         applyDisplayMetadata(sessionId, message)
         handleRealtimeToolTracking(sessionId, message)
         if (message.timestamp) {
@@ -939,6 +953,8 @@ export const useMessageStore = defineStore('message', () => {
       const existingIndex = messages.findIndex(m => (m.message_id || m.id) === dedupKey)
       if (existingIndex !== -1) {
         console.log(`Skipping duplicate message ${dedupKey} (already exists at index ${existingIndex})`)
+        pushDebugEvent('message', 'dedup-skip-duplicate', { sessionId, dedupKey, existingIndex })
+        flushDebugBuffer('duplicate-detected')
         return
       }
     }

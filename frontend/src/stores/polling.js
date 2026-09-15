@@ -9,6 +9,7 @@ import { useUIStore } from './ui'
 import { useEditHistoryStore } from './editHistory'
 import { notify } from '@/composables/useNotifications'
 import { getAuthToken, api } from '@/utils/api'
+import { pushDebugEvent } from '@/composables/useDebugBuffer'
 
 export const usePollingStore = defineStore('polling', () => {
   // ========== STATE ==========
@@ -97,6 +98,9 @@ export const usePollingStore = defineStore('polling', () => {
             handleUIMessage(event)
           }
         }
+        pushDebugEvent('polling', 'poll-cycle', {
+          stream: 'ui', cursorBefore: uiCursor, cursorAfter: data.next_cursor, generation: myGeneration
+        })
         uiCursor = data.next_cursor
 
       } catch (err) {
@@ -105,6 +109,9 @@ export const usePollingStore = defineStore('polling', () => {
           continue
         }
         console.warn(`[UI poll] Connection error (retry ${uiRetryCount.value + 1}):`, err.message || err)
+        pushDebugEvent('polling', 'poll-error', {
+          stream: 'ui', message: err.message || String(err), retryCount: uiRetryCount.value + 1, generation: myGeneration
+        })
         uiConnected.value = false
         uiRetryCount.value++
         const delay = Math.min(2000 * uiRetryCount.value, 30000)
@@ -161,6 +168,9 @@ export const usePollingStore = defineStore('polling', () => {
             handleSessionMessage(event, sessionId)
           }
         }
+        pushDebugEvent('polling', 'poll-cycle', {
+          stream: 'session', sessionId, cursorBefore: cursor, cursorAfter: data.next_cursor, generation: myGeneration
+        })
         sessionCursors[sessionId] = data.next_cursor
 
       } catch (err) {
@@ -168,6 +178,9 @@ export const usePollingStore = defineStore('polling', () => {
           continue
         }
         console.warn(`[Session poll] Connection error for session ${sessionId} (retry ${sessionRetryCount.value + 1}):`, err.message || err)
+        pushDebugEvent('polling', 'poll-error', {
+          stream: 'session', sessionId, message: err.message || String(err), retryCount: sessionRetryCount.value + 1, generation: myGeneration
+        })
         sessionConnected.value = false
         sessionRetryCount.value++
         const delay = Math.min(2000 * sessionRetryCount.value, 30000)
@@ -277,6 +290,9 @@ export const usePollingStore = defineStore('polling', () => {
     if (!heartbeatMs) return
 
     const stallMs = Date.now() - heartbeatMs
+    pushDebugEvent('polling', 'stall-check', {
+      sessionId: sid, stallMs, thresholdMs: STALL_TIMEOUT_MS, passed: stallMs < STALL_TIMEOUT_MS
+    })
     if (stallMs < STALL_TIMEOUT_MS) return
 
     // Cooldown: prevent heal storms
@@ -292,6 +308,7 @@ export const usePollingStore = defineStore('polling', () => {
     sessionAbortController?.abort()
 
     console.warn(`[stall-heal] Session ${sid} stalled ${Math.round(stallMs / 1000)}s (is_processing=${session.is_processing}); re-syncing`)
+    pushDebugEvent('polling', 'stall-heal-start', { sessionId: sid, stallMs, isProcessing: session.is_processing })
 
     // Step 1: backfill any missed messages via REST (deduplicates by message ID)
     try {
@@ -311,12 +328,14 @@ export const usePollingStore = defineStore('polling', () => {
     // Guard: abort if the user switched sessions during the async operations above
     if (currentSessionId.value !== sid) {
       console.warn(`[stall-heal] Session ${sid} heal aborted — session changed during sync`)
+      pushDebugEvent('polling', 'stall-heal-done', { sessionId: sid, aborted: true })
       return
     }
     await disconnectSession()
     await connectSession(sid)
 
     console.warn(`[stall-heal] Session ${sid} re-synced; resumed polling at cursor ${sessionCursors[sid]}`)
+    pushDebugEvent('polling', 'stall-heal-done', { sessionId: sid, aborted: false, cursor: sessionCursors[sid] })
   }
 
   // ========== PAGE VISIBILITY ==========
@@ -325,6 +344,7 @@ export const usePollingStore = defineStore('polling', () => {
 
     const handler = () => {
       if (document.visibilityState === 'visible') {
+        pushDebugEvent('polling', 'visibility-reconnect', { sessionId: currentSessionId.value })
         uiAbortController?.abort()
         sessionAbortController?.abort()
       }

@@ -358,6 +358,15 @@ def configure_logging(
             'enabled': _log_config['debug_oauth'],
             'console': _log_config['debug_oauth'],
             'level': logging.DEBUG
+        },
+        # Issue #1931: frontend debug-buffer submissions are explicit, rare, user/app-
+        # triggered events (not passive ambient debugging), so this is always enabled —
+        # like 'coordinator' — rather than gated behind a --debug-* flag.
+        'client_debug': {
+            'file': f"{log_dir}/client_debug.log",
+            'enabled': True,
+            'console': False,
+            'level': logging.INFO
         }
     }
 

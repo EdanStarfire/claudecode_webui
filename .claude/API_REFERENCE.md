@@ -121,6 +121,12 @@ Complete REST and WebSocket API reference for Claude WebUI. For backend architec
 | `GET` | `/api/git-status` | Get git status of the project |
 | `POST` | `/api/restart-server` | Restart the backend server (rate-limited) |
 
+### Debug Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/debug/client-buffer` | Submit a frontend debug ring buffer (`session_id`, `browser`, `submitted_at`, `reason`, `events`); logged to `client_debug.log` (issue #1931) |
+
 ### Utility Endpoints
 
 | Method | Path | Description |
