@@ -439,6 +439,10 @@ class SessionCoordinator:
         from backend.mcp_config_manager import McpConfigManager
         self.mcp_config_manager = McpConfigManager(self.data_dir)
 
+        # Hook config manager for global hook configurations (issue #1629)
+        from backend.hook_config_manager import HookConfigManager
+        self.hook_config_manager = HookConfigManager(self.data_dir)
+
         # Provider catalog store — data/providers.json (issue #1465)
         from backend.provider_catalog import ProviderCatalogStore
         self.provider_catalog_store = ProviderCatalogStore(self.data_dir)
@@ -820,6 +824,10 @@ class SessionCoordinator:
             # Load global MCP server configs (issue #676)
             await self.mcp_config_manager.load_configs()
             coord_logger.info("Loaded global MCP server configs")
+
+            # Load global hook configs (issue #1629)
+            await self.hook_config_manager.load_configs()
+            coord_logger.info("Loaded global hook configs")
 
             # Load provider catalog from data/providers.json (issue #1465)
             await self.provider_catalog_store.load()
@@ -1593,6 +1601,23 @@ class SessionCoordinator:
                 "[MCP launch] session=%s servers=%s", session_id, list(mcp_servers.keys())
             )
 
+            # Issue #1629: Attach user-selected global hook configs. Purely additive
+            # against any disk-based .claude/settings.json hooks — bare_mode (which
+            # disables hooks entirely) and setting_sources handling live in ClaudeSDK's
+            # _get_sdk_options(); this code path never reads or modifies setting_sources.
+            hooks_settings: dict | None = None
+            if effective_config.hook_ids:
+                selected_hook_configs = self.hook_config_manager.get_configs_by_ids(
+                    effective_config.hook_ids
+                )
+                hooks_settings = self.hook_config_manager.to_sdk_hooks_payload(
+                    selected_hook_configs
+                ) or None
+                if hooks_settings:
+                    coord_logger.info(
+                        f"Attaching {len(selected_hook_configs)} hook config(s) to session {session_id}"
+                    )
+
             # Merge MCP tools with effective allowed_tools
             all_tools = effective_config.allowed_tools if effective_config.allowed_tools else []
             all_tools = list(set(all_tools + mcp_tools_list))  # Deduplicate
@@ -1981,6 +2006,7 @@ class SessionCoordinator:
                 rate_limit_callback=self._on_rate_limits,
                 resume_session_id=resume_sdk_session,
                 mcp_servers=mcp_servers if mcp_servers else None,
+                hooks_settings=hooks_settings,
                 experimental=self.experimental,
                 stderr_callback=self._create_stderr_callback(session_id),
                 extra_env=_merged_extra_env,

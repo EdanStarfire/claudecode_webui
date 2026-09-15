@@ -578,6 +578,99 @@ class TestClaudeSDK:
         assert not temp_path.exists()
         assert sdk._settings_temp_file is None
 
+    def test_bare_mode_enabled_emits_flag(self, temp_dir, session_id):
+        """Issue #902: bare_mode=True adds extra_args['bare'] = None."""
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(bare_mode=True),
+        )
+        opts = sdk._get_sdk_options()
+        assert "bare" in (opts.extra_args or {})
+
+    def test_bare_mode_disabled_omits_flag(self, temp_dir, session_id):
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(bare_mode=False),
+        )
+        opts = sdk._get_sdk_options()
+        assert "bare" not in (opts.extra_args or {})
+
+    def test_hooks_settings_none_produces_no_hooks_key(self, temp_dir, session_id):
+        """Issue #1629: hook_ids unset (hooks_settings=None) -> no 'hooks' settings key,
+        and no settings temp file at all when nothing else is configured either."""
+        with patch("backend.config_manager.load_config", return_value=_features_config(False)):
+            sdk = ClaudeSDK(
+                session_id=session_id,
+                working_directory=temp_dir,
+                config=SessionConfig(),
+                hooks_settings=None,
+            )
+            opts = sdk._get_sdk_options()
+        assert opts.settings is None
+
+    def test_hooks_settings_merged_into_settings_payload(self, temp_dir, session_id):
+        """Issue #1629: a resolved hooks_settings dict is merged into the settings temp file."""
+        import json
+        from pathlib import Path
+
+        hooks_payload = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo hi"}]}]}}
+        with patch("backend.config_manager.load_config", return_value=_features_config(False)):
+            sdk = ClaudeSDK(
+                session_id=session_id,
+                working_directory=temp_dir,
+                config=SessionConfig(hook_ids=["cfg-1"]),
+                hooks_settings=hooks_payload,
+            )
+            opts = sdk._get_sdk_options()
+
+        assert opts.settings is not None
+        with Path(opts.settings).open() as f:
+            payload = json.load(f)
+        assert payload == hooks_payload
+        sdk._cleanup_settings_temp_file()
+
+    def test_hooks_settings_suppressed_by_bare_mode(self, temp_dir, session_id):
+        """Issue #1629: bare_mode=True suppresses hooks_settings even when set — matches
+        --bare's existing CLI-level suppression of all hooks (disk-based and WebUI)."""
+        hooks_payload = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo hi"}]}]}}
+        with patch("backend.config_manager.load_config", return_value=_features_config(False)):
+            sdk = ClaudeSDK(
+                session_id=session_id,
+                working_directory=temp_dir,
+                config=SessionConfig(hook_ids=["cfg-1"], bare_mode=True),
+                hooks_settings=hooks_payload,
+            )
+            opts = sdk._get_sdk_options()
+
+        assert opts.settings is None
+
+    def test_hooks_settings_never_touches_setting_sources(self, temp_dir, session_id):
+        """Issue #1629 regression guard: injecting hooks must never read or mutate
+        setting_sources — that remains an independent, pre-existing control."""
+        import json
+        from pathlib import Path
+
+        hooks_payload = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo hi"}]}]}}
+        with patch("backend.config_manager.load_config", return_value=_features_config(False)):
+            sdk = ClaudeSDK(
+                session_id=session_id,
+                working_directory=temp_dir,
+                config=SessionConfig(hook_ids=["cfg-1"], setting_sources=["project"]),
+                hooks_settings=hooks_payload,
+            )
+            opts = sdk._get_sdk_options()
+
+        # setting_sources stays exactly what the session config resolved it to —
+        # unchanged and untouched by the hooks injection code path.
+        assert sdk.setting_sources == ["project"]
+        with Path(opts.settings).open() as f:
+            payload = json.load(f)
+        assert "settingSources" not in payload
+        assert "setting_sources" not in payload
+        sdk._cleanup_settings_temp_file()
+
     def test_convert_sdk_message_deferred_tool_use(self, sdk_instance):
         """Test that ResultMessage.deferred_tool_use is serialized to a plain dict."""
         from claude_agent_sdk import DeferredToolUse, ResultMessage

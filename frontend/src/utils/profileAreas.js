@@ -1,7 +1,7 @@
 /**
  * Profile area key constants.
  *
- * Single source of truth for the 6 configuration profile areas used
+ * Single source of truth for the 7 configuration profile areas used
  * across stores, composables, and components. Mirrors the backend's
  * PROFILE_AREAS keys defined in src/config_resolution.py.
  */
@@ -11,6 +11,7 @@ export const PROFILE_AREAS = Object.freeze([
   'permissions',
   'system_prompt',
   'mcp',
+  'hooks',
   'isolation',
   'features',
 ])
@@ -20,6 +21,7 @@ export const PROFILE_AREA_LABELS = Object.freeze({
   permissions: 'Permissions',
   system_prompt: 'System Prompt',
   mcp: 'MCP',
+  hooks: 'Hooks',
   isolation: 'Isolation',
   features: 'Features',
 })

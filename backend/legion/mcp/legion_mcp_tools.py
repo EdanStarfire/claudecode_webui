@@ -984,6 +984,12 @@ class LegionMCPTools:
                 'strict_mcp_config',
                 _pc.get('strict_mcp_config', _SESSION_DEFAULTS['strict_mcp_config']),
             )
+            # Issue #1629: hook_ids resolves from the minion's own template/profile only —
+            # deliberately no `_pc.get(...)` parent-session fallback (unlike mcp_server_ids
+            # above), per the feature's scope note: hooks are never auto-copied from the
+            # parent session; sharing them across minions requires attaching the same hook
+            # config to the child's own template.
+            hook_ids = resolved.get('hook_ids')
 
         except Exception as e:
             legion_logger.error(f"Error applying template: {e}", exc_info=True)
@@ -1037,6 +1043,7 @@ class LegionMCPTools:
                 mcp_server_ids=mcp_server_ids,
                 enable_claudeai_mcp_servers=enable_claudeai_mcp_servers,
                 strict_mcp_config=strict_mcp_config,
+                hook_ids=hook_ids,
                 template_id=template_applied.template_id,
             )
             spawn_result = await self.system.overseer_controller.spawn_minion(

@@ -578,10 +578,55 @@ class TestProfileAreasStructure:
                 seen[field] = area
 
     def test_all_areas_non_empty(self):
-        """All 6 profile areas are non-empty."""
-        assert len(PROFILE_AREAS) == 6
+        """All 7 profile areas are non-empty."""
+        assert len(PROFILE_AREAS) == 7
         for area, fields in PROFILE_AREAS.items():
             assert len(fields) > 0, f"Area '{area}' has no fields"
+
+    def test_hooks_area_has_hook_ids(self):
+        """Issue #1629: hooks area exists and contains exactly hook_ids."""
+        assert PROFILE_AREAS["hooks"] == {"hook_ids"}
+        assert FIELD_TO_AREA["hook_ids"] == "hooks"
+
+
+@pytest.mark.asyncio
+class TestResolveHookIds:
+    """Issue #1629 — hook_ids resolves through the same session > template > profile
+    chain as mcp_server_ids, with no special-cased merge logic."""
+
+    async def test_session_overrides_template_and_profile(self):
+        profile = _make_profile(profile_id="p1", area="hooks", config={"hook_ids": ["profile-hook"]})
+        pm = _make_profile_manager([profile])
+        template = _make_template(
+            hook_ids=["template-hook"],
+            profile_ids={"hooks": "p1"},
+        )
+        session = _make_session(template_id="tmpl-001", hook_ids=["session-hook"])
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm, pm)
+
+        assert result.hook_ids == ["session-hook"]
+
+    async def test_template_used_when_session_unset(self):
+        template = _make_template(hook_ids=["template-hook"])
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm, None)
+
+        assert result.hook_ids == ["template-hook"]
+
+    async def test_profile_fills_in_when_template_area_unset(self):
+        profile = _make_profile(profile_id="p1", area="hooks", config={"hook_ids": ["profile-hook"]})
+        pm = _make_profile_manager([profile])
+        template = _make_template(profile_ids={"hooks": "p1"})
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm, pm)
+
+        assert result.hook_ids == ["profile-hook"]
 
 
 @pytest.mark.asyncio

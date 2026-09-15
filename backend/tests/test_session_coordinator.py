@@ -3533,3 +3533,110 @@ class TestIssue1902ResultErrorHandling:
         assert metadata["error_subtype"] == "error_max_turns"
         assert metadata["error_terminal_reason"] == "max_turns"
         assert metadata["errors"] == ["max turns exceeded"]
+
+
+class TestIssue1629HookInjection:
+    """Issue #1629 — hook_ids resolves into hooks_settings passed to ClaudeSDK,
+    purely additive, gated by bare_mode, never touching setting_sources."""
+
+    @pytest.mark.asyncio
+    async def test_start_session_passes_resolved_hooks_settings(
+        self, temp_coordinator, sample_session_config
+    ):
+        coordinator = temp_coordinator
+        hook_config = await coordinator.hook_config_manager.create_config(
+            name="Audit Logging",
+            hooks=[{
+                "events": ["Stop"],
+                "matcher": None,
+                "enabled": True,
+                "type": "command",
+                "command": "echo hi",
+            }],
+        )
+
+        config = sample_session_config["config"].model_copy(update={"hook_ids": [hook_config.id]})
+        session_id = await coordinator.create_session(
+            session_id=sample_session_config["session_id"],
+            project_id=sample_session_config["project_id"],
+            config=config,
+        )
+
+        captured = {}
+
+        def factory(*args, **kwargs):
+            captured.update(kwargs)
+            mock_sdk = AsyncMock()
+            mock_sdk.start.return_value = True
+            mock_sdk.is_running.return_value = False
+            return mock_sdk
+
+        coordinator.set_sdk_factory(factory)
+
+        await coordinator.start_session(session_id)
+
+        assert captured.get("hooks_settings") == {
+            "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo hi"}]}]}
+        }
+
+    @pytest.mark.asyncio
+    async def test_start_session_hooks_settings_none_when_unset(
+        self, temp_coordinator, sample_session_config
+    ):
+        """No hook_ids configured -> hooks_settings passed to ClaudeSDK is None."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        captured = {}
+
+        def factory(*args, **kwargs):
+            captured.update(kwargs)
+            mock_sdk = AsyncMock()
+            mock_sdk.start.return_value = True
+            mock_sdk.is_running.return_value = False
+            return mock_sdk
+
+        coordinator.set_sdk_factory(factory)
+
+        await coordinator.start_session(session_id)
+
+        assert captured.get("hooks_settings") is None
+
+    @pytest.mark.asyncio
+    async def test_start_session_hooks_settings_skips_disabled_config(
+        self, temp_coordinator, sample_session_config
+    ):
+        """A disabled global hook config resolves to no hooks_settings at all."""
+        coordinator = temp_coordinator
+        hook_config = await coordinator.hook_config_manager.create_config(
+            name="Disabled Hook",
+            enabled=False,
+            hooks=[{
+                "events": ["Stop"],
+                "enabled": True,
+                "type": "command",
+                "command": "echo hi",
+            }],
+        )
+
+        config = sample_session_config["config"].model_copy(update={"hook_ids": [hook_config.id]})
+        session_id = await coordinator.create_session(
+            session_id=sample_session_config["session_id"],
+            project_id=sample_session_config["project_id"],
+            config=config,
+        )
+
+        captured = {}
+
+        def factory(*args, **kwargs):
+            captured.update(kwargs)
+            mock_sdk = AsyncMock()
+            mock_sdk.start.return_value = True
+            mock_sdk.is_running.return_value = False
+            return mock_sdk
+
+        coordinator.set_sdk_factory(factory)
+
+        await coordinator.start_session(session_id)
+
+        assert captured.get("hooks_settings") is None

@@ -129,6 +129,11 @@ const routes = [
     component: SettingsLayout
   },
   {
+    path: '/settings/hooks',
+    name: 'settings-hooks',
+    component: SettingsLayout
+  },
+  {
     path: '/settings/pricing',
     name: 'settings-pricing',
     component: SettingsLayout

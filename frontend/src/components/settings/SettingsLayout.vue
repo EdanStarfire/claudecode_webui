@@ -56,6 +56,7 @@ import ApplicationPricingSection from './sections/ApplicationPricingSection.vue'
 import ApplicationNotifsSection from './sections/ApplicationNotifsSection.vue'
 import ApplicationReadAloudSection from './sections/ApplicationReadAloudSection.vue'
 import LibraryMcpServersSection from './sections/LibraryMcpServersSection.vue'
+import LibraryHooksSection from './sections/LibraryHooksSection.vue'
 import LibraryProvidersSection from './sections/LibraryProvidersSection.vue'
 import LibraryTemplatesSection from './sections/LibraryTemplatesSection.vue'
 import LibraryProfilesSection from './sections/LibraryProfilesSection.vue'
@@ -67,6 +68,7 @@ import SecretGeneralSection from './sections/SecretGeneralSection.vue'
 import ModelTuningSection from './sections/ModelTuningSection.vue'
 import ToolsPermissionsSection from './sections/ToolsPermissionsSection.vue'
 import McpServersSection from './sections/McpServersSection.vue'
+import HooksSection from './sections/HooksSection.vue'
 import FeaturesSection from './sections/FeaturesSection.vue'
 import SystemPromptSection from './sections/SystemPromptSection.vue'
 import IsolationSection from './sections/IsolationSection.vue'
@@ -91,6 +93,7 @@ const EDIT_SECTION_MAP = {
   'model-tuning':      ModelTuningSection,
   'tools-permissions': ToolsPermissionsSection,
   'mcp-servers':       McpServersSection,
+  'hooks':             HooksSection,
   'features':          FeaturesSection,
   'system-prompt':     SystemPromptSection,
   'isolation':         IsolationSection,
@@ -113,6 +116,7 @@ const sectionComponent = computed(() => {
     case '/settings/notifications': return ApplicationNotifsSection
     case '/settings/read-aloud':    return ApplicationReadAloudSection
     case '/settings/mcp-servers':   return LibraryMcpServersSection
+    case '/settings/hooks':         return LibraryHooksSection
     case '/settings/providers':     return LibraryProvidersSection
     case '/settings/templates':     return LibraryTemplatesSection
     case '/settings/profiles':      return LibraryProfilesSection

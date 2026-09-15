@@ -230,6 +230,23 @@ class TestPatchSession:
         resp = await client.get(f"/api/sessions/{sid}")
         assert resp.json()["session"]["config"].get("model") == "opus"
 
+    async def test_patch_hook_ids(self, api_integration_env):
+        """Issue #1629: flat `hook_ids` field on PATCH /api/sessions/{id} persists,
+        mirroring the existing mcp_server_ids flat-field pattern."""
+        create_project = api_integration_env["create_test_project"]
+        create_session = api_integration_env["create_test_session"]
+        client = api_integration_env["client"]
+
+        project = await create_project("Hook Ids Patch Test")
+        session = await create_session(project["project_id"], "Hookable")
+        sid = session["session_id"]
+
+        resp = await client.patch(f"/api/sessions/{sid}", json={"hook_ids": ["cfg-1", "cfg-2"]})
+        assert resp.status_code == 200
+
+        resp = await client.get(f"/api/sessions/{sid}")
+        assert resp.json()["session"]["config"].get("hook_ids") == ["cfg-1", "cfg-2"]
+
     async def test_patch_role(self, api_integration_env):
         create_project = api_integration_env["create_test_project"]
         create_session = api_integration_env["create_test_session"]

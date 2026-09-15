@@ -82,6 +82,7 @@ const PROFILE_AREAS = [
   { key: 'permissions',   label: 'Permissions' },
   { key: 'system_prompt', label: 'System Prompt' },
   { key: 'mcp',           label: 'MCP Servers' },
+  { key: 'hooks',         label: 'Hooks' },
   { key: 'isolation',     label: 'Isolation' },
   { key: 'features',      label: 'Features' },
 ]

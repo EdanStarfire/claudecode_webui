@@ -350,6 +350,7 @@ const PROFILE_AREAS = [
   { key: 'permissions',   label: 'Permissions' },
   { key: 'system_prompt', label: 'System Prompt' },
   { key: 'mcp',           label: 'MCP Servers' },
+  { key: 'hooks',         label: 'Hooks' },
   { key: 'isolation',     label: 'Isolation' },
   { key: 'features',      label: 'Features' },
 ]
@@ -358,6 +359,7 @@ const AREA_TO_SECTION = {
   model:         'model-tuning',
   permissions:   'tools-permissions',
   mcp:           'mcp-servers',
+  hooks:         'hooks',
   features:      'features',
   system_prompt: 'system-prompt',
   isolation:     'isolation',

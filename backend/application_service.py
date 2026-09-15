@@ -463,6 +463,45 @@ class ApplicationService:
         config = await self.coordinator.mcp_config_manager.get_config(config_id)
         return config.to_dict() if config else None
 
+    # ========== Hook configs (issue #1629) ==========
+
+    async def list_hook_configs(self, limit: int = 100, offset: int = 0) -> dict:
+        configs = await self.coordinator.hook_config_manager.list_configs()
+        all_configs = [c.to_dict() for c in configs]
+        total = len(all_configs)
+        sliced = all_configs[offset : offset + limit]
+        return {
+            "configs": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+        }
+
+    async def create_hook_config(
+        self,
+        name: str,
+        enabled: bool = True,
+        hooks: list[dict] | None = None,
+    ) -> dict:
+        config = await self.coordinator.hook_config_manager.create_config(
+            name=name,
+            enabled=enabled,
+            hooks=hooks or [],
+        )
+        return config.to_dict()
+
+    async def get_hook_config(self, config_id: str) -> dict | None:
+        config = await self.coordinator.hook_config_manager.get_config(config_id)
+        return config.to_dict() if config else None
+
+    async def update_hook_config(self, config_id: str, **kwargs) -> dict | None:
+        config = await self.coordinator.hook_config_manager.update_config(config_id, **kwargs)
+        return config.to_dict() if config else None
+
+    async def delete_hook_config(self, config_id: str) -> bool:
+        return await self.coordinator.hook_config_manager.delete_config(config_id)
+
     async def update_mcp_config(self, config_id: str, **kwargs) -> dict | None:
         config = await self.coordinator.mcp_config_manager.update_config(
             config_id,
