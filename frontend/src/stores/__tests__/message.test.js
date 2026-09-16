@@ -875,6 +875,261 @@ describe('Issue #1917: reassembly guard idempotency (redelivery hardening)', () 
   })
 })
 
+describe('Issue #1945: buffer-finalized-on-replace (no dropped turns)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('requestAnimationFrame', () => 1)
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('a new turn message_start finalizes the previous turn\'s collected-but-unspliced terminal instead of dropping it', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1945-a'
+    const ID1 = 'msg_1945_a_1'
+    const ID2 = 'msg_1945_a_2'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID1 } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'turn one' } }))
+    // Terminal AM for turn 1 arrives but message_stop for turn 1 never does — a busy overseer
+    // session firing rapid-fire turns can stack a new message_start before that happens.
+    store.addMessage(SID, {
+      type: 'assistant',
+      message_id: 'am-1945-a-1-uuid',
+      content: 'turn one final',
+      metadata: { message_id: ID1, has_thinking: false, thinking_content: '', has_tool_uses: false, tool_uses: [] },
+    })
+
+    // New turn starts before turn 1 ever got its own message_stop.
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID2 } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'turn two' } }))
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    const msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(2)
+    expect(msgs[0].content).toBe('turn one final')
+    expect(msgs[0].streaming).toBe(false)
+    expect(msgs[1].content).toBe('turn two')
+    expect(msgs[1].streaming).toBe(false)
+  })
+
+  it('three or more turns stacking back-to-back without any message_stop in between all remain visible, in order', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1945-b'
+    const ID1 = 'msg_1945_b_1'
+    const ID2 = 'msg_1945_b_2'
+    const ID3 = 'msg_1945_b_3'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID1 } }))
+    store.addMessage(SID, {
+      type: 'assistant', message_id: 'am-1945-b-1-uuid', content: 'first',
+      metadata: { message_id: ID1, has_thinking: false, thinking_content: '', has_tool_uses: false, tool_uses: [] },
+    })
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID2 } }))
+    store.addMessage(SID, {
+      type: 'assistant', message_id: 'am-1945-b-2-uuid', content: 'second',
+      metadata: { message_id: ID2, has_thinking: false, thinking_content: '', has_tool_uses: false, tool_uses: [] },
+    })
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID3 } }))
+    store.addMessage(SID, {
+      type: 'assistant', message_id: 'am-1945-b-3-uuid', content: 'third',
+      metadata: { message_id: ID3, has_thinking: false, thinking_content: '', has_tool_uses: false, tool_uses: [] },
+    })
+
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    const msgs = store.messagesBySession.get(SID)
+    expect(msgs.map(m => m.content)).toEqual(['first', 'second', 'third'])
+    expect(msgs.every(m => m.streaming === false)).toBe(true)
+  })
+
+  it('interrupt arriving with a collected-but-unspliced terminal AM pending still shows that terminal (not just clears the streaming flag)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1945-c'
+    const ID1 = 'msg_1945_c_1'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID1 } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'partial' } }))
+    store.addMessage(SID, {
+      type: 'assistant', message_id: 'am-1945-c-1-uuid', content: 'cut off but complete',
+      metadata: { message_id: ID1, has_thinking: false, thinking_content: '', has_tool_uses: false, tool_uses: [] },
+    })
+
+    // Interrupt cuts the turn off before message_stop ever arrives.
+    store.addMessage(SID, { type: 'system', metadata: { subtype: 'interrupt' } })
+
+    const msgs = store.messagesBySession.get(SID)
+    const finalTurn = msgs.find(m => m.message_id === 'am-1945-c-1-uuid')
+    expect(finalTurn).toBeTruthy()
+    expect(finalTurn.content).toBe('cut off but complete')
+    expect(finalTurn.streaming).toBe(false)
+  })
+
+  it('restart (client_launched) arriving with a collected-but-unspliced terminal AM pending still shows that terminal', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1945-c2'
+    const ID1 = 'msg_1945_c2_1'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID1 } }))
+    store.addMessage(SID, {
+      type: 'assistant', message_id: 'am-1945-c2-1-uuid', content: 'cut off by restart',
+      metadata: { message_id: ID1, has_thinking: false, thinking_content: '', has_tool_uses: false, tool_uses: [] },
+    })
+
+    store.addMessage(SID, { type: 'system', metadata: { subtype: 'client_launched' } })
+
+    const msgs = store.messagesBySession.get(SID)
+    const finalTurn = msgs.find(m => m.message_id === 'am-1945-c2-1-uuid')
+    expect(finalTurn).toBeTruthy()
+    expect(finalTurn.content).toBe('cut off by restart')
+    expect(finalTurn.streaming).toBe(false)
+  })
+
+  it('loadMessages() racing an active buffer merges its collected terminal onto the end when history does not already contain it', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1945-d'
+    const ID1 = 'msg_1945_d_1'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID1 } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'live' } }))
+    store.addMessage(SID, {
+      type: 'assistant', message_id: 'am-1945-d-1-uuid', content: 'live turn complete',
+      metadata: { message_id: ID1, has_thinking: false, thinking_content: '', has_tool_uses: false, tool_uses: [] },
+    })
+
+    apiMock.get.mockResolvedValue({
+      messages: [{ type: 'user', content: 'earlier history', message_id: 'hist-1', timestamp: 1 }],
+      total_count: 1,
+      has_more: false,
+      event_cursor: 5,
+    })
+
+    await store.loadMessages(SID)
+
+    const msgs = store.messagesBySession.get(SID)
+    expect(msgs.map(m => m.message_id)).toEqual(['hist-1', 'am-1945-d-1-uuid'])
+    expect(msgs[1].content).toBe('live turn complete')
+    expect(msgs[1].streaming).toBe(false)
+  })
+
+  it('loadMessages() racing an active buffer does not duplicate the collected terminal when history already contains it', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1945-e'
+    const ID1 = 'msg_1945_e_1'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID1 } }))
+    store.addMessage(SID, {
+      type: 'assistant', message_id: 'am-1945-e-1-uuid', content: 'already persisted',
+      metadata: { message_id: ID1, has_thinking: false, thinking_content: '', has_tool_uses: false, tool_uses: [] },
+    })
+
+    // The freshly-fetched history already has this same turn (backend had already persisted it).
+    apiMock.get.mockResolvedValue({
+      messages: [{ type: 'assistant', content: 'already persisted', message_id: 'am-1945-e-1-uuid', timestamp: 1 }],
+      total_count: 1,
+      has_more: false,
+      event_cursor: 5,
+    })
+
+    await store.loadMessages(SID)
+
+    const msgs = store.messagesBySession.get(SID)
+    expect(msgs.filter(m => m.message_id === 'am-1945-e-1-uuid').length).toBe(1)
+  })
+
+  it('loadMessages() racing a still-open turn (no terminal collected yet) re-appends the flushed placeholder so later deltas/message_stop keep resolving', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1945-f'
+    const ID1 = 'msg_1945_f_1'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID1 } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'partial ' } }))
+
+    apiMock.get.mockResolvedValue({
+      messages: [{ type: 'user', content: 'earlier history', message_id: 'hist-1', timestamp: 1 }],
+      total_count: 1,
+      has_more: false,
+      event_cursor: 5,
+    })
+
+    await store.loadMessages(SID)
+
+    let msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(2)
+    expect(msgs[1].message_id).toBe(ID1)
+    expect(msgs[1].streaming).toBe(true)
+    expect(msgs[1].content).toBe('partial ')
+
+    // Later deltas and the eventual message_stop must still resolve against the reloaded array.
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'response' } }))
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(2)
+    expect(msgs[1].content).toBe('partial response')
+    expect(msgs[1].streaming).toBe(false)
+  })
+
+  it('regression guard: normal single-turn, non-overlapping streaming is unaffected by the finalize-on-replace changes', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1945-g'
+    const ID1 = 'msg_1945_g_1'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID1 } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'hello ' } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'world' } }))
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    const msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].content).toBe('hello world')
+    expect(msgs[0].streaming).toBe(false)
+  })
+
+  it('review fix: interrupt finalizing a buffer with a collected tool_uses terminal does not clobber activeToolUses via reentrant handleRealtimeToolTracking', async () => {
+    // _stopStreamingPlaceholder (called from within handleRealtimeToolTracking's interrupt
+    // branch) now delegates to _finalizeStreamingBuffer, which — for a spliced-in terminal —
+    // calls handleRealtimeToolTracking again as a side effect (mirroring message_stop's
+    // pre-existing behavior). When this is the SESSION'S FIRST tool-tracking event (no existing
+    // activeToolUses entry yet), the outer call's local `openTools` and the reentrant inner
+    // call's local `openTools` used to become two different Set objects, and the outer call's
+    // trailing `activeToolUses.value.set(sessionId, openTools)` would clobber whatever the inner
+    // (reentrant) call had just registered — silently dropping the newly-registered tool_use.
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1945-h'
+    const ID1 = 'msg_1945_h_1'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID1 } }))
+    store.addMessage(SID, {
+      type: 'assistant',
+      message_id: 'am-1945-h-1-uuid',
+      content: 'spawning agent',
+      metadata: {
+        message_id: ID1, has_thinking: false, thinking_content: '',
+        has_tool_uses: true, tool_uses: [{ id: 'tool-use-h-1', name: 'spawn_minion', input: {} }],
+      },
+    })
+
+    // No prior activeToolUses entry exists for SID at all — this is the session's first
+    // tool-tracking event, and it arrives as the interrupt itself.
+    store.addMessage(SID, { type: 'system', metadata: { subtype: 'interrupt' } })
+
+    expect(store.activeToolUses.get(SID)?.has('tool-use-h-1')).toBe(true)
+  })
+})
+
 describe('addMessage metadata accumulation across same-message_id frames (#1765 confirmed root cause)', () => {
   // Reproduces a real user-provided repro (messages.jsonl from a live session): a single
   // Anthropic assistant message (one message_id) dispatching a run_in_background Task/Agent

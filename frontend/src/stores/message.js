@@ -243,6 +243,40 @@ export const useMessageStore = defineStore('message', () => {
         regularMessages.push(message)
       })
 
+      // Issue #1945: a live streaming buffer may exist for this session if a reselect/reload
+      // races an in-flight turn (e.g. opening an already-streaming session for the first time).
+      // Finalize it against the CURRENT (pre-replace) array first so any collected-but-unspliced
+      // terminal content is captured, then merge whatever the freshly-fetched history doesn't
+      // already contain onto the end of regularMessages, instead of blindly overwriting and
+      // orphaning the buffer — message_stop would otherwise look for buf.messageId in the new
+      // array, never find it, and silently drop that turn's content and every subsequent delta.
+      if (_deltaBuffers.has(sessionId)) {
+        const prevBuf = _deltaBuffers.get(sessionId)
+        const hadPendingDeltas = !!(prevBuf.pendingText || prevBuf.pendingThinking)
+        const { finalized, stillStreamingPlaceholder } =
+          _finalizeStreamingBuffer(sessionId, { keepOpenIfStreaming: true })
+        const collectedCount = finalized ? finalized.length : 0
+        pushDebugEvent('message', 'buffer-finalized-on-replace', {
+          sessionId, reason: 'loadMessages-reload-race', hadPendingDeltas, collectedCount
+        })
+        if (collectedCount > 0) flushDebugBuffer('buffer-loss-prevented')
+
+        if (finalized && finalized.length > 0) {
+          // Dedup by message_id/id, mirroring the merge pattern syncMessages() already uses.
+          const existingKeys = new Set(regularMessages.map(m => m.message_id || m.id).filter(Boolean))
+          for (const m of finalized) {
+            const key = m.message_id || m.id
+            if (key && existingKeys.has(key)) continue
+            regularMessages.push(m)
+            if (key) existingKeys.add(key)
+          }
+        } else if (stillStreamingPlaceholder) {
+          // Turn is still genuinely open (no terminal collected yet) — re-append the flushed
+          // placeholder so later deltas/message_stop keep resolving against this reloaded array.
+          regularMessages.push(stillStreamingPlaceholder)
+        }
+      }
+
       // Store only regular messages (tool_call messages are handled separately)
       messagesBySession.value.set(sessionId, regularMessages)
 
@@ -735,6 +769,14 @@ export const useMessageStore = defineStore('message', () => {
    */
   function handleRealtimeToolTracking(sessionId, message) {
     const openTools = activeToolUses.value.get(sessionId) || new Set()
+    // Issue #1945 review fix: register immediately, not just at the end — the interrupt/restart
+    // branches below call _stopStreamingPlaceholder, which can now reentrantly call this same
+    // function (via _finalizeStreamingBuffer's side effects on a newly-spliced terminal message).
+    // If no entry existed yet for this session, that nested call would otherwise build its own
+    // separate Set() (since this call hasn't written `openTools` back yet), and this call's own
+    // trailing `.set()` at the end would then clobber whatever the nested call just registered.
+    // Registering the same Set object up front means both calls share and mutate one Set.
+    activeToolUses.value.set(sessionId, openTools)
 
     // Track new tool uses
     if (message.type === 'assistant' && message.metadata?.tool_uses) {
@@ -771,8 +813,8 @@ export const useMessageStore = defineStore('message', () => {
           : new Date(message.timestamp).getTime() / 1000
         launchTimestampBySession.value.set(sessionId, ts)
       }
-      // Issue #1486: cancel any in-flight streaming placeholder
-      _stopStreamingPlaceholder(sessionId)
+      // Issue #1486/#1945: finalize (not just cancel) any in-flight streaming placeholder
+      _stopStreamingPlaceholder(sessionId, 'restart')
     }
 
     // Detect interrupt during real-time
@@ -784,8 +826,9 @@ export const useMessageStore = defineStore('message', () => {
         markToolUseOrphaned(sessionId, id, 'Session was interrupted')
       })
       openTools.clear()
-      // Issue #1486: flush pending deltas and stop streaming caret
-      _stopStreamingPlaceholder(sessionId)
+      // Issue #1486/#1945: flush pending deltas and finalize (splice collected terminal) instead
+      // of just stopping the streaming caret
+      _stopStreamingPlaceholder(sessionId, 'interrupt')
     }
 
     activeToolUses.value.set(sessionId, openTools)
@@ -1804,6 +1847,23 @@ export const useMessageStore = defineStore('message', () => {
     const openBuf = _deltaBuffers.get(sessionId)
     if (openBuf && openBuf.messageId === messageId) return
 
+    // Issue #1945: a previous turn's buffer can still be registered here if turns stack up
+    // faster than message_stop is processed (e.g. a busy overseer session firing rapid-fire
+    // turns) — finalize it (flush pending deltas + splice any collected terminal) instead of
+    // silently dropping it when _deltaBuffers.set() below overwrites the Map entry. Because this
+    // finalizes exactly one buffer at a time, any number of stacked turns resolves correctly —
+    // each new turn's arrival finalizes precisely the one turn ahead of it.
+    if (_deltaBuffers.has(sessionId)) {
+      const prevBuf = _deltaBuffers.get(sessionId)
+      const hadPendingDeltas = !!(prevBuf.pendingText || prevBuf.pendingThinking)
+      const { finalized } = _finalizeStreamingBuffer(sessionId)
+      const collectedCount = finalized ? finalized.length : 0
+      pushDebugEvent('message', 'buffer-finalized-on-replace', {
+        sessionId, reason: 'new-turn-message-start', hadPendingDeltas, collectedCount
+      })
+      if (collectedCount > 0) flushDebugBuffer('buffer-loss-prevented')
+    }
+
     messages.push({
       id: messageId,
       message_id: messageId,
@@ -1848,21 +1908,110 @@ export const useMessageStore = defineStore('message', () => {
     messagesBySession.value = new Map(messagesBySession.value)
   }
 
-  function _stopStreamingPlaceholder(sessionId) {
+  /**
+   * Issue #1945: shared finalize logic for whatever streaming buffer is currently registered
+   * for a session — flush pending deltas and splice in any collected terminal message(s),
+   * exactly as message_stop already did inline (extracted here unchanged so the existing
+   * single-turn, non-overlapping case has no behavior change). Callers that are about to
+   * invalidate/replace a buffer (a new turn's message_start, an interrupt/restart, or a
+   * session reselect/reload racing a live stream) call this first instead of discarding
+   * whatever the buffer had collected.
+   *
+   * By default the buffer is treated as truly finished and removed from _deltaBuffers. Pass
+   * keepOpenIfStreaming: true (used only by loadMessages' reload-race handling) to leave the
+   * buffer registered — with its placeholder returned still `streaming: true` — when no
+   * terminal message was ever collected, so later deltas/message_stop keep resolving correctly
+   * instead of silently no-op'ing once the array they were targeting gets replaced.
+   *
+   * Returns { finalized, stillStreamingPlaceholder }:
+   * - finalized: array of the message(s) now sitting at the placeholder's former position
+   *   (splice result, terminal content merged in), or [] if a stale duplicate placeholder was
+   *   simply removed, or null if there was nothing to finalize.
+   * - stillStreamingPlaceholder: the (flushed) placeholder object, still `streaming: true`,
+   *   when keepOpenIfStreaming applied; otherwise null.
+   */
+  function _finalizeStreamingBuffer(sessionId, { keepOpenIfStreaming = false } = {}) {
     const buf = _deltaBuffers.get(sessionId)
-    if (!buf) return
+    if (!buf) return { finalized: null, stillStreamingPlaceholder: null }
+
     if (buf.rafHandle) { cancelAnimationFrame(buf.rafHandle); buf.rafHandle = null }
     _flushDeltaBuffer(sessionId)
-    // Clear streaming flag so the caret disappears
+
     const messages = messagesBySession.value.get(sessionId)
+    let finalized = null
+    let stillStreamingPlaceholder = null
+
     if (messages) {
       const idx = messages.findIndex(m => m.message_id === buf.messageId)
-      if (idx >= 0) {
-        messages[idx] = { ...messages[idx], streaming: false }
-        messagesBySession.value = new Map(messagesBySession.value)
+      if (idx >= 0 && messages[idx].streaming) {
+        // Issue #1917 safety net: drop any collected terminal that already exists elsewhere in
+        // the list (or is duplicated within this same batch) before splicing, so a redelivered
+        // batch can't double-commit a visible message.
+        const collected = buf.collectedTerminalMessages || []
+        const seenKeys = new Set()
+        const toSplice = collected.filter(m => {
+          const key = m.message_id || m.id
+          if (!key) return true
+          if (seenKeys.has(key) || messages.some((existing, i) => i !== idx && (existing.message_id || existing.id) === key)) {
+            return false
+          }
+          seenKeys.add(key)
+          return true
+        })
+
+        if (toSplice.length > 0) {
+          const finalizedEntries = toSplice.map(m => ({ ...m, streaming: false }))
+          messages.splice(idx, 1, ...finalizedEntries)
+          // Issue #1614: apply side effects skipped by the generalized defer in addMessage.
+          finalizedEntries.forEach(m => {
+            if (m.timestamp) lastReceivedTimestamp.value.set(sessionId, m.timestamp)
+            applyDisplayMetadata(sessionId, m)
+            handleRealtimeToolTracking(sessionId, m)
+          })
+          finalized = finalizedEntries
+          messagesBySession.value = new Map(messagesBySession.value)
+        } else if (
+          collected.length > 0 ||
+          messages.some((existing, i) => i !== idx && existing.metadata?.message_id === buf.messageId)
+        ) {
+          // Issue #1917: this turn's real terminal already exists elsewhere in the list —
+          // remove the now-superfluous placeholder instead of leaving a stale bubble behind.
+          messages.splice(idx, 1)
+          finalized = []
+          messagesBySession.value = new Map(messagesBySession.value)
+        } else if (keepOpenIfStreaming) {
+          // Genuinely still streaming (no terminal ever collected) — the caller wants to
+          // preserve that instead of prematurely ending the turn.
+          stillStreamingPlaceholder = messages[idx]
+        } else {
+          // No terminal AM collected — just stop the streaming caret.
+          messages[idx] = { ...messages[idx], streaming: false }
+          finalized = [messages[idx]]
+          messagesBySession.value = new Map(messagesBySession.value)
+        }
       }
     }
-    _deltaBuffers.delete(sessionId)
+
+    if (!stillStreamingPlaceholder) {
+      _deltaBuffers.delete(sessionId)
+    }
+
+    return { finalized, stillStreamingPlaceholder }
+  }
+
+  function _stopStreamingPlaceholder(sessionId, reason = 'stop-streaming-placeholder') {
+    if (!_deltaBuffers.has(sessionId)) return
+    const prevBuf = _deltaBuffers.get(sessionId)
+    const hadPendingDeltas = !!(prevBuf.pendingText || prevBuf.pendingThinking)
+    // Issue #1945: delegate to the shared finalize so a terminal message collected just before
+    // an interrupt/restart gets spliced in instead of dropped (previously this only flushed
+    // pending deltas and cleared the streaming flag, never checking collectedTerminalMessages).
+    const { finalized } = _finalizeStreamingBuffer(sessionId)
+    const collectedCount = finalized ? finalized.length : 0
+    pushDebugEvent('message', 'buffer-finalized-on-replace', {
+      sessionId, reason, hadPendingDeltas, collectedCount
+    })
+    if (collectedCount > 0) flushDebugBuffer('buffer-loss-prevented')
   }
 
   function handleAssistantDelta(sessionId, data) {
@@ -1899,59 +2048,9 @@ export const useMessageStore = defineStore('message', () => {
       }
 
       case 'message_stop': {
-        const buf = _deltaBuffers.get(sessionId)
-        if (buf) {
-          if (buf.rafHandle) { cancelAnimationFrame(buf.rafHandle); buf.rafHandle = null }
-          _flushDeltaBuffer(sessionId)
-          // Issue #1601: replace placeholder with collected terminal AMs via splice so each
-          // AM becomes its own bubble, matching the page-load (JSONL) bubble layout exactly.
-          const messages = messagesBySession.value.get(sessionId)
-          if (messages) {
-            const idx = messages.findIndex(m => m.message_id === buf.messageId)
-            if (idx >= 0 && messages[idx].streaming) {
-              // Issue #1917 safety net: drop any collected terminal that already exists
-              // elsewhere in the list (or is duplicated within this same batch) before
-              // splicing, so a redelivered batch can't double-commit a visible message.
-              const collected = buf.collectedTerminalMessages || []
-              const seenKeys = new Set()
-              const toSplice = collected.filter(m => {
-                const key = m.message_id || m.id
-                if (!key) return true
-                if (seenKeys.has(key) || messages.some((existing, i) => i !== idx && (existing.message_id || existing.id) === key)) {
-                  return false
-                }
-                seenKeys.add(key)
-                return true
-              })
-              if (toSplice.length > 0) {
-                messages.splice(idx, 1, ...toSplice.map(m => ({ ...m, streaming: false })))
-                // Issue #1614: apply side effects skipped by the generalized defer in addMessage.
-                toSplice.forEach(m => {
-                  if (m.timestamp) lastReceivedTimestamp.value.set(sessionId, m.timestamp)
-                  applyDisplayMetadata(sessionId, m)
-                  handleRealtimeToolTracking(sessionId, m)
-                })
-              } else if (
-                collected.length > 0 ||
-                messages.some((existing, i) => i !== idx && existing.metadata?.message_id === buf.messageId)
-              ) {
-                // Issue #1917: this turn's real terminal already exists elsewhere in the list —
-                // either every collected terminal was filtered above as a pre-existing duplicate,
-                // or none was ever collected because addMessage()'s own dedup check (message.js
-                // ~865) blocked it at push time (e.g. a concurrent syncMessages() REST backfill
-                // already inserted it while this buffer was still open). Either way, remove the
-                // now-superfluous placeholder instead of leaving a stale, never-updated bubble
-                // (empty or partial streamed content) behind.
-                messages.splice(idx, 1)
-              } else {
-                // No terminal AM collected — just stop the streaming caret
-                messages[idx] = { ...messages[idx], streaming: false }
-              }
-              messagesBySession.value = new Map(messagesBySession.value)
-            }
-          }
-          _deltaBuffers.delete(sessionId)
-        }
+        // Issue #1601/#1614/#1917 splice/flush behavior now lives in the shared
+        // _finalizeStreamingBuffer() helper (extracted unchanged for issue #1945).
+        _finalizeStreamingBuffer(sessionId)
         break
       }
     }
@@ -1979,8 +2078,9 @@ export const useMessageStore = defineStore('message', () => {
 
         if (wasActive && isInactive) {
           clearOrphanedToolUses(newState.id, 'Session was terminated')
-          // Issue #1486: stop any in-flight streaming placeholder so the caret doesn't linger
-          _stopStreamingPlaceholder(newState.id)
+          // Issue #1486/#1945: finalize any in-flight streaming placeholder so the caret doesn't
+          // linger and any collected-but-unspliced terminal content isn't dropped
+          _stopStreamingPlaceholder(newState.id, 'session-terminated')
         }
       })
     },
