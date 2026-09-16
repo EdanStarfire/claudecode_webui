@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from backend.timestamp_injection import (
     format_injection_prefix,
     inject_timestamp,
+    is_slash_command,
     local_date_str,
     maybe_inject_timestamp,
     resolve_timezone,
@@ -77,6 +78,20 @@ class TestLocalDateStr:
         assert local_date_str(now, "Asia/Tokyo") == "2026-08-19"
 
 
+class TestIsSlashCommand:
+    def test_bare_slash_command(self):
+        assert is_slash_command("/usage") is True
+
+    def test_leading_whitespace_slash_command(self):
+        assert is_slash_command("  /usage") is True
+
+    def test_plain_message_is_not_a_command(self):
+        assert is_slash_command("hello there") is False
+
+    def test_empty_string_is_not_a_command(self):
+        assert is_slash_command("") is False
+
+
 class TestMaybeInjectTimestamp:
     def test_disabled_passes_through_unchanged(self):
         now = datetime(2026, 8, 18, 14, 0, tzinfo=UTC)
@@ -133,6 +148,46 @@ class TestMaybeInjectTimestamp:
         )
         assert "UTC" in content
         assert new_date is None
+
+    def test_slash_command_bypasses_injection_every_message(self):
+        now = datetime(2026, 8, 18, 14, 0, tzinfo=UTC)
+        content, new_date = maybe_inject_timestamp(
+            "/usage", enabled=True, frequency="every_message", tz_name="UTC",
+            last_injection_date=None, now_utc=now,
+        )
+        assert content == "/usage"
+        assert new_date is None
+
+    def test_slash_command_bypasses_injection_once_per_day_without_consuming_day(self):
+        now = datetime(2026, 8, 18, 14, 0, tzinfo=UTC)
+        content, new_date = maybe_inject_timestamp(
+            "/compact", enabled=True, frequency="once_per_day", tz_name="UTC",
+            last_injection_date=None, now_utc=now,
+        )
+        assert content == "/compact"
+        # A skipped slash command must not report a date to persist — otherwise
+        # it would silently consume once_per_day's daily injection slot.
+        assert new_date is None
+
+    def test_regular_message_after_skipped_slash_command_still_injects_same_day(self):
+        now = datetime(2026, 8, 18, 14, 0, tzinfo=UTC)
+        slash_content, slash_date = maybe_inject_timestamp(
+            "/clear", enabled=True, frequency="once_per_day", tz_name="UTC",
+            last_injection_date=None, now_utc=now,
+        )
+        assert slash_content == "/clear"
+        assert slash_date is None
+
+        # Caller never persisted a date from the skipped slash command, so
+        # last_injection_date is still None for the next real message today.
+        later = datetime(2026, 8, 18, 15, 0, tzinfo=UTC)
+        content, new_date = maybe_inject_timestamp(
+            "real message", enabled=True, frequency="once_per_day", tz_name="UTC",
+            last_injection_date=slash_date, now_utc=later,
+        )
+        assert content.startswith("[Current time:")
+        assert content.endswith("real message")
+        assert new_date == "2026-08-18"
 
 
 def test_zoneinfo_available_for_all_offsets_used_in_tests():
