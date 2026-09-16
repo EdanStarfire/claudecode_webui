@@ -51,6 +51,7 @@ export const useAnalyticsStore = defineStore('analytics', () => {
     sessionSearch: '',
     chartGrouping: 'token_type',  // 'token_type' | 'model'
     chartMetric: 'cost',          // 'cost' | 'tokens'
+    excludeDeleted: false,        // when true, omit deleted sessions from totals
   })
 
   const sessionRows = ref([])
@@ -217,6 +218,11 @@ export const useAnalyticsStore = defineStore('analytics', () => {
     filters.value.chartMetric = m
   }
 
+  function setExcludeDeleted(v) {
+    filters.value.excludeDeleted = v
+    refresh()
+  }
+
   /** Fetches the time-bucket series, scoped to the active session/model filter if any. */
   async function _fetchBuckets() {
     const seq = ++bucketRequestSeq
@@ -231,7 +237,7 @@ export const useAnalyticsStore = defineStore('analytics', () => {
       return
     }
 
-    const params = { since, until, group_by: bucketSize }
+    const params = { since, until, group_by: bucketSize, include_deleted: !filters.value.excludeDeleted }
     if (hasActiveFilter.value) {
       params.session_ids = filteredSessionRows.value.map(r => r.session_id).join(',')
     }
@@ -258,7 +264,9 @@ export const useAnalyticsStore = defineStore('analytics', () => {
     const { since, until } = _effectiveRange()
 
     try {
-      const sessionResp = await api.get('/api/analytics/usage', { params: { since, until, group_by: 'session' } })
+      const sessionResp = await api.get('/api/analytics/usage', {
+        params: { since, until, group_by: 'session', include_deleted: !filters.value.excludeDeleted },
+      })
 
       sessionRows.value = sessionResp.rows || []
       totals.value = sessionResp.totals || null
@@ -294,6 +302,7 @@ export const useAnalyticsStore = defineStore('analytics', () => {
     setSessionSearch,
     setChartGrouping,
     setChartMetric,
+    setExcludeDeleted,
     fetchData,
     refresh,
     TIME_PRESETS,

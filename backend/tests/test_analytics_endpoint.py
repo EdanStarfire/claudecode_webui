@@ -37,6 +37,18 @@ async def _seed_turn(db: AnalyticsDB, session_id: str, turn_seq: int, **kwargs) 
     ))
 
 
+async def _mark_deleted(db: AnalyticsDB, session_id: str, deleted_at: float = _BASE_TS) -> None:
+    """Insert/update a session_usage row with deleted_at set (issue #1941)."""
+    await db.execute_write(
+        """
+        INSERT INTO session_usage (session_id, turn_count, last_updated, deleted_at)
+        VALUES (?, 0, ?, ?)
+        ON CONFLICT(session_id) DO UPDATE SET deleted_at = excluded.deleted_at
+        """,
+        (session_id, deleted_at, deleted_at),
+    )
+
+
 @pytest.fixture
 async def app_and_db(tmp_path):
     from fastapi import FastAPI
@@ -257,6 +269,62 @@ async def test_deleted_session_shows_as_deleted(app_and_db):
 # ---------------------------------------------------------------------------
 # totals.top_session
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deleted_session_name_sourced_from_deleted_at_not_session_manager(app_and_db):
+    """Issue #1941: a session flagged deleted_at must show as "(deleted)" from
+    its own row field, even if SessionManager still (implausibly) has info for
+    it — deleted_at is the single source of truth, not session-manager absence."""
+    app, db, sm = app_and_db
+    await _seed_turn(db, "flagged-sess", 1, input_tokens=100, ts=_BASE_TS)
+    await _mark_deleted(db, "flagged-sess")
+
+    still_present_info = MagicMock()
+    still_present_info.name = "Should Not Show"
+    sm.get_session_info = AsyncMock(return_value=still_present_info)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/analytics/usage", params={
+            "group_by": "session",
+            "since": int(_BASE_TS - 1),
+            "until": int(_BASE_TS + _DAY),
+        })
+
+    assert resp.status_code == 200
+    row = resp.json()["rows"][0]
+    assert row["session_name"] == "(deleted)"
+    sm.get_session_info.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_include_deleted_false_excludes_flagged_session(app_and_db):
+    app, db, _ = app_and_db
+    await _seed_turn(db, "active-sess", 1, input_tokens=100, ts=_BASE_TS)
+    await _seed_turn(db, "deleted-sess", 1, input_tokens=200, ts=_BASE_TS)
+    await _mark_deleted(db, "deleted-sess")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Default (omitted) includes deleted sessions.
+        default_resp = await client.get("/api/analytics/usage", params={
+            "group_by": "session",
+            "since": int(_BASE_TS - 1),
+            "until": int(_BASE_TS + _DAY),
+        })
+        excluded_resp = await client.get("/api/analytics/usage", params={
+            "group_by": "session",
+            "since": int(_BASE_TS - 1),
+            "until": int(_BASE_TS + _DAY),
+            "include_deleted": "false",
+        })
+
+    default_sids = {r["session_id"] for r in default_resp.json()["rows"]}
+    assert default_sids == {"active-sess", "deleted-sess"}
+
+    excluded_sids = {r["session_id"] for r in excluded_resp.json()["rows"]}
+    assert excluded_sids == {"active-sess"}
 
 
 @pytest.mark.asyncio

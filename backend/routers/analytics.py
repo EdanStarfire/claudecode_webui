@@ -49,6 +49,16 @@ def build_router(webui) -> APIRouter:
             return
         for row in rows:
             sid = row["session_id"]
+            # Issue #1941: source the deleted signal from the row's own
+            # deleted_at field rather than session-manager absence — analytics
+            # rows now outlive session deletion, and a session directory being
+            # gone is not itself proof the row is flagged deleted (nor is
+            # session-manager presence proof it isn't, for edge cases like
+            # archived-but-not-deleted sessions), so deleted_at is the single
+            # source of truth.
+            if row.get("deleted_at") is not None:
+                row["session_name"] = "(deleted)"
+                continue
             info = await sm.get_session_info(sid)
             if info is None:
                 row["session_name"] = "(deleted)"
@@ -65,6 +75,9 @@ def build_router(webui) -> APIRouter:
         session_ids: str | None = Query(default=None, description="Comma-separated session IDs"),
         models: str | None = Query(default=None, description="Comma-separated model names"),
         group_by: str = Query(..., description="Aggregation mode: session | hour | day"),
+        include_deleted: bool = Query(
+            default=True, description="Include usage/cost from deleted sessions"
+        ),
     ):
         if group_by not in _VALID_GROUP_BY:
             raise HTTPException(
@@ -87,7 +100,8 @@ def build_router(webui) -> APIRouter:
 
         if group_by == "session":
             rows = await aggregate_by_session(
-                db, pricing, effective_since, effective_until, sid_list, model_list
+                db, pricing, effective_since, effective_until, sid_list, model_list,
+                include_deleted=include_deleted,
             )
             await _enrich_session_rows(rows, webui)
             totals = compute_session_totals(rows)
@@ -100,7 +114,8 @@ def build_router(webui) -> APIRouter:
             }
         else:
             buckets = await aggregate_by_time(
-                db, pricing, group_by, effective_since, effective_until, sid_list, model_list
+                db, pricing, group_by, effective_since, effective_until, sid_list, model_list,
+                include_deleted=include_deleted,
             )
             totals = compute_bucket_totals(buckets)
             return {

@@ -78,7 +78,8 @@ CREATE TABLE IF NOT EXISTS session_usage (
   cache_write_tokens_5m INTEGER NOT NULL DEFAULT 0,
   cache_write_tokens_1h INTEGER NOT NULL DEFAULT 0,
   sdk_total_cost_usd    REAL,
-  last_updated          REAL    NOT NULL
+  last_updated          REAL    NOT NULL,
+  deleted_at            REAL
 );
 """
 
@@ -92,6 +93,10 @@ _MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("turn_usage", "is_subagent", "INTEGER NOT NULL DEFAULT 0"),
     ("session_usage", "cache_write_tokens_5m", "INTEGER NOT NULL DEFAULT 0"),
     ("session_usage", "cache_write_tokens_1h", "INTEGER NOT NULL DEFAULT 0"),
+    # Issue #1941: session deletion must preserve analytics history instead of
+    # destroying it. A non-NULL deleted_at marks the session's rows as belonging
+    # to a since-deleted session, without ever removing them.
+    ("session_usage", "deleted_at", "REAL"),
 )
 
 
