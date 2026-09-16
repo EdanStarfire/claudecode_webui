@@ -39,6 +39,17 @@ def inject_timestamp(content: str, now_utc: datetime, tz_name: str) -> str:
     return f"{format_injection_prefix(now_utc, tz_name)}\n\n{content}"
 
 
+def is_slash_command(content: str) -> bool:
+    """Whether content is an SDK-native slash command (e.g. /usage, /compact).
+
+    Leading whitespace is tolerated to catch pasted/auto-indented commands.
+    No validation against a known command list — anything starting with `/`
+    is treated as a command, since the SDK is the source of truth for what's
+    valid and false positives here are harmless (message is sent unmodified).
+    """
+    return content.lstrip().startswith("/")
+
+
 def maybe_inject_timestamp(
     content: str,
     *,
@@ -53,8 +64,11 @@ def maybe_inject_timestamp(
     Returns (possibly-augmented content, new_last_injection_date). The date is
     only non-None when it changed and the caller must persist it onto SessionInfo
     (once_per_day tracking); every_message and disabled never return a date.
+    Slash commands (SDK-native, e.g. /usage) are always passed through
+    untouched regardless of frequency, so enabling injection doesn't break
+    them and a skipped command never consumes once_per_day's daily slot.
     """
-    if not enabled:
+    if not enabled or is_slash_command(content):
         return content, None
 
     if frequency == "once_per_day":
