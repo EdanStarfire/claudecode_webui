@@ -48,7 +48,7 @@ def reset_logging():
     logger_names = [
         'polling', 'polling_verbose', 'sdk_debug',
         'coordinator', 'storage', 'parser', 'error_handler',
-        'session_manager', 'legion', 'template_manager'
+        'session_manager', 'legion', 'template_manager', 'client_debug'
     ]
     for name in logger_names:
         logger = logging.getLogger(name)

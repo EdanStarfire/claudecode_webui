@@ -480,6 +480,15 @@ class HookConfigUpdateRequest(BaseModel):
     hooks: list[HookEntryModel] | None = None
 
 
+class ClientDebugBufferRequest(BaseModel):
+    """Frontend debug ring-buffer submission (issue #1931)."""
+    session_id: str | None = None
+    browser: dict = {}
+    submitted_at: str
+    reason: str
+    events: list[dict] = []
+
+
 # Proxy credential request models (issue #1053) — kept for backward compat during transition
 class CredentialCreateRequest(BaseModel):
     name: str

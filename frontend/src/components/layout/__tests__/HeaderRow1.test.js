@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { screen } from '@testing-library/vue'
+import { screen, fireEvent } from '@testing-library/vue'
 import { renderWithStores } from '@/test-utils/render'
 import HeaderRow1 from '@/components/layout/HeaderRow1.vue'
 
 const apiMock = vi.hoisted(() => ({
-  get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), patch: vi.fn()
+  get: vi.fn(), post: vi.fn().mockResolvedValue({}), put: vi.fn(), delete: vi.fn(), patch: vi.fn()
 }))
 vi.mock('@/utils/api', () => ({ api: apiMock, getAuthToken: vi.fn() }))
 
@@ -35,5 +35,17 @@ describe('HeaderRow1', () => {
     expect(indicator.textContent.trim()).toBe('')
     expect(indicator.getAttribute('aria-label')).toBe('Connection status: Disconnected')
     expect(indicator.classList.contains('disconnected')).toBe(true)
+  })
+
+  it('right-clicking the connection indicator submits the debug buffer and shows a confirmation (issue #1931)', async () => {
+    renderWithStores(HeaderRow1)
+
+    const indicator = screen.getByTestId('connection-indicator')
+    await fireEvent.contextMenu(indicator)
+
+    expect(await screen.findByText('✓ Sent')).toBeTruthy()
+    expect(apiMock.post).toHaveBeenCalledWith('/api/debug/client-buffer', expect.objectContaining({
+      reason: 'manual'
+    }))
   })
 })

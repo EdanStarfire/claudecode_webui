@@ -11,8 +11,15 @@
         data-testid="connection-indicator"
         role="status"
         :aria-label="connectionAriaLabel"
+        :title="justSubmitted ? '✓ Debug buffer sent' : 'Right-click (or long-press) to submit the debug buffer'"
+        @contextmenu.prevent="handleFlush"
+        @touchstart="onTouchStart"
+        @touchmove="onTouchMove"
+        @touchend="onTouchEnd"
+        @touchcancel="onTouchCancel"
       >
         <span class="indicator-dot"></span>
+        <span v-if="justSubmitted" class="debug-sent-confirm">✓ Sent</span>
       </div>
       <TrayDropdown />
       <button
@@ -71,12 +78,14 @@
 </template>
 
 <script setup>
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useUIStore } from '@/stores/ui'
 import { usePollingStore } from '@/stores/polling'
 import { useSessionStore } from '@/stores/session'
 import { useRoute, useRouter } from 'vue-router'
 import TrayDropdown from './TrayDropdown.vue'
+import { useLongPress } from '@/composables/useLongPress'
+import { flushDebugBuffer } from '@/composables/useDebugBuffer'
 
 const uiStore = useUIStore()
 const wsStore = usePollingStore()
@@ -86,6 +95,20 @@ const router = useRouter()
 
 const uiConnected = computed(() => wsStore.uiConnected)
 const connectionAriaLabel = computed(() => `Connection status: ${uiConnected.value ? 'Connected' : 'Disconnected'}`)
+
+// Issue #1931: right-click/long-press the connection indicator to submit the debug ring buffer.
+const justSubmitted = ref(false)
+let justSubmittedTimer = null
+
+async function handleFlush() {
+  const attempted = await flushDebugBuffer('manual')
+  if (!attempted) return
+  justSubmitted.value = true
+  clearTimeout(justSubmittedTimer)
+  justSubmittedTimer = setTimeout(() => { justSubmitted.value = false }, 2000)
+}
+
+const { onTouchStart, onTouchMove, onTouchEnd, onTouchCancel } = useLongPress(handleFlush)
 
 const THEME_LABELS = {
   'light':           'Light',
@@ -168,6 +191,22 @@ function toggleAudit() {
   gap: 6px;
   font-size: 11px;
   color: var(--bs-secondary-color);
+  position: relative;
+}
+
+.debug-sent-confirm {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background-color: #22c55e;
+  color: #fff;
+  font-size: 11px;
+  white-space: nowrap;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+  z-index: 10;
 }
 
 .header-indicator.connected {
