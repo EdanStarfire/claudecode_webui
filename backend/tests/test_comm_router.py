@@ -719,18 +719,23 @@ class TestAutoStartFailureReason:
         )
 
 
-class TestPausedTargetSkipsDelivery:
-    """Issue #1918: a target minion PAUSED mid-permission-wait (e.g. AskUserQuestion)
-    must not be force-started — that clobbers it into STARTING with no way back."""
+class TestPausedTargetDeliversWithoutForceStart:
+    """Issue #1918 stopped comm delivery from force-starting a target minion PAUSED
+    mid-permission-wait (e.g. AskUserQuestion) — that clobbers it into STARTING with
+    no way back. Issue #1940: that fix over-scoped the protection into skipping
+    delivery entirely. Message injection via send_message() works identically for
+    ACTIVE and PAUSED targets, so PAUSED must still deliver normally — only the
+    auto-start attempt should be skipped."""
 
     @pytest.mark.asyncio
-    async def test_paused_target_not_force_started(self, comm_router, sample_minion):
+    async def test_paused_target_delivers_without_force_start(self, comm_router, sample_minion):
         from backend.session_manager import SessionState
 
         sample_minion.state = SessionState.PAUSED
         sm = comm_router.system.session_coordinator.session_manager
         sm.get_session_info = AsyncMock(return_value=sample_minion)
         comm_router.system.session_coordinator.start_session = AsyncMock()
+        comm_router.system.session_coordinator.send_message = AsyncMock(return_value=True)
 
         comm = Comm(
             comm_id=str(uuid.uuid4()),
@@ -743,11 +748,9 @@ class TestPausedTargetSkipsDelivery:
         with patch.object(comm_router, '_send_system_error_comm', new=AsyncMock()) as mock_error_comm:
             result = await comm_router._send_to_minion(comm)
 
-        assert result is False
+        assert result is True
         comm_router.system.session_coordinator.start_session.assert_not_awaited()
-        mock_error_comm.assert_called_once()
-        error_message_arg = mock_error_comm.call_args.kwargs["error_message"]
-        assert "paused" in error_message_arg.lower()
+        mock_error_comm.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_active_target_still_delivers_unchanged(self, comm_router, sample_minion):
