@@ -1770,6 +1770,208 @@ async def test_issue_1433_list_minions_parent_unknown_fallback():
     assert "Parent: unknown" in text, f"Should show 'Parent: unknown'; got:\n{text}"
 
 
+# ── Activity status tests (Issue #1952) ──
+
+
+def _make_visible_minion_system(session, from_id):
+    from unittest.mock import AsyncMock, MagicMock
+
+    async def mock_get_session_info(session_id):
+        return session if session_id == from_id else None
+
+    session_manager = MagicMock()
+    session_manager.get_session_info = mock_get_session_info
+
+    session_coordinator = MagicMock()
+    session_coordinator.session_manager = session_manager
+
+    mock_legion = MagicMock()
+    legion_coordinator = MagicMock()
+    legion_coordinator.get_legion = AsyncMock(return_value=mock_legion)
+
+    comm_router = MagicMock()
+    comm_router.get_visible_minions = AsyncMock(return_value=[from_id])
+
+    mock_system = MagicMock()
+    mock_system.session_coordinator = session_coordinator
+    mock_system.legion_coordinator = legion_coordinator
+    mock_system.comm_router = comm_router
+
+    return mock_system
+
+
+def _make_activity_test_session(session_id, state, is_processing):
+    from unittest.mock import MagicMock
+
+    session = MagicMock()
+    session.session_id = session_id
+    session.project_id = "legion-1952"
+    session.name = "TestMinion"
+    session.slug = "testminion"
+    session.role = "Tester"
+    session.state = state
+    session.is_processing = is_processing
+    session.capabilities = []
+    session.working_directory = "/work"
+    session.parent_overseer_id = None
+    session.is_overseer = False
+    session.child_minion_ids = []
+    return session
+
+
+@pytest.mark.asyncio
+async def test_issue_1952_list_minions_shows_idle_for_active_not_processing():
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from backend.session_manager import SessionState
+
+    session = _make_activity_test_session("mid-1", SessionState.ACTIVE, is_processing=False)
+    mock_system = _make_visible_minion_system(session, from_id="mid-1")
+
+    mcp_tools = LegionMCPTools(mock_system)
+    result = await mcp_tools._handle_list_minions({"_from_minion_id": "mid-1"})
+
+    assert result.get("is_error") is False, f"Got error: {result}"
+    text = result["content"][0]["text"]
+    assert "Activity: idle" in text, f"Expected idle activity; got:\n{text}"
+    assert "State: active" in text, f"State line must remain unchanged; got:\n{text}"
+
+
+@pytest.mark.asyncio
+async def test_issue_1952_list_minions_shows_busy_for_active_processing():
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from backend.session_manager import SessionState
+
+    session = _make_activity_test_session("mid-2", SessionState.ACTIVE, is_processing=True)
+    mock_system = _make_visible_minion_system(session, from_id="mid-2")
+
+    mcp_tools = LegionMCPTools(mock_system)
+    result = await mcp_tools._handle_list_minions({"_from_minion_id": "mid-2"})
+
+    assert result.get("is_error") is False, f"Got error: {result}"
+    text = result["content"][0]["text"]
+    assert "Activity: busy" in text, f"Expected busy activity; got:\n{text}"
+
+
+@pytest.mark.asyncio
+async def test_issue_1952_list_minions_shows_paused_regardless_of_is_processing():
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from backend.session_manager import SessionState
+
+    for is_processing in (True, False):
+        session = _make_activity_test_session("mid-3", SessionState.PAUSED, is_processing=is_processing)
+        mock_system = _make_visible_minion_system(session, from_id="mid-3")
+
+        mcp_tools = LegionMCPTools(mock_system)
+        result = await mcp_tools._handle_list_minions({"_from_minion_id": "mid-3"})
+
+        assert result.get("is_error") is False, f"Got error: {result}"
+        text = result["content"][0]["text"]
+        # Scope assertions to the TestMinion block; the always-present "user"
+        # entry legitimately shows "Activity: idle" and must not affect this.
+        minion_block = text.split("**TestMinion**", 1)[1]
+        assert "Activity: paused" in minion_block, (
+            f"PAUSED must always show as paused (is_processing={is_processing}); got:\n{text}"
+        )
+        assert "Activity: busy" not in minion_block
+        assert "Activity: idle" not in minion_block
+
+
+@pytest.mark.asyncio
+async def test_issue_1952_list_minions_other_states_show_state_name_as_activity():
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from backend.session_manager import SessionState
+
+    for state in (
+        SessionState.CREATED,
+        SessionState.STARTING,
+        SessionState.TERMINATING,
+        SessionState.TERMINATED,
+        SessionState.ERROR,
+    ):
+        session = _make_activity_test_session("mid-4", state, is_processing=False)
+        mock_system = _make_visible_minion_system(session, from_id="mid-4")
+
+        mcp_tools = LegionMCPTools(mock_system)
+        result = await mcp_tools._handle_list_minions({"_from_minion_id": "mid-4"})
+
+        assert result.get("is_error") is False, f"Got error: {result}"
+        text = result["content"][0]["text"]
+        assert f"Activity: {state.value}" in text, (
+            f"Expected Activity: {state.value}; got:\n{text}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_issue_1952_list_minions_user_entry_shows_idle():
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from backend.session_manager import SessionState
+
+    session = _make_activity_test_session("mid-5", SessionState.ACTIVE, is_processing=True)
+    mock_system = _make_visible_minion_system(session, from_id="mid-5")
+
+    mcp_tools = LegionMCPTools(mock_system)
+    result = await mcp_tools._handle_list_minions({"_from_minion_id": "mid-5"})
+
+    assert result.get("is_error") is False, f"Got error: {result}"
+    text = result["content"][0]["text"]
+    assert "**user**" in text
+    user_block = text.split("**user**", 1)[1].split("•", 1)[0]
+    assert "Activity: idle" in user_block, f"User entry must always show idle; got:\n{text}"
+
+
+@pytest.mark.asyncio
+async def test_issue_1952_get_minion_info_shows_activity_field():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from backend.session_manager import SessionState
+
+    cases = [
+        (SessionState.ACTIVE, False, "idle"),
+        (SessionState.ACTIVE, True, "busy"),
+        (SessionState.PAUSED, True, "paused"),
+    ]
+
+    for state, is_processing, expected_activity in cases:
+        minion = _make_activity_test_session("info-mid", state, is_processing)
+        minion.name = "InfoMinion"
+        minion.slug = "infominion"
+        minion.role = "Info Role"
+        minion.project_id = None
+
+        caller_session = MagicMock()
+        caller_session.session_id = "caller-id"
+        caller_session.project_id = "legion-1952"
+
+        session_manager = MagicMock()
+        session_manager.get_session_info = AsyncMock(return_value=caller_session)
+
+        session_coordinator = MagicMock()
+        session_coordinator.session_manager = session_manager
+
+        legion_coordinator = MagicMock()
+        legion_coordinator.get_minion_by_name_in_legion = AsyncMock(return_value=minion)
+
+        mock_system = MagicMock()
+        mock_system.session_coordinator = session_coordinator
+        mock_system.legion_coordinator = legion_coordinator
+
+        mcp_tools = LegionMCPTools(mock_system)
+
+        result = await mcp_tools._handle_get_minion_info({
+            "_from_minion_id": "caller-id",
+            "minion_name": "InfoMinion",
+        })
+
+        assert result.get("is_error") is False, f"Got error: {result}"
+        text = result["content"][0]["text"]
+        assert f"**State:** {state.value}" in text, f"State line must remain unchanged; got:\n{text}"
+        assert f"**Activity:** {expected_activity}" in text, (
+            f"Expected Activity: {expected_activity} for state={state.value}, "
+            f"is_processing={is_processing}; got:\n{text}"
+        )
+
+
 # ── Schedule name-based lookup tests (Issue #1817) ──
 
 
