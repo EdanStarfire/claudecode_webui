@@ -881,6 +881,17 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   /**
+   * Issue #1949: an assistant entry produced purely by the streaming-placeholder machinery
+   * (never merged with a real terminal message) is still streaming, or has no `metadata` —
+   * the backend always populates `metadata` on a real terminal assistant message (see
+   * AssistantMessageHandler._extract_business_data()). A dedup-key match against an entry
+   * like this is not a genuine duplicate; it's a stub that should be replaced, not skipped.
+   */
+  function _isIncompleteAssistantEntry(entry) {
+    return entry.type === 'assistant' && (entry.streaming === true || entry.metadata === undefined)
+  }
+
+  /**
    * Add a message to a session (from WebSocket)
    * Now with deduplication to prevent duplicate messages on reconnection
    *
@@ -918,13 +929,40 @@ export const useMessageStore = defineStore('message', () => {
       // ones), so matching against the open placeholder itself would wrongly treat every normal,
       // first-time terminal delivery as a duplicate and silently drop it.
       const dedupKey = message.message_id || message.id
-      if (dedupKey && (
-        messages.some(m => !m.streaming && (m.message_id || m.id) === dedupKey) ||
-        buf.collectedTerminalMessages?.some(m => (m.message_id || m.id) === dedupKey)
-      )) {
-        console.log(`Skipping duplicate deferred terminal message ${dedupKey}`)
-        pushDebugEvent('message', 'dedup-skip-deferred', { sessionId, dedupKey })
-        return
+      if (dedupKey) {
+        const existingIdx = messages.findIndex(m => !m.streaming && (m.message_id || m.id) === dedupKey)
+        if (existingIdx !== -1) {
+          const existing = messages[existingIdx]
+          // Issue #1949: a same-ID match against a stub (still-streaming, or finalized
+          // without ever receiving a real terminal's metadata) is not a genuine duplicate —
+          // replace it in place instead of discarding the incoming terminal.
+          if (_isIncompleteAssistantEntry(existing)) {
+            messages[existingIdx] = {
+              ...existing,
+              ...message,
+              content: message.content || existing.content,
+              thinking: message.thinking || existing.thinking,
+              metadata: _mergeAssistantMetadata(existing.metadata, message.metadata),
+              streaming: false,
+            }
+            messagesBySession.value = new Map(messagesBySession.value)
+            pushDebugEvent('message', 'dedup-replace-incomplete-deferred', { sessionId, dedupKey })
+            applyDisplayMetadata(sessionId, message)
+            handleRealtimeToolTracking(sessionId, message)
+            if (message.timestamp) {
+              lastReceivedTimestamp.value.set(sessionId, message.timestamp)
+            }
+            return
+          }
+          console.log(`Skipping duplicate deferred terminal message ${dedupKey}`)
+          pushDebugEvent('message', 'dedup-skip-deferred', { sessionId, dedupKey })
+          return
+        }
+        if (buf.collectedTerminalMessages?.some(m => (m.message_id || m.id) === dedupKey)) {
+          console.log(`Skipping duplicate deferred terminal message ${dedupKey}`)
+          pushDebugEvent('message', 'dedup-skip-deferred', { sessionId, dedupKey })
+          return
+        }
       }
       if (!buf.collectedTerminalMessages) buf.collectedTerminalMessages = []
       buf.collectedTerminalMessages.push(message)
@@ -995,6 +1033,27 @@ export const useMessageStore = defineStore('message', () => {
     if (dedupKey) {
       const existingIndex = messages.findIndex(m => (m.message_id || m.id) === dedupKey)
       if (existingIndex !== -1) {
+        const existing = messages[existingIndex]
+        // Issue #1949: same completeness check as the deferred-defer path above — a same-ID
+        // match against a stub is not a genuine duplicate, replace it instead of discarding.
+        if (_isIncompleteAssistantEntry(existing)) {
+          messages[existingIndex] = {
+            ...existing,
+            ...message,
+            content: message.content || existing.content,
+            thinking: message.thinking || existing.thinking,
+            metadata: _mergeAssistantMetadata(existing.metadata, message.metadata),
+            streaming: false,
+          }
+          messagesBySession.value = new Map(messagesBySession.value)
+          pushDebugEvent('message', 'dedup-replace-incomplete-duplicate', { sessionId, dedupKey, existingIndex })
+          applyDisplayMetadata(sessionId, message)
+          handleRealtimeToolTracking(sessionId, message)
+          if (message.timestamp) {
+            lastReceivedTimestamp.value.set(sessionId, message.timestamp)
+          }
+          return
+        }
         console.log(`Skipping duplicate message ${dedupKey} (already exists at index ${existingIndex})`)
         pushDebugEvent('message', 'dedup-skip-duplicate', { sessionId, dedupKey, existingIndex })
         flushDebugBuffer('duplicate-detected')

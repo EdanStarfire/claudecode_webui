@@ -1130,6 +1130,200 @@ describe('Issue #1945: buffer-finalized-on-replace (no dropped turns)', () => {
   })
 })
 
+describe('Issue #1949: replace-instead-of-skip when a dedup match is an incomplete stub', () => {
+  // Root cause: _finalizeStreamingBuffer's "no terminal AM collected" fallback (hit when a
+  // buffer is finalized by a new turn's message_start, an interrupt/restart, or a loadMessages()
+  // reload racing a live stream, before that turn's real terminal ever arrived) flips a
+  // still-open placeholder to streaming:false WITHOUT ever merging in a real terminal — leaving
+  // an entry that looks "done" (streaming:false) to both dedup branches below but carries no
+  // `metadata` at all. When the real terminal for that same id arrives later, it matches this
+  // stub by dedup key and used to be silently discarded instead of replacing the stub.
+  beforeEach(() => {
+    vi.stubGlobal('requestAnimationFrame', () => 1)
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('Branch A (deferred-defer path): a late terminal replaces an incomplete stub instead of being skipped as "already exists"', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1949-a'
+    const ID1 = 'msg_1949_a_1'
+    const ID2 = 'msg_1949_a_2'
+
+    // Turn 1 starts streaming but its terminal never arrives before turn 2 starts — this
+    // finalizes turn 1's buffer via the "no terminal collected" fallback, leaving a stub.
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID1 } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'partial one' } }))
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID2 } }))
+
+    let msgs = store.messagesBySession.get(SID)
+    const stub = msgs.find(m => m.message_id === ID1)
+    expect(stub.streaming).toBe(false)
+    expect(stub.metadata).toBeUndefined()
+
+    // Turn 1's real terminal finally arrives, late, while turn 2's buffer is still open — this
+    // is exactly addMessage()'s deferred-defer branch (Branch A).
+    store.addMessage(SID, {
+      type: 'assistant',
+      message_id: ID1,
+      content: 'turn one complete',
+      metadata: {
+        message_id: ID1, has_thinking: false, thinking_content: '',
+        has_tool_uses: true, tool_uses: [{ id: 'tool-a', name: 'Read', input: { file_path: '/tmp/a.txt' } }],
+      },
+    })
+
+    msgs = store.messagesBySession.get(SID)
+    const turn1 = msgs.find(m => m.message_id === ID1)
+    expect(turn1.streaming).toBe(false)
+    expect(turn1.content).toBe('turn one complete')
+    expect(turn1.metadata.has_tool_uses).toBe(true)
+    expect(turn1.metadata.tool_uses.map(t => t.id)).toEqual(['tool-a'])
+
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+    msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(2)
+    expect(msgs.map(m => m.message_id)).toEqual([ID1, ID2])
+  })
+
+  it('Branch B (primary dedupKey path): a late terminal with no active buffer replaces an incomplete stub instead of being skipped', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1949-b'
+
+    // Simulate a stub already sitting in the array: finalized (streaming:false) but never
+    // merged with a real terminal, so it has no `metadata` key — no active buffer involved.
+    store.messagesBySession.set(SID, [{
+      type: 'assistant',
+      message_id: 'am-1949-b-uuid',
+      content: 'partial only',
+      streaming: false,
+    }])
+
+    store.addMessage(SID, {
+      type: 'assistant',
+      message_id: 'am-1949-b-uuid',
+      content: 'full content',
+      metadata: {
+        has_thinking: false, thinking_content: '',
+        has_tool_uses: true, tool_uses: [{ id: 'tool-b', name: 'Edit', input: { file_path: '/tmp/b.txt' } }],
+      },
+    })
+
+    const msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].content).toBe('full content')
+    expect(msgs[0].metadata.has_tool_uses).toBe(true)
+    expect(msgs[0].metadata.tool_uses.map(t => t.id)).toEqual(['tool-b'])
+  })
+
+  it('regression guard (#1917): a genuine redelivery of an already-complete terminal is still discarded while a newer turn is streaming (Branch A)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1949-regress-a'
+    const ID1 = 'msg_1949_regress_a_1'
+    const ID2 = 'msg_1949_regress_a_2'
+
+    const terminal1 = {
+      type: 'assistant',
+      message_id: ID1,
+      content: 'turn one complete',
+      metadata: {
+        message_id: ID1, has_thinking: false, thinking_content: '',
+        has_tool_uses: true, tool_uses: [{ id: 'tool-1', name: 'Read', input: {} }],
+      },
+    }
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID1 } }))
+    store.addMessage(SID, terminal1)
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    let msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].metadata.tool_uses).toHaveLength(1)
+
+    // A newer turn starts streaming...
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID2 } }))
+
+    // ...and turn 1's already-complete terminal is genuinely redelivered while it's open.
+    store.addMessage(SID, terminal1)
+
+    msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(2) // terminal1 (unchanged) + turn 2's open placeholder
+    const turn1 = msgs.find(m => m.message_id === ID1)
+    expect(turn1.metadata.tool_uses).toHaveLength(1)
+    expect(turn1.content).toBe('turn one complete')
+  })
+
+  it('regression guard (#1917): a genuine redelivery of an already-complete message is still discarded with no active buffer (Branch B)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1949-regress-b'
+
+    const complete = {
+      type: 'assistant',
+      message_id: 'am-1949-regress-b-uuid',
+      content: 'already complete',
+      streaming: false,
+      metadata: {
+        has_thinking: false, thinking_content: '',
+        has_tool_uses: true, tool_uses: [{ id: 'tool-b', name: 'Read', input: {} }],
+      },
+    }
+    store.messagesBySession.set(SID, [complete])
+
+    // Genuine redelivery: identical message, no active buffer.
+    store.addMessage(SID, { ...complete })
+
+    const msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].metadata.tool_uses).toHaveLength(1)
+  })
+
+  it('end-to-end: several quick tool calls fired back-to-back, stacking turns faster than message_stop resolves, all remain visible with their tool_uses (#1949 repro shape)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-1949-e2e'
+    const ID1 = 'msg_1949_e2e_1'
+    const ID2 = 'msg_1949_e2e_2'
+    const ID3 = 'msg_1949_e2e_3'
+
+    const terminalFor = (id, toolId, name) => ({
+      type: 'assistant',
+      message_id: id,
+      content: `call for ${id}`,
+      metadata: {
+        message_id: id, has_thinking: false, thinking_content: '',
+        has_tool_uses: true, tool_uses: [{ id: toolId, name, input: {} }],
+      },
+    })
+
+    // Turn 1 starts, then turn 2 starts before turn 1's terminal arrives (stubs turn 1).
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID1 } }))
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID2 } }))
+    // Turn 1's terminal finally arrives, late, while turn 2's buffer is open.
+    store.addMessage(SID, terminalFor(ID1, 'tool-1', 'Read'))
+
+    // Turn 3 starts before turn 2's terminal arrives (stubs turn 2).
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: ID3 } }))
+    // Turn 2's terminal finally arrives, late, while turn 3's buffer is open.
+    store.addMessage(SID, terminalFor(ID2, 'tool-2', 'Edit'))
+
+    // Turn 3's own terminal arrives normally, before its own message_stop.
+    store.addMessage(SID, terminalFor(ID3, 'tool-3', 'Bash'))
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    const msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(3)
+    expect(msgs.every(m => m.streaming === false)).toBe(true)
+    expect(msgs.every(m => m.metadata?.has_tool_uses === true)).toBe(true)
+    expect(msgs.map(m => m.metadata.tool_uses[0].id)).toEqual(['tool-1', 'tool-2', 'tool-3'])
+  })
+})
+
 describe('addMessage metadata accumulation across same-message_id frames (#1765 confirmed root cause)', () => {
   // Reproduces a real user-provided repro (messages.jsonl from a live session): a single
   // Anthropic assistant message (one message_id) dispatching a run_in_background Task/Agent
