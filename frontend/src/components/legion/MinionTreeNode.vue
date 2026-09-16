@@ -580,10 +580,11 @@ function handleClick() {
   cursor: pointer;
 }
 
-/* Issue #1934: Selected = outline-only rendering of the dot's current status
-   color — fill removed, border thickened — so color-coding meaning is untouched. */
+/* Issue #1934: Selected = solid infill using the dot's own status color
+   (the same color already used for border-color on each variant below),
+   versus the light/subtle tinted fill of the unselected state — a filled-in
+   vs. not-filled-in contrast reads more clearly than border-thickness alone. */
 .status-dot.is-selected {
-  background-color: transparent !important;
   border-width: 3px;
 }
 
@@ -592,14 +593,26 @@ function handleClick() {
   border-color: var(--bs-secondary);
 }
 
+.status-dot-grey.is-selected {
+  background-color: var(--bs-secondary);
+}
+
 .status-dot-green {
   background-color: var(--bs-success-bg-subtle);
   border-color: var(--bs-success);
 }
 
+.status-dot-green.is-selected {
+  background-color: var(--bs-success);
+}
+
 .status-dot-purple {
   background-color: #ede0ff;
   border-color: #6f42c1;
+}
+
+.status-dot-purple.is-selected {
+  background-color: #6f42c1;
 }
 
 [data-bs-theme="dark"] .status-dot-purple,
@@ -608,14 +621,27 @@ function handleClick() {
   border-color: #9d6fe8;
 }
 
+[data-bs-theme="dark"] .status-dot-purple.is-selected,
+[data-bs-theme="sensitive-dark"] .status-dot-purple.is-selected {
+  background-color: #9d6fe8;
+}
+
 .status-dot-red {
   background-color: var(--bs-danger-bg-subtle);
   border-color: var(--bs-danger);
 }
 
+.status-dot-red.is-selected {
+  background-color: var(--bs-danger);
+}
+
 .status-dot-yellow {
   background-color: var(--bs-warning-bg-subtle);
   border-color: var(--bs-warning);
+}
+
+.status-dot-yellow.is-selected {
+  background-color: var(--bs-warning);
 }
 
 .status-blinking {
