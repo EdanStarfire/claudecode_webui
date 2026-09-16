@@ -38,6 +38,21 @@ if TYPE_CHECKING:
     from backend.legion_system import LegionSystem
 
 
+def _compute_activity_status(state: str, is_processing: bool) -> str:
+    """Derive a busy/idle/paused/state-name activity label.
+
+    PAUSED always wins over is_processing: a session paused mid permission
+    prompt can still have is_processing=True underneath (nothing resets it
+    during the pause/resume cycle), so checking state first prevents a
+    paused minion from ever being reported as "busy".
+    """
+    if state == "paused":
+        return "paused"
+    if state == "active":
+        return "busy" if is_processing else "idle"
+    return state
+
+
 class SendCommInput(TypedDict):
     to_minion_name: str                    # Exact name of target minion (case-sensitive)
     summary: NotRequired[str]              # Specific one-sentence update (actionable)
@@ -1446,6 +1461,7 @@ class LegionMCPTools:
                 f"• **user** (ID: {USER_MINION_ID})\n"
                 f"  - Role: Human operator\n"
                 f"  - State: active\n"
+                f"  - Activity: idle\n"
                 f"  - Capabilities: Receives reports and can send tasks"
             )
 
@@ -1455,6 +1471,7 @@ class LegionMCPTools:
                 slug = minion.slug or name
                 role = minion.role or "No role specified"
                 state = minion.state.value if hasattr(minion.state, 'value') else str(minion.state)
+                activity = _compute_activity_status(state, minion.is_processing)
                 capabilities = ", ".join(minion.capabilities) if minion.capabilities else "None"
                 cwd = minion.working_directory or "N/A"
 
@@ -1472,6 +1489,7 @@ class LegionMCPTools:
                     f"  - Parent: {parent_display}\n"
                     f"  - Role: {role}\n"
                     f"  - State: {state}\n"
+                    f"  - Activity: {activity}\n"
                     f"  - Working Directory: {cwd}\n"
                     f"  - Capabilities: {capabilities}"
                 )
@@ -1543,6 +1561,8 @@ class LegionMCPTools:
         # State
         state_str = minion.state.value if hasattr(minion.state, 'value') else str(minion.state)
         profile_lines.append(f"**State:** {state_str}")
+        activity = _compute_activity_status(state_str, minion.is_processing)
+        profile_lines.append(f"**Activity:** {activity}")
 
         # Capabilities with expertise scores
         if minion.capabilities:
