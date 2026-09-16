@@ -5,8 +5,13 @@
       <div class="node-row">
         <!-- Left Column: Status + Name (30%) -->
         <div class="node-left">
-          <!-- Status Dot -->
-          <div class="status-dot me-2" :class="statusDotClass"></div>
+          <!-- Status Dot (issue #1934: doubles as batch-selection toggle) -->
+          <div
+            class="status-dot me-2"
+            :class="[statusDotClass, { 'is-selected': isSelectedForBatch }]"
+            :title="isSelectedForBatch ? 'Selected — click to deselect' : 'Click to select for batch actions'"
+            @click.stop="uiStore.toggleSessionSelection(minionData.id)"
+          ></div>
 
           <!-- Overseer Icon -->
           <span v-if="isOverseerWithChildren" class="me-2">👑</span>
@@ -246,6 +251,9 @@ const hasChildren = computed(() => {
 
 // Issue #1696: Collapse state for this node's children
 const isCollapsed = computed(() => uiStore.isMinionCollapsed(props.minionData.id))
+
+// Issue #1934: Batch-selection state for this node's status dot
+const isSelectedForBatch = computed(() => uiStore.isSessionSelected(props.minionData.id))
 
 // Auto-expand override: if the currently selected session is a descendant of this
 // node, show children even when collapsed, so deep-links/navigation stay visible.
@@ -569,6 +577,15 @@ function handleClick() {
   border-radius: 50%;
   border: 2px solid;
   flex-shrink: 0;
+  cursor: pointer;
+}
+
+/* Issue #1934: Selected = solid infill using the dot's own status color
+   (the same color already used for border-color on each variant below),
+   versus the light/subtle tinted fill of the unselected state — a filled-in
+   vs. not-filled-in contrast reads more clearly than border-thickness alone. */
+.status-dot.is-selected {
+  border-width: 3px;
 }
 
 .status-dot-grey {
@@ -576,14 +593,26 @@ function handleClick() {
   border-color: var(--bs-secondary);
 }
 
+.status-dot-grey.is-selected {
+  background-color: var(--bs-secondary);
+}
+
 .status-dot-green {
   background-color: var(--bs-success-bg-subtle);
   border-color: var(--bs-success);
 }
 
+.status-dot-green.is-selected {
+  background-color: var(--bs-success);
+}
+
 .status-dot-purple {
   background-color: #ede0ff;
   border-color: #6f42c1;
+}
+
+.status-dot-purple.is-selected {
+  background-color: #6f42c1;
 }
 
 [data-bs-theme="dark"] .status-dot-purple,
@@ -592,14 +621,27 @@ function handleClick() {
   border-color: #9d6fe8;
 }
 
+[data-bs-theme="dark"] .status-dot-purple.is-selected,
+[data-bs-theme="sensitive-dark"] .status-dot-purple.is-selected {
+  background-color: #9d6fe8;
+}
+
 .status-dot-red {
   background-color: var(--bs-danger-bg-subtle);
   border-color: var(--bs-danger);
 }
 
+.status-dot-red.is-selected {
+  background-color: var(--bs-danger);
+}
+
 .status-dot-yellow {
   background-color: var(--bs-warning-bg-subtle);
   border-color: var(--bs-warning);
+}
+
+.status-dot-yellow.is-selected {
+  background-color: var(--bs-warning);
 }
 
 .status-blinking {
