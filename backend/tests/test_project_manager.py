@@ -3,9 +3,11 @@ Tests for Project Manager
 """
 
 import shutil
+import subprocess
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -608,3 +610,106 @@ async def test_cleanup_session_group_assignment_noop_when_unassigned(project_man
 
     success = await project_manager.cleanup_session_group_assignment(project.project_id, "session-1")
     assert success is True
+
+
+class TestIssue1942WindowsRmtreeFallbackDispatch:
+    """The Windows rmtree fallback stays event-loop-safe (issue #1942)."""
+
+    @pytest.mark.asyncio
+    async def test_happy_path_never_dispatches_to_thread(self, project_manager, temp_data_dir):
+        """On the normal (non-failing) deletion path, the Windows fallback is dead weight."""
+        project = await project_manager.create_project(
+            name="No Fallback Needed",
+            working_directory=str(temp_data_dir / "no_fallback")
+        )
+
+        with patch("backend.project_manager.asyncio.to_thread") as mock_to_thread:
+            success = await project_manager.delete_project(project.project_id)
+
+        assert success is True
+        mock_to_thread.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_windows_fallback_dispatches_via_to_thread(self, project_manager, temp_data_dir):
+        """When shutil.rmtree fails on Windows, the fallback runs via asyncio.to_thread."""
+        project = await project_manager.create_project(
+            name="Windows Fallback",
+            working_directory=str(temp_data_dir / "windows_fallback")
+        )
+        project_dir = project_manager.projects_dir / project.project_id
+
+        fake_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch("backend.project_manager.os.name", "nt"),
+            patch("backend.project_manager.shutil.rmtree", side_effect=OSError("locked")),
+            patch("backend.project_manager.asyncio.to_thread", AsyncMock(return_value=fake_result)) as mock_to_thread,
+        ):
+            success = await project_manager.delete_project(project.project_id)
+
+        assert success is True
+        mock_to_thread.assert_awaited_once_with(project_manager._windows_rmtree_fallback, project_dir)
+
+    @pytest.mark.asyncio
+    async def test_windows_fallback_dispatches_via_to_thread_internal_delete(self, project_manager, temp_data_dir):
+        """_delete_project_internal()'s Windows fallback also dispatches via asyncio.to_thread."""
+        project = await project_manager.create_project(
+            name="Windows Fallback Internal",
+            working_directory=str(temp_data_dir / "windows_fallback_internal")
+        )
+        project_dir = project_manager.projects_dir / project.project_id
+
+        fake_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch("backend.project_manager.os.name", "nt"),
+            patch("backend.project_manager.shutil.rmtree", side_effect=OSError("locked")),
+            patch("backend.project_manager.asyncio.to_thread", AsyncMock(return_value=fake_result)) as mock_to_thread,
+        ):
+            success = await project_manager._delete_project_internal(project.project_id)
+
+        assert success is True
+        mock_to_thread.assert_awaited_once_with(project_manager._windows_rmtree_fallback, project_dir)
+
+    @pytest.mark.asyncio
+    async def test_windows_fallback_returncode_nonzero_fails_deletion(self, project_manager, temp_data_dir):
+        """A failing Windows rmdir (non-zero returncode) must still surface as a failed deletion."""
+        project = await project_manager.create_project(
+            name="Windows Fallback Failure",
+            working_directory=str(temp_data_dir / "windows_fallback_failure")
+        )
+
+        fake_result = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="access denied")
+
+        with (
+            patch("backend.project_manager.os.name", "nt"),
+            patch("backend.project_manager.shutil.rmtree", side_effect=OSError("locked")),
+            patch("backend.project_manager.asyncio.to_thread", AsyncMock(return_value=fake_result)),
+        ):
+            success = await project_manager.delete_project(project.project_id)
+
+        assert success is False
+        assert project.project_id in project_manager._active_projects
+
+    def test_windows_rmtree_fallback_body_runs_gc_sleep_and_rmdir(self, project_manager, temp_data_dir):
+        """_windows_rmtree_fallback() itself must gc.collect, sleep, then run the Windows rmdir command."""
+        target_dir = temp_data_dir / "direct_fallback_test"
+        target_dir.mkdir()
+        fake_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch("backend.project_manager.gc.collect") as mock_gc_collect,
+            patch("backend.project_manager.time.sleep") as mock_sleep,
+            patch("backend.project_manager.subprocess.run", return_value=fake_result) as mock_run,
+        ):
+            result = project_manager._windows_rmtree_fallback(target_dir)
+
+        mock_gc_collect.assert_called_once()
+        mock_sleep.assert_called_once_with(0.5)
+        mock_run.assert_called_once_with(
+            ['rmdir', '/s', '/q', str(target_dir)],
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        assert result is fake_result

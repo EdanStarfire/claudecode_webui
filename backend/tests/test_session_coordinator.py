@@ -1150,6 +1150,27 @@ class TestIssue1375SecretRefs:
         assert result["success"] is True
 
 
+class TestIssue1942DeleteSessionDoesNotForceGc:
+    """delete_session() must not block the event loop with gc.collect() (issue #1942)."""
+
+    @pytest.mark.asyncio
+    async def test_delete_session_never_calls_gc_collect(self, temp_coordinator, sample_session_config, monkeypatch):
+        """The unconditional gc.collect() calls (main path + Windows-only) are gone."""
+        import gc
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        coordinator.legion_system = None
+
+        mock_collect = Mock(wraps=gc.collect)
+        monkeypatch.setattr(gc, "collect", mock_collect)
+
+        result = await coordinator.delete_session(session_id)
+
+        assert result["success"] is True
+        mock_collect.assert_not_called()
+
+
 class TestIssue811IsProcessingStuck:
     """Regression tests for issue #811 — is_processing stuck true when agent is idle."""
 

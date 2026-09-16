@@ -366,6 +366,23 @@ class SessionManager:
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._state_change_callbacks: list[Callable] = []
 
+    @staticmethod
+    def _windows_rmtree_fallback(path: Path) -> subprocess.CompletedProcess:
+        """Synchronous Windows rmdir fallback for a directory shutil.rmtree() failed on.
+
+        Issue #1942: gc.collect() here is reactive (only reached after a real
+        shutil.rmtree() failure), so it's kept — but run via asyncio.to_thread() by
+        callers to avoid blocking the event loop.
+        """
+        gc.collect()
+        time.sleep(0.5)
+        return subprocess.run(
+            ['rmdir', '/s', '/q', str(path)],
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+
     async def initialize(self):
         """Initialize session manager and load existing sessions"""
         try:
@@ -1192,18 +1209,7 @@ class SessionManager:
                             try:
                                 session_logger.info(f"Attempting Windows-specific deletion for {session_dir}")
 
-                                # Method 1: Try to remove directory after ensuring we're not in it
-                                # Force garbage collection to clear any directory references
-                                gc.collect()
-                                time.sleep(0.5)
-
-                                # Use Windows rmdir command as fallback
-                                result = subprocess.run(
-                                    ['rmdir', '/s', '/q', str(session_dir)],
-                                    shell=True,
-                                    capture_output=True,
-                                    text=True
-                                )
+                                result = await asyncio.to_thread(self._windows_rmtree_fallback, session_dir)
 
                                 if result.returncode == 0:
                                     session_logger.info(f"Successfully deleted directory using Windows rmdir: {session_dir}")
