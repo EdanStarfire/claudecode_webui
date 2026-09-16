@@ -2,11 +2,12 @@
 
 import asyncio
 import json
+import subprocess
 import tempfile
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -1186,3 +1187,94 @@ class TestMarkRead:
         await manager.mark_read(sid)
         session_after_second = manager._active_sessions.get(sid)
         assert session_after_second.last_viewed_at == viewed_after_first, "idempotent"
+
+
+class TestIssue1942WindowsRmtreeFallbackDispatch:
+    """delete_session()'s Windows rmtree fallback stays event-loop-safe (issue #1942)."""
+
+    @pytest.mark.asyncio
+    async def test_happy_path_never_dispatches_to_thread(
+        self, temp_session_manager, sample_session_config
+    ):
+        """On the normal (non-failing) deletion path, the Windows fallback is dead weight."""
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+
+        with patch("backend.session_manager.asyncio.to_thread") as mock_to_thread:
+            success = await manager.delete_session(sid)
+
+        assert success is True
+        mock_to_thread.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_windows_fallback_dispatches_via_to_thread(
+        self, temp_session_manager, sample_session_config
+    ):
+        """When shutil.rmtree fails on Windows, the fallback runs via asyncio.to_thread."""
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+        session_dir = manager.sessions_dir / sid
+
+        fake_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch("backend.session_manager.os.name", "nt"),
+            patch("backend.session_manager.shutil.rmtree", side_effect=OSError("locked")),
+            patch(
+                "backend.session_manager.asyncio.to_thread",
+                AsyncMock(return_value=fake_result),
+            ) as mock_to_thread,
+        ):
+            success = await manager.delete_session(sid)
+
+        assert success is True
+        mock_to_thread.assert_awaited_once_with(manager._windows_rmtree_fallback, session_dir)
+
+    @pytest.mark.asyncio
+    async def test_windows_fallback_returncode_nonzero_fails_deletion(
+        self, temp_session_manager, sample_session_config
+    ):
+        """A failing Windows rmdir (non-zero returncode) must still surface as a failed deletion."""
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+
+        fake_result = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="access denied")
+
+        with (
+            patch("backend.session_manager.os.name", "nt"),
+            patch("backend.session_manager.shutil.rmtree", side_effect=OSError("locked")),
+            patch("backend.session_manager.asyncio.to_thread", AsyncMock(return_value=fake_result)),
+        ):
+            success = await manager.delete_session(sid)
+
+        assert success is False
+        assert sid in manager._active_sessions
+
+    def test_windows_rmtree_fallback_body_runs_gc_sleep_and_rmdir(
+        self, temp_session_manager, tmp_path
+    ):
+        """_windows_rmtree_fallback() itself must gc.collect, sleep, then run the Windows rmdir command."""
+        manager = temp_session_manager
+        target_dir = tmp_path / "direct_fallback_test"
+        target_dir.mkdir()
+        fake_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch("backend.session_manager.gc.collect") as mock_gc_collect,
+            patch("backend.session_manager.time.sleep") as mock_sleep,
+            patch("backend.session_manager.subprocess.run", return_value=fake_result) as mock_run,
+        ):
+            result = manager._windows_rmtree_fallback(target_dir)
+
+        mock_gc_collect.assert_called_once()
+        mock_sleep.assert_called_once_with(0.5)
+        mock_run.assert_called_once_with(
+            ['rmdir', '/s', '/q', str(target_dir)],
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        assert result is fake_result

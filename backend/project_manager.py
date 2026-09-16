@@ -107,6 +107,24 @@ class ProjectManager:
         self._active_projects: dict[str, ProjectInfo] = {}
         self._project_locks: dict[str, asyncio.Lock] = {}
 
+    @staticmethod
+    def _windows_rmtree_fallback(path: Path) -> subprocess.CompletedProcess:
+        """Synchronous Windows rmdir fallback for a directory shutil.rmtree() failed on.
+
+        Issue #1942: gc.collect() here is reactive (only reached after a real
+        shutil.rmtree() failure, unlike the unconditional calls removed elsewhere),
+        so it's kept — but run via asyncio.to_thread() by callers to avoid blocking
+        the event loop.
+        """
+        gc.collect()
+        time.sleep(0.5)
+        return subprocess.run(
+            ['rmdir', '/s', '/q', str(path)],
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+
     async def initialize(self):
         """Initialize project manager and load existing projects"""
         try:
@@ -263,15 +281,7 @@ class ProjectManager:
                         if os.name == 'nt':  # Windows
                             try:
                                 project_logger.info(f"Attempting Windows-specific deletion for {project_dir}")
-                                gc.collect()
-                                time.sleep(0.5)
-
-                                result = subprocess.run(
-                                    ['rmdir', '/s', '/q', str(project_dir)],
-                                    shell=True,
-                                    capture_output=True,
-                                    text=True
-                                )
+                                result = await asyncio.to_thread(self._windows_rmtree_fallback, project_dir)
 
                                 if result.returncode == 0:
                                     project_logger.info(f"Successfully deleted directory using Windows rmdir: {project_dir}")
@@ -332,15 +342,7 @@ class ProjectManager:
                     if os.name == 'nt':  # Windows
                         try:
                             project_logger.info(f"Attempting Windows-specific deletion for {project_dir}")
-                            gc.collect()
-                            time.sleep(0.5)
-
-                            result = subprocess.run(
-                                ['rmdir', '/s', '/q', str(project_dir)],
-                                shell=True,
-                                capture_output=True,
-                                text=True
-                            )
+                            result = await asyncio.to_thread(self._windows_rmtree_fallback, project_dir)
 
                             if result.returncode == 0:
                                 project_logger.info(f"Successfully deleted directory using Windows rmdir: {project_dir}")

@@ -6,7 +6,6 @@ into a unified system for managing Claude Code sessions.
 """
 
 import asyncio
-import gc
 import json
 import logging
 import os
@@ -2569,20 +2568,12 @@ class SessionCoordinator:
             self._message_emitted_events.pop(session_id, None)
             self._emitted_message_ids.pop(session_id, None)
 
-            # Step 4: Force multiple garbage collections to ensure all handles are released
-            gc.collect()
-            await asyncio.sleep(0.1)
-            gc.collect()
-            await asyncio.sleep(0.1)
-
-            # Step 5: Additional Windows-specific cleanup
-            if os.name == 'nt':  # Windows
-                # logger.info(f"Performing Windows-specific cleanup for session {session_id}")
-                # Force close any remaining handles that might be held by the system
-                gc.collect()
-                await asyncio.sleep(0.3)
-
-            # Step 6: Delete through session manager (this removes from active sessions and deletes files)
+            # Step 4: Delete through session manager (this removes from active sessions and deletes files)
+            # Issue #1942: the unconditional gc.collect() calls formerly here (and the
+            # Windows-specific one that followed) reclaimed nothing — storage_manager.cleanup()
+            # already closes every file handle deterministically (see #1933), and the real
+            # Windows fallback for a stuck directory delete already lives, properly gated on
+            # an actual shutil.rmtree() failure, inside session_manager.delete_session() below.
             # logger.info(f"Deleting session files for session {session_id}")
             success = await self.session_manager.delete_session(session_id)
 
