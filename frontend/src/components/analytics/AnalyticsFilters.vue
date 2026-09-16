@@ -68,6 +68,21 @@
       aria-label="Search sessions"
     />
 
+    <!-- Exclude deleted sessions toggle -->
+    <div class="form-check form-switch mb-0">
+      <input
+        id="analytics-exclude-deleted"
+        class="form-check-input"
+        type="checkbox"
+        role="switch"
+        :checked="filters.excludeDeleted"
+        @change="store.setExcludeDeleted($event.target.checked)"
+      />
+      <label class="form-check-label small" for="analytics-exclude-deleted">
+        Exclude deleted sessions
+      </label>
+    </div>
+
     <!-- Refresh button -->
     <button
       class="btn btn-sm btn-outline-secondary ms-auto"

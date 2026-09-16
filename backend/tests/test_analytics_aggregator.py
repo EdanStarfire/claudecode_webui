@@ -39,6 +39,20 @@ async def db(tmp_path):
     await d.close()
 
 
+async def _mark_deleted(db: AnalyticsDB, session_id: str, deleted_at: float = _BASE_TS + 1) -> None:
+    """Insert/update a session_usage row with deleted_at set (issue #1941),
+    without going through AnalyticsStore/record_turn — lets aggregator tests
+    exercise the include_deleted join independently of turn_usage seeding."""
+    await db.execute_write(
+        """
+        INSERT INTO session_usage (session_id, turn_count, last_updated, deleted_at)
+        VALUES (?, 0, ?, ?)
+        ON CONFLICT(session_id) DO UPDATE SET deleted_at = excluded.deleted_at
+        """,
+        (session_id, deleted_at, deleted_at),
+    )
+
+
 async def _seed(db: AnalyticsDB, rows: list[dict]) -> None:
     """Insert rows into turn_usage for testing."""
     sql = """
@@ -364,6 +378,67 @@ async def test_by_token_type_per_type_cost_values_correct(db):
     assert abs(tt["output_cost_usd"] - 5.0) < 1e-9
     assert abs(tt["cache_write_cost_usd"] - 1.0) < 1e-9
     assert abs(tt["cache_read_cost_usd"] - 0.1) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# include_deleted (issue #1941: deleted sessions' rows are preserved, only
+# flagged via session_usage.deleted_at — never removed from turn_usage)
+# ---------------------------------------------------------------------------
+
+
+async def test_session_include_deleted_default_true(db):
+    await _seed(db, [
+        {"session_id": "s1", "turn_seq": 1, "input_tokens": 100, "ts": _BASE_TS},
+        {"session_id": "s2", "turn_seq": 1, "input_tokens": 200, "ts": _BASE_TS},
+    ])
+    await _mark_deleted(db, "s2")
+    rows = await aggregate_by_session(db, _PRICING, _BASE_TS - 1, _BASE_TS + _DAY)
+    assert {r["session_id"] for r in rows} == {"s1", "s2"}
+
+
+async def test_session_include_deleted_false_excludes_deleted(db):
+    await _seed(db, [
+        {"session_id": "s1", "turn_seq": 1, "input_tokens": 100, "ts": _BASE_TS},
+        {"session_id": "s2", "turn_seq": 1, "input_tokens": 200, "ts": _BASE_TS},
+    ])
+    await _mark_deleted(db, "s2")
+    rows = await aggregate_by_session(
+        db, _PRICING, _BASE_TS - 1, _BASE_TS + _DAY, include_deleted=False
+    )
+    assert len(rows) == 1
+    assert rows[0]["session_id"] == "s1"
+
+
+async def test_session_deleted_at_field_exposed(db):
+    await _seed(db, [{"session_id": "s1", "turn_seq": 1, "input_tokens": 100, "ts": _BASE_TS}])
+    assert (await aggregate_by_session(db, _PRICING, _BASE_TS - 1, _BASE_TS + _DAY))[0]["deleted_at"] is None
+    await _mark_deleted(db, "s1", deleted_at=1234.0)
+    rows = await aggregate_by_session(db, _PRICING, _BASE_TS - 1, _BASE_TS + _DAY)
+    assert rows[0]["deleted_at"] == 1234.0
+
+
+async def test_time_include_deleted_default_true(db):
+    await _seed(db, [
+        {"session_id": "s1", "turn_seq": 1, "input_tokens": 100, "ts": _BASE_TS},
+        {"session_id": "s2", "turn_seq": 1, "input_tokens": 200, "ts": _BASE_TS + 60},
+    ])
+    await _mark_deleted(db, "s2")
+    buckets = await aggregate_by_time(db, _PRICING, "hour", _BASE_TS - 1, _BASE_TS + _DAY)
+    assert len(buckets) == 1
+    assert buckets[0]["by_token_type"]["input_tokens"] == 300
+
+
+async def test_time_include_deleted_false_excludes_deleted(db):
+    await _seed(db, [
+        {"session_id": "s1", "turn_seq": 1, "input_tokens": 100, "ts": _BASE_TS},
+        {"session_id": "s2", "turn_seq": 1, "input_tokens": 200, "ts": _BASE_TS + 60},
+    ])
+    await _mark_deleted(db, "s2")
+    buckets = await aggregate_by_time(
+        db, _PRICING, "hour", _BASE_TS - 1, _BASE_TS + _DAY, include_deleted=False
+    )
+    assert len(buckets) == 1
+    assert buckets[0]["by_token_type"]["input_tokens"] == 100
 
 
 async def test_by_token_type_unknown_model_zero_contribution(db):

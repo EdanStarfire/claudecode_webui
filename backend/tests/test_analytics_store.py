@@ -89,23 +89,29 @@ async def test_get_turn_count_returns_correct_value(store):
 
 
 # ---------------------------------------------------------------------------
-# Cascade delete
+# Mark deleted (issue #1941: deletion must preserve analytics history)
 # ---------------------------------------------------------------------------
 
-async def test_delete_session_removes_rows(store):
+async def test_mark_session_deleted_preserves_rows(store):
     usage = {"input_tokens": 100}
     await store.record_turn("sid-5", 1, None, usage, None)
-    await store.delete_session("sid-5")
+    await store.mark_session_deleted("sid-5")
 
     agg = await store.get_session_usage("sid-5")
-    assert agg is None
+    assert agg is not None
+    assert agg["input_tokens"] == 100
     count = await store.get_turn_count("sid-5")
-    assert count == 0
+    assert count == 1
+
+    rows = await store._db.execute_read(
+        "SELECT deleted_at FROM session_usage WHERE session_id = ?", ("sid-5",)
+    )
+    assert rows[0]["deleted_at"] is not None
 
 
-async def test_delete_nonexistent_session_is_safe(store):
-    # Should not raise
-    await store.delete_session("no-such-session")
+async def test_mark_nonexistent_session_deleted_is_safe(store):
+    # Should not raise even though there's no session_usage row to update
+    await store.mark_session_deleted("no-such-session")
 
 
 # ---------------------------------------------------------------------------

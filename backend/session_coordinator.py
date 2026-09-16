@@ -2147,6 +2147,49 @@ class SessionCoordinator:
         self._turn_seq_by_session[session_id] += 1
         return self._turn_seq_by_session[session_id]
 
+    async def _flush_unflushed_subagent_usage(
+        self, session_id: str, allow_retry: bool = True
+    ) -> None:
+        """Persist any leftover subagent (Task/Agent tool) usage as a catch-up
+        row, e.g. from a run_in_background subagent still emitting usage after
+        its originating turn's ResultMessage already fired and popped the
+        accumulator. Shared by terminate_session() and delete_session()
+        (issue #1840, folded into #1941): both are a last chance to persist
+        this usage — no further 'result' message will ever arrive to trigger
+        the normal merge, and since #1941, deletion no longer wipes analytics
+        rows afterward either, so dropping it here would be permanent data loss.
+
+        Owns popping `_last_turn_model_by_session` unconditionally (issue #1831
+        requires it cleared on delete regardless of whether there's leftover
+        subagent usage to flush), using its value to attribute the catch-up
+        row when there is one.
+
+        `allow_retry` controls whether a failed flush restores the accumulator
+        for a later retry attempt — correct for terminate_session() (the
+        session_id can be restarted and terminated again, retriggering this
+        flush), but not for delete_session() (the session_id is gone for good
+        afterward; restoring would just leak the entry in memory forever with
+        no code path left to ever retry it).
+        """
+        _model = self._last_turn_model_by_session.pop(session_id, None)
+        _sub_accum = self._subagent_usage_by_session.pop(session_id, None)
+        if not _sub_accum or not self.analytics_store:
+            return
+        try:
+            turn_seq = await self._next_turn_seq(session_id)
+            _flushed = await self.analytics_store.record_turn(
+                session_id, turn_seq, _model, _sub_accum, None, is_subagent=True
+            )
+            if not _flushed and allow_retry:
+                # Don't lose it — restore so a future flush/merge can retry.
+                self._subagent_usage_by_session[session_id] = _sub_accum
+        except Exception:
+            logger.exception(
+                f"Failed to flush subagent usage for session {session_id}"
+            )
+            if allow_retry:
+                self._subagent_usage_by_session[session_id] = _sub_accum
+
     async def terminate_session(self, session_id: str) -> bool:
         """Terminate a session and cleanup resources"""
         try:
@@ -2183,30 +2226,15 @@ class SessionCoordinator:
                 self.litellm_proxy_manager.unregister_session_key(session_id)
                 self.litellm_proxy_manager.unregister_session_routing(session_id)
 
-            # Issue #1840: flush any unflushed subagent (Task/Agent tool) usage —
-            # e.g. a run_in_background subagent still emitting usage after its
-            # originating turn's ResultMessage already fired and popped the
-            # accumulator. Termination is the last chance to persist it: no further
-            # 'result' message will ever arrive for this session to trigger the
-            # normal merge. (delete_session() doesn't need this — it wipes all
-            # analytics rows for the session immediately after, so persisting here
-            # first would accomplish nothing.)
-            _sub_accum = self._subagent_usage_by_session.pop(session_id, None)
-            if _sub_accum and self.analytics_store:
-                try:
-                    turn_seq = await self._next_turn_seq(session_id)
-                    _model = self._last_turn_model_by_session.pop(session_id, None)
-                    _flushed = await self.analytics_store.record_turn(
-                        session_id, turn_seq, _model, _sub_accum, None, is_subagent=True
-                    )
-                    if not _flushed:
-                        # Don't lose it — restore so a future flush/merge can retry.
-                        self._subagent_usage_by_session[session_id] = _sub_accum
-                except Exception:
-                    logger.exception(
-                        f"Failed to flush subagent usage on termination for session {session_id}"
-                    )
-                    self._subagent_usage_by_session[session_id] = _sub_accum
+            # Issue #1840/#1941: flush any unflushed subagent (Task/Agent tool)
+            # usage — e.g. a run_in_background subagent still emitting usage
+            # after its originating turn's ResultMessage already fired and
+            # popped the accumulator. Termination is the last chance to persist
+            # it: no further 'result' message will ever arrive for this session
+            # to trigger the normal merge. delete_session() needs the same
+            # flush now that it preserves analytics history instead of wiping
+            # it (see delete_session()'s own call to this helper).
+            await self._flush_unflushed_subagent_usage(session_id)
 
             # Terminate session through manager
             success = await self.session_manager.terminate_session(session_id)
@@ -2579,21 +2607,25 @@ class SessionCoordinator:
 
             if success:
                 coord_logger.info(f"Session {session_id} deleted")
-                # Issue #1831: Clear any in-flight-turn model tracked for this session
-                self._last_turn_model_by_session.pop(session_id, None)
-                # Issue #1840: drop any unflushed subagent usage without persisting it —
-                # delete_session() wipes all analytics rows for this session a few lines
-                # below, so writing a catch-up row first would accomplish nothing. This
-                # purely avoids a stale in-memory dict entry outliving the session.
-                self._subagent_usage_by_session.pop(session_id, None)
-                # Issue #1125: Remove analytics rows for deleted session
+                # Issue #1840/#1941: flush any unflushed subagent usage before marking
+                # analytics deleted below — deletion no longer wipes analytics rows, so
+                # this is a real, permanent persistence opportunity, not a no-op. Also
+                # owns clearing _last_turn_model_by_session (formerly a standalone
+                # Issue #1831 pop here; folded into the shared helper since the flush
+                # needs that same value to attribute its catch-up row). allow_retry=False:
+                # unlike terminate_session(), this session_id is gone for good right after
+                # this — restoring the accumulator on a write failure would just leak it in
+                # memory forever with no code path left to ever retry the flush.
+                await self._flush_unflushed_subagent_usage(session_id, allow_retry=False)
+                # Issue #1941: mark analytics deleted instead of removing rows, so
+                # historical totals survive session/project deletion.
                 if self.analytics_store:
                     try:
-                        await self.analytics_store.delete_session(session_id)
+                        await self.analytics_store.mark_session_deleted(session_id)
                         self._turn_seq_by_session.pop(session_id, None)
                         self._usage_baseline_by_session.pop(session_id, None)
                     except Exception:
-                        logger.exception("Failed to delete analytics for session %s", session_id)
+                        logger.exception("Failed to mark analytics deleted for session %s", session_id)
                 # Notify about session deletion (using a special state change)
                 await self._notify_state_change(session_id, "deleted")
                 # Add this session to the deleted list

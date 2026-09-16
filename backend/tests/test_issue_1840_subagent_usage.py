@@ -285,6 +285,13 @@ class TestIssue1840SubagentUsageCapture:
 
 
 class TestIssue1840TerminationAndDeletionLifecycle:
+    """Both terminate_session() and delete_session() (issue #1941) must flush
+    leftover subagent usage via the shared _flush_unflushed_subagent_usage()
+    helper — neither ever gets a later 'result' message to trigger the normal
+    merge, and since #1941 removed delete_session()'s row-wiping, there is no
+    longer any justification for either path to drop it silently."""
+
+
     @pytest.mark.asyncio
     async def test_termination_flushes_leftover_subagent_usage(self, temp_coordinator):
         """§2c.2: a run_in_background subagent whose usage arrives after the
@@ -337,21 +344,65 @@ class TestIssue1840TerminationAndDeletionLifecycle:
         analytics_store.record_turn.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_deletion_drops_leftover_usage_without_persisting(self, temp_coordinator):
-        """§2c.2: delete_session() wipes all analytics rows immediately after, so
-        it must drop any leftover accumulator without writing a catch-up row —
-        persisting first would accomplish nothing."""
+    async def test_deletion_flushes_leftover_subagent_usage(self, temp_coordinator):
+        """Issue #1941: delete_session() no longer wipes analytics rows, so any
+        leftover subagent accumulator must be flushed as a catch-up row before
+        the session is marked deleted — mirrors
+        test_termination_flushes_leftover_subagent_usage above. Dropping it here
+        would be the exact same permanent data loss this issue exists to fix,
+        just triggered by an in-flight background subagent at delete-time."""
         coordinator = temp_coordinator
         session_id = await _make_session(coordinator, SessionConfig())
         coordinator.legion_system = None
         analytics_store = _mock_analytics(coordinator)
 
-        coordinator._subagent_usage_by_session[session_id] = {"input_tokens": 99}
+        coordinator._subagent_usage_by_session[session_id] = _accumulate_subagent_usage(
+            None,
+            {
+                "input_tokens": 99,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+        )
 
         result = await coordinator.delete_session(session_id)
 
         assert result["success"] is True
-        analytics_store.record_turn.assert_not_awaited()
+        analytics_store.record_turn.assert_awaited_once()
+        call = analytics_store.record_turn.call_args
+        assert call.args[0] == session_id
+        assert call.args[3] == {
+            "input_tokens": 99,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_write_tokens_5m": 0,
+            "cache_write_tokens_1h": 0,
+            "cache_write_tokens": 0,
+        }
+        assert call.kwargs.get("is_subagent") is True
+        assert session_id not in coordinator._subagent_usage_by_session
+
+    @pytest.mark.asyncio
+    async def test_deletion_flush_failure_does_not_leak_accumulator(self, temp_coordinator):
+        """Issue #1941 code review: unlike terminate_session() (where a failed
+        flush restores the accumulator so a later restart+re-termination can
+        retry it), delete_session()'s session_id is gone for good right after
+        this call — restoring the accumulator on failure would leave a
+        permanently orphaned dict entry with no code path left to ever flush
+        or clean it up. delete_session() must drop it instead."""
+        coordinator = temp_coordinator
+        session_id = await _make_session(coordinator, SessionConfig())
+        coordinator.legion_system = None
+        analytics_store = _mock_analytics(coordinator)
+        analytics_store.record_turn = AsyncMock(return_value=False)
+
+        coordinator._subagent_usage_by_session[session_id] = _accumulate_subagent_usage(
+            None, {"input_tokens": 7}
+        )
+
+        result = await coordinator.delete_session(session_id)
+
+        assert result["success"] is True
+        analytics_store.record_turn.assert_awaited_once()
         assert session_id not in coordinator._subagent_usage_by_session
 
 

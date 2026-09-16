@@ -35,39 +35,44 @@ async def aggregate_by_session(
     until: float,
     session_ids: list[str] | None = None,
     models: list[str] | None = None,
+    include_deleted: bool = True,
 ) -> list[dict[str, Any]]:
     """Return one row per session with summed token counts and estimated cost.
 
     Enrichment fields (session_name, is_minion, parent_session_id) are left as
     their defaults and filled in by the router layer.
     """
-    wheres = ["ts >= ?", "ts <= ?"]
+    wheres = ["turn_usage.ts >= ?", "turn_usage.ts <= ?"]
     params: list[Any] = [since, until]
 
     if session_ids:
         placeholders = ",".join("?" * len(session_ids))
-        wheres.append(f"session_id IN ({placeholders})")
+        wheres.append(f"turn_usage.session_id IN ({placeholders})")
         params.extend(session_ids)
     if models:
         placeholders = ",".join("?" * len(models))
-        wheres.append(f"model IN ({placeholders})")
+        wheres.append(f"turn_usage.model IN ({placeholders})")
         params.extend(models)
+    if not include_deleted:
+        wheres.append("session_usage.deleted_at IS NULL")
 
     where_clause = " AND ".join(wheres)
     sql = f"""
         SELECT
-            session_id,
-            model,
-            COUNT(*)                    AS turn_count,
-            SUM(input_tokens)           AS input_tokens,
-            SUM(output_tokens)          AS output_tokens,
-            SUM(cache_write_tokens)     AS cache_write_tokens,
-            SUM(cache_read_tokens)      AS cache_read_tokens,
-            SUM(sdk_total_cost_usd)     AS sdk_reported_cost_usd,
-            MAX(ts)                     AS last_active
+            turn_usage.session_id                AS session_id,
+            turn_usage.model                      AS model,
+            COUNT(*)                              AS turn_count,
+            SUM(turn_usage.input_tokens)          AS input_tokens,
+            SUM(turn_usage.output_tokens)         AS output_tokens,
+            SUM(turn_usage.cache_write_tokens)    AS cache_write_tokens,
+            SUM(turn_usage.cache_read_tokens)     AS cache_read_tokens,
+            SUM(turn_usage.sdk_total_cost_usd)    AS sdk_reported_cost_usd,
+            MAX(turn_usage.ts)                    AS last_active,
+            MAX(session_usage.deleted_at)         AS deleted_at
         FROM turn_usage
+        LEFT JOIN session_usage ON session_usage.session_id = turn_usage.session_id
         WHERE {where_clause}
-        GROUP BY session_id
+        GROUP BY turn_usage.session_id
         ORDER BY last_active DESC
     """
     raw = await db.execute_read(sql, params)
@@ -89,6 +94,7 @@ async def aggregate_by_session(
                 "sdk_reported_cost_usd": row["sdk_reported_cost_usd"],
                 "rates_known": rates_known,
                 "last_active": row["last_active"],
+                "deleted_at": row["deleted_at"],
             }
         )
     return result
@@ -102,6 +108,7 @@ async def aggregate_by_time(
     until: float,
     session_ids: list[str] | None = None,
     models: list[str] | None = None,
+    include_deleted: bool = True,
 ) -> list[dict[str, Any]]:
     """Return time-bucketed rows with by_token_type and by_model breakdowns.
 
@@ -109,33 +116,44 @@ async def aggregate_by_time(
     pass so the caller can toggle between them client-side without re-querying.
     """
     fmt = _BUCKET_FMT[group_by]
-    wheres = ["ts >= ?", "ts <= ?"]
+    wheres = ["turn_usage.ts >= ?", "turn_usage.ts <= ?"]
     params: list[Any] = [since, until]
 
     if session_ids:
         placeholders = ",".join("?" * len(session_ids))
-        wheres.append(f"session_id IN ({placeholders})")
+        wheres.append(f"turn_usage.session_id IN ({placeholders})")
         params.extend(session_ids)
     if models:
         placeholders = ",".join("?" * len(models))
-        wheres.append(f"model IN ({placeholders})")
+        wheres.append(f"turn_usage.model IN ({placeholders})")
         params.extend(models)
+    if not include_deleted:
+        wheres.append("session_usage.deleted_at IS NULL")
 
     where_clause = " AND ".join(wheres)
+    # Unlike aggregate_by_session, this function never returns deleted_at, so the
+    # join only earns its keep when actually filtering (include_deleted=False) —
+    # skip it on the default include_deleted=True path.
+    join_clause = (
+        "LEFT JOIN session_usage ON session_usage.session_id = turn_usage.session_id"
+        if not include_deleted
+        else ""
+    )
     # Group by bucket+model so we can build the per-model breakdown directly.
     sql = f"""
         SELECT
-            strftime('{fmt}', ts, 'unixepoch')                               AS bucket_label,
-            CAST(strftime('%s', strftime('{fmt}', ts, 'unixepoch')) AS INTEGER) AS bucket_ts,
-            model,
-            SUM(input_tokens)       AS input_tokens,
-            SUM(output_tokens)      AS output_tokens,
-            SUM(cache_write_tokens) AS cache_write_tokens,
-            SUM(cache_read_tokens)  AS cache_read_tokens
+            strftime('{fmt}', turn_usage.ts, 'unixepoch')                               AS bucket_label,
+            CAST(strftime('%s', strftime('{fmt}', turn_usage.ts, 'unixepoch')) AS INTEGER) AS bucket_ts,
+            turn_usage.model               AS model,
+            SUM(turn_usage.input_tokens)       AS input_tokens,
+            SUM(turn_usage.output_tokens)      AS output_tokens,
+            SUM(turn_usage.cache_write_tokens) AS cache_write_tokens,
+            SUM(turn_usage.cache_read_tokens)  AS cache_read_tokens
         FROM turn_usage
+        {join_clause}
         WHERE {where_clause}
-        GROUP BY bucket_label, model
-        ORDER BY bucket_label, model
+        GROUP BY bucket_label, turn_usage.model
+        ORDER BY bucket_label, turn_usage.model
     """
     raw = await db.execute_read(sql, params)
 

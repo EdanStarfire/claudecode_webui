@@ -171,14 +171,18 @@ class AnalyticsStore:
         )
         return int(val) if val is not None else 0
 
-    async def delete_session(self, session_id: str) -> None:
-        """Remove all analytics rows for a session."""
+    async def mark_session_deleted(self, session_id: str) -> None:
+        """Flag a session's aggregate row as deleted, without removing any rows.
+
+        Issue #1941: session/project deletion must never destroy analytics
+        history. Sets `session_usage.deleted_at` so callers can filter deleted
+        sessions in/out of totals while the underlying rows stay intact
+        forever. No-op if the session never recorded any usage (no row exists).
+        """
         try:
             await self._db.execute_write(
-                "DELETE FROM turn_usage WHERE session_id = ?", (session_id,)
-            )
-            await self._db.execute_write(
-                "DELETE FROM session_usage WHERE session_id = ?", (session_id,)
+                "UPDATE session_usage SET deleted_at = ? WHERE session_id = ?",
+                (time(), session_id),
             )
         except Exception:
-            logger.exception("Failed to delete analytics for session %s", session_id)
+            logger.exception("Failed to mark analytics deleted for session %s", session_id)

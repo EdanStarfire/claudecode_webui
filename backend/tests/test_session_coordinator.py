@@ -791,6 +791,42 @@ class TestDeleteSessionScheduleCancellation:
         assert result["success"] is True
 
 
+class TestIssue1941DeleteSessionPreservesAnalytics:
+    """delete_session() must never remove analytics rows (issue #1941) — it
+    flags the session's aggregate row deleted via
+    AnalyticsStore.mark_session_deleted() instead of destroying it, so
+    historical totals stay accurate regardless of routine cleanup."""
+
+    @pytest.mark.asyncio
+    async def test_delete_session_preserves_analytics_rows(
+        self, temp_coordinator, sample_session_config, tmp_path
+    ):
+        from backend.analytics.database import AnalyticsDB
+        from backend.analytics_store import AnalyticsStore
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        db = AnalyticsDB(tmp_path / "analytics.db")
+        await db.initialize()
+        store = AnalyticsStore(db)
+        coordinator.analytics_store = store
+
+        await store.record_turn(
+            session_id, 1, "claude-sonnet-4-6", {"input_tokens": 100, "output_tokens": 50}, 0.01
+        )
+
+        result = await coordinator.delete_session(session_id)
+        assert result["success"] is True
+
+        agg = await store.get_session_usage(session_id)
+        assert agg is not None
+        assert agg["input_tokens"] == 100
+        assert agg["output_tokens"] == 50
+
+        await db.close()
+
+
 class TestIssue1722DeleteSessionKanbanCleanup:
     """delete_session() strips the deleted session's kanban group assignment (issue #1722)."""
 
