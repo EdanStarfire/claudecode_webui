@@ -25,14 +25,13 @@
         <div v-if="sv.hasThinking" class="thinking-block mb-2">
           <ThinkingBlock
             :thinking="sv.thinkingContent"
-            :streaming="!!sv.seg.streaming"
             :scopeKey="sv.seg.id || sv.seg.message_id || index"
           />
         </div>
 
         <!-- Content -->
-        <div v-if="sv.hasContent || sv.seg.streaming" class="msg-content-row">
-          <MarkdownView class="msg-text" :content="sv.rawContent" :streaming="!!sv.seg.streaming" :caret="!!sv.seg.streaming" />
+        <div v-if="sv.hasContent" class="msg-content-row">
+          <MarkdownView class="msg-text" :content="sv.rawContent" />
           <button
             v-if="tts"
             class="tts-play-icon"
@@ -171,15 +170,13 @@ const modelName = computed(() => {
 })
 
 function segHasThinking(seg) {
-  // Issue #1486: message.thinking is built up by thinking_delta events during streaming.
-  // After the fallback-dedup merge the field persists on the message object even though
-  // streaming=false, so check it unconditionally before falling back to metadata.
-  if (seg.thinking) return true
+  // Issue #1955: segments rendered here are always canonical now — the live-typing preview
+  // (including its own thinking display) is StreamingPreview.vue's job, not this component's.
   return !!(seg.metadata?.has_thinking && seg.metadata?.thinking_content)
 }
 
 function segThinkingContent(seg) {
-  return seg.thinking || seg.metadata?.thinking_content || ''
+  return seg.metadata?.thinking_content || ''
 }
 
 function segHasContent(seg) {
@@ -320,10 +317,10 @@ const isTTSPlaying = computed(() => {
  * Issue #195: Hide the entire assistant bubble when there's nothing to render across any segment.
  */
 const hasAnythingToShow = computed(() => {
-  // Issue #1486: always show the streaming placeholder so the caret is visible from the first
-  // token — without this guard a thinking-first response is invisible until text arrives.
+  // Issue #1955: segments rendered here are always canonical (never a streaming placeholder —
+  // that's StreamingPreview.vue's job now), so no streaming-caret carve-out is needed.
   return segmentViews.value.some(sv =>
-    !!sv.seg.streaming || sv.hasContent || sv.hasThinking ||
+    sv.hasContent || sv.hasThinking ||
     sv.mainTimelineTools.length > 0 || sv.subagentAnchors.length > 0
   ) || sendCommToolCalls.value.length > 0
 })

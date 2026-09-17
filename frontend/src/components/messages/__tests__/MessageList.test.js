@@ -854,7 +854,7 @@ describe('virtualizer offset model (#1748 stage: offset-model)', () => {
     expect(scrollToSpy).toHaveBeenCalled()
   })
 
-  it('re-pins to bottom when the tail row\'s measured height grows without a new item being added — streaming growth (§7)', async () => {
+  it('re-pins to bottom when the streaming preview\'s content grows — replaces the old tracked-row streaming-growth trigger (Issue #1955)', async () => {
     const scrollToSpy = vi.fn()
     Element.prototype.scrollTo = scrollToSpy
 
@@ -868,25 +868,58 @@ describe('virtualizer offset model (#1748 stage: offset-model)', () => {
     const messageStore = useMessageStore(pinia)
     useUIStore(pinia).autoScrollEnabled = true
 
-    messageStore.messagesBySession.set(SESSION_ID, [makeMessage({ content: 'Streaming message' })])
+    messageStore.messagesBySession.set(SESSION_ID, [makeMessage({ type: 'assistant', content: 'First' })])
     messageStore.messagesBySession = new Map(messageStore.messagesBySession)
     await new Promise(r => setTimeout(r, 50))
     scrollToSpy.mockClear()
 
-    // No new item is added — only the already-mounted tail row's measured size changes, matching
-    // a single assistant message growing token-by-token. This is the explicit wiring point (the
-    // virtualizer's onChange, not an outer content-box ResizeObserver) plan §7 calls out as easy
-    // to silently regress.
-    // Issue #1911: index 0 is now the leading date separator (the message's default timestamp is
-    // a real date), so the message itself — the row whose growth this test is about — is index 1.
-    const tailRow = document.querySelector('[data-index="1"]')
-    expect(tailRow).toBeTruthy()
-    resizeObserverStub.triggerResize(tailRow, { height: 900 })
+    // Issue #1955: the live-typing preview renders OUTSIDE the virtualizer's tracked rows (a
+    // normal-flow sibling, like TruncationBanner) — its growth no longer trips the virtualizer's
+    // own onChange (which only fires for tracked-row measurement changes). The dedicated
+    // content-length watch in MessageList.vue is the replacement trigger.
+    messageStore.handleAssistantDelta(SESSION_ID, { uuid: 'env-1', event: { type: 'message_start', message: { id: 'msg-stream-1' } } })
+    messageStore.handleAssistantDelta(SESSION_ID, {
+      uuid: 'env-2',
+      event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Streaming in more text' } }
+    })
 
+    // Let the rAF-batched preview flush run, then the component's own nextTick+rAF-coalesced
+    // scheduleStickyScroll (§7/§10).
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(scrollToSpy).toHaveBeenCalled()
+  })
+
+  it('StreamingPreview renders as a sibling after the virtual spacer and is not counted among the virtualizer\'s tracked rows (Issue #1955)', async () => {
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [makeMessage({ type: 'assistant', content: 'First' })])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+    await new Promise(r => setTimeout(r, 50))
+
+    const rowCountBefore = document.querySelectorAll('.virtual-item-row').length
+
+    // Text only (no thinking) keeps this test from also exercising ThinkingBlock — irrelevant
+    // to what's being asserted here (sibling positioning, not counted as a tracked row).
+    messageStore.handleAssistantDelta(SESSION_ID, { uuid: 'env-1', event: { type: 'message_start', message: { id: 'msg-preview-1' } } })
+    messageStore.handleAssistantDelta(SESSION_ID, {
+      uuid: 'env-2',
+      event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'typing...' } }
+    })
     await new Promise(resolve => requestAnimationFrame(resolve))
     await new Promise(r => setTimeout(r, 20))
 
-    expect(scrollToSpy).toHaveBeenCalled()
+    const preview = document.querySelector('[data-testid="streaming-preview"]')
+    expect(preview).toBeTruthy()
+    expect(preview.closest('.virtual-item-row')).toBeNull()
+    expect(document.querySelectorAll('.virtual-item-row').length).toBe(rowCountBefore)
   })
 
   // Issue #1748 (stage: windowing) regression: a real overscan value means rowVirtualizer's

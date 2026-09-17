@@ -79,6 +79,11 @@
           </div>
         </div>
 
+        <!-- Issue #1955: cosmetic-only live-typing preview, rendered as a normal-flow sibling
+             AFTER the virtualizer's tracked rows — same pattern as TruncationBanner/
+             DeferredToolBanner below, never a tracked virtual row itself. -->
+        <StreamingPreview :sessionId="viewSessionId" />
+
         <!-- Issue #662: Truncation banner after last assistant message when response was truncated -->
         <TruncationBanner v-if="showTruncationBanner" :key="'truncation-' + viewSessionId" />
 
@@ -117,6 +122,7 @@ import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import MessageItem from './MessageItem.vue'
 import CompactionEventGroup from './CompactionEventGroup.vue'
+import StreamingPreview from './StreamingPreview.vue'
 import TruncationBanner from './TruncationBanner.vue'
 import DeferredToolBanner from './DeferredToolBanner.vue'
 import SubagentAnchorRow from './SubagentAnchorRow.vue'
@@ -1072,6 +1078,16 @@ watch(() => displayableItems.value.length, () => scheduleStickyScroll())
 // Auto-scroll on tool call updates (for permission requests, status changes, etc.)
 watch(() => sessionToolCalls.value.length, () => scheduleStickyScroll())
 
+// Issue #1955: the live-typing preview renders OUTSIDE the virtualizer's tracked rows (a
+// normal-flow sibling, like TruncationBanner), so its growth no longer trips the virtualizer's
+// own onChange (which only fires for tracked-row measurement changes). Watching the preview's
+// own content/thinking length directly is the replacement trigger for the streaming-growth
+// sticky-scroll case that onChange used to catch incidentally.
+watch(() => {
+  const preview = messageStore.streamingPreviewBySession.get(viewSessionId.value)
+  return preview ? preview.content.length + preview.thinking.length : 0
+}, () => scheduleStickyScroll())
+
 // Watch for tool call status changes (e.g., permission_required)
 watch(
   () => sessionToolCalls.value.map(tc => `${tc.id}-${tc.status}`).join(','),
@@ -1314,8 +1330,9 @@ function shouldDisplayMessage(message) {
   // These contain a ThinkingBlock with empty thinking text plus a signature blob, no text,
   // no tool_use. Keeping them fragments tool timelines because the grouping walk-back in
   // groupToolsToParentMessages stops at the first empty assistant it finds.
-  // Issue #1486: streaming placeholders are always shown — content is being built up.
-  if (message.type === 'assistant' && !message.streaming) {
+  // Issue #1955: no message in messagesBySession is ever a streaming placeholder anymore —
+  // the live-typing preview renders separately via StreamingPreview.vue.
+  if (message.type === 'assistant') {
     const meta = message.metadata || {}
     const text = (message.content || '').trim()
     const hasText = text.length > 0 && text !== 'Assistant response'
@@ -1339,10 +1356,6 @@ function normalizeMessage(message) {
     message_id: message.message_id,
     type: message.type || 'unknown',
     content: message.content || '',
-    // Issue #1486: preserve streaming placeholder fields — stripping them breaks the caret and
-    // thinking-block display because AssistantMessage.vue reads these directly off the message.
-    streaming: message.streaming || false,
-    thinking: message.thinking || '',
     timestamp: message.timestamp || Date.now() / 1000,
     metadata: {
       has_tool_uses: false,
