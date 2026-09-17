@@ -398,4 +398,88 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     apiMock.get.mockResolvedValue({ cursor: 0 })
     await healPromise
   })
+
+  it('#1954: suppresses an overlapping heal while one is already in flight, regardless of cooldown', async () => {
+    const { pollingStore, messageStore, sid } = await setup({ session_id: 'sess-inflight', is_processing: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+    advanceTime(41000) // past STALL_TIMEOUT_MS (40s)
+
+    let resolveSync
+    vi.spyOn(messageStore, 'syncMessages').mockImplementation(() => new Promise(resolve => { resolveSync = resolve }))
+
+    // First heal starts and blocks on syncMessages — it never resolves during this
+    // assertion window, simulating the ~31s real-world heal duration from #1931's capture.
+    const healPromise1 = pollingStore.checkSessionStall()
+    await flush()
+
+    expect(messageStore.syncMessages).toHaveBeenCalledTimes(1)
+
+    // Advance past HEAL_COOLDOWN_MS (10s) — the cooldown alone would now permit a new
+    // heal, but the in-flight guard must still suppress it since the first heal hasn't
+    // finished. This is exactly the overlap race from #1954.
+    advanceTime(11000)
+    await pollingStore.checkSessionStall()
+
+    expect(messageStore.syncMessages).toHaveBeenCalledTimes(1)
+
+    // Let the first heal complete normally — it should finish exactly as it would have
+    // without the new guard.
+    apiMock.get.mockResolvedValue({ cursor: 0 })
+    resolveSync({ syncedCount: 0, hasMore: false })
+    await healPromise1
+    await flush()
+
+    expect(pollingStore.sessionConnected).toBe(true)
+  })
+
+  it('#1954: releases the guard after a completed heal, allowing a genuine subsequent heal', async () => {
+    const { pollingStore, messageStore, sid } = await setup({ session_id: 'sess-second-heal', is_processing: false })
+    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+    advanceTime(41000)
+
+    await pollingStore.checkSessionStall()
+    await flush()
+
+    expect(messageStore.syncMessages).toHaveBeenCalledTimes(1)
+
+    // The reconnect at the end of the first heal reseeds the heartbeat and lastHealedAt,
+    // so a single advance past STALL_TIMEOUT_MS also clears HEAL_COOLDOWN_MS.
+    advanceTime(41000)
+
+    await pollingStore.checkSessionStall()
+    await flush()
+
+    expect(messageStore.syncMessages).toHaveBeenCalledTimes(2)
+    expect(pollingStore.sessionConnected).toBe(true)
+  })
+
+  it('#1954: releases the guard after a heal error, allowing a genuine subsequent heal', async () => {
+    const { pollingStore, messageStore, sid } = await setup({ session_id: 'sess-heal-error', is_processing: false })
+    abortAwareFetchMock()
+    vi.spyOn(messageStore, 'syncMessages').mockRejectedValueOnce(new Error('sync failed'))
+
+    await pollingStore.connectSession(sid)
+    advanceTime(41000)
+
+    // syncMessages() rejects, but checkSessionStall() catches it internally (line
+    // 316-318-equivalent try/catch) so the heal cycle still reaches its finally block.
+    await pollingStore.checkSessionStall()
+    await flush()
+
+    expect(messageStore.syncMessages).toHaveBeenCalledTimes(1)
+    expect(pollingStore.sessionConnected).toBe(true)
+
+    messageStore.syncMessages.mockResolvedValue({ syncedCount: 0, hasMore: false })
+    advanceTime(41000)
+
+    await pollingStore.checkSessionStall()
+    await flush()
+
+    expect(messageStore.syncMessages).toHaveBeenCalledTimes(2)
+  })
 })
