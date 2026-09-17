@@ -26,6 +26,7 @@ export const usePollingStore = defineStore('polling', () => {
   let uiCursor = 0
   const sessionCursors = {}  // Per-session cursor cache to avoid replaying history on switch
   const sessionPollHeartbeatAt = {}  // Per-session last-successful-poll timestamp (Issue #1795)
+  const sessionHealInFlight = {}  // Per-session stall-heal mutex (Issue #1954) — distinct from the HEAL_COOLDOWN_MS rate limiter below
 
   // AbortControllers for long-poll requests
   let uiAbortController = null
@@ -258,6 +259,7 @@ export const usePollingStore = defineStore('polling', () => {
   function resetSessionCursor(sessionId) {
     delete sessionCursors[sessionId]
     delete sessionPollHeartbeatAt[sessionId]
+    delete sessionHealInFlight[sessionId]
   }
 
   // ========== STALL DETECTOR (Fix 5) ==========
@@ -297,7 +299,18 @@ export const usePollingStore = defineStore('polling', () => {
 
     // Cooldown: prevent heal storms
     if (Date.now() - lastHealedAt < HEAL_COOLDOWN_MS) return
+
+    // Issue #1954: mutex guard — a heal already in flight for this session must not be
+    // overlapped by a second one. This is checked (and set) in addition to, not instead of,
+    // the cooldown above: the cooldown still spaces out fast-completing heals as before, while
+    // this guard is what actually eliminates the overlap race regardless of heal duration.
+    if (sessionHealInFlight[sid]) {
+      pushDebugEvent('polling', 'stall-heal-skipped-inflight', { sessionId: sid })
+      return
+    }
+
     lastHealedAt = Date.now()
+    sessionHealInFlight[sid] = true
 
     // Issue #1917 (Fix B1): bump the generation and abort the in-flight fetch synchronously,
     // before either await below. disconnectSession() does this too, but only after the two
@@ -307,35 +320,39 @@ export const usePollingStore = defineStore('polling', () => {
     sessionPollGeneration++
     sessionAbortController?.abort()
 
-    console.warn(`[stall-heal] Session ${sid} stalled ${Math.round(stallMs / 1000)}s (is_processing=${session.is_processing}); re-syncing`)
-    pushDebugEvent('polling', 'stall-heal-start', { sessionId: sid, stallMs, isProcessing: session.is_processing })
-
-    // Step 1: backfill any missed messages via REST (deduplicates by message ID)
     try {
-      await messageStore.syncMessages(sid)
-    } catch (err) {
-      console.error('[stall-heal] syncMessages failed:', err)
-    }
+      console.warn(`[stall-heal] Session ${sid} stalled ${Math.round(stallMs / 1000)}s (is_processing=${session.is_processing}); re-syncing`)
+      pushDebugEvent('polling', 'stall-heal-start', { sessionId: sid, stallMs, isProcessing: session.is_processing })
 
-    // Step 2: re-fetch cursor and restart poll loop
-    try {
-      const result = await api.get(`/api/poll/session/${sid}/cursor`)
-      sessionCursors[sid] = result?.cursor ?? 0
-    } catch {
-      sessionCursors[sid] = 0
-    }
+      // Step 1: backfill any missed messages via REST (deduplicates by message ID)
+      try {
+        await messageStore.syncMessages(sid)
+      } catch (err) {
+        console.error('[stall-heal] syncMessages failed:', err)
+      }
 
-    // Guard: abort if the user switched sessions during the async operations above
-    if (currentSessionId.value !== sid) {
-      console.warn(`[stall-heal] Session ${sid} heal aborted — session changed during sync`)
-      pushDebugEvent('polling', 'stall-heal-done', { sessionId: sid, aborted: true })
-      return
-    }
-    await disconnectSession()
-    await connectSession(sid)
+      // Step 2: re-fetch cursor and restart poll loop
+      try {
+        const result = await api.get(`/api/poll/session/${sid}/cursor`)
+        sessionCursors[sid] = result?.cursor ?? 0
+      } catch {
+        sessionCursors[sid] = 0
+      }
 
-    console.warn(`[stall-heal] Session ${sid} re-synced; resumed polling at cursor ${sessionCursors[sid]}`)
-    pushDebugEvent('polling', 'stall-heal-done', { sessionId: sid, aborted: false, cursor: sessionCursors[sid] })
+      // Guard: abort if the user switched sessions during the async operations above
+      if (currentSessionId.value !== sid) {
+        console.warn(`[stall-heal] Session ${sid} heal aborted — session changed during sync`)
+        pushDebugEvent('polling', 'stall-heal-done', { sessionId: sid, aborted: true })
+        return
+      }
+      await disconnectSession()
+      await connectSession(sid)
+
+      console.warn(`[stall-heal] Session ${sid} re-synced; resumed polling at cursor ${sessionCursors[sid]}`)
+      pushDebugEvent('polling', 'stall-heal-done', { sessionId: sid, aborted: false, cursor: sessionCursors[sid] })
+    } finally {
+      delete sessionHealInFlight[sid]
+    }
   }
 
   // ========== PAGE VISIBILITY ==========
