@@ -5,7 +5,7 @@ import { useSessionStore } from './session'
 import { useTaskStore } from './task'
 import { correlateHooks } from '../utils/hookCorrelation'
 import { getAgentColor, getAssistantRowColor, slugifyAgentName } from '../composables/useAgentColor'
-import { pushDebugEvent } from '../composables/useDebugBuffer'
+import { pushDebugEvent, flushDebugBuffer } from '../composables/useDebugBuffer'
 
 /**
  * Message Store - Manages messages and tool calls per session
@@ -250,7 +250,7 @@ export const useMessageStore = defineStore('message', () => {
       // Issue #1955: any live streaming preview for this session is purely cosmetic and was
       // never part of the canonical message array — discard it outright instead of merging.
       // The freshly-fetched history is authoritative; there is nothing to reconcile it against.
-      _discardStreamingPreview(sessionId)
+      _discardStreamingPreview(sessionId, 'reload')
 
       // Store only regular messages (tool_call messages are handled separately)
       messagesBySession.value.set(sessionId, regularMessages)
@@ -781,7 +781,7 @@ export const useMessageStore = defineStore('message', () => {
         launchTimestampBySession.value.set(sessionId, ts)
       }
       // Issue #1955: a preview never holds authoritative data — restart just discards it
-      _discardStreamingPreview(sessionId)
+      _discardStreamingPreview(sessionId, 'restart')
     }
 
     // Detect interrupt during real-time
@@ -794,7 +794,7 @@ export const useMessageStore = defineStore('message', () => {
       })
       openTools.clear()
       // Issue #1955: same as restart — discard the cosmetic preview outright
-      _discardStreamingPreview(sessionId)
+      _discardStreamingPreview(sessionId, 'interrupt')
     }
 
     activeToolUses.value.set(sessionId, openTools)
@@ -1443,7 +1443,7 @@ export const useMessageStore = defineStore('message', () => {
    * Clear messages for a session (for reset)
    */
   function clearMessages(sessionId) {
-    _discardStreamingPreview(sessionId)  // Issue #1955: discard any in-flight streaming preview
+    _discardStreamingPreview(sessionId, 'clearMessages')  // Issue #1955: discard any in-flight preview
     // Issue #1748 review fix: prune before messages are gone (both read messagesBySession)
     pruneExpandedTimelineToolForSession(sessionId)
     pruneThinkingBlockExpandedForSession(sessionId)
@@ -1670,6 +1670,10 @@ export const useMessageStore = defineStore('message', () => {
     // No redelivery/overlap guarding needed (unlike the old placeholder model): a stray extra
     // message_start just resets cosmetic state — there is no data-loss risk because the preview
     // was never authoritative.
+    const existing = streamingPreviewBySession.value.get(sessionId)
+    pushDebugEvent('message', 'preview-start', {
+      sessionId, hadExisting: !!existing, existingContentLen: existing?.content?.length || 0
+    })
     streamingPreviewBySession.value.set(sessionId, {
       active: true,
       content: '',
@@ -1677,6 +1681,11 @@ export const useMessageStore = defineStore('message', () => {
       pendingText: '',
       pendingThinking: '',
       rafHandle: null,
+      // Issue #1955 review fix: tracks whether a canonical frame for the CURRENTLY-OPEN turn
+      // has already been observed, regardless of arrival order relative to deltas — see
+      // _clearStreamingPreviewContent()/_endStreamingPreview() for why this makes dismissal
+      // level-triggered instead of edge-triggered.
+      canonicalSeen: false,
     })
     streamingPreviewBySession.value = new Map(streamingPreviewBySession.value)
   }
@@ -1688,32 +1697,54 @@ export const useMessageStore = defineStore('message', () => {
 
     preview.content += preview.pendingText
     preview.thinking += preview.pendingThinking
+    const addedChars = preview.pendingText.length + preview.pendingThinking.length
     preview.pendingText = ''
     preview.pendingThinking = ''
     preview.rafHandle = null
 
     streamingPreviewBySession.value = new Map(streamingPreviewBySession.value)
+    pushDebugEvent('message', 'preview-delta', {
+      sessionId, textLen: preview.content.length, thinkingLen: preview.thinking.length, addedChars
+    })
   }
 
   /**
-   * Issue #1955: resets the preview's displayed content whenever a canonical assistant message
-   * appends (called from addMessage()) — leaves `active` untouched so a still-open stream keeps
-   * its caret. This is the mechanism resolving "multi-canonical-message-per-turn": any canonical
-   * append clears whatever the preview was showing, with no identity matching involved.
+   * Issue #1955 (review fix, found via live testing: single-frame turns could leave a
+   * permanent duplicate preview): resets the preview's displayed content whenever a canonical
+   * assistant message appends (called from addMessage()/syncMessages()) — leaves `active`
+   * untouched so a still-open stream keeps its caret. This is the mechanism resolving
+   * "multi-canonical-message-per-turn": any canonical append clears whatever the preview was
+   * showing, with no identity matching involved.
+   *
+   * Also marks `canonicalSeen = true` unconditionally (even when this call is a no-op because
+   * content was already empty) — the canonical and delta channels are delivered independently
+   * and CAN arrive out of order: a single-frame turn's canonical frame occasionally lands
+   * before its own deltas, so this clear fires against an empty preview, the deltas then fill
+   * it in afterward, and with only one frame in the turn there is no SECOND canonical append to
+   * clear it again. `canonicalSeen` lets _endStreamingPreview() (message_stop) catch that case
+   * and dismiss the preview itself once the canonical has definitely landed, regardless of
+   * which arrived first — making dismissal level-triggered instead of edge-triggered.
    */
   function _clearStreamingPreviewContent(sessionId) {
     const preview = streamingPreviewBySession.value.get(sessionId)
     if (!preview) return
+    pushDebugEvent('message', 'preview-clear', { sessionId, lenBefore: preview.content.length })
     preview.content = ''
     preview.thinking = ''
+    preview.canonicalSeen = true
     streamingPreviewBySession.value = new Map(streamingPreviewBySession.value)
   }
 
   /**
-   * Issue #1955: called from message_stop. Flushes any pending delta and ends the caret, but
-   * does NOT clear content/thinking — the preview persists (frozen) until the canonical message
-   * actually appends (see _clearStreamingPreviewContent), so the swap from preview to canonical
-   * message happens as one atomic visual transition instead of a gap.
+   * Issue #1955: called from message_stop. Flushes any pending delta and ends the caret. Does
+   * NOT clear content/thinking on its own — the preview persists (frozen) until the canonical
+   * message actually appends (see _clearStreamingPreviewContent), so the swap from preview to
+   * canonical message happens as one atomic visual transition instead of a gap.
+   *
+   * EXCEPTION (review fix): if the canonical frame for this turn was already observed BEFORE
+   * message_stop (preview.canonicalSeen), clearing now is safe — the canonical bubble is
+   * already showing, so there is no gap to create — and is in fact required, since a
+   * single-frame turn has no future canonical append left to do it.
    */
   function _endStreamingPreview(sessionId) {
     const preview = streamingPreviewBySession.value.get(sessionId)
@@ -1721,7 +1752,18 @@ export const useMessageStore = defineStore('message', () => {
     if (preview.rafHandle) { cancelAnimationFrame(preview.rafHandle); preview.rafHandle = null }
     _flushPreviewDelta(sessionId)
     preview.active = false
+    if (preview.canonicalSeen) {
+      preview.content = ''
+      preview.thinking = ''
+    }
     streamingPreviewBySession.value = new Map(streamingPreviewBySession.value)
+    const nonEmpty = !!(preview.content || preview.thinking)
+    pushDebugEvent('message', 'preview-end', {
+      sessionId, finalLen: preview.content.length, nonEmpty, canonicalSeen: preview.canonicalSeen
+    })
+    // A non-empty preview at message_stop is by definition a leftover — auto-capture the
+    // preceding timeline immediately rather than relying on a user noticing and reporting it.
+    if (nonEmpty) flushDebugBuffer('preview-leftover')
   }
 
   /**
@@ -1729,8 +1771,9 @@ export const useMessageStore = defineStore('message', () => {
    * and the top of loadMessages()/clearMessages(). The preview never holds authoritative data,
    * so there is nothing to finalize or splice; simply deleting the map entry is always correct.
    */
-  function _discardStreamingPreview(sessionId) {
+  function _discardStreamingPreview(sessionId, reason = 'unspecified') {
     if (!streamingPreviewBySession.value.has(sessionId)) return
+    pushDebugEvent('message', 'preview-discard', { sessionId, reason })
     streamingPreviewBySession.value.delete(sessionId)
     streamingPreviewBySession.value = new Map(streamingPreviewBySession.value)
   }
@@ -1789,7 +1832,7 @@ export const useMessageStore = defineStore('message', () => {
         if (wasActive && isInactive) {
           clearOrphanedToolUses(newState.id, 'Session was terminated')
           // Issue #1955: discard any in-flight cosmetic preview so the caret doesn't linger
-          _discardStreamingPreview(newState.id)
+          _discardStreamingPreview(newState.id, 'session-terminated')
         }
       })
     },

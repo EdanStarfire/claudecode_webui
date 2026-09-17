@@ -547,6 +547,61 @@ describe('streamingPreviewBySession lifecycle (Issue #1955)', () => {
     expect(store.messagesBySession.get(SID).map(m => m.message_id)).toEqual(['am-1', 'am-2'])
   })
 
+  it('level-triggered dismissal (review fix): canonical frame arriving BEFORE its own deltas still gets dismissed at message_stop, not left as a permanent leftover', async () => {
+    // Reproduces the reported bug exactly: a single-frame turn where the canonical
+    // AssistantMessage is processed before the streaming deltas (the canonical and delta
+    // channels are delivered independently and can arrive in either order). The old
+    // edge-triggered clear fired against an empty preview (no-op) and, with only one frame in
+    // the turn, nothing ever cleared it again — the deltas then filled in the full text and it
+    // stayed duplicated on screen indefinitely.
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-preview-race'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: 'msg_1' } }))
+    // Canonical frame lands FIRST, while the preview is still empty.
+    store.addMessage(SID, makeMessage({ type: 'assistant', content: 'Yes', message_id: 'am-1' }))
+    expect(store.streamingPreviewBySession.get(SID).content).toBe('') // clear no-op'd (already empty)
+
+    // Deltas arrive AFTER the canonical — this is the ordering that used to leak. (rAF is
+    // stubbed as a no-op in this suite, so the pending delta isn't applied to .content until
+    // message_stop's synchronous flush — matching real behavior when message_stop follows the
+    // delta closely, which is exactly the reported scenario.)
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'Yes' } }))
+    expect(store.streamingPreviewBySession.get(SID).pendingText).toBe('Yes')
+
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    // message_stop must catch the already-seen canonical and dismiss the preview itself —
+    // there is no second canonical append coming to do it for a single-frame turn.
+    const preview = store.streamingPreviewBySession.get(SID)
+    expect(preview.content).toBe('')
+    expect(preview.thinking).toBe('')
+    expect(preview.active).toBe(false)
+  })
+
+  it('normal ordering (deltas then canonical) is unaffected by the level-triggered fix', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-preview-normal-order'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: 'msg_1' } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'Yes' } }))
+    store.handleAssistantDelta(SID, delta('message_stop', SID, {}))
+
+    // Preview persists frozen after message_stop — canonicalSeen is still false, so nothing
+    // clears it yet, matching the plan's swap-atomicity design (no gap before the canonical
+    // bubble takes over).
+    let preview = store.streamingPreviewBySession.get(SID)
+    expect(preview.content).toBe('Yes')
+    expect(preview.active).toBe(false)
+
+    store.addMessage(SID, makeMessage({ type: 'assistant', content: 'Yes', message_id: 'am-1' }))
+
+    preview = store.streamingPreviewBySession.get(SID)
+    expect(preview.content).toBe('')
+  })
+
   it('interrupt discards the preview', async () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
