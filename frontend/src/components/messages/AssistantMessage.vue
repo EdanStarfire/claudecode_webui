@@ -1,9 +1,18 @@
 <template>
   <!-- Issue #195: Hide assistant bubble entirely when nothing to render
        (e.g. content-less messages whose only tools were Task calls moved to SubagentTimeline) -->
-  <div v-if="hasAnythingToShow" class="msg-wrapper msg-assistant" data-testid="assistant-message">
+  <div
+    v-if="hasAnythingToShow"
+    class="msg-wrapper msg-assistant"
+    :class="{ 'is-message-id-continuation': isMessageIdContinuation, 'has-message-id-continuation-following': hasMessageIdContinuationFollowing }"
+    data-testid="assistant-message"
+  >
     <div ref="bubbleRef" class="msg-bubble msg-bubble-assistant" :class="{ 'has-permission-prompt': hasActivePermission, 'tts-playing': isTTSPlaying }">
-      <div class="msg-meta">
+      <!-- Issue #1957: suppressed when this row is a purely-visual continuation of an earlier
+           independent row sharing the same metadata.message_id — segmentViews' own isFirst
+           computation below then renders the lighter turn-meta header instead, matching how a
+           mergeConsecutiveAssistantTurns()-merged continuation segment already looks. -->
+      <div v-if="!isMessageIdContinuation" class="msg-meta">
         <span class="msg-role">assistant</span>
         <span class="msg-time">{{ formattedTimestamp }}</span>
       </div>
@@ -118,6 +127,17 @@ const props = defineProps({
   mergedMessages: {
     type: Array,
     default: () => []
+  },
+  // Issue #1957 (visual grouping, follow-up to #1955): purely presentational flags set by
+  // MessageList.vue's markMessageIdContinuations() — this component instance is still its
+  // own independent virtualizer row/message either way, nothing structural changes.
+  isMessageIdContinuation: {
+    type: Boolean,
+    default: false
+  },
+  hasMessageIdContinuationFollowing: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -247,7 +267,10 @@ function segEnrichedToolCalls(seg, attachedTools, orphanedTools) {
  */
 const segmentViews = computed(() => {
   const views = segments.value.map((seg, index) => {
-    const isFirst = index === 0
+    // Issue #1957: when this whole row is a message_id continuation of an earlier independent
+    // row, segment 0 renders like any other continuation segment (lighter turn-meta header)
+    // instead of the full msg-meta already suppressed above.
+    const isFirst = index === 0 && !props.isMessageIdContinuation
     const attachedTools = isFirst ? props.attachedTools : (seg.attachedTools || [])
     const orphanedTools = isFirst ? props.orphanedPermissionTools : (seg.orphanedPermissionTools || [])
     const enrichedToolCalls = segEnrichedToolCalls(seg, attachedTools, orphanedTools)
@@ -330,6 +353,17 @@ const hasAnythingToShow = computed(() => {
 /* Left-aligned, full-bleed assistant row */
 .msg-wrapper {
   padding: 4px 16px;
+}
+
+/* Issue #1957 (visual grouping, follow-up to #1955): zero out the touching edges so two
+   independent rows (each its own virtualizer item/message, never merged) read as one
+   seamless card — same background wash + left-border-accent on both sides of the join. */
+.msg-wrapper.is-message-id-continuation {
+  padding-top: 0;
+}
+
+.msg-wrapper.has-message-id-continuation-following {
+  padding-bottom: 0;
 }
 
 .msg-assistant {

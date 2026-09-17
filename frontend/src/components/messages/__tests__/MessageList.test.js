@@ -468,6 +468,165 @@ describe('mergeConsecutiveAssistantTurns (#1746 stage: layout)', () => {
   })
 })
 
+// Helper stub capturing the two Issue #1957 continuation flags per rendered row.
+function makeContinuationStub(capturedRows) {
+  return {
+    template: '<div role="article" data-testid="msg-item">{{ message.content }}</div>',
+    props: ['message', 'attachedTools', 'orphanedPermissionTools', 'mergedMessages', 'isMessageIdContinuation', 'hasMessageIdContinuationFollowing'],
+    mounted() {
+      capturedRows.push({
+        content: this.message.content,
+        isMessageIdContinuation: !!this.isMessageIdContinuation,
+        hasMessageIdContinuationFollowing: !!this.hasMessageIdContinuationFollowing,
+      })
+    }
+  }
+}
+
+describe('markMessageIdContinuations — visual grouping (Issue #1957, follow-up to #1955)', () => {
+  it('flags two independent rows sharing metadata.message_id as a continuation, even with a subagent-terminal signal between them', async () => {
+    const capturedRows = []
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: makeContinuationStub(capturedRows), TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    // One Anthropic turn (shared metadata.message_id) split into two backend-persisted frames
+    // — the #1765 background-Task-launch shape — with the subagent's own leg-terminal signal
+    // landing chronologically between them (this is exactly why mergeConsecutiveAssistantTurns'
+    // strict adjacency check does NOT merge them into one row).
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({
+        type: 'assistant', content: 'Launching a subagent', timestamp: 100,
+        metadata: { message_id: 'anthropic-turn-1', has_tool_uses: true, tool_uses: [{ id: 'launch-1', name: 'Task', input: {} }] }
+      }),
+      makeMessage({
+        type: 'assistant', content: 'Second frame of the same turn', timestamp: 300,
+        metadata: { message_id: 'anthropic-turn-1', has_tool_uses: false, tool_uses: [] }
+      })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_started',
+      { task_id: 'task-1', tool_use_id: 'launch-1', description: 'Doing work' }, 100)
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_notification',
+      { task_id: 'task-1', status: 'completed', summary: 'Done' }, 200)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    // Both frames still render as their OWN independent row (never merged into mergedMessages).
+    expect(capturedRows.length).toBe(2)
+    expect(capturedRows[0].content).toBe('Launching a subagent')
+    expect(capturedRows[0].isMessageIdContinuation).toBe(false)
+    expect(capturedRows[0].hasMessageIdContinuationFollowing).toBe(true)
+    expect(capturedRows[1].content).toBe('Second frame of the same turn')
+    expect(capturedRows[1].isMessageIdContinuation).toBe(true)
+    expect(capturedRows[1].hasMessageIdContinuationFollowing).toBe(false)
+  })
+
+  it('does not flag two frames with different metadata.message_id, even with a signal between them', async () => {
+    const capturedRows = []
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: makeContinuationStub(capturedRows), TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({
+        type: 'assistant', content: 'First unrelated turn', timestamp: 100,
+        metadata: { message_id: 'anthropic-turn-A', has_tool_uses: true, tool_uses: [{ id: 'launch-1', name: 'Task', input: {} }] }
+      }),
+      makeMessage({
+        type: 'assistant', content: 'Second unrelated turn', timestamp: 300,
+        metadata: { message_id: 'anthropic-turn-B', has_tool_uses: false, tool_uses: [] }
+      })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_started',
+      { task_id: 'task-1', tool_use_id: 'launch-1', description: 'Doing work' }, 100)
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_notification',
+      { task_id: 'task-1', status: 'completed', summary: 'Done' }, 200)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(capturedRows.length).toBe(2)
+    expect(capturedRows.every(r => !r.isMessageIdContinuation && !r.hasMessageIdContinuationFollowing)).toBe(true)
+  })
+
+  it('does not flag frames sharing metadata.message_id when a genuine user message sits between them', async () => {
+    const capturedRows = []
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: makeContinuationStub(capturedRows), TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({ type: 'assistant', content: 'First frame', timestamp: 100, metadata: { message_id: 'anthropic-turn-1' } }),
+      makeMessage({ type: 'user', content: 'A real interjection', timestamp: 150 }),
+      makeMessage({ type: 'assistant', content: 'Second frame', timestamp: 200, metadata: { message_id: 'anthropic-turn-1' } })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    const assistantRows = capturedRows.filter(r => r.content !== 'A real interjection')
+    expect(assistantRows.length).toBe(2)
+    expect(assistantRows.every(r => !r.isMessageIdContinuation && !r.hasMessageIdContinuationFollowing)).toBe(true)
+  })
+
+  it('renders the continuation row with the lighter turn-meta header instead of the full msg-meta (real AssistantMessage.vue, not stubbed)', async () => {
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { TruncationBanner: true, SubagentTimeline: true, ActivityTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({
+        type: 'assistant', content: 'Launching a subagent', timestamp: 100,
+        metadata: { message_id: 'anthropic-turn-1', has_tool_uses: true, tool_uses: [{ id: 'launch-1', name: 'Task', input: {} }] }
+      }),
+      makeMessage({
+        type: 'assistant', content: 'Second frame of the same turn', timestamp: 300,
+        metadata: { message_id: 'anthropic-turn-1', has_tool_uses: false, tool_uses: [] }
+      })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_started',
+      { task_id: 'task-1', tool_use_id: 'launch-1', description: 'Doing work' }, 100)
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_notification',
+      { task_id: 'task-1', status: 'completed', summary: 'Done' }, 200)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    const bubbles = document.querySelectorAll('[data-testid="assistant-message"]')
+    expect(bubbles.length).toBe(2)
+
+    // First frame: normal full header, no continuation classes.
+    expect(bubbles[0].classList.contains('is-message-id-continuation')).toBe(false)
+    expect(bubbles[0].classList.contains('has-message-id-continuation-following')).toBe(true)
+    expect(bubbles[0].querySelector('.msg-meta')).toBeTruthy()
+
+    // Second frame: continuation — no full header, lighter turn-meta instead.
+    expect(bubbles[1].classList.contains('is-message-id-continuation')).toBe(true)
+    expect(bubbles[1].querySelector('.msg-meta')).toBeNull()
+    expect(bubbles[1].querySelector('.turn-meta')).toBeTruthy()
+  })
+})
+
 // Helper stub that exposes orphanedPermissionTools count as a data attribute
 function makeMessageItemStub(capturedOrphans) {
   return {

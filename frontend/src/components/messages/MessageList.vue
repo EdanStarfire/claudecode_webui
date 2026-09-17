@@ -42,6 +42,8 @@
               :attachedTools="row.item.attachedTools || []"
               :orphanedPermissionTools="row.item.orphanedPermissionTools || []"
               :mergedMessages="row.item.mergedMessages || []"
+              :isMessageIdContinuation="!!row.item.isMessageIdContinuation"
+              :hasMessageIdContinuationFollowing="!!row.item.hasMessageIdContinuationFollowing"
             />
 
             <!-- Compaction event group -->
@@ -215,11 +217,14 @@ const displayableItems = computed(() => {
   //   between two assistant turns it causally sits between (Issue #1746 follow-up)
   // Fifth pass: Merge consecutive assistant turns into one visual block (Issue #1746)
   // Sixth pass: Attach any permission_required tools not yet anchored to a bubble
-  return attachOrphanedPermissionTools(
-    mergeConsecutiveAssistantTurns(
-      injectSubagentSignals(injectDateSeparators(groupToolsToParentMessages(items)), viewSessionId.value)
-    ),
-    viewSessionId.value,
+  // Seventh pass: mark purely-visual message_id continuations (Issue #1957 follow-up to #1955)
+  return markMessageIdContinuations(
+    attachOrphanedPermissionTools(
+      mergeConsecutiveAssistantTurns(
+        injectSubagentSignals(injectDateSeparators(groupToolsToParentMessages(items)), viewSessionId.value)
+      ),
+      viewSessionId.value,
+    )
   )
 })
 
@@ -777,6 +782,59 @@ function mergeConsecutiveAssistantTurns(items) {
   }
 
   return result
+}
+
+/**
+ * Issue #1957 (visual grouping, follow-up to #1955): purely presentational grouping for
+ * multiple canonical AssistantMessage frames sharing the same metadata.message_id — the
+ * #1765 background-Task-launch case, where one Anthropic turn arrives as several separate
+ * backend-persisted frames (each with its own distinct, real top-level message_id — verified
+ * against backend/data_storage.py — but a shared metadata.message_id, the Anthropic streaming
+ * id). Unlike mergeConsecutiveAssistantTurns() above, this does NOT touch the item list: every
+ * frame keeps its own independent virtualizer row, its own identity, its own height
+ * measurement. It only stamps two booleans consumed purely for CSS by AssistantMessage.vue —
+ * `isMessageIdContinuation` (render this item's own first segment like a continuation: no
+ * role/timestamp header, no top spacing) and `hasMessageIdContinuationFollowing` (no bottom
+ * spacing, since the next row butts directly against it) — so two adjacent rows read as one
+ * seamless card with no code path anywhere touching what the virtualizer thinks the row list
+ * contains.
+ *
+ * Adjacency deliberately SKIPS OVER purely structural entries injected earlier in this same
+ * pipeline (subagent_signal, date_separator, compaction) — a background leg's own
+ * leg-terminal signal commonly lands chronologically between two frames of the SAME turn,
+ * which is the whole reason this pass exists (mergeConsecutiveAssistantTurns' own strict
+ * adjacency check already handles the case with nothing in between). It does NOT skip past a
+ * genuine user or unrelated-assistant message — those are real conversation turns, not
+ * decoration, and their presence means the frames are no longer visually adjacent.
+ */
+function markMessageIdContinuations(items) {
+  function tailMessageOf(item) {
+    if (item.mergedMessages && item.mergedMessages.length > 0) {
+      return item.mergedMessages[item.mergedMessages.length - 1]
+    }
+    return item.message
+  }
+
+  let prevMessageItem = null
+  for (const item of items) {
+    if (item.type !== 'message') continue // skip subagent_signal/date_separator/compaction
+
+    const msg = item.message
+    const prevTail = prevMessageItem ? tailMessageOf(prevMessageItem) : null
+    if (
+      msg.type === 'assistant' &&
+      prevTail?.type === 'assistant' &&
+      msg.metadata?.message_id &&
+      prevTail.metadata?.message_id === msg.metadata.message_id
+    ) {
+      item.isMessageIdContinuation = true
+      prevMessageItem.hasMessageIdContinuationFollowing = true
+    }
+
+    prevMessageItem = item
+  }
+
+  return items
 }
 
 /**
