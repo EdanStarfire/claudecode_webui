@@ -294,6 +294,114 @@ async def test_emission_order_envelope_before_tool_call_pending(tmp_path):
     assert queue[1]["data"]["type"] == "tool_call"
 
 
+@pytest.mark.asyncio
+async def test_issue_1957_live_dict_path_separates_frame_id_from_barrier_id(tmp_path):
+    """Issue #1957: for the real live AssistantMessage path — a dict message_data, as
+    ClaudeSDK._store_sdk_message() produces after stamping a per-frame message_id — the
+    live poll payload (websocket_data['message_id']) must carry that PER-FRAME id, while
+    the #1694 barrier must still be marked with the TURN-level Anthropic id from metadata,
+    even though the two values differ on the same message."""
+    session_id = "sess-1957-live-dict"
+
+    webui = _make_webui(tmp_path)
+    webui.session_queues[session_id] = []
+
+    coordinator = MagicMock()
+    marked = []
+    coordinator.mark_assistant_message_emitted.side_effect = lambda sid, mid: marked.append(mid)
+    coordinator.create_tool_call.return_value = None
+    webui.coordinator = coordinator
+
+    # Mirrors ClaudeSDK._store_sdk_message()'s output: a dict with its own per-frame
+    # message_id stamped at the top level, and the turn-level Anthropic id still living
+    # under metadata (never overwritten).
+    message_data = {
+        "type": "assistant",
+        "content": "hello",
+        "message_id": "frame-uuid-per-message",
+        "metadata": {"message_id": "msg_anthropic_turn_shared"},
+    }
+    webui._message_processor.process_message = MagicMock(return_value=MagicMock(
+        type=MagicMock(value="assistant"),
+        metadata={"message_id": "msg_anthropic_turn_shared"},
+    ))
+
+    callback = webui._create_message_callback(session_id)
+    await callback(session_id, message_data)
+
+    queue = webui.session_queues[session_id]
+    assert len(queue) == 1
+    # Live payload carries the PER-FRAME id — this is what #1955's frontend single-rule
+    # dedup keys on, and it must differ per frame even across one shared Anthropic turn.
+    assert queue[0]["data"]["message_id"] == "frame-uuid-per-message"
+
+    # The barrier is marked with the TURN-level id, matching tool_call.message_id's own
+    # source (metadata.get('message_id')) in _emit_tool_call_updates — NOT the per-frame id.
+    assert marked == ["msg_anthropic_turn_shared"]
+
+
+@pytest.mark.asyncio
+async def test_issue_1957_end_to_end_two_frames_one_turn_through_real_pipeline(tmp_path):
+    """Issue #1957 integration test: chains the REAL ClaudeSDK._store_sdk_message() output
+    directly into the REAL BackendApp._create_message_callback() callback (no hand-built
+    stand-in dicts), for two frames sharing one Anthropic turn — the exact #1765
+    background-Task-launch shape from the live-testing repro. Confirms the live poll queue
+    ends up with two DISTINCT message_id values (frontend dedup survives), while both
+    frames' storage_manager.append_message() calls also each got that same distinct id
+    (live and stored stay aligned per frame)."""
+    from backend.claude_sdk import ClaudeSDK
+    from backend.session_config import SessionConfig
+
+    session_id = "sess-1957-e2e"
+
+    sdk = ClaudeSDK(
+        session_id=session_id,
+        working_directory=str(tmp_path),
+        config=SessionConfig(system_prompt="test"),
+    )
+    storage_manager = MagicMock()
+    storage_manager.append_message = AsyncMock()
+    sdk.storage_manager = storage_manager
+
+    webui = _make_webui(tmp_path)
+    webui.session_queues[session_id] = []
+    coordinator = MagicMock()
+    webui.coordinator = coordinator
+    callback = webui._create_message_callback(session_id)
+    sdk.message_callback = callback
+
+    shared_turn_metadata = {"message_id": "msg_anthropic_turn_shared_e2e", "tool_uses": []}
+    frame_1 = {
+        "type": "assistant", "content": "Launching agent A", "timestamp": 1.0,
+        "session_id": session_id, "metadata": dict(shared_turn_metadata),
+    }
+    frame_2 = {
+        "type": "assistant", "content": "Launching agent B", "timestamp": 2.0,
+        "session_id": session_id, "metadata": dict(shared_turn_metadata),
+    }
+
+    # Real _message_processor (not mocked) so process_message()/prepare_for_websocket()
+    # actually run and reflect metadata.message_id into parsed_message.metadata correctly.
+    from backend.message_parser import MessageParser, MessageProcessor
+    webui._message_processor = MessageProcessor(MessageParser())
+
+    await sdk._store_sdk_message(frame_1)
+    await callback(session_id, frame_1)
+    await sdk._store_sdk_message(frame_2)
+    await callback(session_id, frame_2)
+
+    queue = webui.session_queues[session_id]
+    assert len(queue) == 2
+    live_ids = [entry["data"]["message_id"] for entry in queue]
+    assert live_ids[0] != live_ids[1], (
+        "Two frames of one Anthropic turn must get distinct live message_ids, or "
+        "the frontend's single-rule dedup silently drops the second frame (#1957)."
+    )
+
+    stored_ids = [c.args[0]["message_id"] for c in storage_manager.append_message.call_args_list]
+    assert stored_ids == live_ids, "Live-delivered and persisted identities must match per frame."
+
+
 # ---------------------------------------------------------------------------
 # permission_service.py: barrier wait behavior
 # ---------------------------------------------------------------------------

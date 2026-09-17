@@ -6,6 +6,7 @@ import json
 import logging
 import tempfile
 import time
+import uuid
 from collections.abc import Callable, Coroutine
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -1474,6 +1475,24 @@ class ClaudeSDK:
         Uses the new dataclass-based StoredMessage for clean serialization, with fallback
         to legacy MessageProcessor format for backward compatibility during migration.
         """
+        # Issue #1957 (live-path identity fix, found via manual testing of #1955): generate
+        # the per-frame identity HERE, before either storage or the live callback runs, and
+        # stamp it onto converted_message so both paths carry the SAME value for the SAME
+        # frame. Previously, storage assigned its own fresh UUID independently in
+        # DataStorageManager.append_message() (per-frame, correct) while the live poll
+        # payload fell back to metadata's Anthropic streaming id (per-TURN, shared across
+        # every frame of a multi-block turn — e.g. a background Task launch). #1955's
+        # frontend single-rule dedup (addMessage()) trusts message_id as a per-frame
+        # identity; fed a per-turn id on the live path, it silently dropped every frame
+        # after the first as a false duplicate. Stamping the same UUID here — read by
+        # DataStorageManager.append_message()'s own "if 'message_id' not in message_data"
+        # fallback below, and by web_server.py's message-callback via this same dict
+        # object — keeps the live and stored identities aligned for every frame.
+        # setdefault (not a blind assignment): a dict-shaped converted_message can already
+        # carry its own message_id copied through from the raw SDK dict (_convert_sdk_message's
+        # "dict-like objects" branch) — never clobber a genuine pre-existing identity.
+        converted_message.setdefault('message_id', str(uuid.uuid4()))
+
         try:
             # Get the SDK message object from converted message
             sdk_msg = converted_message.get("sdk_message")
@@ -1487,6 +1506,7 @@ class ClaudeSDK:
                     timestamp=converted_message.get("timestamp"),
                 )
                 storage_data = stored_msg.to_dict()
+                storage_data['message_id'] = converted_message['message_id']
 
                 sdk_logger.debug(f"Storing SDK message with new StoredMessage format: {stored_msg._type}")
                 await self.storage_manager.append_message(storage_data)
@@ -1496,6 +1516,7 @@ class ClaudeSDK:
             # This handles dict messages, unknown types, and transition period
             parsed_message = self._message_processor.process_message(converted_message, source="sdk")
             storage_data = self._message_processor.prepare_for_storage(parsed_message)
+            storage_data['message_id'] = converted_message['message_id']
 
             if converted_message.get("sdk_message"):
                 storage_data["sdk_message_type"] = converted_message.get("sdk_message").__class__.__name__
@@ -1511,6 +1532,7 @@ class ClaudeSDK:
                 "content": converted_message.get("content", ""),
                 "session_id": converted_message.get("session_id"),
                 "timestamp": converted_message.get("timestamp"),
+                "message_id": converted_message.get('message_id'),
                 "error": f"Storage failed: {str(e)}"
             }
             await self.storage_manager.append_message(storage_message)

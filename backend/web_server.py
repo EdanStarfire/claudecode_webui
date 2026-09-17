@@ -810,7 +810,14 @@ class BackendApp:
                     parsed_message = self._message_processor.process_message(message_data, source="websocket")
                     websocket_data = self._message_processor.prepare_for_websocket(parsed_message)
 
-                # Issue #1000/#1486: Propagate message_id for frontend streaming dedup.
+                # Issue #1000/#1486/#1957: Propagate message_id for frontend streaming dedup.
+                # As of #1957, branch 1's message_id (when message_data is a dict) is the
+                # PER-FRAME identity ClaudeSDK._store_sdk_message() now stamps onto the same
+                # dict before this callback runs (matching the value persisted to storage) —
+                # not the per-TURN Anthropic streaming id this block used to fall back to for
+                # a live AssistantMessage. #1955's frontend single-rule dedup requires a
+                # genuine per-frame identity here; see message_id_for_barrier below for the
+                # separate, still-per-turn identity the #1694 permission barrier needs.
                 if isinstance(message_data, dict) and 'message_id' in message_data:
                     websocket_data['message_id'] = message_data['message_id']
                 elif isinstance((meta := getattr(message_data, 'metadata', None)), dict) and meta.get('message_id'):
@@ -832,7 +839,18 @@ class BackendApp:
                     self.session_queues[session_id].append(serialized)
                     logger.info(f"Appended message to session queue for {session_id}")
 
-                message_id_for_barrier = websocket_data.get('message_id')
+                # Issue #1957: the barrier keys on the TURN-level Anthropic id — the same
+                # source create_tool_call() reads via metadata.get('message_id') below in
+                # _emit_tool_call_updates() — NOT websocket_data['message_id'] above, which is
+                # now the PER-FRAME id #1955's frontend dedup needs. Reusing websocket_data's
+                # value here would key the barrier on an identity tool_call.message_id never
+                # matches, making every wait fail open (harmless but pointless — see #1694).
+                if isinstance((meta := getattr(message_data, 'metadata', None)), dict) and meta.get('message_id'):
+                    message_id_for_barrier = meta['message_id']
+                elif parsed_message.metadata and parsed_message.metadata.get('message_id'):
+                    message_id_for_barrier = parsed_message.metadata['message_id']
+                else:
+                    message_id_for_barrier = None
                 if message_id_for_barrier:
                     self.coordinator.mark_assistant_message_emitted(session_id, message_id_for_barrier)
 

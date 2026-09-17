@@ -1015,6 +1015,97 @@ class TestClaudeSDK:
             await sdk_instance.register_repo_root("/tmp/some/dir")
 
 
+class TestIssue1957LivePathFrameIdentity:
+    """Issue #1957 (found via manual testing of #1955): _store_sdk_message() must stamp a
+    per-frame message_id onto converted_message BEFORE storage, so the live poll payload
+    (read from the same dict by web_server.py's message callback) carries the same
+    per-frame identity as the persisted record — not the per-turn Anthropic streaming id
+    multiple frames of one turn share, which #1955's frontend single-rule dedup would
+    otherwise treat as one shared identity and silently drop every frame after the first."""
+
+    @pytest.fixture
+    def temp_dir(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            yield temp_dir
+
+    @pytest.fixture
+    def session_id(self):
+        return "test-session-12345"
+
+    @pytest.fixture
+    def sdk_instance(self, temp_dir, session_id):
+        return ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(system_prompt="Hello, test!"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_store_sdk_message_stamps_message_id_before_storage(self, sdk_instance):
+        storage_manager = Mock()
+        storage_manager.append_message = AsyncMock()
+        sdk_instance.storage_manager = storage_manager
+
+        converted_message = {
+            "type": "assistant",
+            "content": "hello",
+            "timestamp": 1.0,
+            "session_id": sdk_instance.session_id,
+        }
+        await sdk_instance._store_sdk_message(converted_message)
+
+        # A per-frame identity was generated and stamped on the same dict object the live
+        # callback reads from afterward.
+        assert converted_message.get("message_id")
+
+        # The exact same value was persisted — live and stored identities stay aligned.
+        stored_data = storage_manager.append_message.call_args[0][0]
+        assert stored_data["message_id"] == converted_message["message_id"]
+
+    @pytest.mark.asyncio
+    async def test_two_frames_sharing_a_turn_level_id_get_distinct_per_frame_ids(self, sdk_instance):
+        """The #1765 background-Task-launch shape: two separate AssistantMessage frames
+        sharing one Anthropic turn (metadata.message_id) must NOT collapse to one identity
+        on the live path — each is its own frame with its own message_id."""
+        storage_manager = Mock()
+        storage_manager.append_message = AsyncMock()
+        sdk_instance.storage_manager = storage_manager
+
+        shared_turn_metadata = {"message_id": "msg_anthropic_turn_shared"}
+        frame_1 = {
+            "type": "assistant", "content": "", "timestamp": 1.0,
+            "session_id": sdk_instance.session_id, "metadata": dict(shared_turn_metadata),
+        }
+        frame_2 = {
+            "type": "assistant", "content": "", "timestamp": 2.0,
+            "session_id": sdk_instance.session_id, "metadata": dict(shared_turn_metadata),
+        }
+
+        await sdk_instance._store_sdk_message(frame_1)
+        await sdk_instance._store_sdk_message(frame_2)
+
+        assert frame_1["message_id"] != frame_2["message_id"]
+
+    @pytest.mark.asyncio
+    async def test_does_not_clobber_a_pre_existing_message_id(self, sdk_instance):
+        """A dict-shaped converted_message can already carry its own message_id copied
+        through from the raw SDK dict (_convert_sdk_message's dict-like-objects branch) —
+        _store_sdk_message must not overwrite a genuine pre-existing identity."""
+        storage_manager = Mock()
+        storage_manager.append_message = AsyncMock()
+        sdk_instance.storage_manager = storage_manager
+
+        converted_message = {
+            "type": "assistant", "content": "hi", "timestamp": 1.0,
+            "session_id": sdk_instance.session_id, "message_id": "pre-existing-id",
+        }
+        await sdk_instance._store_sdk_message(converted_message)
+
+        assert converted_message["message_id"] == "pre-existing-id"
+        stored_data = storage_manager.append_message.call_args[0][0]
+        assert stored_data["message_id"] == "pre-existing-id"
+
+
 class TestSetModel:
     """Tests for ClaudeSDK.set_model() (issue #1673)."""
 

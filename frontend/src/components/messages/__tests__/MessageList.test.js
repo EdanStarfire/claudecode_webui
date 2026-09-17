@@ -778,20 +778,22 @@ describe('attachOrphanedPermissionTools — Fix B (#1626)', () => {
 
     // Two assistant bubbles, separated by a user interjection so mergeConsecutiveAssistantTurns()
     // (#1746) doesn't fold them into one item — this test needs two separate top-level bubbles.
-    // The orphaned tool's messageId matches the EARLIER one.
+    // The orphaned tool's messageId matches the EARLIER one via metadata.message_id — the
+    // TURN-level identity ToolCall.message_id is sourced from (Issue #1957: the top-level
+    // message_id is now the PER-FRAME identity #1955's dedup needs, a different value).
     messageStore.messagesBySession.set(SESSION_ID, [
       makeMessage({
         type: 'assistant',
         content: 'First turn — requests permission',
-        message_id: 'msg-early',
-        metadata: { has_tool_uses: false, tool_uses: [] }
+        message_id: 'frame-uuid-early',
+        metadata: { message_id: 'msg-early', has_tool_uses: false, tool_uses: [] }
       }),
       makeMessage({ type: 'user', content: 'interjection' }),
       makeMessage({
         type: 'assistant',
         content: 'Second, unrelated turn',
-        message_id: 'msg-late',
-        metadata: { has_tool_uses: false, tool_uses: [] }
+        message_id: 'frame-uuid-late',
+        metadata: { message_id: 'msg-late', has_tool_uses: false, tool_uses: [] }
       })
     ])
     messageStore.messagesBySession = new Map(messageStore.messagesBySession)

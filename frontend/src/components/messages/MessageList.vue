@@ -1171,11 +1171,18 @@ watch(
  * (before Fix A fully resolves the issue across all SDK variants).
  *
  * Issue #1694: Anchor each orphan to the assistant bubble that produced it by matching
- * tc.messageId against item.message.message_id, searching the whole displayed list —
- * not just the last bubble. This is correct regardless of realtime emission timing
- * because it matches on identity, not recency/position. Falls back to the pre-#1694
- * last-assistant-bubble heuristic only when messageId is absent (legacy stored data) or
- * unresolved (owning bubble not currently displayed/paginated in).
+ * tc.messageId against the owning message's TURN-level identity, searching the whole
+ * displayed list — not just the last bubble. This is correct regardless of realtime
+ * emission timing because it matches on identity, not recency/position. Falls back to
+ * the pre-#1694 last-assistant-bubble heuristic only when messageId is absent (legacy
+ * stored data) or unresolved (owning bubble not currently displayed/paginated in).
+ *
+ * Issue #1957: tc.messageId is `ToolCall.message_id`, sourced from metadata.message_id
+ * (the Anthropic turn-level id — see backend/web_server.py's create_tool_call() call).
+ * Matching it against the top-level `message.message_id`/`seg.message_id` — the PER-FRAME
+ * identity #1955's frontend dedup needs — silently never matches for any live-delivered
+ * message, since the two identities are deliberately different values. Match against
+ * `metadata?.message_id` instead, which stays turn-level on both sides.
  */
 function attachOrphanedPermissionTools(items, sessionId) {
   if (!sessionId) return items
@@ -1216,7 +1223,7 @@ function attachOrphanedPermissionTools(items, sessionId) {
       continue
     }
     const targetIndex = items.findIndex(
-      it => it.type === 'message' && it.message?.type === 'assistant' && it.message.message_id === orphan.messageId
+      it => it.type === 'message' && it.message?.type === 'assistant' && it.message.metadata?.message_id === orphan.messageId
     )
     if (targetIndex !== -1) {
       items[targetIndex].orphanedPermissionTools = [...(items[targetIndex].orphanedPermissionTools || []), orphan]
@@ -1228,7 +1235,7 @@ function attachOrphanedPermissionTools(items, sessionId) {
     let attachedToSegment = false
     for (const it of items) {
       if (it.type !== 'message' || !it.mergedMessages) continue
-      const seg = it.mergedMessages.find(s => s.message_id === orphan.messageId)
+      const seg = it.mergedMessages.find(s => s.metadata?.message_id === orphan.messageId)
       if (seg) {
         seg.orphanedPermissionTools = [...(seg.orphanedPermissionTools || []), orphan]
         attachedToSegment = true
