@@ -811,15 +811,25 @@ class BackendApp:
                     websocket_data = self._message_processor.prepare_for_websocket(parsed_message)
 
                 # Issue #1000/#1486/#1957: Propagate message_id for frontend streaming dedup.
-                # As of #1957, branch 1's message_id (when message_data is a dict) is the
-                # PER-FRAME identity ClaudeSDK._store_sdk_message() now stamps onto the same
-                # dict before this callback runs (matching the value persisted to storage) —
-                # not the per-TURN Anthropic streaming id this block used to fall back to for
-                # a live AssistantMessage. #1955's frontend single-rule dedup requires a
-                # genuine per-frame identity here; see message_id_for_barrier below for the
-                # separate, still-per-turn identity the #1694 permission barrier needs.
+                #
+                # Issue #1957 follow-up (found via live testing: the first #1957 fix was dead
+                # code in production): on the real live path, this callback is registered as a
+                # subscriber on SessionCoordinator._create_message_callback (session_coordinator.py),
+                # which ALREADY converts the raw dict into a ParsedMessage via
+                # self.message_processor.process_message() before fanning out to subscribers —
+                # so `message_data` here is a ParsedMessage object, never a dict, and branch 1
+                # below is structurally unreachable in production (it only helps a hypothetical
+                # caller that feeds this callback a raw dict directly). The per-frame UUID
+                # ClaudeSDK._store_sdk_message() stamps still survives that dict-to-ParsedMessage
+                # conversion, though — every parse handler sets `raw_data=message_data` (the
+                # original dict) on the returned ParsedMessage — so branch 2 below reads it from
+                # there. Without branch 2, control fell through to the metadata branches, which
+                # only ever carry the per-TURN Anthropic id, silently re-introducing the original
+                # bug this whole propagation block exists to fix.
                 if isinstance(message_data, dict) and 'message_id' in message_data:
                     websocket_data['message_id'] = message_data['message_id']
+                elif isinstance((raw := getattr(message_data, 'raw_data', None)), dict) and 'message_id' in raw:
+                    websocket_data['message_id'] = raw['message_id']
                 elif isinstance((meta := getattr(message_data, 'metadata', None)), dict) and meta.get('message_id'):
                     websocket_data['message_id'] = meta['message_id']
                 elif parsed_message.metadata and parsed_message.metadata.get('message_id'):
