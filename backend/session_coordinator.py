@@ -3537,6 +3537,14 @@ class SessionCoordinator:
                 tool_call_data = dict(data)
                 triggering = tool_call_data.pop("_triggering_message", None)
                 tool_call_data["type"] = "tool_call"
+                # Issue #1958 backward compat: this is a verbatim replay of the stored
+                # dict, bypassing ToolCall.from_dict()/to_dict() entirely — pre-rename
+                # records on disk carry the turn id under the old "message_id" key, not
+                # "turn_id". Promote it so #1694 permission-prompt anchoring still works
+                # for historical sessions instead of silently degrading to the
+                # last-bubble heuristic.
+                if not tool_call_data.get("turn_id") and tool_call_data.get("message_id"):
+                    tool_call_data["turn_id"] = tool_call_data["message_id"]
                 # Preserve request_id from triggering PermissionRequestMessage so that
                 # page-refresh recovery can still correlate permission responses.
                 if (

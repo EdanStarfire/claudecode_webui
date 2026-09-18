@@ -121,6 +121,43 @@ def test_tool_call_with_status_update_preserves_turn_id():
     assert updated.turn_id == "msg_123"
 
 
+def test_tool_call_from_dict_legacy_message_id_fallback():
+    """Backward compat (QA-flagged gap): pre-#1958 ToolCallUpdate records persisted to
+    messages.jsonl carry the turn id under the old ambiguous "message_id" key, not
+    "turn_id". from_dict() must still resolve turn_id when replaying that legacy shape —
+    mirrors the equivalent metadata["turn_id"]/metadata["message_id"] fallback already in
+    place for assistant messages in message_parser.py."""
+    legacy_data = {
+        "tool_use_id": "tu_legacy",
+        "session_id": "sess-a",
+        "name": "Edit",
+        "input": {"file_path": "/x.py"},
+        "status": "pending",
+        "created_at": 0.0,
+        "requires_permission": True,
+        "message_id": "msg_legacy_turn",
+    }
+    restored = ToolCall.from_dict(legacy_data)
+    assert restored.turn_id == "msg_legacy_turn"
+
+
+def test_tool_call_from_dict_prefers_turn_id_over_legacy_message_id():
+    """If a record somehow carries both keys, the new turn_id key must win."""
+    data = {
+        "tool_use_id": "tu_both",
+        "session_id": "sess-a",
+        "name": "Edit",
+        "input": {"file_path": "/x.py"},
+        "status": "pending",
+        "created_at": 0.0,
+        "requires_permission": True,
+        "turn_id": "msg_new_turn",
+        "message_id": "msg_legacy_turn",
+    }
+    restored = ToolCall.from_dict(data)
+    assert restored.turn_id == "msg_new_turn"
+
+
 # ---------------------------------------------------------------------------
 # SessionCoordinator: create_tool_call() threads turn_id
 # ---------------------------------------------------------------------------

@@ -2664,6 +2664,72 @@ class TestConvertStoredMessageToWebsocket:
         assert result["messages"][0]["metadata"]["subtype"] == "client_launched"
 
 
+class TestIssue1958ToolCallUpdateLegacyTurnId:
+    """QA-flagged regression: _convert_stored_message_to_websocket() replays
+    ToolCallUpdate records as a verbatim `dict(data)` copy, bypassing
+    ToolCall.from_dict()/to_dict() entirely. Pre-#1958 sessions persisted these records
+    with the turn id under the old ambiguous "message_id" key, not "turn_id" — measured
+    in real session data as 958/968 pre-existing records having only the legacy key.
+    Without this fallback, #1694 permission-prompt anchoring silently degrades to the
+    last-bubble heuristic for every historical tool call on replay."""
+
+    @pytest.fixture
+    def coordinator(self, tmp_path):
+        return SessionCoordinator(tmp_path)
+
+    def test_legacy_message_id_promoted_to_turn_id(self, coordinator):
+        stored = {
+            "_type": "ToolCallUpdate",
+            "timestamp": 1700000000.0,
+            "data": {
+                "tool_use_id": "toolu_legacy",
+                "session_id": "sess-1",
+                "name": "Edit",
+                "input": {"file_path": "/x.py"},
+                "status": "awaiting_permission",
+                "message_id": "msg_legacy_turn",
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        assert result["type"] == "tool_call"
+        assert result["turn_id"] == "msg_legacy_turn"
+
+    def test_new_turn_id_key_not_overwritten_by_legacy_key(self, coordinator):
+        stored = {
+            "_type": "ToolCallUpdate",
+            "timestamp": 1700000000.0,
+            "data": {
+                "tool_use_id": "toolu_new",
+                "session_id": "sess-1",
+                "name": "Edit",
+                "input": {"file_path": "/x.py"},
+                "status": "awaiting_permission",
+                "turn_id": "msg_new_turn",
+                "message_id": "msg_legacy_turn",
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        assert result["turn_id"] == "msg_new_turn"
+
+    def test_absent_when_neither_key_present(self, coordinator):
+        stored = {
+            "_type": "ToolCallUpdate",
+            "timestamp": 1700000000.0,
+            "data": {
+                "tool_use_id": "toolu_none",
+                "session_id": "sess-1",
+                "name": "Read",
+                "input": {"file_path": "/x.py"},
+                "status": "pending",
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        assert "turn_id" not in result
+
+
 class TestIssue1676AgentNotification:
     """Tests for background subagent Notification hook tagging (issue #1676)."""
 

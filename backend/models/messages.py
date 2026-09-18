@@ -282,7 +282,10 @@ class ToolCall:
             auto_approved_reason=data.get("auto_approved_reason"),
             display=display,
             sender_attachments=data.get("sender_attachments"),
-            turn_id=data.get("turn_id"),
+            # Issue #1958 backward compat: pre-rename ToolCallUpdate records on disk carry
+            # the turn id under the old ambiguous "message_id" key. Mirrors the equivalent
+            # fallback for assistant messages in message_parser.py's turn_id restoration.
+            turn_id=data.get("turn_id") or data.get("message_id"),
         )
 
     def with_status_update(self, **updates: Any) -> "ToolCall":
