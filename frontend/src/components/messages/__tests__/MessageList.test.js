@@ -468,6 +468,165 @@ describe('mergeConsecutiveAssistantTurns (#1746 stage: layout)', () => {
   })
 })
 
+// Helper stub capturing the two Issue #1957 continuation flags per rendered row.
+function makeContinuationStub(capturedRows) {
+  return {
+    template: '<div role="article" data-testid="msg-item">{{ message.content }}</div>',
+    props: ['message', 'attachedTools', 'orphanedPermissionTools', 'mergedMessages', 'isMessageIdContinuation', 'hasMessageIdContinuationFollowing'],
+    mounted() {
+      capturedRows.push({
+        content: this.message.content,
+        isMessageIdContinuation: !!this.isMessageIdContinuation,
+        hasMessageIdContinuationFollowing: !!this.hasMessageIdContinuationFollowing,
+      })
+    }
+  }
+}
+
+describe('markMessageIdContinuations — visual grouping (Issue #1957, follow-up to #1955)', () => {
+  it('flags two independent rows sharing metadata.message_id as a continuation, even with a subagent-terminal signal between them', async () => {
+    const capturedRows = []
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: makeContinuationStub(capturedRows), TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    // One Anthropic turn (shared metadata.message_id) split into two backend-persisted frames
+    // — the #1765 background-Task-launch shape — with the subagent's own leg-terminal signal
+    // landing chronologically between them (this is exactly why mergeConsecutiveAssistantTurns'
+    // strict adjacency check does NOT merge them into one row).
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({
+        type: 'assistant', content: 'Launching a subagent', timestamp: 100,
+        metadata: { message_id: 'anthropic-turn-1', has_tool_uses: true, tool_uses: [{ id: 'launch-1', name: 'Task', input: {} }] }
+      }),
+      makeMessage({
+        type: 'assistant', content: 'Second frame of the same turn', timestamp: 300,
+        metadata: { message_id: 'anthropic-turn-1', has_tool_uses: false, tool_uses: [] }
+      })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_started',
+      { task_id: 'task-1', tool_use_id: 'launch-1', description: 'Doing work' }, 100)
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_notification',
+      { task_id: 'task-1', status: 'completed', summary: 'Done' }, 200)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    // Both frames still render as their OWN independent row (never merged into mergedMessages).
+    expect(capturedRows.length).toBe(2)
+    expect(capturedRows[0].content).toBe('Launching a subagent')
+    expect(capturedRows[0].isMessageIdContinuation).toBe(false)
+    expect(capturedRows[0].hasMessageIdContinuationFollowing).toBe(true)
+    expect(capturedRows[1].content).toBe('Second frame of the same turn')
+    expect(capturedRows[1].isMessageIdContinuation).toBe(true)
+    expect(capturedRows[1].hasMessageIdContinuationFollowing).toBe(false)
+  })
+
+  it('does not flag two frames with different metadata.message_id, even with a signal between them', async () => {
+    const capturedRows = []
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: makeContinuationStub(capturedRows), TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({
+        type: 'assistant', content: 'First unrelated turn', timestamp: 100,
+        metadata: { message_id: 'anthropic-turn-A', has_tool_uses: true, tool_uses: [{ id: 'launch-1', name: 'Task', input: {} }] }
+      }),
+      makeMessage({
+        type: 'assistant', content: 'Second unrelated turn', timestamp: 300,
+        metadata: { message_id: 'anthropic-turn-B', has_tool_uses: false, tool_uses: [] }
+      })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_started',
+      { task_id: 'task-1', tool_use_id: 'launch-1', description: 'Doing work' }, 100)
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_notification',
+      { task_id: 'task-1', status: 'completed', summary: 'Done' }, 200)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(capturedRows.length).toBe(2)
+    expect(capturedRows.every(r => !r.isMessageIdContinuation && !r.hasMessageIdContinuationFollowing)).toBe(true)
+  })
+
+  it('does not flag frames sharing metadata.message_id when a genuine user message sits between them', async () => {
+    const capturedRows = []
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: makeContinuationStub(capturedRows), TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({ type: 'assistant', content: 'First frame', timestamp: 100, metadata: { message_id: 'anthropic-turn-1' } }),
+      makeMessage({ type: 'user', content: 'A real interjection', timestamp: 150 }),
+      makeMessage({ type: 'assistant', content: 'Second frame', timestamp: 200, metadata: { message_id: 'anthropic-turn-1' } })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    const assistantRows = capturedRows.filter(r => r.content !== 'A real interjection')
+    expect(assistantRows.length).toBe(2)
+    expect(assistantRows.every(r => !r.isMessageIdContinuation && !r.hasMessageIdContinuationFollowing)).toBe(true)
+  })
+
+  it('renders the continuation row with the lighter turn-meta header instead of the full msg-meta (real AssistantMessage.vue, not stubbed)', async () => {
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { TruncationBanner: true, SubagentTimeline: true, ActivityTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({
+        type: 'assistant', content: 'Launching a subagent', timestamp: 100,
+        metadata: { message_id: 'anthropic-turn-1', has_tool_uses: true, tool_uses: [{ id: 'launch-1', name: 'Task', input: {} }] }
+      }),
+      makeMessage({
+        type: 'assistant', content: 'Second frame of the same turn', timestamp: 300,
+        metadata: { message_id: 'anthropic-turn-1', has_tool_uses: false, tool_uses: [] }
+      })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_started',
+      { task_id: 'task-1', tool_use_id: 'launch-1', description: 'Doing work' }, 100)
+    messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_notification',
+      { task_id: 'task-1', status: 'completed', summary: 'Done' }, 200)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    const bubbles = document.querySelectorAll('[data-testid="assistant-message"]')
+    expect(bubbles.length).toBe(2)
+
+    // First frame: normal full header, no continuation classes.
+    expect(bubbles[0].classList.contains('is-message-id-continuation')).toBe(false)
+    expect(bubbles[0].classList.contains('has-message-id-continuation-following')).toBe(true)
+    expect(bubbles[0].querySelector('.msg-meta')).toBeTruthy()
+
+    // Second frame: continuation — no full header, lighter turn-meta instead.
+    expect(bubbles[1].classList.contains('is-message-id-continuation')).toBe(true)
+    expect(bubbles[1].querySelector('.msg-meta')).toBeNull()
+    expect(bubbles[1].querySelector('.turn-meta')).toBeTruthy()
+  })
+})
+
 // Helper stub that exposes orphanedPermissionTools count as a data attribute
 function makeMessageItemStub(capturedOrphans) {
   return {
@@ -619,20 +778,22 @@ describe('attachOrphanedPermissionTools — Fix B (#1626)', () => {
 
     // Two assistant bubbles, separated by a user interjection so mergeConsecutiveAssistantTurns()
     // (#1746) doesn't fold them into one item — this test needs two separate top-level bubbles.
-    // The orphaned tool's messageId matches the EARLIER one.
+    // The orphaned tool's messageId matches the EARLIER one via metadata.message_id — the
+    // TURN-level identity ToolCall.message_id is sourced from (Issue #1957: the top-level
+    // message_id is now the PER-FRAME identity #1955's dedup needs, a different value).
     messageStore.messagesBySession.set(SESSION_ID, [
       makeMessage({
         type: 'assistant',
         content: 'First turn — requests permission',
-        message_id: 'msg-early',
-        metadata: { has_tool_uses: false, tool_uses: [] }
+        message_id: 'frame-uuid-early',
+        metadata: { message_id: 'msg-early', has_tool_uses: false, tool_uses: [] }
       }),
       makeMessage({ type: 'user', content: 'interjection' }),
       makeMessage({
         type: 'assistant',
         content: 'Second, unrelated turn',
-        message_id: 'msg-late',
-        metadata: { has_tool_uses: false, tool_uses: [] }
+        message_id: 'frame-uuid-late',
+        metadata: { message_id: 'msg-late', has_tool_uses: false, tool_uses: [] }
       })
     ])
     messageStore.messagesBySession = new Map(messageStore.messagesBySession)
@@ -854,7 +1015,7 @@ describe('virtualizer offset model (#1748 stage: offset-model)', () => {
     expect(scrollToSpy).toHaveBeenCalled()
   })
 
-  it('re-pins to bottom when the tail row\'s measured height grows without a new item being added — streaming growth (§7)', async () => {
+  it('re-pins to bottom when the streaming preview\'s content grows — replaces the old tracked-row streaming-growth trigger (Issue #1955)', async () => {
     const scrollToSpy = vi.fn()
     Element.prototype.scrollTo = scrollToSpy
 
@@ -868,25 +1029,58 @@ describe('virtualizer offset model (#1748 stage: offset-model)', () => {
     const messageStore = useMessageStore(pinia)
     useUIStore(pinia).autoScrollEnabled = true
 
-    messageStore.messagesBySession.set(SESSION_ID, [makeMessage({ content: 'Streaming message' })])
+    messageStore.messagesBySession.set(SESSION_ID, [makeMessage({ type: 'assistant', content: 'First' })])
     messageStore.messagesBySession = new Map(messageStore.messagesBySession)
     await new Promise(r => setTimeout(r, 50))
     scrollToSpy.mockClear()
 
-    // No new item is added — only the already-mounted tail row's measured size changes, matching
-    // a single assistant message growing token-by-token. This is the explicit wiring point (the
-    // virtualizer's onChange, not an outer content-box ResizeObserver) plan §7 calls out as easy
-    // to silently regress.
-    // Issue #1911: index 0 is now the leading date separator (the message's default timestamp is
-    // a real date), so the message itself — the row whose growth this test is about — is index 1.
-    const tailRow = document.querySelector('[data-index="1"]')
-    expect(tailRow).toBeTruthy()
-    resizeObserverStub.triggerResize(tailRow, { height: 900 })
+    // Issue #1955: the live-typing preview renders OUTSIDE the virtualizer's tracked rows (a
+    // normal-flow sibling, like TruncationBanner) — its growth no longer trips the virtualizer's
+    // own onChange (which only fires for tracked-row measurement changes). The dedicated
+    // content-length watch in MessageList.vue is the replacement trigger.
+    messageStore.handleAssistantDelta(SESSION_ID, { uuid: 'env-1', event: { type: 'message_start', message: { id: 'msg-stream-1' } } })
+    messageStore.handleAssistantDelta(SESSION_ID, {
+      uuid: 'env-2',
+      event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Streaming in more text' } }
+    })
 
+    // Let the rAF-batched preview flush run, then the component's own nextTick+rAF-coalesced
+    // scheduleStickyScroll (§7/§10).
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(scrollToSpy).toHaveBeenCalled()
+  })
+
+  it('StreamingPreview renders as a sibling after the virtual spacer and is not counted among the virtualizer\'s tracked rows (Issue #1955)', async () => {
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [makeMessage({ type: 'assistant', content: 'First' })])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+    await new Promise(r => setTimeout(r, 50))
+
+    const rowCountBefore = document.querySelectorAll('.virtual-item-row').length
+
+    // Text only (no thinking) keeps this test from also exercising ThinkingBlock — irrelevant
+    // to what's being asserted here (sibling positioning, not counted as a tracked row).
+    messageStore.handleAssistantDelta(SESSION_ID, { uuid: 'env-1', event: { type: 'message_start', message: { id: 'msg-preview-1' } } })
+    messageStore.handleAssistantDelta(SESSION_ID, {
+      uuid: 'env-2',
+      event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'typing...' } }
+    })
     await new Promise(resolve => requestAnimationFrame(resolve))
     await new Promise(r => setTimeout(r, 20))
 
-    expect(scrollToSpy).toHaveBeenCalled()
+    const preview = document.querySelector('[data-testid="streaming-preview"]')
+    expect(preview).toBeTruthy()
+    expect(preview.closest('.virtual-item-row')).toBeNull()
+    expect(document.querySelectorAll('.virtual-item-row').length).toBe(rowCountBefore)
   })
 
   // Issue #1748 (stage: windowing) regression: a real overscan value means rowVirtualizer's

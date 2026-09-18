@@ -1,9 +1,18 @@
 <template>
   <!-- Issue #195: Hide assistant bubble entirely when nothing to render
        (e.g. content-less messages whose only tools were Task calls moved to SubagentTimeline) -->
-  <div v-if="hasAnythingToShow" class="msg-wrapper msg-assistant" data-testid="assistant-message">
+  <div
+    v-if="hasAnythingToShow"
+    class="msg-wrapper msg-assistant"
+    :class="{ 'is-message-id-continuation': isMessageIdContinuation, 'has-message-id-continuation-following': hasMessageIdContinuationFollowing }"
+    data-testid="assistant-message"
+  >
     <div ref="bubbleRef" class="msg-bubble msg-bubble-assistant" :class="{ 'has-permission-prompt': hasActivePermission, 'tts-playing': isTTSPlaying }">
-      <div class="msg-meta">
+      <!-- Issue #1957: suppressed when this row is a purely-visual continuation of an earlier
+           independent row sharing the same metadata.message_id — segmentViews' own isFirst
+           computation below then renders the lighter turn-meta header instead, matching how a
+           mergeConsecutiveAssistantTurns()-merged continuation segment already looks. -->
+      <div v-if="!isMessageIdContinuation" class="msg-meta">
         <span class="msg-role">assistant</span>
         <span class="msg-time">{{ formattedTimestamp }}</span>
       </div>
@@ -25,14 +34,13 @@
         <div v-if="sv.hasThinking" class="thinking-block mb-2">
           <ThinkingBlock
             :thinking="sv.thinkingContent"
-            :streaming="!!sv.seg.streaming"
             :scopeKey="sv.seg.id || sv.seg.message_id || index"
           />
         </div>
 
         <!-- Content -->
-        <div v-if="sv.hasContent || sv.seg.streaming" class="msg-content-row">
-          <MarkdownView class="msg-text" :content="sv.rawContent" :streaming="!!sv.seg.streaming" :caret="!!sv.seg.streaming" />
+        <div v-if="sv.hasContent" class="msg-content-row">
+          <MarkdownView class="msg-text" :content="sv.rawContent" />
           <button
             v-if="tts"
             class="tts-play-icon"
@@ -119,6 +127,17 @@ const props = defineProps({
   mergedMessages: {
     type: Array,
     default: () => []
+  },
+  // Issue #1957 (visual grouping, follow-up to #1955): purely presentational flags set by
+  // MessageList.vue's markMessageIdContinuations() — this component instance is still its
+  // own independent virtualizer row/message either way, nothing structural changes.
+  isMessageIdContinuation: {
+    type: Boolean,
+    default: false
+  },
+  hasMessageIdContinuationFollowing: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -171,15 +190,13 @@ const modelName = computed(() => {
 })
 
 function segHasThinking(seg) {
-  // Issue #1486: message.thinking is built up by thinking_delta events during streaming.
-  // After the fallback-dedup merge the field persists on the message object even though
-  // streaming=false, so check it unconditionally before falling back to metadata.
-  if (seg.thinking) return true
+  // Issue #1955: segments rendered here are always canonical now — the live-typing preview
+  // (including its own thinking display) is StreamingPreview.vue's job, not this component's.
   return !!(seg.metadata?.has_thinking && seg.metadata?.thinking_content)
 }
 
 function segThinkingContent(seg) {
-  return seg.thinking || seg.metadata?.thinking_content || ''
+  return seg.metadata?.thinking_content || ''
 }
 
 function segHasContent(seg) {
@@ -250,7 +267,10 @@ function segEnrichedToolCalls(seg, attachedTools, orphanedTools) {
  */
 const segmentViews = computed(() => {
   const views = segments.value.map((seg, index) => {
-    const isFirst = index === 0
+    // Issue #1957: when this whole row is a message_id continuation of an earlier independent
+    // row, segment 0 renders like any other continuation segment (lighter turn-meta header)
+    // instead of the full msg-meta already suppressed above.
+    const isFirst = index === 0 && !props.isMessageIdContinuation
     const attachedTools = isFirst ? props.attachedTools : (seg.attachedTools || [])
     const orphanedTools = isFirst ? props.orphanedPermissionTools : (seg.orphanedPermissionTools || [])
     const enrichedToolCalls = segEnrichedToolCalls(seg, attachedTools, orphanedTools)
@@ -320,10 +340,10 @@ const isTTSPlaying = computed(() => {
  * Issue #195: Hide the entire assistant bubble when there's nothing to render across any segment.
  */
 const hasAnythingToShow = computed(() => {
-  // Issue #1486: always show the streaming placeholder so the caret is visible from the first
-  // token — without this guard a thinking-first response is invisible until text arrives.
+  // Issue #1955: segments rendered here are always canonical (never a streaming placeholder —
+  // that's StreamingPreview.vue's job now), so no streaming-caret carve-out is needed.
   return segmentViews.value.some(sv =>
-    !!sv.seg.streaming || sv.hasContent || sv.hasThinking ||
+    sv.hasContent || sv.hasThinking ||
     sv.mainTimelineTools.length > 0 || sv.subagentAnchors.length > 0
   ) || sendCommToolCalls.value.length > 0
 })
@@ -333,6 +353,17 @@ const hasAnythingToShow = computed(() => {
 /* Left-aligned, full-bleed assistant row */
 .msg-wrapper {
   padding: 4px 16px;
+}
+
+/* Issue #1957 (visual grouping, follow-up to #1955): zero out the touching edges so two
+   independent rows (each its own virtualizer item/message, never merged) read as one
+   seamless card — same background wash + left-border-accent on both sides of the join. */
+.msg-wrapper.is-message-id-continuation {
+  padding-top: 0;
+}
+
+.msg-wrapper.has-message-id-continuation-following {
+  padding-bottom: 0;
 }
 
 .msg-assistant {

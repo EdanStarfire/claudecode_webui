@@ -5,6 +5,8 @@
     :attachedTools="attachedTools"
     :orphanedPermissionTools="orphanedPermissionTools"
     :mergedMessages="mergedMessages"
+    :isMessageIdContinuation="isMessageIdContinuation"
+    :hasMessageIdContinuationFollowing="hasMessageIdContinuationFollowing"
   />
 </template>
 
@@ -30,6 +32,16 @@ const props = defineProps({
   mergedMessages: {
     type: Array,
     default: () => []
+  },
+  // Issue #1957 (visual grouping, follow-up to #1955): purely presentational — only
+  // AssistantMessage.vue reads these; other message types ignore them.
+  isMessageIdContinuation: {
+    type: Boolean,
+    default: false
+  },
+  hasMessageIdContinuationFollowing: {
+    type: Boolean,
+    default: false
   }
 })
 

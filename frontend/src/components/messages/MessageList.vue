@@ -42,6 +42,8 @@
               :attachedTools="row.item.attachedTools || []"
               :orphanedPermissionTools="row.item.orphanedPermissionTools || []"
               :mergedMessages="row.item.mergedMessages || []"
+              :isMessageIdContinuation="!!row.item.isMessageIdContinuation"
+              :hasMessageIdContinuationFollowing="!!row.item.hasMessageIdContinuationFollowing"
             />
 
             <!-- Compaction event group -->
@@ -78,6 +80,11 @@
             </div>
           </div>
         </div>
+
+        <!-- Issue #1955: cosmetic-only live-typing preview, rendered as a normal-flow sibling
+             AFTER the virtualizer's tracked rows — same pattern as TruncationBanner/
+             DeferredToolBanner below, never a tracked virtual row itself. -->
+        <StreamingPreview :sessionId="viewSessionId" />
 
         <!-- Issue #662: Truncation banner after last assistant message when response was truncated -->
         <TruncationBanner v-if="showTruncationBanner" :key="'truncation-' + viewSessionId" />
@@ -117,6 +124,7 @@ import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import MessageItem from './MessageItem.vue'
 import CompactionEventGroup from './CompactionEventGroup.vue'
+import StreamingPreview from './StreamingPreview.vue'
 import TruncationBanner from './TruncationBanner.vue'
 import DeferredToolBanner from './DeferredToolBanner.vue'
 import SubagentAnchorRow from './SubagentAnchorRow.vue'
@@ -209,11 +217,14 @@ const displayableItems = computed(() => {
   //   between two assistant turns it causally sits between (Issue #1746 follow-up)
   // Fifth pass: Merge consecutive assistant turns into one visual block (Issue #1746)
   // Sixth pass: Attach any permission_required tools not yet anchored to a bubble
-  return attachOrphanedPermissionTools(
-    mergeConsecutiveAssistantTurns(
-      injectSubagentSignals(injectDateSeparators(groupToolsToParentMessages(items)), viewSessionId.value)
-    ),
-    viewSessionId.value,
+  // Seventh pass: mark purely-visual message_id continuations (Issue #1957 follow-up to #1955)
+  return markMessageIdContinuations(
+    attachOrphanedPermissionTools(
+      mergeConsecutiveAssistantTurns(
+        injectSubagentSignals(injectDateSeparators(groupToolsToParentMessages(items)), viewSessionId.value)
+      ),
+      viewSessionId.value,
+    )
   )
 })
 
@@ -774,6 +785,59 @@ function mergeConsecutiveAssistantTurns(items) {
 }
 
 /**
+ * Issue #1957 (visual grouping, follow-up to #1955): purely presentational grouping for
+ * multiple canonical AssistantMessage frames sharing the same metadata.message_id — the
+ * #1765 background-Task-launch case, where one Anthropic turn arrives as several separate
+ * backend-persisted frames (each with its own distinct, real top-level message_id — verified
+ * against backend/data_storage.py — but a shared metadata.message_id, the Anthropic streaming
+ * id). Unlike mergeConsecutiveAssistantTurns() above, this does NOT touch the item list: every
+ * frame keeps its own independent virtualizer row, its own identity, its own height
+ * measurement. It only stamps two booleans consumed purely for CSS by AssistantMessage.vue —
+ * `isMessageIdContinuation` (render this item's own first segment like a continuation: no
+ * role/timestamp header, no top spacing) and `hasMessageIdContinuationFollowing` (no bottom
+ * spacing, since the next row butts directly against it) — so two adjacent rows read as one
+ * seamless card with no code path anywhere touching what the virtualizer thinks the row list
+ * contains.
+ *
+ * Adjacency deliberately SKIPS OVER purely structural entries injected earlier in this same
+ * pipeline (subagent_signal, date_separator, compaction) — a background leg's own
+ * leg-terminal signal commonly lands chronologically between two frames of the SAME turn,
+ * which is the whole reason this pass exists (mergeConsecutiveAssistantTurns' own strict
+ * adjacency check already handles the case with nothing in between). It does NOT skip past a
+ * genuine user or unrelated-assistant message — those are real conversation turns, not
+ * decoration, and their presence means the frames are no longer visually adjacent.
+ */
+function markMessageIdContinuations(items) {
+  function tailMessageOf(item) {
+    if (item.mergedMessages && item.mergedMessages.length > 0) {
+      return item.mergedMessages[item.mergedMessages.length - 1]
+    }
+    return item.message
+  }
+
+  let prevMessageItem = null
+  for (const item of items) {
+    if (item.type !== 'message') continue // skip subagent_signal/date_separator/compaction
+
+    const msg = item.message
+    const prevTail = prevMessageItem ? tailMessageOf(prevMessageItem) : null
+    if (
+      msg.type === 'assistant' &&
+      prevTail?.type === 'assistant' &&
+      msg.metadata?.message_id &&
+      prevTail.metadata?.message_id === msg.metadata.message_id
+    ) {
+      item.isMessageIdContinuation = true
+      prevMessageItem.hasMessageIdContinuationFollowing = true
+    }
+
+    prevMessageItem = item
+  }
+
+  return items
+}
+
+/**
  * Check if message at index i is the start of a compaction event
  * Pattern (with optional init message):
  * 1. System (subtype=status) - status = 'compacting'
@@ -1072,6 +1136,16 @@ watch(() => displayableItems.value.length, () => scheduleStickyScroll())
 // Auto-scroll on tool call updates (for permission requests, status changes, etc.)
 watch(() => sessionToolCalls.value.length, () => scheduleStickyScroll())
 
+// Issue #1955: the live-typing preview renders OUTSIDE the virtualizer's tracked rows (a
+// normal-flow sibling, like TruncationBanner), so its growth no longer trips the virtualizer's
+// own onChange (which only fires for tracked-row measurement changes). Watching the preview's
+// own content/thinking length directly is the replacement trigger for the streaming-growth
+// sticky-scroll case that onChange used to catch incidentally.
+watch(() => {
+  const preview = messageStore.streamingPreviewBySession.get(viewSessionId.value)
+  return preview ? preview.content.length + preview.thinking.length : 0
+}, () => scheduleStickyScroll())
+
 // Watch for tool call status changes (e.g., permission_required)
 watch(
   () => sessionToolCalls.value.map(tc => `${tc.id}-${tc.status}`).join(','),
@@ -1097,11 +1171,18 @@ watch(
  * (before Fix A fully resolves the issue across all SDK variants).
  *
  * Issue #1694: Anchor each orphan to the assistant bubble that produced it by matching
- * tc.messageId against item.message.message_id, searching the whole displayed list —
- * not just the last bubble. This is correct regardless of realtime emission timing
- * because it matches on identity, not recency/position. Falls back to the pre-#1694
- * last-assistant-bubble heuristic only when messageId is absent (legacy stored data) or
- * unresolved (owning bubble not currently displayed/paginated in).
+ * tc.messageId against the owning message's TURN-level identity, searching the whole
+ * displayed list — not just the last bubble. This is correct regardless of realtime
+ * emission timing because it matches on identity, not recency/position. Falls back to
+ * the pre-#1694 last-assistant-bubble heuristic only when messageId is absent (legacy
+ * stored data) or unresolved (owning bubble not currently displayed/paginated in).
+ *
+ * Issue #1957: tc.messageId is `ToolCall.message_id`, sourced from metadata.message_id
+ * (the Anthropic turn-level id — see backend/web_server.py's create_tool_call() call).
+ * Matching it against the top-level `message.message_id`/`seg.message_id` — the PER-FRAME
+ * identity #1955's frontend dedup needs — silently never matches for any live-delivered
+ * message, since the two identities are deliberately different values. Match against
+ * `metadata?.message_id` instead, which stays turn-level on both sides.
  */
 function attachOrphanedPermissionTools(items, sessionId) {
   if (!sessionId) return items
@@ -1142,7 +1223,7 @@ function attachOrphanedPermissionTools(items, sessionId) {
       continue
     }
     const targetIndex = items.findIndex(
-      it => it.type === 'message' && it.message?.type === 'assistant' && it.message.message_id === orphan.messageId
+      it => it.type === 'message' && it.message?.type === 'assistant' && it.message.metadata?.message_id === orphan.messageId
     )
     if (targetIndex !== -1) {
       items[targetIndex].orphanedPermissionTools = [...(items[targetIndex].orphanedPermissionTools || []), orphan]
@@ -1154,7 +1235,7 @@ function attachOrphanedPermissionTools(items, sessionId) {
     let attachedToSegment = false
     for (const it of items) {
       if (it.type !== 'message' || !it.mergedMessages) continue
-      const seg = it.mergedMessages.find(s => s.message_id === orphan.messageId)
+      const seg = it.mergedMessages.find(s => s.metadata?.message_id === orphan.messageId)
       if (seg) {
         seg.orphanedPermissionTools = [...(seg.orphanedPermissionTools || []), orphan]
         attachedToSegment = true
@@ -1314,8 +1395,9 @@ function shouldDisplayMessage(message) {
   // These contain a ThinkingBlock with empty thinking text plus a signature blob, no text,
   // no tool_use. Keeping them fragments tool timelines because the grouping walk-back in
   // groupToolsToParentMessages stops at the first empty assistant it finds.
-  // Issue #1486: streaming placeholders are always shown — content is being built up.
-  if (message.type === 'assistant' && !message.streaming) {
+  // Issue #1955: no message in messagesBySession is ever a streaming placeholder anymore —
+  // the live-typing preview renders separately via StreamingPreview.vue.
+  if (message.type === 'assistant') {
     const meta = message.metadata || {}
     const text = (message.content || '').trim()
     const hasText = text.length > 0 && text !== 'Assistant response'
@@ -1339,10 +1421,6 @@ function normalizeMessage(message) {
     message_id: message.message_id,
     type: message.type || 'unknown',
     content: message.content || '',
-    // Issue #1486: preserve streaming placeholder fields — stripping them breaks the caret and
-    // thinking-block display because AssistantMessage.vue reads these directly off the message.
-    streaming: message.streaming || false,
-    thinking: message.thinking || '',
     timestamp: message.timestamp || Date.now() / 1000,
     metadata: {
       has_tool_uses: false,
