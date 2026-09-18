@@ -770,7 +770,7 @@ export const useMessageStore = defineStore('message', () => {
         sessionId, reason: 'restart', openToolCount: openTools.size
       })
       openTools.forEach(id => {
-        markToolUseOrphaned(sessionId, id, 'Session was restarted')
+        markToolUseOrphaned(sessionId, id, 'Session was interrupted')
       })
       openTools.clear()
       // Track launch timestamp for uptime calculation
@@ -1384,6 +1384,8 @@ export const useMessageStore = defineStore('message', () => {
         toolCall._isOrphaned = true
         toolCall._orphanedInfo = info
         toolCall.isExpanded = false
+        toolCall.backendStatus = 'interrupted'
+        toolCall.status = 'completed'
       }
     }
     // Trigger reactivity
