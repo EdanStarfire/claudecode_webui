@@ -188,9 +188,9 @@ class PermissionService:
                         # permission prompt. Fail-open on timeout: this barrier only affects
                         # display ordering, not tool execution correctness, so we log a warning
                         # and proceed rather than risk a spurious deny. No-op (zero behavior
-                        # change) for any ToolCall built without message_id.
-                        if tool_call.message_id and not self.coordinator.is_assistant_message_emitted(
-                            session_id, tool_call.message_id
+                        # change) for any ToolCall built without turn_id.
+                        if tool_call.turn_id and not self.coordinator.is_assistant_message_emitted(
+                            session_id, tool_call.turn_id
                         ):
                             event = self.coordinator.get_message_emitted_event(session_id)
                             loop = asyncio.get_running_loop()
@@ -203,7 +203,7 @@ class PermissionService:
                                 # arrives between our check and the wait() call.
                                 event.clear()
                                 if self.coordinator.is_assistant_message_emitted(
-                                    session_id, tool_call.message_id
+                                    session_id, tool_call.turn_id
                                 ):
                                     break
                                 try:
@@ -211,7 +211,7 @@ class PermissionService:
                                 except TimeoutError:
                                     break
                                 if self.coordinator.is_assistant_message_emitted(
-                                    session_id, tool_call.message_id
+                                    session_id, tool_call.turn_id
                                 ):
                                     break
 
@@ -219,11 +219,11 @@ class PermissionService:
                             # this barrier only affects display ordering, never tool
                             # execution correctness, so we log and proceed rather than deny.
                             if not self.coordinator.is_assistant_message_emitted(
-                                session_id, tool_call.message_id
+                                session_id, tool_call.turn_id
                             ):
                                 debug_logger.warning(
                                     f"[PERMISSIONS] Assistant message envelope for "
-                                    f"message_id {tool_call.message_id} not emitted after "
+                                    f"turn_id {tool_call.turn_id} not emitted after "
                                     f"2.0s in session {session_id}. Proceeding anyway "
                                     f"(fail-open; affects display order only)."
                                 )

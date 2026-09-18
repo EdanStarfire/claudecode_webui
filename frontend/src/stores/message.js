@@ -1100,9 +1100,9 @@ export const useMessageStore = defineStore('message', () => {
         existing.answers = toolCall.updated_input.answers
       }
 
-      // Issue #1694: owning assistant message id, for permission-prompt anchoring
-      if (toolCall.message_id) {
-        existing.messageId = toolCall.message_id
+      // Issue #1694/#1958: owning assistant turn id, for permission-prompt anchoring
+      if (toolCall.turn_id) {
+        existing.messageId = toolCall.turn_id
       }
 
       // Update permission fields
@@ -1206,8 +1206,8 @@ export const useMessageStore = defineStore('message', () => {
         agentId: toolCall.agent_id || null,
         // Issue #1593: Sender attachment resource IDs for outbound comm chips
         senderAttachments: toolCall.sender_attachments || null,
-        // Issue #1694: owning assistant message id, for permission-prompt anchoring
-        messageId: toolCall.message_id || null,
+        // Issue #1694/#1958: owning assistant turn id, for permission-prompt anchoring
+        messageId: toolCall.turn_id || null,
         // Issue #1774: persist AskUserQuestion answers independent of `.input` churn
         answers: toolCall.updated_input?.answers || null,
       }

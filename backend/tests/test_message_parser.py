@@ -9,6 +9,7 @@ from backend.message_parser import (
     AssistantMessageHandler,
     ErrorHandler,
     MessageParser,
+    MessageProcessor,
     MessageType,
     ParsedMessage,
     ResultMessageHandler,
@@ -936,10 +937,15 @@ class TestIssue1486MessageIdPropagation:
     Fix: AssistantMessageHandler now captures sdk_msg.message_id into metadata so that
     web_server.py can propagate it in the poll event, and the frontend placeholder is
     keyed on data.event.message.id from the message_start Anthropic streaming event.
+
+    Issue #1958: the captured value is TURN-level identity, not per-record identity —
+    AssistantMessageHandler now writes it under metadata["turn_id"] instead of the
+    ambiguous metadata["message_id"] name it originally shared with the per-record
+    concept elsewhere in the codebase.
     """
 
-    def test_assistant_message_id_captured_from_sdk_object(self):
-        """message_id from AssistantMessage SDK object is surfaced in parsed metadata."""
+    def test_assistant_turn_id_captured_from_sdk_object(self):
+        """turn_id from AssistantMessage SDK object is surfaced in parsed metadata."""
         from claude_agent_sdk import AssistantMessage
         from claude_agent_sdk.types import TextBlock
 
@@ -958,13 +964,13 @@ class TestIssue1486MessageIdPropagation:
         handler = AssistantMessageHandler()
         parsed = handler.parse(message_data)
 
-        assert parsed.metadata.get("message_id") == "msg_abc123", (
-            "Anthropic message_id must be propagated so the frontend can dedup the "
-            "streaming placeholder against the terminal AssistantMessage"
+        assert parsed.metadata.get("turn_id") == "msg_abc123", (
+            "Anthropic message_id must be propagated as turn_id so the frontend can dedup "
+            "the streaming placeholder against the terminal AssistantMessage"
         )
 
-    def test_assistant_message_id_absent_when_none(self):
-        """metadata message_id is absent when SDK object has no message_id."""
+    def test_assistant_turn_id_absent_when_none(self):
+        """metadata turn_id is absent when SDK object has no message_id."""
         from claude_agent_sdk import AssistantMessage
         from claude_agent_sdk.types import TextBlock
 
@@ -983,42 +989,65 @@ class TestIssue1486MessageIdPropagation:
         handler = AssistantMessageHandler()
         parsed = handler.parse(message_data)
 
-        assert "message_id" not in parsed.metadata or parsed.metadata["message_id"] is None
+        assert "turn_id" not in parsed.metadata or parsed.metadata["turn_id"] is None
 
-    def test_assistant_message_id_restored_from_stored_dict(self):
-        """message_id is restored when re-parsing a stored assistant message that has it in metadata."""
+    def test_assistant_turn_id_restored_from_stored_dict(self):
+        """turn_id is restored when re-parsing a stored assistant message that has it in metadata."""
         handler = AssistantMessageHandler()
         message_data = {
             "type": "assistant",
             "content": "Stored response",
             "metadata": {
-                "message_id": "msg_stored456",
+                "turn_id": "msg_stored456",
                 "model": "claude-3-5-sonnet-20241022",
             },
             "session_id": "sess-1",
             "timestamp": time.time(),
         }
         parsed = handler.parse(message_data)
-        assert parsed.metadata.get("message_id") == "msg_stored456"
+        assert parsed.metadata.get("turn_id") == "msg_stored456"
+
+    def test_assistant_turn_id_restored_from_legacy_message_id_key(self):
+        """Issue #1958: pre-#1958 history stored the turn id under the old ambiguous
+        metadata["message_id"] key. Re-parsing that legacy shape must still resolve
+        turn_id correctly, with no migration step required."""
+        handler = AssistantMessageHandler()
+        message_data = {
+            "type": "assistant",
+            "content": "Stored response from before the rename",
+            "metadata": {
+                "message_id": "msg_legacy789",
+                "model": "claude-3-5-sonnet-20241022",
+            },
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+        assert parsed.metadata.get("turn_id") == "msg_legacy789", (
+            "Legacy metadata['message_id'] must be readable as turn_id with no migration"
+        )
 
 
 class TestIssue1845UserMessageIdPropagation:
     """Regression tests for issue #1845 reload-duplicated-user-message bug.
 
-    Root cause: UserMessageHandler never copied the stable message_id (assigned by
-    data_storage.append_message() at persistence time, before the same dict is passed
-    to the live message callback) into ParsedMessage.metadata. AssistantMessageHandler
-    already does this (issue #1486). Without it, a user message redelivered live via
-    the poll stream during the jsonl-write/queue-push race carries no id, so the
-    frontend's message_id-keyed dedup can't catch it and it renders twice.
+    Original root cause: UserMessageHandler never copied the stable message_id
+    (assigned by data_storage.append_message() at persistence time) into
+    ParsedMessage.metadata, so a user message redelivered live via the poll stream
+    during the jsonl-write/queue-push race carried no id and rendered twice.
 
-    Fix: UserMessageHandler now captures message_data["message_id"] (top-level, where
-    append_message() puts it) into metadata, with a fallback to a nested metadata
-    message_id for re-parsed stored dicts.
+    Issue #1958 superseded the original fix: UserMessageHandler's metadata["message_id"]
+    write is removed outright. The per-record identity it existed to propagate is now
+    populated centrally for every message type by MessageProcessor.process_message()
+    as ParsedMessage.record_id, sourced directly from the top-level message_id field —
+    the same field this handler used to dig for and re-stash into metadata. No consumer
+    ever read it back out of metadata, so the write was verified dead once record_id
+    existed as a first-class field.
     """
 
-    def test_user_message_id_captured_from_raw_dict(self):
-        """message_id set at the top level (live path, set by append_message()) is surfaced in parsed metadata."""
+    def test_user_handler_no_longer_writes_metadata_message_id(self):
+        """UserMessageHandler must not resurrect the removed metadata['message_id'] write —
+        that concept is now record_id, populated centrally by process_message()."""
         handler = UserMessageHandler()
         message_data = {
             "type": "user",
@@ -1029,39 +1058,39 @@ class TestIssue1845UserMessageIdPropagation:
         }
         parsed = handler.parse(message_data)
 
-        assert parsed.metadata.get("message_id") == "msg_user_abc123", (
-            "Top-level message_id must be propagated so a live-polled user message "
-            "carries the same id as its REST-loaded counterpart"
+        assert "message_id" not in parsed.metadata
+
+    def test_user_record_id_populated_centrally_by_process_message(self):
+        """The per-record identity issue #1845 needed is now ParsedMessage.record_id,
+        populated by MessageProcessor.process_message() from the top-level message_id —
+        not by UserMessageHandler writing into metadata."""
+        processor = MessageProcessor(MessageParser())
+        message_data = {
+            "type": "user",
+            "content": "Please help me",
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+            "message_id": "msg_user_abc123",
+        }
+        parsed = processor.process_message(message_data, source="websocket")
+
+        assert parsed.record_id == "msg_user_abc123", (
+            "Top-level message_id must be surfaced as record_id so a live-polled user "
+            "message carries the same id as its REST-loaded counterpart"
         )
 
-    def test_user_message_id_absent_when_none(self):
-        """metadata message_id is absent when no message_id is present anywhere."""
-        handler = UserMessageHandler()
+    def test_user_record_id_absent_when_no_top_level_message_id(self):
+        """record_id is None when the raw dict carries no top-level message_id."""
+        processor = MessageProcessor(MessageParser())
         message_data = {
             "type": "user",
             "content": "Please help me",
             "session_id": "sess-1",
             "timestamp": time.time(),
         }
-        parsed = handler.parse(message_data)
+        parsed = processor.process_message(message_data, source="websocket")
 
-        assert "message_id" not in parsed.metadata or parsed.metadata["message_id"] is None
-
-    def test_user_message_id_restored_from_stored_dict(self):
-        """message_id is restored when re-parsing a stored user message that has it nested in metadata."""
-        handler = UserMessageHandler()
-        message_data = {
-            "type": "user",
-            "content": "Please help me",
-            "metadata": {
-                "message_id": "msg_user_stored456",
-            },
-            "session_id": "sess-1",
-            "timestamp": time.time(),
-        }
-        parsed = handler.parse(message_data)
-
-        assert parsed.metadata.get("message_id") == "msg_user_stored456"
+        assert parsed.record_id is None
 
 
 class TestIssue1840UsageExtraction:
@@ -1153,3 +1182,91 @@ class TestIssue1840UsageExtraction:
         }
         parsed = handler.parse(message_data)
         assert "usage" not in parsed.metadata
+
+
+class TestIssue1958RecordAndTurnIdentity:
+    """Regression tests for issue #1958: record_id and turn_id are distinct, first-class
+    ParsedMessage fields, populated once and centrally by
+    MessageProcessor.process_message() for every message on every path (live, replay,
+    storage-read) — not something each downstream consumer re-derives by digging through
+    dicts under a same-named, ambiguous key.
+    """
+
+    def test_record_id_and_turn_id_both_populated_for_assistant_message(self):
+        """A live assistant message with a distinct per-record id and per-turn id gets
+        both surfaced correctly, and they are NOT equal to each other."""
+        from claude_agent_sdk import AssistantMessage
+        from claude_agent_sdk.types import TextBlock
+
+        sdk_msg = AssistantMessage(
+            content=[TextBlock(text="hello")],
+            model="claude-3-5-sonnet-20241022",
+            message_id="anthropic-turn-1",
+            uuid="some-per-event-uuid",
+        )
+        message_data = {
+            "type": "assistant",
+            "sdk_message": sdk_msg,
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+            "message_id": "frame-uuid-1",
+        }
+        processor = MessageProcessor(MessageParser())
+        parsed = processor.process_message(message_data, source="websocket")
+
+        assert parsed.record_id == "frame-uuid-1"
+        assert parsed.turn_id == "anthropic-turn-1"
+        assert parsed.record_id != parsed.turn_id
+
+    def test_turn_id_none_for_user_message(self):
+        """turn_id is an assistant-only concept — a user message never has one, even
+        though it does have a record_id."""
+        processor = MessageProcessor(MessageParser())
+        message_data = {
+            "type": "user",
+            "content": "hello",
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+            "message_id": "frame-uuid-user-1",
+        }
+        parsed = processor.process_message(message_data, source="websocket")
+
+        assert parsed.record_id == "frame-uuid-user-1"
+        assert parsed.turn_id is None
+
+    def test_turn_id_legacy_fallback_via_process_message_from_storage(self):
+        """Issue #1958 backward-compat requirement: a stored dict shaped exactly like
+        pre-#1958 history (turn id only under the old metadata["message_id"] key, no
+        metadata["turn_id"]) must still resolve turn_id correctly via
+        process_message(source="storage") — no migration step required."""
+        processor = MessageProcessor(MessageParser())
+        message_data = {
+            "type": "assistant",
+            "content": "Pre-#1958 stored response",
+            "metadata": {
+                "message_id": "legacy-turn-id",
+                "model": "claude-3-5-sonnet-20241022",
+            },
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+            "message_id": "frame-uuid-legacy",
+        }
+        parsed = processor.process_message(message_data, source="storage")
+
+        assert parsed.turn_id == "legacy-turn-id"
+        assert parsed.record_id == "frame-uuid-legacy"
+
+    def test_record_id_none_when_message_data_not_a_dict(self):
+        """process_message() defensively handles a non-dict message_data (e.g. an SDK
+        object passed directly) without raising — record_id is simply None."""
+        from claude_agent_sdk import AssistantMessage
+        from claude_agent_sdk.types import TextBlock
+
+        sdk_msg = AssistantMessage(
+            content=[TextBlock(text="hi")],
+            model="claude-3-5-sonnet-20241022",
+        )
+        processor = MessageProcessor(MessageParser())
+        parsed = processor.process_message(sdk_msg, source="websocket")
+
+        assert parsed.record_id is None

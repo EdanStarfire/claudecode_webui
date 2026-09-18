@@ -8,8 +8,8 @@
     data-testid="assistant-message"
   >
     <div ref="bubbleRef" class="msg-bubble msg-bubble-assistant" :class="{ 'has-permission-prompt': hasActivePermission, 'tts-playing': isTTSPlaying }">
-      <!-- Issue #1957: suppressed when this row is a purely-visual continuation of an earlier
-           independent row sharing the same metadata.message_id — segmentViews' own isFirst
+      <!-- Issue #1957/#1958: suppressed when this row is a purely-visual continuation of an
+           earlier independent row sharing the same metadata.turn_id — segmentViews' own isFirst
            computation below then renders the lighter turn-meta header instead, matching how a
            mergeConsecutiveAssistantTurns()-merged continuation segment already looks. -->
       <div v-if="!isMessageIdContinuation" class="msg-meta">

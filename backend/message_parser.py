@@ -80,6 +80,8 @@ class ParsedMessage:
     content: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     error_message: str | None = None
+    record_id: str | None = None
+    turn_id: str | None = None
 
 
 class MessageHandler(ABC):
@@ -617,8 +619,9 @@ class AssistantMessageHandler(MessageHandler):
             if "sdk_message" in message_data and isinstance(message_data["sdk_message"], AssistantMessage):
                 sdk_msg = message_data["sdk_message"]
                 # Issue #1486: capture Anthropic message ID for streaming placeholder dedup
+                # Issue #1958: this is turn-level identity, not per-record identity
                 if getattr(sdk_msg, 'message_id', None):
-                    extracted["metadata"]["message_id"] = sdk_msg.message_id
+                    extracted["metadata"]["turn_id"] = sdk_msg.message_id
                 if hasattr(sdk_msg, 'content'):
                     for block in sdk_msg.content:
                         if isinstance(block, TextBlock):
@@ -642,11 +645,14 @@ class AssistantMessageHandler(MessageHandler):
             else:
                 self._extract_from_legacy_format(message_data, text_parts)
 
-        # Fallback: restore message_id from stored metadata (dict-format messages)
-        if "message_id" not in extracted["metadata"]:
-            stored_mid = (message_data.get("metadata") or {}).get("message_id")
-            if stored_mid:
-                extracted["metadata"]["message_id"] = stored_mid
+        # Fallback: restore turn_id from stored metadata (dict-format messages)
+        if "turn_id" not in extracted["metadata"]:
+            stored_meta = message_data.get("metadata") or {}
+            # Issue #1958: prefer the new key; fall back to the legacy
+            # ambiguous name for history written before this change.
+            stored_tid = stored_meta.get("turn_id") or stored_meta.get("message_id")
+            if stored_tid:
+                extracted["metadata"]["turn_id"] = stored_tid
 
         # Extract tool_uses from metadata (covers dict-format messages from mock SDK)
         if not tool_uses:
@@ -1090,17 +1096,6 @@ class UserMessageHandler(MessageHandler):
             for key in ("comm", "attachments"):
                 if key in orig_meta:
                     extracted["metadata"][key] = orig_meta[key]
-
-        # Issue #1845: capture the stable message_id assigned by
-        # data_storage.append_message() (top-level on the persisted dict, mirroring
-        # the live-broadcast dict since append_message mutates it in place before the
-        # message callback fires) so a live-polled user message carries the same id as
-        # its REST-loaded counterpart, letting frontend dedup catch redelivery races.
-        message_id = message_data.get("message_id")
-        if not message_id and isinstance(orig_meta, dict):
-            message_id = orig_meta.get("message_id")
-        if message_id:
-            extracted["metadata"]["message_id"] = message_id
 
         return extracted
 
@@ -1821,6 +1816,16 @@ class MessageProcessor:
                 parsed_message.metadata = {}
             parsed_message.metadata['source'] = source
             parsed_message.metadata['processed_at'] = time.time()
+
+            # Issue #1958: populate the two identity concepts centrally, once,
+            # so every downstream consumer reads a named field instead of
+            # digging through dicts for a same-named key with two meanings.
+            parsed_message.record_id = (
+                message_data.get("message_id") if isinstance(message_data, dict) else None
+            )
+            parsed_message.turn_id = (
+                parsed_message.metadata.get("turn_id") if parsed_message.metadata else None
+            )
 
             self.logger.debug(f"Successfully processed {parsed_message.type.value} message from {source}")
             return parsed_message

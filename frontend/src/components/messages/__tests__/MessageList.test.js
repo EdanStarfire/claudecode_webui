@@ -484,7 +484,7 @@ function makeContinuationStub(capturedRows) {
 }
 
 describe('markMessageIdContinuations — visual grouping (Issue #1957, follow-up to #1955)', () => {
-  it('flags two independent rows sharing metadata.message_id as a continuation, even with a subagent-terminal signal between them', async () => {
+  it('flags two independent rows sharing metadata.turn_id as a continuation, even with a subagent-terminal signal between them', async () => {
     const capturedRows = []
     const { pinia } = renderWithStores(MessageList, {
       provide: { viewSessionId: viewSessionIdRef },
@@ -494,18 +494,18 @@ describe('markMessageIdContinuations — visual grouping (Issue #1957, follow-up
     const { useMessageStore } = await import('@/stores/message')
     const messageStore = useMessageStore(pinia)
 
-    // One Anthropic turn (shared metadata.message_id) split into two backend-persisted frames
+    // One Anthropic turn (shared metadata.turn_id) split into two backend-persisted frames
     // — the #1765 background-Task-launch shape — with the subagent's own leg-terminal signal
     // landing chronologically between them (this is exactly why mergeConsecutiveAssistantTurns'
     // strict adjacency check does NOT merge them into one row).
     messageStore.messagesBySession.set(SESSION_ID, [
       makeMessage({
         type: 'assistant', content: 'Launching a subagent', timestamp: 100,
-        metadata: { message_id: 'anthropic-turn-1', has_tool_uses: true, tool_uses: [{ id: 'launch-1', name: 'Task', input: {} }] }
+        metadata: { turn_id: 'anthropic-turn-1', has_tool_uses: true, tool_uses: [{ id: 'launch-1', name: 'Task', input: {} }] }
       }),
       makeMessage({
         type: 'assistant', content: 'Second frame of the same turn', timestamp: 300,
-        metadata: { message_id: 'anthropic-turn-1', has_tool_uses: false, tool_uses: [] }
+        metadata: { turn_id: 'anthropic-turn-1', has_tool_uses: false, tool_uses: [] }
       })
     ])
     messageStore.messagesBySession = new Map(messageStore.messagesBySession)
@@ -527,7 +527,7 @@ describe('markMessageIdContinuations — visual grouping (Issue #1957, follow-up
     expect(capturedRows[1].hasMessageIdContinuationFollowing).toBe(false)
   })
 
-  it('does not flag two frames with different metadata.message_id, even with a signal between them', async () => {
+  it('does not flag two frames with different metadata.turn_id, even with a signal between them', async () => {
     const capturedRows = []
     const { pinia } = renderWithStores(MessageList, {
       provide: { viewSessionId: viewSessionIdRef },
@@ -540,11 +540,11 @@ describe('markMessageIdContinuations — visual grouping (Issue #1957, follow-up
     messageStore.messagesBySession.set(SESSION_ID, [
       makeMessage({
         type: 'assistant', content: 'First unrelated turn', timestamp: 100,
-        metadata: { message_id: 'anthropic-turn-A', has_tool_uses: true, tool_uses: [{ id: 'launch-1', name: 'Task', input: {} }] }
+        metadata: { turn_id: 'anthropic-turn-A', has_tool_uses: true, tool_uses: [{ id: 'launch-1', name: 'Task', input: {} }] }
       }),
       makeMessage({
         type: 'assistant', content: 'Second unrelated turn', timestamp: 300,
-        metadata: { message_id: 'anthropic-turn-B', has_tool_uses: false, tool_uses: [] }
+        metadata: { turn_id: 'anthropic-turn-B', has_tool_uses: false, tool_uses: [] }
       })
     ])
     messageStore.messagesBySession = new Map(messageStore.messagesBySession)
@@ -560,7 +560,7 @@ describe('markMessageIdContinuations — visual grouping (Issue #1957, follow-up
     expect(capturedRows.every(r => !r.isMessageIdContinuation && !r.hasMessageIdContinuationFollowing)).toBe(true)
   })
 
-  it('does not flag frames sharing metadata.message_id when a genuine user message sits between them', async () => {
+  it('does not flag frames sharing metadata.turn_id when a genuine user message sits between them', async () => {
     const capturedRows = []
     const { pinia } = renderWithStores(MessageList, {
       provide: { viewSessionId: viewSessionIdRef },
@@ -571,9 +571,9 @@ describe('markMessageIdContinuations — visual grouping (Issue #1957, follow-up
     const messageStore = useMessageStore(pinia)
 
     messageStore.messagesBySession.set(SESSION_ID, [
-      makeMessage({ type: 'assistant', content: 'First frame', timestamp: 100, metadata: { message_id: 'anthropic-turn-1' } }),
+      makeMessage({ type: 'assistant', content: 'First frame', timestamp: 100, metadata: { turn_id: 'anthropic-turn-1' } }),
       makeMessage({ type: 'user', content: 'A real interjection', timestamp: 150 }),
-      makeMessage({ type: 'assistant', content: 'Second frame', timestamp: 200, metadata: { message_id: 'anthropic-turn-1' } })
+      makeMessage({ type: 'assistant', content: 'Second frame', timestamp: 200, metadata: { turn_id: 'anthropic-turn-1' } })
     ])
     messageStore.messagesBySession = new Map(messageStore.messagesBySession)
 
@@ -596,11 +596,11 @@ describe('markMessageIdContinuations — visual grouping (Issue #1957, follow-up
     messageStore.messagesBySession.set(SESSION_ID, [
       makeMessage({
         type: 'assistant', content: 'Launching a subagent', timestamp: 100,
-        metadata: { message_id: 'anthropic-turn-1', has_tool_uses: true, tool_uses: [{ id: 'launch-1', name: 'Task', input: {} }] }
+        metadata: { turn_id: 'anthropic-turn-1', has_tool_uses: true, tool_uses: [{ id: 'launch-1', name: 'Task', input: {} }] }
       }),
       makeMessage({
         type: 'assistant', content: 'Second frame of the same turn', timestamp: 300,
-        metadata: { message_id: 'anthropic-turn-1', has_tool_uses: false, tool_uses: [] }
+        metadata: { turn_id: 'anthropic-turn-1', has_tool_uses: false, tool_uses: [] }
       })
     ])
     messageStore.messagesBySession = new Map(messageStore.messagesBySession)
@@ -778,22 +778,22 @@ describe('attachOrphanedPermissionTools — Fix B (#1626)', () => {
 
     // Two assistant bubbles, separated by a user interjection so mergeConsecutiveAssistantTurns()
     // (#1746) doesn't fold them into one item — this test needs two separate top-level bubbles.
-    // The orphaned tool's messageId matches the EARLIER one via metadata.message_id — the
-    // TURN-level identity ToolCall.message_id is sourced from (Issue #1957: the top-level
+    // The orphaned tool's messageId matches the EARLIER one via metadata.turn_id — the
+    // TURN-level identity ToolCall.turn_id is sourced from (Issue #1957: the top-level
     // message_id is now the PER-FRAME identity #1955's dedup needs, a different value).
     messageStore.messagesBySession.set(SESSION_ID, [
       makeMessage({
         type: 'assistant',
         content: 'First turn — requests permission',
         message_id: 'frame-uuid-early',
-        metadata: { message_id: 'msg-early', has_tool_uses: false, tool_uses: [] }
+        metadata: { turn_id: 'msg-early', has_tool_uses: false, tool_uses: [] }
       }),
       makeMessage({ type: 'user', content: 'interjection' }),
       makeMessage({
         type: 'assistant',
         content: 'Second, unrelated turn',
         message_id: 'frame-uuid-late',
-        metadata: { message_id: 'msg-late', has_tool_uses: false, tool_uses: [] }
+        metadata: { turn_id: 'msg-late', has_tool_uses: false, tool_uses: [] }
       })
     ])
     messageStore.messagesBySession = new Map(messageStore.messagesBySession)

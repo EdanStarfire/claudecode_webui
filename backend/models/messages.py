@@ -171,9 +171,9 @@ class ToolCall:
     # Issue #195: Parent Task tool that spawned this subagent tool
     parent_tool_use_id: str | None = None
 
-    # Issue #1694: id of the assistant message that produced this tool_use, for
+    # Issue #1694/#1958: id of the assistant TURN that produced this tool_use, for
     # frontend anchoring of permission prompts to their owning bubble.
-    message_id: str | None = None
+    turn_id: str | None = None
 
     # Issue #707: Auto-approval reason (set when suggestion-based auto-approval fires)
     auto_approved_reason: str | None = None
@@ -224,9 +224,9 @@ class ToolCall:
         if self.parent_tool_use_id is not None:
             result["parent_tool_use_id"] = self.parent_tool_use_id
 
-        # Issue #1694: Owning assistant message id
-        if self.message_id is not None:
-            result["message_id"] = self.message_id
+        # Issue #1694/#1958: Owning assistant turn id
+        if self.turn_id is not None:
+            result["turn_id"] = self.turn_id
 
         # Issue #707: Auto-approval reason
         if self.auto_approved_reason is not None:
@@ -282,7 +282,10 @@ class ToolCall:
             auto_approved_reason=data.get("auto_approved_reason"),
             display=display,
             sender_attachments=data.get("sender_attachments"),
-            message_id=data.get("message_id"),
+            # Issue #1958 backward compat: pre-rename ToolCallUpdate records on disk carry
+            # the turn id under the old ambiguous "message_id" key. Mirrors the equivalent
+            # fallback for assistant messages in message_parser.py's turn_id restoration.
+            turn_id=data.get("turn_id") or data.get("message_id"),
         )
 
     def with_status_update(self, **updates: Any) -> "ToolCall":
