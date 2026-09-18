@@ -868,6 +868,14 @@ class ClaudeSDK:
                             if message_data.get("metadata"):
                                 user_message["metadata"] = message_data["metadata"]
 
+                            # Issue #1958: stamp the per-record identity unconditionally, same
+                            # as the SDK-inbound path in _process_sdk_message() — this outgoing
+                            # user message is broadcast via message_callback below regardless of
+                            # whether storage_manager is configured, and previously relied
+                            # entirely on DataStorageManager.append_message()'s own fallback
+                            # stamp, which never ran when storage was unset.
+                            user_message.setdefault('message_id', str(uuid.uuid4()))
+
                             # Store user message if storage available
                             if self.storage_manager:
                                 await self.storage_manager.append_message(user_message)
@@ -1433,7 +1441,11 @@ class ClaudeSDK:
             converted_message = self._convert_sdk_message(sdk_message)
             self.info.last_activity = time.time()
 
-            # Issue #1486: assistant_delta is ephemeral — bypass storage, deliver directly
+            # Issue #1486: assistant_delta is ephemeral — bypass storage, deliver directly.
+            # Deltas are cosmetic streaming previews (#1957), never reach the
+            # ParsedMessage/MessageProcessor pipeline, and don't need a record_id — stamping
+            # one here would burn a uuid4() call on every single streamed token/thinking
+            # chunk for a value nothing ever reads.
             if converted_message.get("type") == "assistant_delta":
                 ev = converted_message.get("event", {})
                 ev_type = ev.get("type", "?")
@@ -1455,6 +1467,17 @@ class ClaudeSDK:
             # Debug log raw SDK response structure
             sdk_logger.debug(f"Raw SDK response: {sdk_message=}")
 
+            # Issue #1958: stamp the per-record identity here, unconditionally, right after
+            # conversion — NOT inside _store_sdk_message(), which only ever runs
+            # `if self.storage_manager`. Stamping was previously gated on storage being
+            # configured for the session; if it wasn't, a live message could reach the
+            # message callback with no record_id at all, silently falling through to
+            # turn-level substitution downstream. setdefault (not a blind assignment): a
+            # dict-shaped converted_message can already carry its own message_id copied
+            # through from the raw SDK dict (_convert_sdk_message's "dict-like objects"
+            # branch) — never clobber a genuine pre-existing identity.
+            converted_message.setdefault('message_id', str(uuid.uuid4()))
+
             if self.storage_manager:
                 await self._store_sdk_message(converted_message)
 
@@ -1475,23 +1498,10 @@ class ClaudeSDK:
         Uses the new dataclass-based StoredMessage for clean serialization, with fallback
         to legacy MessageProcessor format for backward compatibility during migration.
         """
-        # Issue #1957 (live-path identity fix, found via manual testing of #1955): generate
-        # the per-frame identity HERE, before either storage or the live callback runs, and
-        # stamp it onto converted_message so both paths carry the SAME value for the SAME
-        # frame. Previously, storage assigned its own fresh UUID independently in
-        # DataStorageManager.append_message() (per-frame, correct) while the live poll
-        # payload fell back to metadata's Anthropic streaming id (per-TURN, shared across
-        # every frame of a multi-block turn — e.g. a background Task launch). #1955's
-        # frontend single-rule dedup (addMessage()) trusts message_id as a per-frame
-        # identity; fed a per-turn id on the live path, it silently dropped every frame
-        # after the first as a false duplicate. Stamping the same UUID here — read by
-        # DataStorageManager.append_message()'s own "if 'message_id' not in message_data"
-        # fallback below, and by web_server.py's message-callback via this same dict
-        # object — keeps the live and stored identities aligned for every frame.
-        # setdefault (not a blind assignment): a dict-shaped converted_message can already
-        # carry its own message_id copied through from the raw SDK dict (_convert_sdk_message's
-        # "dict-like objects" branch) — never clobber a genuine pre-existing identity.
-        converted_message.setdefault('message_id', str(uuid.uuid4()))
+        # Issue #1958: the per-record identity is now stamped unconditionally in
+        # _process_sdk_message() immediately after _convert_sdk_message() returns, ahead of
+        # this method's `if self.storage_manager` gate — see the comment there. By the time
+        # this method runs, converted_message['message_id'] is always already present.
 
         try:
             # Get the SDK message object from converted message

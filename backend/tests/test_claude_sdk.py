@@ -1015,13 +1015,21 @@ class TestClaudeSDK:
             await sdk_instance.register_repo_root("/tmp/some/dir")
 
 
-class TestIssue1957LivePathFrameIdentity:
-    """Issue #1957 (found via manual testing of #1955): _store_sdk_message() must stamp a
-    per-frame message_id onto converted_message BEFORE storage, so the live poll payload
-    (read from the same dict by web_server.py's message callback) carries the same
-    per-frame identity as the persisted record — not the per-turn Anthropic streaming id
-    multiple frames of one turn share, which #1955's frontend single-rule dedup would
-    otherwise treat as one shared identity and silently drop every frame after the first."""
+class TestIssue1958LivePathRecordIdentity:
+    """Issue #1957 (found via manual testing of #1955): the per-frame identity must be
+    stamped onto converted_message BEFORE either storage or the live message callback
+    runs, so both paths carry the same per-frame identity for the same frame — not the
+    per-turn Anthropic streaming id multiple frames of one turn share, which #1955's
+    frontend single-rule dedup would otherwise treat as one shared identity and silently
+    drop every frame after the first.
+
+    Issue #1958 moved this stamp out of _store_sdk_message() (previously gated behind
+    `if self.storage_manager`) into _process_sdk_message(), immediately after
+    _convert_sdk_message() returns — unconditional, regardless of whether storage is
+    configured for the session. These tests now exercise _process_sdk_message()
+    directly rather than calling _store_sdk_message() in isolation, since the stamp no
+    longer lives there.
+    """
 
     @pytest.fixture
     def temp_dir(self):
@@ -1041,37 +1049,40 @@ class TestIssue1957LivePathFrameIdentity:
         )
 
     @pytest.mark.asyncio
-    async def test_store_sdk_message_stamps_message_id_before_storage(self, sdk_instance):
+    async def test_process_sdk_message_stamps_record_id_before_storage(self, sdk_instance):
         storage_manager = Mock()
         storage_manager.append_message = AsyncMock()
         sdk_instance.storage_manager = storage_manager
 
-        converted_message = {
+        received = []
+        sdk_instance.message_callback = lambda msg: received.append(msg)
+
+        frame = {
             "type": "assistant",
             "content": "hello",
             "timestamp": 1.0,
             "session_id": sdk_instance.session_id,
         }
-        await sdk_instance._store_sdk_message(converted_message)
+        await sdk_instance._process_sdk_message(frame)
 
-        # A per-frame identity was generated and stamped on the same dict object the live
-        # callback reads from afterward.
-        assert converted_message.get("message_id")
+        # A per-frame identity was generated and stamped before the live callback fired.
+        assert len(received) == 1
+        assert received[0].get("message_id")
 
         # The exact same value was persisted — live and stored identities stay aligned.
         stored_data = storage_manager.append_message.call_args[0][0]
-        assert stored_data["message_id"] == converted_message["message_id"]
+        assert stored_data["message_id"] == received[0]["message_id"]
 
     @pytest.mark.asyncio
     async def test_two_frames_sharing_a_turn_level_id_get_distinct_per_frame_ids(self, sdk_instance):
         """The #1765 background-Task-launch shape: two separate AssistantMessage frames
-        sharing one Anthropic turn (metadata.message_id) must NOT collapse to one identity
-        on the live path — each is its own frame with its own message_id."""
+        sharing one Anthropic turn (metadata.turn_id) must NOT collapse to one identity
+        on the live path — each is its own frame with its own message_id (record_id)."""
         storage_manager = Mock()
         storage_manager.append_message = AsyncMock()
         sdk_instance.storage_manager = storage_manager
 
-        shared_turn_metadata = {"message_id": "msg_anthropic_turn_shared"}
+        shared_turn_metadata = {"turn_id": "msg_anthropic_turn_shared"}
         frame_1 = {
             "type": "assistant", "content": "", "timestamp": 1.0,
             "session_id": sdk_instance.session_id, "metadata": dict(shared_turn_metadata),
@@ -1081,27 +1092,27 @@ class TestIssue1957LivePathFrameIdentity:
             "session_id": sdk_instance.session_id, "metadata": dict(shared_turn_metadata),
         }
 
-        await sdk_instance._store_sdk_message(frame_1)
-        await sdk_instance._store_sdk_message(frame_2)
+        await sdk_instance._process_sdk_message(frame_1)
+        await sdk_instance._process_sdk_message(frame_2)
 
-        assert frame_1["message_id"] != frame_2["message_id"]
+        stored_ids = [c.args[0]["message_id"] for c in storage_manager.append_message.call_args_list]
+        assert stored_ids[0] != stored_ids[1]
 
     @pytest.mark.asyncio
     async def test_does_not_clobber_a_pre_existing_message_id(self, sdk_instance):
-        """A dict-shaped converted_message can already carry its own message_id copied
-        through from the raw SDK dict (_convert_sdk_message's dict-like-objects branch) —
-        _store_sdk_message must not overwrite a genuine pre-existing identity."""
+        """A dict-shaped message can already carry its own message_id copied through from
+        the raw SDK dict (_convert_sdk_message's dict-like-objects branch) — the stamp
+        must not overwrite a genuine pre-existing identity."""
         storage_manager = Mock()
         storage_manager.append_message = AsyncMock()
         sdk_instance.storage_manager = storage_manager
 
-        converted_message = {
+        frame = {
             "type": "assistant", "content": "hi", "timestamp": 1.0,
             "session_id": sdk_instance.session_id, "message_id": "pre-existing-id",
         }
-        await sdk_instance._store_sdk_message(converted_message)
+        await sdk_instance._process_sdk_message(frame)
 
-        assert converted_message["message_id"] == "pre-existing-id"
         stored_data = storage_manager.append_message.call_args[0][0]
         assert stored_data["message_id"] == "pre-existing-id"
 

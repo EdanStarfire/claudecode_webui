@@ -179,7 +179,7 @@ describe('message store', () => {
     expect(tc.status).toBe('executing')
   })
 
-  it('handleToolCall captures messageId on create and on update (#1694)', async () => {
+  it('handleToolCall captures messageId on create and on update (#1694/#1958)', async () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
 
@@ -188,7 +188,7 @@ describe('message store', () => {
       name: 'Bash',
       input: { command: 'ls' },
       status: 'running',
-      message_id: 'msg-abc'
+      turn_id: 'msg-abc'
     })
 
     let calls = store.toolCallsBySession.get('sess-1')
@@ -200,20 +200,20 @@ describe('message store', () => {
       input: {},
       status: 'awaiting_permission',
       request_id: 'req-2'
-      // no message_id — legacy payload
+      // no turn_id — legacy payload
     })
 
     calls = store.toolCallsBySession.get('sess-1')
     expect(calls[1].messageId).toBeNull()
 
-    // Update branch: a later event for use-2 carries message_id
+    // Update branch: a later event for use-2 carries turn_id
     store.handleToolCall('sess-1', {
       tool_use_id: 'use-2',
       name: 'Edit',
       input: {},
       status: 'awaiting_permission',
       request_id: 'req-2',
-      message_id: 'msg-def'
+      turn_id: 'msg-def'
     })
 
     calls = store.toolCallsBySession.get('sess-1')

@@ -810,30 +810,25 @@ class BackendApp:
                     parsed_message = self._message_processor.process_message(message_data, source="websocket")
                     websocket_data = self._message_processor.prepare_for_websocket(parsed_message)
 
-                # Issue #1000/#1486/#1957: Propagate message_id for frontend streaming dedup.
-                #
-                # Issue #1957 follow-up (found via live testing: the first #1957 fix was dead
-                # code in production): on the real live path, this callback is registered as a
-                # subscriber on SessionCoordinator._create_message_callback (session_coordinator.py),
-                # which ALREADY converts the raw dict into a ParsedMessage via
-                # self.message_processor.process_message() before fanning out to subscribers —
-                # so `message_data` here is a ParsedMessage object, never a dict, and branch 1
-                # below is structurally unreachable in production (it only helps a hypothetical
-                # caller that feeds this callback a raw dict directly). The per-frame UUID
-                # ClaudeSDK._store_sdk_message() stamps still survives that dict-to-ParsedMessage
-                # conversion, though — every parse handler sets `raw_data=message_data` (the
-                # original dict) on the returned ParsedMessage — so branch 2 below reads it from
-                # there. Without branch 2, control fell through to the metadata branches, which
-                # only ever carry the per-TURN Anthropic id, silently re-introducing the original
-                # bug this whole propagation block exists to fix.
-                if isinstance(message_data, dict) and 'message_id' in message_data:
-                    websocket_data['message_id'] = message_data['message_id']
-                elif isinstance((raw := getattr(message_data, 'raw_data', None)), dict) and 'message_id' in raw:
-                    websocket_data['message_id'] = raw['message_id']
-                elif isinstance((meta := getattr(message_data, 'metadata', None)), dict) and meta.get('message_id'):
-                    websocket_data['message_id'] = meta['message_id']
-                elif parsed_message.metadata and parsed_message.metadata.get('message_id'):
-                    websocket_data['message_id'] = parsed_message.metadata['message_id']
+                # Issue #1958: record_id is the per-record identity, populated centrally by
+                # MessageProcessor.process_message() for every message on every path (live,
+                # replay, storage-read) from the same top-level `message_id` field storage has
+                # always used. Reading the named field replaces the old 4-branch dict-digging
+                # chain that silently fell through to the turn-level id on a miss — that
+                # silent substitution was the direct cause of #1955/#1957/#1957-followup.
+                msg_type = getattr(parsed_message, 'type', None)
+                if msg_type is not None:
+                    msg_type_str = msg_type.value if hasattr(msg_type, 'value') else str(msg_type)
+                else:
+                    msg_type_str = websocket_data.get("type", "")
+
+                if parsed_message.record_id:
+                    websocket_data['message_id'] = parsed_message.record_id
+                else:
+                    logger.error(
+                        f"Live message for session {session_id} (type={msg_type_str}) has no "
+                        f"record_id — frontend dedup identity unresolved"
+                    )
 
                 # Wrap in standard poll queue envelope
                 serialized = {
@@ -849,30 +844,21 @@ class BackendApp:
                     self.session_queues[session_id].append(serialized)
                     logger.info(f"Appended message to session queue for {session_id}")
 
-                # Issue #1957: the barrier keys on the TURN-level Anthropic id — the same
-                # source create_tool_call() reads via metadata.get('message_id') below in
-                # _emit_tool_call_updates() — NOT websocket_data['message_id'] above, which is
-                # now the PER-FRAME id #1955's frontend dedup needs. Reusing websocket_data's
-                # value here would key the barrier on an identity tool_call.message_id never
-                # matches, making every wait fail open (harmless but pointless — see #1694).
-                if isinstance((meta := getattr(message_data, 'metadata', None)), dict) and meta.get('message_id'):
-                    message_id_for_barrier = meta['message_id']
-                elif parsed_message.metadata and parsed_message.metadata.get('message_id'):
-                    message_id_for_barrier = parsed_message.metadata['message_id']
-                else:
-                    message_id_for_barrier = None
-                if message_id_for_barrier:
-                    self.coordinator.mark_assistant_message_emitted(session_id, message_id_for_barrier)
+                # Issue #1957/#1958: the barrier keys on the TURN-level Anthropic id — now the
+                # first-class `parsed_message.turn_id` field, populated centrally by
+                # MessageProcessor.process_message() — NOT websocket_data['message_id'] above,
+                # which is the PER-RECORD id #1955's frontend dedup needs. Reusing
+                # websocket_data's value here would key the barrier on an identity
+                # tool_call.turn_id never matches, making every wait fail open (harmless but
+                # pointless — see #1694).
+                turn_id_for_barrier = getattr(parsed_message, 'turn_id', None)
+                if turn_id_for_barrier:
+                    self.coordinator.mark_assistant_message_emitted(session_id, turn_id_for_barrier)
 
                 # Issue #324: Emit tool_call messages for tool lifecycle events
                 await self._emit_tool_call_updates(session_id, parsed_message)
 
                 # Issue #952: Emit context_update after result messages using SDK API
-                msg_type = getattr(parsed_message, 'type', None)
-                if msg_type is not None:
-                    msg_type_str = msg_type.value if hasattr(msg_type, 'value') else str(msg_type)
-                else:
-                    msg_type_str = websocket_data.get("type", "")
                 if msg_type_str == "result" and session_id in self.session_queues:
                     ctx = await self.coordinator.get_context_usage(session_id)
                     if ctx and ctx.get("totalTokens"):
@@ -904,6 +890,10 @@ class BackendApp:
                 tool_uses = metadata.get('tool_uses', [])
                 # Issue #195: Propagate parent_tool_use_id from message to child tool_calls
                 parent_tool_use_id = metadata.get('parent_tool_use_id')
+                # Issue #1958: read the first-class field, not the raw metadata dict a second
+                # time — parsed_message.turn_id IS metadata.get('turn_id'), already resolved
+                # once by MessageProcessor.process_message().
+                turn_id = getattr(parsed_message, 'turn_id', None)
                 for tool_use in tool_uses:
                     tool_id = tool_use.get('id')
                     tool_name = tool_use.get('name')
@@ -917,7 +907,7 @@ class BackendApp:
                             input_params=input_params,
                             requires_permission=False,  # Will be updated if permission is requested
                             parent_tool_use_id=parent_tool_use_id,
-                            message_id=metadata.get('message_id'),
+                            turn_id=turn_id,
                         )
 
                         tool_call_data = tool_call.to_dict()

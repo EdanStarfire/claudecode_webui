@@ -785,11 +785,11 @@ function mergeConsecutiveAssistantTurns(items) {
 }
 
 /**
- * Issue #1957 (visual grouping, follow-up to #1955): purely presentational grouping for
- * multiple canonical AssistantMessage frames sharing the same metadata.message_id — the
- * #1765 background-Task-launch case, where one Anthropic turn arrives as several separate
+ * Issue #1957 (visual grouping, follow-up to #1955); renamed for #1958: purely presentational
+ * grouping for multiple canonical AssistantMessage frames sharing the same metadata.turn_id —
+ * the #1765 background-Task-launch case, where one Anthropic turn arrives as several separate
  * backend-persisted frames (each with its own distinct, real top-level message_id — verified
- * against backend/data_storage.py — but a shared metadata.message_id, the Anthropic streaming
+ * against backend/data_storage.py — but a shared metadata.turn_id, the Anthropic streaming
  * id). Unlike mergeConsecutiveAssistantTurns() above, this does NOT touch the item list: every
  * frame keeps its own independent virtualizer row, its own identity, its own height
  * measurement. It only stamps two booleans consumed purely for CSS by AssistantMessage.vue —
@@ -824,8 +824,8 @@ function markMessageIdContinuations(items) {
     if (
       msg.type === 'assistant' &&
       prevTail?.type === 'assistant' &&
-      msg.metadata?.message_id &&
-      prevTail.metadata?.message_id === msg.metadata.message_id
+      msg.metadata?.turn_id &&
+      prevTail.metadata?.turn_id === msg.metadata.turn_id
     ) {
       item.isMessageIdContinuation = true
       prevMessageItem.hasMessageIdContinuationFollowing = true
@@ -1177,12 +1177,12 @@ watch(
  * the pre-#1694 last-assistant-bubble heuristic only when messageId is absent (legacy
  * stored data) or unresolved (owning bubble not currently displayed/paginated in).
  *
- * Issue #1957: tc.messageId is `ToolCall.message_id`, sourced from metadata.message_id
+ * Issue #1957/#1958: tc.messageId is `ToolCall.turn_id`, sourced from metadata.turn_id
  * (the Anthropic turn-level id — see backend/web_server.py's create_tool_call() call).
- * Matching it against the top-level `message.message_id`/`seg.message_id` — the PER-FRAME
+ * Matching it against the top-level `message.message_id`/`seg.message_id` — the PER-RECORD
  * identity #1955's frontend dedup needs — silently never matches for any live-delivered
  * message, since the two identities are deliberately different values. Match against
- * `metadata?.message_id` instead, which stays turn-level on both sides.
+ * `metadata?.turn_id` instead, which stays turn-level on both sides.
  */
 function attachOrphanedPermissionTools(items, sessionId) {
   if (!sessionId) return items
@@ -1215,7 +1215,7 @@ function attachOrphanedPermissionTools(items, sessionId) {
   }
   if (orphans.length === 0) return items
 
-  // Anchor by message_id first; collect anything that can't be resolved that way.
+  // Anchor by turn_id first; collect anything that can't be resolved that way.
   const unanchored = []
   for (const orphan of orphans) {
     if (!orphan.messageId) {
@@ -1223,7 +1223,7 @@ function attachOrphanedPermissionTools(items, sessionId) {
       continue
     }
     const targetIndex = items.findIndex(
-      it => it.type === 'message' && it.message?.type === 'assistant' && it.message.metadata?.message_id === orphan.messageId
+      it => it.type === 'message' && it.message?.type === 'assistant' && it.message.metadata?.turn_id === orphan.messageId
     )
     if (targetIndex !== -1) {
       items[targetIndex].orphanedPermissionTools = [...(items[targetIndex].orphanedPermissionTools || []), orphan]
@@ -1231,11 +1231,11 @@ function attachOrphanedPermissionTools(items, sessionId) {
     }
 
     // Issue #1746: the owning message may have been merged into a preceding row as a
-    // continuation segment — search item.mergedMessages before giving up on message_id anchoring.
+    // continuation segment — search item.mergedMessages before giving up on turn_id anchoring.
     let attachedToSegment = false
     for (const it of items) {
       if (it.type !== 'message' || !it.mergedMessages) continue
-      const seg = it.mergedMessages.find(s => s.metadata?.message_id === orphan.messageId)
+      const seg = it.mergedMessages.find(s => s.metadata?.turn_id === orphan.messageId)
       if (seg) {
         seg.orphanedPermissionTools = [...(seg.orphanedPermissionTools || []), orphan]
         attachedToSegment = true
