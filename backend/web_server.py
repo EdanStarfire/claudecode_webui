@@ -31,6 +31,7 @@ from .analytics.database import AnalyticsDB
 from .analytics_store import AnalyticsStore
 from .application_service import ApplicationService
 from .message_parser import MessageParser, MessageProcessor
+from .models.messages import PermissionInfo, ToolState
 from .permission_service import PermissionService
 from .session_coordinator import SessionCoordinator
 from .skill_manager import SkillManager
@@ -966,6 +967,94 @@ class BackendApp:
                                 f"Emitted tool_call {'failed' if is_error else 'completed'} "
                                 f"for {tool_use_id} in session {session_id}"
                             )
+
+            # Issue #1964: mock-SDK fixture replay is the only remaining producer of these
+            # legacy message types — live sessions broadcast permission lifecycle updates
+            # directly from permission_service.py and never emit these. Mirror that same
+            # coordinator update + broadcast here so replayed fixtures reach the same
+            # unified tool_call states (awaiting_permission / running / denied) the
+            # frontend actually renders.
+            elif msg_type == 'permission_request':
+                tool_use_id = metadata.get('tool_use_id')
+                tool_name = metadata.get('tool_name', 'unknown')
+                if not tool_use_id:
+                    tool_call = self.coordinator.find_tool_call_by_signature(
+                        session_id, tool_name, metadata.get('input_params', {})
+                    )
+                    tool_use_id = tool_call.tool_use_id if tool_call else None
+
+                if tool_use_id:
+                    permission_info = PermissionInfo(
+                        message=f"Allow {tool_name}?",
+                        suggestions=metadata.get('suggestions', []),
+                        decision_reason=metadata.get('decision_reason'),
+                        blocked_path=metadata.get('blocked_path'),
+                        title=metadata.get('title'),
+                        display_name=metadata.get('display_name'),
+                        description=metadata.get('description'),
+                    )
+                    updated_tool_call = self.coordinator.update_tool_call_permission_request(
+                        session_id, tool_use_id, permission_info
+                    )
+                    if updated_tool_call:
+                        tool_call_data = updated_tool_call.to_dict()
+                        tool_call_data["type"] = "tool_call"
+                        tool_call_data["request_id"] = metadata.get('request_id')
+
+                        websocket_message = {
+                            "type": "message",
+                            "session_id": session_id,
+                            "data": tool_call_data,
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        }
+                        if session_id in self.session_queues:
+                            self.session_queues[session_id].append(websocket_message)
+                        logger.debug(
+                            f"Emitted tool_call awaiting_permission for {tool_name} "
+                            f"({tool_use_id}) in session {session_id}"
+                        )
+
+            elif msg_type == 'permission_response':
+                tool_use_id = metadata.get('tool_use_id')
+                tool_name = metadata.get('tool_name', 'unknown')
+                if not tool_use_id:
+                    # PermissionResponseHandler never populates metadata['input_params'] (a
+                    # response doesn't carry the original tool call's params) — matching by
+                    # signature against an always-empty dict would either never match or
+                    # collide with an unrelated tool call, so fall back to whichever tool in
+                    # the session is uniquely awaiting permission instead.
+                    awaiting = [
+                        tc for tc in self.coordinator.get_active_tool_calls(session_id)
+                        if tc.status == ToolState.AWAITING_PERMISSION
+                        and (tool_name == 'unknown' or tc.name == tool_name)
+                    ]
+                    if len(awaiting) == 1:
+                        tool_use_id = awaiting[0].tool_use_id
+
+                if tool_use_id:
+                    granted = metadata.get('decision') == 'allow'
+                    updated_tool_call = self.coordinator.update_tool_call_permission_response(
+                        session_id,
+                        tool_use_id,
+                        granted,
+                        applied_updates=metadata.get('applied_updates') or None,
+                    )
+                    if updated_tool_call:
+                        tool_call_data = updated_tool_call.to_dict()
+                        tool_call_data["type"] = "tool_call"
+
+                        websocket_message = {
+                            "type": "message",
+                            "session_id": session_id,
+                            "data": tool_call_data,
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        }
+                        if session_id in self.session_queues:
+                            self.session_queues[session_id].append(websocket_message)
+                        logger.debug(
+                            f"Emitted tool_call {'running' if granted else 'denied'} "
+                            f"for {tool_use_id} in session {session_id}"
+                        )
 
         except Exception:
             logger.exception("Error emitting tool_call updates")

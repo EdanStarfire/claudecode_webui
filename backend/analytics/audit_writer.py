@@ -231,7 +231,10 @@ class AuditWriter:
 
         elif msg_type == "permission_request":
             metadata = msg.get("metadata", {})
-            tool_name = metadata.get("tool_name")
+            # Issue #1964: tool_name lives at the top level of this message shape
+            # (metadata only carries has_permission_requests/suggestions); keep the
+            # metadata check for back-compat with any older-shaped fixture/JSONL.
+            tool_name = metadata.get("tool_name") or msg.get("tool_name")
             summary = _truncate(f"Permission requested: {tool_name}")
             extra = {"tool_name": tool_name}
             self._enqueue_with_ts(
@@ -241,8 +244,10 @@ class AuditWriter:
 
         elif msg_type == "permission_response":
             metadata = msg.get("metadata", {})
-            decision = metadata.get("decision", "unknown")
-            tool_name = metadata.get("tool_name")
+            # Issue #1964: decision/tool_name live at the top level of this message
+            # shape (metadata only carries has_permission_responses/behavior).
+            decision = metadata.get("decision") or msg.get("decision", "unknown")
+            tool_name = metadata.get("tool_name") or msg.get("tool_name")
             status = "denied" if decision == "deny" else "allowed"
             summary = _truncate(f"Permission {status}: {tool_name}")
             extra = {"tool_name": tool_name, "decision": decision}

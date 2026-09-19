@@ -62,6 +62,10 @@ class SessionRecording:
         self.state: dict = {}
         self.segments: list[list[dict]] = []
         self.actions: list[ActionType] = []
+        # Issue #1964: original message dict behind each classified action, so
+        # a permission_response's real data (tool_use_id, decision, etc.) survives
+        # past boundary classification instead of being discarded.
+        self.action_messages: list[dict] = []
         self._parse()
 
     def _parse(self):
@@ -223,6 +227,7 @@ class SessionRecording:
         """
         self.segments = []
         self.actions = []
+        self.action_messages = []
         current_segment: list[dict] = []
 
         i = 0
@@ -235,6 +240,7 @@ class SessionRecording:
                     self.segments.append(current_segment)
                     current_segment = []
                 self.actions.append(ActionType.USER_MESSAGE)
+                self.action_messages.append(msg)
 
             elif self._is_permission_response(msg):
                 # Permission response — action boundary
@@ -243,6 +249,7 @@ class SessionRecording:
                     current_segment = []
                 action = self._classify_permission_response(msg)
                 self.actions.append(action)
+                self.action_messages.append(msg)
 
             elif self._is_sdk_generated(msg):
                 # SDK-generated message — part of current segment
@@ -272,6 +279,12 @@ class SessionRecording:
         """Get the expected action type at a given action index."""
         if 0 <= action_index < len(self.actions):
             return self.actions[action_index]
+        return None
+
+    def get_action_message(self, action_index: int) -> dict | None:
+        """Get the original message dict behind a given action index (issue #1964)."""
+        if 0 <= action_index < len(self.action_messages):
+            return self.action_messages[action_index]
         return None
 
     def get_timestamp(self, msg: dict) -> float:
@@ -717,6 +730,15 @@ class MockClaudeSDK:
                 ActionType.PERMISSION_DENY,
                 ActionType.PERMISSION_GUIDANCE,
             ):
+                # Issue #1964: a real decision (not mere guidance) must flow through
+                # message_callback so the unified ToolCall transitions to
+                # running/denied — the recorded permission_response was previously
+                # discarded here, leaving the tool stuck at awaiting_permission.
+                if expected != ActionType.PERMISSION_GUIDANCE and self.message_callback:
+                    response_msg = self._recording.get_action_message(self._action_cursor)
+                    if response_msg is not None:
+                        await self._safe_callback(self.message_callback, response_msg)
+
                 # Auto-advance past permission action
                 self._action_cursor += 1
 

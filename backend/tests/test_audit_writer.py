@@ -70,6 +70,57 @@ async def test_tool_use_row():
 
 
 @pytest.mark.asyncio
+async def test_issue_1964_permission_request_reads_top_level_tool_name():
+    """Issue #1964: the permission_flow fixture's tool_name lives at the top level
+    of the raw message dict, not nested under metadata — the audit writer's legacy
+    permission_request branch must read it from there."""
+    db = MockDB()
+    writer = AuditWriter(db)
+    writer.start()
+    msg = {
+        "type": "permission_request",
+        "timestamp": 2.0,
+        "message_id": "m1",
+        "tool_name": "Edit",
+        "input_params": {"file_path": "foo.py"},
+        "request_id": "req1",
+        "tool_use_id": "t1",
+        "metadata": {"has_permission_requests": True},
+    }
+    await writer.on_message_append("s1", "proj1", msg)
+    await asyncio.sleep(0.3)
+    await writer.stop()
+    row = db.rows[0]
+    assert row[7] == "Edit"
+    assert row[8] == "requested"
+
+
+@pytest.mark.asyncio
+async def test_issue_1964_permission_response_reads_top_level_decision():
+    """Issue #1964: decision/tool_name live at the top level of the raw
+    permission_response dict, not nested under metadata."""
+    db = MockDB()
+    writer = AuditWriter(db)
+    writer.start()
+    msg = {
+        "type": "permission_response",
+        "timestamp": 3.0,
+        "message_id": "m2",
+        "decision": "deny",
+        "tool_name": "Edit",
+        "request_id": "req1",
+        "tool_use_id": "t1",
+        "metadata": {"has_permission_responses": True, "behavior": "deny"},
+    }
+    await writer.on_message_append("s1", "proj1", msg)
+    await asyncio.sleep(0.3)
+    await writer.stop()
+    row = db.rows[0]
+    assert row[7] == "Edit"
+    assert row[8] == "denied"
+
+
+@pytest.mark.asyncio
 async def test_watchdog_alert():
     db = MockDB()
     writer = AuditWriter(db)
