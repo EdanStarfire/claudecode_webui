@@ -281,7 +281,26 @@ describe('message store', () => {
 
     const tc = store.toolCallsBySession.get('sess-1')[0]
     expect(tc._isOrphaned).toBe(true)
+    expect(tc.backendStatus).toBe('interrupted')
     expect(store.isToolUseOrphaned('sess-1', 'use-1')).toBe(true)
+  })
+
+  it('markToolUseOrphaned resolves effectiveStatus to orphaned, not permission_required (#1959)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const { getEffectiveStatusForTool } = await import('@/composables/useToolStatus')
+    const store = useMessageStore()
+
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'use-1',
+      name: 'AskUserQuestion',
+      input: { questions: [] },
+      status: 'awaiting_permission'
+    })
+
+    store.markToolUseOrphaned('sess-1', 'use-1', 'Session was interrupted')
+
+    const tc = store.toolCallsBySession.get('sess-1')[0]
+    expect(getEffectiveStatusForTool(tc)).toBe('orphaned')
   })
 
   it('syncMessages single-page response makes exactly one request (#1747 regression guard)', async () => {
