@@ -7,7 +7,7 @@
     <div class="header-right">
       <div
         class="header-indicator"
-        :class="uiConnected ? 'connected' : 'disconnected'"
+        :class="combinedConnectionState"
         data-testid="connection-indicator"
         role="status"
         :aria-label="connectionAriaLabel"
@@ -93,8 +93,51 @@ const sessionStore = useSessionStore()
 const route = useRoute()
 const router = useRouter()
 
-const uiConnected = computed(() => wsStore.uiConnected)
-const connectionAriaLabel = computed(() => `Connection status: ${uiConnected.value ? 'Connected' : 'Disconnected'}`)
+// Issue #1960: this single dot is the app's only live connection indicator — it must
+// reflect both the global UI-poll channel and (when a session poll loop is actually
+// running) the session-poll channel, since a silently-stalled session-poll connection
+// is exactly the bug this closes. Retry-backoff takes priority over "stalled" so a
+// session mid-recovery doesn't flip between the two on every watchdog tick; the UI
+// channel has no stall/heartbeat subsystem, so it can only ever be
+// connected/reconnecting/disconnected.
+function channelState({ connected, retryCount, stalled }) {
+  if (retryCount > 0 && !connected) return 'reconnecting'
+  if (connected && stalled) return 'stalled'
+  if (connected) return 'connected'
+  return 'disconnected'
+}
+
+// Worst-to-best: an outright disconnect is more alarming than an active retry, which is
+// more alarming than a silent stall (still "connected" from the transport's point of
+// view), which is more alarming than healthy.
+const STATE_SEVERITY = { disconnected: 0, reconnecting: 1, stalled: 2, connected: 3 }
+
+const uiChannelState = computed(() => channelState({
+  connected: wsStore.uiConnected, retryCount: wsStore.uiRetryCount, stalled: false
+}))
+// Gated on wsStore's OWN currentSessionId (the session its poll loop is actually
+// targeting), not sessionStore.currentSessionId (which archive/deleted-agent views set
+// directly without ever starting a poll loop — gating on that instead falsely showed
+// "disconnected" for the whole time an archive was open).
+const sessionChannelState = computed(() => wsStore.currentSessionId
+  ? channelState({
+    connected: wsStore.sessionConnected, retryCount: wsStore.sessionRetryCount, stalled: wsStore.sessionStalled
+  })
+  : null)
+
+const combinedConnectionState = computed(() => {
+  const states = [uiChannelState.value]
+  if (sessionChannelState.value) states.push(sessionChannelState.value)
+  return states.reduce((worst, s) => (STATE_SEVERITY[s] < STATE_SEVERITY[worst] ? s : worst))
+})
+
+const CONNECTION_LABELS = {
+  connected: 'Connected',
+  reconnecting: 'Reconnecting',
+  stalled: 'Stalled',
+  disconnected: 'Disconnected',
+}
+const connectionAriaLabel = computed(() => `Connection status: ${CONNECTION_LABELS[combinedConnectionState.value]}`)
 
 // Issue #1931: right-click/long-press the connection indicator to submit the debug ring buffer.
 const justSubmitted = ref(false)
@@ -217,6 +260,16 @@ function toggleAudit() {
   color: #ef4444;
 }
 
+.header-indicator.reconnecting {
+  color: #f59e0b;
+}
+
+/* Issue #1960: session-poll transport believes itself connected but the heartbeat is
+   dead — distinct amber hue from reconnecting's yellow, same "attention needed" pulse. */
+.header-indicator.stalled {
+  color: #fd7e14;
+}
+
 .indicator-dot {
   width: 6px;
   height: 6px;
@@ -230,6 +283,16 @@ function toggleAudit() {
 
 .header-indicator.disconnected .indicator-dot {
   background: #ef4444;
+  animation: pulse-error 1.5s infinite;
+}
+
+.header-indicator.reconnecting .indicator-dot {
+  background: #f59e0b;
+  animation: pulse-error 1.5s infinite;
+}
+
+.header-indicator.stalled .indicator-dot {
+  background: #fd7e14;
   animation: pulse-error 1.5s infinite;
 }
 

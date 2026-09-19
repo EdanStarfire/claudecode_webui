@@ -482,4 +482,162 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
 
     expect(messageStore.syncMessages).toHaveBeenCalledTimes(2)
   })
+
+  // Issue #1960: sessionStalled reporting — decoupled from the healing action above.
+  it('#1960: sessionStalled becomes true once the threshold elapses while sessionConnected stays true', async () => {
+    const { pollingStore, messageStore, sid } = await setup({ session_id: 'sess-1960-a', is_processing: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+    expect(pollingStore.sessionStalled).toBe(false)
+
+    advanceTime(41000) // past STALL_TIMEOUT_MS (40s)
+
+    // syncMessages() deliberately never resolves during this assertion window — the
+    // liveness flag is set synchronously before the heal sequence's first await, and
+    // the heal's own reconnect (by design) resets the flag back to false on completion,
+    // so we must assert before letting the heal finish (mirrors the B1 pattern below).
+    let resolveSync
+    vi.spyOn(messageStore, 'syncMessages').mockImplementation(() => new Promise(resolve => { resolveSync = resolve }))
+
+    const healPromise = pollingStore.checkSessionStall()
+
+    expect(pollingStore.sessionStalled).toBe(true)
+    expect(pollingStore.sessionConnected).toBe(true)
+
+    resolveSync({ syncedCount: 0, hasMore: false })
+    apiMock.get.mockResolvedValue({ cursor: 0 })
+    await healPromise
+  })
+
+  it('#1960: sessionStalled stays false for a healthy-but-quiet connection', async () => {
+    const { pollingStore, sid } = await setup({ session_id: 'sess-1960-b', is_processing: false })
+
+    let resolveFetch
+    vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveFetch = resolve }))
+
+    await pollingStore.connectSession(sid)
+
+    for (let i = 0; i < 3; i++) {
+      advanceTime(25000) // simulate the server holding the long-poll request open with no events
+      resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: i + 1 }) })
+      await flush()
+      await pollingStore.checkSessionStall()
+      expect(pollingStore.sessionStalled).toBe(false)
+    }
+  })
+
+  it('#1960: sessionStalled clears immediately on the next successful poll, without waiting for a watchdog tick', async () => {
+    const { pollingStore, sid } = await setup({ session_id: 'sess-1960-c', is_processing: false })
+
+    let resolveFetch
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => new Promise((resolve, reject) => {
+      resolveFetch = resolve
+      opts?.signal?.addEventListener('abort', () => {
+        const err = new Error('Aborted')
+        err.name = 'AbortError'
+        reject(err)
+      })
+    }))
+
+    await pollingStore.connectSession(sid)
+    // Set directly rather than driving it via checkSessionStall(), since a real stall
+    // detection at this threshold would also trigger the heal cycle's own reconnect —
+    // this test targets only _runSessionPollLoop's heartbeat-refresh clearing behavior.
+    pollingStore.sessionStalled = true
+
+    resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 1 }) })
+    await flush()
+
+    expect(pollingStore.sessionStalled).toBe(false)
+    expect(fetchSpy).toHaveBeenCalled()
+  })
+
+  it('#1960: sessionStalled is false while session.state is paused even if the heartbeat is stale', async () => {
+    const { pollingStore, sessionStore, sid } = await setup({ session_id: 'sess-1960-d', is_processing: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+    advanceTime(41000)
+
+    sessionStore.sessions.set(sid, makeSession({ session_id: sid, state: 'paused' }))
+    await pollingStore.checkSessionStall()
+
+    expect(pollingStore.sessionStalled).toBe(false)
+  })
+
+  it('#1960: sessionStalled does not suppress the existing heal-gating early return for #1795', async () => {
+    const { pollingStore, messageStore, sid } = await setup({ session_id: 'sess-1960-e', is_processing: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+    advanceTime(41000)
+
+    // Simulate the exponential-backoff loop having already detected a failure.
+    pollingStore.sessionConnected = false
+    const syncSpy = vi.spyOn(messageStore, 'syncMessages')
+
+    await pollingStore.checkSessionStall()
+
+    expect(pollingStore.sessionStalled).toBe(true)
+    expect(syncSpy).not.toHaveBeenCalled()
+  })
+
+  it('#1960: a session switch does not leak sessionStalled=true onto the newly selected session', async () => {
+    const { pollingStore, sid } = await setup({ session_id: 'sess-1960-f', is_processing: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+    // Set directly rather than via checkSessionStall(), since triggering a real heal
+    // would itself reconnect this same session and reset the flag before the session
+    // switch under test even happens — this test targets connectSession()'s own guard.
+    pollingStore.sessionStalled = true
+
+    const { useSessionStore } = await import('@/stores/session')
+    const sessionStore = useSessionStore()
+    sessionStore.sessions.set('sess-1960-g', makeSession({ session_id: 'sess-1960-g' }))
+    apiMock.get.mockResolvedValue({ cursor: 0 })
+
+    await pollingStore.connectSession('sess-1960-g')
+
+    expect(pollingStore.sessionStalled).toBe(false)
+  })
+
+  it('#1960: stopStallDetector() clears the interval so checkSessionStall stops firing after disconnectSession()', async () => {
+    const { pollingStore, sid } = await setup({ session_id: 'sess-1960-h', is_processing: false })
+    abortAwareFetchMock()
+
+    const clearIntervalSpy = vi.spyOn(global, 'clearInterval')
+    await pollingStore.connectSession(sid)
+    await pollingStore.disconnectSession()
+
+    expect(clearIntervalSpy).toHaveBeenCalled()
+  })
+
+  it('#1960: the no-heartbeat branch is reachable and leaves sessionStalled false rather than stale', async () => {
+    const { pollingStore, sid } = await setup({ session_id: 'sess-1960-i', is_processing: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+    // resetSessionCursor() deletes the seeded heartbeat entry without clearing
+    // currentSessionId, reproducing the "session current but heartbeat not yet
+    // recorded" state the no-heartbeat branch exists for.
+    pollingStore.resetSessionCursor(sid)
+
+    await pollingStore.checkSessionStall()
+
+    expect(pollingStore.sessionStalled).toBe(false)
+  })
+
+  it('#1960: resetSessionCursor() clears a previously-set sessionStalled flag directly', async () => {
+    const { pollingStore, sid } = await setup({ session_id: 'sess-1960-j', is_processing: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+    pollingStore.sessionStalled = true
+
+    pollingStore.resetSessionCursor(sid)
+
+    expect(pollingStore.sessionStalled).toBe(false)
+  })
 })
