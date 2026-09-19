@@ -34,7 +34,6 @@ frontend/src/
     │   └── AuthPrompt.test.js
     ├── layout/
     │   ├── AgentChip.test.js
-    │   ├── ConnectionIndicator.test.js
     │   └── ProjectPill.test.js
     ├── messages/
     │   ├── InputArea.test.js
