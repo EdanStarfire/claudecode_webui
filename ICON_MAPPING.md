@@ -197,21 +197,6 @@ This document maps all current icon usage across the Vue 3 frontend to proposed 
 
 ---
 
-## Connection States
-
-### WebSocket Connection Indicators
-
-**Current**: Emojis
-**Proposed**: Keep current emojis
-**Use Case**: WebSocket connection status
-**Where Used**:
-- `ConnectionIndicator.vue:9,18,27`
-  - UI WebSocket: 🌐
-  - Session WebSocket: 💬
-  - Legion WebSocket: 👥
-
-**Note**: Connection state is indicated by background color (green=connected, yellow=connecting, red=disconnected)
-
 ### Warning/Alert
 
 **Bootstrap Icon**: `bi-exclamation-triangle`, `bi-exclamation-triangle-fill` (SVG)
@@ -306,11 +291,6 @@ This document maps all current icon usage across the Vue 3 frontend to proposed 
 - ❌ Completed (denied)
 - 💥 Error
 - 🔧 Default/Tool
-
-**Connection**:
-- 🌐 UI WebSocket
-- 💬 Session WebSocket
-- 👥 Legion WebSocket
 
 **Legion**:
 - 🏛 Legion Project

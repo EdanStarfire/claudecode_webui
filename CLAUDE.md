@@ -407,57 +407,9 @@ For detailed store documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE.md#
 ### 13. MCP Config Store (`stores/mcpConfig.js`)
 **Responsibility**: MCP server configuration CRUD (STDIO/SSE/HTTP, OAuth 2.1)
 
-## Vue Components (99+ files)
+## Vue Components
 
-For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE.md#component-organization).
-
-### Layout (13)
-- `ProjectPillBar`, `ProjectPill`, `AgentStrip`, `AgentChip`, `StackedChip`, `ChipConnector`
-- `HeaderRow1`, `AgentOverview`, `PeekCard`, `ConnectionIndicator`, `RightSidebar`, `RestartModal`, `DeletedAgentsModal`
-
-### Configuration (12)
-- `ConfigurationModal`, `GlobalConfigModal`, `QuickSettingsPanel`, `AdvancedSettingsPanel`
-- `FeaturesTab`, `McpConfigTab`, `McpServerPanel`, `McpServerPicker`, `McpServerRow`
-- `NotificationsTab`, `ReadAloudTab`, `PermissionPreviewModal`
-
-### Session (7)
-- `SessionView`, `SessionInfoBar`, `SessionStateStatusLine`, `SessionInfoModal`, `SessionManageModal`, `McpServerDetail`, `NoSessionSelected`
-
-### Project (4)
-- `ProjectOverview`, `ProjectStatusLine`, `ProjectCreateModal`, `ProjectEditModal`
-
-### Messages (12)
-- `MessageList`, `MessageItem`, `UserMessage`, `AssistantMessage`, `SystemMessage`, `ThinkingBlock`, `InputArea`
-- `AttachmentList`, `CompactionEventGroup`, `SlashCommandDropdown`, `SubagentTimeline`, `TruncationBanner`
-
-### Activity Timeline (6)
-- `ActivityTimeline`, `PermissionPrompt`, `TimelineNode`, `TimelineDetail`, `TimelineSegment`, `TimelineOverflow`
-
-### Tool Handlers (22)
-**See [TOOL_HANDLERS.md](./TOOL_HANDLERS.md) for detailed documentation**
-
-- **File**: `ReadToolHandler`, `EditToolHandler`, `WriteToolHandler`
-- **Shell**: `BashToolHandler`, `ShellToolHandler`, `CommandToolHandler`
-- **Search**: `SearchToolHandler` (Grep/Glob)
-- **Web**: `WebToolHandler` (WebFetch/WebSearch)
-- **Tasks**: `TodoToolHandler`, `TaskCreateToolHandler`, `TaskGetToolHandler`, `TaskListToolHandler`, `TaskUpdateToolHandler`
-- **Interactive**: `AskUserQuestionToolHandler`
-- **Skills**: `SkillToolHandler`, `SlashCommandToolHandler`
-- **Agent/Comms**: `AgentToolHandler`, `SendCommToolHandler`
-- **Other**: `ExitPlanModeToolHandler`, `NotebookEditToolHandler`
-- **Shared**: `ToolSuccessMessage` (success banner), `BaseToolHandler` (fallback)
-
-### Right Sidebar Panels (6)
-- `TaskListPanel`, `TaskItem`, `DiffPanel`, `ResourceGallery`, `ImageGallery`, `QueueSection`
-
-### Schedules (3)
-- `SchedulePanel`, `ScheduleItem`, `ScheduleCreateModal`
-
-### Legion (2)
-- `MinionTreeNode`, `MinionViewModal`
-
-### Common (6)
-- `FolderBrowserModal`, `CommCard`, `DiffFullView`, `ResourceFullView`, `AttachmentChip`, `AuthPrompt`
+For component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE.md#component-organization).
 
 ## Naming Conventions
 
