@@ -1270,3 +1270,200 @@ class TestIssue1958RecordAndTurnIdentity:
         parsed = processor.process_message(sdk_msg, source="websocket")
 
         assert parsed.record_id is None
+
+
+class TestIssue1967CombinedTextAndToolUse:
+    """Regression tests for issue #1967: an assistant turn with both narration text
+    and a tool call in the same SDK message silently dropped tool_uses and turn_id.
+
+    Root cause: ClaudeSDK._convert_sdk_message() always derives a top-level
+    "content" string whenever any TextBlock is present, alongside the full
+    "sdk_message" object. AssistantMessageHandler checked that derived "content"
+    string first, so it never reached the branch that iterates sdk_msg.content to
+    extract tool_uses and turn_id. Fix: check for a real AssistantMessage SDK object
+    first, and only fall back to the derived "content" string / legacy nested format
+    when no such object is present.
+    """
+
+    def _combined_sdk_message_data(self, extra_blocks=None):
+        """Build message_data shaped exactly like ClaudeSDK._convert_sdk_message()
+        produces for a combined text+tool_use frame: a derived top-level "content"
+        string AND the full "sdk_message" object are both present."""
+        from claude_agent_sdk import AssistantMessage
+        from claude_agent_sdk.types import TextBlock, ToolUseBlock
+
+        blocks = [
+            TextBlock(text="Let me check that file."),
+            ToolUseBlock(id="tool-1", name="Read", input={"file_path": "/tmp/x.py"}),
+        ]
+        if extra_blocks:
+            blocks.extend(extra_blocks)
+
+        sdk_msg = AssistantMessage(
+            content=blocks,
+            model="claude-3-5-sonnet-20241022",
+            message_id="msg_combined_1",
+            uuid="some-per-event-uuid",
+        )
+        return {
+            "type": "assistant",
+            "content": "Let me check that file.",  # derived by _convert_sdk_message()
+            "sdk_message": sdk_msg,
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+        }
+
+    def test_combined_text_and_tool_use_both_captured(self):
+        """A live combined text+tool_use frame must capture text, tool_uses, and turn_id
+        all at once — this exact shape (competing top-level "content" string plus
+        "sdk_message") had zero prior coverage and was the reproduction of the bug."""
+        handler = AssistantMessageHandler()
+        message_data = self._combined_sdk_message_data()
+
+        parsed = handler.parse(message_data)
+
+        assert "Let me check that file." in parsed.content
+        assert len(parsed.metadata["tool_uses"]) == 1
+        assert parsed.metadata["tool_uses"][0]["id"] == "tool-1"
+        assert parsed.metadata["tool_uses"][0]["name"] == "Read"
+        assert parsed.metadata["has_tool_uses"] is True
+        assert parsed.metadata["turn_id"] == "msg_combined_1"
+
+    def test_text_only_assistant_message_still_works(self):
+        """Regression guard: a text-only AssistantMessage (no competing top-level
+        "content" string set) still captures text and turn_id, with empty tool_uses."""
+        from claude_agent_sdk import AssistantMessage
+        from claude_agent_sdk.types import TextBlock
+
+        sdk_msg = AssistantMessage(
+            content=[TextBlock(text="just narration")],
+            model="claude-3-5-sonnet-20241022",
+            message_id="msg_text_only",
+            uuid="some-per-event-uuid",
+        )
+        message_data = {
+            "type": "assistant",
+            "sdk_message": sdk_msg,
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+        }
+        handler = AssistantMessageHandler()
+        parsed = handler.parse(message_data)
+
+        assert "just narration" in parsed.content
+        assert parsed.metadata["tool_uses"] == []
+        assert parsed.metadata["turn_id"] == "msg_text_only"
+
+    def test_tool_use_only_assistant_message_still_works(self):
+        """Regression guard: a tool-use-only AssistantMessage (no TextBlock, so no
+        derived top-level "content" string is set) still captures tool_uses/turn_id,
+        with the default content fallback preserved."""
+        from claude_agent_sdk import AssistantMessage
+        from claude_agent_sdk.types import ToolUseBlock
+
+        sdk_msg = AssistantMessage(
+            content=[ToolUseBlock(id="tool-2", name="Bash", input={"command": "ls"})],
+            model="claude-3-5-sonnet-20241022",
+            message_id="msg_tool_only",
+            uuid="some-per-event-uuid",
+        )
+        message_data = {
+            "type": "assistant",
+            "sdk_message": sdk_msg,
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+        }
+        handler = AssistantMessageHandler()
+        parsed = handler.parse(message_data)
+
+        assert parsed.content == "Assistant response"
+        assert len(parsed.metadata["tool_uses"]) == 1
+        assert parsed.metadata["tool_uses"][0]["id"] == "tool-2"
+        assert parsed.metadata["turn_id"] == "msg_tool_only"
+
+    def test_multiple_tool_uses_combined_with_text(self):
+        """Multiple ToolUseBlocks combined with text in one frame: all tool calls
+        must be captured, not just the first."""
+        from claude_agent_sdk.types import ToolUseBlock
+
+        handler = AssistantMessageHandler()
+        message_data = self._combined_sdk_message_data(
+            extra_blocks=[ToolUseBlock(id="tool-3", name="Grep", input={"pattern": "foo"})]
+        )
+
+        parsed = handler.parse(message_data)
+
+        tool_ids = {tu["id"] for tu in parsed.metadata["tool_uses"]}
+        assert tool_ids == {"tool-1", "tool-3"}
+
+    def test_thinking_text_and_tool_use_combined(self):
+        """ThinkingBlock + TextBlock + ToolUseBlock combined in one frame: thinking,
+        text, and tool_use must all be captured simultaneously."""
+        from claude_agent_sdk.types import ThinkingBlock
+
+        handler = AssistantMessageHandler()
+        message_data = self._combined_sdk_message_data(
+            extra_blocks=[ThinkingBlock(thinking="pondering...", signature="sig-1")]
+        )
+
+        parsed = handler.parse(message_data)
+
+        assert "Let me check that file." in parsed.content
+        assert len(parsed.metadata["tool_uses"]) == 1
+        assert parsed.metadata["has_thinking"] is True
+        assert "pondering..." in parsed.metadata["thinking_content"]
+
+    def test_unrecognized_block_type_logs_warning_but_others_still_captured(self, caplog):
+        """An unrecognized content block type mixed into content must produce a
+        logger.warning, while the other blocks in the same frame are still captured."""
+        from claude_agent_sdk import AssistantMessage
+        from claude_agent_sdk.types import TextBlock, ToolUseBlock
+
+        class UnknownBlock:
+            """Stand-in for a future SDK content block type this handler doesn't know about."""
+
+        sdk_msg = AssistantMessage(
+            content=[
+                TextBlock(text="narration"),
+                UnknownBlock(),
+                ToolUseBlock(id="tool-4", name="Read", input={}),
+            ],
+            model="claude-3-5-sonnet-20241022",
+            message_id="msg_unknown_block",
+            uuid="some-per-event-uuid",
+        )
+        message_data = {
+            "type": "assistant",
+            "sdk_message": sdk_msg,
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+        }
+        handler = AssistantMessageHandler()
+
+        with caplog.at_level("WARNING"):
+            parsed = handler.parse(message_data)
+
+        assert "UnknownBlock" in caplog.text
+        assert "narration" in parsed.content
+        assert len(parsed.metadata["tool_uses"]) == 1
+        assert parsed.metadata["tool_uses"][0]["id"] == "tool-4"
+
+    def test_live_replay_round_trip_preserves_tool_uses_and_turn_id(self):
+        """Issue #1958-style live/replay divergence check: a combined text+tool_use
+        parsed message must survive a prepare_for_storage() -> process_message(...,
+        source="storage") round trip with tool_uses and turn_id intact."""
+        processor = MessageProcessor(MessageParser())
+        message_data = self._combined_sdk_message_data()
+        message_data["message_id"] = "frame-uuid-combined"
+
+        parsed = processor.process_message(message_data, source="websocket")
+        assert parsed.metadata["tool_uses"], "sanity check: live parse captured tool_uses"
+        assert parsed.turn_id == "msg_combined_1"
+
+        stored = processor.prepare_for_storage(parsed)
+        stored["message_id"] = "frame-uuid-combined"
+
+        reparsed = processor.process_message(stored, source="storage")
+
+        assert reparsed.metadata["tool_uses"] == parsed.metadata["tool_uses"]
+        assert reparsed.turn_id == "msg_combined_1"
