@@ -610,40 +610,45 @@ class AssistantMessageHandler(MessageHandler):
         thinking_blocks = []
         tool_uses = []
 
-        # Check for direct content field first (most common case)
+        # Issue #1967: check for a real SDK AssistantMessage object first — the derived
+        # top-level "content" string (set by ClaudeSDK._convert_sdk_message()
+        # whenever any TextBlock is present) is a lossy summary that must not preempt
+        # extraction of tool_uses/turn_id from the full content block list.
+        sdk_msg = message_data.get("sdk_message")
         direct_content = message_data.get("content", "")
-        if isinstance(direct_content, str) and direct_content.strip():
+        if isinstance(sdk_msg, AssistantMessage):
+            # Issue #1486: capture Anthropic message ID for streaming placeholder dedup
+            # Issue #1958: this is turn-level identity, not per-record identity
+            if getattr(sdk_msg, 'message_id', None):
+                extracted["metadata"]["turn_id"] = sdk_msg.message_id
+            if hasattr(sdk_msg, 'content'):
+                for block in sdk_msg.content:
+                    if isinstance(block, TextBlock):
+                        text_parts.append(block.text)
+                    elif isinstance(block, ThinkingBlock):
+                        thinking_content = block.thinking
+                        thinking_parts.append(thinking_content)
+                        thinking_blocks.append({
+                            "content": thinking_content,
+                            "timestamp": message_data.get("timestamp", time.time())
+                        })
+                    elif isinstance(block, ToolUseBlock):
+                        tool_uses.append({
+                            "id": block.id,
+                            "name": block.name,
+                            "input": block.input,
+                            "timestamp": message_data.get("timestamp", time.time())
+                        })
+                    else:
+                        logger.warning(
+                            "AssistantMessageHandler: unrecognized content block type "
+                            f"{type(block).__name__!r}; its data is not captured"
+                        )
+        elif isinstance(direct_content, str) and direct_content.strip():
             text_parts.append(direct_content)
+        # Handle nested message structure (legacy)
         else:
-            # Handle SDK message object
-            if "sdk_message" in message_data and isinstance(message_data["sdk_message"], AssistantMessage):
-                sdk_msg = message_data["sdk_message"]
-                # Issue #1486: capture Anthropic message ID for streaming placeholder dedup
-                # Issue #1958: this is turn-level identity, not per-record identity
-                if getattr(sdk_msg, 'message_id', None):
-                    extracted["metadata"]["turn_id"] = sdk_msg.message_id
-                if hasattr(sdk_msg, 'content'):
-                    for block in sdk_msg.content:
-                        if isinstance(block, TextBlock):
-                            text_parts.append(block.text)
-                        elif isinstance(block, ThinkingBlock):
-                            thinking_content = block.thinking
-                            thinking_parts.append(thinking_content)
-                            thinking_blocks.append({
-                                "content": thinking_content,
-                                "timestamp": message_data.get("timestamp", time.time())
-                            })
-                        elif isinstance(block, ToolUseBlock):
-                            tool_uses.append({
-                                "id": block.id,
-                                "name": block.name,
-                                "input": block.input,
-                                "timestamp": message_data.get("timestamp", time.time())
-                            })
-
-            # Handle nested message structure (legacy)
-            else:
-                self._extract_from_legacy_format(message_data, text_parts)
+            self._extract_from_legacy_format(message_data, text_parts)
 
         # Fallback: restore turn_id from stored metadata (dict-format messages)
         if "turn_id" not in extracted["metadata"]:
@@ -685,14 +690,14 @@ class AssistantMessageHandler(MessageHandler):
         # Check both top-level (from claude_sdk attribute copy) and sdk_message object
         parent_tool_use_id = (
             message_data.get("parent_tool_use_id")
-            or getattr(message_data.get("sdk_message"), "parent_tool_use_id", None)
+            or getattr(sdk_msg, "parent_tool_use_id", None)
         )
         if parent_tool_use_id:
             extracted["metadata"]["parent_tool_use_id"] = parent_tool_use_id
 
         # Issue #1840: extract per-message usage (needed for subagent usage accumulation;
         # top-level assistant messages carry it too but it's not consumed by that path)
-        usage = message_data.get("usage") or getattr(message_data.get("sdk_message"), "usage", None)
+        usage = message_data.get("usage") or getattr(sdk_msg, "usage", None)
         if usage:
             extracted["metadata"]["usage"] = dict(usage)
 
