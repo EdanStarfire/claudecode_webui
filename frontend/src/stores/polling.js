@@ -17,6 +17,7 @@ export const usePollingStore = defineStore('polling', () => {
   const uiRetryCount = ref(0)
   const sessionConnected = ref(false)
   const sessionRetryCount = ref(0)
+  const sessionStalled = ref(false)
   const currentSessionId = ref(null)
   const currentLegionId = ref(null)  // stub - always null
   const legionConnected = ref(false)  // stub - always false
@@ -163,6 +164,16 @@ export const usePollingStore = defineStore('polling', () => {
         // Issue #1795: any successful response — even one carrying zero events after
         // the server's long-poll hold — proves this connection is alive.
         sessionPollHeartbeatAt[sessionId] = Date.now()
+        // Issue #1960: clear immediately on success rather than waiting up to
+        // STALL_CHECK_INTERVAL_MS for the next watchdog tick to notice recovery.
+        // Guarded by generation + session identity (mirroring the retry branch's guard
+        // below) since this is a single global flag, not keyed per session like
+        // sessionPollHeartbeatAt — an in-flight response from a since-superseded
+        // generation (e.g. a stall-heal reconnect racing its own old loop) must not
+        // clear the flag for whatever session/generation is current now.
+        if (sessionPollGeneration === myGeneration && currentSessionId.value === sessionId) {
+          sessionStalled.value = false
+        }
 
         if (data.events && data.events.length > 0) {
           for (const event of data.events) {
@@ -203,6 +214,9 @@ export const usePollingStore = defineStore('polling', () => {
     currentSessionId.value = sessionId
     sessionConnected.value = true
     sessionRetryCount.value = 0
+    // Issue #1960: prevent a previously-viewed session's stalled flag from leaking
+    // onto the newly-selected session.
+    sessionStalled.value = false
 
     // Issue #1000: Prefer cursor from loadMessages() REST response (aligned with
     // loaded history). Fall back to API bootstrap for first-time connections.
@@ -238,6 +252,7 @@ export const usePollingStore = defineStore('polling', () => {
     currentSessionId.value = null
     sessionAbortController?.abort()
     sessionAbortController = null
+    stopStallDetector()
     // Fix 2: await loop exit with 3s budget (must exceed 2s catch-block sleep)
     if (sessionLoopExitPromise) {
       try {
@@ -260,6 +275,9 @@ export const usePollingStore = defineStore('polling', () => {
     delete sessionCursors[sessionId]
     delete sessionPollHeartbeatAt[sessionId]
     delete sessionHealInFlight[sessionId]
+    // Issue #1960: prevent a reset session's stalled flag from leaking onto whatever
+    // session is current afterward.
+    sessionStalled.value = false
   }
 
   // ========== STALL DETECTOR (Fix 5) ==========
@@ -268,20 +286,31 @@ export const usePollingStore = defineStore('polling', () => {
     stallDetectorInterval = setInterval(checkSessionStall, STALL_CHECK_INTERVAL_MS)
   }
 
+  // Issue #1960: closes a leak where stallDetectorInterval was created once and never
+  // cleared — startStallDetector()'s `if (stallDetectorInterval) return` guard already
+  // makes re-starting idempotent, so this only stops the leak without changing runtime
+  // behavior for the normal case.
+  function stopStallDetector() {
+    if (stallDetectorInterval) {
+      clearInterval(stallDetectorInterval)
+      stallDetectorInterval = null
+    }
+  }
+
   async function checkSessionStall() {
     const sessionStore = useSessionStore()
     const messageStore = useMessageStore()
     const sid = currentSessionId.value
+    // Issue #1960: default to false so every early-return below (inapplicable or
+    // not-yet-measurable session) leaves the flag correctly cleared — the single
+    // `stallMs >= STALL_TIMEOUT_MS` assignment further down is the only place it's
+    // ever set true, so a future added early-return can't forget to reset it.
+    sessionStalled.value = false
     if (!sid) return
 
     const session = sessionStore.sessions.get(sid)
     if (!session) return
     if (session.state === 'paused') return
-
-    // Issue #1795: skip while a detected fetch error is already being retried by the
-    // exponential-backoff loop — that failure mode self-heals; letting the watchdog also
-    // intervene risks a redundant/racy reconnect.
-    if (!sessionConnected.value) return
 
     // Issue #1795: liveness is derived from the session-poll connection's own heartbeat,
     // not from is_processing (which is written exclusively by the separate UI-poll channel
@@ -289,13 +318,26 @@ export const usePollingStore = defineStore('polling', () => {
     // applies regardless of is_processing — the heartbeat measures poll round-trip
     // freshness, which behaves identically whether the session is idle or processing.
     const heartbeatMs = sessionPollHeartbeatAt[sid]
-    if (!heartbeatMs) return
+    if (!heartbeatMs) {
+      // Issue #1960: same class of "detection state with no visible signal" as the core
+      // bug — make the no-heartbeat path explicit and observable rather than a silent
+      // no-op indistinguishable from "not stalled".
+      pushDebugEvent('polling', 'stall-check-no-heartbeat', { sessionId: sid })
+      return
+    }
 
     const stallMs = Date.now() - heartbeatMs
+    sessionStalled.value = stallMs >= STALL_TIMEOUT_MS
     pushDebugEvent('polling', 'stall-check', {
       sessionId: sid, stallMs, thresholdMs: STALL_TIMEOUT_MS, passed: stallMs < STALL_TIMEOUT_MS
     })
     if (stallMs < STALL_TIMEOUT_MS) return
+
+    // Issue #1795: skip healing while a detected fetch error is already being retried by
+    // the exponential-backoff loop — that failure mode self-heals; letting the watchdog
+    // also intervene risks a redundant/racy reconnect. Liveness reporting above runs
+    // unconditionally; only the heal action below is gated on sessionConnected.
+    if (!sessionConnected.value) return
 
     // Cooldown: prevent heal storms
     if (Date.now() - lastHealedAt < HEAL_COOLDOWN_MS) return
@@ -768,6 +810,8 @@ export const usePollingStore = defineStore('polling', () => {
     uiRetryCount,
     sessionConnected,
     sessionRetryCount,
+    sessionStalled,
+    currentSessionId,
     legionConnected,
     legionRetryCount,
     currentLegionId,
