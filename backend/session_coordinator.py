@@ -4925,7 +4925,12 @@ class SessionCoordinator:
         return None
 
     async def _store_processed_message(self, session_id: str, message_data: dict[str, Any]):
-        """Store message using unified MessageProcessor for consistent format."""
+        """Store message using unified MessageProcessor for consistent format.
+
+        Stamps `message_data["message_id"]` in place with the exact id written to
+        storage, so lifecycle senders' live-callback dict and stored record always
+        share one identity (issue #1972) — never two independently-minted UUIDs.
+        """
         try:
             # Process the message through MessageProcessor
             parsed_message = self.message_processor.process_message(message_data, source="system")
@@ -4938,8 +4943,10 @@ class SessionCoordinator:
             if storage:
                 # logger.debug(f"Storing processed system message: {storage_data.get('type', 'unknown')}")
                 await storage.append_message(storage_data)
+                message_data["message_id"] = storage_data["message_id"]
             else:
                 logger.warning(f"No storage manager found for session {session_id}")
+                message_data.setdefault("message_id", str(uuid4()))
 
         except Exception:
             logger.exception(f"Failed to store processed message for session {session_id}")
@@ -4947,6 +4954,8 @@ class SessionCoordinator:
             storage = self._storage_managers.get(session_id)
             if storage:
                 await storage.append_message(message_data)
+            else:
+                message_data.setdefault("message_id", str(uuid4()))
 
     def _build_permission_handler(
         self,

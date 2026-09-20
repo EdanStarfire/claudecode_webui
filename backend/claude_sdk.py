@@ -516,7 +516,8 @@ class ClaudeSDK:
                     "content": "Session interrupted successfully",
                     "subtype": "interrupt_success",
                     "session_id": self.session_id,
-                    "timestamp": time.time()
+                    "timestamp": time.time(),
+                    "message_id": str(uuid.uuid4()),
                 })
 
             return True
@@ -908,7 +909,8 @@ class ClaudeSDK:
                                         "content": "Session interrupted successfully",
                                         "subtype": "interrupt_success",
                                         "session_id": self.session_id,
-                                        "timestamp": time.time()
+                                        "timestamp": time.time(),
+                                        "message_id": str(uuid.uuid4()),
                                     })
                             except Exception:
                                 logger.exception("Failed to send interrupt")
