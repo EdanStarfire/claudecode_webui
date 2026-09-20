@@ -447,8 +447,10 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
 
     expect(messageStore.syncMessages).toHaveBeenCalledTimes(1)
 
-    // The reconnect at the end of the first heal reseeds the heartbeat and lastHealedAt,
-    // so a single advance past STALL_TIMEOUT_MS also clears HEAL_COOLDOWN_MS.
+    // #1973: the reconnect at the end of a heal no longer reseeds the heartbeat — the
+    // stale pre-heal value is preserved until a real poll response updates it. This
+    // advance still exceeds STALL_TIMEOUT_MS against that stale baseline regardless
+    // (and HEAL_COOLDOWN_MS, tracked separately via lastHealedAt, has long since elapsed).
     advanceTime(41000)
 
     await pollingStore.checkSessionStall()
@@ -494,9 +496,10 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     advanceTime(41000) // past STALL_TIMEOUT_MS (40s)
 
     // syncMessages() deliberately never resolves during this assertion window — the
-    // liveness flag is set synchronously before the heal sequence's first await, and
-    // the heal's own reconnect (by design) resets the flag back to false on completion,
-    // so we must assert before letting the heal finish (mirrors the B1 pattern below).
+    // liveness flag is set synchronously before the heal sequence's first await. Assert
+    // here (mid-heal) to isolate that synchronous set from whatever the eventual
+    // reconnect/poll outcome does to the flag (mirrors the B1 pattern below; see the
+    // #1973 tests for reconnect-specific behavior).
     let resolveSync
     vi.spyOn(messageStore, 'syncMessages').mockImplementation(() => new Promise(resolve => { resolveSync = resolve }))
 
@@ -639,5 +642,99 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     pollingStore.resetSessionCursor(sid)
 
     expect(pollingStore.sessionStalled).toBe(false)
+  })
+
+  it("#1973: a heal reconnect that doesn't restore data leaves sessionStalled true", async () => {
+    const { pollingStore, messageStore, sid } = await setup({ session_id: 'sess-1973-a', is_processing: false })
+    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+    advanceTime(41000) // past STALL_TIMEOUT_MS (40s)
+
+    await pollingStore.checkSessionStall()
+    await flush()
+
+    // The heal's reconnect must not forge liveness — no successful poll response has
+    // occurred yet, so the flag must stay true immediately after the heal returns.
+    expect(pollingStore.sessionStalled).toBe(true)
+
+    // A subsequent watchdog tick against the still-stale (unreseeded) heartbeat must
+    // not flip it false either.
+    advanceTime(5000) // STALL_CHECK_INTERVAL_MS
+    await pollingStore.checkSessionStall()
+    await flush()
+
+    expect(pollingStore.sessionStalled).toBe(true)
+  })
+
+  it('#1973: a heal reconnect followed by a real poll response clears sessionStalled promptly', async () => {
+    const { pollingStore, messageStore, sid } = await setup({ session_id: 'sess-1973-b', is_processing: false })
+    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
+
+    let callCount = 0
+    vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => {
+      callCount++
+      if (callCount === 2) {
+        // The heal reconnect's first fetch — the one real poll response under test —
+        // succeeds immediately.
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: callCount }) })
+      }
+      // Call 1 (pre-heal connection) hangs until aborted by the heal sequence; calls
+      // from 3 onward (post-recovery loop continuation) hang too, so the loop parks
+      // instead of spinning a tight, unbounded fetch loop once it "recovers".
+      return new Promise((_resolve, reject) => {
+        opts?.signal?.addEventListener('abort', () => {
+          const err = new Error('Aborted')
+          err.name = 'AbortError'
+          reject(err)
+        })
+      })
+    })
+
+    await pollingStore.connectSession(sid)
+    advanceTime(41000) // past STALL_TIMEOUT_MS (40s)
+
+    await pollingStore.checkSessionStall()
+    await flush()
+
+    expect(pollingStore.sessionStalled).toBe(false)
+  })
+
+  it('#1973: repeated unsuccessful heals never let sessionStalled flip false between attempts', async () => {
+    const { pollingStore, messageStore, sid } = await setup({ session_id: 'sess-1973-c', is_processing: false })
+    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+    advanceTime(41000) // past STALL_TIMEOUT_MS (40s) — first heal
+
+    await pollingStore.checkSessionStall()
+    await flush()
+    expect(pollingStore.sessionStalled).toBe(true)
+
+    advanceTime(5000) // STALL_CHECK_INTERVAL_MS tick between heals, still no data
+    await pollingStore.checkSessionStall()
+    await flush()
+    expect(pollingStore.sessionStalled).toBe(true)
+
+    advanceTime(41000) // past STALL_TIMEOUT_MS again (HEAL_COOLDOWN_MS long since elapsed) — second heal
+    await pollingStore.checkSessionStall()
+    await flush()
+    expect(pollingStore.sessionStalled).toBe(true)
+
+    expect(messageStore.syncMessages).toHaveBeenCalledTimes(2)
+  })
+
+  it("#1973: baseline is still seeded on a session's first connection", async () => {
+    const { pollingStore, sid } = await setup({ session_id: 'sess-1973-d', is_processing: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+    advanceTime(41000) // measurable only if the baseline was seeded at connect time — regression guard for #1795
+
+    await pollingStore.checkSessionStall()
+
+    expect(pollingStore.sessionStalled).toBe(true)
   })
 })

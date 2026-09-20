@@ -206,7 +206,7 @@ export const usePollingStore = defineStore('polling', () => {
     }
   }
 
-  async function connectSession(sessionId) {
+  async function connectSession(sessionId, { isRecoveryReconnect = false } = {}) {
     // Stop any existing session poll (Fix 2: truly awaits loop exit)
     await disconnectSession()
 
@@ -216,7 +216,12 @@ export const usePollingStore = defineStore('polling', () => {
     sessionRetryCount.value = 0
     // Issue #1960: prevent a previously-viewed session's stalled flag from leaking
     // onto the newly-selected session.
-    sessionStalled.value = false
+    // Issue #1973: skip this for a stall-heal recovery reconnect — reconnecting is not
+    // itself evidence of recovery, so a still-stalled session must stay visibly stalled
+    // until a real poll response clears the flag (below, in _runSessionPollLoop).
+    if (!isRecoveryReconnect) {
+      sessionStalled.value = false
+    }
 
     // Issue #1000: Prefer cursor from loadMessages() REST response (aligned with
     // loaded history). Fall back to API bootstrap for first-time connections.
@@ -236,7 +241,12 @@ export const usePollingStore = defineStore('polling', () => {
 
     // Issue #1795: seed the heartbeat before the loop starts so staleness is measurable
     // from t=0 — closes a latent gap where a hung first fetch left no baseline to compare.
-    sessionPollHeartbeatAt[sessionId] = Date.now()
+    // Issue #1973: skip this on a recovery reconnect — the existing baseline is legitimately
+    // stale, and reseeding it here would forge liveness before any response has actually
+    // arrived. Only a real poll response (below) should advance it in that case.
+    if (!isRecoveryReconnect) {
+      sessionPollHeartbeatAt[sessionId] = Date.now()
+    }
 
     // Capture the loop promise so disconnectSession() can await clean exit (Fix 2)
     sessionLoopExitPromise = _runSessionPollLoop(sessionId, myGeneration)
@@ -388,7 +398,7 @@ export const usePollingStore = defineStore('polling', () => {
         return
       }
       await disconnectSession()
-      await connectSession(sid)
+      await connectSession(sid, { isRecoveryReconnect: true })
 
       console.warn(`[stall-heal] Session ${sid} re-synced; resumed polling at cursor ${sessionCursors[sid]}`)
       pushDebugEvent('polling', 'stall-heal-done', { sessionId: sid, aborted: false, cursor: sessionCursors[sid] })
