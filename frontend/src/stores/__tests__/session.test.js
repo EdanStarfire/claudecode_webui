@@ -17,16 +17,21 @@ vi.mock('@/stores/resource', () => ({
 vi.mock('@/stores/usage', () => ({
   useUsageStore: vi.fn(() => ({ loadUsage: vi.fn() }))
 }))
+const pollingMock = vi.hoisted(() => ({
+  connectSession: vi.fn().mockResolvedValue(undefined),
+  disconnectSession: vi.fn(),
+  cleanupSessionPollingState: vi.fn()
+}))
 vi.mock('@/stores/polling', () => ({
-  usePollingStore: vi.fn(() => ({
-    connectSession: vi.fn().mockResolvedValue(undefined),
-    disconnectSession: vi.fn()
-  }))
+  usePollingStore: vi.fn(() => pollingMock)
 }))
 
 beforeEach(() => {
   setActivePinia(createPinia())
   Object.values(apiMock).forEach(fn => fn.mockReset())
+  pollingMock.connectSession.mockReset().mockResolvedValue(undefined)
+  pollingMock.disconnectSession.mockReset()
+  pollingMock.cleanupSessionPollingState.mockReset()
 })
 
 describe('session store', () => {
@@ -89,6 +94,72 @@ describe('session store', () => {
     expect(store.sessions.has('sess-1')).toBe(false)
     expect(store.sessions.has('sess-2')).toBe(false)
     expect(store.currentSessionId).toBeNull()
+  })
+
+  it('deleteSession tears down the polling store\'s per-session state for every cascaded ID (#1974)', async () => {
+    const { useSessionStore } = await import('@/stores/session')
+    const store = useSessionStore()
+
+    store.sessions.set('sess-1', makeSession({ session_id: 'sess-1' }))
+    store.sessions.set('sess-2', makeSession({ session_id: 'sess-2' }))
+
+    apiMock.delete.mockResolvedValue({ deleted_session_ids: ['sess-1', 'sess-2'] })
+
+    await store.deleteSession('sess-1')
+
+    expect(pollingMock.cleanupSessionPollingState).toHaveBeenCalledWith('sess-1')
+    expect(pollingMock.cleanupSessionPollingState).toHaveBeenCalledWith('sess-2')
+    expect(pollingMock.cleanupSessionPollingState).toHaveBeenCalledTimes(2)
+  })
+
+  it('deleteSession disconnects the poll loop before the API call when deleting the currently displayed session (#1974)', async () => {
+    const { useSessionStore } = await import('@/stores/session')
+    const store = useSessionStore()
+
+    store.sessions.set('sess-1', makeSession({ session_id: 'sess-1' }))
+    store.currentSessionId = 'sess-1'
+
+    apiMock.delete.mockResolvedValue({ deleted_session_ids: ['sess-1'] })
+
+    await store.deleteSession('sess-1')
+
+    expect(pollingMock.disconnectSession).toHaveBeenCalled()
+    // The whole point is to stop the poll loop before the session can disappear
+    // server-side out from under it — not merely before this function returns.
+    expect(pollingMock.disconnectSession.mock.invocationCallOrder[0])
+      .toBeLessThan(apiMock.delete.mock.invocationCallOrder[0])
+  })
+
+  it('deleteSession does not disconnect the poll loop when deleting a different, non-current session (#1974)', async () => {
+    const { useSessionStore } = await import('@/stores/session')
+    const store = useSessionStore()
+
+    store.sessions.set('sess-1', makeSession({ session_id: 'sess-1' }))
+    store.sessions.set('sess-2', makeSession({ session_id: 'sess-2' }))
+    store.currentSessionId = 'sess-2'
+
+    apiMock.delete.mockResolvedValue({ deleted_session_ids: ['sess-1'] })
+
+    await store.deleteSession('sess-1')
+
+    expect(pollingMock.disconnectSession).not.toHaveBeenCalled()
+  })
+
+  it('deleteSession disconnects the poll loop for a cascaded child that is the currently displayed session (#1974)', async () => {
+    const { useSessionStore } = await import('@/stores/session')
+    const store = useSessionStore()
+
+    store.sessions.set('sess-parent', makeSession({ session_id: 'sess-parent' }))
+    store.sessions.set('sess-child', makeSession({ session_id: 'sess-child' }))
+    // The user is viewing the CHILD, but deletes the PARENT — the primary target isn't
+    // current, so only the cascade-aware check (after deletedIds is known) catches this.
+    store.currentSessionId = 'sess-child'
+
+    apiMock.delete.mockResolvedValue({ deleted_session_ids: ['sess-parent', 'sess-child'] })
+
+    await store.deleteSession('sess-parent')
+
+    expect(pollingMock.disconnectSession).toHaveBeenCalled()
   })
 
   it('getInput/setInput caches per session', async () => {
