@@ -272,6 +272,422 @@ describe('polling store', () => {
   })
 })
 
+// Issue #1977: mocks /api/projects and /api/sessions distinctly so fetchProjects()/
+// fetchSessions() (both called by loadAppData()) each get a shape they can parse
+// without throwing on `.forEach` of an undefined array.
+function mockAppDataEndpoints({ projectsOk = true, sessionsOk = true } = {}) {
+  apiMock.get.mockImplementation((url) => {
+    if (url === '/api/projects') {
+      return projectsOk ? Promise.resolve({ projects: [] }) : Promise.reject(new Error('projects fetch failed'))
+    }
+    if (url === '/api/sessions') {
+      return sessionsOk ? Promise.resolve({ sessions: [] }) : Promise.reject(new Error('sessions fetch failed'))
+    }
+    return Promise.resolve({})
+  })
+}
+
+// A fetch mock for startUIPolling()'s own transport: the first call rejects (driving the
+// catch → backoff → reconnect path under test), every call after that hangs until aborted
+// (mirrors abortAwareFetchMock above) so the loop doesn't spin through repeated real errors
+// once stopUIPolling() is called at the end of each test.
+function rejectOnceThenHangFetchMock() {
+  let callCount = 0
+  return vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => {
+    callCount++
+    if (callCount === 1) {
+      return Promise.reject(new Error('Connection refused'))
+    }
+    return new Promise((_resolve, reject) => {
+      opts?.signal?.addEventListener('abort', () => {
+        const err = new Error('Aborted')
+        err.name = 'AbortError'
+        reject(err)
+      })
+    })
+  })
+}
+
+// Like rejectOnceThenHangFetchMock(), but the second call succeeds with an empty poll
+// response — this is what actually confirms a reconnect (retryStaleAppData() only fires
+// on a CONFIRMED successful poll, not merely once the backoff delay elapses; see #1977).
+// Every call after the second hangs until aborted, same as above.
+function rejectOnceThenSucceedThenHangFetchMock() {
+  let callCount = 0
+  return vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => {
+    callCount++
+    if (callCount === 1) {
+      return Promise.reject(new Error('Connection refused'))
+    }
+    if (callCount === 2) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ events: [], next_cursor: 1 }),
+      })
+    }
+    return new Promise((_resolve, reject) => {
+      opts?.signal?.addEventListener('abort', () => {
+        const err = new Error('Aborted')
+        err.name = 'AbortError'
+        reject(err)
+      })
+    })
+  })
+}
+
+describe('polling store - loadAppData / appDataStatus (issue #1977)', () => {
+  it('overallStatus does not read "connected" when uiConnected but appDataStatus is failed (AC4)', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useUIStore } = await import('@/stores/ui')
+    const pollingStore = usePollingStore()
+    const uiStore = useUIStore()
+
+    pollingStore.uiConnected = true
+    uiStore.setAppDataStatus('failed')
+
+    expect(pollingStore.overallStatus).not.toBe('connected')
+    expect(pollingStore.overallStatus).toBe('partial')
+  })
+
+  it('overallStatus reads connected when uiConnected and appDataStatus is loaded', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useUIStore } = await import('@/stores/ui')
+    const pollingStore = usePollingStore()
+    const uiStore = useUIStore()
+
+    pollingStore.uiConnected = true
+    uiStore.setAppDataStatus('loaded')
+
+    expect(pollingStore.overallStatus).toBe('connected')
+  })
+
+  it('loadAppData sets appDataStatus to failed when either fetch rejects', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useUIStore } = await import('@/stores/ui')
+    const pollingStore = usePollingStore()
+    const uiStore = useUIStore()
+
+    mockAppDataEndpoints({ projectsOk: false })
+
+    await pollingStore.loadAppData()
+
+    expect(uiStore.appDataStatus).toBe('failed')
+  })
+
+  it('loadAppData sets appDataStatus to loaded when both fetches succeed', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useUIStore } = await import('@/stores/ui')
+    const pollingStore = usePollingStore()
+    const uiStore = useUIStore()
+
+    mockAppDataEndpoints()
+
+    await pollingStore.loadAppData()
+
+    expect(uiStore.appDataStatus).toBe('loaded')
+  })
+
+  it('overlapping loadAppData calls collapse into a single in-flight load (T3)', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const pollingStore = usePollingStore()
+
+    let resolveProjects
+    apiMock.get.mockImplementation((url) => {
+      if (url === '/api/projects') return new Promise(resolve => { resolveProjects = resolve })
+      if (url === '/api/sessions') return Promise.resolve({ sessions: [] })
+      return Promise.resolve({})
+    })
+
+    const first = pollingStore.loadAppData()
+    pollingStore.loadAppData()
+
+    // One call each for /api/projects and /api/sessions — the second loadAppData()
+    // call must not have triggered a second pair of fetches (Pinia's action wrapper
+    // means the two calls don't return the identical Promise instance, so the in-flight
+    // guard is verified here via call count instead of reference equality).
+    expect(apiMock.get).toHaveBeenCalledTimes(2)
+
+    resolveProjects({ projects: [] })
+    await first
+  })
+
+  it('reconnect after backoff retries loadAppData when appDataStatus is not loaded (AC7)', async () => {
+    vi.useFakeTimers()
+    try {
+      const { usePollingStore } = await import('@/stores/polling')
+      const { useUIStore } = await import('@/stores/ui')
+      const pollingStore = usePollingStore()
+      const uiStore = useUIStore()
+
+      uiStore.setAppDataStatus('failed')
+      mockAppDataEndpoints()
+      rejectOnceThenSucceedThenHangFetchMock()
+
+      pollingStore.startUIPolling()
+
+      // Flush the rejected first poll fetch through the catch block, then advance past
+      // the first backoff delay (2000ms * 1 retry) to the reconnect point.
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(2000)
+      // Let the confirming second poll fetch (a real, unfaked promise chain) resolve,
+      // then the reconnect-triggered loadAppData() it fires settle.
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(uiStore.appDataStatus).toBe('loaded')
+
+      pollingStore.stopUIPolling()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not double-fetch on the normal happy-path first connection (appDataStatus already loaded)', async () => {
+    vi.useFakeTimers()
+    try {
+      const { usePollingStore } = await import('@/stores/polling')
+      const { useUIStore } = await import('@/stores/ui')
+      const pollingStore = usePollingStore()
+      const uiStore = useUIStore()
+
+      // Happy path: initial load already resolved appDataStatus before startUIPolling()
+      // was ever called (as App.vue's initializeApp() does).
+      uiStore.setAppDataStatus('loaded')
+      mockAppDataEndpoints()
+      rejectOnceThenHangFetchMock()
+
+      pollingStore.startUIPolling()
+
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(2000)
+      await vi.advanceTimersByTimeAsync(0)
+
+      // loadAppData() would call /api/projects and /api/sessions — neither should have
+      // been hit by the reconnect, since appDataStatus was already 'loaded'.
+      expect(apiMock.get).not.toHaveBeenCalledWith('/api/projects')
+      expect(apiMock.get).not.toHaveBeenCalledWith('/api/sessions')
+
+      pollingStore.stopUIPolling()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not re-fire the retry on every backoff tick during a sustained total outage', async () => {
+    vi.useFakeTimers()
+    try {
+      const { usePollingStore } = await import('@/stores/polling')
+      const { useUIStore } = await import('@/stores/ui')
+      const pollingStore = usePollingStore()
+      const uiStore = useUIStore()
+
+      uiStore.setAppDataStatus('failed')
+      mockAppDataEndpoints()
+      // Every /api/poll/ui call fails — a sustained total outage, not a one-off blip.
+      vi.spyOn(global, 'fetch').mockRejectedValue(new Error('Connection refused'))
+
+      pollingStore.startUIPolling()
+
+      // Three backoff cycles (2000ms, 4000ms, 6000ms) — each re-arms uiConnected
+      // optimistically, but since /api/poll/ui never actually succeeds, retryStaleAppData()
+      // (and its two REST calls) must never fire during any of them.
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(2000)
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(4000)
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(6000)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(apiMock.get).not.toHaveBeenCalledWith('/api/projects')
+      expect(apiMock.get).not.toHaveBeenCalledWith('/api/sessions')
+      expect(uiStore.appDataStatus).toBe('failed')
+
+      pollingStore.stopUIPolling()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('periodic watcher retries a failed app-data load even when /api/poll/ui itself never errors (AC7)', async () => {
+    vi.useFakeTimers()
+    try {
+      const { usePollingStore } = await import('@/stores/polling')
+      const { useUIStore } = await import('@/stores/ui')
+      const pollingStore = usePollingStore()
+      const uiStore = useUIStore()
+
+      // /api/projects failed on the initial load, but the UI-poll transport itself is
+      // healthy throughout (a real, independent failure mode) — the reconnect-triggered
+      // retry inside startUIPolling()'s catch block never fires in this case, so recovery
+      // depends entirely on the periodic watcher.
+      uiStore.setAppDataStatus('failed')
+      mockAppDataEndpoints()
+      vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => new Promise((_resolve, reject) => {
+        opts?.signal?.addEventListener('abort', () => {
+          const err = new Error('Aborted')
+          err.name = 'AbortError'
+          reject(err)
+        })
+      }))
+
+      pollingStore.startUIPolling()
+      await vi.advanceTimersByTimeAsync(0)
+
+      // Before the watcher's first tick, still failed.
+      expect(uiStore.appDataStatus).toBe('failed')
+
+      await vi.advanceTimersByTimeAsync(15000)
+
+      expect(uiStore.appDataStatus).toBe('loaded')
+
+      pollingStore.stopUIPolling()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stopUIPolling stops the periodic app-data retry watcher', async () => {
+    vi.useFakeTimers()
+    try {
+      const { usePollingStore } = await import('@/stores/polling')
+      const { useUIStore } = await import('@/stores/ui')
+      const pollingStore = usePollingStore()
+      const uiStore = useUIStore()
+
+      uiStore.setAppDataStatus('failed')
+      // Always failing — if the watcher kept running after stop, appDataStatus would
+      // still flip through 'loading' on every tick, which we can detect below.
+      apiMock.get.mockRejectedValue(new Error('still down'))
+      vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => new Promise((_resolve, reject) => {
+        opts?.signal?.addEventListener('abort', () => {
+          const err = new Error('Aborted')
+          err.name = 'AbortError'
+          reject(err)
+        })
+      }))
+
+      pollingStore.startUIPolling()
+      await vi.advanceTimersByTimeAsync(0)
+      pollingStore.stopUIPolling()
+
+      apiMock.get.mockClear()
+      await vi.advanceTimersByTimeAsync(30000)
+
+      expect(apiMock.get).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reconnect also retries a transient deepLinkFailure alongside loadAppData (partial T4)', async () => {
+    vi.useFakeTimers()
+    try {
+      const { usePollingStore } = await import('@/stores/polling')
+      const { useUIStore } = await import('@/stores/ui')
+      const { useSessionStore } = await import('@/stores/session')
+      const pollingStore = usePollingStore()
+      const uiStore = useUIStore()
+      const sessionStore = useSessionStore()
+
+      uiStore.setAppDataStatus('failed')
+      uiStore.setDeepLinkFailure({ sessionId: 'sess-deep', kind: 'transient', message: 'oops' })
+      // The user is still on the session the deep-link fetch failed for (selectSession()
+      // sets currentSessionId optimistically even on failure) — this is the condition the
+      // retry is gated on, so it must be set for the retry to actually fire.
+      sessionStore.currentSessionId = 'sess-deep'
+      mockAppDataEndpoints()
+      rejectOnceThenSucceedThenHangFetchMock()
+
+      const selectSpy = vi.spyOn(sessionStore, 'selectSession').mockResolvedValue(undefined)
+
+      pollingStore.startUIPolling()
+
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(2000)
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(selectSpy).toHaveBeenCalledWith('sess-deep')
+      // Bypasses selectSession()'s early-return guard (currentSessionId already equals
+      // sessionId with no selection in flight) — without this reset the retry is a no-op.
+      expect(sessionStore.currentSessionId).toBeNull()
+
+      pollingStore.stopUIPolling()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reconnect does not retry a transient deepLinkFailure for a session the user has since navigated away from', async () => {
+    vi.useFakeTimers()
+    try {
+      const { usePollingStore } = await import('@/stores/polling')
+      const { useUIStore } = await import('@/stores/ui')
+      const { useSessionStore } = await import('@/stores/session')
+      const pollingStore = usePollingStore()
+      const uiStore = useUIStore()
+      const sessionStore = useSessionStore()
+
+      uiStore.setAppDataStatus('failed')
+      uiStore.setDeepLinkFailure({ sessionId: 'sess-deep', kind: 'transient', message: 'oops' })
+      // The user navigated to a different session after the deep-link failure — the stale
+      // failure must not hijack them back to 'sess-deep'.
+      sessionStore.currentSessionId = 'sess-other'
+      mockAppDataEndpoints()
+      rejectOnceThenSucceedThenHangFetchMock()
+
+      const selectSpy = vi.spyOn(sessionStore, 'selectSession').mockResolvedValue(undefined)
+
+      pollingStore.startUIPolling()
+
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(2000)
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(selectSpy).not.toHaveBeenCalled()
+      expect(sessionStore.currentSessionId).toBe('sess-other')
+
+      pollingStore.stopUIPolling()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reconnect does not retry a permanent (not-found) deepLinkFailure', async () => {
+    vi.useFakeTimers()
+    try {
+      const { usePollingStore } = await import('@/stores/polling')
+      const { useUIStore } = await import('@/stores/ui')
+      const { useSessionStore } = await import('@/stores/session')
+      const pollingStore = usePollingStore()
+      const uiStore = useUIStore()
+      const sessionStore = useSessionStore()
+
+      uiStore.setAppDataStatus('failed')
+      uiStore.setDeepLinkFailure({ sessionId: 'sess-gone', kind: 'not-found', message: 'gone' })
+      mockAppDataEndpoints()
+      rejectOnceThenSucceedThenHangFetchMock()
+
+      const selectSpy = vi.spyOn(sessionStore, 'selectSession').mockResolvedValue(undefined)
+
+      pollingStore.startUIPolling()
+
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(2000)
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(selectSpy).not.toHaveBeenCalled()
+
+      pollingStore.stopUIPolling()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('polling store - stall-heal watchdog (#1795)', () => {
   // These tests fake only Date so checkSessionStall()'s Date.now() comparisons are
   // controllable, while setTimeout/setInterval stay real — that keeps the background

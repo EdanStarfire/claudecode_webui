@@ -92,6 +92,13 @@ export const usePollingStore = defineStore('polling', () => {
 
   // ========== COMPUTED ==========
   const overallStatus = computed(() => {
+    const uiStore = useUIStore()
+    // Issue #1977 (AC4): a connected transport with a failed initial data load must
+    // never read as fully 'connected' — reuses 'partial' (already means "not fully
+    // healthy") rather than adding a new value only this one case would use.
+    if (uiConnected.value && uiStore.appDataStatus === 'failed') {
+      return 'partial'
+    }
     if (uiConnected.value && (sessionConnected.value || !currentSessionId.value)) {
       return 'connected'
     }
@@ -128,13 +135,102 @@ export const usePollingStore = defineStore('polling', () => {
     return token ? `${base}&token=${encodeURIComponent(token)}` : base
   }
 
+  // ========== APP DATA LOAD (Issue #1977) ==========
+  // In-flight guard so overlapping calls (initial mount + a reconnect racing it) collapse
+  // into one shared load instead of firing duplicate fetches.
+  let appDataLoadPromise = null
+
+  function loadAppData() {
+    if (appDataLoadPromise) return appDataLoadPromise
+
+    const uiStore = useUIStore()
+    const projectStore = useProjectStore()
+    const sessionStore = useSessionStore()
+    uiStore.setAppDataStatus('loading')
+
+    appDataLoadPromise = Promise.allSettled([
+      projectStore.fetchProjects(),
+      sessionStore.fetchSessions(),
+    ]).then((results) => {
+      const failed = results.some(r => r.status === 'rejected')
+      uiStore.setAppDataStatus(failed ? 'failed' : 'loaded')
+      return results
+    }).finally(() => {
+      appDataLoadPromise = null
+    })
+
+    return appDataLoadPromise
+  }
+
+  // Retries a still-failed app-data load and/or a still-relevant transient deep-link
+  // failure. Shared by the reconnect-triggered trigger below and the periodic watcher
+  // right after it — both are just different ways of deciding *when* to call this.
+  function retryStaleAppData() {
+    const uiStore = useUIStore()
+    if (uiStore.appDataStatus !== 'loaded') {
+      loadAppData()
+    }
+    const failure = uiStore.deepLinkFailure
+    // Only retry if the user is still trying to view the session that failed — if
+    // they've since navigated elsewhere, currentSessionId will no longer match (and
+    // session.js's selectSession() already clears deepLinkFailure on navigation away),
+    // so this naturally skips rather than hijacking their current view.
+    if (failure?.kind === 'transient') {
+      const sessionStore = useSessionStore()
+      if (sessionStore.currentSessionId === failure.sessionId) {
+        // selectSession() early-returns as a no-op when sessionId is already
+        // currentSessionId and no selection is in flight — both true here, since the
+        // failed attempt set currentSessionId optimistically before failing. Clearing
+        // it first forces a real re-fetch, mirroring the same bypass SessionManageModal.vue
+        // uses to force a reconnect after a session restart.
+        sessionStore.currentSessionId = null
+        // Fire-and-forget (same pattern as SessionManageModal.vue's restart-reconnect) —
+        // caught here only to avoid an unhandled-rejection console error if it fails
+        // again; the failure itself is already reflected via deepLinkFailure/appDataStatus.
+        sessionStore.selectSession(failure.sessionId).catch(() => {})
+      }
+    }
+  }
+
+  // Issue #1977 (AC7): the reconnect-triggered retry (inside startUIPolling()'s catch
+  // block, below) only fires when the /api/poll/ui transport itself errors. But
+  // /api/projects, /api/sessions, and a deep-linked session's own fetch are independent
+  // backend routes that can fail while /api/poll/ui stays healthy throughout — without
+  // this, appDataStatus could stay 'failed' forever with LoadStatusBanner's "retrying
+  // automatically" claim never actually true. This periodic watcher is the catch-all:
+  // while UI polling is active, retry on a fixed cadence regardless of why the load
+  // previously failed. loadAppData()'s own in-flight guard means this can't double-fetch
+  // if a reconnect-triggered retry is already in flight.
+  const APP_DATA_RETRY_INTERVAL_MS = 15000
+  let appDataRetryInterval = null
+
+  function startAppDataRetryWatcher() {
+    if (appDataRetryInterval) return
+    appDataRetryInterval = setInterval(retryStaleAppData, APP_DATA_RETRY_INTERVAL_MS)
+  }
+
+  function stopAppDataRetryWatcher() {
+    if (appDataRetryInterval) {
+      clearInterval(appDataRetryInterval)
+      appDataRetryInterval = null
+    }
+  }
+
   // ========== UI POLL LOOP ==========
   async function startUIPolling(initialCursor = 0) {
     if (uiConnected.value) return
     uiCursor = initialCursor
     uiConnected.value = true
     uiRetryCount.value = 0
+    startAppDataRetryWatcher()
     const myGeneration = ++uiPollGeneration
+    // Issue #1977: tracks "we backed off after an error and are waiting to confirm
+    // we're actually back" — retryStaleAppData() fires once, on the next CONFIRMED
+    // successful response, not merely once the backoff delay elapses. Firing on backoff
+    // alone would re-fire on every retry tick during a sustained total outage (each
+    // subsequent fetch attempt still failing), roughly doubling REST traffic against a
+    // server that's already known unreachable.
+    let recoveringFromError = false
 
     while (uiConnected.value) {
       try {
@@ -149,6 +245,13 @@ export const usePollingStore = defineStore('polling', () => {
 
         const data = await response.json()
         uiRetryCount.value = 0
+        if (recoveringFromError) {
+          recoveringFromError = false
+          // Issue #1977 (AC3, AC7): a confirmed successful poll after an outage means
+          // the connection is genuinely back — retry anything that didn't survive that
+          // outage immediately, rather than waiting for the periodic watcher's next tick.
+          retryStaleAppData()
+        }
 
         if (data.events && data.events.length > 0) {
           for (const event of data.events) {
@@ -175,6 +278,7 @@ export const usePollingStore = defineStore('polling', () => {
         await new Promise(resolve => setTimeout(resolve, delay))
         if (uiPollGeneration === myGeneration) {
           uiConnected.value = true
+          recoveringFromError = true
         }
       }
     }
@@ -185,6 +289,7 @@ export const usePollingStore = defineStore('polling', () => {
     uiConnected.value = false
     uiAbortController?.abort()
     uiAbortController = null
+    stopAppDataRetryWatcher()
   }
 
   // Compat aliases
@@ -945,6 +1050,7 @@ export const usePollingStore = defineStore('polling', () => {
 
     connectUI,
     disconnectUI,
+    loadAppData,
     startUIPolling,
     stopUIPolling,
     setupVisibilityHandler,

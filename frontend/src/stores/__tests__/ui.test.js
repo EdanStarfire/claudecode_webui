@@ -116,4 +116,45 @@ describe('ui store', () => {
       expect(store.agentSort).toBe('last_active')
     })
   })
+
+  describe('appDataStatus / deepLinkFailure (issue #1977)', () => {
+    it('defaults appDataStatus to loading and deepLinkFailure to null', async () => {
+      const { useUIStore } = await import('@/stores/ui')
+      const store = useUIStore()
+
+      expect(store.appDataStatus).toBe('loading')
+      expect(store.deepLinkFailure).toBeNull()
+    })
+
+    it('setAppDataStatus updates the status', async () => {
+      const { useUIStore } = await import('@/stores/ui')
+      const store = useUIStore()
+
+      store.setAppDataStatus('failed')
+      expect(store.appDataStatus).toBe('failed')
+
+      store.setAppDataStatus('loaded')
+      expect(store.appDataStatus).toBe('loaded')
+    })
+
+    it('setDeepLinkFailure stores the failure object', async () => {
+      const { useUIStore } = await import('@/stores/ui')
+      const store = useUIStore()
+
+      const failure = { sessionId: 'sess-1', kind: 'not-found', message: 'Not found' }
+      store.setDeepLinkFailure(failure)
+
+      expect(store.deepLinkFailure).toEqual(failure)
+    })
+
+    it('clearDeepLinkFailure resets to null', async () => {
+      const { useUIStore } = await import('@/stores/ui')
+      const store = useUIStore()
+
+      store.setDeepLinkFailure({ sessionId: 'sess-1', kind: 'transient', message: 'oops' })
+      store.clearDeepLinkFailure()
+
+      expect(store.deepLinkFailure).toBeNull()
+    })
+  })
 })

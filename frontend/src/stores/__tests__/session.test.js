@@ -326,6 +326,60 @@ describe('session store', () => {
     })
   })
 
+  describe('selectSession deep-link failure classification (#1977)', () => {
+    it('a mocked 404 sets a permanent (not-found) deepLinkFailure', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const { useUIStore } = await import('@/stores/ui')
+      const store = useSessionStore()
+      const uiStore = useUIStore()
+
+      const err = new Error('Not Found')
+      err.status = 404
+      apiMock.get.mockRejectedValue(err)
+
+      await store.selectSession('sess-missing')
+
+      expect(uiStore.deepLinkFailure).toEqual({
+        sessionId: 'sess-missing',
+        kind: 'not-found',
+        message: 'Not Found',
+      })
+    })
+
+    it('a mocked network/5xx error sets a transient deepLinkFailure', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const { useUIStore } = await import('@/stores/ui')
+      const store = useSessionStore()
+      const uiStore = useUIStore()
+
+      const err = new Error('Internal Server Error')
+      err.status = 500
+      apiMock.get.mockRejectedValue(err)
+
+      await store.selectSession('sess-flaky')
+
+      expect(uiStore.deepLinkFailure).toEqual({
+        sessionId: 'sess-flaky',
+        kind: 'transient',
+        message: 'Internal Server Error',
+      })
+    })
+
+    it('a successful deep-link fetch clears a prior deepLinkFailure', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const { useUIStore } = await import('@/stores/ui')
+      const store = useSessionStore()
+      const uiStore = useUIStore()
+
+      uiStore.setDeepLinkFailure({ sessionId: 'sess-1', kind: 'transient', message: 'oops' })
+      apiMock.get.mockResolvedValue({ session: makeSession({ session_id: 'sess-1' }) })
+
+      await store.selectSession('sess-1')
+
+      expect(uiStore.deepLinkFailure).toBeNull()
+    })
+  })
+
   describe('scroll position persistence — {itemIndex, offsetWithinItem} (#1748 stage: offset-model)', () => {
     it('round-trips a logical position through save/restore', async () => {
       const { useSessionStore } = await import('@/stores/session')

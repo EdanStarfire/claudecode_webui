@@ -112,8 +112,11 @@ function channelState({ connected, retryCount, stalled }) {
 // view), which is more alarming than healthy.
 const STATE_SEVERITY = { disconnected: 0, reconnecting: 1, stalled: 2, connected: 3 }
 
+// Issue #1977 (AC4): a failed initial data load reuses the existing "stalled" visual
+// treatment (transport connected, but something's wrong) so this dot never reads
+// "Connected" while the app is actually showing nothing.
 const uiChannelState = computed(() => channelState({
-  connected: wsStore.uiConnected, retryCount: wsStore.uiRetryCount, stalled: false
+  connected: wsStore.uiConnected, retryCount: wsStore.uiRetryCount, stalled: uiStore.appDataStatus === 'failed'
 }))
 // Gated on wsStore's OWN currentSessionId (the session its poll loop is actually
 // targeting), not sessionStore.currentSessionId (which archive/deleted-agent views set
