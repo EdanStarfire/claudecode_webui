@@ -28,6 +28,10 @@ export const usePollingStore = defineStore('polling', () => {
   const sessionCursors = {}  // Per-session cursor cache to avoid replaying history on switch
   const sessionPollHeartbeatAt = {}  // Per-session last-successful-poll timestamp (Issue #1795)
   const sessionHealInFlight = {}  // Per-session stall-heal mutex (Issue #1954) — distinct from the HEAL_COOLDOWN_MS rate limiter below
+  // Issue #1974: per-session snapshot of totalFrozenMs taken at the last heartbeat write,
+  // so checkSessionStall() can forgive only the frozen time that occurred *after* that
+  // heartbeat (see totalFrozenMs below) rather than the session's entire frozen history.
+  const frozenMsAtHeartbeat = {}
 
   // AbortControllers for long-poll requests
   let uiAbortController = null
@@ -51,6 +55,15 @@ export const usePollingStore = defineStore('polling', () => {
   const STALL_TIMEOUT_MS = 40000
   const HEAL_COOLDOWN_MS = 10000
   const STALL_CHECK_INTERVAL_MS = 5000
+  // Issue #1974: tick-lateness watchdog. A backgrounded tab or sleeping machine can
+  // freeze the JS timer loop itself, so the stall-check interval firing late is the
+  // signal that wall-clock time passed without this page being able to observe it —
+  // any cause (background throttling, machine sleep, long GC/debugger pauses) shows up
+  // the same way. Excess over this buffer (on top of the expected STALL_CHECK_INTERVAL_MS
+  // gap) is treated as frozen time and forgiven from the staleness computation below.
+  const TICK_LATE_BUFFER_MS = 2000
+  let lastTickAt = 0
+  let totalFrozenMs = 0
 
   // Page Visibility cleanup
   let visibilityUnsubscribe = null
@@ -67,6 +80,14 @@ export const usePollingStore = defineStore('polling', () => {
   })
 
   // ========== HELPERS ==========
+  // Issue #1974: single write path for a successful-poll heartbeat, so
+  // sessionPollHeartbeatAt and its paired frozenMsAtHeartbeat snapshot can never drift
+  // out of sync at a call site that forgets one of the two.
+  function seedHeartbeat(sessionId) {
+    sessionPollHeartbeatAt[sessionId] = Date.now()
+    frozenMsAtHeartbeat[sessionId] = totalFrozenMs
+  }
+
   function getPollUrl(path, cursor, timeout = 30) {
     const token = getAuthToken()
     const base = `${path}?since=${cursor}&timeout=${timeout}`
@@ -163,7 +184,7 @@ export const usePollingStore = defineStore('polling', () => {
         sessionRetryCount.value = 0
         // Issue #1795: any successful response — even one carrying zero events after
         // the server's long-poll hold — proves this connection is alive.
-        sessionPollHeartbeatAt[sessionId] = Date.now()
+        seedHeartbeat(sessionId)
         // Issue #1960: clear immediately on success rather than waiting up to
         // STALL_CHECK_INTERVAL_MS for the next watchdog tick to notice recovery.
         // Guarded by generation + session identity (mirroring the retry branch's guard
@@ -245,7 +266,7 @@ export const usePollingStore = defineStore('polling', () => {
     // stale, and reseeding it here would forge liveness before any response has actually
     // arrived. Only a real poll response (below) should advance it in that case.
     if (!isRecoveryReconnect) {
-      sessionPollHeartbeatAt[sessionId] = Date.now()
+      seedHeartbeat(sessionId)
     }
 
     // Capture the loop promise so disconnectSession() can await clean exit (Fix 2)
@@ -285,6 +306,7 @@ export const usePollingStore = defineStore('polling', () => {
     delete sessionCursors[sessionId]
     delete sessionPollHeartbeatAt[sessionId]
     delete sessionHealInFlight[sessionId]
+    delete frozenMsAtHeartbeat[sessionId]
     // Issue #1960: prevent a reset session's stalled flag from leaking onto whatever
     // session is current afterward.
     sessionStalled.value = false
@@ -293,6 +315,10 @@ export const usePollingStore = defineStore('polling', () => {
   // ========== STALL DETECTOR (Fix 5) ==========
   function startStallDetector() {
     if (stallDetectorInterval) return
+    // Issue #1974: (re)seed the tick-lateness baseline whenever the detector (re)starts,
+    // so a gap that occurred before this connectSession() call (e.g. while disconnected)
+    // isn't misread as a freeze on the very first tick.
+    lastTickAt = Date.now()
     stallDetectorInterval = setInterval(checkSessionStall, STALL_CHECK_INTERVAL_MS)
   }
 
@@ -308,6 +334,20 @@ export const usePollingStore = defineStore('polling', () => {
   }
 
   async function checkSessionStall() {
+    // Issue #1974: tick-lateness measurement — page-level, independent of which session
+    // is current (a freeze affects the whole tab's ability to run JS, not just polling
+    // for the active session), so this runs before the sid early-return below. Any
+    // excess over the expected STALL_CHECK_INTERVAL_MS gap (past a small jitter buffer)
+    // means that much wall-clock time was not actually observable by the page.
+    const now = Date.now()
+    const observedGap = now - lastTickAt
+    const frozenMs = Math.max(0, observedGap - STALL_CHECK_INTERVAL_MS - TICK_LATE_BUFFER_MS)
+    if (frozenMs > 0) {
+      totalFrozenMs += frozenMs
+      pushDebugEvent('polling', 'freeze-detected', { frozenMs, totalFrozenMs, observedGap })
+    }
+    lastTickAt = now
+
     const sessionStore = useSessionStore()
     const messageStore = useMessageStore()
     const sid = currentSessionId.value
@@ -336,10 +376,14 @@ export const usePollingStore = defineStore('polling', () => {
       return
     }
 
-    const stallMs = Date.now() - heartbeatMs
+    // Issue #1974: forgive only the frozen time that occurred *after* the last successful
+    // heartbeat — a stall that was already accumulating before a freeze started is
+    // untouched and still crosses the threshold on schedule.
+    const frozenSinceHeartbeat = totalFrozenMs - (frozenMsAtHeartbeat[sid] ?? 0)
+    const stallMs = Math.max(0, (now - heartbeatMs) - frozenSinceHeartbeat)
     sessionStalled.value = stallMs >= STALL_TIMEOUT_MS
     pushDebugEvent('polling', 'stall-check', {
-      sessionId: sid, stallMs, thresholdMs: STALL_TIMEOUT_MS, passed: stallMs < STALL_TIMEOUT_MS
+      sessionId: sid, stallMs, thresholdMs: STALL_TIMEOUT_MS, passed: stallMs < STALL_TIMEOUT_MS, frozenSinceHeartbeat
     })
     if (stallMs < STALL_TIMEOUT_MS) return
 
@@ -349,8 +393,19 @@ export const usePollingStore = defineStore('polling', () => {
     // unconditionally; only the heal action below is gated on sessionConnected.
     if (!sessionConnected.value) return
 
+    // Issue #1974: a backgrounded tab must not itself trigger recovery — gate only the
+    // heal step, not the staleness computation/reporting above, so sessionStalled stays
+    // accurate the instant the user returns (established by an actual poll response, not
+    // assumed on visibility-restore). Deliberately does not gate on the sleeping-machine
+    // case (document.hidden can still read false there) — that's covered by the
+    // tick-lateness forgiveness above alone, independent of visibility.
+    if (document.hidden) {
+      pushDebugEvent('polling', 'stall-heal-skipped-hidden', { sessionId: sid, stallMs })
+      return
+    }
+
     // Cooldown: prevent heal storms
-    if (Date.now() - lastHealedAt < HEAL_COOLDOWN_MS) return
+    if (now - lastHealedAt < HEAL_COOLDOWN_MS) return
 
     // Issue #1954: mutex guard — a heal already in flight for this session must not be
     // overlapped by a second one. This is checked (and set) in addition to, not instead of,
@@ -577,6 +632,10 @@ export const usePollingStore = defineStore('polling', () => {
           sessionStore2.recordSessionReset(resetSessionId)
           delete sessionCursors[resetSessionId]
           delete sessionPollHeartbeatAt[resetSessionId]
+          delete frozenMsAtHeartbeat[resetSessionId]
+          // Issue #1960: prevent a reset session's stalled flag from leaking onto whatever
+          // session is current afterward — mirrors resetSessionCursor()'s same guard.
+          sessionStalled.value = false
         }
         break
       }
