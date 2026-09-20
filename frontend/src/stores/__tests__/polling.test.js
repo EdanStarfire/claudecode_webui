@@ -55,6 +55,40 @@ async function tickStallCadence(pollingStore, ticks) {
   }
 }
 
+// Issue #1979: delivers a single 'session_reset' UI-poll event for sessionId, while any
+// concurrent session-poll fetch ('/api/poll/session/...') keeps hanging exactly like
+// abortAwareFetchMock — used by both the in-flight-heal race test and the regression-guard
+// test below, which differ only in what state they set up beforehand.
+async function fireSessionResetEvent(pollingStore, sessionId) {
+  let uiFetchCallCount = 0
+  vi.spyOn(global, 'fetch').mockImplementation((url, opts) => {
+    if (String(url).includes('/api/poll/session/')) {
+      return new Promise((_resolve, reject) => {
+        opts?.signal?.addEventListener('abort', () => {
+          const err = new Error('Aborted')
+          err.name = 'AbortError'
+          reject(err)
+        })
+      })
+    }
+    uiFetchCallCount++
+    if (uiFetchCallCount === 1) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({
+          events: [{ type: 'session_reset', data: { session_id: sessionId } }],
+          next_cursor: 1
+        })
+      })
+    }
+    return new Promise(() => {})
+  })
+
+  pollingStore.startUIPolling()
+  await flush()
+  pollingStore.stopUIPolling()
+}
+
 async function setupStallSession(sessionOverrides) {
   const { usePollingStore } = await import('@/stores/polling')
   const { useSessionStore } = await import('@/stores/session')
@@ -1397,5 +1431,70 @@ describe('polling store - freeze forgiveness watchdog (#1974)', () => {
     await flush()
 
     expect(pollingStore.sessionStalled).toBe(true)
+  })
+
+  it('#1979: a session_reset event for a session whose stall-heal is still in flight does not erase the heartbeat/frozen snapshot or clear sessionStalled', async () => {
+    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1979-a', is_processing: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+    await tickStallCadence(pollingStore, 7)
+
+    // Hang syncMessages so checkSessionStall()'s heal sequence stays inside its try block —
+    // sessionHealInFlight[sid] stays true for the whole assertion window below, mirroring
+    // the '#1960: sessionStalled becomes true...' test's technique further up this file.
+    let resolveSync
+    vi.spyOn(messageStore, 'syncMessages').mockImplementation(() => new Promise(resolve => { resolveSync = resolve }))
+
+    advanceTime(5000) // final tick — crosses STALL_TIMEOUT_MS (40s), starts the heal
+    const healPromise = pollingStore.checkSessionStall()
+    expect(pollingStore.sessionStalled).toBe(true) // heal in flight, heartbeat still stale
+
+    // Feed a session_reset UI-poll event for the same session while the heal is in flight.
+    await fireSessionResetEvent(pollingStore, sid)
+
+    expect(pollingStore.sessionStalled).toBe(true)
+
+    // Let the heal finish cleanly.
+    resolveSync({ syncedCount: 0, hasMore: false })
+    apiMock.get.mockResolvedValue({ cursor: 0 })
+    await healPromise
+
+    // The heartbeat/frozen snapshot survived the session_reset: a subsequent
+    // checkSessionStall() tick still reports genuinely stalled, rather than the spurious
+    // "no heartbeat" false that would result if session_reset had deleted them mid-heal
+    // (see the '#1960: the no-heartbeat branch...' test above for that contrasting case).
+    advanceTime(5000)
+    await pollingStore.checkSessionStall()
+    expect(pollingStore.sessionStalled).toBe(true)
+  })
+
+  it('#1979: a session_reset event with no heal in flight still clears the heartbeat/stalled state as before (regression guard)', async () => {
+    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1979-b', is_processing: false })
+    const { useResourceStore } = await import('@/stores/resource')
+    const { useEditHistoryStore } = await import('@/stores/editHistory')
+    const { useSessionStore } = await import('@/stores/session')
+    const resourceStore = useResourceStore()
+    const editHistoryStore = useEditHistoryStore()
+    const sessionStore = useSessionStore()
+    const clearMessagesSpy = vi.spyOn(messageStore, 'clearMessages')
+    const clearResourcesSpy = vi.spyOn(resourceStore, 'clearResources')
+    const clearHistorySpy = vi.spyOn(editHistoryStore, 'clearHistory')
+    const recordResetSpy = vi.spyOn(sessionStore, 'recordSessionReset')
+
+    abortAwareFetchMock()
+    await pollingStore.connectSession(sid)
+    // Set directly rather than driving a real stall/heal — this test only cares about
+    // session_reset's own clearing behavior when sessionHealInFlight is falsy, mirroring
+    // the '#1960: sessionStalled clears immediately...' test's technique above.
+    pollingStore.sessionStalled = true
+
+    await fireSessionResetEvent(pollingStore, sid)
+
+    expect(pollingStore.sessionStalled).toBe(false)
+    expect(clearMessagesSpy).toHaveBeenCalledWith(sid)
+    expect(clearResourcesSpy).toHaveBeenCalledWith(sid)
+    expect(clearHistorySpy).toHaveBeenCalledWith(sid)
+    expect(recordResetSpy).toHaveBeenCalledWith(sid)
   })
 })

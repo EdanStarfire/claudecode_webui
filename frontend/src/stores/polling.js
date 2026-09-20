@@ -793,11 +793,19 @@ export const usePollingStore = defineStore('polling', () => {
           // clearing the #1954 mutex here could let a second heal start concurrently with
           // one still finishing.
           delete sessionCursors[resetSessionId]
-          delete sessionPollHeartbeatAt[resetSessionId]
-          delete frozenMsAtHeartbeat[resetSessionId]
-          // Issue #1960: prevent a reset session's stalled flag from leaking onto whatever
-          // session is current afterward — mirrors resetSessionCursor()'s same guard.
-          sessionStalled.value = false
+          // Issue #1979: if a stall-heal reconnect is actively in flight for this exact
+          // session, its heartbeat is deliberately left stale (not yet reseeded) so
+          // checkSessionStall() keeps reporting the genuine stall until a real poll
+          // response lands. Deleting it here would erase that signal and make the
+          // indicator transiently read healthy mid-heal. Skip this piece only — every
+          // other part of session_reset's handling above/below still runs unconditionally.
+          if (!sessionHealInFlight[resetSessionId]) {
+            delete sessionPollHeartbeatAt[resetSessionId]
+            delete frozenMsAtHeartbeat[resetSessionId]
+            // Issue #1960: prevent a reset session's stalled flag from leaking onto whatever
+            // session is current afterward — mirrors resetSessionCursor()'s same guard.
+            sessionStalled.value = false
+          }
         }
         break
       }
