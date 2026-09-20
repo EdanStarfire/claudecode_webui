@@ -857,7 +857,8 @@ export const useMessageStore = defineStore('message', () => {
     // stream the preview mirrors — clearing on their arrival would visibly truncate the main
     // turn's still-accumulating live text purely because an unrelated subagent leg progressed.
     if (message.type === 'assistant' && !message.metadata?.parent_tool_use_id) {
-      _clearStreamingPreviewContent(sessionId)
+      const canonicalToolIds = (message.metadata?.tool_uses || []).map(t => t.id)
+      _clearStreamingPreviewContent(sessionId, canonicalToolIds)
     }
 
     // Track last received timestamp for reconnection sync
@@ -1640,7 +1641,8 @@ export const useMessageStore = defineStore('message', () => {
         // otherwise the frozen preview text lingers indefinitely alongside the now-merged
         // canonical message.
         if (message.type === 'assistant' && !message.metadata?.parent_tool_use_id) {
-          _clearStreamingPreviewContent(sessionId)
+          const canonicalToolIds = (message.metadata?.tool_uses || []).map(t => t.id)
+          _clearStreamingPreviewContent(sessionId, canonicalToolIds)
         }
       })
 
@@ -1688,7 +1690,48 @@ export const useMessageStore = defineStore('message', () => {
       // _clearStreamingPreviewContent()/_endStreamingPreview() for why this makes dismissal
       // level-triggered instead of edge-triggered.
       canonicalSeen: false,
+      // Issue #1573: tool_use ids (content_block_start) registered for THIS still-open turn
+      // that have no rendering surface of their own yet — see _registerPendingToolInPreview().
+      pendingTools: [],
+      // Issue #1573 (review fix): tool_use ids already claimed by a canonical assistant message
+      // for this still-open turn — see _clearStreamingPreviewContent(). Deliberately NOT the
+      // same thing as `canonicalSeen`: addMessage()'s own #1955 comment documents that a single
+      // still-open turn can carry MULTIPLE canonical assistant messages ("multi-canonical-
+      // message turn"), so `canonicalSeen` flips true after the FIRST one and then stays true
+      // for the rest of the turn — gating registration on it would silently drop the indicator
+      // for any tool whose content_block_start arrives after that first canonical message but
+      // before ITS OWN. Gating per-id on `claimedToolIds` instead means each tool is judged only
+      // against whether its own canonical message has actually landed yet.
+      claimedToolIds: new Set(),
     })
+    streamingPreviewBySession.value = new Map(streamingPreviewBySession.value)
+  }
+
+  /**
+   * Issue #1573: record a newly-started tool_use so StreamingPreview.vue can show a transient
+   * "Starting: <name>..." indicator for it. This follows the same level-triggered pattern as
+   * `canonicalSeen` (see _clearStreamingPreviewContent()'s comment for the full rationale):
+   * rather than assuming content_block_start always arrives before the canonical assistant
+   * message for this turn, check the CURRENT state at the time this fires —
+   * - `!preview.active`: this turn has already ended (message_stop seen) — a content_block_start
+   *   this late is a stray/out-of-order delivery; the turn it belonged to is over, so there is
+   *   nothing left to show a live indicator for.
+   * - `preview.claimedToolIds.has(toolId)`: THIS tool's own canonical message already landed —
+   *   the real tool card is already rendering via AssistantMessage.vue's normal segment-based
+   *   path, so surfacing a duplicate "Starting..." indicator here would be a stale duplicate,
+   *   not a lead (covers both a stray redelivery of this same content_block_start, and the
+   *   general out-of-order-across-channels case).
+   * Clearing happens in _clearStreamingPreviewContent(), scoped to exactly the tool ids the
+   * arriving canonical message actually claims — i.e. each tool's indicator is handed off to
+   * its own real card at the instant THAT card gains a rendering surface, never on an earlier
+   * edge-triggered guess, and never blocked by an unrelated tool's canonical message landing
+   * first in a multi-canonical-message turn.
+   */
+  function _registerPendingToolInPreview(sessionId, toolId, toolName) {
+    const preview = streamingPreviewBySession.value.get(sessionId)
+    if (!preview || !preview.active || preview.claimedToolIds.has(toolId)) return
+    if (preview.pendingTools.some(t => t.id === toolId)) return
+    preview.pendingTools = [...preview.pendingTools, { id: toolId, name: toolName }]
     streamingPreviewBySession.value = new Map(streamingPreviewBySession.value)
   }
 
@@ -1726,14 +1769,31 @@ export const useMessageStore = defineStore('message', () => {
    * clear it again. `canonicalSeen` lets _endStreamingPreview() (message_stop) catch that case
    * and dismiss the preview itself once the canonical has definitely landed, regardless of
    * which arrived first — making dismissal level-triggered instead of edge-triggered.
+   *
+   * Issue #1573: also hands off `pendingTools` here, scoped to exactly the tool_use ids the
+   * arriving canonical message carries (`canonicalToolIds`) — NOT a wholesale wipe of the whole
+   * array. A wholesale wipe gated on this same call site would be wrong for a multi-canonical-
+   * message turn: `canonicalSeen` is a one-way flag (true for the rest of the turn after the
+   * FIRST canonical message), but a SECOND tool_use in the same still-open turn can start
+   * streaming after that first message and before its OWN canonical message arrives — a
+   * wholesale-wipe-on-first-canonical would silently drop that second tool's indicator with no
+   * real card yet to replace it (reproducing the exact invisible-card gap this feature exists to
+   * close). Recording claimed ids into `claimedToolIds` and filtering by id keeps each tool's
+   * handoff independent of every other tool's in the same turn.
    */
-  function _clearStreamingPreviewContent(sessionId) {
+  function _clearStreamingPreviewContent(sessionId, canonicalToolIds = []) {
     const preview = streamingPreviewBySession.value.get(sessionId)
     if (!preview) return
     pushDebugEvent('message', 'preview-clear', { sessionId, lenBefore: preview.content.length })
     preview.content = ''
     preview.thinking = ''
     preview.canonicalSeen = true
+    if (canonicalToolIds.length) {
+      for (const id of canonicalToolIds) preview.claimedToolIds.add(id)
+      if (preview.pendingTools.length) {
+        preview.pendingTools = preview.pendingTools.filter(t => !preview.claimedToolIds.has(t.id))
+      }
+    }
     streamingPreviewBySession.value = new Map(streamingPreviewBySession.value)
   }
 
@@ -1789,6 +1849,41 @@ export const useMessageStore = defineStore('message', () => {
       case 'message_start':
         _startStreamingPreview(sessionId)
         break
+
+      case 'content_block_start': {
+        // Issue #1573: render a pending tool card as soon as the model commits to a tool
+        // call, instead of waiting for the full turn to arrive.
+        const block = data.event.content_block
+        if (block?.type === 'tool_use' && block.id) {
+          handleToolCall(sessionId, {
+            tool_use_id: block.id,
+            name: block.name,
+            input: {},
+            status: 'pending'
+          })
+          // Skip the two side effects below when the card is already terminal: handleToolCall's
+          // status-regression guard silently no-ops on a stray/late content_block_start for an
+          // already-completed tool, and both re-opening it for the orphan sweep and showing a
+          // "starting..." indicator for it would be wrong.
+          const currentCard = toolCallsBySession.value.get(sessionId)?.find(tc => tc.id === block.id)
+          if (currentCard && !['completed', 'error'].includes(currentCard.status)) {
+            // Register into activeToolUses at creation time so the interrupt/restart/
+            // termination sweep in handleRealtimeToolTracking covers this card too —
+            // it's otherwise only populated from completed assistant messages.
+            const openTools = activeToolUses.value.get(sessionId) || new Set()
+            openTools.add(block.id)
+            activeToolUses.value.set(sessionId, openTools)
+
+            // The card itself has no rendering surface yet — AssistantMessage.vue only shows
+            // tool cards that belong to a message "segment", and none exists until the
+            // canonical assistant message for this turn lands. Mirror it into the streaming
+            // preview's own pendingTools list so StreamingPreview.vue can show a transient
+            // "Starting: <name>..." indicator in the meantime.
+            _registerPendingToolInPreview(sessionId, block.id, block.name)
+          }
+        }
+        break
+      }
 
       case 'content_block_delta': {
         const preview = streamingPreviewBySession.value.get(sessionId)

@@ -12,6 +12,17 @@
       <div v-if="hasContent || preview.active" class="msg-content-row">
         <MarkdownView class="msg-text" :content="preview.content" :streaming="preview.active" :caret="preview.active" />
       </div>
+
+      <!-- Issue #1573: transient indicator for a tool_use that has started streaming but has
+           no rendering surface of its own yet (no AssistantMessage segment exists until the
+           canonical message for this turn lands — see _registerPendingToolInPreview() in
+           stores/message.js for the full handoff timing). -->
+      <div v-if="pendingTools.length" class="pending-tools-row" data-testid="streaming-pending-tool">
+        <span v-for="t in pendingTools" :key="t.id" class="pending-tool-chip">
+          <span class="pending-tool-spinner"></span>
+          Starting: {{ t.name }}…
+        </span>
+      </div>
     </div>
   </div>
 </template>
@@ -35,10 +46,18 @@ const preview = computed(() => messageStore.streamingPreviewBySession.get(props.
 
 const hasThinking = computed(() => !!preview.value?.thinking?.trim().length)
 const hasContent = computed(() => !!preview.value?.content?.trim().length)
+const pendingTools = computed(() => preview.value?.pendingTools || [])
 
 const shouldShow = computed(() => {
   const p = preview.value
-  return !!p && (p.active || hasContent.value || hasThinking.value)
+  // Issue #1573 (review fix): must also stay visible on `pendingTools.length` alone. Without
+  // this, a bare tool call with no preceding text (hasContent/hasThinking both false) whose
+  // message_stop arrives before its canonical assistant message — the same out-of-order-across-
+  // channels race #1955's canonicalSeen already defends against for text — would flip
+  // `p.active` false and unmount the whole component, silently hiding the still-pending
+  // indicator until the canonical message eventually lands and would otherwise have nothing
+  // left to clear.
+  return !!p && (p.active || hasContent.value || hasThinking.value || pendingTools.value.length > 0)
 })
 
 // Scoped per session so two sessions' previews never share ThinkingBlock expand state.
@@ -124,6 +143,39 @@ const scopeKey = computed(() => `streaming-preview-${props.sessionId}`)
 
 .msg-content-row {
   position: relative;
+}
+
+.pending-tools-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.pending-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--bs-secondary-color);
+}
+
+/* Mirrors TimelineNode.vue's row-dot/dot-running pulse so an early streaming-only tool card
+   reads as the same "in progress" visual language as a real tool card's status dot. */
+.pending-tool-spinner {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background-color: #e2e8f0;
+  animation: pending-tool-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pending-tool-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.4); }
+  50% { box-shadow: 0 0 6px 2px rgba(139, 92, 246, 0.6); }
 }
 
 @media (max-width: 768px) {
