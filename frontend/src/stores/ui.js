@@ -146,6 +146,16 @@ export const useUIStore = defineStore('ui', () => {
   // Issue #1130: Watchdog alert queue (session_watchdog_alert events from UI poll)
   const watchdogAlerts = ref([])
 
+  // Issue #1977: initial app data (projects/sessions) load outcome — lets LoadStatusBanner
+  // show an honest empty state instead of a silent blank app when the load fails, and lets
+  // the connection indicator (HeaderRow1) avoid reading "connected" with no data loaded.
+  const appDataStatus = ref('loading') // 'loading' | 'loaded' | 'failed'
+
+  // Issue #1977: deep-link session fetch failure classification (session.js's selectSession()
+  // cache-miss fetch). 'not-found' (404) is permanent — no retry. 'transient' (network/5xx) is
+  // retried by polling.js's reconnect hook. null = no deep-link failure outstanding.
+  const deepLinkFailure = ref(null) // { sessionId, kind: 'not-found' | 'transient', message } | null
+
   // Agent sort preference ('alpha' | 'creation') — persisted
   const agentSort = ref(readStorage('agentSort', 'alpha'))
 
@@ -324,6 +334,19 @@ export const useUIStore = defineStore('ui', () => {
 
   function dismissAlert(id) {
     watchdogAlerts.value = watchdogAlerts.value.filter(a => a.id !== id)
+  }
+
+  // Issue #1977: initial app data load status + deep-link failure classification
+  function setAppDataStatus(status) {
+    appDataStatus.value = status
+  }
+
+  function setDeepLinkFailure(failure) {
+    deepLinkFailure.value = failure
+  }
+
+  function clearDeepLinkFailure() {
+    deepLinkFailure.value = null
   }
 
   // --- Panel state actions (replaces tab + queue-height model) ---
@@ -518,6 +541,8 @@ export const useUIStore = defineStore('ui', () => {
     ttsReadAloudEnabled,
     rateLimits,
     watchdogAlerts,
+    appDataStatus,
+    deepLinkFailure,
     agentSort,
     projectViewMode,
     flatSort,
@@ -562,6 +587,9 @@ export const useUIStore = defineStore('ui', () => {
     setRateLimits,
     pushAlert,
     dismissAlert,
+    setAppDataStatus,
+    setDeepLinkFailure,
+    clearDeepLinkFailure,
     setAgentSort,
     setProjectViewMode,
     setFlatSort,

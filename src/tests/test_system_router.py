@@ -332,6 +332,49 @@ class TestFinishRestart:
         )
 
 
+class TestFinishRestartClosesReadyRace:
+    """Issue #1977: a tab polling /ready during _finish_restart()'s teardown window
+    (sleep, poll_relay stop, backend_client close, Backend stop) must never see
+    ready:true, or it can reload onto a server that is mid-death. webui._ready must
+    flip to False as the very first action, before any other teardown step runs."""
+
+    @pytest.mark.asyncio
+    async def test_ready_flag_false_before_any_teardown_step(self):
+        webui = _make_webui(backend_supervisor=MagicMock(stop=AsyncMock()))
+        webui._ready = True
+
+        # Records webui._ready's value at the moment each teardown step is invoked, so
+        # we can assert it was already False before the *first* one — not merely by the
+        # time os.execv is reached.
+        ready_at_call = []
+
+        async def record_sleep(*_args, **_kwargs):
+            ready_at_call.append(("sleep", webui._ready))
+
+        webui.poll_relay.stop = AsyncMock(
+            side_effect=lambda: ready_at_call.append(("poll_relay.stop", webui._ready))
+        )
+        webui.backend_client.aclose = AsyncMock(
+            side_effect=lambda: ready_at_call.append(("backend_client.aclose", webui._ready))
+        )
+        webui.backend_supervisor.stop = AsyncMock(
+            side_effect=lambda: ready_at_call.append(("backend_supervisor.stop", webui._ready))
+        )
+
+        with (
+            patch("src.routers.system.asyncio.sleep", AsyncMock(side_effect=record_sleep)),
+            patch("src.routers.system.os.execv") as mock_execv,
+        ):
+            await _finish_restart(webui)
+
+        assert webui._ready is False
+        assert ready_at_call, "expected at least one teardown step to run"
+        assert all(ready is False for _step, ready in ready_at_call), ready_at_call
+        # The sleep (the very first teardown step) must already have seen it False.
+        assert ready_at_call[0][0] == "sleep"
+        mock_execv.assert_called_once()
+
+
 def _http_status_error(status_code, detail):
     request = httpx.Request("POST", "http://backend/api/system/restart")
     response = httpx.Response(status_code, json={"detail": detail}, request=request)
@@ -738,3 +781,45 @@ class TestFrontendModeEndpoint:
 
         assert resp.status_code == 200
         assert resp.json() == {"remote_mode": True}
+
+
+class TestReadyEndpointShortCircuitsDuringTeardown:
+    """Issue #1977: /ready (src/routers/core.py) must short-circuit to ready:false the
+    instant webui._ready is False, without ever calling backend_client.ready() — this is
+    what makes it safe to flip webui._ready = False as _finish_restart()'s very first
+    step even though backend_client gets closed later in that same teardown (closes a
+    latent RuntimeError-on-closed-client edge case)."""
+
+    @pytest.mark.asyncio
+    async def test_ready_false_short_circuits_without_touching_backend_client(self):
+        from src.routers.core import build_router as build_core_router
+
+        webui = _make_webui(backend_supervisor=MagicMock(stop=AsyncMock()))
+        webui._ready = False
+        webui.backend_client.ready = AsyncMock(side_effect=RuntimeError("client closed"))
+        webui.app.include_router(build_core_router(webui))
+
+        async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+            resp = await client.get("/ready")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ready"] is False
+        assert body["degraded"] is False
+        webui.backend_client.ready.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ready_true_when_ready_flag_set_and_backend_healthy(self):
+        from src.routers.core import build_router as build_core_router
+
+        webui = _make_webui(backend_supervisor=MagicMock(stop=AsyncMock(), degraded=False))
+        webui._ready = True
+        webui.app.include_router(build_core_router(webui))
+
+        async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+            resp = await client.get("/ready")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ready"] is True
+        webui.backend_client.ready.assert_awaited_once()

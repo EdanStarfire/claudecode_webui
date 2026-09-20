@@ -255,6 +255,11 @@ async def _finish_restart(webui) -> None:
     already been sent — extracted to a standalone function so it's directly
     awaitable from tests instead of only reachable via the scheduled task.
     """
+    # Issue #1977: flip /ready to false before anything else — otherwise a tab
+    # polling /ready during this entire teardown window (sleep, poll_relay stop,
+    # backend_client close, Backend stop) would keep seeing ready:true right up
+    # until the process re-execs, and could reload onto a server mid-death.
+    webui._ready = False
     await asyncio.sleep(0.5)
     logger.info("Executing Frontend os.execv restart...")
     if webui._oauth_resync_task is not None:

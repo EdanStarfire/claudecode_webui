@@ -49,6 +49,9 @@
     <!-- Watchdog alert banners (issue #1130) -->
     <AlertBanner />
 
+    <!-- Honest empty-state banner for failed initial load / deep-link fetch (issue #1977) -->
+    <LoadStatusBanner />
+
     <!-- Global Modals -->
     <FolderBrowserModal />
     <ProjectCreateModal />
@@ -81,6 +84,7 @@ import RestartModal from './components/layout/RestartModal.vue'
 import AuthPrompt from './components/common/AuthPrompt.vue'
 import MermaidFullView from './components/common/MermaidFullView.vue'
 import AlertBanner from './components/common/AlertBanner.vue'
+import LoadStatusBanner from './components/common/LoadStatusBanner.vue'
 import { useUIStore } from './stores/ui'
 import { usePollingStore } from './stores/polling'
 import { useSessionStore } from './stores/session'
@@ -196,10 +200,12 @@ async function initializeApp() {
   wsStore.setupVisibilityHandler()
 
   // Fetch cursor alongside initial data so polling starts from current head,
-  // preventing historical events from replaying and corrupting session_ids (#870)
-  const [, , cursorResult] = await Promise.allSettled([
-    projectStore.fetchProjects(),
-    sessionStore.fetchSessions(),
+  // preventing historical events from replaying and corrupting session_ids (#870).
+  // Issue #1977: project/session loading now goes through wsStore.loadAppData(), which
+  // tracks appDataStatus ('loading'/'loaded'/'failed') and never throws — it also gets
+  // retried automatically on the poll loop's own reconnect if it failed here.
+  const [, cursorResult] = await Promise.allSettled([
+    wsStore.loadAppData(),
     apiGet('/api/poll/cursor')
   ])
 

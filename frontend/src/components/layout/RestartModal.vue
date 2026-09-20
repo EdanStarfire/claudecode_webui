@@ -565,16 +565,24 @@ function startHealthPoll() {
   setTimeout(() => {
     healthPollInterval = setInterval(async () => {
       try {
-        const response = await fetch('/health')
+        // Issue #1977: /health returns 200 the instant the process is up, well
+        // before Frontend's own startup (and Backend) are actually usable — and
+        // during _finish_restart()'s teardown window it stays 200 the whole time
+        // the old process is still dying. /ready live-checks both, and is now
+        // explicitly flipped false as the very first step of that teardown.
+        const response = await fetch('/ready')
         if (response.ok) {
-          cleanup()
-          uiStore.restartInProgress = false
-          uiStore.restartStatus = 'idle'
-          if (modalInstance) {
-            modalInstance.hide()
+          const data = await response.json()
+          if (data.ready === true) {
+            cleanup()
+            uiStore.restartInProgress = false
+            uiStore.restartStatus = 'idle'
+            if (modalInstance) {
+              modalInstance.hide()
+            }
+            // Reload the page to pick up any frontend changes
+            window.location.reload()
           }
-          // Reload the page to pick up any frontend changes
-          window.location.reload()
         }
       } catch {
         // Server still down, keep polling

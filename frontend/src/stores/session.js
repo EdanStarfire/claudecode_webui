@@ -273,6 +273,14 @@ export const useSessionStore = defineStore('session', () => {
   async function selectSession(sessionId) {
     const leavingSessionId = currentSessionId.value
     const wasAlreadyCurrent = leavingSessionId === sessionId
+    const uiStore = useUIStore()
+
+    // Issue #1977: a deep-link failure banner is scoped to the session it failed for.
+    // Switching to a different session makes it stale — clear it here rather than
+    // leaving a banner referencing a session the user is no longer trying to view.
+    if (uiStore.deepLinkFailure && uiStore.deepLinkFailure.sessionId !== sessionId) {
+      uiStore.clearDeepLinkFailure()
+    }
 
     // Commit synchronously so chip highlight and content area update on the same tick.
     currentSessionId.value = sessionId
@@ -301,7 +309,6 @@ export const useSessionStore = defineStore('session', () => {
     selectingSession.value = true
 
     // Suppress auto-show of right panel while loading existing session data (#521)
-    const uiStore = useUIStore()
     uiStore.setSuppressAutoShow(true)
 
     try {
@@ -330,8 +337,18 @@ export const useSessionStore = defineStore('session', () => {
           // Trigger reactivity
           sessions.value = new Map(sessions.value)
           console.log(`Fetched session ${sessionId} for deeplink`)
+          // Issue #1977: a prior deep-link failure for this session is now resolved
+          uiStore.clearDeepLinkFailure()
         } catch (error) {
           console.error(`Failed to fetch session ${sessionId}:`, error)
+          // Issue #1977: classify so the UI can distinguish "this session was actually
+          // deleted" (404, no retry) from a transient failure (network/5xx, retried by
+          // polling.js's reconnect hook) instead of only logging to the console.
+          uiStore.setDeepLinkFailure({
+            sessionId,
+            kind: error.status === 404 ? 'not-found' : 'transient',
+            message: error.data?.detail || error.message || 'Failed to load session',
+          })
           // Can't proceed without session data
           return
         }
