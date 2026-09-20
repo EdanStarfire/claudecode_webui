@@ -425,6 +425,176 @@ function delta(type, sessionId, event) {
   return { uuid: 'env-' + Math.random(), event: { type, ...event } }
 }
 
+describe('content_block_start (tool_use) early tool card (Issue #1573)', () => {
+  it('creates a single pending card with correct id/name/status/input', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-early-card'
+
+    store.handleAssistantDelta(SID, delta('content_block_start', SID, {
+      index: 1,
+      content_block: { type: 'tool_use', id: 'toolu_1', name: 'Bash' }
+    }))
+
+    const toolCalls = store.toolCallsBySession.get(SID)
+    expect(toolCalls.length).toBe(1)
+    expect(toolCalls[0]).toMatchObject({
+      id: 'toolu_1',
+      name: 'Bash',
+      status: 'pending',
+      input: {}
+    })
+  })
+
+  it('a subsequent full tool_call for the same id updates the card in place (no duplicate)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-early-card-update'
+
+    store.handleAssistantDelta(SID, delta('content_block_start', SID, {
+      index: 1,
+      content_block: { type: 'tool_use', id: 'toolu_2', name: 'Bash' }
+    }))
+
+    store.handleToolCall(SID, {
+      tool_use_id: 'toolu_2',
+      name: 'Bash',
+      input: { command: 'ls -la' },
+      status: 'running'
+    })
+
+    const toolCalls = store.toolCallsBySession.get(SID)
+    expect(toolCalls.length).toBe(1)
+    expect(toolCalls[0].status).toBe('executing')
+    expect(toolCalls[0].input).toEqual({ command: 'ls -la' })
+  })
+
+  it('early card is orphaned (not stuck pending) on interrupt (#1959 precedent)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const { getEffectiveStatusForTool } = await import('@/composables/useToolStatus')
+    const store = useMessageStore()
+    const SID = 'sess-early-card-interrupt'
+
+    store.handleAssistantDelta(SID, delta('content_block_start', SID, {
+      index: 1,
+      content_block: { type: 'tool_use', id: 'toolu_3', name: 'Write' }
+    }))
+
+    store.addMessage(SID, makeMessage({ type: 'system', content: '', metadata: { subtype: 'interrupt' } }))
+
+    const tc = store.toolCallsBySession.get(SID).find(t => t.id === 'toolu_3')
+    expect(getEffectiveStatusForTool(tc)).toBe('orphaned')
+  })
+
+  it('early card is orphaned on restart (client_launched)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const { getEffectiveStatusForTool } = await import('@/composables/useToolStatus')
+    const store = useMessageStore()
+    const SID = 'sess-early-card-restart'
+
+    store.handleAssistantDelta(SID, delta('content_block_start', SID, {
+      index: 1,
+      content_block: { type: 'tool_use', id: 'toolu_4', name: 'Read' }
+    }))
+
+    store.addMessage(SID, makeMessage({ type: 'system', content: '', metadata: { subtype: 'client_launched' } }))
+
+    const tc = store.toolCallsBySession.get(SID).find(t => t.id === 'toolu_4')
+    expect(getEffectiveStatusForTool(tc)).toBe('orphaned')
+  })
+
+  it('does not regress an already-terminal card backward on a stray content_block_start', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-early-card-no-regress'
+
+    store.handleToolCall(SID, {
+      tool_use_id: 'toolu_5',
+      name: 'Bash',
+      input: { command: 'echo done' },
+      status: 'completed',
+      result: 'done'
+    })
+
+    store.handleAssistantDelta(SID, delta('content_block_start', SID, {
+      index: 1,
+      content_block: { type: 'tool_use', id: 'toolu_5', name: 'Bash' }
+    }))
+
+    const tc = store.toolCallsBySession.get(SID).find(t => t.id === 'toolu_5')
+    expect(tc.status).toBe('completed')
+  })
+
+  it('a stray content_block_start for an already-completed tool does not re-open it for the orphan sweep (review fix)', async () => {
+    // handleToolCall's status-regression guard silently no-ops when a content_block_start
+    // arrives late for a tool that already completed — but the activeToolUses registration
+    // must not run independently of that guard, or a subsequent interrupt/restart would
+    // orphan a card that already finished successfully.
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-early-card-no-reopen'
+
+    store.handleToolCall(SID, {
+      tool_use_id: 'toolu_6',
+      name: 'Bash',
+      input: { command: 'echo done' },
+      status: 'completed',
+      result: 'done'
+    })
+
+    store.handleAssistantDelta(SID, delta('content_block_start', SID, {
+      index: 1,
+      content_block: { type: 'tool_use', id: 'toolu_6', name: 'Bash' }
+    }))
+
+    store.addMessage(SID, makeMessage({ type: 'system', content: '', metadata: { subtype: 'interrupt' } }))
+
+    const tc = store.toolCallsBySession.get(SID).find(t => t.id === 'toolu_6')
+    expect(tc.status).toBe('completed')
+    expect(tc._isOrphaned).not.toBe(true)
+  })
+
+  it('multiple tool calls in one turn resolve to correct count, order, and final state', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-early-card-multi'
+
+    store.handleAssistantDelta(SID, delta('content_block_start', SID, {
+      index: 1,
+      content_block: { type: 'tool_use', id: 'toolu_a', name: 'Read' }
+    }))
+    store.handleAssistantDelta(SID, delta('content_block_start', SID, {
+      index: 2,
+      content_block: { type: 'tool_use', id: 'toolu_b', name: 'Bash' }
+    }))
+
+    store.handleToolCall(SID, {
+      tool_use_id: 'toolu_a', name: 'Read', input: { file_path: '/tmp/a' }, status: 'completed', result: 'ok'
+    })
+    store.handleToolCall(SID, {
+      tool_use_id: 'toolu_b', name: 'Bash', input: { command: 'ls' }, status: 'completed', result: 'ok'
+    })
+
+    const toolCalls = store.toolCallsBySession.get(SID)
+    expect(toolCalls.length).toBe(2)
+    expect(toolCalls.map(tc => tc.id)).toEqual(['toolu_a', 'toolu_b'])
+    expect(toolCalls.every(tc => tc.status === 'completed')).toBe(true)
+  })
+
+  it('ignores content_block_start for non-tool_use blocks (e.g. text)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-early-card-text-block'
+
+    store.handleAssistantDelta(SID, delta('content_block_start', SID, {
+      index: 0,
+      content_block: { type: 'text' }
+    }))
+
+    expect(store.toolCallsBySession.get(SID)).toBeUndefined()
+  })
+})
+
 describe('addMessage single-rule dedup (Issue #1955)', () => {
   it('pushes a new canonical message', async () => {
     const { useMessageStore } = await import('@/stores/message')
