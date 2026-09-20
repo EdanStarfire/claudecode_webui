@@ -562,6 +562,19 @@ export const useSessionStore = defineStore('session', () => {
     deletingSessions.value.add(sessionId)
 
     try {
+      // Issue #1974: stop this session's poll loop *before* the server-side delete, if
+      // it's the one currently displayed — mirrors the disconnect-before-mutate pattern
+      // already used by handleMarkUnread()/handleRestart() in SessionManageModal.vue
+      // (that component's own confirmDeleteSession() was the one caller that hadn't been
+      // doing this). Without it, the poll loop for the just-deleted session can keep
+      // running past the delete, and a still-in-flight response landing afterward can
+      // resurrect the per-session polling state the cleanup below is about to tear down.
+      let pollingStore = null
+      if (currentSessionId.value === sessionId) {
+        pollingStore = (await import('./polling')).usePollingStore()
+        await pollingStore.disconnectSession()
+      }
+
       const response = await api.delete(`/api/sessions/${sessionId}`)
 
       // Get list of all deleted session IDs (includes cascaded children)
@@ -584,6 +597,23 @@ export const useSessionStore = defineStore('session', () => {
           linksStore.clearLinks(deletedId)
         }
       })
+
+      // Issue #1974: also stop the poll loop for the cascaded-child case — the session
+      // actually displayed wasn't the primary delete target above, so the pre-emptive
+      // disconnect at the top of this function didn't cover it. Reuses the same
+      // pollingStore reference if already fetched above; disconnectSession() is safe to
+      // call again (idempotent) if it was.
+      if (deletedIds.includes(currentSessionId.value)) {
+        pollingStore ??= (await import('./polling')).usePollingStore()
+        await pollingStore.disconnectSession()
+      }
+
+      // Issue #1974: tear down the polling store's per-session state (cursor, heartbeat,
+      // heal-in-flight mutex, frozen-time snapshot) for deleted sessions.
+      pollingStore ??= (await import('./polling')).usePollingStore()
+      for (const deletedId of deletedIds) {
+        pollingStore.cleanupSessionPollingState(deletedId)
+      }
 
       // Trigger reactivity
       sessions.value = new Map(sessions.value)

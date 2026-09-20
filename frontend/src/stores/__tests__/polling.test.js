@@ -669,6 +669,35 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     expect(pollingStore.sessionStalled).toBe(false)
   })
 
+  it('#1974: cleanupSessionPollingState() clears sessionStalled when the cleaned-up session is the current one', async () => {
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-1974-cleanup-current', is_processing: false })
+
+    // Sets the property under test directly (currentSessionId, sessionStalled) rather than
+    // driving a full connectSession()/fetch-mock cycle — isolates this test from unrelated
+    // polling-loop internals (retry state, cursor bootstrap, stall detector startup).
+    pollingStore.currentSessionId = sid
+    pollingStore.sessionStalled = true
+
+    pollingStore.cleanupSessionPollingState(sid)
+
+    expect(pollingStore.sessionStalled).toBe(false)
+  })
+
+  it('#1974: cleanupSessionPollingState() does not clear sessionStalled when cleaning up a different, non-current session (deleteSession cascade)', async () => {
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-1974-cleanup-a', is_processing: false })
+
+    pollingStore.currentSessionId = sid
+    pollingStore.sessionStalled = true
+
+    // deleteSession() can cascade-delete several sessions at once (e.g. a project delete),
+    // most of which are not the one currently displayed — unlike resetSessionCursor()
+    // above, cleaning up an unrelated sibling session must not wrongly clear the
+    // genuinely-stalled flag for the session actually being viewed.
+    pollingStore.cleanupSessionPollingState('sess-1974-cleanup-b')
+
+    expect(pollingStore.sessionStalled).toBe(true)
+  })
+
   it("#1973: a heal reconnect that doesn't restore data leaves sessionStalled true", async () => {
     const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1973-a', is_processing: false })
     vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
@@ -806,6 +835,59 @@ describe('polling store - freeze forgiveness watchdog (#1974)', () => {
     expect(pollingStore.sessionStalled).toBe(false)
   })
 
+  it('a realistic single machine-sleep gap well under MAX_FORGIVE_PER_TICK_MS (30min) is still fully forgiven', async () => {
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-1974-cap-under', is_processing: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+
+    advanceTime(25 * 60 * 1000) // a 25-minute sleep — under the 30-minute per-tick cap
+    await pollingStore.checkSessionStall()
+
+    expect(pollingStore.sessionStalled).toBe(false)
+  })
+
+  it('a pathological single freeze far exceeding MAX_FORGIVE_PER_TICK_MS (30min) is bounded rather than forgiven forever', async () => {
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-1974-cap-over', is_processing: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+
+    advanceTime(45 * 60 * 1000) // a 45-minute freeze — well past the 30-minute per-tick cap
+    await pollingStore.checkSessionStall()
+
+    // Only 30 minutes of this gap is forgiven; the remaining ~15 minutes counts as real
+    // staleness, which already far exceeds STALL_TIMEOUT_MS (40s) on this same tick —
+    // an unbounded cap would instead have forgiven the entire 45 minutes and read healthy.
+    expect(pollingStore.sessionStalled).toBe(true)
+  })
+
+  it('a genuinely dead connection under sustained ~60s-cadence background throttling still converges to stalled within a bounded number of ticks', async () => {
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-1974-throttle-dead', is_processing: false })
+    abortAwareFetchMock() // the connection itself is dead — the heartbeat never refreshes
+
+    await pollingStore.connectSession(sid)
+
+    // Simulate Chrome's documented background-tab timer clamp: the watchdog interval
+    // still fires, just throttled to roughly once per minute instead of every 5s. Each
+    // individual 60s gap stays far under the 30-minute per-tick cap, so per-tick
+    // forgiveness is unaffected by the cap (53s forgiven, 7s counted each tick, same as
+    // before the cap was added) — this only confirms the cap doesn't regress that
+    // existing convergence. At exactly 7s counted per tick, stallMs crosses
+    // STALL_TIMEOUT_MS (40s) on tick 6 (42s), not before — pinned exactly so any drift in
+    // the cap/buffer math (e.g. an off-by-one that halves effective forgiveness) fails
+    // this test immediately instead of passing silently under a loose bound.
+    for (let i = 0; i < 5; i++) {
+      advanceTime(60000)
+      await pollingStore.checkSessionStall()
+      expect(pollingStore.sessionStalled).toBe(false)
+    }
+    advanceTime(60000)
+    await pollingStore.checkSessionStall()
+
+    expect(pollingStore.sessionStalled).toBe(true)
+  })
+
   it('a stall already underway before the tab is hidden is still reported after a subsequent freeze/return', async () => {
     const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-1974-c', is_processing: false })
     abortAwareFetchMock()
@@ -861,5 +943,43 @@ describe('polling store - freeze forgiveness watchdog (#1974)', () => {
     expect(syncSpy).not.toHaveBeenCalled()
 
     hiddenSpy.mockRestore()
+  })
+
+  it("a stale in-flight response from a superseded polling generation can't overwrite the heartbeat/frozen snapshot or clear sessionStalled", async () => {
+    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1974-race', is_processing: false })
+    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
+
+    // The pre-heal (old-generation) fetch never reacts to abort — it simulates having
+    // already progressed past the fetch by the time sessionAbortController.abort() fires
+    // (e.g. mid `await response.json()`), so the abort has no effect and this response
+    // resolves successfully on its own, landing AFTER the heal has already bumped the
+    // generation and reconnected. Every fetch after the first (the heal's own reconnect
+    // and beyond) just hangs — this test doesn't need to model further polling.
+    let resolveOldFetch
+    let fetchCallCount = 0
+    vi.spyOn(global, 'fetch').mockImplementation(() => {
+      fetchCallCount++
+      if (fetchCallCount === 1) {
+        return new Promise(resolve => { resolveOldFetch = resolve })
+      }
+      return new Promise(() => {})
+    })
+
+    await pollingStore.connectSession(sid)
+    await tickStallCadence(pollingStore, 8) // reaches STALL_TIMEOUT_MS (40s) — starts the heal
+    await flush()
+
+    // The heal reconnected (isRecoveryReconnect) without a real response yet, so the
+    // heartbeat/frozen snapshot are still stale and sessionStalled must still read true.
+    expect(pollingStore.sessionStalled).toBe(true)
+
+    // The OLD generation's fetch (from before the heal) now finally resolves successfully.
+    // Without the generation guard, this stale success would wrongly refresh the
+    // heartbeat/frozen snapshot and clear sessionStalled directly (bypassing the watchdog
+    // entirely). With the guard, nothing should change.
+    resolveOldFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 999 }) })
+    await flush()
+
+    expect(pollingStore.sessionStalled).toBe(true)
   })
 })
