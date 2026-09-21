@@ -261,6 +261,11 @@ export const usePollingStore = defineStore('polling', () => {
         pushDebugEvent('polling', 'poll-cycle', {
           stream: 'ui', cursorBefore: uiCursor, cursorAfter: data.next_cursor, generation: myGeneration
         })
+        if (data.reset) {
+          pushDebugEvent('polling', 'poll-reset', {
+            stream: 'ui', staleCursor: uiCursor, next_cursor: data.next_cursor, eventCount: data.events?.length ?? 0, generation: myGeneration
+          })
+        }
         uiCursor = data.next_cursor
 
       } catch (err) {
@@ -345,6 +350,11 @@ export const usePollingStore = defineStore('polling', () => {
         pushDebugEvent('polling', 'poll-cycle', {
           stream: 'session', sessionId, cursorBefore: cursor, cursorAfter: data.next_cursor, generation: myGeneration
         })
+        if (data.reset) {
+          pushDebugEvent('polling', 'poll-reset', {
+            stream: 'session', sessionId, staleCursor: cursor, next_cursor: data.next_cursor, eventCount: data.events?.length ?? 0, generation: myGeneration
+          })
+        }
         sessionCursors[sessionId] = data.next_cursor
 
       } catch (err) {

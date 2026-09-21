@@ -5,6 +5,16 @@ Bounded in-memory event queue for HTTP long-polling.
 import asyncio
 
 
+def reset_occurred(next_cursor: int, since: int) -> bool:
+    """Whether an `events_since(since)` result reflects a queue reset.
+
+    A `next_cursor` lower than the `since` a caller asked for is only
+    possible if the queue's cursor space started over beneath the caller —
+    proof of a reset (e.g. Backend restart), not just an empty poll.
+    """
+    return next_cursor < since
+
+
 class EventQueue:
     """Bounded in-memory event queue for HTTP long-polling."""
 
@@ -63,7 +73,12 @@ class EventQueue:
     def events_since(self, cursor: int) -> tuple[list[dict], int]:
         if not self._events:
             return [], self._cursor
-        if cursor < self._oldest_cursor - 1:
+        if cursor > self._cursor or cursor < self._oldest_cursor - 1:
+            # Either `since` exceeds what this queue instance has ever handed
+            # out (the queue must have reset to a lower cursor space, e.g. a
+            # Backend restart) or it predates the buffer's oldest retained
+            # event (evicted history). Both cases mean the caller can't be
+            # served a slice — hand back everything currently buffered.
             return list(self._events), self._cursor
         start_idx = max(0, cursor - self._oldest_cursor + 1)
         return self._events[start_idx:], self._cursor
@@ -73,8 +88,8 @@ class EventQueue:
         return self._cursor
 
     async def wait_for_events(self, cursor: int, timeout: float) -> None:
-        _, current = self.events_since(cursor)
-        if current > cursor:
+        events, current = self.events_since(cursor)
+        if events or current > cursor:
             return
         waiter = asyncio.Event()
         self._waiters.append(waiter)
