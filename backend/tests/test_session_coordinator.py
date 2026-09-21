@@ -1035,7 +1035,7 @@ class TestIssue1375SecretRefs:
         }
 
         name_to_placeholder = {"foo": "CC_SECRET_foo_deadbeef"}
-        result = await coordinator._get_mcp_sdk_config(mock_cfg, name_to_placeholder)
+        result, _reason = await coordinator._get_mcp_sdk_config(mock_cfg, name_to_placeholder)
 
         assert result["env"]["MY_VAR"] == "${secret:foo}"
 
@@ -1076,7 +1076,7 @@ class TestIssue1375SecretRefs:
             "foo": "CC_SECRET_foo_11111111",
             "bar": "CC_SECRET_bar_22222222",
         }
-        result = await coordinator._get_mcp_sdk_config(mock_cfg, name_to_placeholder)
+        result, _reason = await coordinator._get_mcp_sdk_config(mock_cfg, name_to_placeholder)
 
         # Placeholder wins: OAuth bearer is NOT injected; ${secret:foo} is resolved to CC_SECRET_*.
         assert result["headers"]["Authorization"] == "CC_SECRET_foo_11111111"
@@ -1105,7 +1105,7 @@ class TestIssue1375SecretRefs:
 
         coordinator.shared_mcp_manager.get_or_open = AsyncMock(return_value=MagicMock())
 
-        result = await coordinator._get_mcp_sdk_config(mock_cfg, {})
+        result, _reason = await coordinator._get_mcp_sdk_config(mock_cfg, {})
 
         assert result["type"] == "sdk"
         assert result["name"] == mock_cfg.slug
@@ -1129,7 +1129,7 @@ class TestIssue1375SecretRefs:
 
         coordinator.shared_mcp_manager.get_or_open = AsyncMock()
 
-        result = await coordinator._get_mcp_sdk_config(mock_cfg, {})
+        result, _reason = await coordinator._get_mcp_sdk_config(mock_cfg, {})
 
         assert result["type"] == "stdio"
         coordinator.shared_mcp_manager.get_or_open.assert_not_awaited()
@@ -1167,7 +1167,7 @@ class TestIssue1375SecretRefs:
 
         coordinator.shared_mcp_manager.get_or_open = AsyncMock()
 
-        result = await coordinator._get_mcp_sdk_config(mock_cfg, {})
+        result, _reason = await coordinator._get_mcp_sdk_config(mock_cfg, {})
 
         assert result["type"] == "stdio"
         coordinator.shared_mcp_manager.get_or_open.assert_not_awaited()
@@ -1924,7 +1924,7 @@ class TestIssue1425OAuthPlaceholder:
         mock_store.get_token_expiry = AsyncMock(return_value=None)
         coordinator.oauth_manager.get_token_store = MagicMock(return_value=mock_store)
 
-        result = await coordinator._get_mcp_sdk_config(
+        result, _reason = await coordinator._get_mcp_sdk_config(
             mock_cfg, {"GH_PAT": "CC_SECRET_GH_PAT_deadbeef"}
         )
 
@@ -1956,7 +1956,7 @@ class TestIssue1425OAuthPlaceholder:
         mock_store.get_token_expiry = AsyncMock(return_value=None)
         coordinator.oauth_manager.get_token_store = MagicMock(return_value=mock_store)
 
-        result = await coordinator._get_mcp_sdk_config(mock_cfg, {})
+        result, _reason = await coordinator._get_mcp_sdk_config(mock_cfg, {})
 
         assert result["headers"]["Authorization"] == "Bearer injected-oauth-token"
 
@@ -1986,7 +1986,7 @@ class TestIssue1425OAuthPlaceholder:
         mock_store.get_token_expiry = AsyncMock(return_value=None)
         coordinator.oauth_manager.get_token_store = MagicMock(return_value=mock_store)
 
-        result = await coordinator._get_mcp_sdk_config(mock_cfg, {})
+        result, _reason = await coordinator._get_mcp_sdk_config(mock_cfg, {})
 
         assert result["headers"]["Authorization"] == "Bearer fresh-oauth-token"
 
@@ -2013,7 +2013,7 @@ class TestIssue1425OAuthPlaceholder:
         mock_get_token = AsyncMock()
         coordinator.oauth_manager.get_stored_token = mock_get_token
 
-        result = await coordinator._get_mcp_sdk_config(
+        result, _reason = await coordinator._get_mcp_sdk_config(
             mock_cfg, {"MY_KEY": "CC_SECRET_MY_KEY_cafebabe"}
         )
 
@@ -3806,3 +3806,209 @@ class TestIssue1629HookInjection:
         await coordinator.start_session(session_id)
 
         assert captured.get("hooks_settings") is None
+
+
+class TestIssue1982McpDegradedStart:
+    """A shared-connection MCP server that fails to open at start_session() must
+    degrade gracefully: the session still starts, the server stays attached (so a
+    later reconnect/token-refresh can pick it up), and a non-fatal system message
+    names the server and the real (unwrapped) failure reason instead of aborting
+    the whole session with an opaque TaskGroup error (issue #1982)."""
+
+    async def _make_session_with_shared_configs(self, coordinator, mock_cfgs):
+        import uuid
+
+        project = await coordinator.project_manager.create_project(
+            name="Test Project", working_directory="/test"
+        )
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(mcp_server_ids=[c.id for c in mock_cfgs]),
+        )
+        coordinator.mcp_config_manager.get_configs_by_ids = MagicMock(return_value=mock_cfgs)
+        mock_sdk_instance = AsyncMock()
+        mock_sdk_instance.start.return_value = True
+        mock_sdk_instance.is_running.return_value = False
+        coordinator.set_sdk_factory(Mock(return_value=mock_sdk_instance))
+        return session_id
+
+    def _make_shared_cfg(self, cfg_id, name, slug):
+        from backend.mcp_config_manager import McpServerType
+
+        mock_cfg = MagicMock()
+        mock_cfg.id = cfg_id
+        mock_cfg.name = name
+        mock_cfg.slug = slug
+        mock_cfg.type = McpServerType.HTTP
+        mock_cfg.shared_connection = True
+        mock_cfg.oauth_enabled = False
+        return mock_cfg
+
+    async def _degraded_messages(self, coordinator, session_id):
+        storage_manager = coordinator._storage_managers[session_id]
+        messages = await storage_manager.read_messages()
+        return [
+            m for m in messages
+            if m.get("metadata", {}).get("subtype") == "mcp_server_degraded"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_t1_401_at_start_stays_running_with_named_degraded_message(
+        self, temp_coordinator
+    ):
+        """T1: a 401 at start does not abort the session, and the stored degraded
+        message names the server and the unwrapped 401 reason — never the opaque
+        'unhandled errors in a TaskGroup' string."""
+        import httpx
+
+        coordinator = temp_coordinator
+        mock_cfg = self._make_shared_cfg("shared-1", "Shared MCP", "shared-mcp")
+        session_id = await self._make_session_with_shared_configs(coordinator, [mock_cfg])
+
+        request = httpx.Request("GET", "https://example.com/mcp")
+        response = httpx.Response(401, request=request)
+        http_err = httpx.HTTPStatusError("401", request=request, response=response)
+        group = ExceptionGroup("unhandled errors in a TaskGroup (1 sub-exception)", [http_err])
+        coordinator.shared_mcp_manager.get_or_open = AsyncMock(side_effect=group)
+
+        success = await coordinator.start_session(session_id)
+
+        assert success is True
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.state != SessionState.ERROR
+        assert "TaskGroup" not in (session_info.error_message or "")
+
+        degraded = await self._degraded_messages(coordinator, session_id)
+        assert len(degraded) == 1
+        assert "Shared MCP" in degraded[0]["content"]
+        assert "401" in degraded[0]["content"]
+        assert "TaskGroup" not in degraded[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_t4_slow_open_does_not_stall_start_past_startup_timeout(
+        self, temp_coordinator
+    ):
+        """T4/AC7: a hung shared-manager open must not stall start_session() for
+        anywhere near the old internal ~35s ceiling — it gives up at
+        STARTUP_ATTACH_TIMEOUT_SECONDS and proceeds degraded."""
+        import time
+
+        from backend.session_coordinator import STARTUP_ATTACH_TIMEOUT_SECONDS
+
+        coordinator = temp_coordinator
+        mock_cfg = self._make_shared_cfg("shared-1", "Shared MCP", "shared-mcp")
+        session_id = await self._make_session_with_shared_configs(coordinator, [mock_cfg])
+
+        async def hanging_open(cfg):
+            await asyncio.sleep(1000)
+
+        coordinator.shared_mcp_manager.get_or_open = hanging_open
+
+        start = time.monotonic()
+        success = await coordinator.start_session(session_id)
+        elapsed = time.monotonic() - start
+
+        assert success is True
+        assert elapsed < STARTUP_ATTACH_TIMEOUT_SECONDS + 5.0, (
+            f"start_session() took {elapsed:.1f}s — must give up well before the old "
+            "~35s internal ceiling"
+        )
+        degraded = await self._degraded_messages(coordinator, session_id)
+        assert len(degraded) == 1
+        assert "timed out" in degraded[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_t5_mixed_healthy_and_failing_servers_both_attach(self, temp_coordinator):
+        """T5: one healthy + one failing shared server — both remain attached
+        (mcp_servers/mcp_tools_list), only the failing one is reported degraded."""
+        coordinator = temp_coordinator
+        healthy_cfg = self._make_shared_cfg("shared-healthy", "Healthy MCP", "healthy-mcp")
+        failing_cfg = self._make_shared_cfg("shared-failing", "Failing MCP", "failing-mcp")
+        session_id = await self._make_session_with_shared_configs(
+            coordinator, [healthy_cfg, failing_cfg]
+        )
+
+        captured = {}
+
+        def factory(*args, **kwargs):
+            captured.update(kwargs)
+            mock_sdk = AsyncMock()
+            mock_sdk.start.return_value = True
+            mock_sdk.is_running.return_value = False
+            return mock_sdk
+
+        coordinator.set_sdk_factory(factory)
+
+        async def selective_open(cfg):
+            if cfg.id == "shared-failing":
+                raise ConnectionRefusedError("connection refused")
+            return MagicMock()
+
+        coordinator.shared_mcp_manager.get_or_open = AsyncMock(side_effect=selective_open)
+
+        success = await coordinator.start_session(session_id)
+
+        assert success is True
+        mcp_servers = captured.get("mcp_servers")
+        assert mcp_servers is not None
+        assert "healthy-mcp" in mcp_servers
+        assert "failing-mcp" in mcp_servers
+
+        degraded = await self._degraded_messages(coordinator, session_id)
+        assert len(degraded) == 1
+        assert "Failing MCP" in degraded[0]["content"]
+        assert "Healthy MCP" not in degraded[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_t7_all_healthy_start_sends_no_degraded_message(self, temp_coordinator):
+        """T7/AC8: no-regression — an all-healthy start sends no mcp_server_degraded
+        message at all."""
+        coordinator = temp_coordinator
+        mock_cfg = self._make_shared_cfg("shared-1", "Shared MCP", "shared-mcp")
+        session_id = await self._make_session_with_shared_configs(coordinator, [mock_cfg])
+
+        coordinator.shared_mcp_manager.get_or_open = AsyncMock(return_value=MagicMock())
+
+        success = await coordinator.start_session(session_id)
+
+        assert success is True
+        degraded = await self._degraded_messages(coordinator, session_id)
+        assert degraded == []
+
+    @pytest.mark.asyncio
+    async def test_t3_non_401_failure_modes_produce_distinct_reasons(self, temp_coordinator):
+        """T3: ConnectionRefusedError, TimeoutError, and ssl.SSLError (each optionally
+        wrapped in an ExceptionGroup, mirroring how anyio actually raises them) each
+        produce a distinct, accurate reason string rather than one shared generic one."""
+        import ssl
+
+        cases = [
+            (ConnectionRefusedError("Connection refused"), "ConnectionRefusedError"),
+            (ExceptionGroup("teardown", [TimeoutError("timed out")]), "TimeoutError"),
+            (ssl.SSLError("certificate verify failed"), "SSLError"),
+        ]
+
+        reasons = []
+        for exc, expected_marker in cases:
+            coordinator = SessionCoordinator(Path(tempfile.mkdtemp()))
+            await coordinator.initialize()
+            try:
+                mock_cfg = self._make_shared_cfg("shared-1", "Shared MCP", "shared-mcp")
+                session_id = await self._make_session_with_shared_configs(coordinator, [mock_cfg])
+                coordinator.shared_mcp_manager.get_or_open = AsyncMock(side_effect=exc)
+
+                success = await coordinator.start_session(session_id)
+                assert success is True
+
+                degraded = await self._degraded_messages(coordinator, session_id)
+                assert len(degraded) == 1
+                assert expected_marker in degraded[0]["content"], (
+                    f"expected {expected_marker!r} in {degraded[0]['content']!r}"
+                )
+                reasons.append(degraded[0]["content"])
+            finally:
+                await coordinator.cleanup()
+
+        assert len(set(reasons)) == len(reasons), "each failure mode must produce a distinct reason"

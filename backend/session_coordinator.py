@@ -59,6 +59,13 @@ logger = logging.getLogger(__name__)
 # Issue #1375: Regex for ${secret:<name>} references in MCP server header values.
 _SECRET_REF_RE = re.compile(r"\$\{secret:([^}]+)\}")
 
+# Issue #1982: max time start_session() waits for a shared-connection MCP server's
+# first open attempt before proceeding degraded. Deliberately shorter than the
+# shared-connection manager's own internal open timeout — a black-holed host
+# can't stall session start, but a still-in-flight open isn't cancelled and may
+# still succeed in time for the session's first tool call.
+STARTUP_ATTACH_TIMEOUT_SECONDS = 8.0
+
 # Issue #1746: stored "_type" discriminator (reload path, via StoredMessage)
 # for the four SDK Task lifecycle frame types — feeding TaskLegRegistry.
 # The parsed-"subtype" form (live path) is TASK_LIFECYCLE_SUBTYPES, imported
@@ -649,12 +656,12 @@ class SessionCoordinator:
 
     async def _get_mcp_sdk_config(
         self, mcp_cfg, name_to_placeholder: "dict[str, str] | None" = None
-    ) -> dict:
-        """Return SDK config for an MCP server, injecting OAuth Bearer token when applicable.
+    ) -> tuple[dict, str | None]:
+        """Return (SDK config, unavailable_reason) for an MCP server.
 
-        For HTTP/SSE servers with oauth_enabled=True, reads the stored encrypted token
-        and adds an Authorization: Bearer header. Replaces direct mcp_cfg.to_sdk_config()
-        calls so that OAuth-authenticated servers always have fresh credentials injected.
+        unavailable_reason is None on success. Injects an OAuth Bearer token when
+        applicable for HTTP/SSE servers with oauth_enabled=True, reading the stored
+        encrypted token so OAuth-authenticated servers always have fresh credentials.
 
         Issue #976: Proactively refreshes tokens that are expired or expiring within
         _OAUTH_REFRESH_BUFFER_SECONDS. On refresh failure the original token is still
@@ -663,12 +670,33 @@ class SessionCoordinator:
         Issue #1375: name_to_placeholder maps secret name → CC_SECRET_* placeholder.
         After OAuth injection, any ${secret:<name>} references in header values are
         replaced with the corresponding placeholder for HTTP/SSE servers.
+
+        Issue #1982: for shared_connection configs, the upstream open is bounded by
+        STARTUP_ATTACH_TIMEOUT_SECONDS and never raises — a broken/slow server
+        returns the proxy config anyway (still attachable; a later reconnect or
+        token refresh may bring it up) along with a human-readable reason string.
         """
         # Issue #1484: route shared-connection configs through the in-process proxy.
         if getattr(mcp_cfg, "shared_connection", False):
-            await self.shared_mcp_manager.get_or_open(mcp_cfg)
             from backend.mcp.proxy_server_factory import build_proxy_server
-            return build_proxy_server(mcp_cfg, self.shared_mcp_manager)
+            from backend.mcp.shared_connection_manager import _describe_open_failure
+
+            reason: str | None = None
+            try:
+                # Shielded: a timeout here abandons only our own wait, not the
+                # underlying get_or_open() attempt — it keeps running in the
+                # background so a slow-but-successful open still lands (and
+                # correctly finishes its own refcount bookkeeping) rather than
+                # being cut off mid-open.
+                await asyncio.wait_for(
+                    asyncio.shield(self.shared_mcp_manager.get_or_open(mcp_cfg)),
+                    timeout=STARTUP_ATTACH_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                reason = "timed out connecting"
+            except Exception as exc:
+                reason = _describe_open_failure(exc)
+            return build_proxy_server(mcp_cfg, self.shared_mcp_manager), reason
 
         import time as _time
 
@@ -745,7 +773,7 @@ class SessionCoordinator:
             if headers:
                 headers = self._substitute_secret_refs(headers, name_to_placeholder, mcp_cfg.name)
                 config["headers"] = headers
-        return config
+        return config, None
 
     async def _generate_secret_placeholders(
         self,
@@ -1541,6 +1569,9 @@ class SessionCoordinator:
             # All sessions with can_spawn_minions=True get Legion MCP tools
             mcp_servers = {}
             mcp_tools_list = []
+            # Issue #1982: (name, reason) for shared-connection servers whose start-time
+            # open attempt failed. The server stays attached either way — only reported.
+            unavailable_mcp_servers: list[tuple[str, str]] = []
             if session_info.can_spawn_minions and self.legion_system and self.legion_system.mcp_tools:
                 # Create session-specific MCP server (injects session_id into tool calls)
                 mcp_server = self.legion_system.mcp_tools.create_mcp_server_for_session(session_id)
@@ -1589,13 +1620,21 @@ class SessionCoordinator:
                         "Enable the proxy sidecar in session/profile/template config, or remove the references."
                     )
                 for mcp_cfg in selected_configs:
-                    mcp_servers[mcp_cfg.slug] = await self._get_mcp_sdk_config(
+                    sdk_config, unavailable_reason = await self._get_mcp_sdk_config(
                         mcp_cfg, name_to_placeholder
                     )
+                    mcp_servers[mcp_cfg.slug] = sdk_config
                     mcp_tools_list.append(f"mcp__{mcp_cfg.slug}")
-                    coord_logger.info(
-                        f"Attaching global MCP server '{mcp_cfg.name}' to session {session_id}"
-                    )
+                    if unavailable_reason is not None:
+                        unavailable_mcp_servers.append((mcp_cfg.name, unavailable_reason))
+                        coord_logger.warning(
+                            f"MCP server '{mcp_cfg.name}' unavailable at start for "
+                            f"session {session_id}: {unavailable_reason}"
+                        )
+                    else:
+                        coord_logger.info(
+                            f"Attaching global MCP server '{mcp_cfg.name}' to session {session_id}"
+                        )
 
             coord_logger.debug(
                 "[MCP launch] session=%s servers=%s", session_id, list(mcp_servers.keys())
@@ -2098,6 +2137,11 @@ class SessionCoordinator:
                 for mcp_cfg in selected_configs:
                     if mcp_cfg.oauth_enabled:
                         self.oauth_refresh_manager.ensure_refresh(mcp_cfg.id)
+
+            # Issue #1982: tell the agent/user, once, when a shared MCP server was
+            # unavailable at start — the server itself stayed attached regardless.
+            if unavailable_mcp_servers:
+                await self._send_mcp_degraded_message(session_id, unavailable_mcp_servers)
 
             coord_logger.info(f"Session {session_id} SDK task started - state will update to ACTIVE when SDK is ready")
             return True
@@ -5419,6 +5463,46 @@ class SessionCoordinator:
                 logger.exception(f"Error in stderr callback for session {session_id}")
 
         return callback
+
+    async def _send_mcp_degraded_message(
+        self, session_id: str, unavailable: list[tuple[str, str]]
+    ) -> None:
+        """Send a non-fatal system message naming shared MCP servers unavailable at start.
+
+        Issue #1982: sent once per start_session() call (initial start, resume, restart,
+        reset) when unavailable is non-empty — never per-turn. Goes through the same
+        storage/callback path as client_launched, so it lands in the persisted transcript
+        the agent reads as context (AC2/US2) and is visible to the user without reading
+        backend tracebacks (US3), with no new UI surface required.
+        """
+        try:
+            lines = "\n".join(f"- {name}: {reason}" for name, reason in unavailable)
+            content = (
+                "Some configured MCP servers are unavailable:\n"
+                f"{lines}\n\n"
+                "Other tools and servers are unaffected. These will be retried automatically."
+            )
+            message_data = {
+                "type": "system",
+                "subtype": "mcp_server_degraded",
+                "is_error": False,
+                "content": content,
+                "session_id": session_id,
+                "timestamp": get_unix_timestamp(),
+                "sdk_message_type": "SystemMessage",
+            }
+
+            await self._store_processed_message(session_id, message_data)
+
+            callback = self._create_message_callback(session_id)
+            await callback(message_data)
+
+            coord_logger.info(
+                f"MCP degraded message sent for session {session_id}: "
+                f"{[name for name, _ in unavailable]}"
+            )
+        except Exception:
+            logger.exception(f"Failed to send MCP degraded message for {session_id}")
 
     async def _send_client_launched_message(self, session_id: str):
         """Send a system message indicating the Claude SDK client was launched/resumed"""

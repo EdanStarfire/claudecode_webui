@@ -254,7 +254,7 @@ async def test_get_mcp_sdk_config_injects_bearer_token(tmp_path: Path):
         "headers": {},
     }
 
-    sdk_config = await coordinator._get_mcp_sdk_config(mcp_cfg)
+    sdk_config, _reason = await coordinator._get_mcp_sdk_config(mcp_cfg)
 
     assert sdk_config["headers"]["Authorization"] == "Bearer injected_token"
 
@@ -277,7 +277,7 @@ async def test_get_mcp_sdk_config_no_token_no_header(tmp_path: Path):
         "headers": {},
     }
 
-    sdk_config = await coordinator._get_mcp_sdk_config(mcp_cfg)
+    sdk_config, _reason = await coordinator._get_mcp_sdk_config(mcp_cfg)
 
     assert "Authorization" not in sdk_config["headers"]
 
@@ -351,6 +351,6 @@ async def test_get_mcp_sdk_config_non_oauth_passthrough(tmp_path: Path):
     mcp_cfg.shared_connection = False
     mcp_cfg.to_sdk_config.return_value = expected
 
-    sdk_config = await coordinator._get_mcp_sdk_config(mcp_cfg)
+    sdk_config, _reason = await coordinator._get_mcp_sdk_config(mcp_cfg)
 
     assert sdk_config == expected

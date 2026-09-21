@@ -306,7 +306,7 @@ async def test_get_mcp_sdk_config_proactive_refresh_before_expiry(tmp_path: Path
 
     coordinator.oauth_manager.refresh_token = _mock_refresh
 
-    sdk_config = await coordinator._get_mcp_sdk_config(_make_mcp_cfg())
+    sdk_config, _reason = await coordinator._get_mcp_sdk_config(_make_mcp_cfg())
     assert sdk_config["headers"]["Authorization"] == "Bearer fresh_token"
 
 
@@ -331,7 +331,7 @@ async def test_get_mcp_sdk_config_reactive_refresh_on_expired(tmp_path: Path):
 
     coordinator.oauth_manager.refresh_token = _mock_refresh
 
-    sdk_config = await coordinator._get_mcp_sdk_config(_make_mcp_cfg())
+    sdk_config, _reason = await coordinator._get_mcp_sdk_config(_make_mcp_cfg())
     assert sdk_config["headers"]["Authorization"] == "Bearer refreshed_token"
 
 
@@ -352,7 +352,7 @@ async def test_get_mcp_sdk_config_fallback_when_refresh_fails(tmp_path: Path):
 
     coordinator.oauth_manager.refresh_token = _mock_refresh_fail
 
-    sdk_config = await coordinator._get_mcp_sdk_config(_make_mcp_cfg())
+    sdk_config, _reason = await coordinator._get_mcp_sdk_config(_make_mcp_cfg())
     # Falls back to original stale token rather than raising
     assert sdk_config["headers"]["Authorization"] == "Bearer stale_token"
 

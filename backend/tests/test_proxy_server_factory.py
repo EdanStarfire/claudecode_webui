@@ -26,7 +26,7 @@ def _cfg(slug="my-mcp"):
 
 def _shared_mgr(tools=None, call_result=None):
     mgr = MagicMock()
-    mgr.list_tools = AsyncMock(
+    mgr.list_tools_or_cached = AsyncMock(
         return_value=tools
         or [Tool(name="echo", description="echo tool", inputSchema={"type": "object"})]
     )
@@ -73,7 +73,7 @@ async def test_list_tools_handler_delegates_to_shared_manager():
     req.params = None
     response = await handler(req)
 
-    mgr.list_tools.assert_awaited_once_with(cfg)
+    mgr.list_tools_or_cached.assert_awaited_once_with(cfg)
     # Handler wraps result in ServerResult; unwrap via .root
     assert response.root.tools == tools
 
