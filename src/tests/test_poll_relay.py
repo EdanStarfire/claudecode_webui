@@ -77,7 +77,7 @@ async def test_ensure_session_relay_starts_task_and_appends_events():
             break
         await asyncio.sleep(0.01)
 
-    events, _ = session_queues["sess-1"].events_since(0)
+    events, _, _ = session_queues["sess-1"].events_since(0)
     assert len(events) == 1
     assert events[0]["type"] == "message"
 
@@ -289,7 +289,7 @@ async def test_relay_restart_seeds_from_local_queue_cursor_not_zero():
             await asyncio.sleep(0.01)
 
         assert queue.current_cursor == 3
-        events, next_cursor = queue.events_since(0)
+        events, next_cursor, _ = queue.events_since(0)
         assert [e["n"] for e in events] == [1, 2, 3]  # no gap, no redelivery
         assert next_cursor == 3
         assert seen_since_values[0] == 2  # seeded from the local queue, not 0
@@ -323,11 +323,11 @@ async def test_end_to_end_backend_cursor_resolves_correctly_against_local_queue(
 
     # A browser that just bootstrapped via GET /messages resumes from that
     # exact Backend-space cursor — no gap, no redelivery.
-    events, next_cursor = queue.events_since(3)
+    events, next_cursor, _ = queue.events_since(3)
     assert events == []
     assert next_cursor == 3
 
-    events, next_cursor = queue.events_since(1)
+    events, next_cursor, _ = queue.events_since(1)
     assert [e["n"] for e in events] == [2, 3]
     assert next_cursor == 3
 
@@ -367,7 +367,7 @@ async def test_backend_restart_regression_delivers_next_event_exactly_once():
         await asyncio.sleep(0.01)
 
     queue = session_queues["sess-regress"]
-    events, next_cursor = queue.events_since(0)
+    events, next_cursor, _ = queue.events_since(0)
     assert [e["n"] for e in events] == ["post-1"]  # stale pre-restart history dropped
     assert next_cursor == 1
 
@@ -400,7 +400,7 @@ async def test_ui_relay_uses_auto_increment_not_backend_cursor():
         await asyncio.sleep(0.01)
 
     assert ui_queue.current_cursor == 1  # local auto-increment, not Backend's next_cursor=500
-    events, next_cursor = ui_queue.events_since(0)
+    events, next_cursor, _ = ui_queue.events_since(0)
     assert [e["n"] for e in events] == [1]
     assert next_cursor == 1
 
@@ -435,12 +435,12 @@ async def test_ui_queue_local_write_and_relay_write_do_not_collide():
     relay.start_ui_relay()
 
     for _ in range(300):
-        events, _ = ui_queue.events_since(0)
+        events, _, _ = ui_queue.events_since(0)
         if len(events) >= 2:
             break
         await asyncio.sleep(0.01)
 
-    events, next_cursor = ui_queue.events_since(0)
+    events, next_cursor, _ = ui_queue.events_since(0)
     assert [e["n"] for e in events] == ["restart-notice", "relay-1"]  # no drop, no reset
     assert next_cursor == 2
 

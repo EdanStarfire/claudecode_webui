@@ -536,13 +536,13 @@ class TestDeleteSession:
         session = await create_session(project["project_id"], "ToDelete")
         sid = session["session_id"]
 
-        _, cursor_before = webui.ui_queue.events_since(0)
+        _, cursor_before, _ = webui.ui_queue.events_since(0)
 
         with caplog.at_level("ERROR"):
             resp = await client.delete(f"/api/sessions/{sid}")
         assert resp.status_code == 200
 
-        events, _ = webui.ui_queue.events_since(cursor_before)
+        events, _, _ = webui.ui_queue.events_since(cursor_before)
         session_deleted_events = [e for e in events if e["type"] == "session_deleted"]
         assert session_deleted_events == [{"type": "session_deleted", "data": {"session_id": sid}}]
 
@@ -564,7 +564,7 @@ class TestDeleteSession:
 
         # Two independent poll cursors, standing in for two open browser tabs, both
         # caught up to the same point before the delete happens.
-        _, cursor_tab_a = webui.ui_queue.events_since(0)
+        _, cursor_tab_a, _ = webui.ui_queue.events_since(0)
         cursor_tab_b = cursor_tab_a
 
         resp = await client.delete(f"/api/sessions/{sid}")
