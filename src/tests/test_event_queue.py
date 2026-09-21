@@ -80,31 +80,40 @@ def test_explicit_cursor_backward_jump_is_treated_as_reset_not_silent_drop():
     assert next_cursor == 2
 
 
-def test_explicit_cursor_backward_jump_self_heals_for_a_stale_high_since():
-    """The specific production trigger for the backward-jump/reset branch: a
-    browser tab (or an in-flight long-poll waiter) is holding the OLD,
-    pre-restart high `since` value at the moment of reset. events_since() must
-    not error or mis-slice — it reports "nothing yet" at the new, lower
-    current_cursor, which is exactly the signal src/routers/poll.py's callers
-    (frontend/src/stores/polling.js unconditionally adopts next_cursor) rely on
-    to self-correct onto the new cursor space rather than polling with the
-    stale value forever."""
+def test_explicit_cursor_backward_jump_delivers_all_post_reset_events_to_a_stale_high_since():
+    """Issue #1984: a browser tab (or an in-flight long-poll waiter) is holding
+    the OLD, pre-restart high `since` value at the moment of reset. Previously
+    events_since() mis-sliced this into an out-of-range empty result, silently
+    dropping every event appended between the reset and the stale caller's next
+    poll. Since `since` can never legitimately exceed a queue's own current
+    cursor within one epoch, `since > current_cursor` is proof a reset happened
+    and must return everything currently buffered instead of `[]`."""
     queue = EventQueue()
     for n in range(98, 101):
         queue.append({"n": n}, cursor=n)
     assert queue.current_cursor == 100
 
+    for n in range(1, 6):
+        queue.append({"n": n}, cursor=n)
+
+    events, next_cursor = queue.events_since(100)
+    assert [e["n"] for e in events] == [1, 2, 3, 4, 5]
+    assert next_cursor == 5
+
+
+def test_explicit_cursor_backward_jump_delivers_partial_post_reset_batch_so_far():
+    """Zero-events-yet-after-reset sub-case: the stale poll can race the reset
+    and land after only the first post-reset event has arrived. It must still
+    get that one event, not `[]`."""
+    queue = EventQueue()
+    for n in range(98, 101):
+        queue.append({"n": n}, cursor=n)
+
     queue.append({"n": "post-restart-1"}, cursor=1)
 
     events, next_cursor = queue.events_since(100)
-    assert events == []
-    assert next_cursor == 1  # lower than the stale `since` passed in — the self-heal signal
-
-    # Once the caller adopts that lower cursor, subsequent events resolve normally.
-    queue.append({"n": "post-restart-2"}, cursor=2)
-    events, next_cursor = queue.events_since(1)
-    assert [e["n"] for e in events] == ["post-restart-2"]
-    assert next_cursor == 2
+    assert [e["n"] for e in events] == ["post-restart-1"]
+    assert next_cursor == 1
 
 
 def test_explicit_cursor_first_ever_append_anchors_oldest_cursor():

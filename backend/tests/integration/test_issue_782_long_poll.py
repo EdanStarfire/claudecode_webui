@@ -185,6 +185,41 @@ class TestPollUI:
         # state_change event should appear when session is created
         assert "state_change" in event_types
 
+    async def test_poll_ui_reset_true_with_full_events_after_queue_reset(self, api_integration_env):
+        """Issue #1984: simulates a Backend restart replacing the queue instance
+        with a fresh EventQueue() at cursor 0. A stale, still-high `since` held by
+        an already-connected browser must get the full post-reset buffer and
+        reset=true — never an empty batch with a silently-adopted next_cursor."""
+        client = api_integration_env["client"]
+        webui = api_integration_env["webui"]
+
+        webui.ui_queue.append({"type": "pre_reset_a"})
+        webui.ui_queue.append({"type": "pre_reset_b"})
+        webui.ui_queue.append({"type": "pre_reset_c"})
+        stale_cursor = webui.ui_queue.current_cursor
+
+        from shared.event_queue import EventQueue
+        webui.ui_queue = EventQueue()
+        webui.ui_queue.append({"type": "post_reset_1"})
+        webui.ui_queue.append({"type": "post_reset_2"})
+
+        resp = await client.get(f"/api/poll/ui?since={stale_cursor}&timeout=0")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["reset"] is True
+        assert [e["type"] for e in data["events"]] == ["post_reset_1", "post_reset_2"]
+
+    async def test_poll_ui_reset_false_in_normal_case(self, api_integration_env):
+        client = api_integration_env["client"]
+        webui = api_integration_env["webui"]
+
+        webui.ui_queue.append({"type": "evt"})
+
+        resp = await client.get("/api/poll/ui?since=0&timeout=0")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["reset"] is False
+
 
 class TestPollSession:
     async def test_poll_session_404_for_unknown(self, api_integration_env):
@@ -246,6 +281,47 @@ class TestPollSession:
         session = await api_integration_env["create_test_session"](project["project_id"])
         sid = session["session_id"]
         assert sid in webui.session_queues
+
+    async def test_poll_session_reset_true_with_full_events_after_queue_reset(self, api_integration_env):
+        """Issue #1984: mirrors the UI-queue reset case for a session queue —
+        a fresh EventQueue() replacing the session's queue (Backend restart)
+        must surface reset=true and the full post-reset buffer to a stale,
+        still-high `since`."""
+        client = api_integration_env["client"]
+        webui = api_integration_env["webui"]
+        project = await api_integration_env["create_test_project"]()
+        session = await api_integration_env["create_test_session"](project["project_id"])
+        sid = session["session_id"]
+
+        webui.session_queues[sid].append({"type": "pre_reset_a"})
+        webui.session_queues[sid].append({"type": "pre_reset_b"})
+        webui.session_queues[sid].append({"type": "pre_reset_c"})
+        stale_cursor = webui.session_queues[sid].current_cursor
+
+        from shared.event_queue import EventQueue
+        webui.session_queues[sid] = EventQueue()
+        webui.session_queues[sid].append({"type": "post_reset_1"})
+        webui.session_queues[sid].append({"type": "post_reset_2"})
+
+        resp = await client.get(f"/api/poll/session/{sid}?since={stale_cursor}&timeout=0")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["reset"] is True
+        assert [e["type"] for e in data["events"]] == ["post_reset_1", "post_reset_2"]
+
+    async def test_poll_session_reset_false_in_normal_case(self, api_integration_env):
+        client = api_integration_env["client"]
+        webui = api_integration_env["webui"]
+        project = await api_integration_env["create_test_project"]()
+        session = await api_integration_env["create_test_session"](project["project_id"])
+        sid = session["session_id"]
+
+        webui.session_queues[sid].append({"type": "evt"})
+
+        resp = await client.get(f"/api/poll/session/{sid}?since=0&timeout=0")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["reset"] is False
 
     async def test_session_queue_removed_on_session_delete(self, api_integration_env):
         client = api_integration_env["client"]

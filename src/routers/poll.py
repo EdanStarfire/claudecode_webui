@@ -17,6 +17,7 @@ need to call it separately.
 import httpx
 from fastapi import APIRouter, HTTPException
 
+from shared.event_queue import reset_occurred
 from shared.exception_handlers import handle_exceptions
 from shared.logging_config import get_logger
 
@@ -36,12 +37,13 @@ def build_router(webui) -> APIRouter:
         effective_timeout = min(float(timeout), 30.0)
         await webui.ui_queue.wait_for_events(since, timeout=effective_timeout)
         events, next_cursor = webui.ui_queue.events_since(since)
+        reset = reset_occurred(next_cursor, since)
         if events:
             _polling_logger.info(
                 "poll ui returned %d event(s) since=%d next_cursor=%d",
                 len(events), since, next_cursor
             )
-        return {"events": events, "next_cursor": next_cursor}
+        return {"events": events, "next_cursor": next_cursor, "reset": reset}
 
     @router.get("/api/poll/cursor")
     @handle_exceptions("poll cursor")
@@ -84,12 +86,13 @@ def build_router(webui) -> APIRouter:
         effective_timeout = min(float(timeout), 30.0)
         await queue.wait_for_events(since, timeout=effective_timeout)
         events, next_cursor = queue.events_since(since)
+        reset = reset_occurred(next_cursor, since)
 
         if events:
             _polling_logger.info(
                 "poll session %s returned %d event(s) since=%d next_cursor=%d",
                 session_id, len(events), since, next_cursor
             )
-        return {"events": events, "next_cursor": next_cursor}
+        return {"events": events, "next_cursor": next_cursor, "reset": reset}
 
     return router
