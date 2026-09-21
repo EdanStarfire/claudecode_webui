@@ -388,6 +388,14 @@ class BackendApp:
         except Exception:
             logger.exception("Error appending project_deleted")
 
+    def _broadcast_session_deleted(self, session_id: str) -> None:
+        """Emit session_deleted to the global UI poll queue (Issue #1986)."""
+        try:
+            self.ui_queue.append({"type": "session_deleted", "data": {"session_id": session_id}})
+            logger.debug("Appended session_deleted for session %s", session_id)
+        except Exception:
+            logger.exception("Error appending session_deleted")
+
     def _broadcast_state_change(self, session_id: str, session_dict: dict, timestamp: str | None = None) -> None:
         """Emit state_change to the global UI poll queue."""
         try:
@@ -715,6 +723,7 @@ class BackendApp:
         # Register callbacks
         self.coordinator.add_state_change_callback(self._on_state_change)
         self.coordinator.add_session_reset_callback(self._on_session_reset)
+        self.coordinator.add_session_deleted_callback(self._on_session_deleted)
         self.coordinator.add_tool_call_broadcast_callback(self._on_tool_call_broadcast)
         self.coordinator.set_rate_limit_broadcast_callback(self._broadcast_rate_limits_update)
 
@@ -1096,6 +1105,10 @@ class BackendApp:
             logger.info(f"Appended session_reset for {session_id} to UI queue")
         except Exception:
             logger.exception("Error appending session_reset")
+
+    async def _on_session_deleted(self, session_id: str):
+        """Issue #1986: Broadcast session_deleted so every open tab removes the session."""
+        self._broadcast_session_deleted(session_id)
 
     async def _run_git_command(
         self, args: list[str], cwd: str, allow_nonzero: bool = False

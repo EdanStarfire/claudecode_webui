@@ -575,6 +575,56 @@ export const useSessionStore = defineStore('session', () => {
   /**
    * Delete a session (handles cascading deletes for child sessions)
    */
+  // Issue #1986: shared per-deleted-id cleanup, extracted so both the local delete flow
+  // (deleteSession() below) and the cross-tab session_deleted poll handler use one code
+  // path. Preserves the exact original ordering. Returns whether the currently-open
+  // session in this tab was among the removed IDs.
+  async function removeSessionsFromStores(deletedIds) {
+    // Remove all deleted sessions from maps
+    for (const deletedId of deletedIds) {
+      sessions.value.delete(deletedId)
+      inputCache.value.delete(deletedId)
+      attachmentCache.value.delete(deletedId)
+      initData.value.delete(deletedId)
+      archiveInitData.value.delete(deletedId)
+      scrollPositions.value.delete(deletedId)
+    }
+
+    // Issue #1530: Clear links for deleted sessions
+    import('./links').then(({ useLinksStore }) => {
+      const linksStore = useLinksStore()
+      for (const deletedId of deletedIds) {
+        linksStore.clearLinks(deletedId)
+      }
+    })
+
+    // Issue #1974: stop the poll loop for the deleted session(s) if one is currently
+    // displayed in this tab — a still-in-flight response landing afterward could
+    // otherwise resurrect the per-session polling state the cleanup below tears down.
+    const pollingStore = (await import('./polling')).usePollingStore()
+    if (deletedIds.includes(currentSessionId.value)) {
+      await pollingStore.disconnectSession()
+    }
+
+    // Issue #1974: tear down the polling store's per-session state (cursor, heartbeat,
+    // heal-in-flight mutex, frozen-time snapshot) for deleted sessions.
+    for (const deletedId of deletedIds) {
+      pollingStore.cleanupSessionPollingState(deletedId)
+    }
+
+    // Trigger reactivity
+    sessions.value = new Map(sessions.value)
+
+    // If deleted current session (or it was a cascaded child), clear selection
+    const wasCurrentSessionRemoved = deletedIds.includes(currentSessionId.value)
+    if (wasCurrentSessionRemoved) {
+      currentSessionId.value = null
+      // Navigation is handled by the caller
+    }
+
+    return wasCurrentSessionRemoved
+  }
+
   async function deleteSession(sessionId) {
     deletingSessions.value.add(sessionId)
 
@@ -586,9 +636,8 @@ export const useSessionStore = defineStore('session', () => {
       // doing this). Without it, the poll loop for the just-deleted session can keep
       // running past the delete, and a still-in-flight response landing afterward can
       // resurrect the per-session polling state the cleanup below is about to tear down.
-      let pollingStore = null
       if (currentSessionId.value === sessionId) {
-        pollingStore = (await import('./polling')).usePollingStore()
+        const pollingStore = (await import('./polling')).usePollingStore()
         await pollingStore.disconnectSession()
       }
 
@@ -597,49 +646,7 @@ export const useSessionStore = defineStore('session', () => {
       // Get list of all deleted session IDs (includes cascaded children)
       const deletedIds = response.deleted_session_ids || [sessionId]
 
-      // Remove all deleted sessions from maps
-      for (const deletedId of deletedIds) {
-        sessions.value.delete(deletedId)
-        inputCache.value.delete(deletedId)
-        attachmentCache.value.delete(deletedId)
-        initData.value.delete(deletedId)
-        archiveInitData.value.delete(deletedId)
-        scrollPositions.value.delete(deletedId)
-      }
-
-      // Issue #1530: Clear links for deleted sessions
-      import('./links').then(({ useLinksStore }) => {
-        const linksStore = useLinksStore()
-        for (const deletedId of deletedIds) {
-          linksStore.clearLinks(deletedId)
-        }
-      })
-
-      // Issue #1974: also stop the poll loop for the cascaded-child case — the session
-      // actually displayed wasn't the primary delete target above, so the pre-emptive
-      // disconnect at the top of this function didn't cover it. Reuses the same
-      // pollingStore reference if already fetched above; disconnectSession() is safe to
-      // call again (idempotent) if it was.
-      if (deletedIds.includes(currentSessionId.value)) {
-        pollingStore ??= (await import('./polling')).usePollingStore()
-        await pollingStore.disconnectSession()
-      }
-
-      // Issue #1974: tear down the polling store's per-session state (cursor, heartbeat,
-      // heal-in-flight mutex, frozen-time snapshot) for deleted sessions.
-      pollingStore ??= (await import('./polling')).usePollingStore()
-      for (const deletedId of deletedIds) {
-        pollingStore.cleanupSessionPollingState(deletedId)
-      }
-
-      // Trigger reactivity
-      sessions.value = new Map(sessions.value)
-
-      // If deleted current session (or it was a cascaded child), clear selection
-      if (deletedIds.includes(currentSessionId.value)) {
-        currentSessionId.value = null
-        // Navigation is handled by the component calling this function
-      }
+      await removeSessionsFromStores(deletedIds)
 
       console.log(`Deleted ${deletedIds.length} session(s): ${deletedIds.join(', ')}`)
       return deletedIds
@@ -959,6 +966,7 @@ export const useSessionStore = defineStore('session', () => {
     selectSession,
     updateSession,
     deleteSession,
+    removeSessionsFromStores,
     patchSession,
     setPermissionMode,
     setModel,

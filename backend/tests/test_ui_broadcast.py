@@ -5,6 +5,7 @@ Covers:
 - LegionSystem.broadcast_ui_event()
 - BackendApp._broadcast_project_updated()
 - BackendApp._broadcast_project_deleted()
+- BackendApp._broadcast_session_deleted() (issue #1986)
 - BackendApp._broadcast_state_change()
 - BackendApp._broadcast_server_restarting()
 - BackendApp._broadcast_mcp_oauth_complete()
@@ -92,6 +93,18 @@ def test_broadcast_project_deleted_event_shape(tmp_path):
     assert event["data"]["project_id"] == "proj-2"
 
 
+def test_broadcast_session_deleted_event_shape(tmp_path):
+    """_broadcast_session_deleted() appends a correctly-shaped session_deleted event."""
+    webui = _make_webui(tmp_path)
+
+    webui._broadcast_session_deleted("sess-3")
+
+    assert len(webui.ui_queue) == 1
+    event = webui.ui_queue[0]
+    assert event["type"] == "session_deleted"
+    assert event["data"]["session_id"] == "sess-3"
+
+
 def test_broadcast_state_change_event_shape(tmp_path):
     """_broadcast_state_change() appends a correctly-shaped state_change event."""
     webui = _make_webui(tmp_path)
@@ -150,6 +163,7 @@ def test_broadcast_helpers_resilient_to_queue_append_error(tmp_path):
     # None of these should propagate the RuntimeError
     webui._broadcast_project_updated({"project_id": "p"})
     webui._broadcast_project_deleted("p")
+    webui._broadcast_session_deleted("s")
     webui._broadcast_state_change("s", {}, None)
     webui._broadcast_server_restarting("", "")
     webui._broadcast_mcp_oauth_complete("srv")

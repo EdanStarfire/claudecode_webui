@@ -151,6 +151,7 @@ Global UI state updates. One connection per browser tab.
 | `state_change` | `{session_id, state, ...}` | Session state transitions |
 | `project_updated` | `{project_id, ...}` | Project metadata changes |
 | `project_deleted` | `{project_id}` | Project deleted |
+| `session_deleted` | `{session_id}` | Session deleted (fires once per session, including cascaded children) |
 
 **Client → Server Messages:**
 
