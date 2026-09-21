@@ -2663,6 +2663,158 @@ class TestConvertStoredMessageToWebsocket:
         assert result["messages"][0]["content"] == "Claude Code Launched"
         assert result["messages"][0]["metadata"]["subtype"] == "client_launched"
 
+    def test_issue_1985_assistant_message_record_id_and_turn_id(self, coordinator):
+        """record_id (top-level message_id) and turn_id (data.message_id) are distinct
+        concepts and must not be conflated when reloading an AssistantMessage record."""
+        stored = {
+            "_type": "AssistantMessage",
+            "message_id": "record-abc",
+            "timestamp": 1700000000.0,
+            "session_id": "sess-1",
+            "data": {
+                "content": [{"type": "text", "text": "hello"}],
+                "message_id": "turn-xyz",
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        assert result["message_id"] == "record-abc"
+        assert result["metadata"]["turn_id"] == "turn-xyz"
+        assert result["message_id"] != result["metadata"]["turn_id"]
+
+    def test_issue_1985_user_message_record_id(self, coordinator):
+        """UserMessage has no SDK-level turn concept — only record_id propagates."""
+        stored = {
+            "_type": "UserMessage",
+            "message_id": "record-user-1",
+            "timestamp": 1700000000.0,
+            "session_id": "sess-1",
+            "data": {"content": "a user message"},
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        assert result["message_id"] == "record-user-1"
+        assert "turn_id" not in result["metadata"]
+
+    def test_issue_1985_result_and_system_message_record_id(self, coordinator):
+        """record_id propagates uniformly for ResultMessage and SystemMessage too."""
+        for _type, data in (
+            ("ResultMessage", {"subtype": "success"}),
+            ("SystemMessage", {"subtype": "info"}),
+        ):
+            stored = {
+                "_type": _type,
+                "message_id": f"record-{_type}",
+                "timestamp": 1700000000.0,
+                "session_id": "sess-1",
+                "data": data,
+            }
+            result = coordinator._convert_stored_message_to_websocket(stored)
+            assert result is not None
+            assert result["message_id"] == f"record-{_type}"
+
+    def test_issue_1985_combined_text_and_tool_use_turn(self, coordinator):
+        """turn_id is set alongside tool_uses extraction for mixed text+tool_use content
+        (the #1970 edge case)."""
+        stored = {
+            "_type": "AssistantMessage",
+            "message_id": "record-mixed",
+            "timestamp": 1700000000.0,
+            "session_id": "sess-1",
+            "data": {
+                "content": [
+                    {"type": "text", "text": "here you go"},
+                    {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {}},
+                ],
+                "message_id": "turn-mixed",
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        assert result["message_id"] == "record-mixed"
+        assert result["metadata"]["turn_id"] == "turn-mixed"
+        assert result["metadata"]["has_tool_uses"] is True
+        assert len(result["metadata"]["tool_uses"]) == 1
+
+    def test_issue_1985_missing_message_id_no_crash(self, coordinator):
+        """Pre-#1961-style minimal records with no top-level message_id at all must not
+        crash — message_id is simply absent from the result rather than None."""
+        stored = {
+            "_type": "AssistantMessage",
+            "timestamp": 1700000000.0,
+            "session_id": "sess-1",
+            "data": {"content": [{"type": "text", "text": "hi"}]},
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        assert "message_id" not in result
+        assert "turn_id" not in result["metadata"]
+
+
+class TestIssue1985IdentityParity:
+    """Parity test (AC3, scoped to identity fields): the live delivery path and the
+    reload/history path must agree on message_id (record identity) and turn_id
+    (AssistantMessage turn identity), built from the SAME real production functions
+    on both sides rather than hand-built assumptions about their output shape.
+
+    Live side: MessageProcessor.process_message() + prepare_for_websocket(), with the
+    message_id promotion that backend/web_server.py's _create_message_callback()
+    performs (websocket_data['message_id'] = parsed_message.record_id) — the actual
+    site where the live event acquires its top-level message_id.
+
+    Reload side: sdk_message_to_stored() (the same helper ClaudeSDK._store_sdk_message
+    uses) + SessionCoordinator._convert_stored_message_to_websocket().
+    """
+
+    @pytest.fixture
+    def coordinator(self, tmp_path):
+        return SessionCoordinator(tmp_path)
+
+    def test_assistant_message_identity_matches_between_live_and_reload(self, coordinator):
+        from claude_agent_sdk import AssistantMessage
+        from claude_agent_sdk.types import TextBlock
+
+        from backend.models.messages import sdk_message_to_stored
+
+        record_id = "record-parity-1"
+        turn_id = "turn-parity-1"
+        timestamp = 1700000000.0
+
+        sdk_msg = AssistantMessage(
+            content=[TextBlock(text="hello from parity test")],
+            model="claude-3-5-sonnet-20241022",
+            message_id=turn_id,
+            uuid="per-event-uuid",
+        )
+
+        # --- Live path ---
+        converted_message = {
+            "type": "assistant",
+            "sdk_message": sdk_msg,
+            "session_id": "sess-1",
+            "timestamp": timestamp,
+            "message_id": record_id,
+        }
+        parsed = coordinator.message_processor.process_message(converted_message, source="sdk")
+        live_ws = coordinator.message_processor.prepare_for_websocket(parsed)
+        # Mirrors backend/web_server.py's _create_message_callback(), the actual site
+        # that promotes record_id onto the outgoing websocket_data.
+        if parsed.record_id:
+            live_ws["message_id"] = parsed.record_id
+
+        # --- Reload path ---
+        stored = sdk_message_to_stored(sdk_msg, session_id="sess-1", timestamp=timestamp).to_dict()
+        stored["message_id"] = record_id
+        reload_ws = coordinator._convert_stored_message_to_websocket(stored)
+
+        assert live_ws["message_id"] == record_id
+        assert reload_ws["message_id"] == record_id
+        assert live_ws["message_id"] == reload_ws["message_id"]
+
+        assert live_ws["metadata"]["turn_id"] == turn_id
+        assert reload_ws["metadata"]["turn_id"] == turn_id
+        assert live_ws["metadata"]["turn_id"] == reload_ws["metadata"]["turn_id"]
+
 
 class TestIssue1958ToolCallUpdateLegacyTurnId:
     """QA-flagged regression: _convert_stored_message_to_websocket() replays

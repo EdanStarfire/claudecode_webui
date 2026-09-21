@@ -3645,6 +3645,11 @@ class SessionCoordinator:
                 metadata["has_tool_uses"] = True
                 metadata["tool_uses"] = tool_uses
 
+            # Issue #1985: propagate turn-level identity (distinct from record_id
+            # below), mirroring the live extraction at message_parser.py:622-623.
+            if _type == "AssistantMessage" and data.get("message_id"):
+                metadata["turn_id"] = data["message_id"]
+
             # Extract tool results from UserMessage
             tool_results = []
             if _type == "UserMessage" and isinstance(data.get("content"), list):
@@ -3849,6 +3854,11 @@ class SessionCoordinator:
             # Add subtype at root level for backward compatibility
             if metadata.get("subtype"):
                 websocket_data["subtype"] = metadata["subtype"]
+
+            # Issue #1985: propagate record identity, matching the sibling branches
+            # at lines ~4113/4123-4124 for the legacy dict-shaped storage formats.
+            if stored_msg.get("message_id"):
+                websocket_data["message_id"] = stored_msg["message_id"]
 
             return websocket_data
 
