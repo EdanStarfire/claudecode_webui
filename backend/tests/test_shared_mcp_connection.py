@@ -5,11 +5,16 @@ from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anyio
+import httpx
 import pytest
 from mcp.types import CallToolResult, TextContent, Tool
 
 from backend.mcp.secret_resolver import SharedSecretResolutionError
-from backend.mcp.shared_connection_manager import SharedMcpConnectionManager, _SharedConn
+from backend.mcp.shared_connection_manager import (
+    SharedMcpConnectionManager,
+    _describe_open_failure,
+    _SharedConn,
+)
 from backend.mcp_config_manager import McpServerConfig, McpServerType
 
 # ---------------------------------------------------------------------------
@@ -1037,3 +1042,218 @@ async def test_owner_task_close_timeout():
     assert conn.last_close_error is not None
     assert isinstance(conn.last_close_error, TimeoutError)
     assert stubborn.cancelled() or stubborn.done()
+
+
+# ---------------------------------------------------------------------------
+# _describe_open_failure — ExceptionGroup unwrapping (issue #1982)
+# ---------------------------------------------------------------------------
+
+
+def test_describe_open_failure_unwraps_nested_exception_group():
+    inner = ValueError("root cause")
+    group = ExceptionGroup("outer", [ExceptionGroup("inner", [inner])])
+
+    assert _describe_open_failure(group) == "ValueError: root cause"
+
+
+def test_describe_open_failure_unwraps_base_exception_group():
+    inner = OSError("network down")
+    group = BaseExceptionGroup("outer", [inner])
+
+    assert _describe_open_failure(group) == "OSError: network down"
+
+
+def test_describe_open_failure_plain_exception():
+    exc = ConnectionRefusedError("refused")
+
+    assert _describe_open_failure(exc) == "ConnectionRefusedError: refused"
+
+
+def test_describe_open_failure_http_status_error():
+    request = httpx.Request("GET", "https://example.com/mcp")
+    response = httpx.Response(401, request=request)
+    exc = httpx.HTTPStatusError("401", request=request, response=response)
+
+    assert _describe_open_failure(exc) == "401 Unauthorized"
+
+
+def test_describe_open_failure_http_status_error_wrapped_in_group():
+    """Mirrors how anyio actually raises transport failures: wrapped in a TaskGroup."""
+    request = httpx.Request("GET", "https://example.com/mcp")
+    response = httpx.Response(401, request=request)
+    exc = httpx.HTTPStatusError("401", request=request, response=response)
+    group = ExceptionGroup("unhandled errors in a TaskGroup (1 sub-exception)", [exc])
+
+    assert _describe_open_failure(group) == "401 Unauthorized"
+
+
+def test_describe_open_failure_cached_failure_returned_verbatim():
+    """A cooldown fast-fail's exception must re-describe to the identical text,
+    not a doubled/prefixed version — e.g. never "RuntimeError: 401 Unauthorized"
+    when a caller re-describes the exception _open_locked's cooldown branch raised."""
+    from backend.mcp.shared_connection_manager import _CachedOpenError
+
+    cached = _CachedOpenError("401 Unauthorized")
+
+    assert _describe_open_failure(cached) == "401 Unauthorized"
+
+
+# ---------------------------------------------------------------------------
+# Open failure records a human-readable reason on the connection (issue #1982)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_open_failure_records_human_readable_401_reason():
+    """get_or_open() still raises for direct callers (unchanged contract), but
+    conn.last_open_error is set to a human-readable 401 message, not the opaque
+    ExceptionGroup string.
+    """
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    request = httpx.Request("GET", "https://example.com/mcp")
+    response = httpx.Response(401, request=request)
+    http_err = httpx.HTTPStatusError("401", request=request, response=response)
+    group = ExceptionGroup("unhandled errors in a TaskGroup (1 sub-exception)", [http_err])
+
+    async def failing_enter_transport(self_mgr, c, stack):
+        raise group
+
+    with patch.object(SharedMcpConnectionManager, "_enter_transport", failing_enter_transport):
+        with pytest.raises(ExceptionGroup):
+            await mgr.get_or_open(cfg)
+
+    conn = mgr._conns[cfg.id]
+    assert conn.last_open_error == "401 Unauthorized"
+    assert conn.session is None
+
+
+# ---------------------------------------------------------------------------
+# list_tools() degrades instead of raising on a never-successful connection
+# (issue #1982)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_tools_still_raises_for_direct_callers():
+    """list_tools() itself must keep raising — application_service.get_mcp_config_tools()
+    (the Library "Show tools" diagnostic) depends on this to report status="failed"
+    with a real error message instead of a misleading "connected, 0 tools"."""
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    async def failing_open(self_mgr, c, conn):
+        raise RuntimeError("boom")
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", failing_open):
+        with pytest.raises(RuntimeError, match="boom"):
+            await mgr.list_tools(cfg)
+
+
+@pytest.mark.asyncio
+async def test_list_tools_or_cached_returns_empty_list_when_open_attempt_failed():
+    """list_tools_or_cached() — used by the in-process SDK proxy — must degrade
+    instead of raising, since the SDK calls list_tools() on every attached server
+    at its own connect time."""
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    async def failing_open(self_mgr, c, conn):
+        raise RuntimeError("boom")
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", failing_open):
+        tools = await mgr.list_tools_or_cached(cfg)
+
+    assert tools == []
+
+
+# ---------------------------------------------------------------------------
+# Open-retry cooldown — no reconnect storm against a still-down host (issue #1982)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_open_retry_cooldown_skips_transport_after_recent_failure():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+    enter_calls = []
+
+    async def failing_enter_transport(self_mgr, c, stack):
+        enter_calls.append(c.id)
+        raise RuntimeError("connection refused")
+
+    with patch.object(SharedMcpConnectionManager, "_enter_transport", failing_enter_transport):
+        with pytest.raises(Exception, match="connection refused"):
+            await mgr.get_or_open(cfg)
+
+        # Second attempt lands within OPEN_RETRY_COOLDOWN_SECONDS of the first
+        # failure — must fail fast on the cached reason, not re-enter transport.
+        with pytest.raises(RuntimeError, match="connection refused"):
+            await mgr.get_or_open(cfg)
+
+    assert len(enter_calls) == 1, "cooldown must prevent a second real transport attempt"
+
+
+@pytest.mark.asyncio
+async def test_open_retry_cooldown_reason_not_double_wrapped():
+    """A caller that re-describes the cooldown fast-fail's exception (e.g.
+    SessionCoordinator._get_mcp_sdk_config()) must see the identical clean reason
+    as the original failure — not "RuntimeError: 401 Unauthorized"."""
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    request = httpx.Request("GET", "https://example.com/mcp")
+    response = httpx.Response(401, request=request)
+    http_err = httpx.HTTPStatusError("401", request=request, response=response)
+    group = ExceptionGroup("unhandled errors in a TaskGroup (1 sub-exception)", [http_err])
+
+    async def failing_enter_transport(self_mgr, c, stack):
+        raise group
+
+    with patch.object(SharedMcpConnectionManager, "_enter_transport", failing_enter_transport):
+        with pytest.raises(ExceptionGroup):
+            await mgr.get_or_open(cfg)
+
+        try:
+            await mgr.get_or_open(cfg)
+            pytest.fail("expected the cooldown fast-fail to raise")
+        except Exception as cooldown_exc:
+            assert _describe_open_failure(cooldown_exc) == "401 Unauthorized"
+
+
+# ---------------------------------------------------------------------------
+# Token refresh must reconnect a conn that has never successfully opened
+# (issue #1982 — regression for the gap in the pre-existing
+# test_token_refresh_triggers_reconnect, which only covers "was open, then
+# refreshed")
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_token_refresh_reconnects_conn_that_never_opened():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+    open_calls = []
+
+    async def failing_open(self_mgr, c, conn):
+        open_calls.append(c.id)
+        raise RuntimeError("still down")
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", failing_open):
+        with pytest.raises(RuntimeError):
+            await mgr.get_or_open(cfg)
+
+    assert len(open_calls) == 1
+    conn = mgr._conns[cfg.id]
+    assert conn.session is None, "precondition: conn exists but has never successfully opened"
+
+    mgr.set_cfg_lookup(AsyncMock(return_value=cfg))
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        await mgr._on_token_refreshed(cfg.id)
+
+    assert conn.session is not None, (
+        "token refresh must attempt to open a conn that never succeeded before, "
+        "not just one that was open and later dropped"
+    )

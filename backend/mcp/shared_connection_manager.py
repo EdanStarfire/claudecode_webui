@@ -15,11 +15,13 @@ violation that previously caused RuntimeError on OAuth token refresh.
 """
 
 import asyncio
+import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Any
 
 import anyio
+import httpx
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -35,6 +37,35 @@ from shared.logging_config import get_logger
 from ..task_utils import task_done_log_exception
 
 _logger = get_logger("mcp_shared", category="MCP_SHARED")
+
+
+class _CachedOpenError(RuntimeError):
+    """Raised by _open_locked()'s cooldown fast-fail (see OPEN_RETRY_COOLDOWN_SECONDS).
+
+    Its message is already a finished, human-readable reason (produced by a prior
+    _describe_open_failure() call) — _describe_open_failure() returns it verbatim
+    instead of re-wrapping it as "_CachedOpenError: <reason>", so a fast-failed
+    retry within the cooldown window reports the identical clean text as the
+    original failure, not a doubled/prefixed version of it.
+    """
+
+
+def _describe_open_failure(exc: BaseException) -> str:
+    """Unwrap (Base)ExceptionGroup to the first leaf cause and format it concisely.
+
+    anyio surfaces transport failures (401, DNS, TLS, refused connection) as
+    ExceptionGroup wrappers; str(exc) on those yields only the opaque
+    "unhandled errors in a TaskGroup (1 sub-exception)" — never the real cause.
+    """
+    leaf = exc
+    while isinstance(leaf, ExceptionGroup | BaseExceptionGroup) and leaf.exceptions:
+        leaf = leaf.exceptions[0]
+    if isinstance(leaf, _CachedOpenError):
+        return str(leaf)
+    if isinstance(leaf, httpx.HTTPStatusError):
+        response = leaf.response
+        return f"{response.status_code} {response.reason_phrase}".strip()
+    return f"{type(leaf).__name__}: {leaf}"
 
 
 @dataclass
@@ -53,6 +84,10 @@ class _SharedConn:
     closed_future: asyncio.Future | None = None
     generation: int = 0
     last_close_error: Exception | None = None
+    # Set on every failed open attempt (distinct from last_close_error, which is
+    # close-path only and typed as an exception); human-readable for direct display.
+    last_open_error: str | None = None
+    last_open_attempt_at: float | None = None
 
 
 class SharedMcpConnectionManager:
@@ -60,6 +95,9 @@ class SharedMcpConnectionManager:
     RECONNECT_WAIT_SECONDS = 5.0
     # Max time to wait for the owner task to finish closing
     CLOSE_TIMEOUT_SECONDS = 10.0
+    # After a failed open, skip re-attempting the transport for this long and
+    # raise the cached reason instead — avoids reconnect storms against a down host.
+    OPEN_RETRY_COOLDOWN_SECONDS = 15.0
 
     def __init__(self, oauth_manager, oauth_refresh_manager, credential_vault):
         self._oauth_manager = oauth_manager
@@ -149,17 +187,48 @@ class SharedMcpConnectionManager:
         self._pending_drains.discard(cfg_id)
 
     async def list_tools(self, cfg) -> list[Tool]:
-        """Return cached tools, opening the connection if needed."""
+        """Return cached tools, opening the connection if needed.
+
+        Raises on failure — used by direct callers (e.g. the Library "Show tools"
+        diagnostic in application_service.get_mcp_config_tools()) that need to
+        distinguish a genuine connection failure from an empty tool list. Use
+        list_tools_or_cached() instead for a caller that must never raise.
+        """
         conn = await self._ensure_open(cfg)
         return list(conn.cached_tools)
+
+    async def list_tools_or_cached(self, cfg) -> list[Tool]:
+        """Like list_tools(), but degrades to the last-known cached tools (empty if
+        never populated) instead of raising — mirrors call_tool()'s "degrade, don't
+        raise" contract. Used by the in-process SDK proxy server (build_proxy_server),
+        since the SDK calls list_tools() on every attached server at its own connect
+        time — a proxy that failed once must not take down the SDK's own connection
+        to it (unlike the Library diagnostic path, which needs list_tools()'s raise).
+        """
+        try:
+            return await self.list_tools(cfg)
+        except Exception:
+            _logger.warning(
+                "shared MCP list_tools failed cfg=%s — returning cached tools", cfg.id
+            )
+            conn = self._conns.get(cfg.id)
+            return list(conn.cached_tools) if conn else []
 
     async def call_tool(self, cfg, name: str, arguments: dict[str, Any]) -> CallToolResult:
         """Forward a tool call to the upstream session.
 
         If a reconnect is in progress, wait up to RECONNECT_WAIT_SECONDS on
         reconnect_lock, then either retry or return a structured error.
+
+        A failed (re)open attempt raises out of _ensure_open() itself — caught
+        here and unwrapped via _describe_open_failure() so a fresh/lapsed-cooldown
+        reattach failure is reported with the same human-readable reason as the
+        already-registered-conn case, never the raw opaque ExceptionGroup text.
         """
-        conn = await self._ensure_open(cfg)
+        try:
+            conn = await self._ensure_open(cfg)
+        except Exception as exc:
+            return _disconnect_error_result_named(cfg.id, _describe_open_failure(exc))
         try:
             return await asyncio.wait_for(
                 self._call_tool_locked(conn, name, arguments),
@@ -214,7 +283,9 @@ class SharedMcpConnectionManager:
         try:
             session = conn.session
             if session is None:
-                reason = str(conn.last_close_error) if conn.last_close_error else None
+                reason = conn.last_open_error or (
+                    str(conn.last_close_error) if conn.last_close_error else None
+                )
                 return _disconnect_error_result_named(conn.cfg_id, reason)
             try:
                 return await session.call_tool(name, arguments)
@@ -280,7 +351,20 @@ class SharedMcpConnectionManager:
                 conn.closed_future = None
 
     async def _open_locked(self, cfg, conn: _SharedConn) -> None:
-        """Spawn an owner task that opens the transport and parks until close_event."""
+        """Spawn an owner task that opens the transport and parks until close_event.
+
+        If the previous attempt failed within OPEN_RETRY_COOLDOWN_SECONDS, skip the
+        real transport attempt and raise the cached reason immediately — avoids a
+        reconnect storm against a host that's still down.
+        """
+        now = time.monotonic()
+        if (
+            conn.last_open_error is not None
+            and conn.last_open_attempt_at is not None
+            and (now - conn.last_open_attempt_at) < self.OPEN_RETRY_COOLDOWN_SECONDS
+        ):
+            raise _CachedOpenError(conn.last_open_error)
+
         loop = asyncio.get_running_loop()
         ready_fut: asyncio.Future = loop.create_future()
         close_event = asyncio.Event()
@@ -299,18 +383,23 @@ class SharedMcpConnectionManager:
         task.add_done_callback(task_done_log_exception)
         conn.owner_task = task
 
+        conn.last_open_attempt_at = now
         try:
             await asyncio.wait_for(
                 asyncio.shield(ready_fut),
                 timeout=self.RECONNECT_WAIT_SECONDS + 30.0,
             )
-        except (TimeoutError, Exception):
+        except (TimeoutError, Exception) as exc:
             # Wait for the owner to finish cleanup before re-raising.
             try:
                 await asyncio.wait_for(asyncio.shield(closed_fut), timeout=5.0)
             except Exception:
                 pass
+            conn.last_open_error = _describe_open_failure(exc)
             raise
+        else:
+            conn.last_open_error = None
+            conn.last_open_attempt_at = None
 
     async def _close_owner_locked(self, conn: _SharedConn) -> Exception | None:
         """Signal the owner task to close and await its completion.
@@ -373,12 +462,16 @@ class SharedMcpConnectionManager:
         _logger.info("shared MCP closed cfg=%s", cfg_id)
 
     async def _on_token_refreshed(self, server_id: str) -> None:
-        """Reconnect upstream with the freshly refreshed token.
+        """(Re)connect upstream with the freshly refreshed token.
 
         Called from OAuthRefreshManager._refresh_loop after a successful refresh.
+        Also handles a connection that has never successfully opened (e.g. session
+        started with an expired/absent token) — not just one that was open and
+        later dropped — since a fresh token is exactly the signal that a
+        previously-failing open is now worth retrying.
         """
         conn = self._conns.get(server_id)
-        if conn is None or conn.session is None:
+        if conn is None:
             return
         _logger.info("shared MCP token refresh — reconnecting cfg=%s", server_id)
         async with self._get_open_lock(server_id):
@@ -389,7 +482,11 @@ class SharedMcpConnectionManager:
                         "shared MCP refresh: cfg %s not found, leaving conn closed", server_id
                     )
                     return
-                await self._mark_disconnected_locked(conn)
+                if conn.session is not None:
+                    await self._mark_disconnected_locked(conn)
+                # A token refresh is a strong signal the failure cause just
+                # changed — bypass the open-retry cooldown for this attempt.
+                conn.last_open_attempt_at = None
                 try:
                     await self._open_locked(cfg, conn)
                 except Exception:

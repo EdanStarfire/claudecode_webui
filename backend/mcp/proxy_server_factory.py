@@ -20,9 +20,12 @@ def build_proxy_server(cfg, shared_mgr) -> dict:
     """Return a McpSdkServerConfig dict for the SDK's mcp_servers map."""
     server = Server(cfg.slug, version="1.0.0")
 
+    # Issue #1982: degrade instead of raise — the SDK calls list_tools() on every
+    # attached server at its own connect time, so a failed shared server must not
+    # take down the SDK's own connection to this proxy.
     @server.list_tools()
     async def _list_tools() -> list[Tool]:
-        return await shared_mgr.list_tools(cfg)
+        return await shared_mgr.list_tools_or_cached(cfg)
 
     # validate_input=False: upstream server validates; cached Tool schemas on this proxy
     # may temporarily lag after notifications/tools/list_changed.
