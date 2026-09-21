@@ -200,3 +200,64 @@ class TestResumeAll:
 
         resp = await client.post(f"/api/legions/{fake_id}/resume-all")
         assert resp.status_code == 404
+
+
+class TestDisposeMinionHardDeleteBroadcast:
+    """Issue #1986: OverseerController.dispose_minion()'s hard-delete path calls
+    session_coordinator.delete_session() directly — bypassing the
+    DELETE /api/sessions/{id} HTTP route entirely. This is the edge case the
+    coordinator-level (rather than router-level) event design exists to cover:
+    it must produce the same session_deleted broadcast as an HTTP delete, with
+    no exception logged, even though no HTTP request is ever made."""
+
+    async def test_dispose_minion_hard_delete_broadcasts_session_deleted(
+        self, api_integration_env, caplog
+    ):
+        from backend.session_config import SessionConfig
+
+        coordinator = api_integration_env["coordinator"]
+        webui = api_integration_env["webui"]
+        project = await _setup_legion(api_integration_env)
+        legion_id = project["project_id"]
+
+        parent_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=parent_id,
+            project_id=legion_id,
+            config=SessionConfig(),
+            name="Parent",
+        )
+
+        child_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=child_id,
+            project_id=legion_id,
+            config=SessionConfig(),
+            name="Child",
+            parent_overseer_id=parent_id,
+        )
+
+        # Wire the parent/child relationship the way spawn_minion would (mirrors
+        # TestIssue1722DeleteSessionKanbanCleanup's cascading-delete test setup).
+        parent_info = await coordinator.session_manager.get_session_info(parent_id)
+        parent_info.child_minion_ids = [child_id]
+
+        _, cursor_before = webui.ui_queue.events_since(0)
+
+        with caplog.at_level("ERROR"):
+            result = await coordinator.legion_system.overseer_controller.dispose_minion(
+                parent_overseer_id=parent_id,
+                child_minion_name="Child",
+                delete_after_archive=True,
+            )
+
+        assert result["success"] is True
+        assert result["deleted"] is True
+        assert result["disposed_minion_id"] == child_id
+
+        events, _ = webui.ui_queue.events_since(cursor_before)
+        session_deleted_events = [e for e in events if e["type"] == "session_deleted"]
+        assert session_deleted_events == [{"type": "session_deleted", "data": {"session_id": child_id}}]
+
+        assert not any(record.levelname == "ERROR" for record in caplog.records)
+        assert not any(record.exc_info for record in caplog.records)

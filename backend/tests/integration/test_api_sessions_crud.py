@@ -518,6 +518,67 @@ class TestDeleteSession:
         resp = await client.delete(f"/api/sessions/{fake_id}")
         assert resp.status_code == 404
 
+    async def test_delete_session_broadcasts_exact_session_deleted_event(self, api_integration_env, caplog):
+        """T1 (issue #1986): DELETE fires exactly one session_deleted event with the
+        correct session_id, and never logs an exception (regression test for the
+        AttributeError that _notify_state_change(session_id, "deleted") used to raise
+        and silently swallow)."""
+        create_project = api_integration_env["create_test_project"]
+        create_session = api_integration_env["create_test_session"]
+        client = api_integration_env["client"]
+        webui = api_integration_env["webui"]
+
+        project = await create_project("Delete Broadcast Test")
+        # A second session keeps the project non-empty, so the delete below produces
+        # a project_updated broadcast rather than project_deleted — event shape either
+        # way is not this test's concern, only that session_deleted fires exactly once.
+        await create_session(project["project_id"], "Keep")
+        session = await create_session(project["project_id"], "ToDelete")
+        sid = session["session_id"]
+
+        _, cursor_before = webui.ui_queue.events_since(0)
+
+        with caplog.at_level("ERROR"):
+            resp = await client.delete(f"/api/sessions/{sid}")
+        assert resp.status_code == 200
+
+        events, _ = webui.ui_queue.events_since(cursor_before)
+        session_deleted_events = [e for e in events if e["type"] == "session_deleted"]
+        assert session_deleted_events == [{"type": "session_deleted", "data": {"session_id": sid}}]
+
+        assert not any(record.levelname == "ERROR" for record in caplog.records)
+        assert not any(record.exc_info for record in caplog.records)
+
+    async def test_delete_session_two_poll_clients_converge_on_session_deleted(self, api_integration_env):
+        """T2 (issue #1986): a second /api/poll/ui long-poll cursor (modeled on a
+        second browser tab) also observes the session_deleted event, not just the
+        client issuing the delete — mirrors test_issue_782_long_poll.py's pattern."""
+        create_project = api_integration_env["create_test_project"]
+        create_session = api_integration_env["create_test_session"]
+        client = api_integration_env["client"]
+        webui = api_integration_env["webui"]
+
+        project = await create_project("Delete Two-Tab Test")
+        session = await create_session(project["project_id"], "ToDelete")
+        sid = session["session_id"]
+
+        # Two independent poll cursors, standing in for two open browser tabs, both
+        # caught up to the same point before the delete happens.
+        _, cursor_tab_a = webui.ui_queue.events_since(0)
+        cursor_tab_b = cursor_tab_a
+
+        resp = await client.delete(f"/api/sessions/{sid}")
+        assert resp.status_code == 200
+
+        resp_a = await client.get(f"/api/poll/ui?since={cursor_tab_a}&timeout=0")
+        resp_b = await client.get(f"/api/poll/ui?since={cursor_tab_b}&timeout=0")
+
+        for resp_tab in (resp_a, resp_b):
+            assert resp_tab.status_code == 200
+            events = resp_tab.json()["events"]
+            session_deleted_events = [e for e in events if e["type"] == "session_deleted"]
+            assert session_deleted_events == [{"type": "session_deleted", "data": {"session_id": sid}}]
+
 
 class TestHistoryArchivesStatus:
     async def test_status_no_history(self, api_integration_env):

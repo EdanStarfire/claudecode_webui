@@ -834,6 +834,18 @@ export const usePollingStore = defineStore('polling', () => {
         }
         break
 
+      case 'session_deleted':
+        if (payload.data?.session_id) {
+          sessionStore.removeSessionsFromStores([payload.data.session_id]).then((wasCurrentSessionRemoved) => {
+            if (wasCurrentSessionRemoved) {
+              import('../router').then(({ default: router }) => {
+                router.push('/')
+              })
+            }
+          })
+        }
+        break
+
       case 'notification':
         if (payload.data?.event_type === 'minion_comm') {
           notify('minion_comm', {

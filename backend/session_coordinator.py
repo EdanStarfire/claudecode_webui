@@ -501,6 +501,7 @@ class SessionCoordinator:
         self._error_callbacks: dict[str, list[Callable]] = {}
         self._state_change_callbacks: list[Callable] = []
         self._session_reset_callbacks: list[Callable] = []
+        self._session_deleted_callbacks: list[Callable] = []
         self._tool_call_broadcast_callbacks: list[Callable] = []
 
 
@@ -2670,8 +2671,11 @@ class SessionCoordinator:
                         self._usage_baseline_by_session.pop(session_id, None)
                     except Exception:
                         logger.exception("Failed to mark analytics deleted for session %s", session_id)
-                # Notify about session deletion (using a special state change)
-                await self._notify_state_change(session_id, "deleted")
+                # Notify about session deletion (issue #1986: dedicated event, mirrors
+                # session_reset — _notify_state_change() requires a SessionState enum
+                # member and there is no DELETED one, and by this point the session is
+                # already gone from session_manager so a state-change lookup would no-op)
+                await self._notify_session_deleted(session_id)
                 # Add this session to the deleted list
                 deleted_ids.append(session_id)
 
@@ -4381,6 +4385,10 @@ class SessionCoordinator:
         """Add callback for session reset events (Issue #500)."""
         self._session_reset_callbacks.append(callback)
 
+    def add_session_deleted_callback(self, callback: Callable):
+        """Add callback for session deleted events (Issue #1986)."""
+        self._session_deleted_callbacks.append(callback)
+
     def add_tool_call_broadcast_callback(self, callback: Callable):
         """Add callback for broadcasting tool_call messages via WebSocket (Issue #520)."""
         self._tool_call_broadcast_callbacks.append(callback)
@@ -4422,6 +4430,17 @@ class SessionCoordinator:
                     cb(session_id)
             except Exception:
                 logger.exception("Error in session reset callback")
+
+    async def _notify_session_deleted(self, session_id: str) -> None:
+        """Notify registered callbacks that a session was deleted (Issue #1986)."""
+        for cb in self._session_deleted_callbacks:
+            try:
+                if asyncio.iscoroutinefunction(cb):
+                    await cb(session_id)
+                else:
+                    cb(session_id)
+            except Exception:
+                logger.exception("Error in session deleted callback")
 
     def _get_display_projection(self, session_id: str) -> DisplayProjection:
         """
