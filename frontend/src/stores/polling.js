@@ -337,9 +337,54 @@ export const usePollingStore = defineStore('polling', () => {
         // sessionStalled — doing so would silently reset the staleness/forgiveness
         // baseline for a session that may still actually be stalled, right after a
         // heal that hasn't itself delivered anything yet.
-        if (sessionPollGeneration === myGeneration && currentSessionId.value === sessionId) {
+        const isCurrentGeneration = sessionPollGeneration === myGeneration && currentSessionId.value === sessionId
+        if (isCurrentGeneration) {
           seedHeartbeat(sessionId)
           sessionStalled.value = false
+        }
+
+        if (data.evicted || data.reset) {
+          // Issue #1988: neither an evicted cursor (predates the server's retained
+          // ring-buffer window) nor a reset queue (e.g. a Backend restart recreated
+          // it from scratch) can be trusted to deliver a gapless slice — `evicted`
+          // and `reset` are independent signals (shared/event_queue.py), and a
+          // restart-during-stall produces reset=true with evicted deliberately
+          // false, so both must fall back the same way: a full resync via the same
+          // proven event_cursor-capturing pattern the initial session load already
+          // uses (loadMessages()), instead of risking a permanent gap by applying
+          // this response's events as if they were a complete slice.
+          pushDebugEvent('polling', data.evicted ? 'poll-evicted' : 'poll-reset', {
+            stream: 'session', sessionId, staleCursor: cursor, next_cursor: data.next_cursor,
+            evicted: data.evicted, reset: data.reset, generation: myGeneration
+          })
+          if (isCurrentGeneration) {
+            const messageStore = useMessageStore()
+            // Deliberately not wrapped in a local try/catch: a failure here is a
+            // connection-level problem exactly like any other poll failure, so it
+            // should go through the SAME backoff/retry-count path as the outer
+            // catch below rather than a second, weaker, unthrottled one — swallowing
+            // it locally and retrying immediately would let a persistent failure
+            // hammer the history endpoint every poll cycle with no backoff, which is
+            // the same "wasted round trips" pattern this issue exists to eliminate.
+            await messageStore.loadMessages(sessionId)
+            // Re-check the guard AFTER the await: a concurrent heal/reconnect for
+            // this same session can supersede this loop's generation while the
+            // reload is in flight. Adopting this reload's cursor onto a
+            // since-superseded generation would clobber the freshly-reconnected
+            // generation's own correct cursor with a stale one.
+            if (sessionPollGeneration === myGeneration && currentSessionId.value === sessionId) {
+              const restCursor = messageStore.loadedEventCursors.get(sessionId)
+              if (restCursor !== undefined) {
+                messageStore.loadedEventCursors.delete(sessionId)
+                sessionCursors[sessionId] = restCursor
+              } else {
+                sessionCursors[sessionId] = data.next_cursor
+              }
+            }
+          } else {
+            sessionCursors[sessionId] = data.next_cursor
+          }
+          continue
         }
 
         if (data.events && data.events.length > 0) {
@@ -350,11 +395,6 @@ export const usePollingStore = defineStore('polling', () => {
         pushDebugEvent('polling', 'poll-cycle', {
           stream: 'session', sessionId, cursorBefore: cursor, cursorAfter: data.next_cursor, generation: myGeneration
         })
-        if (data.reset) {
-          pushDebugEvent('polling', 'poll-reset', {
-            stream: 'session', sessionId, staleCursor: cursor, next_cursor: data.next_cursor, eventCount: data.events?.length ?? 0, generation: myGeneration
-          })
-        }
         sessionCursors[sessionId] = data.next_cursor
 
       } catch (err) {
@@ -514,7 +554,6 @@ export const usePollingStore = defineStore('polling', () => {
     lastTickAt = now
 
     const sessionStore = useSessionStore()
-    const messageStore = useMessageStore()
     const sid = currentSessionId.value
     // Issue #1960: default to false so every early-return below (inapplicable or
     // not-yet-measurable session) leaves the flag correctly cleared — the single
@@ -593,34 +632,34 @@ export const usePollingStore = defineStore('polling', () => {
     sessionAbortController?.abort()
 
     try {
-      console.warn(`[stall-heal] Session ${sid} stalled ${Math.round(stallMs / 1000)}s (is_processing=${session.is_processing}); re-syncing`)
+      console.warn(`[stall-heal] Session ${sid} stalled ${Math.round(stallMs / 1000)}s (is_processing=${session.is_processing}); reconnecting from existing cursor`)
       pushDebugEvent('polling', 'stall-heal-start', { sessionId: sid, stallMs, isProcessing: session.is_processing })
 
-      // Step 1: backfill any missed messages via REST (deduplicates by message ID)
-      try {
-        await messageStore.syncMessages(sid)
-      } catch (err) {
-        console.error('[stall-heal] syncMessages failed:', err)
-      }
+      // Issue #1988: the heal no longer re-derives a cursor via REST (a
+      // syncMessages() history walk followed by a separate /cursor GET) —
+      // that two-step, independently-timed pair is what let an event
+      // appended between the two calls fall into the gap and never get
+      // delivered. EventQueue.events_since() (shared/event_queue.py) is a
+      // synchronous, atomic "everything after cursor X, right now" query, so
+      // reconnecting straight from the existing, untouched sessionCursors[sid]
+      // and letting the resumed poll's first request hit that same atomic
+      // read is both simpler and strictly more correct: it delivers every
+      // event appended since the last acknowledged cursor exactly once,
+      // including anything appended during the heal cycle itself. A cursor
+      // old enough to have been evicted from the server's ring buffer is
+      // handled separately, by the evicted-fallback branch in
+      // _runSessionPollLoop() below, once the resumed poll reports it.
 
-      // Step 2: re-fetch cursor and restart poll loop
-      try {
-        const result = await api.get(`/api/poll/session/${sid}/cursor`)
-        sessionCursors[sid] = result?.cursor ?? 0
-      } catch {
-        sessionCursors[sid] = 0
-      }
-
-      // Guard: abort if the user switched sessions during the async operations above
+      // Guard: abort if the user switched sessions before reconnecting.
       if (currentSessionId.value !== sid) {
-        console.warn(`[stall-heal] Session ${sid} heal aborted — session changed during sync`)
+        console.warn(`[stall-heal] Session ${sid} heal aborted — session changed`)
         pushDebugEvent('polling', 'stall-heal-done', { sessionId: sid, aborted: true })
         return
       }
       await disconnectSession()
       await connectSession(sid, { isRecoveryReconnect: true })
 
-      console.warn(`[stall-heal] Session ${sid} re-synced; resumed polling at cursor ${sessionCursors[sid]}`)
+      console.warn(`[stall-heal] Session ${sid} reconnected at cursor ${sessionCursors[sid]}`)
       pushDebugEvent('polling', 'stall-heal-done', { sessionId: sid, aborted: false, cursor: sessionCursors[sid] })
     } finally {
       delete sessionHealInFlight[sid]

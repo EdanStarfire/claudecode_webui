@@ -41,6 +41,40 @@ function abortAwareFetchMock() {
   }))
 }
 
+// Issue #1988: serves each entry of `responses` (a JSON-body object, or a function taking
+// (url, opts) for full control) to successive fetch() calls in order; once exhausted, every
+// further call hangs until aborted (same behavior as abortAwareFetchMock) so the poll loop
+// parks instead of spinning once the scripted sequence ends.
+function sequencedFetchMock(responses) {
+  let i = 0
+  return vi.spyOn(global, 'fetch').mockImplementation((url, opts) => {
+    if (i < responses.length) {
+      const entry = responses[i]
+      i++
+      if (typeof entry === 'function') return entry(url, opts)
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(entry) })
+    }
+    return new Promise((_resolve, reject) => {
+      opts?.signal?.addEventListener('abort', () => {
+        const err = new Error('Aborted')
+        err.name = 'AbortError'
+        reject(err)
+      })
+    })
+  })
+}
+
+// Issue #1988: the heal body no longer has a syncMessages()/cursor-GET step whose mock call
+// count can stand in for "a heal actually ran past the mutex/cooldown gates" — the new heal
+// body logs `[stall-heal] Session ${sid} stalled...` exactly once per attempt that gets past
+// those gates (a mutex-suppressed attempt returns before this line), so counting that log
+// line is the direct replacement for the old syncMessages-call-count assertions.
+function healStartCount(warnSpy, sid) {
+  return warnSpy.mock.calls.filter(
+    ([msg]) => typeof msg === 'string' && msg.includes(`[stall-heal] Session ${sid} stalled`)
+  ).length
+}
+
 // Issue #1974: advances time in STALL_CHECK_INTERVAL_MS (5000ms) steps and calls
 // checkSessionStall() on each tick, rather than one large time jump. Under the new
 // tick-lateness forgiveness logic, any single tick gap beyond STALL_CHECK_INTERVAL_MS +
@@ -738,8 +772,8 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
   })
 
   it('T1: heals a stalled active-processing connection once the unified threshold elapses', async () => {
-    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-t1', is_processing: true })
-    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-t1', is_processing: true })
+    const warnSpy = vi.spyOn(console, 'warn')
     abortAwareFetchMock()
 
     await pollingStore.connectSession(sid)
@@ -753,13 +787,13 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     await tickStallCadence(pollingStore, 8)
     await flush()
 
-    expect(messageStore.syncMessages).toHaveBeenCalledWith(sid)
+    expect(healStartCount(warnSpy, sid)).toBe(1)
     expect(pollingStore.sessionConnected).toBe(true)
   })
 
   it('T2: heals a stalled idle connection once the unified threshold elapses', async () => {
-    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-t2', is_processing: false })
-    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-t2', is_processing: false })
+    const warnSpy = vi.spyOn(console, 'warn')
     abortAwareFetchMock()
 
     await pollingStore.connectSession(sid)
@@ -769,7 +803,7 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     await tickStallCadence(pollingStore, 8)
     await flush()
 
-    expect(messageStore.syncMessages).toHaveBeenCalledWith(sid)
+    expect(healStartCount(warnSpy, sid)).toBe(1)
     expect(pollingStore.sessionConnected).toBe(true)
   })
 
@@ -810,10 +844,8 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(4)
   })
 
-  it('T4: end-to-end heal cycle re-syncs via syncMessages without a manual loadMessages reload', async () => {
+  it('T4 (#1988): end-to-end heal cycle reconnects straight from the existing cursor — no history walk, no extra cursor GET, no manual loadMessages reload', async () => {
     const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-t4', is_processing: false })
-    apiMock.get.mockResolvedValueOnce({ cursor: 0 }).mockResolvedValue({ cursor: 12 })
-    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 2, hasMore: false })
     const loadSpy = vi.spyOn(messageStore, 'loadMessages')
     const fetchSpy = abortAwareFetchMock()
 
@@ -821,19 +853,32 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     await tickStallCadence(pollingStore, 8) // past STALL_TIMEOUT_MS (40s) via realistic tick cadence (#1974)
     await flush()
 
-    expect(messageStore.syncMessages).toHaveBeenCalledWith(sid)
     expect(loadSpy).not.toHaveBeenCalled()
     expect(pollingStore.sessionConnected).toBe(true)
+
+    // Root-cause fix: the resumed poll's `since` is the SAME cursor connectSession()
+    // bootstrapped before the stall (0, from setupStallSession's cursor mock) — not a
+    // freshly re-fetched value from a second /cursor GET, and not derived from any
+    // REST history walk.
     const lastFetchUrl = fetchSpy.mock.calls[fetchSpy.mock.calls.length - 1][0]
-    expect(lastFetchUrl).toContain('since=12')
+    expect(lastFetchUrl).toContain('since=0')
+
+    // Only the initial connectSession() bootstrap should have hit /cursor — the heal
+    // must not issue a second one, and must never touch the /messages history endpoint.
+    const cursorRequests = apiMock.get.mock.calls.filter(([url]) => String(url).includes('/cursor'))
+    const messagesRequests = apiMock.get.mock.calls.filter(([url]) => String(url).includes('/messages'))
+    expect(cursorRequests).toHaveLength(1)
+    expect(messagesRequests).toHaveLength(0)
   })
 
   it('B1 (#1917): aborts the in-flight fetch synchronously at the start of the heal sequence, before any await', async () => {
-    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-b1', is_processing: false })
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-b1', is_processing: false })
 
     // A fetch that only ever settles via its abort signal — never resolves on its own —
-    // so we can prove the abort happens before syncMessages() is even awaited, not only
-    // later inside disconnectSession() (the pre-fix behavior this test guards against).
+    // so we can prove the abort happens before the heal's first await. #1988 removed the
+    // syncMessages()/cursor-GET steps that used to sit between the synchronous abort and
+    // the reconnect — disconnectSession() is now that first await, so this test proves
+    // the abort still precedes it.
     let capturedSignal
     vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => {
       capturedSignal = opts?.signal
@@ -853,10 +898,6 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     await tickStallCadence(pollingStore, 7)
     advanceTime(5000) // final tick — crosses STALL_TIMEOUT_MS (40s)
 
-    // syncMessages() deliberately never resolves during this assertion window.
-    let resolveSync
-    vi.spyOn(messageStore, 'syncMessages').mockImplementation(() => new Promise(resolve => { resolveSync = resolve }))
-
     // Do not await yet — an async function runs synchronously up to its first `await`,
     // so by the time this call returns control, B1's synchronous abort has already run.
     const healPromise = pollingStore.checkSessionStall()
@@ -864,14 +905,27 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     expect(capturedSignal.aborted).toBe(true)
 
     // Let the heal sequence finish so it doesn't leak into later tests.
-    resolveSync({ syncedCount: 0, hasMore: false })
-    apiMock.get.mockResolvedValue({ cursor: 0 })
     await healPromise
   })
 
   it('#1954: suppresses an overlapping heal while one is already in flight, regardless of cooldown', async () => {
-    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-inflight', is_processing: false })
-    abortAwareFetchMock()
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-inflight', is_processing: false })
+    const warnSpy = vi.spyOn(console, 'warn')
+
+    // Issue #1988: the pre-heal (old-generation) fetch never reacts to its abort
+    // signal — it only settles once resolveOldFetch() is called — so
+    // disconnectSession()'s wait for the old poll loop to exit stays pending for as
+    // long as this test needs. This is the #1988-era replacement for the old
+    // syncMessages()-hang technique: the new heal body has no REST await of its own
+    // left to freeze on, since #1988 removed the two REST calls that used to sit
+    // between the synchronous abort and the reconnect. Note: because
+    // disconnectSession() now runs almost immediately (rather than after two REST
+    // round trips), sessionConnected also reads false for most of this window now —
+    // the older #1795 "not connected" guard and the #1954 mutex largely overlap in
+    // what they protect against today. This test still directly exercises and proves
+    // the mutex's own contract: no second heal starts while sessionHealInFlight is true.
+    let resolveOldFetch
+    vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveOldFetch = resolve }))
 
     await pollingStore.connectSession(sid)
     // Advance to just short of STALL_TIMEOUT_MS (40s) via realistic tick cadence (#1974),
@@ -879,15 +933,12 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     await tickStallCadence(pollingStore, 7)
     advanceTime(5000) // final tick — crosses STALL_TIMEOUT_MS (40s)
 
-    let resolveSync
-    vi.spyOn(messageStore, 'syncMessages').mockImplementation(() => new Promise(resolve => { resolveSync = resolve }))
-
-    // First heal starts and blocks on syncMessages — it never resolves during this
-    // assertion window, simulating the ~31s real-world heal duration from #1931's capture.
+    // First heal starts and blocks inside disconnectSession(), waiting for the old
+    // poll loop to exit — it never does during this assertion window, simulating the
+    // ~31s real-world heal duration from #1931's capture.
     const healPromise1 = pollingStore.checkSessionStall()
-    await flush()
 
-    expect(messageStore.syncMessages).toHaveBeenCalledTimes(1)
+    expect(healStartCount(warnSpy, sid)).toBe(1)
 
     // Advance past HEAL_COOLDOWN_MS (10s) — the cooldown alone would now permit a new
     // heal, but the in-flight guard must still suppress it since the first heal hasn't
@@ -895,12 +946,11 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     advanceTime(11000)
     await pollingStore.checkSessionStall()
 
-    expect(messageStore.syncMessages).toHaveBeenCalledTimes(1)
+    expect(healStartCount(warnSpy, sid)).toBe(1)
 
     // Let the first heal complete normally — it should finish exactly as it would have
     // without the new guard.
-    apiMock.get.mockResolvedValue({ cursor: 0 })
-    resolveSync({ syncedCount: 0, hasMore: false })
+    resolveOldFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 0 }) })
     await healPromise1
     await flush()
 
@@ -908,15 +958,15 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
   })
 
   it('#1954: releases the guard after a completed heal, allowing a genuine subsequent heal', async () => {
-    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-second-heal', is_processing: false })
-    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-second-heal', is_processing: false })
+    const warnSpy = vi.spyOn(console, 'warn')
     abortAwareFetchMock()
 
     await pollingStore.connectSession(sid)
     await tickStallCadence(pollingStore, 8) // past STALL_TIMEOUT_MS (40s) via realistic tick cadence (#1974)
     await flush()
 
-    expect(messageStore.syncMessages).toHaveBeenCalledTimes(1)
+    expect(healStartCount(warnSpy, sid)).toBe(1)
 
     // #1973: the reconnect at the end of a heal no longer reseeds the heartbeat — the
     // stale pre-heal value is preserved until a real poll response updates it, so the
@@ -926,38 +976,19 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     await tickStallCadence(pollingStore, 2)
     await flush()
 
-    expect(messageStore.syncMessages).toHaveBeenCalledTimes(2)
-    expect(pollingStore.sessionConnected).toBe(true)
-  })
-
-  it('#1954: releases the guard after a heal error, allowing a genuine subsequent heal', async () => {
-    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-heal-error', is_processing: false })
-    abortAwareFetchMock()
-    vi.spyOn(messageStore, 'syncMessages').mockRejectedValueOnce(new Error('sync failed'))
-
-    await pollingStore.connectSession(sid)
-
-    // syncMessages() rejects, but checkSessionStall() catches it internally (line
-    // 316-318-equivalent try/catch) so the heal cycle still reaches its finally block.
-    await tickStallCadence(pollingStore, 8) // past STALL_TIMEOUT_MS (40s) via realistic tick cadence (#1974)
-    await flush()
-
-    expect(messageStore.syncMessages).toHaveBeenCalledTimes(1)
-    expect(pollingStore.sessionConnected).toBe(true)
-
-    messageStore.syncMessages.mockResolvedValue({ syncedCount: 0, hasMore: false })
-    // Heartbeat stays stale across the reconnect (#1973) — only HEAL_COOLDOWN_MS still
-    // gates the second heal; two more realistic ticks clears it.
-    await tickStallCadence(pollingStore, 2)
-    await flush()
-
-    expect(messageStore.syncMessages).toHaveBeenCalledTimes(2)
+    expect(healStartCount(warnSpy, sid)).toBe(2)
   })
 
   // Issue #1960: sessionStalled reporting — decoupled from the healing action above.
-  it('#1960: sessionStalled becomes true once the threshold elapses while sessionConnected stays true', async () => {
-    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1960-a', is_processing: false })
-    abortAwareFetchMock()
+  it('#1960: sessionStalled becomes true synchronously once the threshold elapses, before the heal reconnects', async () => {
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-1960-a', is_processing: false })
+
+    // Issue #1988: hang the pre-heal fetch without reacting to its abort signal, so
+    // disconnectSession() (the heal's first await now, since #1988 removed the
+    // syncMessages()/cursor-GET steps that used to precede it) stays pending for this
+    // assertion window.
+    let resolveOldFetch
+    vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveOldFetch = resolve }))
 
     await pollingStore.connectSession(sid)
     expect(pollingStore.sessionStalled).toBe(false)
@@ -967,22 +998,22 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     await tickStallCadence(pollingStore, 7)
     advanceTime(5000) // final tick — crosses STALL_TIMEOUT_MS (40s)
 
-    // syncMessages() deliberately never resolves during this assertion window — the
-    // liveness flag is set synchronously before the heal sequence's first await. Assert
-    // here (mid-heal) to isolate that synchronous set from whatever the eventual
-    // reconnect/poll outcome does to the flag (mirrors the B1 pattern below; see the
-    // #1973 tests for reconnect-specific behavior).
-    let resolveSync
-    vi.spyOn(messageStore, 'syncMessages').mockImplementation(() => new Promise(resolve => { resolveSync = resolve }))
-
+    // sessionStalled is set synchronously, before the heal sequence's first await —
+    // assert here (mid-heal) to isolate that synchronous set from whatever the eventual
+    // reconnect/poll outcome does to the flag (mirrors the B1 pattern above; see the
+    // #1973 tests for reconnect-specific behavior). Note sessionConnected is NOT
+    // asserted true here anymore: #1988's redesign makes disconnectSession() the heal's
+    // first await, and disconnectSession() synchronously flips sessionConnected false
+    // as part of its own prefix — so by this point it already reads false, unlike the
+    // old, REST-heavy heal where it stayed true for most of the heal's duration.
     const healPromise = pollingStore.checkSessionStall()
 
     expect(pollingStore.sessionStalled).toBe(true)
-    expect(pollingStore.sessionConnected).toBe(true)
 
-    resolveSync({ syncedCount: 0, hasMore: false })
-    apiMock.get.mockResolvedValue({ cursor: 0 })
+    resolveOldFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 0 }) })
     await healPromise
+
+    expect(pollingStore.sessionConnected).toBe(true)
   })
 
   it('#1960: sessionStalled stays false for a healthy-but-quiet connection', async () => {
@@ -1042,8 +1073,9 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
   })
 
   it('#1960: sessionStalled does not suppress the existing heal-gating early return for #1795', async () => {
-    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1960-e', is_processing: false })
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-1960-e', is_processing: false })
     abortAwareFetchMock()
+    const warnSpy = vi.spyOn(console, 'warn')
 
     await pollingStore.connectSession(sid)
     // Advance to just short of STALL_TIMEOUT_MS (40s) via realistic tick cadence (#1974),
@@ -1053,12 +1085,11 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
 
     // Simulate the exponential-backoff loop having already detected a failure.
     pollingStore.sessionConnected = false
-    const syncSpy = vi.spyOn(messageStore, 'syncMessages')
 
     await pollingStore.checkSessionStall()
 
     expect(pollingStore.sessionStalled).toBe(true)
-    expect(syncSpy).not.toHaveBeenCalled()
+    expect(healStartCount(warnSpy, sid)).toBe(0)
   })
 
   it('#1960: a session switch does not leak sessionStalled=true onto the newly selected session', async () => {
@@ -1149,8 +1180,7 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
   })
 
   it("#1973: a heal reconnect that doesn't restore data leaves sessionStalled true", async () => {
-    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1973-a', is_processing: false })
-    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-1973-a', is_processing: false })
     abortAwareFetchMock()
 
     await pollingStore.connectSession(sid)
@@ -1171,8 +1201,7 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
   })
 
   it('#1973: a heal reconnect followed by a real poll response clears sessionStalled promptly', async () => {
-    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1973-b', is_processing: false })
-    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-1973-b', is_processing: false })
 
     let callCount = 0
     vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => {
@@ -1204,8 +1233,8 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
   })
 
   it('#1973: repeated unsuccessful heals never let sessionStalled flip false between attempts', async () => {
-    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1973-c', is_processing: false })
-    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-1973-c', is_processing: false })
+    const warnSpy = vi.spyOn(console, 'warn')
     abortAwareFetchMock()
 
     await pollingStore.connectSession(sid)
@@ -1223,7 +1252,7 @@ describe('polling store - stall-heal watchdog (#1795)', () => {
     await flush()
     expect(pollingStore.sessionStalled).toBe(true)
 
-    expect(messageStore.syncMessages).toHaveBeenCalledTimes(2)
+    expect(healStartCount(warnSpy, sid)).toBe(2)
   })
 
   it("#1973: baseline is still seeded on a session's first connection", async () => {
@@ -1358,8 +1387,8 @@ describe('polling store - freeze forgiveness watchdog (#1974)', () => {
   })
 
   it("a freeze followed by return doesn't fabricate health when the connection is actually broken", async () => {
-    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1974-d', is_processing: false })
-    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-1974-d', is_processing: false })
+    const warnSpy = vi.spyOn(console, 'warn')
     abortAwareFetchMock()
 
     await pollingStore.connectSession(sid)
@@ -1376,28 +1405,27 @@ describe('polling store - freeze forgiveness watchdog (#1974)', () => {
     await flush()
 
     expect(pollingStore.sessionStalled).toBe(true)
-    expect(messageStore.syncMessages).toHaveBeenCalledWith(sid)
+    expect(healStartCount(warnSpy, sid)).toBe(1)
   })
 
   it('a backgrounded tab does not trigger heal recovery even once genuinely stalled, but keeps reporting the stall', async () => {
-    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1974-e', is_processing: false })
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-1974-e', is_processing: false })
     abortAwareFetchMock()
     const hiddenSpy = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
-    const syncSpy = vi.spyOn(messageStore, 'syncMessages')
+    const warnSpy = vi.spyOn(console, 'warn')
 
     await pollingStore.connectSession(sid)
     await tickStallCadence(pollingStore, 8) // reaches STALL_TIMEOUT_MS (40s) at normal cadence
     await flush()
 
     expect(pollingStore.sessionStalled).toBe(true)
-    expect(syncSpy).not.toHaveBeenCalled()
+    expect(healStartCount(warnSpy, sid)).toBe(0)
 
     hiddenSpy.mockRestore()
   })
 
   it("a stale in-flight response from a superseded polling generation can't overwrite the heartbeat/frozen snapshot or clear sessionStalled", async () => {
-    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1974-race', is_processing: false })
-    vi.spyOn(messageStore, 'syncMessages').mockResolvedValue({ syncedCount: 0, hasMore: false })
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-1974-race', is_processing: false })
 
     // The pre-heal (old-generation) fetch never reacts to abort — it simulates having
     // already progressed past the fetch by the time sessionAbortController.abort() fires
@@ -1434,17 +1462,18 @@ describe('polling store - freeze forgiveness watchdog (#1974)', () => {
   })
 
   it('#1979: a session_reset event for a session whose stall-heal is still in flight does not erase the heartbeat/frozen snapshot or clear sessionStalled', async () => {
-    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1979-a', is_processing: false })
-    abortAwareFetchMock()
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-1979-a', is_processing: false })
+
+    // Issue #1988: the pre-heal fetch never reacts to its abort signal, so
+    // disconnectSession() (the heal's first await now that the syncMessages()/cursor-GET
+    // steps are gone) stays pending until resolveOldFetch() is called — keeping
+    // sessionHealInFlight[sid] true for the whole assertion window below, mirroring the
+    // '#1960: sessionStalled becomes true...' test's technique further up this file.
+    let resolveOldFetch
+    vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveOldFetch = resolve }))
 
     await pollingStore.connectSession(sid)
     await tickStallCadence(pollingStore, 7)
-
-    // Hang syncMessages so checkSessionStall()'s heal sequence stays inside its try block —
-    // sessionHealInFlight[sid] stays true for the whole assertion window below, mirroring
-    // the '#1960: sessionStalled becomes true...' test's technique further up this file.
-    let resolveSync
-    vi.spyOn(messageStore, 'syncMessages').mockImplementation(() => new Promise(resolve => { resolveSync = resolve }))
 
     advanceTime(5000) // final tick — crosses STALL_TIMEOUT_MS (40s), starts the heal
     const healPromise = pollingStore.checkSessionStall()
@@ -1456,8 +1485,7 @@ describe('polling store - freeze forgiveness watchdog (#1974)', () => {
     expect(pollingStore.sessionStalled).toBe(true)
 
     // Let the heal finish cleanly.
-    resolveSync({ syncedCount: 0, hasMore: false })
-    apiMock.get.mockResolvedValue({ cursor: 0 })
+    resolveOldFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 0 }) })
     await healPromise
 
     // The heartbeat/frozen snapshot survived the session_reset: a subsequent
@@ -1496,5 +1524,218 @@ describe('polling store - freeze forgiveness watchdog (#1974)', () => {
     expect(clearResourcesSpy).toHaveBeenCalledWith(sid)
     expect(clearHistorySpy).toHaveBeenCalledWith(sid)
     expect(recordResetSpy).toHaveBeenCalledWith(sid)
+  })
+})
+
+// Issue #1988: root-cause fix — a stall-heal no longer reconciles via a REST history
+// walk (syncMessages()) followed by a separately-timed cursor re-fetch. Both steps are
+// gone; the heal reconnects straight from the existing, untouched sessionCursors[sid],
+// trusting EventQueue.events_since()'s atomic "everything after cursor X, right now"
+// semantics (shared/event_queue.py) to deliver a gapless, exactly-once catch-up batch on
+// the resumed poll's very first request — including anything appended during the heal
+// window itself. A cursor old enough to have been evicted from the server's ring buffer
+// is handled by a separate, explicit fallback (see poll.js's `evicted` handling below).
+describe('polling store - stall-heal cursor-atomicity fix (#1988)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(1_700_000_000_000)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('T1: every event appended during the heal window is delivered exactly once via the resumed poll, with zero history/sync REST calls (AC1, AC2)', async () => {
+    const { pollingStore, sessionStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1988-t1', is_processing: false })
+    // handleSessionMessage() only applies an event when session.js's own currentSessionId
+    // (independent of polling.js's) matches — mirrors how the real app keeps them in sync
+    // via selectSession().
+    sessionStore.currentSessionId = sid
+    const addMessageSpy = vi.spyOn(messageStore, 'addMessage')
+
+    sequencedFetchMock([
+      { events: [], next_cursor: 5 }, // initial connect's poll — establishes cursor 5
+      // second iteration (pre-stall) hangs — falls through to sequencedFetchMock's
+      // abort-aware default once the array below is exhausted
+      (url, opts) => new Promise((_resolve, reject) => {
+        opts?.signal?.addEventListener('abort', () => {
+          const err = new Error('Aborted')
+          err.name = 'AbortError'
+          reject(err)
+        })
+      }),
+      // The heal's resumed poll — its very first request reuses cursor 5 unchanged (no
+      // REST re-derivation) and delivers an event that was appended to the server
+      // during the heal window itself.
+      (url) => {
+        expect(String(url)).toContain('since=5')
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            events: [{ type: 'message', data: { type: 'assistant', id: 'during-heal-1' } }],
+            next_cursor: 6,
+          }),
+        })
+      },
+    ])
+
+    await pollingStore.connectSession(sid)
+    await flush() // let the first poll response land (cursor becomes 5), loop issues 2nd call which hangs
+
+    await tickStallCadence(pollingStore, 8) // past STALL_TIMEOUT_MS (40s)
+    await flush()
+
+    expect(addMessageSpy).toHaveBeenCalledWith(sid, expect.objectContaining({ id: 'during-heal-1' }))
+    // Zero REST calls to the message-history endpoint — the old two-step
+    // (syncMessages + cursor GET) is gone from the common path entirely.
+    const messagesRequests = apiMock.get.mock.calls.filter(([url]) => String(url).includes('/messages'))
+    expect(messagesRequests).toHaveLength(0)
+  })
+
+  it('T2: the heal path issues zero REST history-page requests even for a long-lived/large session, only the reconnect + resumed poll (AC3)', async () => {
+    const { pollingStore, sid } = await setupStallSession({ session_id: 'sess-1988-t2', is_processing: false })
+    abortAwareFetchMock()
+
+    await pollingStore.connectSession(sid)
+    await tickStallCadence(pollingStore, 8)
+    await flush()
+
+    // A 20,000-event session would otherwise cost many sequential /messages page round
+    // trips under the old syncMessages()-based heal — the new heal never walks history
+    // regardless of session size, so this count must be zero.
+    const messagesRequests = apiMock.get.mock.calls.filter(([url]) => String(url).includes('/messages'))
+    expect(messagesRequests).toHaveLength(0)
+    // Only the initial connectSession() bootstrap should have hit /cursor — no second,
+    // heal-specific re-fetch.
+    const cursorRequests = apiMock.get.mock.calls.filter(([url]) => String(url).includes('/cursor'))
+    expect(cursorRequests).toHaveLength(1)
+    expect(pollingStore.sessionConnected).toBe(true)
+  })
+
+  it('evicted fallback: a poll response reporting evicted=true triggers a full history reload and adopts the reload\'s own event_cursor', async () => {
+    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1988-evicted', is_processing: false })
+    const loadSpy = vi.spyOn(messageStore, 'loadMessages').mockImplementation(async (sessionId) => {
+      // Mirrors loadMessages()'s real event_cursor-capturing contract (message.js) without
+      // exercising its full REST/parsing pipeline — that pipeline has its own coverage in
+      // message.test.js; this test is about polling.js's response to the `evicted` flag.
+      messageStore.loadedEventCursors.set(sessionId, 999)
+      return { messages: [], totalCount: 0, hasMore: false }
+    })
+
+    const fetchMock = sequencedFetchMock([
+      { events: [], next_cursor: 5 }, // initial connect poll establishes cursor 5
+      { events: [], next_cursor: 5, evicted: true }, // next poll: cursor 5 has been evicted server-side
+    ])
+
+    await pollingStore.connectSession(sid)
+    await flush() // first response lands (cursor -> 5)
+    await flush() // second (evicted) response lands, triggers the fallback reload
+
+    expect(loadSpy).toHaveBeenCalledWith(sid)
+
+    // The next poll cycle resumes from the RELOAD's own event_cursor (999) — not the
+    // evicted response's own next_cursor (5), and not a stale re-fetch.
+    const lastCall = fetchMock.mock.calls[fetchMock.mock.calls.length - 1]
+    expect(lastCall[0]).toContain('since=999')
+  })
+
+  it('evicted fallback: does not apply the evicted response\'s own (incomplete) events — only the fresh reload\'s state', async () => {
+    const { pollingStore, sessionStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1988-evicted-b', is_processing: false })
+    sessionStore.currentSessionId = sid // so a false negative can't hide behind handleSessionMessage()'s own currentSessionId guard
+    const addMessageSpy = vi.spyOn(messageStore, 'addMessage')
+    vi.spyOn(messageStore, 'loadMessages').mockImplementation(async (sessionId) => {
+      messageStore.loadedEventCursors.set(sessionId, 42)
+      return { messages: [], totalCount: 0, hasMore: false }
+    })
+
+    sequencedFetchMock([
+      { events: [], next_cursor: 5 },
+      {
+        // The buffered-but-incomplete batch a real evicted response would still carry —
+        // must NOT be applied via handleSessionMessage(), since it can't be trusted as a
+        // gapless slice once the server has already dropped some history.
+        events: [{ type: 'message', data: { type: 'assistant', id: 'unreliable-evicted-event' } }],
+        next_cursor: 6,
+        evicted: true,
+      },
+    ])
+
+    await pollingStore.connectSession(sid)
+    await flush()
+    await flush()
+
+    expect(addMessageSpy).not.toHaveBeenCalledWith(sid, expect.objectContaining({ id: 'unreliable-evicted-event' }))
+  })
+
+  // Note: #1917's synchronous-abort guarantee and #1956/#1954's overlapping-heal mutex
+  // are already directly re-verified above by 'B1 (#1917): ...' and '#1954: suppresses
+  // an overlapping heal...' against this same new heal body — not duplicated again here.
+
+  it('reset fallback: a poll response reporting reset=true (evicted=false) also triggers the full history reload — Backend-restart-during-stall', async () => {
+    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1988-reset-fallback', is_processing: false })
+    const loadSpy = vi.spyOn(messageStore, 'loadMessages').mockImplementation(async (sessionId) => {
+      messageStore.loadedEventCursors.set(sessionId, 7)
+      return { messages: [], totalCount: 0, hasMore: false }
+    })
+
+    const fetchMock = sequencedFetchMock([
+      { events: [], next_cursor: 5 }, // initial connect poll establishes cursor 5
+      // A Backend restart recreated the session's EventQueue from scratch: reset=true,
+      // but evicted is deliberately false — reset and eviction are independent signals
+      // (shared/event_queue.py) — so this must NOT be silently treated as "here's
+      // everything" the way an ordinary reset (outside a heal) would be.
+      { events: [], next_cursor: 0, reset: true, evicted: false },
+    ])
+
+    await pollingStore.connectSession(sid)
+    await flush()
+    await flush()
+
+    expect(loadSpy).toHaveBeenCalledWith(sid)
+    const lastCall = fetchMock.mock.calls[fetchMock.mock.calls.length - 1]
+    expect(lastCall[0]).toContain('since=7')
+  })
+
+  it('regression: a concurrent reconnect during the evicted/reset reload does not have its cursor clobbered by the stale reload once it resolves', async () => {
+    const { pollingStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1988-race-fix', is_processing: false })
+
+    let resolveLoad
+    vi.spyOn(messageStore, 'loadMessages').mockImplementation(() => new Promise(resolve => {
+      // Deliberately does NOT set messageStore.loadedEventCursors — isolates this test
+      // to the direct `sessionCursors[sessionId] = data.next_cursor` write path (the
+      // one the post-await generation guard protects), so it can't pass "by accident"
+      // via connectSession()'s own separate, unguarded loadedEventCursors consumption.
+      resolveLoad = () => resolve({ messages: [], totalCount: 0, hasMore: false })
+    }))
+
+    const fetchMock = sequencedFetchMock([
+      { events: [], next_cursor: 5 }, // initial connect poll establishes cursor 5
+      { events: [], next_cursor: 5, evicted: true }, // triggers the fallback reload, held open
+    ])
+
+    await pollingStore.connectSession(sid)
+    await flush() // cursor -> 5; evicted response starts the now-pending reload
+
+    // A concurrent reconnect for the same session (e.g. a stall-heal) supersedes this
+    // loop's generation while the reload above is still in flight.
+    pollingStore.resetSessionCursor(sid)
+    apiMock.get.mockResolvedValue({ cursor: 42 })
+    await pollingStore.connectSession(sid)
+
+    const newGenFetchUrl = fetchMock.mock.calls[fetchMock.mock.calls.length - 1][0]
+    expect(newGenFetchUrl).toContain('since=42') // sanity: the new generation really did start from 42
+
+    // Now let the STALE (superseded-generation) reload finally resolve.
+    resolveLoad()
+    await flush()
+
+    // Force a fresh poll cycle to observe whichever cursor is currently in effect. If
+    // the stale reload's post-await write weren't guarded, sessionCursors[sid] would
+    // have been clobbered back to 5 (the old evicted response's own next_cursor).
+    await pollingStore.disconnectSession()
+    await pollingStore.connectSession(sid)
+    const finalFetchUrl = fetchMock.mock.calls[fetchMock.mock.calls.length - 1][0]
+    expect(finalFetchUrl).toContain('since=42')
   })
 })

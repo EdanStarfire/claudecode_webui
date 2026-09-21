@@ -32,22 +32,24 @@ class TestEventQueue:
         q.append({"type": "a"})
         q.append({"type": "b"})
         q.append({"type": "c"})
-        events, next_cur = q.events_since(1)
+        events, next_cur, evicted = q.events_since(1)
         assert len(events) == 2
         assert events[0]["type"] == "b"
         assert events[1]["type"] == "c"
         assert next_cur == 3
+        assert evicted is False
 
     def test_events_since_zero_returns_all(self):
         q = self._make_queue()
         q.append({"type": "x"})
         q.append({"type": "y"})
-        events, next_cur = q.events_since(0)
+        events, next_cur, evicted = q.events_since(0)
         assert len(events) == 2
         assert next_cur == 2
+        assert evicted is False
 
     def test_events_since_too_old_cursor_returns_full_snapshot(self):
-        """Cursor predating the buffer returns all buffered events."""
+        """Cursor predating the buffer returns all buffered events, flagged evicted."""
         from shared.event_queue import EventQueue
         q = EventQueue()
         q.MAX_SIZE = 3  # tiny buffer for this test
@@ -55,10 +57,25 @@ class TestEventQueue:
         for i in range(5):
             q.append({"type": str(i), "i": i})
         # Oldest buffered cursor is 3 (events 3,4,5)
-        # Request cursor=0 (too old) → full snapshot
-        events, next_cur = q.events_since(0)
+        # Request cursor=0 (too old) → full snapshot, evicted=True
+        events, next_cur, evicted = q.events_since(0)
         assert len(events) == 3
         assert next_cur == 5
+        assert evicted is True
+
+    def test_events_since_not_evicted_when_cursor_still_valid(self):
+        """Issue #1988: a cursor still inside the retained window must not be
+        flagged evicted, even after eviction has occurred elsewhere in the buffer."""
+        from shared.event_queue import EventQueue
+        q = EventQueue()
+        q.MAX_SIZE = 3
+        for i in range(5):
+            q.append({"type": str(i), "i": i})
+        # Oldest buffered cursor is 3 — requesting since=3 is still valid (not evicted).
+        events, next_cur, evicted = q.events_since(3)
+        assert [e["i"] for e in events] == [3, 4]
+        assert next_cur == 5
+        assert evicted is False
 
     def test_max_size_eviction(self):
         from shared.event_queue import EventQueue
@@ -67,15 +84,16 @@ class TestEventQueue:
         for i in range(10):
             q.append({"i": i})
         # Only last 3 remain
-        events, _ = q.events_since(0)
+        events, _, _ = q.events_since(0)
         assert len(events) == 3
         assert events[-1]["i"] == 9
 
     def test_empty_queue(self):
         q = self._make_queue()
-        events, cur = q.events_since(0)
+        events, cur, evicted = q.events_since(0)
         assert events == []
         assert cur == 0
+        assert evicted is False
 
     async def test_wait_for_events_returns_immediately_if_available(self):
         q = self._make_queue()
@@ -92,7 +110,7 @@ class TestEventQueue:
 
         appender = asyncio.create_task(_appender())
         await asyncio.wait_for(q.wait_for_events(0, timeout=5.0), timeout=2.0)
-        events, _ = q.events_since(0)
+        events, _, _ = q.events_since(0)
         assert len(events) == 1
         await appender
 
@@ -173,7 +191,7 @@ class TestPollUI:
         webui = api_integration_env["webui"]
 
         # Get current cursor before creating project+session
-        _, cursor_before = webui.ui_queue.events_since(0)
+        _, cursor_before, _ = webui.ui_queue.events_since(0)
 
         project = await api_integration_env["create_test_project"]("Poll UI Test")
         await api_integration_env["create_test_session"](project["project_id"])
@@ -219,6 +237,7 @@ class TestPollUI:
         assert resp.status_code == 200
         data = resp.json()
         assert data["reset"] is False
+        assert data["evicted"] is False
 
 
 class TestPollSession:
@@ -322,6 +341,28 @@ class TestPollSession:
         assert resp.status_code == 200
         data = resp.json()
         assert data["reset"] is False
+        assert data["evicted"] is False
+
+    async def test_poll_session_evicted_true_when_cursor_predates_buffer(self, api_integration_env):
+        """Issue #1988: a cursor older than the retained window must surface
+        evicted=true, independent of the reset signal, so the frontend's
+        stall-heal can distinguish genuinely-lost history from a normal reset."""
+        client = api_integration_env["client"]
+        webui = api_integration_env["webui"]
+        project = await api_integration_env["create_test_project"]()
+        session = await api_integration_env["create_test_session"](project["project_id"])
+        sid = session["session_id"]
+
+        queue = webui.session_queues[sid]
+        queue.MAX_SIZE = 3
+        for i in range(5):
+            queue.append({"type": str(i), "i": i})
+
+        resp = await client.get(f"/api/poll/session/{sid}?since=0&timeout=0")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["reset"] is False
+        assert data["evicted"] is True
 
     async def test_session_queue_removed_on_session_delete(self, api_integration_env):
         client = api_integration_env["client"]

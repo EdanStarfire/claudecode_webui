@@ -242,7 +242,7 @@ class TestDisposeMinionHardDeleteBroadcast:
         parent_info = await coordinator.session_manager.get_session_info(parent_id)
         parent_info.child_minion_ids = [child_id]
 
-        _, cursor_before = webui.ui_queue.events_since(0)
+        _, cursor_before, _ = webui.ui_queue.events_since(0)
 
         with caplog.at_level("ERROR"):
             result = await coordinator.legion_system.overseer_controller.dispose_minion(
@@ -255,7 +255,7 @@ class TestDisposeMinionHardDeleteBroadcast:
         assert result["deleted"] is True
         assert result["disposed_minion_id"] == child_id
 
-        events, _ = webui.ui_queue.events_since(cursor_before)
+        events, _, _ = webui.ui_queue.events_since(cursor_before)
         session_deleted_events = [e for e in events if e["type"] == "session_deleted"]
         assert session_deleted_events == [{"type": "session_deleted", "data": {"session_id": child_id}}]
 

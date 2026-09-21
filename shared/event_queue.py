@@ -70,25 +70,36 @@ class EventQueue:
         self._waiters.clear()
         return self._cursor
 
-    def events_since(self, cursor: int) -> tuple[list[dict], int]:
+    def events_since(self, cursor: int) -> tuple[list[dict], int, bool]:
+        """Returns (events, next_cursor, evicted).
+
+        `evicted` is true only when `cursor` predates the buffer's oldest
+        retained event — i.e. genuinely-lost history, not a resettable cursor
+        space (that case is `reset_occurred()`, checked independently by
+        callers against `next_cursor`/`since`). Callers that need an explicit
+        signal for "some history was silently dropped" (e.g. a stall-heal
+        deciding whether to fall back to a full resync) should check this
+        field rather than inferring it from `reset_occurred()`.
+        """
         if not self._events:
-            return [], self._cursor
-        if cursor > self._cursor or cursor < self._oldest_cursor - 1:
+            return [], self._cursor, False
+        evicted = cursor < self._oldest_cursor - 1
+        if cursor > self._cursor or evicted:
             # Either `since` exceeds what this queue instance has ever handed
             # out (the queue must have reset to a lower cursor space, e.g. a
             # Backend restart) or it predates the buffer's oldest retained
             # event (evicted history). Both cases mean the caller can't be
             # served a slice — hand back everything currently buffered.
-            return list(self._events), self._cursor
+            return list(self._events), self._cursor, evicted
         start_idx = max(0, cursor - self._oldest_cursor + 1)
-        return self._events[start_idx:], self._cursor
+        return self._events[start_idx:], self._cursor, False
 
     @property
     def current_cursor(self) -> int:
         return self._cursor
 
     async def wait_for_events(self, cursor: int, timeout: float) -> None:
-        events, current = self.events_since(cursor)
+        events, current, _evicted = self.events_since(cursor)
         if events or current > cursor:
             return
         waiter = asyncio.Event()

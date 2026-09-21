@@ -16,7 +16,7 @@ def test_explicit_cursor_contiguous_append_behaves_like_auto_increment():
     assert queue.append({"n": 2}, cursor=2) == 2
     assert queue.append({"n": 3}, cursor=3) == 3
 
-    events, next_cursor = queue.events_since(0)
+    events, next_cursor, _ = queue.events_since(0)
     assert [e["n"] for e in events] == [1, 2, 3]
     assert next_cursor == 3
 
@@ -29,7 +29,7 @@ def test_explicit_cursor_exact_redelivery_is_a_noop():
     result = queue.append({"n": "duplicate-of-2"}, cursor=2)
 
     assert result == 2
-    events, next_cursor = queue.events_since(0)
+    events, next_cursor, _ = queue.events_since(0)
     assert [e["n"] for e in events] == [1, 2]  # not duplicated, not replaced
     assert next_cursor == 2
 
@@ -44,13 +44,13 @@ def test_explicit_cursor_forward_gap_drops_stale_history_and_anchors_fresh():
     result = queue.append({"n": "gap"}, cursor=50)
 
     assert result == 50
-    events, next_cursor = queue.events_since(0)
+    events, next_cursor, _ = queue.events_since(0)
     assert [e["n"] for e in events] == ["gap"]
     assert next_cursor == 50
 
     # An old `since` value now legitimately falls into the "too old, here's
     # everything we currently have" fallback rather than mis-slicing.
-    events, next_cursor = queue.events_since(1)
+    events, next_cursor, _ = queue.events_since(1)
     assert [e["n"] for e in events] == ["gap"]
     assert next_cursor == 50
 
@@ -69,13 +69,13 @@ def test_explicit_cursor_backward_jump_is_treated_as_reset_not_silent_drop():
     result = queue.append({"n": "post-restart-1"}, cursor=1)
 
     assert result == 1
-    events, next_cursor = queue.events_since(0)
+    events, next_cursor, _ = queue.events_since(0)
     assert [e["n"] for e in events] == ["post-restart-1"]
     assert next_cursor == 1
 
     # The next post-restart event continues to append contiguously as normal.
     queue.append({"n": "post-restart-2"}, cursor=2)
-    events, next_cursor = queue.events_since(0)
+    events, next_cursor, _ = queue.events_since(0)
     assert [e["n"] for e in events] == ["post-restart-1", "post-restart-2"]
     assert next_cursor == 2
 
@@ -96,7 +96,7 @@ def test_explicit_cursor_backward_jump_delivers_all_post_reset_events_to_a_stale
     for n in range(1, 6):
         queue.append({"n": n}, cursor=n)
 
-    events, next_cursor = queue.events_since(100)
+    events, next_cursor, _ = queue.events_since(100)
     assert [e["n"] for e in events] == [1, 2, 3, 4, 5]
     assert next_cursor == 5
 
@@ -111,7 +111,7 @@ def test_explicit_cursor_backward_jump_delivers_partial_post_reset_batch_so_far(
 
     queue.append({"n": "post-restart-1"}, cursor=1)
 
-    events, next_cursor = queue.events_since(100)
+    events, next_cursor, _ = queue.events_since(100)
     assert [e["n"] for e in events] == ["post-restart-1"]
     assert next_cursor == 1
 
@@ -124,12 +124,12 @@ def test_explicit_cursor_first_ever_append_anchors_oldest_cursor():
 
     queue.append({"n": "first"}, cursor=42)
 
-    events, next_cursor = queue.events_since(41)
+    events, next_cursor, _ = queue.events_since(41)
     assert [e["n"] for e in events] == ["first"]
     assert next_cursor == 42
 
     # since < oldest_cursor - 1 falls into the "too old" fallback correctly.
-    events, next_cursor = queue.events_since(0)
+    events, next_cursor, _ = queue.events_since(0)
     assert [e["n"] for e in events] == ["first"]
     assert next_cursor == 42
 
@@ -138,6 +138,6 @@ def test_default_no_cursor_append_path_is_unchanged():
     queue = EventQueue()
     assert queue.append({"n": 1}) == 1
     assert queue.append({"n": 2}) == 2
-    events, next_cursor = queue.events_since(0)
+    events, next_cursor, _ = queue.events_since(0)
     assert [e["n"] for e in events] == [1, 2]
     assert next_cursor == 2

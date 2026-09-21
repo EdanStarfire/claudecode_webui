@@ -180,12 +180,12 @@ class TestRestartNoticeAgainstLiveQueue:
                 release_relay.set()
 
                 for _ in range(300):
-                    events, _ = webui.ui_queue.events_since(0)
+                    events, _, _ = webui.ui_queue.events_since(0)
                     if len(events) >= 2:
                         break
                     await asyncio.sleep(0.01)
 
-            events, _ = webui.ui_queue.events_since(0)
+            events, _, _ = webui.ui_queue.events_since(0)
             markers = [(e.get("type"), e.get("n")) for e in events]
             assert ("server_restarting", None) in markers
             assert ("message", "relay-1") in markers
