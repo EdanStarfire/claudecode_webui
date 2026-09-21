@@ -780,10 +780,10 @@ class TestClaudeSDK:
         # storage_manager is None on a bare ClaudeSDK instance — confirms no storage was attempted
         assert sdk_instance.storage_manager is None
 
-    # --- Issue #1614: message_id / tool_use_id stamping on delta events ---
+    # --- Issue #1987: turn_id / tool_use_id stamping on delta events ---
 
-    def test_issue_1614_message_id_stamped_on_deltas(self, sdk_instance):
-        """Issue #1614: message_id captured from message_start is stamped on subsequent deltas."""
+    def test_issue_1987_turn_id_stamped_on_deltas(self, sdk_instance):
+        """Issue #1987: turn_id captured from message_start is stamped on subsequent deltas."""
         from claude_agent_sdk import StreamEvent
 
         def se(event_dict):
@@ -794,10 +794,10 @@ class TestClaudeSDK:
             "type": "content_block_delta", "index": 0,
             "delta": {"type": "text_delta", "text": "hi"},
         }))
-        assert delta["message_id"] == "msg_abc123"
+        assert delta["turn_id"] == "msg_abc123"
 
-    def test_issue_1614_message_id_cleared_on_message_stop(self, sdk_instance):
-        """Issue #1614: message_stop clears stream state; next message_start resets correctly."""
+    def test_issue_1987_turn_id_cleared_on_message_stop(self, sdk_instance):
+        """Issue #1987: message_stop clears stream state; next message_start resets correctly."""
         from claude_agent_sdk import StreamEvent
 
         def se(event_dict):
@@ -805,20 +805,54 @@ class TestClaudeSDK:
 
         sdk_instance._convert_sdk_message(se({"type": "message_start", "message": {"id": "msg_first"}}))
         sdk_instance._convert_sdk_message(se({"type": "message_stop"}))
-        # After message_stop, state is cleared; delta carries no message_id
+        # After message_stop, state is cleared; delta carries no turn_id
         delta_after = sdk_instance._convert_sdk_message(se({
             "type": "content_block_delta", "index": 0,
             "delta": {"type": "text_delta", "text": "orphan"},
         }))
-        assert delta_after.get("message_id") is None
+        assert delta_after.get("turn_id") is None
 
-        # Next turn starts fresh with new message_id
+        # Next turn starts fresh with new turn_id
         sdk_instance._convert_sdk_message(se({"type": "message_start", "message": {"id": "msg_second"}}))
         delta_new = sdk_instance._convert_sdk_message(se({
             "type": "content_block_delta", "index": 0,
             "delta": {"type": "text_delta", "text": "fresh"},
         }))
-        assert delta_new["message_id"] == "msg_second"
+        assert delta_new["turn_id"] == "msg_second"
+
+    @pytest.mark.asyncio
+    async def test_issue_1987_delta_turn_id_matches_final_record_turn_id(self, sdk_instance):
+        """Issue #1987: turn_id stamped on assistant_delta frames during streaming equals
+        the finalized message's metadata.turn_id, while the finalized message's own
+        record_id (message_id) remains a distinct per-record identity."""
+        from claude_agent_sdk import StreamEvent
+
+        def se(event_dict):
+            return StreamEvent(uuid="u5", session_id=sdk_instance.session_id, event=event_dict)
+
+        sdk_instance._convert_sdk_message(se({"type": "message_start", "message": {"id": "msg_turn_1987"}}))
+        delta = sdk_instance._convert_sdk_message(se({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "hi"},
+        }))
+
+        storage_manager = Mock()
+        storage_manager.append_message = AsyncMock()
+        sdk_instance.storage_manager = storage_manager
+        received = []
+        sdk_instance.message_callback = lambda msg: received.append(msg)
+
+        final_frame = {
+            "type": "assistant", "content": "hi", "timestamp": 2.0,
+            "session_id": sdk_instance.session_id,
+            "metadata": {"turn_id": "msg_turn_1987"},
+        }
+        await sdk_instance._process_sdk_message(final_frame)
+
+        assert len(received) == 1
+        final = received[0]
+        assert final["metadata"]["turn_id"] == delta["turn_id"]
+        assert final["message_id"] != delta["turn_id"]
 
     def test_issue_1614_tool_use_id_stamped_on_input_json_delta(self, sdk_instance):
         """Issue #1614: tool_use_id captured from content_block_start is stamped on input_json_delta."""

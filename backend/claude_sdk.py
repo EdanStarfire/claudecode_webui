@@ -329,7 +329,7 @@ class ClaudeSDK:
             "total_responses_received": 0
         }
 
-        # Issue #1614: per-stream state for stamping message_id / tool_use_id on delta events.
+        # Issue #1987: per-stream state for stamping turn_id / tool_use_id on delta events.
         # Keyed by parent_tool_use_id (None = top-level session).
         self._stream_state: dict[str | None, dict] = {}
 
@@ -1727,7 +1727,7 @@ class ClaudeSDK:
         try:
             # Issue #1486: StreamEvent — partial message delta, never persisted
             if StreamEvent is not None and isinstance(sdk_message, StreamEvent):
-                # Issue #1614: stamp stable message_id / tool_use_id on every delta so the
+                # Issue #1987: stamp stable turn_id / tool_use_id on every delta so the
                 # frontend can associate deltas with placeholders without depending on event order.
                 key = sdk_message.parent_tool_use_id  # None for top-level session
                 event = sdk_message.event if isinstance(sdk_message.event, dict) else {}
@@ -1736,13 +1736,13 @@ class ClaudeSDK:
                 if event_type == "message_start":
                     # Overwrite any stale state (guards against dropped message_stop).
                     self._stream_state[key] = {
-                        "message_id": event.get("message", {}).get("id"),
+                        "turn_id": event.get("message", {}).get("id"),
                         "tool_use_id_by_index": {},
                     }
                 elif event_type == "content_block_start":
                     content_block = event.get("content_block", {})
                     if content_block.get("type") == "tool_use":
-                        state = self._stream_state.setdefault(key, {"message_id": None, "tool_use_id_by_index": {}})
+                        state = self._stream_state.setdefault(key, {"turn_id": None, "tool_use_id_by_index": {}})
                         idx = event.get("index")
                         state["tool_use_id_by_index"][idx] = content_block.get("id")
                 elif event_type == "content_block_stop":
@@ -1760,7 +1760,7 @@ class ClaudeSDK:
                     "parent_tool_use_id": sdk_message.parent_tool_use_id,
                     "event": sdk_message.event,
                     "timestamp": time.time(),
-                    "message_id": state.get("message_id"),
+                    "turn_id": state.get("turn_id"),
                 }
                 # Stamp tool_use_id only on input_json_delta (keyed by block index).
                 if event_type == "content_block_delta":
