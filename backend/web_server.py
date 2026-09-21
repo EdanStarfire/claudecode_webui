@@ -803,7 +803,7 @@ class BackendApp:
                             "data": {
                                 "uuid": message_data["uuid"],
                                 "event": message_data["event"],
-                                "message_id": message_data.get("message_id"),
+                                "turn_id": message_data.get("turn_id"),
                                 "tool_use_id": message_data.get("tool_use_id"),
                             },
                             "timestamp": datetime.now(UTC).isoformat(),

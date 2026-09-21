@@ -858,6 +858,40 @@ describe('streamingPreviewBySession lifecycle (Issue #1955)', () => {
   })
 })
 
+describe('assistant_delta turn_id field (Issue #1987)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('requestAnimationFrame', () => 1)
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('handleAssistantDelta ignores the renamed turn_id field and the preview-to-final swap still yields exactly one message', async () => {
+    // #1987 renamed the delta envelope's turn-identity key from message_id to turn_id.
+    // handleAssistantDelta never read either key (the #1955 rewrite made the streaming
+    // preview purely cosmetic, keyed only by sessionId) — this locks in that the extra
+    // field is harmlessly ignored and the preview/final-message lifecycle is unaffected.
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-turn-id-1987'
+
+    store.handleAssistantDelta(SID, { ...delta('message_start', SID, { message: { id: 'msg_1' } }), turn_id: 'msg_1' })
+    store.handleAssistantDelta(SID, { ...delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'hello' } }), turn_id: 'msg_1' })
+    store.handleAssistantDelta(SID, { ...delta('message_stop', SID, {}), turn_id: 'msg_1' })
+
+    expect(store.streamingPreviewBySession.get(SID).content).toBe('hello')
+
+    store.addMessage(SID, makeMessage({ type: 'assistant', content: 'hello', message_id: 'am-final-1987' }))
+
+    const msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].content).toBe('hello')
+    expect(store.streamingPreviewBySession.get(SID).content).toBe('')
+  })
+})
+
 describe('loadMessages reload-race (Issue #1955, replaces old #1945 tests)', () => {
   it('discards an active preview and shows exactly the freshly-loaded canonical history, nothing merged in', async () => {
     const { useMessageStore } = await import('@/stores/message')
