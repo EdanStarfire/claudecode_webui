@@ -74,7 +74,7 @@ def build_router(webui) -> APIRouter:
             try:
                 await webui.backend_client.request_json("PUT", "/api/config", json=backend_body)
             except httpx.RequestError as e:
-                raise to_http_exception(e) from e
+                raise to_http_exception(e, degraded=is_backend_degraded(webui)) from e
 
         return {"config": await _merged_config()}
 

@@ -151,6 +151,23 @@ async def test_issue_1989_get_config_backend_degraded_returns_503(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_issue_1989_put_config_backend_degraded_returns_503(tmp_path):
+    """Regression guard: the PUT handler's backend_body relay (config.py:77) is a
+    separate to_http_exception() call site from the GET path above and was
+    initially missed when degraded= was wired through — confirmed missing in
+    review despite the GET path's equivalent test already existing and passing."""
+    app, _, webui = _make_app(tmp_path)
+    webui.backend_client.request_json = AsyncMock(side_effect=httpx.ConnectError("refused"))
+    webui.backend_supervisor = MagicMock(degraded=True)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.put("/api/config", json={"features": {"skill_sync_enabled": False}})
+
+    assert resp.status_code == 503
+    assert resp.json() == {"detail": "Backend is degraded and unavailable"}
+
+
+@pytest.mark.asyncio
 async def test_put_config_backend_connection_is_frontend_owned(tmp_path):
     app, config_file, webui = _make_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
