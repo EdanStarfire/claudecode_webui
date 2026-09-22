@@ -57,7 +57,11 @@ Transform issue #{ISSUE_NUMBER} into a detailed, approved implementation plan th
    - Iterate based on feedback
 
 6. **Post Approved Plan**
-   - Use custom-plan-manager write-plan if available, else post as GitHub comment + add `ready-to-build` label
+   - Use custom-plan-manager write-plan if available, else write the plan to a local
+     file (e.g. `plan-issue-{ISSUE_NUMBER}.md`) at the worktree root and attach it via
+     `send_comm`'s `attachments` param — use the file's full absolute path, not a
+     relative or /tmp path. Do NOT post the plan as a GitHub issue comment: it has not
+     been reviewed yet, and GitHub comments are public and effectively permanent.
    - Signal completion to Orchestrator
 
 ### Communication
@@ -92,7 +96,8 @@ Implement the approved plan for issue #{ISSUE_NUMBER}.
 ### Phase 1: Plan Retrieval
 
 1. **Fetch Implementation Plan**
-   - Use custom-plan-manager read-plan if available, else github-issue-reader + read from comments
+   - Use custom-plan-manager read-plan if available, else read the plan file the
+     Orchestrator attached to your spawn/kickoff comm — it is not on GitHub
    - Extract all user stories, steps, and acceptance criteria
 
 2. **Create Task List**
@@ -181,14 +186,18 @@ When spawning, replace:
 ## Notes for Orchestrator
 
 ### Planner → Builder Transition
-1. Planner posts plan and marks as approved (via custom-plan-manager or GitHub)
+1. Planner writes the plan to a local file and sends it to the Orchestrator via
+   `send_comm` attachment (via custom-plan-manager if available, else the local-file
+   fallback above) — never via GitHub comment
 2. User approves via `/approve_plan`
-3. Orchestrator disposes Planner, spawns Builder in same worktree
-4. Builder retrieves plan via custom-plan-manager or GitHub (clean handoff, no filesystem assumptions)
+3. Orchestrator disposes Planner, spawns Builder in same worktree, attaching the
+   approved plan file to the Builder's kickoff comm
+4. Builder reads the plan from that attachment (clean handoff, no GitHub dependency)
 
 ### Custom Skill Injection
 The templates reference custom skills at defined checkpoints:
-- `custom-plan-manager` - Issue tracking & plan storage (falls back to GitHub)
+- `custom-plan-manager` - Issue tracking & plan storage (falls back to a local plan
+  file delivered via comm attachment, never GitHub)
 - `custom-build-process` - Project-specific build
 - `custom-quality-check` - Linting/quality checks
 - `custom-test-process` - Full test cycle
