@@ -13,7 +13,7 @@ from fastapi import APIRouter, Request
 
 from shared.exception_handlers import handle_exceptions
 
-from ..backend_reachability import to_http_exception
+from ..backend_reachability import is_backend_degraded, to_http_exception
 
 # Mutating an MCP config can add/change/remove its custom OAuth callback path on
 # Backend — resync Frontend's dynamic relay routes (webui.resync_oauth_callback_paths,
@@ -43,7 +43,7 @@ def build_router(webui) -> APIRouter:
         try:
             response = await webui.backend_client.relay(request, f"/api/{full_path}", timeout=timeout)
         except httpx.RequestError as e:
-            raise to_http_exception(e) from e
+            raise to_http_exception(e, degraded=is_backend_degraded(webui)) from e
         if full_path.startswith("mcp-configs") and request.method in _MCP_CONFIG_MUTATION_METHODS:
             await webui.resync_oauth_callback_paths()
         return response
@@ -60,6 +60,6 @@ def build_router(webui) -> APIRouter:
         try:
             return await webui.backend_client.relay(request, "/oauth/callback")
         except httpx.RequestError as e:
-            raise to_http_exception(e) from e
+            raise to_http_exception(e, degraded=is_backend_degraded(webui)) from e
 
     return router

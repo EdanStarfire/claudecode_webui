@@ -107,10 +107,19 @@ function channelState({ connected, retryCount, stalled }) {
   return 'disconnected'
 }
 
-// Worst-to-best: an outright disconnect is more alarming than an active retry, which is
-// more alarming than a silent stall (still "connected" from the transport's point of
-// view), which is more alarming than healthy.
-const STATE_SEVERITY = { disconnected: 0, reconnecting: 1, stalled: 2, connected: 3 }
+// Worst-to-best: an outright browser<->Frontend disconnect is the most alarming (Backend's
+// status can't even be observed), followed by a genuine Backend outage (issue #1989 —
+// "degraded" ranked worse than plain "unreachable" since it needs a manual restart rather
+// than self-healing), then active retry, then a silent stall (still "connected" from the
+// transport's point of view), then healthy.
+const STATE_SEVERITY = {
+  disconnected: 0,
+  'backend-degraded': 1,
+  'backend-unreachable': 2,
+  reconnecting: 3,
+  stalled: 4,
+  connected: 5,
+}
 
 // Issue #1977 (AC4): a failed initial data load reuses the existing "stalled" visual
 // treatment (transport connected, but something's wrong) so this dot never reads
@@ -128,9 +137,19 @@ const sessionChannelState = computed(() => wsStore.currentSessionId
   })
   : null)
 
+// Issue #1989: Backend-health signal, independent of the transport channels above —
+// stays 'connected' from the transport's point of view throughout a pure Backend-side
+// outage, so this is the only thing that can surface it on the indicator.
+const backendChannelState = computed(() => {
+  if (wsStore.backendStatus === 'degraded') return 'backend-degraded'
+  if (wsStore.backendStatus === 'unreachable') return 'backend-unreachable'
+  return null
+})
+
 const combinedConnectionState = computed(() => {
   const states = [uiChannelState.value]
   if (sessionChannelState.value) states.push(sessionChannelState.value)
+  if (backendChannelState.value) states.push(backendChannelState.value)
   return states.reduce((worst, s) => (STATE_SEVERITY[s] < STATE_SEVERITY[worst] ? s : worst))
 })
 
@@ -139,6 +158,8 @@ const CONNECTION_LABELS = {
   reconnecting: 'Reconnecting',
   stalled: 'Stalled',
   disconnected: 'Disconnected',
+  'backend-unreachable': 'Backend unreachable',
+  'backend-degraded': 'Backend degraded',
 }
 const connectionAriaLabel = computed(() => `Connection status: ${CONNECTION_LABELS[combinedConnectionState.value]}`)
 
@@ -273,6 +294,20 @@ function toggleAudit() {
   color: #fd7e14;
 }
 
+/* Issue #1989: Backend-side outage, violet family — distinct from the transport-level
+   red/amber/orange states above, since it's a different failure mode (browser<->Frontend
+   is fine, Frontend<->Backend is not). backend-degraded uses a darker shade of the same
+   hue (not red — #dc2626 read as near-identical to disconnected's #ef4444 in review) so
+   the two backend states read as a related pair while still being distinguishable from
+   each other by severity. */
+.header-indicator.backend-unreachable {
+  color: #a855f7;
+}
+
+.header-indicator.backend-degraded {
+  color: #7e22ce;
+}
+
 .indicator-dot {
   width: 6px;
   height: 6px;
@@ -296,6 +331,16 @@ function toggleAudit() {
 
 .header-indicator.stalled .indicator-dot {
   background: #fd7e14;
+  animation: pulse-error 1.5s infinite;
+}
+
+.header-indicator.backend-unreachable .indicator-dot {
+  background: #a855f7;
+  animation: pulse-error 1.5s infinite;
+}
+
+.header-indicator.backend-degraded .indicator-dot {
+  background: #7e22ce;
   animation: pulse-error 1.5s infinite;
 }
 

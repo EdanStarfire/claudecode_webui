@@ -90,8 +90,8 @@ async def test_issue_1844_to_http_exception_sanitized_when_debug_off():
     with patch.object(logging_config, '_log_config', {'debug_error_handler': False}):
         exc = to_http_exception(httpx.ConnectError("internal/path/secret"))
 
-    assert exc.status_code == 500
-    assert exc.detail == "An internal error occurred"
+    assert exc.status_code == 502
+    assert exc.detail == "Backend is unreachable"
 
 
 @pytest.mark.asyncio
@@ -99,5 +99,23 @@ async def test_issue_1844_to_http_exception_full_detail_when_debug_on():
     with patch.object(logging_config, '_log_config', {'debug_error_handler': True}):
         exc = to_http_exception(httpx.ConnectError("refused"))
 
-    assert exc.status_code == 500
+    assert exc.status_code == 502
     assert "refused" in exc.detail
+
+
+@pytest.mark.asyncio
+async def test_issue_1989_to_http_exception_unreachable_error_code():
+    exc = to_http_exception(httpx.ConnectError("refused"))
+
+    assert exc.status_code == 502
+    assert exc.error_code == "backend_unreachable"
+
+
+@pytest.mark.asyncio
+async def test_issue_1989_to_http_exception_degraded_returns_503():
+    with patch.object(logging_config, '_log_config', {'debug_error_handler': False}):
+        exc = to_http_exception(httpx.ConnectError("refused"), degraded=True)
+
+    assert exc.status_code == 503
+    assert exc.error_code == "backend_degraded"
+    assert exc.detail == "Backend is degraded and unavailable"

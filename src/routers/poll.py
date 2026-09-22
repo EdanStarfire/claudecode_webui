@@ -21,9 +21,23 @@ from shared.event_queue import reset_occurred
 from shared.exception_handlers import handle_exceptions
 from shared.logging_config import get_logger
 
-from ..backend_reachability import to_http_exception
+from ..backend_reachability import is_backend_degraded, to_http_exception
 
 _polling_logger = get_logger('polling', category='POLL')
+
+
+def _backend_status(webui) -> str:
+    """Vocabulary shared with `to_http_exception()`: "degraded" (supervisor gave
+    up restarting, needs a manual restart) takes precedence over "unreachable"
+    (transient — the poll-relay's own retry loop is expected to recover it) when
+    both are true. In remote-Backend mode `backend_supervisor` is None, so
+    "degraded" can never occur there — only "unreachable" (issue #1989).
+    """
+    if is_backend_degraded(webui):
+        return "degraded"
+    if webui.backend_client.reachability.is_unreachable:
+        return "unreachable"
+    return "ok"
 
 
 def build_router(webui) -> APIRouter:
@@ -43,7 +57,13 @@ def build_router(webui) -> APIRouter:
                 "poll ui returned %d event(s) since=%d next_cursor=%d",
                 len(events), since, next_cursor
             )
-        return {"events": events, "next_cursor": next_cursor, "reset": reset, "evicted": evicted}
+        return {
+            "events": events,
+            "next_cursor": next_cursor,
+            "reset": reset,
+            "evicted": evicted,
+            "backend_status": _backend_status(webui),
+        }
 
     @router.get("/api/poll/cursor")
     @handle_exceptions("poll cursor")
@@ -63,7 +83,7 @@ def build_router(webui) -> APIRouter:
                     raise HTTPException(status_code=404, detail="Session not found") from e
                 raise
             except httpx.RequestError as e:
-                raise to_http_exception(e) from e
+                raise to_http_exception(e, degraded=is_backend_degraded(webui)) from e
             return {"cursor": 0}  # session exists but queue not yet initialized
         return {"cursor": webui.session_queues[session_id].current_cursor}
 
@@ -79,7 +99,7 @@ def build_router(webui) -> APIRouter:
                     raise HTTPException(status_code=404, detail="Session not found") from e
                 raise
             except httpx.RequestError as e:
-                raise to_http_exception(e) from e
+                raise to_http_exception(e, degraded=is_backend_degraded(webui)) from e
         webui.poll_relay.ensure_session_relay(session_id)
         queue = webui.session_queues[session_id]
 
@@ -93,6 +113,12 @@ def build_router(webui) -> APIRouter:
                 "poll session %s returned %d event(s) since=%d next_cursor=%d",
                 session_id, len(events), since, next_cursor
             )
-        return {"events": events, "next_cursor": next_cursor, "reset": reset, "evicted": evicted}
+        return {
+            "events": events,
+            "next_cursor": next_cursor,
+            "reset": reset,
+            "evicted": evicted,
+            "backend_status": _backend_status(webui),
+        }
 
     return router

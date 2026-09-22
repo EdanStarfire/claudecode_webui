@@ -14,7 +14,7 @@ from fastapi import APIRouter, Request
 
 from shared.exception_handlers import handle_exceptions
 
-from ..backend_reachability import to_http_exception
+from ..backend_reachability import is_backend_degraded, to_http_exception
 from ..frontend_config import load_frontend_config, save_frontend_config
 
 _FRONTEND_OWNED_KEYS = {"networking", "backend_connection"}
@@ -27,7 +27,7 @@ def build_router(webui) -> APIRouter:
         try:
             backend_result = await webui.backend_client.get_json("/api/config")
         except httpx.RequestError as e:
-            raise to_http_exception(e) from e
+            raise to_http_exception(e, degraded=is_backend_degraded(webui)) from e
         merged = backend_result["config"]
         frontend_cfg = (
             load_frontend_config(webui.config_file) if webui.config_file else load_frontend_config()
@@ -74,7 +74,7 @@ def build_router(webui) -> APIRouter:
             try:
                 await webui.backend_client.request_json("PUT", "/api/config", json=backend_body)
             except httpx.RequestError as e:
-                raise to_http_exception(e) from e
+                raise to_http_exception(e, degraded=is_backend_degraded(webui)) from e
 
         return {"config": await _merged_config()}
 
