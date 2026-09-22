@@ -24,6 +24,9 @@ def _make_webui(reserved_paths=frozenset()):
     webui._oauth_callback_paths = set()
     webui._reserved_route_paths = frozenset(reserved_paths)
     webui.backend_client = MagicMock()
+    # __new__ bypasses __init__, so this attribute is never set unless done here
+    # explicitly — is_backend_degraded() (src/backend_reachability.py) reads it.
+    webui.backend_supervisor = None
     return webui
 
 
@@ -174,13 +177,17 @@ async def test_dynamic_callback_route_actually_relays():
 
 
 @pytest.mark.asyncio
-async def test_issue_1844_dynamic_callback_route_backend_unreachable_returns_500():
+async def test_issue_1989_dynamic_callback_route_backend_unreachable_returns_502():
     """This handler is a raw Starlette Route, not a FastAPI route — it isn't
     wrapped by @handle_exceptions, so it must pre-empt a Backend-unreachable
     failure itself (like the default /oauth/callback path in
     src/routers/relay.py) or an httpx.RequestError falls straight through to
     Starlette's default unhandled-exception traceback logging on every hit
-    (builder-review finding for issue #1844)."""
+    (builder-review finding for issue #1844). Issue #1989: the response is now
+    502 instead of a flat 500 — this bare test app doesn't register the
+    BackendUnreachableError exception handler (that's src/web_server.py's real
+    __init__, bypassed here), so FastAPI's default HTTPException handling
+    applies: {"detail": ...} only, no error_code key."""
     import httpx
 
     webui = _make_webui()
@@ -191,8 +198,30 @@ async def test_issue_1844_dynamic_callback_route_backend_unreachable_returns_500
     async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
         resp = await client.get("/custom/callback?code=abc123")
 
-    assert resp.status_code == 500
-    assert resp.json() == {"detail": "An internal error occurred"}
+    assert resp.status_code == 502
+    assert resp.json() == {"detail": "Backend is unreachable"}
+
+
+@pytest.mark.asyncio
+async def test_issue_1989_dynamic_callback_route_backend_degraded_returns_503():
+    """Regression guard (builder-review finding): this handler's to_http_exception()
+    call originally had no degraded= kwarg at all, so it could never report 503
+    even when webui.backend_supervisor.degraded is True — the docstring above
+    claims parity with relay.py's default /oauth/callback path, which does
+    thread degraded through."""
+    import httpx
+
+    webui = _make_webui()
+    webui.backend_client.relay = AsyncMock(side_effect=httpx.ConnectError("refused"))
+    webui.backend_supervisor = MagicMock(degraded=True)
+
+    webui._add_oauth_callback_relay_route("/custom/callback")
+
+    async with AsyncClient(transport=ASGITransport(app=webui.app), base_url="http://test") as client:
+        resp = await client.get("/custom/callback?code=abc123")
+
+    assert resp.status_code == 503
+    assert resp.json() == {"detail": "Backend is degraded and unavailable"}
 
 
 class TestReservedPathCollision:

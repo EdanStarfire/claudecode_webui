@@ -15,6 +15,12 @@ export const usePollingStore = defineStore('polling', () => {
   // ========== STATE ==========
   const uiConnected = ref(false)
   const uiRetryCount = ref(0)
+  // Issue #1989: Backend-health signal carried on every successful poll response
+  // ("ok" / "unreachable" / "degraded") — independent of uiConnected/sessionConnected,
+  // which only reflect the browser<->Frontend transport and stay true throughout a
+  // pure Backend-side outage (Frontend keeps answering polls normally). Defaults to
+  // 'ok' when the field is absent, for resilience against a stale/older remote Backend.
+  const backendStatus = ref('ok')
   const sessionConnected = ref(false)
   const sessionRetryCount = ref(0)
   const sessionStalled = ref(false)
@@ -245,6 +251,7 @@ export const usePollingStore = defineStore('polling', () => {
 
         const data = await response.json()
         uiRetryCount.value = 0
+        backendStatus.value = data.backend_status || 'ok'
         if (recoveringFromError) {
           recoveringFromError = false
           // Issue #1977 (AC3, AC7): a confirmed successful poll after an outage means
@@ -341,6 +348,13 @@ export const usePollingStore = defineStore('polling', () => {
         if (isCurrentGeneration) {
           seedHeartbeat(sessionId)
           sessionStalled.value = false
+          // Issue #1989 (review finding): gated on the same isCurrentGeneration check —
+          // a stale response from a since-superseded generation carries an older
+          // backend_status snapshot than one a newer generation's poll may have already
+          // delivered, and writing it here would clobber the fresher value back to stale
+          // data. startUIPolling()'s own loop (single-generation, no staleness concern)
+          // still keeps this signal fresh on its own cadence regardless.
+          backendStatus.value = data.backend_status || 'ok'
         }
 
         if (data.evicted || data.reset) {
@@ -1108,6 +1122,7 @@ export const usePollingStore = defineStore('polling', () => {
   return {
     uiConnected,
     uiRetryCount,
+    backendStatus,
     sessionConnected,
     sessionRetryCount,
     sessionStalled,

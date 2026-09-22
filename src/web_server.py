@@ -27,7 +27,7 @@ from starlette.routing import Route
 from shared.event_queue import EventQueue
 
 from .backend_client import BackendClient
-from .backend_reachability import to_http_exception
+from .backend_reachability import BackendUnreachableError, is_backend_degraded, to_http_exception
 from .backend_supervisor import BackendSupervisor
 from .poll_relay import PollRelay
 
@@ -155,6 +155,16 @@ class ClaudeWebUI:
         # Setup routes
         self._setup_routes()
 
+        # Issue #1989: flatten BackendUnreachableError's error_code alongside
+        # detail at the top level of the response body — a plain HTTPException
+        # can't do this without nesting under "detail".
+        @self.app.exception_handler(BackendUnreachableError)
+        async def _backend_unreachable_handler(request: Request, exc: BackendUnreachableError):
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail, "error_code": exc.error_code},
+            )
+
         # Register auth middleware if enabled (issue #728)
         if self.auth_enabled and self.auth_token:
             self.app.add_middleware(AuthMiddleware, auth_token=self.auth_token)
@@ -222,7 +232,7 @@ class ClaudeWebUI:
             try:
                 return await self.backend_client.relay(request, path)
             except httpx.RequestError as e:
-                raise to_http_exception(e) from e
+                raise to_http_exception(e, degraded=is_backend_degraded(self)) from e
 
         self.app.router.routes.insert(0, Route(path, _handler, methods=["GET"]))
         AuthMiddleware.EXEMPT_PATHS.add(path)

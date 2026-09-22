@@ -25,6 +25,11 @@ def _make_app(tmp_path, backend_config: dict | None = None):
 
     webui = MagicMock()
     webui.config_file = config_file
+    # MagicMock()'s auto-created attributes are truthy, so backend_supervisor must be
+    # set explicitly — otherwise `is_backend_degraded()` treats it as a present,
+    # already-degraded supervisor (see test_relay_router.py's _make_app for the same
+    # gotcha).
+    webui.backend_supervisor = None
     webui.backend_client = MagicMock()
     webui.backend_client.get_json = AsyncMock(
         return_value={"config": backend_config or {"features": {"skill_sync_enabled": True}}}
@@ -102,30 +107,47 @@ async def test_put_config_mixed_body_splits_between_both(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_issue_1844_get_config_backend_unreachable_returns_500(tmp_path):
-    """A connection failure to Backend must still surface as a 500 to the
-    browser with the same detail-construction as before (issue #1844) —
-    only the logging behind the scenes changed, not the response contract."""
+async def test_issue_1989_get_config_backend_unreachable_returns_502(tmp_path):
+    """A connection failure to Backend now surfaces as 502 (issue #1989) instead
+    of a flat 500 — this app doesn't register the BackendUnreachableError
+    exception handler (that's src/web_server.py's job), so FastAPI's default
+    HTTPException handling applies: {"detail": ...} only, no error_code key."""
     app, _, webui = _make_app(tmp_path)
     webui.backend_client.get_json = AsyncMock(side_effect=httpx.ConnectError("refused"))
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/api/config")
 
-    assert resp.status_code == 500
-    assert resp.json() == {"detail": "An internal error occurred"}
+    assert resp.status_code == 502
+    assert resp.json() == {"detail": "Backend is unreachable"}
 
 
 @pytest.mark.asyncio
-async def test_issue_1844_put_config_backend_unreachable_returns_500(tmp_path):
+async def test_issue_1989_put_config_backend_unreachable_returns_502(tmp_path):
     app, _, webui = _make_app(tmp_path)
     webui.backend_client.request_json = AsyncMock(side_effect=httpx.ConnectError("refused"))
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.put("/api/config", json={"features": {"skill_sync_enabled": False}})
 
-    assert resp.status_code == 500
-    assert resp.json() == {"detail": "An internal error occurred"}
+    assert resp.status_code == 502
+    assert resp.json() == {"detail": "Backend is unreachable"}
+
+
+@pytest.mark.asyncio
+async def test_issue_1989_get_config_backend_degraded_returns_503(tmp_path):
+    """Regression guard (builder-review finding): this call site was originally
+    wired up without a degraded= kwarg at all, so it could never report 503 even
+    when webui.backend_supervisor.degraded is True — always fell back to 502."""
+    app, _, webui = _make_app(tmp_path)
+    webui.backend_client.get_json = AsyncMock(side_effect=httpx.ConnectError("refused"))
+    webui.backend_supervisor = MagicMock(degraded=True)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/config")
+
+    assert resp.status_code == 503
+    assert resp.json() == {"detail": "Backend is degraded and unavailable"}
 
 
 @pytest.mark.asyncio

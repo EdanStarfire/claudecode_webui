@@ -17,6 +17,19 @@
       <span>Cannot send messages while reconnecting...</span>
     </div>
 
+    <!-- Backend outage banner (issue #1989): browser<->Frontend transport is fine, but
+         Frontend<->Backend isn't — distinct from the transport-level banner above, which
+         never fires during a pure Backend-side outage since Frontend keeps answering
+         polls normally. -->
+    <div
+      v-else-if="isBackendUnavailable"
+      class="alert alert-danger mb-0 py-2 px-3 small d-flex align-items-center gap-2"
+      role="alert"
+    >
+      <span class="flex-shrink-0">❗</span>
+      <span>{{ backendBannerMessage }}</span>
+    </div>
+
     <!-- Send failure banner (issue #1746 stage: permissions follow-up): surfaces a rejected
          send instead of silently discarding the typed message. -->
     <div
@@ -79,7 +92,7 @@
         class="btn btn-outline-secondary btn-sm file-picker-btn"
         title="Attach files"
         aria-label="Attach files"
-        :disabled="isStarting || !isConnected"
+        :disabled="isStarting || !isConnected || isBackendUnavailable"
         @click="openFilePicker"
       >
         📎
@@ -91,7 +104,7 @@
         v-model="inputText"
         class="form-control"
         :placeholder="inputPlaceholder"
-        :disabled="isStarting || !isConnected"
+        :disabled="isStarting || !isConnected || isBackendUnavailable"
         rows="1"
         :aria-expanded="showSlashDropdown || undefined"
         :aria-activedescendant="showSlashDropdown ? `slash-cmd-${selectedSlashIndex}` : undefined"
@@ -115,7 +128,7 @@
       <button
         v-else-if="isProcessing && hasContent"
         class="btn btn-info"
-        :disabled="!isConnected || isStarting || isUploading"
+        :disabled="!isConnected || isStarting || isUploading || isBackendUnavailable"
         title="Send while processing (doesn't interrupt)"
         @click="sendMessage"
       >
@@ -126,7 +139,7 @@
       <button
         v-else
         class="btn btn-primary"
-        :disabled="!hasContent || !isConnected || isStarting || isUploading"
+        :disabled="!hasContent || !isConnected || isStarting || isUploading || isBackendUnavailable"
         @click="sendMessage"
         data-testid="send-button"
       >
@@ -240,6 +253,12 @@ const inputText = computed({
 const currentSession = computed(() => sessionStore.sessions.get(viewSessionId.value))
 const isProcessing = computed(() => currentSession.value?.is_processing || false)
 const isConnected = computed(() => wsStore.sessionConnected)
+// Issue #1989: independent of isConnected — stays true throughout a pure Backend-side
+// outage, since the browser<->Frontend transport keeps answering polls normally.
+const isBackendUnavailable = computed(() => wsStore.backendStatus !== 'ok')
+const backendBannerMessage = computed(() => wsStore.backendStatus === 'degraded'
+  ? 'Backend unavailable — restart required'
+  : 'Backend unreachable — messages cannot be processed until it recovers')
 const { isStarting } = useSessionState(currentSession)
 
 // Check if input has content (text or valid attachments)

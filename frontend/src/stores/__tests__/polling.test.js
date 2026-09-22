@@ -340,6 +340,132 @@ describe('polling store', () => {
   })
 })
 
+describe('polling store - backendStatus (issue #1989)', () => {
+  it('starts as ok', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const pollingStore = usePollingStore()
+
+    expect(pollingStore.backendStatus).toBe('ok')
+  })
+
+  it('a UI-poll response carrying backend_status updates it', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const pollingStore = usePollingStore()
+
+    sequencedFetchMock([
+      { events: [], next_cursor: 1, backend_status: 'unreachable' },
+    ])
+
+    pollingStore.startUIPolling()
+    await flush()
+    pollingStore.stopUIPolling()
+
+    expect(pollingStore.backendStatus).toBe('unreachable')
+  })
+
+  it('a UI-poll response carrying backend_status: degraded updates it', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const pollingStore = usePollingStore()
+
+    sequencedFetchMock([
+      { events: [], next_cursor: 1, backend_status: 'degraded' },
+    ])
+
+    pollingStore.startUIPolling()
+    await flush()
+    pollingStore.stopUIPolling()
+
+    expect(pollingStore.backendStatus).toBe('degraded')
+  })
+
+  it('a subsequent response carrying ok clears a prior unreachable/degraded state (AC4)', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const pollingStore = usePollingStore()
+
+    // Single mutable resolver: each fetch() call gets a fresh pending promise and
+    // repoints this variable at its resolve function, so successive calls can be
+    // driven one at a time from the test.
+    let resolveFetch
+    vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveFetch = resolve }))
+
+    pollingStore.startUIPolling()
+    resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 1, backend_status: 'unreachable' }) })
+    await flush()
+    expect(pollingStore.backendStatus).toBe('unreachable')
+
+    resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 2, backend_status: 'ok' }) })
+    await flush()
+    pollingStore.stopUIPolling()
+
+    expect(pollingStore.backendStatus).toBe('ok')
+  })
+
+  it('a response with the field entirely absent defaults to ok', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const pollingStore = usePollingStore()
+
+    sequencedFetchMock([
+      { events: [], next_cursor: 1 },
+    ])
+
+    pollingStore.startUIPolling()
+    await flush()
+    pollingStore.stopUIPolling()
+
+    expect(pollingStore.backendStatus).toBe('ok')
+  })
+
+  it('a session-poll response carrying backend_status updates it', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useSessionStore } = await import('@/stores/session')
+    const pollingStore = usePollingStore()
+    const sessionStore = useSessionStore()
+
+    sessionStore.sessions.set('sess-bs', makeSession({ session_id: 'sess-bs' }))
+    apiMock.get.mockResolvedValue({ messages: [], total_count: 0, has_more: false })
+
+    sequencedFetchMock([
+      { events: [], next_cursor: 1, backend_status: 'unreachable' },
+    ])
+
+    await pollingStore.connectSession('sess-bs')
+    await flush()
+    await pollingStore.disconnectSession()
+
+    expect(pollingStore.backendStatus).toBe('unreachable')
+  })
+
+  // Regression test (builder-review finding): the session-poll loop's backendStatus
+  // write originally happened before the isCurrentGeneration guard used for
+  // heartbeat/sessionStalled just below it — a stale response landing after this
+  // session was superseded (e.g. by a stall-heal reconnect, or a session switch)
+  // could clobber a fresher value written by whatever poll loop replaced it.
+  it('a session-poll response for a no-longer-current session does not clobber a fresher backendStatus', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useSessionStore } = await import('@/stores/session')
+    const pollingStore = usePollingStore()
+    const sessionStore = useSessionStore()
+
+    sessionStore.sessions.set('sess-race', makeSession({ session_id: 'sess-race' }))
+    apiMock.get.mockResolvedValue({ messages: [], total_count: 0, has_more: false })
+
+    let resolveFetch
+    vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveFetch = resolve }))
+
+    await pollingStore.connectSession('sess-race')
+    pollingStore.backendStatus = 'ok'
+
+    // Simulate this session no longer being current (e.g. a stall-heal reconnect or a
+    // session switch) while the poll request above is still in flight.
+    pollingStore.currentSessionId = 'some-other-session'
+
+    resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 1, backend_status: 'unreachable' }) })
+    await flush()
+
+    expect(pollingStore.backendStatus).toBe('ok')
+  })
+})
+
 // Issue #1977: mocks /api/projects and /api/sessions distinctly so fetchProjects()/
 // fetchSessions() (both called by loadAppData()) each get a shape they can parse
 // without throwing on `.forEach` of an undefined array.

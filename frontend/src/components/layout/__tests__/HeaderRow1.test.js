@@ -163,4 +163,65 @@ describe('HeaderRow1', () => {
       expect(indicator.getAttribute('aria-label')).toBe('Connection status: Connected')
     })
   })
+
+  // Issue #1989: backendStatus is a Backend-health signal independent of the transport
+  // channels above — it must surface even while uiConnected/sessionConnected stay true
+  // throughout a pure Backend-side outage (Frontend keeps answering polls normally).
+  describe('backend_status indicator (#1989)', () => {
+    async function setup() {
+      const { pinia } = renderWithStores(HeaderRow1)
+      const { usePollingStore } = await import('@/stores/polling')
+      const pollingStore = usePollingStore(pinia)
+      pollingStore.uiConnected = true
+      pollingStore.uiRetryCount = 0
+      await new Promise(r => setTimeout(r, 0))
+      return { pollingStore, indicator: screen.getByTestId('connection-indicator') }
+    }
+
+    it('shows backend-unreachable, distinct from disconnected/stalled, when backendStatus is unreachable', async () => {
+      const { pollingStore, indicator } = await setup()
+      pollingStore.backendStatus = 'unreachable'
+      await new Promise(r => setTimeout(r, 0))
+
+      expect(indicator.classList.contains('backend-unreachable')).toBe(true)
+      expect(indicator.classList.contains('disconnected')).toBe(false)
+      expect(indicator.classList.contains('stalled')).toBe(false)
+      expect(indicator.getAttribute('aria-label')).toBe('Connection status: Backend unreachable')
+    })
+
+    it('shows backend-degraded, distinct from backend-unreachable, when backendStatus is degraded', async () => {
+      const { pollingStore, indicator } = await setup()
+      pollingStore.backendStatus = 'degraded'
+      await new Promise(r => setTimeout(r, 0))
+
+      expect(indicator.classList.contains('backend-degraded')).toBe(true)
+      expect(indicator.classList.contains('backend-unreachable')).toBe(false)
+      expect(indicator.getAttribute('aria-label')).toBe('Connection status: Backend degraded')
+    })
+
+    it('clears back to connected once backendStatus returns to ok (AC4)', async () => {
+      const { pollingStore, indicator } = await setup()
+      pollingStore.backendStatus = 'unreachable'
+      await new Promise(r => setTimeout(r, 0))
+      expect(indicator.classList.contains('backend-unreachable')).toBe(true)
+
+      pollingStore.backendStatus = 'ok'
+      await new Promise(r => setTimeout(r, 0))
+
+      expect(indicator.classList.contains('connected')).toBe(true)
+      expect(indicator.getAttribute('aria-label')).toBe('Connection status: Connected')
+    })
+
+    it('an outright transport disconnect still wins over a Backend outage (severity ranking)', async () => {
+      const { pollingStore, indicator } = await setup()
+      pollingStore.backendStatus = 'degraded'
+      pollingStore.uiConnected = false
+      pollingStore.uiRetryCount = 0
+      await new Promise(r => setTimeout(r, 0))
+
+      expect(indicator.classList.contains('disconnected')).toBe(true)
+      expect(indicator.classList.contains('backend-degraded')).toBe(false)
+      expect(indicator.getAttribute('aria-label')).toBe('Connection status: Disconnected')
+    })
+  })
 })

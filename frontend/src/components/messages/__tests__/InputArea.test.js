@@ -171,6 +171,62 @@ describe('InputArea', () => {
     expect(sessionStore.getInput(SESSION_ID)).toBe('')
   })
 
+  // Issue #1989: backendStatus is independent of sessionConnected — it must gate the
+  // send button and mic/attach buttons and show its own banner even while the transport
+  // itself is fully connected, since a pure Backend-side outage never flips sessionConnected.
+  describe('backend outage gating (#1989)', () => {
+    async function setup(backendStatus) {
+      const { pinia } = renderWithStores(InputArea, {
+        provide: { viewSessionId: viewSessionIdRef },
+        stubs: {
+          AttachmentList: true,
+          SlashCommandDropdown: true
+        }
+      })
+
+      const { useSessionStore } = await import('@/stores/session')
+      const { usePollingStore } = await import('@/stores/polling')
+      const sessionStore = useSessionStore(pinia)
+      const pollingStore = usePollingStore(pinia)
+      sessionStore.currentSessionId = SESSION_ID
+      sessionStore.setInput(SESSION_ID, 'draft message')
+      pollingStore.sessionConnected = true
+      pollingStore.backendStatus = backendStatus
+      await nextTick()
+      return { pollingStore }
+    }
+
+    it('send button and file-picker are disabled when backendStatus is unreachable, independent of sessionConnected', async () => {
+      await setup('unreachable')
+
+      expect(screen.getByRole('button', { name: /^send$/i })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /attach files/i })).toBeDisabled()
+      expect(screen.getByRole('textbox')).toBeDisabled()
+    })
+
+    it('shows the "unreachable" banner text, distinct from the transport-disconnected banner', async () => {
+      await setup('unreachable')
+
+      expect(screen.getByText(/Backend unreachable — messages cannot be processed/i)).toBeTruthy()
+      expect(screen.queryByText('Disconnected')).toBeFalsy()
+    })
+
+    it('shows the "degraded" banner text when backendStatus is degraded', async () => {
+      await setup('degraded')
+
+      expect(screen.getByText(/Backend unavailable — restart required/i)).toBeTruthy()
+      expect(screen.getByRole('button', { name: /^send$/i })).toBeDisabled()
+    })
+
+    it('send button is enabled when backendStatus is ok and other conditions are met', async () => {
+      await setup('ok')
+
+      expect(screen.getByRole('button', { name: /^send$/i })).not.toBeDisabled()
+      expect(screen.queryByText(/Backend unreachable/i)).toBeFalsy()
+      expect(screen.queryByText(/Backend unavailable/i)).toBeFalsy()
+    })
+  })
+
   // Issue #1788: measurement moved from the live textarea to an offscreen clone to
   // avoid forcing layout on large unvirtualized sessions. jsdom implements neither
   // ResizeObserver nor real layout (scrollHeight is always 0), so these tests assert
