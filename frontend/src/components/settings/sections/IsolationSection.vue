@@ -40,6 +40,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useTemplateStore } from '@/stores/template'
 import { useProfileStore } from '@/stores/profile'
 import { useSessionStore } from '@/stores/session'
+import { useUIStore } from '@/stores/ui'
 import SettingsToolbar from '../SettingsToolbar.vue'
 import FieldSection from '../../configuration/fields/FieldSection.vue'
 import { FIELD_SCHEMAS } from '../../configuration/fields/fieldSchemas.js'
@@ -58,6 +59,7 @@ const templateStore = useTemplateStore()
 const profileStore  = useProfileStore()
 const sessionStore  = useSessionStore()
 const scheduleStore = useScheduleStore()
+const uiStore       = useUIStore()
 
 const isTemplateMode = computed(() => route.path.startsWith('/settings/template/'))
 const isProfileMode  = computed(() => route.path.startsWith('/settings/profile/'))
@@ -118,9 +120,21 @@ const mergedConfig = computed(() => {
 const isDirty = computed(() => settingsStore.dirtyAreas.has(areaKey.value))
 const saving  = ref(false)
 
-const isolationFields = computed(() => FIELD_SCHEMAS.isolation.map(f => {
-  if (f.key === 'docker_enabled' && isSessionMode.value && entity.value && entity.value.state !== 'created') {
-    return { ...f, disabledWhen: () => true, description: 'Docker isolation cannot be changed after session creation.' }
+// Fields locked once a session has left 'created' state (issue #1998: recording joins
+// docker_enabled in reusing this same boundary, rather than inventing a new one).
+const LOCKED_AFTER_CREATE = {
+  docker_enabled: 'Docker isolation cannot be changed after session creation.',
+  recording_enabled: 'Recording cannot be changed after session creation.',
+}
+
+const isolationFields = computed(() => FIELD_SCHEMAS.isolation
+  // Issue #1998: genuinely absent from the DOM (not disabledWhen-greyed) when this
+  // instance wasn't started with --enable-session-recording — the field only exists
+  // once the Backend capability fetch (App.vue boot) confirms it's actually available.
+  .filter(f => f.key !== 'recording_enabled' || uiStore.sessionRecordingAvailable)
+  .map(f => {
+  if (f.key in LOCKED_AFTER_CREATE && isSessionMode.value && entity.value && entity.value.state !== 'created') {
+    return { ...f, disabledWhen: () => true, description: LOCKED_AFTER_CREATE[f.key] }
   }
   if (f.key === 'sandbox_config')       return { ...f, description: 'Redacts/masks credentials from the agent via the sandbox — it does not provide credentials.' }
   if (f.key === 'docker_proxy_enabled') return { ...f, description: 'Intercepts outbound traffic via a dedicated proxy sidecar. Requires <code>claude-proxy:local</code> image.' }

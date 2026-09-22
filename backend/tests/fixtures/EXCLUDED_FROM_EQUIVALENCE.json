@@ -1,0 +1,24 @@
+{
+  "excluded_from_equivalence": [
+    {
+      "name": "hook_messages",
+      "reason": "hand-built storage-layer fixture predating the recorder, no raw_log.jsonl"
+    },
+    {
+      "name": "multi_turn",
+      "reason": "hand-built storage-layer fixture predating the recorder, no raw_log.jsonl"
+    },
+    {
+      "name": "permission_flow",
+      "reason": "hand-built storage-layer fixture predating the recorder, no raw_log.jsonl"
+    },
+    {
+      "name": "single_turn",
+      "reason": "hand-built storage-layer fixture predating the recorder, no raw_log.jsonl"
+    },
+    {
+      "name": "tool_use",
+      "reason": "hand-built storage-layer fixture predating the recorder, no raw_log.jsonl"
+    }
+  ]
+}

@@ -856,6 +856,16 @@ export const useSessionStore = defineStore('session', () => {
     return await api.get(`/api/sessions/${sessionId}/history-archives-status`)
   }
 
+  /**
+   * Export a recording session's raw log as a named test fixture (issue #1998).
+   * On coverage-check failure the backend returns HTTP 200 with
+   * {success: false, missing_markers: [...]} — not a thrown error — so the caller
+   * can render the failure panel inline the same way as the success panel.
+   */
+  async function exportFixture(sessionId, name) {
+    return await api.post(`/api/sessions/${sessionId}/export-fixture`, { name })
+  }
+
   function clearSessionSelection() {
     currentSessionId.value = null
   }
@@ -979,6 +989,7 @@ export const useSessionStore = defineStore('session', () => {
     clearArchiveInitData,
     eraseHistory,
     eraseArchives,
+    exportFixture,
     checkHistoryArchivesStatus,
     addGhostAgent,
     removeGhostAgent,

@@ -9,8 +9,10 @@ from fastapi import APIRouter, HTTPException
 from shared.event_queue import EventQueue
 from shared.exception_handlers import handle_exceptions
 
+from ..fixture_export import FixtureExportError, export_fixture
 from ..session_manager import SessionState
 from ._models import (
+    FixtureExportRequest,
     MessageRequest,
     SessionCreateRequest,
     SessionNameUpdateRequest,
@@ -19,6 +21,38 @@ from ._models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _validate_recording_config(webui, session_id: str, config: dict) -> None:
+    """Reject a config-dict PATCH that turns recording_enabled on when it isn't
+    actually allowed (issue #1998). Server-side is the source of truth for both
+    rejections here — the manage-modal toggle/disabledWhen are client-side courtesy
+    only, never the only enforcement (mirrors the Docker-rejection banner's own
+    posture).
+    """
+    if not config.get("recording_enabled"):
+        return
+    if not webui.coordinator.session_recording_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="Session recording is disabled on this instance. Restart the "
+                   "Backend with --enable-session-recording to enable this "
+                   "developer feature.",
+        )
+    effective_docker_enabled = config.get("docker_enabled")
+    if effective_docker_enabled is None:
+        current_info = await webui.coordinator.session_manager.get_session_info(session_id)
+        effective_docker_enabled = bool(
+            current_info.config.get("docker_enabled")
+        ) if current_info else False
+    if effective_docker_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="Recording is not supported on Docker-isolated sessions and "
+                   "cannot be enabled while Docker Isolation is on. Disable Docker "
+                   "Isolation on this session, or create a separate non-Docker "
+                   "session for recording.",
+        )
 
 
 def build_router(webui) -> APIRouter:
@@ -54,7 +88,7 @@ def build_router(webui) -> APIRouter:
         )
 
         # Create event queue for this new session
-        webui.session_queues[session_id] = EventQueue()
+        webui.session_queues[session_id] = EventQueue(on_append=webui._queue_append_hook(session_id))
 
         # Broadcast session creation to all UI clients
         session_info_dict = await webui.coordinator.get_session_info(session_id)
@@ -195,6 +229,33 @@ def build_router(webui) -> APIRouter:
         success = await webui.coordinator.terminate_session(session_id)
         return {"success": success}
 
+    @router.post("/api/sessions/{session_id}/export-fixture")
+    @handle_exceptions("export fixture", value_error_status=404)
+    async def export_fixture_route(session_id: str, request: FixtureExportRequest):
+        """Export a recording session's raw log as a named test fixture (issue #1998).
+
+        403s independent of session state when the instance wasn't started with
+        --enable-session-recording — this developer capability is structurally
+        unavailable, not just defaulted off. Coverage-check failure returns HTTP 200
+        with {success: false, missing_markers: [...]} — the UI renders that inline
+        as the failure panel rather than treating it as a request error.
+        """
+        if not webui.coordinator.session_recording_enabled:
+            raise HTTPException(
+                status_code=403,
+                detail="Session recording is disabled on this instance. Restart the Backend "
+                       "with --enable-session-recording to enable this developer feature.",
+            )
+        if not await webui.service.get_session_exists(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        name = request.name or session_id
+        try:
+            result = await export_fixture(webui.coordinator, session_id, name)
+        except FixtureExportError as e:
+            return {"success": False, "missing_markers": e.missing_markers}
+        return result.to_dict()
+
     @router.put("/api/sessions/{session_id}/name")
     @handle_exceptions("update session name")
     async def update_session_name(session_id: str, request: SessionNameUpdateRequest):
@@ -215,6 +276,7 @@ def build_router(webui) -> APIRouter:
 
         # Handle full config dict replacement (issue #1230)
         if request.config is not None:
+            await _validate_recording_config(webui, session_id, request.config)
             updates["_replace_config"] = request.config
 
         # Handle name update

@@ -352,6 +352,17 @@ export const FIELD_SCHEMAS = {
       description: 'Named secrets assigned to this session for proxy injection.',
     },
     {
+      key: 'recording_enabled',
+      label: 'Record Session',
+      widget: 'toggle',
+      defaultValue: false,
+      disabledWhen: (config) => !!config.docker_enabled,
+      description: 'Captures every raw SDK object, stream event, permission callback, ' +
+                   'interrupt, lifecycle action, and queue event to a raw log beside this ' +
+                   'session, for building test fixtures. Off by default; adds no overhead ' +
+                   'when off. Not supported on Docker-isolated sessions.',
+    },
+    {
       key: 'bare_mode',
       label: 'Bare mode',
       widget: 'toggle',

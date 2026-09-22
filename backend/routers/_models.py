@@ -114,6 +114,11 @@ class SessionUpdateRequest(BaseModel):
         return v
 
 
+class FixtureExportRequest(BaseModel):
+    """Request to export a recording session as a named test fixture (issue #1998)."""
+    name: str | None = None
+
+
 class SessionReorderRequest(BaseModel):
     session_ids: list[str]
 
@@ -348,6 +353,8 @@ class TemplateUpdateRequest(BaseModel):
     # Issue #1905: CLI --restricted (strips Bash/code-exec tools + WebFetch,
     # ignores project/user settings files, confines file tools to the working directory)
     restricted_mode: bool | None = None
+    # Issue #1998: dev-only raw SDK traffic capture for fixture building
+    recording_enabled: bool | None = None
     # Issue #1669: max depth for nested subagent spawning (WebUI default: 1)
     max_subagent_spawn_depth: int | None = Field(None, ge=1, le=3)
     enable_streaming_text: bool | None = None  # Issue #1486 — opt-in streaming text rendering

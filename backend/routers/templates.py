@@ -105,6 +105,7 @@ def build_router(webui) -> APIRouter:
             bare_mode=request.bare_mode,
             env_scrub_enabled=request.env_scrub_enabled,
             restricted_mode=request.restricted_mode,
+            recording_enabled=request.recording_enabled,
             max_subagent_spawn_depth=request.max_subagent_spawn_depth,
             enable_streaming_text=request.enable_streaming_text,
             # Non-secret direct env passthrough (issue #1396)

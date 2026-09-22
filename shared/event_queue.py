@@ -3,6 +3,9 @@ Bounded in-memory event queue for HTTP long-polling.
 """
 
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def reset_occurred(next_cursor: int, since: int) -> bool:
@@ -20,11 +23,22 @@ class EventQueue:
 
     MAX_SIZE = 5000
 
-    def __init__(self):
+    def __init__(self, on_append=None):
+        """
+        Args:
+            on_append: Optional callable(event: dict) invoked synchronously on every
+                append() — a generic observer hook for callers that need visibility
+                into every event this queue delivers without threading a parameter
+                through each of its (potentially many, scattered) push call sites.
+                Must be synchronous and cheap; exceptions are swallowed so a broken
+                hook never breaks event delivery. (First use: issue #1998's raw-
+                fidelity session recorder.)
+        """
         self._events: list[dict] = []
         self._cursor: int = 0
         self._oldest_cursor: int = 1
         self._waiters: list[asyncio.Event] = []
+        self._on_append = on_append
 
     def append(self, event: dict, cursor: int | None = None) -> int:
         """Append an event, either auto-incrementing the local cursor (cursor=None)
@@ -68,6 +82,11 @@ class EventQueue:
         for waiter in self._waiters:
             waiter.set()
         self._waiters.clear()
+        if self._on_append is not None:
+            try:
+                self._on_append(event)
+            except Exception:
+                logger.exception("EventQueue on_append hook failed")
         return self._cursor
 
     def events_since(self, cursor: int) -> tuple[list[dict], int, bool]:

@@ -21,7 +21,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .claude_sdk import SDK_ACTIVE_STATES, SessionInfo, SessionState
+from .claude_sdk import SDK_ACTIVE_STATES, ClaudeSDK, SessionInfo, SessionState
+from .raw_replay import reconstruct_sdk_message
 
 logger = logging.getLogger(__name__)
 
@@ -394,6 +395,46 @@ class ReplayEngine:
             logger.error(f"Error in replay callback: {e}")
 
 
+class RawFixtureReplay:
+    """
+    Parses a raw_log.jsonl fixture (issue #1998's SessionRecorder capture format)
+    into an ordered list of reconstructed SDK dataclass objects.
+
+    Unlike SessionRecording (which parses messages.jsonl/state.json into segments
+    split at user-action boundaries for interactive validated replay), this is a
+    straight ordered replay of every `sdk_message`-kind record — raw-layer replay's
+    job in stage 1a (issue #1998) is proving the capture/reconstruct/real-wrapper-path
+    mechanics are correct (T3), not full interactive action-boundary emulation, which
+    is stage 1b's (#1999) equivalence harness concern.
+    """
+
+    def __init__(self, session_dir: str | Path):
+        self.session_dir = Path(session_dir)
+        self.messages: list[Any] = []
+        self._parse()
+
+    def _parse(self) -> None:
+        raw_log_path = self.session_dir / "raw_log.jsonl"
+        if not raw_log_path.exists():
+            raise FileNotFoundError(f"raw_log.jsonl not found in {self.session_dir}")
+
+        for line in raw_log_path.read_text(encoding="utf-8").strip().splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if record.get("kind") != "sdk_message":
+                continue
+            try:
+                self.messages.append(
+                    reconstruct_sdk_message(record["_type"], record["data"])
+                )
+            except ValueError:
+                logger.warning(
+                    f"Skipping unrecognized raw_log sdk_message type "
+                    f"{record.get('_type')!r} in {self.session_dir}"
+                )
+
+
 class MockClaudeSDK:
     """
     Drop-in replacement for ClaudeSDK that replays recorded session data.
@@ -444,6 +485,10 @@ class MockClaudeSDK:
         self._action_cursor = 0
         self._replay_task: asyncio.Task | None = None
         self._shutdown_event = asyncio.Event()
+
+        # Issue #1998: raw-layer replay mode — selected by presence of raw_log.jsonl vs.
+        # messages.jsonl+state.json in the target fixture directory.
+        self._raw_mode = (self.session_dir / "raw_log.jsonl").exists()
 
         # Wrap message_callback to convert fixture format → legacy dict format
         # so SessionCoordinator's MessageProcessor can parse them correctly
@@ -610,28 +655,39 @@ class MockClaudeSDK:
         Start the mock session.
 
         Loads the SessionRecording and skips Segment 0 (client_launched is
-        handled by SessionCoordinator._send_client_launched_message).
+        handled by SessionCoordinator._send_client_launched_message). Issue
+        #1998: if the fixture directory is raw_log.jsonl-shaped instead, takes
+        the raw-layer replay path (_start_raw_replay) instead.
         """
         try:
             self.info.state = SessionState.STARTING
             self.info.start_time = time.time()
 
-            # Load recording
-            self._recording = SessionRecording(self.session_dir)
-            self._engine = ReplayEngine(
-                recording=self._recording,
-                message_callback=self.message_callback,
-                permission_callback=self.permission_callback,
-                speed_factor=self.speed_factor,
-            )
+            if self._raw_mode:
+                # Set RUNNING before replay, not after: _start_raw_replay() synchronously
+                # drives every captured message through storage + message_callback before
+                # returning, so setting RUNNING afterward would leave any concurrent status
+                # check (is_running(), a session-status poll) seeing STARTING while messages
+                # are already being persisted and streamed.
+                self.info.state = SessionState.RUNNING
+                await self._start_raw_replay()
+            else:
+                # Load recording
+                self._recording = SessionRecording(self.session_dir)
+                self._engine = ReplayEngine(
+                    recording=self._recording,
+                    message_callback=self.message_callback,
+                    permission_callback=self.permission_callback,
+                    speed_factor=self.speed_factor,
+                )
 
-            self.info.state = SessionState.RUNNING
+                # Skip Segment 0 replay — it contains client_launched which the
+                # SessionCoordinator already sends via _send_client_launched_message.
+                # Just advance the cursor past it.
+                if self._recording.get_segment_count() > 0:
+                    self._engine._segment_cursor = 1
 
-            # Skip Segment 0 replay — it contains client_launched which the
-            # SessionCoordinator already sends via _send_client_launched_message.
-            # Just advance the cursor past it.
-            if self._recording.get_segment_count() > 0:
-                self._engine._segment_cursor = 1
+                self.info.state = SessionState.RUNNING
 
             # Notify session manager if available
             if self.session_manager:
@@ -650,6 +706,27 @@ class MockClaudeSDK:
                 await self._safe_callback(self.error_callback, "startup_failed", e)
             return False
 
+    async def _start_raw_replay(self) -> None:
+        """Issue #1998 (AC6): raw-layer replay — reconstruct real SDK dataclass objects
+        from raw_log.jsonl and drive them through a real (non-connected) ClaudeSDK
+        instance's own _process_sdk_message()/_convert_sdk_message()/_store_sdk_message(),
+        instead of this module's hand-rolled _convert_fixture_message() pre-conversion.
+
+        session_manager is deliberately not forwarded to the shadow instance — it exists
+        only to run the real message-processing pipeline against this mock's own
+        storage_manager/message_callback, not to mutate live session state a second time.
+        """
+        raw_replay = RawFixtureReplay(self.session_dir)
+        shadow_sdk = ClaudeSDK(
+            session_id=self.session_id,
+            working_directory=str(self.working_directory),
+            storage_manager=self.storage_manager,
+            message_callback=self._raw_message_callback,
+            error_callback=self.error_callback,
+        )
+        for sdk_message in raw_replay.messages:
+            await shadow_sdk._process_sdk_message(sdk_message)
+
     async def send_message(self, message: str, metadata: dict | None = None) -> bool:
         """
         Process a user message.
@@ -659,6 +736,15 @@ class MockClaudeSDK:
         """
         if self.info.state != SessionState.RUNNING:
             return False
+
+        if self._raw_mode:
+            # Issue #1998: raw-layer replay fires every captured sdk_message at start()
+            # (T3's mechanics-only scope — no interactive action-boundary replay yet, see
+            # _start_raw_replay's docstring). A user message here has nothing further to
+            # trigger; just count it so callers relying on message_count still see it move.
+            self.info.message_count += 1
+            self.info.last_activity = time.time()
+            return True
 
         try:
             # Validate action type

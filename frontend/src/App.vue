@@ -206,7 +206,10 @@ async function initializeApp() {
   // retried automatically on the poll loop's own reconnect if it failed here.
   const [, cursorResult] = await Promise.allSettled([
     wsStore.loadAppData(),
-    apiGet('/api/poll/cursor')
+    apiGet('/api/poll/cursor'),
+    // Issue #1998: one-time capability fetch — the manage modal's export panel and the
+    // Isolation section's recording toggle need this before a user could open either.
+    uiStore.fetchCapabilities()
   ])
 
   const cursor = cursorResult.status === 'fulfilled' ? (cursorResult.value?.cursor ?? 0) : 0

@@ -76,6 +76,15 @@ def main():
     # Experimental features
     parser.add_argument('--experimental', action='store_true', help='Enable experimental features (Agent Teams)')
 
+    # Issue #1998: dev-only raw SDK traffic capture for fixture building. Structurally
+    # unavailable (config rejected, UI absent, export endpoint 403s) unless this flag is set.
+    parser.add_argument(
+        '--enable-session-recording', action='store_true',
+        help='Enable the session recording / fixture export developer feature. Off by '
+             'default — this is a dev-only capability for building test fixtures, not an '
+             'end-user feature.'
+    )
+
     # Backend-scoped auth token — always required, no "auth disabled" mode (issue #498:
     # two trust boundaries, browser token and backend token, are never bridged).
     parser.add_argument(
@@ -199,6 +208,7 @@ def main():
         host=args.host,
         port=args.port,
         litellm_port=args.litellm_port,
+        session_recording_enabled=args.enable_session_recording,
     )
 
     # Run the server

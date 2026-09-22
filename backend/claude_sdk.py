@@ -204,6 +204,7 @@ class ClaudeSDK:
         stderr_callback: Callable[[str], Any] | None = None,
         extra_env: dict[str, str] | None = None,
         permission_handler: Any | None = None,
+        recorder: Any | None = None,
     ):
         """
         Initialize enhanced Claude Code SDK wrapper.
@@ -227,6 +228,9 @@ class ClaudeSDK:
             stderr_callback: Called with each stderr line from SDK subprocess (issue #517)
             extra_env: Extra environment variables (e.g., Docker wrapper config)
             permission_handler: InternalPermissionHandler for suggestion-based auto-approval (issue #707)
+            recorder: Optional SessionRecorder (issue #1998) — when set, captures raw SDK
+                traffic for fixture building. None on every non-recording session (AC7);
+                every capture point below short-circuits on `self.recorder is None`.
         """
         if config is None:
             config = SessionConfig()
@@ -286,6 +290,7 @@ class ClaudeSDK:
         self.timestamp_injection_frequency = config.timestamp_injection_frequency
         self.timestamp_injection_timezone = config.timestamp_injection_timezone
         self.permission_handler = permission_handler
+        self.recorder = recorder  # Issue #1998: raw SDK traffic capture, None unless recording
         self.auto_approval_callback: Callable | None = None  # Issue #707: notifies coordinator
         self._stderr_buffer: list[str] = []
 
@@ -426,6 +431,7 @@ class ClaudeSDK:
             self.info.state = SessionState.FAILED
             self.info.error_message = str(e)
             self._apply_result_error_fields(e)
+            self._record_sdk_message(e)
             if self.error_callback:
                 await self._safe_callback(self.error_callback, "startup_failed", e)
             return False
@@ -508,6 +514,12 @@ class ClaudeSDK:
             sdk_logger.debug(f"Sending direct interrupt to SDK for session {self.session_id}")
             await self._sdk_client.interrupt()
             sdk_logger.info(f"INTERRUPT SENT DIRECTLY for session {self.session_id}")
+
+            if self.recorder is not None:
+                try:
+                    self.recorder.record_interrupt()
+                except Exception:
+                    logger.exception(f"Recorder failed to capture interrupt for session {self.session_id}")
 
             # Notify through callback
             if self.message_callback:
@@ -805,6 +817,7 @@ class ClaudeSDK:
                             self.info.state = SessionState.FAILED
                             self.info.error_message = str(consumer_err)
                             self._apply_result_error_fields(consumer_err)
+                            self._record_sdk_message(consumer_err)
                             if self.error_callback:
                                 await self._safe_callback(
                                     self.error_callback,
@@ -973,6 +986,7 @@ class ClaudeSDK:
             # so error_callback can branch on isinstance(error, ResultError).
             self.info.error_message = str(e)
             self._apply_result_error_fields(e)
+            self._record_sdk_message(e)
             if self.error_callback:
                 await self._safe_callback(self.error_callback, "message_processing_loop_error", e)
 
@@ -1064,7 +1078,30 @@ class ClaudeSDK:
             input_params: dict[str, Any],
             context: ToolPermissionContext
         ) -> PermissionResultAllow | PermissionResultDeny:
-            return await self._can_use_tool_callback(tool_name, input_params, context)
+            # Issue #1998: capture invocation + final decision here, at the SDK-shape
+            # adapter layer, rather than renaming/wrapping _can_use_tool_callback itself —
+            # this is the one and only caller of that method, so recording every outcome
+            # (auto-approved via tool-block rules, auto-approved/denied via suggestion
+            # matching, or user-decided) needs no changes to the real permission logic.
+            # Guarded independently of SessionRecorder's own exception handling — a
+            # recorder failure here must never abort the actual permission decision.
+            if self.recorder is not None:
+                try:
+                    self.recorder.record_permission_invocation(
+                        tool_name, input_params, getattr(context, "suggestions", None)
+                    )
+                except Exception:
+                    logger.exception(f"Recorder failed to capture permission invocation for session {self.session_id}")
+            result = await self._can_use_tool_callback(tool_name, input_params, context)
+            if self.recorder is not None:
+                try:
+                    decision = "allow" if isinstance(result, PermissionResultAllow) else "deny"
+                    self.recorder.record_permission_response(
+                        tool_name, decision, getattr(result, "message", None)
+                    )
+                except Exception:
+                    logger.exception(f"Recorder failed to capture permission response for session {self.session_id}")
+            return result
 
         # Configure system prompt using file-based delivery to bypass CLI length limits
         # Issue #382: Use --append-system-prompt-file or --system-prompt-file flags via extra_args
@@ -1377,6 +1414,24 @@ class ClaudeSDK:
 
         return env_vars
 
+    def _record_sdk_message(self, sdk_message: Any) -> None:
+        """Issue #1998: cheap no-op when not recording — every capture point calls
+        this instead of repeating the `if self.recorder is not None:` guard inline.
+
+        Guarded independently of SessionRecorder's own internal exception handling:
+        this is called as the very first statement inside _process_sdk_message()'s
+        try block, ahead of real message conversion/storage/delivery — an unguarded
+        failure here (of any kind, not just the ones SessionRecorder anticipates)
+        would be caught by that method's own broad except and drop the entire
+        message, turning a dev-only recording bug into silent message loss.
+        """
+        if self.recorder is None:
+            return
+        try:
+            self.recorder.record_sdk_message(sdk_message)
+        except Exception:
+            logger.exception(f"Recorder failed to capture SDK message for session {self.session_id}")
+
     async def _process_sdk_message(self, sdk_message: Any):
         """Process a single message from the SDK stream."""
         try:
@@ -1384,6 +1439,11 @@ class ClaudeSDK:
             if sdk_message is None:
                 sdk_logger.debug("Skipping None SDK message")
                 return
+
+            # Issue #1998: capture every SDK object/stream event exactly once, at the single
+            # entry point every one passes through — ahead of the RateLimitEvent early return
+            # below, which would otherwise silently miss rate-limit coverage in the raw log.
+            self._record_sdk_message(sdk_message)
 
             # Check for fatal error messages that indicate immediate CLI failures
             if hasattr(sdk_message, 'type') and sdk_message.type == 'error':

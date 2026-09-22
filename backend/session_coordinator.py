@@ -46,6 +46,7 @@ from .queue_manager import QueueManager
 from .queue_processor import QueueProcessor
 from .session_config import SessionConfig
 from .session_manager import STOPPED_STATES, SessionManager, SessionState
+from .session_recorder import SessionRecorder
 from .task_registry import TASK_LIFECYCLE_SUBTYPES, TaskLegRegistry
 from .task_utils import task_done_log_exception
 from .timestamp_injection import maybe_inject_timestamp
@@ -418,9 +419,14 @@ class SessionCoordinator:
         litellm_proxy_manager=None,
         host: str = "127.0.0.1",
         port: int = 8000,
+        session_recording_enabled: bool = False,
     ):
         self.data_dir = data_dir or Path("data")
         self.experimental = experimental
+        # Issue #1998: dev-only raw SDK traffic capture, structurally unavailable unless the
+        # Backend was started with --enable-session-recording. See start_session()'s recorder
+        # gate and routers/sessions.py's config-save rejection when this is False.
+        self.session_recording_enabled = session_recording_enabled
         # Issue #1789: the main app's own bind host/port — used by OAuthCallbackListenerManager
         # to bind on the same host, and by McpConfigManager's custom-callback conflict checks.
         self.host = host
@@ -461,6 +467,10 @@ class SessionCoordinator:
         # Active SDK instances
         self._active_sdks: dict[str, ClaudeSDK] = {}
         self._storage_managers: dict[str, DataStorageManager] = {}
+        # Issue #1998: raw-fidelity session recorders, keyed by session_id. Created lazily in
+        # start_session() when the effective config opts in and the flag above is on; reused
+        # across restart_session/reset_session (never recreated); dropped in terminate_session.
+        self._session_recorders: dict[str, SessionRecorder] = {}
 
         # Issue #976/#989: OAuth token refresh lifecycle (extracted to OAuthRefreshManager)
         self.oauth_refresh_manager = OAuthRefreshManager(self.oauth_manager)
@@ -633,6 +643,13 @@ class SessionCoordinator:
     def set_sdk_factory(self, factory):
         """Set custom SDK factory for testing (e.g., MockClaudeSDK)."""
         self._sdk_factory = factory
+
+    def get_session_recorder(self, session_id: str) -> SessionRecorder | None:
+        """Issue #1998: the active SessionRecorder for a session, or None if it isn't
+        recording. Used by EventQueue's on_append hook and PermissionService's pause
+        lifecycle recording — both live outside start_session()'s own creation path.
+        """
+        return self._session_recorders.get(session_id)
 
     def set_analytics_store(self, store) -> None:
         """Inject the AnalyticsStore instance (issue #1125)."""
@@ -1463,8 +1480,20 @@ class SessionCoordinator:
             return []
         return session_info.links or []
 
-    async def start_session(self, session_id: str, permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None) -> bool:
-        """Start a session with SDK integration"""
+    async def start_session(
+        self,
+        session_id: str,
+        permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None,
+        _lifecycle_action: str = "start",
+    ) -> bool:
+        """Start a session with SDK integration.
+
+        Args:
+            _lifecycle_action: Issue #1998 — the raw-log lifecycle label recorded when a
+                SessionRecorder is active. restart_session()/reset_session() both funnel
+                through this method to actually (re)start the SDK, so they pass "restart"/
+                "reset" here rather than this method guessing which caller invoked it.
+        """
         try:
             # Start session through session manager
             if not await self.session_manager.start_session(session_id):
@@ -1523,6 +1552,34 @@ class SessionCoordinator:
             effective_config = await resolve_effective_config(
                 session_info, self.template_manager, self.profile_manager
             )
+
+            # Issue #1998: create/reuse the SessionRecorder for this session. Gated on the
+            # persisted per-session opt-in AND the Backend-wide --enable-session-recording
+            # flag — a session configured with recording_enabled=True before a later
+            # flag-less Backend restart just goes inert (no recorder, no error), the same
+            # posture as docker_enabled going inert if Docker becomes unavailable. Also
+            # never constructed for a Docker-isolated session (defense-in-depth alongside
+            # the config-save rejection in routers/sessions.py — never silently partial).
+            # Reused across restart/reset (never recreated) so a scenario spanning a
+            # restart keeps appending to the same raw_log.jsonl; only dropped in
+            # terminate_session().
+            recorder: SessionRecorder | None = self._session_recorders.get(session_id)
+            if (
+                recorder is None
+                and self.session_recording_enabled
+                and effective_config.recording_enabled
+                and not effective_config.docker_enabled
+            ):
+                recorder = SessionRecorder(session_id, session_dir)
+                self._session_recorders[session_id] = recorder
+            if recorder is not None:
+                try:
+                    recorder.record_lifecycle(_lifecycle_action)
+                except Exception:
+                    logger.exception(
+                        f"Recorder failed to capture lifecycle event for session {session_id} "
+                        "— continuing session start regardless"
+                    )
 
             # Issue #917: Resolve template variables in path-typed CONFIG_FIELDS.
             # Apply to effective_config (single source of truth for CONFIG_FIELDS).
@@ -2051,6 +2108,7 @@ class SessionCoordinator:
                 stderr_callback=self._create_stderr_callback(session_id),
                 extra_env=_merged_extra_env,
                 permission_handler=permission_handler,
+                recorder=recorder,
             )
             # Issue #707: Set auto-approval callback so can_use_tool can notify us
             sdk.auto_approval_callback = self._create_auto_approval_callback(session_id)
@@ -2266,6 +2324,18 @@ class SessionCoordinator:
             if sdk:
                 await sdk.terminate()
                 del self._active_sdks[session_id]
+
+            # Issue #1998: recorder is only ever torn down here (not on restart/reset) —
+            # record the final lifecycle event, then release its held file handle.
+            recorder = self._session_recorders.pop(session_id, None)
+            if recorder is not None:
+                try:
+                    recorder.record_lifecycle("terminate")
+                except Exception:
+                    logger.exception(
+                        f"Recorder failed to capture terminate lifecycle event for session {session_id}"
+                    )
+                recorder.close()
 
             if self.litellm_proxy_manager is not None:
                 self.litellm_proxy_manager.unregister_session_key(session_id)
@@ -3134,7 +3204,7 @@ class SessionCoordinator:
                 logger.exception(f"Failed to clear unread timestamps for session {session_id}")
 
             # Start session again (will automatically resume using claude_code_session_id)
-            success = await self.start_session(session_id, permission_callback)
+            success = await self.start_session(session_id, permission_callback, _lifecycle_action="restart")
 
             if success:
                 coord_logger.info(f"Session {session_id} restarted successfully")
@@ -3262,7 +3332,7 @@ class SessionCoordinator:
             await self._notify_session_reset(session_id)
 
             # Start fresh session (will create new Claude Code session)
-            success = await self.start_session(session_id, permission_callback)
+            success = await self.start_session(session_id, permission_callback, _lifecycle_action="reset")
 
             if success:
                 coord_logger.info(f"Session {session_id} reset successfully")

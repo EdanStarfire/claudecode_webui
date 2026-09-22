@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { apiGet } from '@/utils/api'
 
 // localStorage helpers for sidebar persistence
 const STORAGE_PREFIX = 'webui-sidebar-'
@@ -243,6 +244,21 @@ export const useUIStore = defineStore('ui', () => {
   function setExperimentalNavHeader(value) {
     experimentalNavHeader.value = !!value
     writeStorage('experimentalNavHeader', experimentalNavHeader.value)
+  }
+
+  // Issue #1998: whether this Backend instance was started with --enable-session-recording.
+  // Not persisted — it's a process-level capability, not a user preference, and is fetched
+  // fresh once at app boot (App.vue's onMounted) before a user could open the manage modal.
+  const sessionRecordingAvailable = ref(false)
+
+  async function fetchCapabilities() {
+    try {
+      const { config } = await apiGet('/api/config')
+      sessionRecordingAvailable.value = !!config?.capabilities?.session_recording_available
+    } catch {
+      // Leave at the safe default (false) — the manage-modal export panel and the
+      // Isolation section's recording toggle just stay absent.
+    }
   }
 
   // Issue #1744: Last non-settings/analytics/audit route — shared between HeaderRow1's
@@ -551,6 +567,7 @@ export const useUIStore = defineStore('ui', () => {
     resumeBatchSize,
     resumeBatchDelaySeconds,
     experimentalNavHeader,
+    sessionRecordingAvailable,
     lastContentRoute,
 
     // Actions
@@ -598,6 +615,7 @@ export const useUIStore = defineStore('ui', () => {
     setResumeBatchSize,
     setResumeBatchDelaySeconds,
     setExperimentalNavHeader,
+    fetchCapabilities,
     setLastContentRoute,
     schedulesGroupBy,
     schedulesCollapsedGroups,

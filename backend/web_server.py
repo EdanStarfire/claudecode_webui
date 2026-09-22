@@ -118,11 +118,19 @@ class BackendApp:
                  config_file: Path | None = None,
                  auth_token: str | None = None,
                  host: str = "127.0.0.1", port: int = 8000,
-                 litellm_port: int | None = None):
+                 litellm_port: int | None = None,
+                 session_recording_enabled: bool = False):
         self.app = FastAPI(title="Claude Code WebUI Backend", version="1.0.0")
         self.host = host
         self.port = port
-        self.coordinator = SessionCoordinator(data_dir, experimental=experimental, host=host, port=port)
+        # Issue #1998: dev-only raw SDK traffic capture, structurally unavailable unless the
+        # Backend was started with --enable-session-recording. Single source of truth is
+        # self.coordinator.session_recording_enabled — every consumer (routers, this class)
+        # reads it from there, not from a second copy on BackendApp.
+        self.coordinator = SessionCoordinator(
+            data_dir, experimental=experimental, host=host, port=port,
+            session_recording_enabled=session_recording_enabled,
+        )
         self.service = ApplicationService(self.coordinator)
         self.config_file = config_file
         # Issue #1789: track config_id -> path for dynamic (path-only, no custom port) OAuth
@@ -295,6 +303,22 @@ class BackendApp:
             r.path for r in self.app.router.routes if getattr(r, "path", None)
         )
 
+    def _queue_append_hook(self, session_id: str):
+        """Issue #1998: EventQueue.on_append hook for a session's queue.
+
+        Looks up the recorder lazily at append-time (not bind-time) so the hook
+        works regardless of whether the queue or the recorder was constructed
+        first — start_session() creates recorders lazily, while a session's
+        EventQueue can be constructed at several different points (session
+        create, poll, coordinator init sync). A cheap dict lookup that's None
+        on every non-recording session (AC7).
+        """
+        def hook(event: dict) -> None:
+            recorder = self.coordinator.get_session_recorder(session_id)
+            if recorder is not None:
+                recorder.record_queue_event(event)
+        return hook
+
     def _get_permission_callback_factory(self):
         def factory(session_id: str):
             return self.permission_service.create_permission_callback(session_id)
@@ -312,7 +336,7 @@ class BackendApp:
             logger.info(f"Registered message callback for session {session_id}")
 
             if session_id not in self.session_queues:
-                self.session_queues[session_id] = EventQueue()
+                self.session_queues[session_id] = EventQueue(on_append=self._queue_append_hook(session_id))
 
             async def _broadcast_session_added():
                 try:
@@ -718,7 +742,7 @@ class BackendApp:
         for s in sessions_result.get("sessions", []):
             sid = s.get('session_id') or (s.get('session') or {}).get('session_id')
             if sid:
-                self.session_queues[sid] = EventQueue()
+                self.session_queues[sid] = EventQueue(on_append=self._queue_append_hook(sid))
 
         # Register callbacks
         self.coordinator.add_state_change_callback(self._on_state_change)
@@ -1170,6 +1194,7 @@ def create_app(
     host: str = "127.0.0.1",
     port: int = 8000,
     litellm_port: int | None = None,
+    session_recording_enabled: bool = False,
 ) -> FastAPI:
     """Create and configure the Backend FastAPI application"""
     app_instance = BackendApp(
@@ -1179,6 +1204,7 @@ def create_app(
         auth_token=auth_token,
         host=host, port=port,
         litellm_port=litellm_port,
+        session_recording_enabled=session_recording_enabled,
     )
 
     @asynccontextmanager

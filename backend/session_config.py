@@ -139,6 +139,10 @@ class SessionConfig(BaseModel):
     strict_mcp_config: bool = False  # Pass --strict-mcp-config to disable local .mcp.json
     bare_mode: bool = False  # Pass --bare to skip hooks, LSP, plugin sync, skill walks
     env_scrub_enabled: bool = False  # Issue #957: Strip credentials from subprocess envs
+    # Issue #1998: dev-only raw SDK traffic capture for fixture building. Structurally
+    # unavailable unless the Backend was started with --enable-session-recording — see
+    # SessionCoordinator.start_session() and routers/sessions.py's config-save rejection.
+    recording_enabled: bool = False
     # Issue #1669: CC 2.1.220 raised the CLI default from 1 to 3; WebUI restores 1
     # to avoid silently changing Legion hierarchy tracking behavior underneath it.
     max_subagent_spawn_depth: int = Field(default=1, ge=1, le=3)
@@ -195,7 +199,7 @@ CONFIG_FIELDS: set[str] = {
     "inject_timestamps_enabled", "timestamp_injection_frequency", "timestamp_injection_timezone",
     "hook_ids",
     "mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config",
-    "bare_mode", "env_scrub_enabled", "max_subagent_spawn_depth", "extra_env",
+    "bare_mode", "env_scrub_enabled", "recording_enabled", "max_subagent_spawn_depth", "extra_env",
     "provider_catalog_id", "provider_model_id",
     "provider_haiku_catalog_id", "provider_haiku_model_id",
     "provider_sonnet_catalog_id", "provider_sonnet_model_id",

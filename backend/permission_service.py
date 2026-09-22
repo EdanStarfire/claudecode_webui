@@ -300,6 +300,12 @@ class PermissionService:
                 if is_first_pending_for_session:
                     await self.coordinator.session_manager.pause_session(session_id)
                     debug_logger.info(f"Set session {session_id} to PAUSED state while waiting for permission")
+                    # Issue #1998: session pause is triggered from here, not session_manager
+                    # directly — record it here rather than adding a recorder dependency
+                    # into session_manager.
+                    recorder = self.coordinator.get_session_recorder(session_id)
+                    if recorder is not None:
+                        recorder.record_lifecycle("pause")
             except Exception:
                 logger.exception(f"Failed to pause session {session_id} for permission wait")
 
