@@ -18,6 +18,7 @@ import secrets
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -47,6 +48,52 @@ def _wait_for(predicate, timeout: float, description: str):
     raise AssertionError(f"Timed out waiting for: {description} (last error: {last_exc})")
 
 
+def _spawn_backend(backend_port: int, backend_token: str, data_dir: Path, env: dict) -> subprocess.Popen:
+    return subprocess.Popen(
+        [
+            sys.executable, "-m", "backend.main",
+            "--host", "127.0.0.1",
+            "--port", str(backend_port),
+            "--token", backend_token,
+            "--data-dir", str(data_dir),
+            "--mock-sdk",
+            "--fixtures-dir", str(FIXTURES_DIR),
+        ],
+        cwd=str(REPO_ROOT),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+
+def _spawn_frontend(frontend_port: int, backend_port: int, backend_token: str, env: dict) -> subprocess.Popen:
+    return subprocess.Popen(
+        [
+            sys.executable, "main.py",
+            "--host", "127.0.0.1",
+            "--port", str(frontend_port),
+            "--no-auth",
+            "--remote-backend-url", f"http://127.0.0.1:{backend_port}",
+            "--remote-backend-token", backend_token,
+        ],
+        cwd=str(REPO_ROOT),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+
+def _terminate(proc: subprocess.Popen) -> None:
+    proc.terminate()
+    try:
+        proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
 def test_live_session_lifecycle_through_two_real_processes(tmp_path: Path):
     """create -> start -> message -> interrupt -> terminate, through two real
     subprocesses (backend.main + main.py), verified via the actual HTTP relay —
@@ -58,22 +105,7 @@ def test_live_session_lifecycle_through_two_real_processes(tmp_path: Path):
     env = os.environ.copy()
     env.pop("CLAUDECODE", None)
 
-    backend_proc = subprocess.Popen(
-        [
-            sys.executable, "-m", "backend.main",
-            "--host", "127.0.0.1",
-            "--port", str(backend_port),
-            "--token", backend_token,
-            "--data-dir", str(tmp_path / "backend_data"),
-            "--mock-sdk",
-            "--fixtures-dir", str(FIXTURES_DIR),
-        ],
-        cwd=str(REPO_ROOT),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
+    backend_proc = _spawn_backend(backend_port, backend_token, tmp_path / "backend_data", env)
     frontend_proc = None
 
     try:
@@ -83,21 +115,7 @@ def test_live_session_lifecycle_through_two_real_processes(tmp_path: Path):
             description="backend.main /health",
         )
 
-        frontend_proc = subprocess.Popen(
-            [
-                sys.executable, "main.py",
-                "--host", "127.0.0.1",
-                "--port", str(frontend_port),
-                "--no-auth",
-                "--remote-backend-url", f"http://127.0.0.1:{backend_port}",
-                "--remote-backend-token", backend_token,
-            ],
-            cwd=str(REPO_ROOT),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        frontend_proc = _spawn_frontend(frontend_port, backend_port, backend_token, env)
         _wait_for(
             lambda: httpx.get(f"http://127.0.0.1:{frontend_port}/ready", timeout=1).json().get("ready") is True,
             timeout=20,
@@ -185,12 +203,7 @@ def test_live_session_lifecycle_through_two_real_processes(tmp_path: Path):
         for proc in (frontend_proc, backend_proc):
             if proc is None:
                 continue
-            proc.terminate()
-            try:
-                proc.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5)
+            _terminate(proc)
 
         # Verify clean shutdown left no orphaned process behind (issue #498's own
         # standard, applied to this test's own subprocesses too).
@@ -221,33 +234,7 @@ def test_live_session_survives_backend_restart_mid_poll(tmp_path: Path):
     env.pop("CLAUDECODE", None)
     data_dir = tmp_path / "backend_data"
 
-    def _spawn_backend():
-        return subprocess.Popen(
-            [
-                sys.executable, "-m", "backend.main",
-                "--host", "127.0.0.1",
-                "--port", str(backend_port),
-                "--token", backend_token,
-                "--data-dir", str(data_dir),
-                "--mock-sdk",
-                "--fixtures-dir", str(FIXTURES_DIR),
-            ],
-            cwd=str(REPO_ROOT),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-
-    def _terminate(proc):
-        proc.terminate()
-        try:
-            proc.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
-
-    backend_proc = _spawn_backend()
+    backend_proc = _spawn_backend(backend_port, backend_token, data_dir, env)
     frontend_proc = None
 
     try:
@@ -257,21 +244,7 @@ def test_live_session_survives_backend_restart_mid_poll(tmp_path: Path):
             description="backend.main /health (pre-restart instance)",
         )
 
-        frontend_proc = subprocess.Popen(
-            [
-                sys.executable, "main.py",
-                "--host", "127.0.0.1",
-                "--port", str(frontend_port),
-                "--no-auth",
-                "--remote-backend-url", f"http://127.0.0.1:{backend_port}",
-                "--remote-backend-token", backend_token,
-            ],
-            cwd=str(REPO_ROOT),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        frontend_proc = _spawn_frontend(frontend_port, backend_port, backend_token, env)
         _wait_for(
             lambda: httpx.get(f"http://127.0.0.1:{frontend_port}/ready", timeout=1).json().get("ready") is True,
             timeout=20,
@@ -330,7 +303,7 @@ def test_live_session_survives_backend_restart_mid_poll(tmp_path: Path):
             # port/token/--data-dir, while Frontend (and the stale-cursor
             # client) keeps running. ---
             _terminate(backend_proc)
-            backend_proc = _spawn_backend()
+            backend_proc = _spawn_backend(backend_port, backend_token, data_dir, env)
             _wait_for(
                 lambda: httpx.get(f"http://127.0.0.1:{backend_port}/health", timeout=1).status_code == 200,
                 timeout=20,
@@ -378,6 +351,212 @@ def test_live_session_survives_backend_restart_mid_poll(tmp_path: Path):
             # only checking `reset` under a condition that's already guaranteed true.
             assert result["next_cursor"] < stale_cursor
             assert result["reset"] is True
+
+        assert frontend_proc.poll() is None
+
+    finally:
+        for proc in (frontend_proc, backend_proc):
+            if proc is None:
+                continue
+            _terminate(proc)
+
+        # Verify clean shutdown left no orphaned process behind.
+        time.sleep(1)
+        for proc, label in ((backend_proc, "backend"), (frontend_proc, "frontend")):
+            if proc is None:
+                continue
+            assert proc.poll() is not None, f"{label} process did not exit after terminate/kill"
+
+
+@pytest.mark.timeout(90)  # a second backend.main boot + health/ready gate needs more than the 30s default
+def test_live_session_restart_mid_poll_genuinely_in_flight(tmp_path: Path):
+    """Issue #1999 (US3, AC5): kill Backend while a long-poll GET request is
+    genuinely blocked mid-request at Backend/Frontend (parked inside
+    EventQueue.wait_for_events()) — not merely between two completed poll
+    cycles, which is all test_live_session_survives_backend_restart_mid_poll
+    (issue #1984) above covers.
+
+    The session goes quiet once its one recorded turn finishes replaying
+    (mock-sdk's `single_turn` fixture) — a long-poll issued during that quiet
+    window with a timeout well past when Backend gets killed is guaranteed to
+    still be parked, waiting on Frontend's own local EventQueue, at the moment
+    of the kill (confirmed by sleeping briefly and checking the background
+    poll thread hasn't already returned).
+    """
+    backend_port = _free_port()
+    frontend_port = _free_port()
+    backend_token = secrets.token_urlsafe(16)
+    env = os.environ.copy()
+    env.pop("CLAUDECODE", None)
+    data_dir = tmp_path / "backend_data"
+
+    backend_proc = _spawn_backend(backend_port, backend_token, data_dir, env)
+    frontend_proc = None
+
+    try:
+        _wait_for(
+            lambda: httpx.get(f"http://127.0.0.1:{backend_port}/health", timeout=1).status_code == 200,
+            timeout=20,
+            description="backend.main /health (pre-restart instance)",
+        )
+
+        frontend_proc = _spawn_frontend(frontend_port, backend_port, backend_token, env)
+        _wait_for(
+            lambda: httpx.get(f"http://127.0.0.1:{frontend_port}/ready", timeout=1).json().get("ready") is True,
+            timeout=20,
+            description="main.py /ready (gated on backend.main being ready)",
+        )
+
+        base_url = f"http://127.0.0.1:{frontend_port}"
+
+        with httpx.Client(base_url=base_url, timeout=10) as client:
+            proj_resp = client.post("/api/projects", json={
+                "name": "e2e-mid-poll-restart-test",
+                "working_directory": str(tmp_path),
+            })
+            assert proj_resp.status_code == 200, proj_resp.text
+            project_id = proj_resp.json()["project"]["project_id"]
+
+            sess_resp = client.post("/api/sessions", json={
+                "project_id": project_id,
+                "name": "single_turn",  # matches backend/tests/fixtures/single_turn
+            })
+            assert sess_resp.status_code == 200, sess_resp.text
+            session_id = sess_resp.json()["session_id"]
+
+            start_resp = client.post(f"/api/sessions/{session_id}/start")
+            assert start_resp.status_code == 200, start_resp.text
+
+            def _is_active():
+                info = client.get(f"/api/sessions/{session_id}").json()
+                return info["session"]["state"] == "active"
+
+            _wait_for(_is_active, timeout=15, description="session reaches ACTIVE state")
+
+            msg_resp = client.post(f"/api/sessions/{session_id}/messages", json={
+                "message": "Hello before the mid-poll backend restart",
+            })
+            assert msg_resp.status_code == 200, msg_resp.text
+
+            def _got_streamed_message():
+                events = client.get(f"/api/poll/session/{session_id}?since=0&timeout=2").json()["events"]
+                return any(e.get("type") == "message" for e in events)
+
+            _wait_for(_got_streamed_message, timeout=15,
+                      description="streamed message event via poll-relay before restart")
+
+            # The turn has fully replayed (mock-sdk's single_turn fixture has exactly
+            # one round trip) — the session is now genuinely quiet. Capture the current
+            # cursor and record every pre-restart event so the post-restart assertion
+            # can confirm no duplication, not just "something new arrived."
+            pre_restart_poll = client.get(f"/api/poll/session/{session_id}?since=0&timeout=1").json()
+            pre_restart_cursor = pre_restart_poll["next_cursor"]
+            pre_restart_events = pre_restart_poll["events"]
+            assert pre_restart_cursor > 0
+            assert len(pre_restart_events) > 0
+
+        # --- The core setup: issue a genuinely long-poll GET from a SEPARATE
+        # client/thread, confirm it's actually parked (not yet returned) before
+        # killing Backend while that exact request is still in flight. ---
+        in_flight_result: dict = {}
+
+        def _blocked_poll():
+            try:
+                with httpx.Client(base_url=base_url, timeout=30) as poll_client:
+                    resp = poll_client.get(
+                        f"/api/poll/session/{session_id}?since={pre_restart_cursor}&timeout=25"
+                    )
+                    in_flight_result["status_code"] = resp.status_code
+                    in_flight_result["body"] = resp.json()
+            except httpx.HTTPError as exc:
+                in_flight_result["error"] = repr(exc)
+
+        poll_thread = threading.Thread(target=_blocked_poll, daemon=True)
+        poll_thread.start()
+
+        # Confirm the request is genuinely parked mid-flight before killing Backend —
+        # not merely sent-but-not-yet-scheduled.
+        time.sleep(1.5)
+        assert poll_thread.is_alive(), (
+            "long-poll thread already returned before the restart — it never "
+            "actually blocked, so this test wouldn't be exercising a genuinely "
+            "in-flight kill"
+        )
+
+        # --- Kill Backend while the above GET is still parked inside
+        # EventQueue.wait_for_events(), then respawn it on the same port/token/
+        # --data-dir (supervisor-restart-in-place). ---
+        _terminate(backend_proc)
+        backend_proc = _spawn_backend(backend_port, backend_token, data_dir, env)
+        _wait_for(
+            lambda: httpx.get(f"http://127.0.0.1:{backend_port}/health", timeout=1).status_code == 200,
+            timeout=20,
+            description="backend.main /health (restarted instance)",
+        )
+
+        with httpx.Client(base_url=base_url, timeout=10) as client:
+            def _session_reachable():
+                return client.get(f"/api/sessions/{session_id}").status_code == 200
+
+            _wait_for(_session_reachable, timeout=15,
+                      description="session reachable through restarted backend")
+
+            # Starting the session again in the fresh process sends a client_launched
+            # system message through the message callback — a genuine post-restart
+            # event the relay picks up and forwards, which is what actually resolves
+            # the still-blocked in-flight poll thread above (rather than it just
+            # timing out at its own 25s ceiling).
+            restart_start_resp = client.post(f"/api/sessions/{session_id}/start")
+            assert restart_start_resp.status_code == 200, restart_start_resp.text
+
+            # --- AC5's core assertion: the request that was genuinely in flight at
+            # the moment of the kill must resolve — either as a transport error, or
+            # by unblocking with reset: true — not hang forever and not silently
+            # return an empty/stale response indistinguishable from a normal timeout. ---
+            poll_thread.join(timeout=30)
+            assert not poll_thread.is_alive(), "in-flight poll thread never resolved after the restart"
+
+            if "error" in in_flight_result:
+                pass  # A transport-level error while Backend was down is an acceptable resolution.
+            else:
+                assert in_flight_result["status_code"] == 200
+                body = in_flight_result["body"]
+                assert body["reset"] is True
+                assert body["next_cursor"] < pre_restart_cursor
+
+            # --- The next poll after respawn must show exactly the pre-restart
+            # events plus whatever resumed after — no duplicates, no loss. Since
+            # `reset` was true, the client must do a full resync from cursor 0
+            # against the NEW (post-restart) cursor space, exactly like a real
+            # browser's message.js loadMessages() fallback would. ---
+            def _post_restart_events():
+                resp = client.get(f"/api/poll/session/{session_id}?since=0&timeout=5")
+                data = resp.json()
+                return data if data["events"] else None
+
+            deadline = time.monotonic() + 20
+            post_restart_result = None
+            while time.monotonic() < deadline:
+                post_restart_result = _post_restart_events()
+                if post_restart_result is not None:
+                    break
+                time.sleep(0.3)
+
+            assert post_restart_result is not None, "no events observed after backend respawn"
+            post_restart_events = post_restart_result["events"]
+            assert len(post_restart_events) > 0
+
+            # No duplicates: every post-restart client_launched marker appears
+            # exactly once relative to itself (message_id-based, mirroring how the
+            # real frontend store dedups — see frontend/src/stores/message.js).
+            message_ids = [
+                e["data"].get("message_id")
+                for e in post_restart_events
+                if e.get("type") == "message" and e.get("data", {}).get("message_id")
+            ]
+            assert len(message_ids) == len(set(message_ids)), (
+                f"duplicate message_id(s) in post-restart event stream: {message_ids}"
+            )
 
         assert frontend_proc.poll() is None
 
