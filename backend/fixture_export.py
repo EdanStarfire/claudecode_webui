@@ -151,11 +151,17 @@ def _check_markers(raw_records: list[dict[str, Any]]) -> dict[str, bool]:
             # An inter-minion comm delivered to this session arrives as an ordinary
             # outbound user message (CommRouter._send_to_minion -> SessionCoordinator.
             # send_message()) — it never reaches _process_sdk_message's inbound SDK-message
-            # hook, and its queue-event type is "user", not "comm". The one place comm
-            # delivery is actually distinguishable is the `metadata.comm` key MessageProcessor.
-            # prepare_for_websocket() carries through from comm_metadata (backend/legion/
-            # comm_router.py's `comm_metadata = {"comm": {...}}`).
-            event_metadata = (record.get("event") or {}).get("metadata") or {}
+            # hook, and its queue-event type is "user", not "comm". The captured event is
+            # the poll-queue envelope BackendApp._create_message_callback() builds
+            # (web_server.py: {"type": "message", "session_id": ..., "data": websocket_data,
+            # "timestamp": ...}) — the actual per-message type/metadata live one level down,
+            # at event.data.type / event.data.metadata, not directly on event. Confirmed
+            # against a real captured raw_log (2026-09-23): event.metadata is never populated
+            # at the top level; event.data.metadata.comm is where a real comm delivery shows
+            # up (comm_router.py's `comm_metadata = {"comm": {...}}`, carried through by
+            # MessageProcessor.prepare_for_websocket()).
+            event_data = (record.get("event") or {}).get("data") or {}
+            event_metadata = event_data.get("metadata") or {}
             if "comm" in event_metadata:
                 found["inter-minion comm"] = True
 

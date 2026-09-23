@@ -56,10 +56,15 @@ def _write_full_coverage_raw_log(recorder: SessionRecorder) -> None:
         "sdk_message",
         lambda: {"_type": "SystemMessage", "data": {"subtype": "compact_boundary"}},
     )
-    # Inter-minion comm delivery arrives as an ordinary "user" queue event carrying
-    # metadata.comm (see comm_router.py's comm_metadata + prepare_for_websocket) —
-    # not a queue event literally typed "comm".
-    recorder.record_queue_event({"type": "user", "metadata": {"comm": {"from_minion_id": "m1"}}})
+    # Inter-minion comm delivery arrives as an ordinary "user" message wrapped in
+    # BackendApp's poll-queue envelope ({"type": "message", "data": {"type": "user",
+    # "metadata": {"comm": {...}}}}) — confirmed against a real captured raw_log
+    # (2026-09-23). Not a queue event literally typed "comm", and not metadata
+    # directly on the envelope (that level is never populated).
+    recorder.record_queue_event({
+        "type": "message",
+        "data": {"type": "user", "metadata": {"comm": {"from_minion_id": "m1"}}},
+    })
 
 
 class TestCheckMarkers:
@@ -117,10 +122,28 @@ class TestCheckMarkers:
         found = _check_markers(records)
         assert found["inter-minion comm"] is False
 
-    def test_issue_1998_comm_metadata_is_detected(self):
+    def test_issue_1998_comm_metadata_at_wrong_nesting_level_is_not_a_match(self):
+        """Regression: the raw log's queue_event.event is BackendApp's poll-queue
+        envelope ({"type": "message", "data": {...}}) — metadata lives at
+        event.data.metadata, never directly on event.metadata. An earlier fix
+        checked the wrong level and passed only because the test fixture that
+        exercised it made the same wrong assumption; caught against a real
+        captured raw_log on 2026-09-23 where every genuine comm delivery was
+        still reported missing despite two real deliveries being present."""
         records = [{
             "kind": "queue_event",
             "event": {"type": "user", "metadata": {"comm": {"from_minion_id": "m1"}}},
+        }]
+        found = _check_markers(records)
+        assert found["inter-minion comm"] is False
+
+    def test_issue_1998_comm_metadata_is_detected(self):
+        records = [{
+            "kind": "queue_event",
+            "event": {
+                "type": "message",
+                "data": {"type": "user", "metadata": {"comm": {"from_minion_id": "m1"}}},
+            },
         }]
         found = _check_markers(records)
         assert found["inter-minion comm"] is True
