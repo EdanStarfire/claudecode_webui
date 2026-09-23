@@ -188,6 +188,26 @@ class TestExportFixture:
         assert "capture_date" in provenance
 
     @pytest.mark.asyncio
+    async def test_issue_1998_exported_state_scrubs_secret_fetch_token(self, session_with_dir, tmp_path):
+        """Security regression: state.json's secret_fetch_token is a live credential
+        granting vault-secret resolution for this session (session_coordinator.py's
+        start_session()). An earlier version of this export copied state.json
+        verbatim via shutil.copy2() — found leaking a real token into a committed
+        fixture during live owner testing (2026-09-23). Must reuse the same
+        scrub_state_for_archive() archive_manager.py already applies to state.json
+        for the disposal-archive path."""
+        coordinator, session_id, session_dir = session_with_dir
+        await coordinator.session_manager.update_session(session_id, secret_fetch_token="fake-token-xyz")
+        recorder = SessionRecorder(session_id, session_dir)
+        _write_full_coverage_raw_log(recorder)
+
+        await export_fixture(coordinator, session_id, "test-fixture", fixtures_root=tmp_path)
+
+        exported_state = json.loads((tmp_path / "test-fixture" / "state.json").read_text())
+        assert "secret_fetch_token" not in exported_state
+        assert "fake-token-xyz" not in json.dumps(exported_state)
+
+    @pytest.mark.asyncio
     async def test_no_raw_log_at_all_reports_all_markers_missing(self, session_with_dir, tmp_path):
         coordinator, session_id, _session_dir = session_with_dir
         with pytest.raises(FixtureExportError) as exc_info:

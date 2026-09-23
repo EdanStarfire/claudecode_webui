@@ -249,7 +249,17 @@ async def export_fixture(
         shutil.copy2(raw_log_path, fixture_dir / "raw_log.jsonl")
     state_path = session_dir / "state.json"
     if state_path.exists():
-        shutil.copy2(state_path, fixture_dir / "state.json")
+        # Security: scrub secret_fetch_token (a live credential granting vault-secret
+        # resolution for this session) before writing into what becomes a committed
+        # test fixture. Reuses the same scrub_state_for_archive() archive_manager.py
+        # already applies to state.json for the disposal-archive path — same file,
+        # same sensitivity, same redaction, rather than a second bespoke scrubber.
+        from backend.legion.archive_manager import scrub_state_for_archive
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        scrubbed = scrub_state_for_archive(state)
+        (fixture_dir / "state.json").write_text(
+            json.dumps(scrubbed, indent=2, default=str), encoding="utf-8"
+        )
     messages_path = session_dir / "messages.jsonl"
     if messages_path.exists():
         shutil.copy2(messages_path, fixture_dir / "messages.jsonl")
