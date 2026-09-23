@@ -21,6 +21,19 @@ regenerate `backend/tests/fixtures/raw/mock-sdk-synthetic/` from scratch — tha
 the whole point of it living in the repo as a runnable script rather than being a
 one-off throwaway.
 
+`rest_history.json` is built independently from the live path (see
+`_reconstruct_rest_history_messages()`): it reprocesses the real, stored
+`messages.jsonl` rows through `SessionCoordinator._convert_stored_message_to_
+websocket()` — the actual REST-reload reconstruction method, called on a
+minimally-constructed instance (`object.__new__`) since that method needs no
+other coordinator state. This is deliberate, not incidental: an earlier version
+of this script built `rest_history.json` from the same accumulator the live
+path used, which made the equivalence harness's check against this fixture
+tautological. As a direct consequence, this fixture is expected to reproduce
+issue #2002's divergence too (see `frontend/src/stores/__tests__/
+equivalence.test.js`'s `KNOWN_DIVERGENT_FIXTURES`) — that's confirmatory
+evidence the bug is systemic, not an artifact of one real recording.
+
 Usage:
     uv run python -m backend.tests.fixtures.generate_synthetic_fixture
 """
@@ -54,6 +67,7 @@ from claude_agent_sdk import (
 from backend.claude_sdk import ClaudeSDK
 from backend.data_storage import DataStorageManager
 from backend.message_parser import MessageParser, MessageProcessor
+from backend.session_coordinator import SessionCoordinator
 from backend.session_recorder import SessionRecorder
 from shared.event_queue import EventQueue
 
@@ -226,6 +240,40 @@ async def _run_scenario(shadow_sdk: ClaudeSDK, recorder: SessionRecorder) -> Non
     await shadow_sdk._process_sdk_message(result_msg)
 
 
+def _reconstruct_rest_history_messages(stored_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rebuilds rest_history.json's message list via the REAL REST-reload
+    reconstruction method — backend.session_coordinator.SessionCoordinator.
+    _convert_stored_message_to_websocket() — instead of reusing anything the
+    live path (message_callback, above) computed. Reviewed (2026-09-23): that
+    method never reads `self` beyond calling two @staticmethods on the same
+    class (_extract_agent_name, _parse_agent_notification_label) — no
+    SessionManager, storage, or other coordinator state — so the smallest
+    viable real dependency is a completely uninitialized instance
+    (`object.__new__`, bypassing `__init__` and its full manager graph
+    entirely), not a hand-rolled approximation of the method's logic.
+
+    This is deliberately independent of the live path's own accumulator: an
+    earlier version of this script built rest_history.json from the exact
+    same list the live path's queue events were drawn from, making the
+    equivalence check tautological (see issue #1999 PR discussion) — it could
+    prove the replay mechanics ran without crashing, never that the harness
+    catches a genuine live-vs-reload divergence. Reprocessing the real stored
+    JSONL rows through the real reconstruction method closes that gap — and,
+    expected per #2002, reproduces that same tracked bug on synthetic data too
+    (sparser content/metadata than the live path), confirming #2002 is a
+    systemic backend gap, not an artifact of one real recording.
+    """
+    coordinator = object.__new__(SessionCoordinator)
+    messages = []
+    for stored in stored_records:
+        if stored.get("_type") == "ToolCallUpdate":
+            continue  # not produced by this fixture's scenario; nothing to reconstruct
+        websocket_data = coordinator._convert_stored_message_to_websocket(stored)
+        if websocket_data is not None:
+            messages.append(_json_safe(websocket_data))
+    return messages
+
+
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -388,19 +436,16 @@ async def generate() -> dict[str, bool]:
         queue = EventQueue(on_append=recorder.record_queue_event)
         message_processor = MessageProcessor(MessageParser())
 
-        # rest_history.json's message list — mirrors what a live
-        # SessionCoordinator.get_session_messages() REST response would contain:
-        # ephemeral assistant_delta events are excluded (see #1486 — they bypass
-        # storage entirely and are never returned by a real history reload).
-        accumulated_messages: list[dict[str, Any]] = []
-
         async def message_callback(msg: dict[str, Any]) -> None:
             # Mirrors backend/web_server.py's BackendApp._create_message_callback()
             # exactly — the real code that turns a ClaudeSDK message_callback
             # invocation into a poll-queue envelope. That method lives on a
             # BackendApp instance with a live self.session_queues/self._message_processor
             # too heavy to construct standalone here; replicated by hand against the
-            # SAME MessageProcessor and EventQueue primitives it actually uses.
+            # SAME MessageProcessor and EventQueue primitives it actually uses. This is
+            # the LIVE path only — rest_history.json is built completely independently,
+            # below, by re-processing stored messages.jsonl through the real REST
+            # reconstruction method (see the tautology note there).
             if isinstance(msg, dict) and msg.get("type") == "assistant_delta":
                 if msg.get("parent_tool_use_id") is not None:
                     return  # subagent deltas are dropped in production too
@@ -422,7 +467,6 @@ async def generate() -> dict[str, bool]:
             if parsed_message.record_id:
                 websocket_data["message_id"] = parsed_message.record_id
 
-            accumulated_messages.append(_json_safe(websocket_data))
             queue.append({
                 "type": "message",
                 "session_id": _SESSION_ID,
@@ -463,15 +507,16 @@ async def generate() -> dict[str, bool]:
             json.dumps(_build_synthetic_state(), indent=2, default=str), encoding="utf-8"
         )
 
-        # Issue #1999 note: no live SessionCoordinator.get_session_messages() to call
-        # standalone here, so this synthetic fixture's "REST reload path ground truth"
-        # is approximated by reusing the same message_callback-accumulated dicts
-        # (websocket-shaped, same as a live queue_event's .data field) instead of a
-        # real REST-endpoint response — a reasonable approximation for a synthetic
-        # fixture per the issue's own instructions.
+        # rest_history.json is built from the REAL stored messages.jsonl rows,
+        # reprocessed through the real REST reconstruction method — genuinely
+        # independent of the live path above. See
+        # _reconstruct_rest_history_messages()'s docstring for why this is the
+        # correct fix (not an approximation) and what it's expected to surface.
+        stored_records = _read_jsonl(messages_dst)
+        rest_messages = _reconstruct_rest_history_messages(stored_records)
         rest_history = {
-            "messages": accumulated_messages,
-            "total_count": len(accumulated_messages),
+            "messages": rest_messages,
+            "total_count": len(rest_messages),
             "limit": 50,
             "offset": 0,
             "has_more": False,

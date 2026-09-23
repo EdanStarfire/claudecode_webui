@@ -113,23 +113,36 @@ async function replayRestPath(fixture) {
 // Issue #1999 (AC1/AC2) found a genuine, pre-existing divergence between the live
 // event path and the REST reload path that predates this issue entirely — NOT a
 // message-pipeline regression this harness is meant to catch, and out of scope to fix
-// here (this issue is test-infrastructure-only; the fix lives in backend/, under
-// backend/session_coordinator.py's _convert_stored_message_to_websocket(), which
-// reconstructs messages from stored StoredMessage rows for a REST reload without
-// running them through DisplayProjection or message_parser.py's default-content/
-// default-metadata synthesis the live path always applies — e.g. every "init"-subtype
-// system message reloads with content:"" instead of the live path's synthesized
-// "System message", and dozens of has_*/tool_uses/tool_results/thinking/display/model/
-// usage metadata keys are simply absent rather than explicitly false/empty). Measured
-// against the primary fixture: ~76% of non-tool_call messages differ in `content` on
-// reload, and nearly every message is missing 5-15 metadata keys the live path always
-// sets. A normalizer permissive enough to hide this would also hide a real regression,
-// defeating AC2's purpose — so this is captured as an it.fails() expected-failure,
-// naming the fixture and the reason, rather than silently skipped or normalized away.
-// It.fails() means: if a future backend fix makes this pass, the suite FAILS until
-// someone removes this exclusion — the test can't silently go stale.
+// here (this issue is test-infrastructure-only). Tracked as issue #2002: backend/
+// session_coordinator.py's _convert_stored_message_to_websocket() reconstructs
+// messages from stored StoredMessage rows for a REST reload without running them
+// through DisplayProjection or message_parser.py's default-content/default-metadata
+// synthesis the live path always applies — e.g. every "init"-subtype system message
+// reloads with content:"" instead of the live path's synthesized "System message", and
+// dozens of has_*/tool_uses/tool_results/thinking/display/model/usage metadata keys are
+// simply absent rather than explicitly false/empty. Measured against the primary
+// fixture: ~76% of non-tool_call messages differ in `content` on reload, and nearly
+// every message is missing 5-15 metadata keys the live path always sets.
+//
+// mock-sdk-synthetic (T1's builder-regenerable fixture) independently reproduces the
+// same divergence: its rest_history.json is built by reprocessing the real stored
+// messages.jsonl through the SAME real _convert_stored_message_to_websocket() method
+// (see generate_synthetic_fixture.py's _reconstruct_rest_history_messages() —
+// deliberately NOT built from the live path's own accumulator, which would make this
+// check tautological and prove nothing about the harness's ability to catch a genuine
+// divergence). Confirming the same bug shows up on synthetic data too is useful
+// evidence #2002 is a systemic backend gap, not an artifact of one real recording — not
+// a reason to weaken this harness.
+//
+// A normalizer permissive enough to hide this would also hide a real regression,
+// defeating AC2's purpose — so both fixtures are captured as it.fails() expected
+// failures, naming the fixture and citing #2002, rather than silently skipped or
+// normalized away. it.fails() means: if #2002 is fixed and either of these starts
+// passing, the suite FAILS until someone removes that fixture's entry here — the test
+// can't silently go stale, and this file is the single place to update when that happens.
 const KNOWN_DIVERGENT_FIXTURES = new Map([
-  ['2026-09-23-primary', 'backend/session_coordinator.py _convert_stored_message_to_websocket() is missing DisplayProjection + message_parser.py\'s default content/metadata synthesis — see comment above'],
+  ['2026-09-23-primary', 'issue #2002 — see comment above'],
+  ['mock-sdk-synthetic', 'issue #2002 — see comment above'],
 ])
 
 describe('fixture equivalence — live event path vs. REST reload path (issue #1999, AC1/AC2)', () => {
