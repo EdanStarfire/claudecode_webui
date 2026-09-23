@@ -47,11 +47,14 @@ class BackendSupervisor:
         fixtures_dir: Path | None = None,
         extra_backend_args: list[str] | None = None,
         log_dir: Path | None = None,
+        session_recording_enabled: bool = False,
     ):
         self.data_dir = data_dir
         self.experimental = experimental
         self.mock_sdk = mock_sdk
         self.fixtures_dir = fixtures_dir
+        # Issue #1998: forwarded verbatim into the auto-started Backend's argv.
+        self.session_recording_enabled = session_recording_enabled
         self.extra_backend_args = extra_backend_args or []
         self.log_dir = Path(log_dir) if log_dir else (data_dir / "logs" / "backend")
 
@@ -90,6 +93,8 @@ class BackendSupervisor:
         ]
         if self.experimental:
             cmd.append("--experimental")
+        if self.session_recording_enabled:
+            cmd.append("--enable-session-recording")
         if self.mock_sdk:
             cmd.append("--mock-sdk")
             if self.fixtures_dir:

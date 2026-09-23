@@ -70,6 +70,12 @@ def main():
     # Experimental features / mock SDK — passed through to an auto-started Backend
     parser.add_argument('--experimental', action='store_true', help='Enable experimental features (Agent Teams) on Backend')
     parser.add_argument(
+        '--enable-session-recording', action='store_true',
+        help='Enable the session recording / fixture export developer feature on Backend. '
+             'Off by default — a dev-only capability for building test fixtures, not an '
+             'end-user feature.'
+    )
+    parser.add_argument(
         '--mock-sdk', action='store_true',
         help='Use MockClaudeSDK with fixture replay instead of real SDK (auto-started Backend only)'
     )
@@ -182,6 +188,7 @@ def main():
             fixtures_dir=Path(args.fixtures_dir).resolve() if args.fixtures_dir else None,
             extra_backend_args=extra_backend_args,
             log_dir=data_dir_path / "logs" / "backend",
+            session_recording_enabled=args.enable_session_recording,
         )
         print(f"Auto-starting Backend (embedded) on {backend_supervisor.host}:{backend_supervisor.port}")
 

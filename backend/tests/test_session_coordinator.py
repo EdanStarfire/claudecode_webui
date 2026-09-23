@@ -688,7 +688,7 @@ class TestSessionCoordinator:
             success = await coordinator.reset_session(session_id)
 
         assert success is True
-        mock_start.assert_called_once_with(session_id, None)
+        mock_start.assert_called_once_with(session_id, None, _lifecycle_action="reset")
 
     @pytest.mark.asyncio
     async def test_issue_1579_reset_re_registers_message_callback(self, temp_coordinator, sample_session_config):

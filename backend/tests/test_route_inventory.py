@@ -13,7 +13,9 @@ since Backend usually isn't independently publicly reachable). Issue #1629 added
 5 hook-config CRUD routes (GET/POST /api/hook-configs, GET/PUT/DELETE
 /api/hook-configs/{config_id}), mirroring the MCP config router's shape. Issue
 #1931 added 1 route: POST /api/debug/client-buffer (frontend debug ring-buffer
-submission, logged to client_debug.log).
+submission, logged to client_debug.log). Issue #1998 added 1 route: POST
+/api/sessions/{session_id}/export-fixture (session recording fixture export,
+403s unless the Backend was started with --enable-session-recording).
 """
 
 
@@ -41,8 +43,8 @@ def test_route_count_unchanged():
     from backend.web_server import create_app
     app = create_app()
     api_routes_count = _count_api_routes(app)
-    assert api_routes_count == 164, (
-        f"Expected 164 Backend routes post-#498 split (core.py's 3 browser routes "
+    assert api_routes_count == 165, (
+        f"Expected 165 Backend routes post-#498 split (core.py's 3 browser routes "
         f"stayed Frontend-side only; config.py now has its own 2 backend-owned routes "
         f"here PLUS 2 more on the Frontend side doing merged-read/split-write; poll.py's "
         f"4 routes are duplicated into backend/routers/poll.py since Backend owns the "
@@ -52,6 +54,7 @@ def test_route_count_unchanged():
         f"POST /api/secrets/oauth/initiate, POST /api/secrets/{{name}}/oauth/reconnect-initiate, "
         f"POST /api/secrets/oauth/{{flow_id}}/cancel; "
         f"+5 hook-config CRUD routes from issue #1629; "
-        f"+1 POST /api/debug/client-buffer from issue #1931), "
+        f"+1 POST /api/debug/client-buffer from issue #1931; "
+        f"+1 POST /api/sessions/{{session_id}}/export-fixture from issue #1998), "
         f"got {api_routes_count}. A route was added or removed."
     )

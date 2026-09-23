@@ -26,6 +26,13 @@ def build_router(webui) -> APIRouter:
             model_id: rates.to_dict()
             for model_id, rates in default_pricing_rates().items()
         }
+        # Issue #1998: process-level capability flag, deliberately not part of the
+        # persisted AppConfig model (it's not user-configurable — only set at Backend
+        # startup via --enable-session-recording). Frontend's merged-config read
+        # already spreads this response, so no relay-side plumbing is needed.
+        result["capabilities"] = {
+            "session_recording_available": webui.coordinator.session_recording_enabled,
+        }
         return {"config": result}
 
     @router.put("/api/config")

@@ -207,6 +207,50 @@
                   <div class="small text-muted">Clear full playback records for session</div>
                 </button>
               </template>
+
+              <!-- Fixture Recording (issue #1998, conditional on --enable-session-recording) -->
+              <template v-if="uiStore.sessionRecordingAvailable">
+                <hr class="my-2">
+
+                <div class="knowledge-section-header">
+                  <h6 class="text-secondary mb-2">Fixture Recording</h6>
+                </div>
+
+                <div class="d-flex gap-2 mb-2">
+                  <input
+                    type="text"
+                    class="form-control form-control-sm"
+                    v-model="exportName"
+                    placeholder="Fixture name (default: session ID)"
+                    :disabled="isExporting"
+                  >
+                  <button
+                    class="btn btn-outline-secondary text-nowrap"
+                    @click="handleExportFixture"
+                    :disabled="isPerformingAction || isExporting"
+                  >
+                    {{ isExporting ? 'Exporting…' : 'Export Fixture' }}
+                  </button>
+                </div>
+
+                <div v-if="exportResult?.success" class="alert alert-success small mb-2">
+                  <strong>Export succeeded.</strong> Fixture written to
+                  <code>{{ exportResult.fixture_dir }}</code>.
+                  <ul class="mb-0 mt-2 ps-3">
+                    <li v-for="(present, marker) in exportResult.markers" :key="marker">
+                      {{ present ? '✔' : '✘' }} {{ marker }}
+                    </li>
+                  </ul>
+                </div>
+
+                <div v-else-if="exportResult && exportResult.success === false" class="alert alert-warning small mb-2">
+                  <strong>Export failed.</strong>
+                  {{ exportResult.missing_markers?.length }} required scenario marker{{ exportResult.missing_markers?.length === 1 ? '' : 's' }} missing:
+                  <ul class="mb-0 mt-2 ps-3">
+                    <li v-for="marker in exportResult.missing_markers" :key="marker">✘ {{ marker }}</li>
+                  </ul>
+                </div>
+              </template>
             </div>
           </div>
         </div>
@@ -274,6 +318,11 @@ let modalInstance = null
 // Descendant tracking for cascading deletion warning
 const descendants = ref([])
 const isLoadingDescendants = ref(false)
+
+// Fixture export (issue #1998)
+const exportName = ref('')
+const isExporting = ref(false)
+const exportResult = ref(null)
 
 // History/archives status
 const historyArchivesStatus = ref({ has_history: false, has_archives: false })
@@ -635,6 +684,23 @@ async function confirmEraseArchives() {
   }
 }
 
+// Export fixture (issue #1998)
+async function handleExportFixture() {
+  if (!session.value) return
+
+  isExporting.value = true
+  exportResult.value = null
+  try {
+    const name = exportName.value.trim() || undefined
+    exportResult.value = await sessionStore.exportFixture(session.value.session_id, name)
+  } catch (error) {
+    console.error('Error exporting fixture:', error)
+    errorMessage.value = `Error exporting fixture: ${error.data?.detail || error.message || 'Unknown error'}`
+  } finally {
+    isExporting.value = false
+  }
+}
+
 // Reset state
 function resetState() {
   confirmationView.value = null
@@ -649,6 +715,9 @@ function resetState() {
   isLoadingReparentTargets.value = false
   reparentError.value = ''
   selectedReparentTargetId.value = undefined
+  exportName.value = ''
+  isExporting.value = false
+  exportResult.value = null
 }
 
 // Handle modal hidden event

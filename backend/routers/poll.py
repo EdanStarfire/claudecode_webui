@@ -56,7 +56,7 @@ def build_router(webui) -> APIRouter:
         if session_id not in webui.session_queues:
             if not await webui.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
-            webui.session_queues[session_id] = EventQueue()
+            webui.session_queues[session_id] = EventQueue(on_append=webui._queue_append_hook(session_id))
         queue = webui.session_queues[session_id]
 
         # Issue #1598: Mark session viewed at poll START, not poll END.

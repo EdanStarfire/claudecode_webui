@@ -1,0 +1,7 @@
+{
+  "sdk_version": "0.2.152",
+  "cli_version": "2.1.260 (Claude Code)",
+  "model": "opus",
+  "git_sha": "c2ffb904baf8c58ccd716056a9a5bcc7967be7fa",
+  "capture_date": "2026-09-23T03:19:29.806179+00:00"
+}
