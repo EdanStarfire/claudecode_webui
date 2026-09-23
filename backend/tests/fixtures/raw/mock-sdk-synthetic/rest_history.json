@@ -1,0 +1,146 @@
+{
+  "messages": [
+    {
+      "type": "assistant",
+      "content": "I'll read that file for you.",
+      "timestamp": 1790172732.0788023,
+      "session_id": "mock-sdk-synthetic-session",
+      "metadata": {
+        "has_tool_uses": true,
+        "tool_uses": [
+          {
+            "id": "synthetic-tu-1",
+            "name": "Read",
+            "input": {
+              "file_path": "/tmp/example.txt"
+            }
+          }
+        ]
+      },
+      "message_id": "78e23ad4-ed29-4b30-9681-3f2692a0d3b6"
+    },
+    {
+      "type": "user",
+      "content": "",
+      "timestamp": 1790172732.0790322,
+      "session_id": "mock-sdk-synthetic-session",
+      "metadata": {
+        "has_tool_results": true,
+        "tool_results": [
+          {
+            "tool_use_id": "synthetic-tu-1",
+            "content": "Line 1: hello\nLine 2: world\n",
+            "is_error": false
+          }
+        ]
+      },
+      "message_id": "29aa5efb-da46-41bf-9026-9106701b1778"
+    },
+    {
+      "type": "system",
+      "content": "Agent spawned: Explore the repository structure",
+      "timestamp": 1790172732.0791671,
+      "session_id": "mock-sdk-synthetic-session",
+      "metadata": {
+        "subtype": "task_started",
+        "init_data": {
+          "task_id": "synthetic-task-1",
+          "description": "Explore the repository structure"
+        },
+        "task_id": "synthetic-task-1",
+        "description": "Explore the repository structure",
+        "task_session_id": "mock-sdk-synthetic-session",
+        "task_type": "general-purpose",
+        "uuid": "synthetic-ts-1",
+        "tool_use_id": null
+      },
+      "subtype": "task_started",
+      "message_id": "76f2abe8-7309-4034-9e0d-65c23a95540b"
+    },
+    {
+      "type": "system",
+      "content": "Agent progress: Reading files in src/ [Read]",
+      "timestamp": 1790172732.0792754,
+      "session_id": "mock-sdk-synthetic-session",
+      "metadata": {
+        "subtype": "task_progress",
+        "init_data": {
+          "task_id": "synthetic-task-1"
+        },
+        "task_id": "synthetic-task-1",
+        "description": "Reading files in src/",
+        "task_session_id": "mock-sdk-synthetic-session",
+        "last_tool_name": "Read",
+        "uuid": "synthetic-tp-1",
+        "tool_use_id": null,
+        "usage": {
+          "total_tokens": 1200,
+          "tool_uses": 3,
+          "duration_ms": 4500
+        }
+      },
+      "subtype": "task_progress",
+      "message_id": "cd2a714d-8e56-4461-83b9-b6115192c7de"
+    },
+    {
+      "type": "system",
+      "content": "Agent completed: Explored the repository structure and summarized key directories.",
+      "timestamp": 1790172732.0794222,
+      "session_id": "mock-sdk-synthetic-session",
+      "metadata": {
+        "subtype": "task_notification",
+        "init_data": {
+          "task_id": "synthetic-task-1",
+          "status": "completed"
+        },
+        "task_id": "synthetic-task-1",
+        "status": "completed",
+        "summary": "Explored the repository structure and summarized key directories.",
+        "task_session_id": "mock-sdk-synthetic-session",
+        "output_file": "/tmp/synthetic-task-output.txt",
+        "uuid": "synthetic-tn-1",
+        "tool_use_id": null,
+        "usage": {
+          "total_tokens": 3400,
+          "tool_uses": 5,
+          "duration_ms": 9800
+        }
+      },
+      "subtype": "task_notification",
+      "message_id": "96225283-310c-4250-935e-1462122c18ea"
+    },
+    {
+      "type": "assistant",
+      "content": "Welcome back \u2014 resuming where we left off.",
+      "timestamp": 1790172732.0795705,
+      "session_id": "mock-sdk-synthetic-session",
+      "metadata": {},
+      "message_id": "13ad2c39-8f3c-4ac6-a07a-3cc3293a2d23"
+    },
+    {
+      "type": "result",
+      "content": "",
+      "timestamp": 1790172732.0797,
+      "session_id": "mock-sdk-synthetic-session",
+      "metadata": {
+        "subtype": "success",
+        "usage": null,
+        "model_usage": null,
+        "duration_ms": 12345,
+        "duration_api_ms": 9800,
+        "total_cost_usd": null,
+        "num_turns": 2,
+        "stop_reason": null,
+        "errors": null,
+        "permission_denials": null,
+        "deferred_tool_use": null
+      },
+      "subtype": "success",
+      "message_id": "4f616b1e-1370-432e-8478-4f6b6b3f4776"
+    }
+  ],
+  "total_count": 7,
+  "limit": 50,
+  "offset": 0,
+  "has_more": false
+}
