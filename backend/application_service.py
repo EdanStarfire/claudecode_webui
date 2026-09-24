@@ -705,12 +705,28 @@ class ApplicationService:
         if not token_url:
             raise ValueError("OAuth token endpoint not recorded; re-authenticate to refresh it")
 
+        vault = self.coordinator.credential_vault
+
         # Determine sibling secret names
         refresh_token_name = f"{base_name}_refresh" if tokens.refresh_token else None
         client_secret_value = client_info.client_secret if client_info else None
         client_secret_name = f"{base_name}_client_secret" if client_secret_value else None
+        client_secret_reused = False
+        if client_secret_value:
+            from .mcp.secret_resolver import find_secret_ref_names
 
-        vault = self.coordinator.credential_vault
+            ref_names = find_secret_ref_names(config.oauth_client_secret)
+            if ref_names and len(ref_names) == 1 and (
+                config.oauth_client_secret.strip() == f"${{secret:{ref_names[0]}}}"
+            ):
+                existing_secret = await vault.get_secret(ref_names[0])
+                if existing_secret is None:
+                    raise LookupError(
+                        f"404: Referenced client secret '{ref_names[0]}' no longer exists in vault"
+                    )
+                client_secret_name = ref_names[0]
+                client_secret_reused = True
+
         now = datetime.now(UTC)
         # Issue #1871: .hostname (not .netloc) — target_hosts validation rejects a
         # port component, so an MCP server URL with an explicit non-standard port
@@ -754,8 +770,12 @@ class ApplicationService:
                 expires_at_iso=expires_at_iso,
             )
 
-        # Pre-check vault collisions (replace=False only)
-        for name in filter(None, [base_name, refresh_token_name, client_secret_name]):
+        # Pre-check vault collisions (replace=False only). A reused reference's
+        # existing presence in the vault is expected, not a collision.
+        collision_candidates = [base_name, refresh_token_name]
+        if not client_secret_reused:
+            collision_candidates.append(client_secret_name)
+        for name in filter(None, collision_candidates):
             existing = await vault.get_secret(name)
             if existing is not None:
                 raise KeyError(f"409: Secret '{name}' already exists; choose a different base_name")
@@ -772,6 +792,7 @@ class ApplicationService:
             scrub=scrub,
             host=host,
             now=now,
+            client_secret_reused=client_secret_reused,
         )
 
         # Update MCP config headers — rollback all secrets if this fails
@@ -807,6 +828,7 @@ class ApplicationService:
         scrub,
         host: str,
         now,
+        client_secret_reused: bool = False,
     ) -> list[str]:
         """Create up to 3 vault secrets (refresh-token sibling, client-secret sibling,
         primary oauth2 record) with rollback-on-failure. Returns the list of created
@@ -816,6 +838,13 @@ class ApplicationService:
         Extracted from import_oauth_as_secret() (issue #1871) so the standalone
         vault-secret guided-authorization flow can create the same shape of bundle
         without going through any MCP config at all.
+
+        When `client_secret_reused` is True, `client_secret_name` refers to a secret
+        that already exists (a `${secret:NAME}` reference in `config.oauth_client_secret`,
+        issue #2005) — its value is overwritten in place if it drifted from the freshly
+        observed one, but it is never appended to `created`: this method's own rollback
+        deletes everything in `created` on failure, and a secret this call didn't create
+        must never be deleted by that rollback.
         """
         from .models.secret_record import SecretRecord, SecretType
 
@@ -833,15 +862,33 @@ class ApplicationService:
                 created.append(refresh_token_name)
 
             if client_secret_name and client_secret_value:
-                cs_record = SecretRecord(
-                    name=client_secret_name,
-                    type=SecretType.GENERIC,
-                    target_hosts=[host],
-                    created_at=now,
-                    updated_at=now,
-                )
-                await vault.create_secret(cs_record, client_secret_value)
-                created.append(client_secret_name)
+                if client_secret_reused:
+                    resolved = await vault.resolve_secrets_for_assignment([client_secret_name])
+                    current_value = resolved[0]["value"] if resolved else None
+                    if current_value != client_secret_value:
+                        existing_meta = await vault.get_secret(client_secret_name)
+                        if existing_meta is None:
+                            # Deleted concurrently between the earlier existence
+                            # check and here — fail closed rather than crash on
+                            # SecretRecord.from_dict(None) (Decision 1).
+                            raise LookupError(
+                                f"404: Referenced client secret '{client_secret_name}' "
+                                "no longer exists in vault"
+                            )
+                        cs_record = SecretRecord.from_dict(
+                            {**existing_meta, "updated_at": now.isoformat()}
+                        )
+                        await vault.update_secret(client_secret_name, cs_record, client_secret_value)
+                else:
+                    cs_record = SecretRecord(
+                        name=client_secret_name,
+                        type=SecretType.GENERIC,
+                        target_hosts=[host],
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    await vault.create_secret(cs_record, client_secret_value)
+                    created.append(client_secret_name)
 
             primary_record = SecretRecord(
                 name=base_name,

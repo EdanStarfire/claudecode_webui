@@ -779,21 +779,23 @@ async def test_issue_1867_import_as_secret_full_chain_confidential_client(tmp_pa
         client_info_after_exchange = await store.get_client_info()
         assert client_info_after_exchange.client_secret == client_secret_plain
 
-        # --- import_oauth_as_secret(): all 3 secrets created & correctly wired ---
+        # --- import_oauth_as_secret(): config.oauth_client_secret is a
+        # ${secret:test-google-secret} reference, so per issue #2005 the existing
+        # "test-google-secret" vault entry is reused instead of minting a duplicate
+        # "google_oauth_client_secret" — only 2 secrets are newly created.
         result = await service.import_oauth_as_secret(config_id, "google_oauth")
 
         assert set(result["secrets_created"]) == {
             "google_oauth",
             "google_oauth_refresh",
-            "google_oauth_client_secret",
         }
         assert result["auto_refresh_enabled"] is True
 
         primary_meta = await vault.get_secret("google_oauth")
-        assert primary_meta["refresh"]["client_secret_secret_name"] == "google_oauth_client_secret"
+        assert primary_meta["refresh"]["client_secret_secret_name"] == "test-google-secret"
         assert primary_meta["refresh"]["refresh_token_secret_name"] == "google_oauth_refresh"
 
-        assert fake_keyring.get_value("google_oauth_client_secret") == client_secret_plain
+        assert fake_keyring.get_value("test-google-secret") == client_secret_plain
         assert fake_keyring.get_value("google_oauth_refresh") == "google_refresh_token"
         assert fake_keyring.get_value("google_oauth") == "google_access_token"
 
@@ -872,3 +874,360 @@ async def test_issue_1871_replace_true_updates_bundle_in_place(
         "jira_oauth", "jira_oauth_refresh", "jira_oauth_client_secret",
     }
     assert result["auto_refresh_enabled"] is True
+
+
+# ---------------------------------------------------------------------------
+# Issue #2005: reuse an existing ${secret:NAME} client-secret reference instead
+# of minting a duplicate `{base_name}_client_secret`.
+# ---------------------------------------------------------------------------
+
+
+def _make_service_with_fake_keyring(
+    tmp_path: Path,
+    mock_config: McpServerConfig | None,
+    store: FernetTokenStore,
+    fake: _FakeKeyring,
+) -> ApplicationService:
+    """Like `_make_service()`, but backed by a `_FakeKeyring` so pre-seeded and
+    freshly-written secret values can be distinguished and compared (needed to
+    exercise drift-detection, which `_make_service()`'s constant-value keyring
+    stub can't)."""
+    coordinator = MagicMock()
+
+    async def _get_config(config_id):
+        return mock_config
+
+    async def _update_config(config_id, **kwargs):
+        if mock_config:
+            if "headers" in kwargs:
+                mock_config.headers = kwargs["headers"]
+        return mock_config
+
+    coordinator.mcp_config_manager.get_config = _get_config
+    coordinator.mcp_config_manager.update_config = _update_config
+    coordinator.oauth_manager.get_token_store.return_value = store
+
+    with _patched_keyring(fake):
+        vault = SecretsVault(tmp_path)
+    coordinator.credential_vault = vault
+    return ApplicationService(coordinator)
+
+
+@pytest.mark.asyncio
+async def test_issue_2005_reuse_existing_reference_no_drift(
+    tmp_path: Path, tmp_store: FernetTokenStore
+):
+    """oauth_client_secret is a ${secret:NAME} reference already holding the same
+    value as the freshly observed client_info.client_secret -> reused, not re-minted,
+    and left untouched (no spurious update)."""
+    token = _make_token()
+    await tmp_store.set_tokens(token)
+    tmp_store.set_token_endpoint(_TOKEN_URL)
+    await tmp_store.set_client_info(_make_client_info(client_secret="my_client_secret"))
+
+    fake = _FakeKeyring()
+    cfg = _make_mcp_config(oauth_client_secret="${secret:existing-cs}")
+
+    with _patched_keyring(fake):
+        service = _make_service_with_fake_keyring(tmp_path, cfg, tmp_store, fake)
+        vault = service.coordinator.credential_vault
+        now = datetime.now(UTC)
+        await vault.create_secret(
+            SecretRecord(
+                name="existing-cs",
+                type=SecretType.GENERIC,
+                target_hosts=["example.com"],
+                created_at=now,
+                updated_at=now,
+            ),
+            "my_client_secret",
+        )
+
+        original_update = vault.update_secret
+        update_calls = []
+
+        async def _tracking_update(name, record, value=None):
+            update_calls.append(name)
+            return await original_update(name, record, value)
+
+        vault.update_secret = _tracking_update
+
+        result = await service.import_oauth_as_secret(_CONFIG_ID, "jira_oauth")
+
+    assert set(result["secrets_created"]) == {"jira_oauth", "jira_oauth_refresh"}
+    assert "existing-cs" not in result["secrets_created"]
+    assert "jira_oauth_client_secret" not in result["secrets_created"]
+    assert "existing-cs" not in update_calls
+    assert fake.get_value("existing-cs") == "my_client_secret"
+
+
+@pytest.mark.asyncio
+async def test_issue_2005_reuse_existing_reference_with_drift_overwrites(
+    tmp_path: Path, tmp_store: FernetTokenStore
+):
+    """Existing referenced secret's stored value differs from the freshly observed
+    client_info.client_secret -> overwritten in place (Decision 2)."""
+    token = _make_token()
+    await tmp_store.set_tokens(token)
+    tmp_store.set_token_endpoint(_TOKEN_URL)
+    await tmp_store.set_client_info(_make_client_info(client_secret="fresh-value"))
+
+    fake = _FakeKeyring()
+    cfg = _make_mcp_config(oauth_client_secret="${secret:existing-cs}")
+
+    with _patched_keyring(fake):
+        service = _make_service_with_fake_keyring(tmp_path, cfg, tmp_store, fake)
+        vault = service.coordinator.credential_vault
+        now = datetime.now(UTC)
+        await vault.create_secret(
+            SecretRecord(
+                name="existing-cs",
+                type=SecretType.GENERIC,
+                target_hosts=["example.com"],
+                created_at=now,
+                updated_at=now,
+            ),
+            "stale-value",
+        )
+
+        result = await service.import_oauth_as_secret(_CONFIG_ID, "jira_oauth")
+
+    assert set(result["secrets_created"]) == {"jira_oauth", "jira_oauth_refresh"}
+    assert fake.get_value("existing-cs") == "fresh-value"
+
+
+@pytest.mark.asyncio
+async def test_issue_2005_reuse_deleted_reference_raises_404(
+    tmp_path: Path, tmp_store: FernetTokenStore, keyring_patch
+):
+    """oauth_client_secret references a vault secret that no longer exists ->
+    fail closed with LookupError (Decision 1), no partial bundle created."""
+    token = _make_token()
+    await tmp_store.set_tokens(token)
+    tmp_store.set_token_endpoint(_TOKEN_URL)
+    await tmp_store.set_client_info(_make_client_info())
+
+    cfg = _make_mcp_config(oauth_client_secret="${secret:missing-cs}")
+    service = _make_service(tmp_path, cfg, tmp_store)
+
+    with (
+        patch("backend.credential_vault.set_secret_value"),
+        patch("backend.credential_vault.get_secret_value", return_value="value"),
+        patch("backend.credential_vault.delete_secret_value"),
+    ):
+        with pytest.raises(LookupError, match="404"):
+            await service.import_oauth_as_secret(_CONFIG_ID, "jira_oauth")
+
+    creds_dir = tmp_path / "credentials"
+    assert not creds_dir.exists() or list(creds_dir.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_issue_2005_raw_literal_oauth_client_secret_unchanged(
+    tmp_path: Path, tmp_store: FernetTokenStore, keyring_patch
+):
+    """Regression: a raw literal (non-reference) oauth_client_secret still mints a
+    new {base_name}_client_secret exactly as before this issue's fix."""
+    token = _make_token()
+    await tmp_store.set_tokens(token)
+    tmp_store.set_token_endpoint(_TOKEN_URL)
+    await tmp_store.set_client_info(_make_client_info())
+
+    cfg = _make_mcp_config(oauth_client_secret="raw-literal-secret")
+    service = _make_service(tmp_path, cfg, tmp_store)
+
+    with (
+        patch("backend.credential_vault.set_secret_value"),
+        patch("backend.credential_vault.get_secret_value", return_value="value"),
+        patch("backend.credential_vault.delete_secret_value"),
+    ):
+        result = await service.import_oauth_as_secret(_CONFIG_ID, "jira_oauth")
+
+    assert set(result["secrets_created"]) == {
+        "jira_oauth", "jira_oauth_refresh", "jira_oauth_client_secret",
+    }
+
+
+@pytest.mark.asyncio
+async def test_issue_2005_no_dcr_client_secret_with_existing_reference_configured(
+    tmp_path: Path, tmp_store: FernetTokenStore
+):
+    """client_info.client_secret is None (pre-registered app, no DCR secret) even
+    though oauth_client_secret references an existing vault secret -> nothing
+    freshly observed to reconcile, so the reference is left untouched and the
+    bundle stays primary+refresh only, same as today's no_client_secret case."""
+    token = _make_token()
+    await tmp_store.set_tokens(token)
+    tmp_store.set_token_endpoint(_TOKEN_URL)
+    await tmp_store.set_client_info(_make_client_info(client_secret=None))
+
+    fake = _FakeKeyring()
+    cfg = _make_mcp_config(oauth_client_secret="${secret:existing-cs}")
+
+    with _patched_keyring(fake):
+        service = _make_service_with_fake_keyring(tmp_path, cfg, tmp_store, fake)
+        vault = service.coordinator.credential_vault
+        now = datetime.now(UTC)
+        await vault.create_secret(
+            SecretRecord(
+                name="existing-cs",
+                type=SecretType.GENERIC,
+                target_hosts=["example.com"],
+                created_at=now,
+                updated_at=now,
+            ),
+            "untouched-value",
+        )
+
+        result = await service.import_oauth_as_secret(_CONFIG_ID, "jira_oauth")
+
+    assert set(result["secrets_created"]) == {"jira_oauth", "jira_oauth_refresh"}
+    assert fake.get_value("existing-cs") == "untouched-value"
+
+
+@pytest.mark.asyncio
+async def test_issue_2005_reconnect_after_reused_reference_import(
+    tmp_path: Path, tmp_store: FernetTokenStore
+):
+    """Reconnect (replace=True) following an initial reused-reference import: the
+    sibling ownership guard resolves the same reused name and doesn't reject, and
+    the reused secret's value is updated in place."""
+    token = _make_token(access_token="access_v1", refresh_token="refresh_v1")
+    await tmp_store.set_tokens(token)
+    tmp_store.set_token_endpoint(_TOKEN_URL)
+    await tmp_store.set_client_info(_make_client_info(client_secret="my_client_secret"))
+
+    fake = _FakeKeyring()
+    cfg = _make_mcp_config(oauth_client_secret="${secret:existing-cs}")
+
+    with _patched_keyring(fake):
+        service = _make_service_with_fake_keyring(tmp_path, cfg, tmp_store, fake)
+        vault = service.coordinator.credential_vault
+        now = datetime.now(UTC)
+        await vault.create_secret(
+            SecretRecord(
+                name="existing-cs",
+                type=SecretType.GENERIC,
+                target_hosts=["example.com"],
+                created_at=now,
+                updated_at=now,
+            ),
+            "my_client_secret",
+        )
+
+        first = await service.import_oauth_as_secret(_CONFIG_ID, "jira_oauth")
+        assert set(first["secrets_created"]) == {"jira_oauth", "jira_oauth_refresh"}
+
+        # Re-authorize with a rotated client secret + fresh tokens under the same base_name.
+        token2 = _make_token(access_token="access_v2", refresh_token="refresh_v2")
+        await tmp_store.set_tokens(token2)
+        await tmp_store.set_client_info(_make_client_info(client_secret="rotated-secret"))
+
+        result = await service.import_oauth_as_secret(_CONFIG_ID, "jira_oauth", replace=True)
+
+    assert set(result["secrets_updated"]) == {"jira_oauth", "jira_oauth_refresh", "existing-cs"}
+    assert fake.get_value("existing-cs") == "rotated-secret"
+    assert fake.get_value("jira_oauth") == "access_v2"
+
+
+@pytest.mark.asyncio
+async def test_issue_2005_reused_reference_not_deleted_on_rollback(
+    tmp_path: Path, tmp_store: FernetTokenStore
+):
+    """If a later step (MCP config header update) fails, only secrets newly created
+    by this call are rolled back — a reused pre-existing reference must never be
+    deleted, even though its value may have just been overwritten."""
+    token = _make_token()
+    await tmp_store.set_tokens(token)
+    tmp_store.set_token_endpoint(_TOKEN_URL)
+    await tmp_store.set_client_info(_make_client_info(client_secret="fresh-value"))
+
+    fake = _FakeKeyring()
+    cfg = _make_mcp_config(oauth_client_secret="${secret:existing-cs}")
+
+    with _patched_keyring(fake):
+        service = _make_service_with_fake_keyring(tmp_path, cfg, tmp_store, fake)
+        vault = service.coordinator.credential_vault
+        now = datetime.now(UTC)
+        await vault.create_secret(
+            SecretRecord(
+                name="existing-cs",
+                type=SecretType.GENERIC,
+                target_hosts=["example.com"],
+                created_at=now,
+                updated_at=now,
+            ),
+            "stale-value",
+        )
+
+        async def _failing_update(config_id, **kwargs):
+            raise RuntimeError("forced headers update failure")
+
+        service.coordinator.mcp_config_manager.update_config = _failing_update
+
+        deleted_names = []
+        original_delete = vault.delete_secret
+
+        async def _tracking_delete(name):
+            deleted_names.append(name)
+            return await original_delete(name)
+
+        vault.delete_secret = _tracking_delete
+
+        with pytest.raises(RuntimeError, match="forced headers update failure"):
+            await service.import_oauth_as_secret(_CONFIG_ID, "jira_oauth")
+
+    assert "jira_oauth" in deleted_names
+    assert "jira_oauth_refresh" in deleted_names
+    assert "existing-cs" not in deleted_names
+    # The drift overwrite that happened before the failure is not reverted (intentional).
+    assert fake.get_value("existing-cs") == "fresh-value"
+
+
+@pytest.mark.asyncio
+async def test_issue_2005_reused_reference_deleted_between_check_and_write_raises_404(
+    tmp_path: Path, tmp_store: FernetTokenStore
+):
+    """Race condition: the referenced secret is deleted concurrently after the
+    upfront existence check but before _create_oauth_secret_bundle() reads it
+    again to compare/overwrite the value. Must fail closed with LookupError
+    (Decision 1), not crash on SecretRecord.from_dict(None)."""
+    token = _make_token()
+    await tmp_store.set_tokens(token)
+    tmp_store.set_token_endpoint(_TOKEN_URL)
+    await tmp_store.set_client_info(_make_client_info(client_secret="fresh-value"))
+
+    fake = _FakeKeyring()
+    cfg = _make_mcp_config(oauth_client_secret="${secret:existing-cs}")
+
+    with _patched_keyring(fake):
+        service = _make_service_with_fake_keyring(tmp_path, cfg, tmp_store, fake)
+        vault = service.coordinator.credential_vault
+        now = datetime.now(UTC)
+        await vault.create_secret(
+            SecretRecord(
+                name="existing-cs",
+                type=SecretType.GENERIC,
+                target_hosts=["example.com"],
+                created_at=now,
+                updated_at=now,
+            ),
+            "stale-value",
+        )
+
+        # Simulate the secret vanishing between import_oauth_as_secret()'s upfront
+        # existence check and _create_oauth_secret_bundle()'s later read.
+        original_get_secret = vault.get_secret
+        call_count = 0
+
+        async def _get_secret_then_delete(name):
+            nonlocal call_count
+            call_count += 1
+            if name == "existing-cs" and call_count > 1:
+                return None
+            return await original_get_secret(name)
+
+        vault.get_secret = _get_secret_then_delete
+
+        with pytest.raises(LookupError, match="404"):
+            await service.import_oauth_as_secret(_CONFIG_ID, "jira_oauth")
