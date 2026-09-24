@@ -111,38 +111,49 @@ async function replayRestPath(fixture) {
 }
 
 // Issue #1999 (AC1/AC2) found a genuine, pre-existing divergence between the live
-// event path and the REST reload path that predates this issue entirely — NOT a
-// message-pipeline regression this harness is meant to catch, and out of scope to fix
-// here (this issue is test-infrastructure-only). Tracked as issue #2002: backend/
-// session_coordinator.py's _convert_stored_message_to_websocket() reconstructs
-// messages from stored StoredMessage rows for a REST reload without running them
-// through DisplayProjection or message_parser.py's default-content/default-metadata
-// synthesis the live path always applies — e.g. every "init"-subtype system message
-// reloads with content:"" instead of the live path's synthesized "System message", and
-// dozens of has_*/tool_uses/tool_results/thinking/display/model/usage metadata keys are
-// simply absent rather than explicitly false/empty. Measured against the primary
-// fixture: ~76% of non-tool_call messages differ in `content` on reload, and nearly
-// every message is missing 5-15 metadata keys the live path always sets.
+// event path and the REST reload path: backend/session_coordinator.py's
+// _convert_stored_message_to_websocket() reconstructed messages from stored
+// StoredMessage rows for a REST reload without running them through DisplayProjection
+// or message_parser.py's default-content/default-metadata synthesis the live path
+// always applies. Fixed in issue #2002 (field-parity in
+// _convert_stored_message_to_websocket() plus a request-local DisplayProjection replay
+// — with pagination-prefix replay so tools that completed on an earlier page still
+// show correctly on a later one — in get_session_messages()/get_archive_messages()).
 //
-// mock-sdk-synthetic (T1's builder-regenerable fixture) independently reproduces the
-// same divergence: its rest_history.json is built by reprocessing the real stored
-// messages.jsonl through the SAME real _convert_stored_message_to_websocket() method
-// (see generate_synthetic_fixture.py's _reconstruct_rest_history_messages() —
-// deliberately NOT built from the live path's own accumulator, which would make this
-// check tautological and prove nothing about the harness's ability to catch a genuine
-// divergence). Confirming the same bug shows up on synthetic data too is useful
-// evidence #2002 is a systemic backend gap, not an artifact of one real recording — not
-// a reason to weaken this harness.
+// mock-sdk-synthetic (independently rebuilt by reprocessing messages.jsonl through the
+// same real _convert_stored_message_to_websocket()) now converges fully and runs
+// through the normal it.each() below.
 //
-// A normalizer permissive enough to hide this would also hide a real regression,
-// defeating AC2's purpose — so both fixtures are captured as it.fails() expected
-// failures, naming the fixture and citing #2002, rather than silently skipped or
-// normalized away. it.fails() means: if #2002 is fixed and either of these starts
-// passing, the suite FAILS until someone removes that fixture's entry here — the test
-// can't silently go stale, and this file is the single place to update when that happens.
+// 2026-09-23-primary still diverges, but no longer for #2002's reason — every field
+// #2002 measured (content synthesis, ~40 metadata keys, tool_results content-block
+// joining, local-command-response unwrapping, etc.) now matches exactly. What's left
+// is two narrower, genuinely separate, pre-existing gaps in the LIVE path itself
+// (not the REST reload path #2002 touches), found by diffing this real fixture's raw
+// captured live events against messages.jsonl:
+//   1. Three live-only system messages (interrupt_success; two hook "stderr" events)
+//      are injected directly into _create_message_callback(), bypassing
+//      ClaudeSDK._store_sdk_message() entirely — they are never written to
+//      messages.jsonl at all, so no reload-time reconstruction can recover them.
+//   2. DisplayProjection is a structural no-op on the live path for ordinary
+//      messages: _create_message_callback() feeds it a StoredMessage built from
+//      legacy_to_stored({content: parsed_message.content, ...parsed_message.metadata}),
+//      and StoredMessage.get_tool_uses()/get_tool_results() only ever look at
+//      data["content"] — which here is parsed_message.content, always a
+//      human-readable string, never the real content-block list. Confirmed against
+//      this fixture's raw_log.jsonl: 515 captured live messages carry a `display` key,
+//      and `tool_states` is `{}` on every single one. Reload's DisplayProjection
+//      replay (Gap 2) reads the real StoredMessage content-block list instead, so it
+//      correctly tracks tool lifecycle — matching Gap 2b's own required regression
+//      test — which makes it diverge from what live actually (if wrongly) ships today.
+// Both are live-write/live-callback-pipeline bugs, explicitly out of #2002's scope
+// (see its plan's "Not in scope" section) and orthogonal to each other and to #2002's
+// original finding. Filed as issue #2007, with a severity caveat: message.js drives
+// live tool-card status from dedicated ToolCallUpdate payloads (a separate,
+// actively-maintained path — see get_session_messages()'s "they already carry their
+// own baked-in display state" comment), so gap 2 above likely doesn't break the
+// primary tool-card UI even though DisplayProjection itself is a no-op on live.
 const KNOWN_DIVERGENT_FIXTURES = new Map([
-  ['2026-09-23-primary', 'issue #2002 — see comment above'],
-  ['mock-sdk-synthetic', 'issue #2002 — see comment above'],
+  ['2026-09-23-primary', 'issue #2007 — see comment above, not #2002'],
 ])
 
 describe('fixture equivalence — live event path vs. REST reload path (issue #1999, AC1/AC2)', () => {
