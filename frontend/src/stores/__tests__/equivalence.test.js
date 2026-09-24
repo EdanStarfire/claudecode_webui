@@ -147,9 +147,13 @@ async function replayRestPath(fixture) {
 //      test — which makes it diverge from what live actually (if wrongly) ships today.
 // Both are live-write/live-callback-pipeline bugs, explicitly out of #2002's scope
 // (see its plan's "Not in scope" section) and orthogonal to each other and to #2002's
-// original finding — tracked here, not re-litigated as part of #2002.
+// original finding. Filed as issue #2007, with a severity caveat: message.js drives
+// live tool-card status from dedicated ToolCallUpdate payloads (a separate,
+// actively-maintained path — see get_session_messages()'s "they already carry their
+// own baked-in display state" comment), so gap 2 above likely doesn't break the
+// primary tool-card UI even though DisplayProjection itself is a no-op on live.
 const KNOWN_DIVERGENT_FIXTURES = new Map([
-  ['2026-09-23-primary', 'live-path DisplayProjection/never-persisted-message gaps — see comment above, not #2002'],
+  ['2026-09-23-primary', 'issue #2007 — see comment above, not #2002'],
 ])
 
 describe('fixture equivalence — live event path vs. REST reload path (issue #1999, AC1/AC2)', () => {
