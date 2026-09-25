@@ -94,6 +94,7 @@ def build_router(webui) -> APIRouter:
             history_distillation_enabled=request.history_distillation_enabled,
             auto_memory_mode=request.auto_memory_mode,
             auto_memory_directory=request.auto_memory_directory,
+            task_tools_mode=request.task_tools_mode,
             skill_creating_enabled=request.skill_creating_enabled,
             mcp_server_ids=request.mcp_server_ids,
             enable_claudeai_mcp_servers=request.enable_claudeai_mcp_servers,

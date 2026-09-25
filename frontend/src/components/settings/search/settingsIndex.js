@@ -122,6 +122,7 @@ export const settingsIndex = [
   { section: 'edit-features', fieldKey: 'history_distillation_enabled', label: 'History Distillation' },
   { section: 'edit-features', fieldKey: 'auto_memory_mode',             label: 'Auto-Memory Mode' },
   { section: 'edit-features', fieldKey: 'auto_memory_directory',        label: 'Memory Directory' },
+  { section: 'edit-features', fieldKey: 'task_tools_mode',              label: 'Task Tracking Tools' },
   { section: 'edit-features', fieldKey: 'skill_creating_enabled',       label: 'Skill Creating' },
 
   // System Prompt section

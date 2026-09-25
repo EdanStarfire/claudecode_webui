@@ -384,6 +384,9 @@ def build_router(webui) -> APIRouter:
         if request.auto_memory_directory is not None:
             updates["auto_memory_directory"] = request.auto_memory_directory
 
+        if request.task_tools_mode is not None:
+            updates["task_tools_mode"] = request.task_tools_mode
+
         if request.skill_creating_enabled is not None:
             updates["skill_creating_enabled"] = request.skill_creating_enabled
 

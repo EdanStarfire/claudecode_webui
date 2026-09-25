@@ -123,6 +123,8 @@ class SessionConfig(BaseModel):
     history_distillation_enabled: bool = True
     auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
     auto_memory_directory: str | None = None  # Custom directory for auto-memory when mode is "claude" (issue #906)
+    # Issue #2010: controls CLAUDE_CODE_ENABLE_TASKS + CLAUDE_CODE_ENABLE_TODO_TOOLS together
+    task_tools_mode: str = "default"  # "default" | "on" | "off"
     skill_creating_enabled: bool = False
     enable_streaming_text: bool = False  # Issue #1486 — opt-in streaming text rendering
     # Issue #1779: opt-in automatic timestamp injection into user messages
@@ -195,6 +197,7 @@ CONFIG_FIELDS: set[str] = {
     "docker_home_directory", "docker_proxy_enabled", "docker_proxy_image",
     "assigned_secrets", "docker_proxy_allowlist_domains",
     "history_distillation_enabled", "auto_memory_mode", "auto_memory_directory",
+    "task_tools_mode",
     "skill_creating_enabled", "enable_streaming_text",
     "inject_timestamps_enabled", "timestamp_injection_frequency", "timestamp_injection_timezone",
     "hook_ids",

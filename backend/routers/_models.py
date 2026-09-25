@@ -88,6 +88,8 @@ class SessionUpdateRequest(BaseModel):
     auto_memory_mode: str | None = None  # "claude" | "session" | "disabled"
     # Custom directory for auto-memory when mode is "claude" (issue #906)
     auto_memory_directory: str | None = None
+    # Task tracking tools gate (issue #2010)
+    task_tools_mode: str | None = None  # "default" | "on" | "off"
     # Skill creating toggle (issue #749)
     skill_creating_enabled: bool | None = None
     # MCP server configuration (issue #676)
@@ -336,6 +338,8 @@ class TemplateUpdateRequest(BaseModel):
     auto_memory_mode: str | None = None  # "claude" | "session" | "disabled"
     # Custom directory for auto-memory when mode is "claude" (issue #906)
     auto_memory_directory: str | None = None
+    # Task tracking tools gate (issue #2010)
+    task_tools_mode: str | None = None  # "default" | "on" | "off"
     # Skill creating toggle (issue #749)
     skill_creating_enabled: bool | None = None
     # MCP server configuration (issue #676)

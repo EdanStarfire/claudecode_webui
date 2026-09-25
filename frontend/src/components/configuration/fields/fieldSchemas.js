@@ -413,6 +413,21 @@ export const FIELD_SCHEMAS = {
       showWhen: (config) => (config.auto_memory_mode ?? 'claude') === 'claude',
     },
     {
+      key: 'task_tools_mode',
+      label: 'Task Tracking Tools',
+      widget: 'button-group',
+      defaultValue: 'default',
+      options: [
+        { value: 'default', label: 'Default' },
+        { value: 'on', label: 'On' },
+        { value: 'off', label: 'Off' },
+      ],
+      description: 'Controls TodoWrite/Task* tool availability. Default: follows the CLI\'s '
+        + 'own model-family gating (on for older/recognized Claude models, off for newer '
+        + 'Claude-5-family and non-Claude models). On: force-enabled for every model. '
+        + 'Off: force-disabled for every model.',
+    },
+    {
       key: 'skill_creating_enabled',
       label: 'Skill Creating',
       widget: 'toggle',
