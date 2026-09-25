@@ -3,7 +3,7 @@
     {
       "type": "assistant",
       "content": "I'll read that file for you.",
-      "timestamp": 1790225858.2044034,
+      "timestamp": 1790308399.643091,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "session_id": "mock-sdk-synthetic-session",
@@ -20,19 +20,19 @@
             "input": {
               "file_path": "/tmp/example.txt"
             },
-            "timestamp": 1790225858.2044034
+            "timestamp": 1790308399.643091
           }
         ],
         "tool_results": [],
         "thinking_blocks": [],
         "thinking_content": ""
       },
-      "message_id": "a89eb880-39da-4664-af2b-252250c87579"
+      "message_id": "2e717bcf-d8b4-41c5-9fae-55671a96ca2f"
     },
     {
       "type": "user",
       "content": "Tool results: 1 results",
-      "timestamp": 1790225858.2046463,
+      "timestamp": 1790308399.6433308,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "session_id": "mock-sdk-synthetic-session",
@@ -46,18 +46,18 @@
             "tool_use_id": "synthetic-tu-1",
             "content": "Line 1: hello\nLine 2: world\n",
             "is_error": false,
-            "timestamp": 1790225858.2046463
+            "timestamp": 1790308399.6433308
           }
         ],
         "tool_uses": [],
         "role": null
       },
-      "message_id": "ab759e4f-beaa-443d-8e3f-2363b9e1bb2b"
+      "message_id": "4e2c32d3-1262-4266-a61b-a24311c53457"
     },
     {
       "type": "system",
       "content": "Agent spawned: Explore the repository structure",
-      "timestamp": 1790225858.2047963,
+      "timestamp": 1790308399.6435213,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "session_id": "mock-sdk-synthetic-session",
@@ -70,12 +70,12 @@
         "tool_use_id": null
       },
       "subtype": "task_started",
-      "message_id": "7c0d532d-02a1-4cae-a26f-4a13fa1b9c93"
+      "message_id": "5f6199d7-59e0-4e37-a57a-cb957041078d"
     },
     {
       "type": "system",
       "content": "Agent progress: Reading files in src/ [Read]",
-      "timestamp": 1790225858.2049308,
+      "timestamp": 1790308399.6436384,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "session_id": "mock-sdk-synthetic-session",
@@ -93,12 +93,12 @@
         }
       },
       "subtype": "task_progress",
-      "message_id": "8bb1bbd5-c64d-4fb1-9ebe-dae83b88c3d6"
+      "message_id": "daa9fadd-538b-46a0-b6c3-aeb9b9e76e52"
     },
     {
       "type": "system",
       "content": "Agent completed: Explored the repository structure and summarized key directories.",
-      "timestamp": 1790225858.2050617,
+      "timestamp": 1790308399.6437654,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "session_id": "mock-sdk-synthetic-session",
@@ -117,12 +117,12 @@
         }
       },
       "subtype": "task_notification",
-      "message_id": "7f4b3403-1f2a-4684-97b9-50835a8000ac"
+      "message_id": "bc3f4794-b180-45a2-9012-46f132f86dbf"
     },
     {
       "type": "assistant",
       "content": "Welcome back \u2014 resuming where we left off.",
-      "timestamp": 1790225858.2052221,
+      "timestamp": 1790308399.6439204,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "session_id": "mock-sdk-synthetic-session",
@@ -137,12 +137,12 @@
         "thinking_blocks": [],
         "thinking_content": ""
       },
-      "message_id": "92fe051c-6a56-47d7-be12-2c1bde567be8"
+      "message_id": "9682b2ad-ef1b-48b3-a252-66033c8c5546"
     },
     {
       "type": "result",
       "content": "Conversation success",
-      "timestamp": 1790225858.2053442,
+      "timestamp": 1790308399.6440392,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "session_id": "mock-sdk-synthetic-session",
@@ -169,7 +169,7 @@
         "api_error_status": null
       },
       "subtype": "success",
-      "message_id": "0e587866-6e17-4096-8e19-798dc7f28cb6"
+      "message_id": "01d2c3ad-581c-479d-998e-3c356af2e193"
     }
   ],
   "total_count": 7,
