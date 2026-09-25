@@ -1223,6 +1223,113 @@ describe('leg grouping by timestamp window — resume via SendMessage (#1746 fol
   })
 })
 
+describe('applyDisplayMetadata status-regression guard (Issue #2007)', () => {
+  // Issue #2007 (Gap B): fixing the backend DisplayProjection no-op bug activated a
+  // previously-dead frontend code path — display.tool_states was always {} before, so
+  // this for-loop in applyDisplayMetadata() never actually ran. DisplayProjection only
+  // ever tracks pending -> completed/failed on the live path (it never reports the live
+  // awaiting_permission/running states the dedicated #324 ToolCallUpdate pipeline already
+  // sets), and its per-session snapshot is cumulative — every tool ever seen in the
+  // session, not a delta. Without a regression guard, any later message in the session
+  // re-attaches a stale 'pending' entry for a still-in-progress tool and silently reverts
+  // its status. SkillToolHandler.vue/SlashCommandToolHandler.vue read toolCall.status
+  // directly (bypassing the useToolStatus composable that masks this for most other tool
+  // cards via backendStatus priority), so this is user-visible for those tool types.
+  it('does not revert an executing tool call to pending when a later unrelated message carries a stale cumulative display snapshot', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    // Real #324 ToolCallUpdate pipeline sets the Skill tool call to 'executing'.
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'toolu_skill_1',
+      name: 'Skill',
+      input: { command: 'my-skill' },
+      status: 'running',
+    })
+    expect(store.toolCallsBySession.get('sess-1').find(tc => tc.id === 'toolu_skill_1').status).toBe('executing')
+
+    // A later, unrelated message in the session carries DisplayProjection's cumulative
+    // snapshot, which still shows the still-in-progress Skill tool as 'pending' (it has
+    // no live 'executing' state of its own).
+    store.addMessage('sess-1', makeMessage({
+      type: 'assistant',
+      content: 'unrelated text',
+      metadata: {
+        display: {
+          tool_states: {
+            toolu_skill_1: { state: 'pending', visible: true, collapsed: false, style: 'default' }
+          },
+          orphaned_tools: [],
+          linked_permissions: {}
+        }
+      }
+    }))
+
+    const toolCall = store.toolCallsBySession.get('sess-1').find(tc => tc.id === 'toolu_skill_1')
+    expect(toolCall.status).toBe('executing')
+  })
+
+  it('does not revert a permission_required tool call to pending from a stale cumulative display snapshot', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'toolu_slash_1',
+      name: 'SlashCommand',
+      input: { command: '/deploy' },
+      status: 'awaiting_permission',
+    })
+    expect(store.toolCallsBySession.get('sess-1').find(tc => tc.id === 'toolu_slash_1').status).toBe('permission_required')
+
+    store.addMessage('sess-1', makeMessage({
+      type: 'assistant',
+      content: 'unrelated text',
+      metadata: {
+        display: {
+          tool_states: {
+            toolu_slash_1: { state: 'pending', visible: true, collapsed: false, style: 'default' }
+          },
+          orphaned_tools: [],
+          linked_permissions: {}
+        }
+      }
+    }))
+
+    const toolCall = store.toolCallsBySession.get('sess-1').find(tc => tc.id === 'toolu_slash_1')
+    expect(toolCall.status).toBe('permission_required')
+  })
+
+  it('still applies a forward transition (pending -> completed) from the display snapshot', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'toolu_read_1',
+      name: 'Read',
+      input: { file_path: '/x.py' },
+      status: 'pending',
+    })
+    expect(store.toolCallsBySession.get('sess-1').find(tc => tc.id === 'toolu_read_1').status).toBe('pending')
+
+    store.addMessage('sess-1', makeMessage({
+      type: 'user',
+      content: 'tool result',
+      metadata: {
+        display: {
+          tool_states: {
+            toolu_read_1: { state: 'completed', visible: true, collapsed: false, style: 'success' }
+          },
+          orphaned_tools: [],
+          linked_permissions: {}
+        }
+      }
+    }))
+
+    const toolCall = store.toolCallsBySession.get('sess-1').find(tc => tc.id === 'toolu_read_1')
+    expect(toolCall.status).toBe('completed')
+  })
+})
+
 describe('openPermissionsForSession (#1746 stage: permissions)', () => {
   it('returns a main-session-only permission with taskId null', async () => {
     const { useMessageStore } = await import('@/stores/message')

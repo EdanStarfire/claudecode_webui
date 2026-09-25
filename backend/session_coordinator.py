@@ -5718,6 +5718,13 @@ class SessionCoordinator:
                 # is_processing reset is relocated onto this subtype instead, since
                 # _send_interrupt_message() fires under the exact same condition
                 # interrupt_success used to (sdk.interrupt_session() returned True).
+                # Known narrow gap: _send_interrupt_message() wraps its store-then-callback
+                # sequence in one try/except, so if the storage write fails AND its own
+                # internal fallback also fails, this branch never runs and is_processing
+                # stays stuck True. This is not a new risk shape — it's the same one every
+                # other _store_processed_message()-then-callback sender in this file already
+                # has (client_launched, mcp_server_degraded, session_failed) — just newly
+                # applicable here since the reset used to be delivered independent of storage.
                 elif parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'interrupt':
                     try:
                         await self.session_manager.update_processing_state(session_id, False)
