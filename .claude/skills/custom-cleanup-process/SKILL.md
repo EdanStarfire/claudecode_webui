@@ -40,28 +40,52 @@ the graceful cascade entirely and orphan it.
 
 ### 2. Stop Test Servers
 
-Use the `process-manager` skill pattern - find and kill by PID. Kill the
-Frontend API gracefully first (SIGTERM, default) so its shutdown lifespan has
-a chance to cleanly stop its auto-started Backend child:
+**`lsof` is not reliably present in this environment — confirmed absent on multiple builder
+containers.** Do NOT rely on `lsof -ti :PORT | xargs -r kill` as the primary mechanism: if
+`lsof` is missing, that command silently produces no output, `xargs -r` sees empty input and
+runs nothing, and the whole step becomes a **silent no-op with no error** — the Frontend never
+actually gets killed, but nothing tells you that. (This exact failure mode happened in
+practice: step 3's orphan check then found the still-running Backend and killed *it* directly,
+out from under a still-alive Frontend — which triggered `backend_supervisor`'s
+auto-restart-on-crash logic and spawned a brand-new Backend process instead of cleaning up.)
+
+Find the Frontend API by matching its own command-line arguments via `ps`, which needs no
+external tool and can't silently no-op the same way:
 
 ```bash
-# Find and kill the Frontend API (graceful SIGTERM — lets it cascade-stop Backend)
-lsof -ti :${FRONTEND_API_PORT} | xargs -r kill 2>/dev/null
+# Find the Frontend API by its own --port argument (robust regardless of lsof availability)
+FRONTEND_PID=$(ps aux | grep -E "main\.py.*--port[= ]${FRONTEND_API_PORT}\b" | grep -v grep | awk '{print $2}')
+if [ -n "$FRONTEND_PID" ]; then
+    kill "$FRONTEND_PID"   # graceful SIGTERM — lets it cascade-stop Backend
+else
+    echo "No Frontend API process found on port ${FRONTEND_API_PORT} (may already be stopped)"
+fi
 
 # Give the graceful shutdown cascade a moment to complete (Frontend waits up to
 # 10s for Backend to exit before SIGKILLing it — src/backend_supervisor.py)
 sleep 12
 
-# Find and kill vite server
-lsof -ti :${VITE_PORT} | xargs -r kill 2>/dev/null
+# Same approach for vite
+VITE_PID=$(ps aux | grep -E "vite.*--port[= ]${VITE_PORT}\b" | grep -v grep | awk '{print $2}')
+if [ -n "$VITE_PID" ]; then
+    kill "$VITE_PID"
+fi
 ```
+
+If `lsof` happens to be available, it's fine to use as an additional cross-check — but never as
+the only mechanism, and never in a way where its absence fails silently instead of falling
+through to the `ps`-based approach above.
 
 ### 3. Verify No Orphaned Backend Process
 
-**Required, not optional** — Backend's port can't be predicted in advance, so
-the only reliable check is by process name. If the graceful cascade in step 2
-didn't work (e.g. Frontend had to be force-killed), Backend can be left running
-with no Frontend left to clean it up:
+**Required, not optional, and order matters**: only run this *after* confirming step 2 actually
+found and killed a Frontend PID (or confirmed none was running). If step 2 found no Frontend
+process at all, do NOT immediately jump to killing anything matching `backend.main` — a Backend
+process with no Frontend PID found could mean either "already cleanly stopped" or "step 2's
+match pattern missed it while Frontend is still actually alive" — verify with a fresh `ps aux`
+check for `main.py` generally (not just the port-matched pattern) before concluding it's a true
+orphan. Backend's own port can't be predicted in advance, so process name is the only reliable
+identifier for it specifically:
 
 ```bash
 ORPHANED_BACKEND=$(ps aux | grep "backend\.main" | grep -v grep)
@@ -75,12 +99,15 @@ fi
 ### 4. Verify Servers Stopped
 
 ```bash
-lsof -i :${FRONTEND_API_PORT} 2>/dev/null
-lsof -i :${VITE_PORT} 2>/dev/null
+ps aux | grep -E "main\.py.*--port[= ]${FRONTEND_API_PORT}\b" | grep -v grep
+ps aux | grep -E "vite.*--port[= ]${VITE_PORT}\b" | grep -v grep
 ps aux | grep "backend\.main" | grep -v grep
+# If curl is available, an additional live check:
+curl -s -o /dev/null -w "%{http_code}\n" --max-time 2 http://127.0.0.1:${FRONTEND_API_PORT}/health 2>/dev/null || true
 ```
 
-All three should return no output.
+All three `ps` checks should return no output (the `curl` check, if run, should fail to connect
+rather than return `200`).
 
 ### 5. Error Handling
 

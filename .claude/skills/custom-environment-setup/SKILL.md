@@ -63,13 +63,22 @@ Return this context fragment for inclusion in minion initialization:
 ```
 Test Server Configuration:
 - Frontend API Port: ${FRONTEND_API_PORT} (8000 + issue_number % 1000)
-- Frontend API Host: 0.0.0.0 (required for network-accessible dev server)
+- Frontend API Host: 127.0.0.1 (do not bind 0.0.0.0 and do not attempt to edit
+  networking.allow_network_binding or any other host-level security config to
+  enable it — the owner tests from a separate dedicated build that pulls your
+  branch directly, not by connecting to your test server, so localhost-only
+  binding is sufficient and network-wide exposure is unnecessary. Attempting
+  the config edit reliably gets blocked by the permission classifier as a
+  security-sensitive change and wastes a round-trip.)
 - Backend Port: allocated dynamically by the Frontend at startup — do not
   hardcode a second fixed port (see custom-environment-setup skill for how
   to discover the actual value if needed for direct debugging)
 - Vite Port: ${VITE_PORT} (5000 + issue_number % 1000)
 - Auth Token: test (pinned for testing, Frontend-side only)
 - Data Directory: Default (data/) - DO NOT use --data-dir flag
+- Test servers: stop them as part of your own normal completion flow (see
+  Phase 4 of the Builder workflow) — no need to leave them running for the
+  owner's review.
 ```
 
 ### Status Display Context
