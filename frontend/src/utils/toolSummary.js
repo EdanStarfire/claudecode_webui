@@ -264,6 +264,9 @@ export function generateShortToolSummary(toolCall) {
     case 'Bash':
     case 'Shell':
     case 'Command': {
+      if (input.description) {
+        return `${toolName}: ${truncateBashCommand(input.description, 60)}`
+      }
       const extractedCmd = extractBashCommand(input.command)
       const cmd = truncateBashCommand(extractedCmd, 60)
       return `${toolName}: ${cmd}`
