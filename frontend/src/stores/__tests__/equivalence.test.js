@@ -126,34 +126,43 @@ async function replayRestPath(fixture) {
 //
 // 2026-09-23-primary still diverges, but no longer for #2002's reason — every field
 // #2002 measured (content synthesis, ~40 metadata keys, tool_results content-block
-// joining, local-command-response unwrapping, etc.) now matches exactly. What's left
-// is two narrower, genuinely separate, pre-existing gaps in the LIVE path itself
+// joining, local-command-response unwrapping, etc.) now matches exactly. What was left
+// were two narrower, genuinely separate, pre-existing gaps in the LIVE path itself
 // (not the REST reload path #2002 touches), found by diffing this real fixture's raw
 // captured live events against messages.jsonl:
-//   1. Three live-only system messages (interrupt_success; two hook "stderr" events)
-//      are injected directly into _create_message_callback(), bypassing
-//      ClaudeSDK._store_sdk_message() entirely — they are never written to
-//      messages.jsonl at all, so no reload-time reconstruction can recover them.
-//   2. DisplayProjection is a structural no-op on the live path for ordinary
-//      messages: _create_message_callback() feeds it a StoredMessage built from
+//   1. Live-only system messages (interrupt_success; two hook "stderr" events) were
+//      injected directly into _create_message_callback(), bypassing
+//      ClaudeSDK._store_sdk_message() entirely — never written to messages.jsonl at
+//      all, so no reload-time reconstruction could recover them.
+//   2. DisplayProjection was a structural no-op on the live path for ordinary
+//      messages: _create_message_callback() fed it a StoredMessage built from
 //      legacy_to_stored({content: parsed_message.content, ...parsed_message.metadata}),
 //      and StoredMessage.get_tool_uses()/get_tool_results() only ever look at
-//      data["content"] — which here is parsed_message.content, always a
-//      human-readable string, never the real content-block list. Confirmed against
-//      this fixture's raw_log.jsonl: 515 captured live messages carry a `display` key,
-//      and `tool_states` is `{}` on every single one. Reload's DisplayProjection
-//      replay (Gap 2) reads the real StoredMessage content-block list instead, so it
-//      correctly tracks tool lifecycle — matching Gap 2b's own required regression
-//      test — which makes it diverge from what live actually (if wrongly) ships today.
-// Both are live-write/live-callback-pipeline bugs, explicitly out of #2002's scope
+//      data["content"] — which there was parsed_message.content, always a
+//      human-readable string, never the real content-block list.
+// Both were live-write/live-callback-pipeline bugs, explicitly out of #2002's scope
 // (see its plan's "Not in scope" section) and orthogonal to each other and to #2002's
-// original finding. Filed as issue #2007, with a severity caveat: message.js drives
-// live tool-card status from dedicated ToolCallUpdate payloads (a separate,
-// actively-maintained path — see get_session_messages()'s "they already carry their
-// own baked-in display state" comment), so gap 2 above likely doesn't break the
-// primary tool-card UI even though DisplayProjection itself is a no-op on live.
+// original finding.
+//
+// Fixed in issue #2007: stderr messages classified failure/ambiguous are now stored;
+// interrupt_success is removed entirely (the already-stored "interrupt" message is the
+// sole live+reload confirmation, so there's one fewer message per interrupt, not a
+// stored duplicate); DisplayProjection is now fed the real tool_uses/tool_results
+// content-block list instead of the flattened string.
+//
+// This fixture still won't converge, and the exclusion below can't be removed as part
+// of #2007 — 2026-09-23-primary's raw_log.jsonl/rest_history.json are static files
+// captured once against the real Anthropic API (owner-only-regenerable; see
+// provenance.json), frozen before the #2007 fix existed. They still literally contain
+// a captured interrupt_success event and un-stored stderr lines from the old code, and
+// display.tool_states == {} on every captured live message from the old no-op
+// projection — no code change, now or later, can retroactively alter what's already
+// captured in these files. Closing this loop requires a live re-capture of this fixture
+// (or a fresh equivalent) against real API credentials, confirming convergence, and
+// then removing this entry — deliberately out of scope for #2007 (owner-gated
+// follow-up, not filed as a separate issue).
 const KNOWN_DIVERGENT_FIXTURES = new Map([
-  ['2026-09-23-primary', 'issue #2007 — see comment above, not #2002'],
+  ['2026-09-23-primary', 'issue #2007 — frozen pre-fix capture; needs live re-capture to converge, see comment above'],
 ])
 
 describe('fixture equivalence — live event path vs. REST reload path (issue #1999, AC1/AC2)', () => {
