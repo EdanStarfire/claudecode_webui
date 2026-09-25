@@ -284,3 +284,40 @@ class TestAllowBackgroundAgentOverridesDisableBackgroundTasks:
         with patch("backend.config_manager.load_config", return_value=config):
             env = sdk._resolve_env_vars()
         assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+
+
+class TestAutoModeServerClassifier:
+    """Issue #2009 — CLAUDE_CODE_AUTO_MODE_SERVER is always-set, independent of
+    BackgroundCallsConfig state, proving it's its own always-set line rather than
+    folded into _BACKGROUND_CALL_ENV_MAP's conditional loop."""
+
+    def test_true_emits_one(self):
+        sdk = _make_sdk()
+        config = AppConfig(features=FeaturesConfig(auto_mode_server_classifier=True))
+        with patch("backend.config_manager.load_config", return_value=config):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == "1"
+
+    def test_false_emits_zero(self):
+        sdk = _make_sdk()
+        config = AppConfig(features=FeaturesConfig(auto_mode_server_classifier=False))
+        with patch("backend.config_manager.load_config", return_value=config):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0"
+
+    def test_always_present_regardless_of_background_calls_config(self):
+        sdk = _make_sdk()
+        config = AppConfig(
+            background_calls=BackgroundCallsConfig(disable_nonessential_traffic=False),
+            features=FeaturesConfig(auto_mode_server_classifier=True),
+        )
+        with patch("backend.config_manager.load_config", return_value=config):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == "1"
+
+    def test_extra_env_still_overrides(self):
+        sdk = _make_sdk(extra_env={"CLAUDE_CODE_AUTO_MODE_SERVER": "0"})
+        config = AppConfig(features=FeaturesConfig(auto_mode_server_classifier=True))
+        with patch("backend.config_manager.load_config", return_value=config):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0"

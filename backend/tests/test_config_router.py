@@ -486,3 +486,38 @@ async def test_put_config_block_cross_session_messaging_rejects_non_bool(tmp_pat
             "features": {"block_cross_session_messaging": "yes"}
         })
     assert resp.status_code == 400
+
+
+# ── GET/PUT /api/config — auto_mode_server_classifier (issue #2009) ─────────
+
+@pytest.mark.asyncio
+async def test_get_config_auto_mode_server_classifier_default(tmp_path):
+    app, _ = _make_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/config")
+    assert resp.status_code == 200
+    assert resp.json()["config"]["features"]["auto_mode_server_classifier"] is True
+
+
+@pytest.mark.asyncio
+async def test_put_config_auto_mode_server_classifier_round_trip(tmp_path):
+    app, _ = _make_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        put_resp = await client.put("/api/config", json={
+            "features": {"auto_mode_server_classifier": False}
+        })
+        assert put_resp.status_code == 200
+        assert put_resp.json()["config"]["features"]["auto_mode_server_classifier"] is False
+
+        get_resp = await client.get("/api/config")
+    assert get_resp.json()["config"]["features"]["auto_mode_server_classifier"] is False
+
+
+@pytest.mark.asyncio
+async def test_put_config_auto_mode_server_classifier_rejects_non_bool(tmp_path):
+    app, _ = _make_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.put("/api/config", json={
+            "features": {"auto_mode_server_classifier": "yes"}
+        })
+    assert resp.status_code == 400
