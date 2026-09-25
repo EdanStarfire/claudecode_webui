@@ -2,7 +2,7 @@
   <span class="position-relative d-inline-block" ref="trayRef">
     <button
       type="button"
-      class="header-btn tray-btn"
+      :class="['header-btn tray-btn', { 'tray-btn-unread': unreadCount > 0 }]"
       title="Notifications"
       aria-label="Notification tray"
       @click.stop="toggleOpen"
@@ -110,6 +110,12 @@ onUnmounted(() => {
 .tray-btn svg {
   width: 16px;
   height: 16px;
+}
+
+.tray-btn-unread {
+  border-color: #6366f1;
+  color: var(--bs-link-color);
+  background: rgba(99, 102, 241, 0.1);
 }
 
 .tray-badge {

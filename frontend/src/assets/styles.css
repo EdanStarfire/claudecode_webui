@@ -788,6 +788,31 @@ button:focus {
     50% { opacity: 0.4; }
 }
 
+/* ========== HEADER CHROME ========== */
+
+/* Shared header icon-button base, used by HeaderRow1.vue and TrayDropdown.vue */
+.header-btn {
+    background: none;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 6px;
+    color: var(--bs-body-color);
+    font-size: 14px;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.header-btn:hover {
+    background: var(--bs-secondary-bg);
+    border-color: var(--bs-border-color);
+}
+
 /* ========== MESSAGE STYLING ========== */
 
 /* Two-column message layout */

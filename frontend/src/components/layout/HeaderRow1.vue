@@ -344,28 +344,6 @@ function toggleAudit() {
   animation: pulse-error 1.5s infinite;
 }
 
-.header-btn {
-  background: none;
-  border: 1px solid var(--bs-border-color);
-  border-radius: 6px;
-  color: var(--bs-body-color);
-  font-size: 14px;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  cursor: pointer;
-  transition: all 0.15s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.header-btn:hover {
-  background: var(--bs-secondary-bg);
-  border-color: var(--bs-border-color);
-}
-
 .theme-btn-light      { color: #94a3b8; }
 .theme-btn-dark       { color: #818cf8; border-color: #818cf8; }
 .theme-btn-sensitive-light { color: #ef4444; border-color: #fca5a5; }
