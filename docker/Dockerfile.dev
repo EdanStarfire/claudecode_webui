@@ -18,6 +18,16 @@
 #   Frontend: cd frontend && npm run dev -- --host
 #   (Vite needs --host for HMR to work inside Docker)
 #
+# Python version and venv isolation from the host (issue #2003):
+#   The container runs the same Python version as the host (currently 3.14)
+#   for test parity, and uv's project venv lives at the container-local path
+#   /home/claude/.venvs/project (via UV_PROJECT_ENVIRONMENT), never at the
+#   workspace-relative $WORKSPACE/.venv default. Since the workspace is
+#   bind-mounted from the host (-v "$WORKSPACE:$WORKSPACE"), a container-local
+#   venv path is required — otherwise uv finds the host's own .venv through
+#   the mount, decides its pyvenv.cfg is invalid for the container's
+#   interpreter, and silently deletes + recreates it out from under the host.
+#
 # Port forwarding example:
 #   docker run -p 8001:8001 -p 5173:5173 -v $(pwd):/workspace -w /workspace ...
 #
@@ -108,8 +118,11 @@ ENV PATH="/home/claude/.local/bin:${PATH}"
 # `uv sync` at build time so all wheels — including native packages like
 # uvloop, cryptography, pydantic-core, watchfiles — are downloaded and
 # compiled once and cached at /home/claude/.cache/uv. At runtime, `uv sync`
-# in the mounted workspace reads the cache and assembles .venv from copies,
-# bypassing source compilation.
+# assembles the project venv at the container-local UV_PROJECT_ENVIRONMENT
+# path (/home/claude/.venvs/project, set below) from those cached copies,
+# bypassing source compilation. The mounted workspace's own .venv (if any,
+# e.g. the host's) is never read or written by uv in the container — see
+# issue #2003.
 #
 # Placement: this layer MUST sit ABOVE the Claude Code CLI layer below.
 # CLAUDE_CODE_VERSION is bumped every few days in lockstep with
@@ -118,12 +131,20 @@ ENV PATH="/home/claude/.local/bin:${PATH}"
 # deps (pyproject.toml / uv.lock) change much less often than the Claude
 # Code CLI version, so this is the correct layer ordering.
 #
+# UV_PROJECT_ENVIRONMENT must be set (below) before this pre-warm `uv sync`
+# runs, so the baked venv lands at the container-local path directly instead
+# of the default $WORKSPACE/.venv.
+#
 # Drift caveat: when pyproject.toml/uv.lock change, the runtime `uv sync`
 # will pull/build the delta online; rebuild the image to refresh the
 # baseline.
+ENV UV_NATIVE_TLS=1
+ENV UV_CACHE_DIR=/home/claude/.cache/uv
+ENV UV_LINK_MODE=copy
+ENV UV_PROJECT_ENVIRONMENT=/home/claude/.venvs/project
 COPY --chown=claude:claude pyproject.toml uv.lock /tmp/prewarm/
 RUN cd /tmp/prewarm \
-    && uv python install 3.13 \
+    && uv python install 3.14 \
     && uv sync --frozen --no-install-project \
     && rm -rf /tmp/prewarm
 
@@ -132,11 +153,7 @@ RUN cd /tmp/prewarm \
 ARG CLAUDE_CODE_VERSION=2.1.259
 RUN curl -fsSL https://claude.ai/install.sh | bash -s ${CLAUDE_CODE_VERSION}
 
-# ---------- Layer 8: Environment and entrypoint ----------
-ENV UV_NATIVE_TLS=1
-ENV UV_CACHE_DIR=/home/claude/.cache/uv
-ENV UV_LINK_MODE=copy
-
+# ---------- Layer 8: Entrypoint ----------
 # Workspace path and working directory set at runtime via docker run -w
 COPY --chown=claude:claude docker/entrypoint.sh /home/claude/.local/bin/entrypoint.sh
 RUN chmod +x /home/claude/.local/bin/entrypoint.sh
