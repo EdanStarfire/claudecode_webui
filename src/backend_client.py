@@ -7,6 +7,7 @@ backend-scoped credential instead (two trust boundaries, never bridged).
 
 import asyncio
 import gzip
+import json as json_lib
 import logging
 
 import httpx
@@ -181,6 +182,61 @@ class BackendClient:
             media_type=backend_resp.headers.get("content-type"),
         )
 
+    async def _send_and_decode_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict | None = None,
+        json_body: dict | None = None,
+        timeout: float | None = None,
+    ) -> dict:
+        """Shared tail for get_json()/request_json(): send, then decode a possibly
+        gzip'd JSON response without httpx's synchronous auto-decompression.
+
+        Issue #2029 review finding: httpx's high-level `.get()`/`.request()` (used
+        here previously) fully decompress the body inline inside the awaited call —
+        GZipDecoder.decode() is a plain sync method, no thread offload anywhere in
+        httpx. Backend's poll responses are gzip'd now that Step 1 turned on
+        GZipMiddleware there, and backend/routers/poll.py has no cap on a catch-up
+        batch's size, so a large buffered batch (post-reconnect, or a burst) could
+        decompress synchronously on Frontend's shared event loop — the same
+        regression class this epic (#1990) exists to prevent (#2006/#2028). Mirrors
+        relay()'s already-reviewed build_request()+send(stream=True)+aiter_raw()+
+        threshold-guarded decompress discipline instead.
+        """
+        kwargs = {}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        req = self._client.build_request(
+            method, path, params=params, json=json_body, headers=self._auth_headers(), **kwargs
+        )
+        try:
+            resp = await self._client.send(req, stream=True)
+        except httpx.RequestError as e:
+            self.reachability.record_failure(e)
+            raise
+
+        try:
+            raw_body = b"".join([chunk async for chunk in resp.aiter_raw()])
+        except httpx.RequestError as e:
+            self.reachability.record_failure(e)
+            raise
+        finally:
+            if not resp.is_closed:
+                await resp.aclose()
+
+        self.reachability.record_success()
+        resp.raise_for_status()
+
+        if resp.headers.get("content-encoding", "").strip().lower() == "gzip":
+            if len(raw_body) >= _DECOMPRESS_THREAD_THRESHOLD:
+                raw_body = await asyncio.to_thread(gzip.decompress, raw_body)
+            else:
+                raw_body = gzip.decompress(raw_body)
+
+        return json_lib.loads(raw_body)
+
     async def get_json(self, path: str, params: dict | None = None, timeout: float | None = None) -> dict:
         """GET a JSON endpoint on Backend and return the decoded body. Raises on non-2xx.
 
@@ -190,14 +246,7 @@ class BackendClient:
         network latency/scheduling jitter on top of an at-the-ceiling server response
         turns a normal idle poll into a client-side ReadTimeout (issue #498 review finding).
         """
-        try:
-            resp = await self._client.get(path, params=params, headers=self._auth_headers(), timeout=timeout)
-        except httpx.RequestError as e:
-            self.reachability.record_failure(e)
-            raise
-        self.reachability.record_success()
-        resp.raise_for_status()
-        return resp.json()
+        return await self._send_and_decode_json("GET", path, params=params, timeout=timeout)
 
     async def request_json(
         self, method: str, path: str, json: dict | None = None, timeout: float | None = None
@@ -211,17 +260,7 @@ class BackendClient:
         (not just falsy) when not given, so existing callers keep this client's normal
         per-request default instead of an explicit `timeout=None` disabling it outright.
         """
-        kwargs = {"json": json, "headers": self._auth_headers()}
-        if timeout is not None:
-            kwargs["timeout"] = timeout
-        try:
-            resp = await self._client.request(method, path, **kwargs)
-        except httpx.RequestError as e:
-            self.reachability.record_failure(e)
-            raise
-        self.reachability.record_success()
-        resp.raise_for_status()
-        return resp.json()
+        return await self._send_and_decode_json(method, path, json_body=json, timeout=timeout)
 
     async def health(self) -> bool:
         """Best-effort liveness check — never raises."""

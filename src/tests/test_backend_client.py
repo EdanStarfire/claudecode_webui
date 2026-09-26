@@ -12,6 +12,7 @@ test_oauth_callback_relay.py.
 
 import asyncio
 import gzip
+import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -332,7 +333,7 @@ async def test_issue_2029_relay_does_not_recompress_non_gzip_encoded_request_bod
 @pytest.mark.asyncio
 async def test_issue_1844_get_json_records_failure_and_reraises_on_request_error():
     client = _make_client()
-    client._client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
+    client._client.send = AsyncMock(side_effect=httpx.ConnectError("refused"))
 
     with pytest.raises(httpx.ConnectError):
         await client.get_json("/api/config")
@@ -347,16 +348,72 @@ async def test_issue_1844_get_json_records_success_before_raise_for_status():
     client = _make_client()
     client.reachability.record_failure(httpx.ConnectError("refused"))
 
-    resp = MagicMock()
+    resp = _make_streaming_response(b'{"detail": "boom"}', status_code=500)
     resp.raise_for_status.side_effect = httpx.HTTPStatusError(
         "500", request=MagicMock(), response=MagicMock(status_code=500)
     )
-    client._client.get = AsyncMock(return_value=resp)
+    client._client.send = AsyncMock(return_value=resp)
 
     with pytest.raises(httpx.HTTPStatusError):
         await client.get_json("/api/config")
 
     assert client.reachability.is_unreachable is False
+
+
+@pytest.mark.asyncio
+async def test_issue_2029_get_json_decompresses_gzip_response():
+    client = _make_client()
+    raw = b'{"events": [], "next_cursor": 5}'
+    resp = _make_streaming_response(gzip.compress(raw), headers={"content-encoding": "gzip"})
+    client._client.send = AsyncMock(return_value=resp)
+
+    result = await client.get_json("/api/poll/ui")
+
+    assert result == {"events": [], "next_cursor": 5}
+
+
+@pytest.mark.asyncio
+async def test_issue_2029_get_json_decompress_uses_thread_above_threshold():
+    """Review finding: httpx's high-level .get()/.request() (used here previously)
+    decompress fully inline inside the awaited call — GZipDecoder.decode() is a
+    plain sync method, no thread offload anywhere in httpx. Now that Backend's poll
+    responses are gzip'd (Step 1) and poll.py has no cap on a catch-up batch's size,
+    a large buffered batch could block Frontend's shared event loop — the same
+    regression class this epic exists to prevent. Mirrors relay()'s already-proven
+    thread-offload discipline instead."""
+    from src import backend_client as backend_client_module
+
+    client = _make_client()
+    # Random (incompressible) bytes so the *compressed* size also exceeds the
+    # threshold, not just the decompressed size.
+    raw = json.dumps({"padding": os.urandom(backend_client_module._DECOMPRESS_THREAD_THRESHOLD + 1024).hex()}).encode()
+    compressed = gzip.compress(raw)
+    resp = _make_streaming_response(compressed, headers={"content-encoding": "gzip"})
+    client._client.send = AsyncMock(return_value=resp)
+
+    with patch(
+        "src.backend_client.asyncio.to_thread", new=AsyncMock(wraps=asyncio.to_thread)
+    ) as mock_to_thread:
+        result = await client.get_json("/api/poll/session/abc")
+
+    mock_to_thread.assert_called_once()
+    assert result == json.loads(raw)
+
+
+@pytest.mark.asyncio
+async def test_issue_2029_get_json_decompress_stays_inline_below_threshold():
+    client = _make_client()
+    raw = b'{"ok": true}'
+    resp = _make_streaming_response(gzip.compress(raw), headers={"content-encoding": "gzip"})
+    client._client.send = AsyncMock(return_value=resp)
+
+    with patch(
+        "src.backend_client.asyncio.to_thread", new=AsyncMock(wraps=asyncio.to_thread)
+    ) as mock_to_thread:
+        result = await client.get_json("/api/config")
+
+    mock_to_thread.assert_not_called()
+    assert result == {"ok": True}
 
 
 # --- request_json() ---
@@ -365,7 +422,7 @@ async def test_issue_1844_get_json_records_success_before_raise_for_status():
 @pytest.mark.asyncio
 async def test_issue_1844_request_json_records_failure_and_reraises_on_request_error():
     client = _make_client()
-    client._client.request = AsyncMock(side_effect=httpx.ConnectError("refused"))
+    client._client.send = AsyncMock(side_effect=httpx.ConnectError("refused"))
 
     with pytest.raises(httpx.ConnectError):
         await client.request_json("PUT", "/api/config", json={"a": 1})
@@ -378,11 +435,11 @@ async def test_issue_1844_request_json_records_success_before_raise_for_status()
     client = _make_client()
     client.reachability.record_failure(httpx.ConnectError("refused"))
 
-    resp = MagicMock()
+    resp = _make_streaming_response(b'{"detail": "boom"}', status_code=400)
     resp.raise_for_status.side_effect = httpx.HTTPStatusError(
         "400", request=MagicMock(), response=MagicMock(status_code=400)
     )
-    client._client.request = AsyncMock(return_value=resp)
+    client._client.send = AsyncMock(return_value=resp)
 
     with pytest.raises(httpx.HTTPStatusError):
         await client.request_json("PUT", "/api/config", json={"a": 1})
@@ -397,13 +454,11 @@ async def test_issue_1847_request_json_omits_timeout_kwarg_when_not_given():
     the timeout entirely rather than falling back to the client default, so the
     kwarg must be omitted outright, not passed as None."""
     client = _make_client()
-    resp = MagicMock()
-    resp.json.return_value = {"ok": True}
-    client._client.request = AsyncMock(return_value=resp)
+    client._client.send = AsyncMock(return_value=_make_streaming_response(b'{"ok": true}'))
 
     await client.request_json("PUT", "/api/config", json={"a": 1})
 
-    _, kwargs = client._client.request.call_args
+    _, kwargs = client._client.build_request.call_args
     assert "timeout" not in kwargs
 
 
@@ -413,13 +468,11 @@ async def test_issue_1847_request_json_forwards_explicit_timeout():
     budget (e.g. the restart endpoint's git operations + uv sync) must be able to
     give the client-side call matching headroom."""
     client = _make_client()
-    resp = MagicMock()
-    resp.json.return_value = {"ok": True}
-    client._client.request = AsyncMock(return_value=resp)
+    client._client.send = AsyncMock(return_value=_make_streaming_response(b'{"ok": true}'))
 
     await client.request_json("POST", "/api/system/restart", json={}, timeout=210.0)
 
-    _, kwargs = client._client.request.call_args
+    _, kwargs = client._client.build_request.call_args
     assert kwargs["timeout"] == 210.0
 
 
