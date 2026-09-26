@@ -22,9 +22,11 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 from starlette.routing import Route
 
 from shared.event_queue import EventQueue
+from shared.gzip_request_middleware import GZipRequestMiddleware
 
 from .backend_client import BackendClient
 from .backend_reachability import BackendUnreachableError, is_backend_degraded, to_http_exception
@@ -165,10 +167,34 @@ class ClaudeWebUI:
                 content={"detail": exc.detail, "error_code": exc.error_code},
             )
 
+        # Issue #2029: add_middleware() inserts at index 0, so the LAST call here ends
+        # up outermost (closest to the client) once reversed() builds the stack.
+        # Registration order (first to last call) must therefore be: GZipRequestMiddleware
+        # (innermost — only concerns request bodies), AuthMiddleware, GZipMiddleware
+        # (outermost — response compression).
+        #
+        # decompress_paths is restricted to Frontend's own body-consuming local routes
+        # (review finding): everything else is generic-relayed to Backend by
+        # src/routers/relay.py unparsed, and Backend has its own GZipRequestMiddleware
+        # (registered with no restriction, see backend/web_server.py) to decode it
+        # there — decompressing here first and re-compressing in
+        # BackendClient.relay() would silently defeat AC6's "browser compresses once,
+        # no intermediate decompress+recompress" goal.
+        self.app.add_middleware(
+            GZipRequestMiddleware,
+            decompress_paths=frozenset({"/api/config", "/api/system/restart"}),
+        )
+
         # Register auth middleware if enabled (issue #728)
         if self.auth_enabled and self.auth_token:
             self.app.add_middleware(AuthMiddleware, auth_token=self.auth_token)
             logger.info("Authentication middleware enabled")
+
+        self.app.add_middleware(
+            GZipMiddleware,
+            minimum_size=500,
+            exclude_content_types=(*DEFAULT_EXCLUDED_CONTENT_TYPES, "application/octet-stream"),
+        )
 
         # Setup static files (Vue 3 production build)
         static_dir = Path(__file__).parent.parent / "frontend" / "dist"
