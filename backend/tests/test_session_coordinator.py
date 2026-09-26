@@ -2481,6 +2481,22 @@ class TestConvertStoredMessageToWebsocket:
     def coordinator(self, tmp_path):
         return SessionCoordinator(tmp_path)
 
+    def test_issue_2026_result_message_missing_subtype_does_not_render_conversation_none(
+        self, coordinator
+    ):
+        """A malformed/legacy ResultMessage record with no subtype must not
+        reload as the literal string 'Conversation None' — match the live
+        path's "unknown" default instead."""
+        stored = {
+            "_type": "ResultMessage",
+            "timestamp": 1700000000.0,
+            "data": {"is_error": False},
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        assert result["content"] == "Conversation unknown"
+        assert result["metadata"]["subtype"] == "unknown"
+
     def test_issue_1657_task_updated_message_sets_subtype(self, coordinator):
         stored = {
             "_type": "TaskUpdatedMessage",
@@ -2606,7 +2622,12 @@ class TestConvertStoredMessageToWebsocket:
         }
         result = coordinator._convert_stored_message_to_websocket(stored)
         assert result is not None
-        assert result["content"] == ""
+        # Issue #2026 (Part A): a status SystemMessage with no permissionMode isn't
+        # special-cased by any content synthesis branch, so it now falls through to
+        # the same "System message" default the live path's SystemMessageHandler
+        # SDK-object branch always used — this was the literal #2002 "blank system
+        # pill" gap (content used to reload as "" here).
+        assert result["content"] == "System message"
         assert result["metadata"]["subtype"] == "status"
 
     def test_issue_1756_api_retry_synthesizes_content(self, coordinator):
@@ -3744,7 +3765,15 @@ class TestIssue2007DisplayProjectionContentBlocks:
     flattened content string (always `str | None`), so StoredMessage.get_tool_uses()/
     get_tool_results() (which gate on isinstance(content, list)) always returned [],
     making the projection a structural no-op for ordinary messages. Fixed by feeding
-    the real tool_uses/tool_results content-block list instead."""
+    the real tool_uses/tool_results content-block list instead.
+
+    Issue #2026 (Part B2): display is now computed once, before storage, by
+    _compute_display_metadata_for_storage() — the real ClaudeSDK streaming path
+    calls this via its `display_hook` and stamps the result onto the message dict
+    ahead of _create_message_callback(). These tests call _create_message_callback()
+    directly (bypassing ClaudeSDK), so they replicate that same pre-store step by
+    hand before invoking the callback, exactly mirroring what the SDK does.
+    """
 
     @pytest.mark.asyncio
     async def test_tool_use_then_result_transitions_pending_to_completed(
@@ -3775,6 +3804,9 @@ class TestIssue2007DisplayProjectionContentBlocks:
             "session_id": session_id,
             "timestamp": 1.0,
         }
+        assistant_msg["display"] = coordinator._compute_display_metadata_for_storage(
+            session_id, assistant_msg
+        )
         await cb_inner(assistant_msg)
 
         assert len(received) == 1
@@ -3789,6 +3821,7 @@ class TestIssue2007DisplayProjectionContentBlocks:
             "session_id": session_id,
             "timestamp": 2.0,
         }
+        user_msg["display"] = coordinator._compute_display_metadata_for_storage(session_id, user_msg)
         await cb_inner(user_msg)
 
         assert len(received) == 2
@@ -3824,6 +3857,9 @@ class TestIssue2007DisplayProjectionContentBlocks:
             "session_id": session_id,
             "timestamp": 1.0,
         }
+        assistant_msg["display"] = coordinator._compute_display_metadata_for_storage(
+            session_id, assistant_msg
+        )
         await cb_inner(assistant_msg)
 
         user_msg = {
@@ -3834,6 +3870,7 @@ class TestIssue2007DisplayProjectionContentBlocks:
             "session_id": session_id,
             "timestamp": 2.0,
         }
+        user_msg["display"] = coordinator._compute_display_metadata_for_storage(session_id, user_msg)
         await cb_inner(user_msg)
 
         assert len(received) == 2

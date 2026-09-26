@@ -952,6 +952,20 @@ class DisplayProjection:
         self._active_tools.clear()
         return orphaned
 
+    def build_orphaned_delta(self, orphaned_ids: list[str]) -> DisplayMetadata:
+        """Build the DisplayMetadata delta for tools just marked orphaned.
+
+        Issue #2026: mark_tools_orphaned() mutates projection state directly
+        (bypassing process_message()/the _process_* methods), so under the
+        delta-only design (Part B1) this change would otherwise never appear in
+        any future DisplayMetadata this projection produces — the old
+        full-snapshot _build_display_metadata() used to surface it as a side
+        effect of every subsequent call, regardless of message type. Callers
+        should attach this to whatever message they emit next for the session,
+        exactly once.
+        """
+        return self._build_display_metadata(tool_ids=set(orphaned_ids), orphaned_tools=orphaned_ids)
+
     def process_message(self, message: StoredMessage) -> DisplayMetadata:
         """
         Process a single message and compute its display metadata.
@@ -985,6 +999,7 @@ class DisplayProjection:
     def _process_assistant_message(self, message: StoredMessage) -> DisplayMetadata:
         """Process AssistantMessage - extract and track tool uses."""
         tool_uses = message.get_tool_uses()
+        touched_tool_ids: set[str] = set()
 
         for tool_use in tool_uses:
             tool_id = tool_use.get('id')
@@ -999,6 +1014,7 @@ class DisplayProjection:
                 collapsed=False,
                 style='default',
             )
+            touched_tool_ids.add(tool_id)
 
             # Track as active (waiting for result)
             self._active_tools.add(tool_id)
@@ -1007,11 +1023,12 @@ class DisplayProjection:
             signature = self._create_tool_signature(tool_name, tool_use.get('input', {}))
             self._tool_signatures[signature] = tool_id
 
-        return self._build_display_metadata()
+        return self._build_display_metadata(tool_ids=touched_tool_ids)
 
     def _process_user_message(self, message: StoredMessage) -> DisplayMetadata:
         """Process UserMessage - extract tool results and update states."""
         tool_results = message.get_tool_results()
+        touched_tool_ids: set[str] = set()
 
         for result in tool_results:
             tool_id = result.get('tool_use_id')
@@ -1027,11 +1044,12 @@ class DisplayProjection:
                 else:
                     self._tool_states[tool_id].state = ToolState.COMPLETED
                     self._tool_states[tool_id].style = 'success'
+                touched_tool_ids.add(tool_id)
 
                 # No longer active
                 self._active_tools.discard(tool_id)
 
-        return self._build_display_metadata()
+        return self._build_display_metadata(tool_ids=touched_tool_ids)
 
     def _process_permission_request(self, message: StoredMessage) -> DisplayMetadata:
         """Process PermissionRequestMessage - link to tool and update state."""
@@ -1048,17 +1066,23 @@ class DisplayProjection:
             signature = self._create_tool_signature(tool_name, input_params)
             tool_id = self._tool_signatures.get(signature)
 
+        touched_tool_ids: set[str] = set()
+        touched_linked_permissions: dict[str, str] = {}
         if tool_id:
             # Link permission to tool
             self._permission_to_tool[request_id] = tool_id
+            touched_linked_permissions[request_id] = tool_id
 
             # Update tool state
             if tool_id in self._tool_states:
                 self._tool_states[tool_id].state = ToolState.PERMISSION_REQUIRED
                 self._tool_states[tool_id].style = 'warning'
                 self._tool_states[tool_id].linked_permission_id = request_id
+                touched_tool_ids.add(tool_id)
 
-        return self._build_display_metadata()
+        return self._build_display_metadata(
+            tool_ids=touched_tool_ids, linked_permissions=touched_linked_permissions
+        )
 
     def _process_permission_response(self, message: StoredMessage) -> DisplayMetadata:
         """Process PermissionResponseMessage - update tool state based on decision."""
@@ -1067,6 +1091,7 @@ class DisplayProjection:
 
         # Find linked tool
         tool_id = self._permission_to_tool.get(request_id)
+        touched_tool_ids: set[str] = set()
 
         if tool_id and tool_id in self._tool_states:
             if decision == 'allow':
@@ -1078,8 +1103,9 @@ class DisplayProjection:
                 self._tool_states[tool_id].state = ToolState.FAILED
                 self._tool_states[tool_id].style = 'error'
                 self._active_tools.discard(tool_id)
+            touched_tool_ids.add(tool_id)
 
-        return self._build_display_metadata()
+        return self._build_display_metadata(tool_ids=touched_tool_ids)
 
     def _create_tool_signature(self, tool_name: str, input_params: dict) -> str:
         """
@@ -1105,10 +1131,38 @@ class DisplayProjection:
         param_hash = hashlib.md5(first_value.encode()).hexdigest()[:8]
         return f"{tool_name}:{param_hash}"
 
-    def _build_display_metadata(self) -> DisplayMetadata:
-        """Build current DisplayMetadata from internal state."""
+    def _build_display_metadata(
+        self,
+        tool_ids: set[str] | None = None,
+        orphaned_tools: list[str] | None = None,
+        linked_permissions: dict[str, str] | None = None,
+    ) -> DisplayMetadata:
+        """Build a DELTA DisplayMetadata containing only what this call touched.
+
+        Issue #2026 (Part B1): this used to return the full cumulative
+        tool_states/orphaned_tools/linked_permissions snapshot (every tool ever
+        seen) on every single message. Persisting or broadcasting that snapshot
+        per-message reproduces the same unbounded-payload growth #2026's incident
+        traced to — the same total bytes, just spread across the session's
+        lifetime instead of one paginated request, which is better but still
+        unbounded. Each `_process_*` caller already knows exactly which
+        tool_id(s)/permission(s) it just touched; passing those here — rather
+        than defaulting to "everything" — is what makes this a delta.
+
+        This is safe because the frontend already treats `display` as a
+        cumulative cache it builds up incrementally, one message at a time
+        (`applyDisplayMetadata`, frontend/src/stores/message.js) — a stream of
+        deltas reconstructs identical end-state to a stream of full snapshots,
+        for a client that sees every message in order (live from the start, or
+        a paginated reload from the start — the only two ways messages are ever
+        consumed).
+        """
+        tool_states = (
+            {tid: self._tool_states[tid] for tid in tool_ids if tid in self._tool_states}
+            if tool_ids else {}
+        )
         return DisplayMetadata(
-            tool_states=dict(self._tool_states),  # Copy to avoid mutation
-            orphaned_tools=list(self._orphaned_tools),
-            linked_permissions=dict(self._permission_to_tool),
+            tool_states=tool_states,
+            orphaned_tools=list(orphaned_tools) if orphaned_tools else [],
+            linked_permissions=dict(linked_permissions) if linked_permissions else {},
         )

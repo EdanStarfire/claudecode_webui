@@ -3,7 +3,7 @@
     {
       "type": "assistant",
       "content": "I'll read that file for you.",
-      "timestamp": 1790383292.1211548,
+      "timestamp": 1790399022.2639198,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "has_tool_uses": true,
@@ -13,16 +13,26 @@
             "name": "Read",
             "input": {
               "file_path": "/tmp/example.txt"
-            }
+            },
+            "timestamp": 1790399022.2639198
           }
-        ]
+        ],
+        "tool_results": [],
+        "model": "claude-sonnet-4-5",
+        "has_thinking": false,
+        "thinking_blocks": [],
+        "thinking_content": "",
+        "session_id": "mock-sdk-synthetic-session",
+        "has_tool_results": false,
+        "has_permission_requests": false,
+        "has_permission_responses": false
       },
-      "message_id": "821054ef-7d80-4a36-af41-5bc72e79190a"
+      "message_id": "cfdf5ed7-7e3c-44f2-9340-ac6236b24a3e"
     },
     {
       "type": "user",
-      "content": "",
-      "timestamp": 1790383292.1214275,
+      "content": "Tool results: 1 results",
+      "timestamp": 1790399022.264218,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "has_tool_results": true,
@@ -30,43 +40,45 @@
           {
             "tool_use_id": "synthetic-tu-1",
             "content": "Line 1: hello\nLine 2: world\n",
-            "is_error": false
+            "is_error": false,
+            "timestamp": 1790399022.264218
           }
-        ]
+        ],
+        "tool_uses": [],
+        "role": null,
+        "session_id": "mock-sdk-synthetic-session",
+        "has_tool_uses": false,
+        "has_thinking": false,
+        "has_permission_requests": false,
+        "has_permission_responses": false
       },
-      "message_id": "73b332dc-8504-481f-bc49-54c2b058899a"
+      "message_id": "d15fc117-de01-44c3-94b0-b38a252dc11b"
     },
     {
       "type": "system",
       "content": "Agent spawned: Explore the repository structure",
-      "timestamp": 1790383292.121607,
+      "timestamp": 1790399022.2643936,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "subtype": "task_started",
-        "init_data": {
-          "task_id": "synthetic-task-1",
-          "description": "Explore the repository structure"
-        },
         "task_id": "synthetic-task-1",
         "description": "Explore the repository structure",
         "task_session_id": "mock-sdk-synthetic-session",
         "task_type": "general-purpose",
         "uuid": "synthetic-ts-1",
-        "tool_use_id": null
+        "tool_use_id": null,
+        "session_id": "mock-sdk-synthetic-session"
       },
       "subtype": "task_started",
-      "message_id": "19b2ce83-425f-43ac-9715-380602314dcc"
+      "message_id": "12a8f695-26c2-4807-9e53-b1295fc86c52"
     },
     {
       "type": "system",
       "content": "Agent progress: Reading files in src/ [Read]",
-      "timestamp": 1790383292.1217709,
+      "timestamp": 1790399022.2645352,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "subtype": "task_progress",
-        "init_data": {
-          "task_id": "synthetic-task-1"
-        },
         "task_id": "synthetic-task-1",
         "description": "Reading files in src/",
         "task_session_id": "mock-sdk-synthetic-session",
@@ -77,22 +89,19 @@
           "total_tokens": 1200,
           "tool_uses": 3,
           "duration_ms": 4500
-        }
+        },
+        "session_id": "mock-sdk-synthetic-session"
       },
       "subtype": "task_progress",
-      "message_id": "2e86f6ab-f40e-4436-b961-9ad98b2af95c"
+      "message_id": "2c31a76e-ac92-4e03-94d3-368cef560c49"
     },
     {
       "type": "system",
       "content": "Agent completed: Explored the repository structure and summarized key directories.",
-      "timestamp": 1790383292.121909,
+      "timestamp": 1790399022.2646961,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "subtype": "task_notification",
-        "init_data": {
-          "task_id": "synthetic-task-1",
-          "status": "completed"
-        },
         "task_id": "synthetic-task-1",
         "status": "completed",
         "summary": "Explored the repository structure and summarized key directories.",
@@ -104,26 +113,44 @@
           "total_tokens": 3400,
           "tool_uses": 5,
           "duration_ms": 9800
-        }
+        },
+        "session_id": "mock-sdk-synthetic-session"
       },
       "subtype": "task_notification",
-      "message_id": "2371d95c-10ea-47d8-8036-21d2e312768c"
+      "message_id": "fed7795c-b04a-4114-a6b8-5074e8969067"
     },
     {
       "type": "assistant",
       "content": "Welcome back \u2014 resuming where we left off.",
-      "timestamp": 1790383292.122091,
+      "timestamp": 1790399022.2649062,
       "session_id": "mock-sdk-synthetic-session",
-      "metadata": {},
-      "message_id": "782964a2-d71d-40d7-bbdc-cf9513f9dbc2"
+      "metadata": {
+        "has_tool_uses": false,
+        "tool_uses": [],
+        "tool_results": [],
+        "model": "claude-sonnet-4-5",
+        "has_thinking": false,
+        "thinking_blocks": [],
+        "thinking_content": "",
+        "session_id": "mock-sdk-synthetic-session",
+        "has_tool_results": false,
+        "has_permission_requests": false,
+        "has_permission_responses": false
+      },
+      "message_id": "b7d3ae62-a9a3-4d3d-94fe-70c200911471"
     },
     {
       "type": "result",
-      "content": "",
-      "timestamp": 1790383292.1222167,
+      "content": "Conversation success",
+      "timestamp": 1790399022.2650523,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "subtype": "success",
+        "is_error": false,
+        "error_type": null,
+        "error_code": null,
+        "stack_trace": null,
+        "api_error_status": null,
         "usage": null,
         "model_usage": null,
         "duration_ms": 12345,
@@ -133,10 +160,16 @@
         "stop_reason": null,
         "errors": null,
         "permission_denials": null,
-        "deferred_tool_use": null
+        "deferred_tool_use": null,
+        "session_id": "mock-sdk-synthetic-session",
+        "has_tool_uses": false,
+        "has_tool_results": false,
+        "has_thinking": false,
+        "has_permission_requests": false,
+        "has_permission_responses": false
       },
       "subtype": "success",
-      "message_id": "f088d4cb-ae77-4e7f-98f6-23f45f9ac60b"
+      "message_id": "293d1854-347c-4d39-b09a-0da0e170e30c"
     }
   ],
   "total_count": 7,

@@ -197,6 +197,40 @@ class TestDataStorageManager:
         assert messages[0]["content"] == unicode_message["content"]
 
     @pytest.mark.asyncio
+    async def test_issue_2026_unicode_line_separator_does_not_corrupt_pagination(
+        self, temp_storage_manager
+    ):
+        """read_messages() must split records on '\\n' only, not str.splitlines()'s
+        wider Unicode line-boundary set (U+2028/U+2029/U+0085/etc). append_message()
+        writes with ensure_ascii=False, so a message whose content contains one of
+        those characters verbatim is written as-is inside a single JSON line; a
+        splitlines()-based reader would fragment that one JSON record into multiple
+        invalid-JSON pieces, silently dropping the message and shifting every
+        subsequent offset/limit-based page index."""
+        manager = temp_storage_manager
+
+        await manager.append_message({
+            "type": "user",
+            "content": "paragraph one paragraph two",
+            "session_id": "test-session-123",
+        })
+        await manager.append_message({
+            "type": "assistant",
+            "content": "second message",
+            "session_id": "test-session-123",
+        })
+
+        messages = await manager.read_messages()
+        assert len(messages) == 2
+        assert messages[0]["content"] == "paragraph one paragraph two"
+        assert messages[1]["content"] == "second message"
+
+        # Pagination must still land on the right record.
+        second_page = await manager.read_messages(limit=1, offset=1)
+        assert len(second_page) == 1
+        assert second_page[0]["content"] == "second message"
+
+    @pytest.mark.asyncio
     async def test_concurrent_message_appends(self, temp_storage_manager):
         """Test concurrent message appends."""
         manager = temp_storage_manager

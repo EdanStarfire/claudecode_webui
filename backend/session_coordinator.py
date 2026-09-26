@@ -295,6 +295,29 @@ def _accumulate_subagent_usage(
     return accum
 
 
+def _merge_display_deltas(pending: dict[str, Any], own: dict[str, Any] | None) -> dict[str, Any]:
+    """Merge a pending orphaned-tool delta (see `_pending_orphan_deltas`) into a
+    message's own computed display delta (Issue #2026).
+
+    Both are already bounded, single-purpose deltas — a plain per-key union is
+    correct here (never a full-snapshot merge) since `pending` only ever
+    contains the tools `mark_tools_orphaned()` just touched, and `own` only
+    ever contains the tools this specific message's process_message() call
+    just touched — the two are disjoint by construction (a tool is either
+    still active when orphaned, or already terminal from a prior message).
+    """
+    own = own or {}
+    return {
+        "tool_states": {**pending.get("tool_states", {}), **own.get("tool_states", {})},
+        "orphaned_tools": list(dict.fromkeys(
+            [*pending.get("orphaned_tools", []), *own.get("orphaned_tools", [])]
+        )),
+        "linked_permissions": {
+            **pending.get("linked_permissions", {}), **own.get("linked_permissions", {})
+        },
+    }
+
+
 def _tail_read_lines(path: "Path", limit: int) -> list[str]:
     """Read the last `limit` lines from a file efficiently using a deque."""
     from collections import deque
@@ -523,6 +546,13 @@ class SessionCoordinator:
         # Display projections per session (Issue #310)
         # Tracks tool lifecycle state and computes display metadata for frontend
         self._display_projections: dict[str, DisplayProjection] = {}
+
+        # Issue #2026 (Part B1 follow-up): orphaned-tool deltas computed by
+        # _mark_tools_orphaned() (a side-channel projection mutation, not routed
+        # through process_message()) waiting to be attached to the next message's
+        # computed display for that session. Popped (consumed exactly once) by
+        # _compute_display_metadata_for_storage().
+        self._pending_orphan_deltas: dict[str, dict[str, Any]] = {}
 
         # Audit writer (set after construction via set_audit_writer; optional)
         self._audit_writer = None
@@ -2098,6 +2128,7 @@ class SessionCoordinator:
                 storage_manager=storage_manager,
                 session_manager=self.session_manager,
                 message_callback=self._create_message_callback(session_id),
+                display_hook=lambda msg, _sid=session_id: self._compute_display_metadata_for_storage(_sid, msg),
                 error_callback=self._create_error_callback(session_id),
                 permission_callback=permission_callback,
                 rate_limit_callback=self._on_rate_limits,
@@ -2377,6 +2408,10 @@ class SessionCoordinator:
             # Issue #310: Cleanup display projection
             if session_id in self._display_projections:
                 del self._display_projections[session_id]
+            # Issue #2026: drop any never-consumed pending orphan delta (e.g. this
+            # is the termination path itself, which — unlike interrupt — has no
+            # follow-up message that could ever pick one up).
+            self._pending_orphan_deltas.pop(session_id, None)
             # Issue #858: Cleanup per-session tool-call event
             self._tool_call_events.pop(session_id, None)
             # Issue #1694: Cleanup per-session message-emitted barrier state
@@ -3707,6 +3742,12 @@ class SessionCoordinator:
                             # Neither should contribute to the content string
                     content = " ".join(texts) if texts else ""
 
+            # Issue #2026 (Part A): the live path's AssistantMessageHandler falls back
+            # to "Assistant response" when a turn has no text blocks (e.g. a tool-use-
+            # only turn) — port the same default so reload doesn't show a blank pill.
+            if _type == "AssistantMessage" and not content:
+                content = "Assistant response"
+
             # Build metadata
             metadata = {}
 
@@ -3715,10 +3756,22 @@ class SessionCoordinator:
             if _type == "AssistantMessage" and isinstance(data.get("content"), list):
                 for block in data["content"]:
                     if isinstance(block, dict) and "id" in block and "name" in block:
-                        tool_uses.append(block)
-            if tool_uses:
-                metadata["has_tool_uses"] = True
+                        # Issue #2026: stamp the message-level timestamp onto each
+                        # block — the live path's AssistantMessageHandler reads the
+                        # same already-set message_data["timestamp"] for every
+                        # tool_use it extracts, not a fresh clock read, so this is
+                        # what makes reload byte-identical to the live broadcast.
+                        tool_uses.append({**block, "timestamp": timestamp})
+            if _type == "AssistantMessage":
+                metadata["has_tool_uses"] = bool(tool_uses)
                 metadata["tool_uses"] = tool_uses
+                # Issue #2026: AssistantMessageHandler's tool_results default is a
+                # hardcoded empty list for this message type — never derived.
+                metadata["tool_results"] = []
+                metadata["model"] = data.get("model")
+                usage = data.get("usage")
+                if usage:
+                    metadata["usage"] = usage
 
             # Issue #1985: propagate turn-level identity (distinct from record_id
             # below), mirroring the live extraction at message_parser.py:622-623.
@@ -3730,10 +3783,30 @@ class SessionCoordinator:
             if _type == "UserMessage" and isinstance(data.get("content"), list):
                 for block in data["content"]:
                     if isinstance(block, dict) and "tool_use_id" in block:
-                        tool_results.append(block)
-            if tool_results:
-                metadata["has_tool_results"] = True
+                        # Issue #2026: see the matching tool_uses comment above —
+                        # same message-level timestamp, not a fresh clock read.
+                        tool_results.append({**block, "timestamp": timestamp})
+            if _type == "UserMessage":
+                metadata["has_tool_results"] = bool(tool_results)
                 metadata["tool_results"] = tool_results
+                metadata["tool_uses"] = []
+                metadata["role"] = None
+                # Issue #2026: UserMessageHandler falls back to a synthesized
+                # "Tool results: N results" string when the message carries tool
+                # results but no direct text — the common shape for a stored
+                # tool-result turn, which has no top-level "content" string.
+                if tool_results and not content:
+                    content = f"Tool results: {len(tool_results)} results"
+                # Issue #2026: unwrap slash-command output turns (e.g. /cost,
+                # /context), matching UserMessageHandler's live-path handling.
+                if content and '<local-command-stdout>' in content:
+                    match = re.search(
+                        r'<local-command-stdout>(.*?)</local-command-stdout>', content, re.DOTALL
+                    )
+                    if match:
+                        content = match.group(1).strip()
+                    metadata["is_local_command_response"] = True
+                    metadata["subtype"] = "local_command_response"
 
             # Extract parent_tool_use_id for Task subagent filtering (Issue #384, #195)
             # Present on both UserMessage (prompt) and AssistantMessage (subagent responses)
@@ -3749,11 +3822,12 @@ class SessionCoordinator:
                             "content": block["thinking"],
                             "timestamp": timestamp,
                         })
-            if thinking_blocks:
-                metadata["has_thinking"] = True
+            if _type == "AssistantMessage":
+                metadata["has_thinking"] = bool(thinking_blocks)
                 metadata["thinking_blocks"] = thinking_blocks
-                metadata["thinking_content"] = " ".join(
-                    block["content"] for block in thinking_blocks
+                metadata["thinking_content"] = (
+                    " ".join(block["content"] for block in thinking_blocks)
+                    if thinking_blocks else ""
                 )
 
             # Handle SystemMessage subtypes (including Task* subclasses)
@@ -3761,8 +3835,14 @@ class SessionCoordinator:
                 subtype = data.get("subtype")
                 if subtype:
                     metadata["subtype"] = subtype
-                # Extract init_data if present
-                if data.get("data"):
+                # Extract init_data if present. Issue #2026: only SystemMessage/
+                # HookEventMessage's live handler (SystemMessageHandler) ever exposes
+                # this as `init_data` — the Task* dataclasses below share the same
+                # `data` field but each has its own dedicated handler that never sets
+                # it, so setting it unconditionally for every _type in this tuple (as
+                # this code used to) put an extra key on Task* records the live path
+                # never sends.
+                if _type in ("SystemMessage", "HookEventMessage") and data.get("data"):
                     metadata["init_data"] = data["data"]
 
                 # Issue #677: Extract task message metadata from stored format
@@ -3873,34 +3953,70 @@ class SessionCoordinator:
                     wait_str = f" (~{round(wait_ms / 1000)}s)" if wait_ms else ""
                     content = f"API retry {attempt_str}{wait_str}"
 
+                # Issue #2026 (Part A): plain SystemMessage/HookEventMessage subtypes
+                # with no special-cased content synthesis above (most commonly "init")
+                # reload with content="" today, while the live path's
+                # SystemMessageHandler SDK-object branch falls back to the literal
+                # "System message" whenever the dataclass has no `content` attribute —
+                # true for every SystemMessage/HookEventMessage subtype currently
+                # emitted by the SDK. This is exactly #2002's "blank system pill" gap.
+                if _type in ("SystemMessage", "HookEventMessage"):
+                    if not content:
+                        content = "System message"
+                    metadata["is_error"] = False
+
             # Handle ResultMessage
             if _type == "ResultMessage":
-                subtype = data.get("subtype")
-                if subtype:
-                    metadata["subtype"] = subtype
+                # Issue #2026: match ResultMessageHandler's live-path default of
+                # "unknown" (message_parser.py:1167) exactly — a bare `.get("subtype")`
+                # with no default would render "Conversation None" below for a
+                # record with a missing/None subtype, which the live path never
+                # produces since "unknown" is a truthy string.
+                subtype = data.get("subtype") or "unknown"
+                is_error = data.get("is_error", False)
+                metadata["subtype"] = subtype
+                # Issue #2026: ResultMessageHandler's live-path content default is
+                # f"Conversation {subtype}" — NOT the SDK's own `result` text. This
+                # looks surprising (the stored record's data.result *is* the real
+                # answer text) but it's a genuine, separately-tracked live-path quirk:
+                # ClaudeSDK._convert_sdk_message()'s attribute-copy allowlist for
+                # ResultMessage never includes "result", so message_data.get("result")
+                # is always absent by the time ResultMessageHandler runs live. Parity
+                # here means reproducing what the live path actually sends, not
+                # "fixing" this — a separate, unrelated issue.
+                content = f"Conversation {subtype}"
+                metadata["is_error"] = is_error
+                metadata["error_type"] = data.get("error_type") if is_error else None
+                metadata["error_code"] = data.get("error_code") if is_error else None
+                metadata["stack_trace"] = data.get("stack_trace") if is_error else None
+                metadata["api_error_status"] = data.get("api_error_status")
                 # Copy usage data
                 for key in ["usage", "model_usage", "duration_ms", "duration_api_ms", "total_cost_usd", "num_turns"]:
-                    if key in data:
-                        metadata[key] = data[key]
+                    metadata[key] = data.get(key)
                 # Copy stop_reason for truncation detection
-                if "stop_reason" in data:
-                    metadata["stop_reason"] = data["stop_reason"]
+                metadata["stop_reason"] = data.get("stop_reason")
                 # Copy errors and permission_denials for error display
-                if "errors" in data:
-                    metadata["errors"] = data["errors"]
-                if "permission_denials" in data:
-                    metadata["permission_denials"] = data["permission_denials"]
+                metadata["errors"] = data.get("errors")
+                metadata["permission_denials"] = data.get("permission_denials", [])
                 # Copy deferred_tool_use for frontend deferral banner
-                if "deferred_tool_use" in data:
-                    metadata["deferred_tool_use"] = data["deferred_tool_use"]
+                metadata["deferred_tool_use"] = data.get("deferred_tool_use")
 
             # Handle PermissionRequestMessage
             if _type == "PermissionRequestMessage":
                 metadata["request_id"] = data.get("request_id")
                 metadata["tool_name"] = data.get("tool_name")
                 metadata["input_params"] = data.get("input_params", {})
-                metadata["suggestions"] = data.get("suggestions", [])
+                suggestions = data.get("suggestions", [])
+                metadata["suggestions"] = suggestions
+                metadata["has_suggestions"] = len(suggestions) > 0
                 metadata["has_permission_requests"] = True
+                metadata["tool_use_id"] = data.get("tool_use_id")
+                metadata["agent_id"] = data.get("agent_id")
+                metadata["decision_reason"] = data.get("decision_reason")
+                metadata["blocked_path"] = data.get("blocked_path")
+                metadata["title"] = data.get("title")
+                metadata["display_name"] = data.get("display_name")
+                metadata["description"] = data.get("description")
 
             # Handle PermissionResponseMessage
             if _type == "PermissionResponseMessage":
@@ -3908,10 +4024,41 @@ class SessionCoordinator:
                 metadata["decision"] = data.get("decision")
                 metadata["tool_name"] = data.get("tool_name")
                 metadata["reasoning"] = data.get("reasoning")
-                metadata["applied_updates"] = data.get("applied_updates", [])
+                metadata["response_time_ms"] = data.get("response_time_ms")
+                applied_updates = data.get("applied_updates", [])
+                metadata["applied_updates"] = applied_updates
+                metadata["applied_update_types"] = [
+                    u.get("type") for u in applied_updates if u.get("type")
+                ]
+                metadata["has_permission_responses"] = True
+                metadata["tool_use_id"] = data.get("tool_use_id")
                 # Include updated_input for AskUserQuestion answers
                 if data.get("updated_input"):
                     metadata["updated_input"] = data["updated_input"]
+
+            # Issue #2026 (Part A): stamp session_id into metadata and always-explicit
+            # has_tool_uses/has_tool_results/has_thinking/has_permission_requests/
+            # has_permission_responses booleans, mirroring message_parser.py's
+            # handlers — the live path never omits these keys, it sets them False
+            # when not applicable. Task* dataclasses are excluded from the has_*
+            # defaults: each has its own dedicated live handler
+            # (TaskStartedHandler/etc.) that never sets these booleans at all.
+            if _type in (
+                "AssistantMessage", "UserMessage", "SystemMessage", "HookEventMessage",
+                "ResultMessage", "PermissionRequestMessage", "PermissionResponseMessage",
+                "TaskStartedMessage", "TaskProgressMessage", "TaskNotificationMessage",
+                "TaskUpdatedMessage",
+            ):
+                metadata.setdefault("session_id", session_id)
+            if _type in (
+                "AssistantMessage", "UserMessage", "SystemMessage", "HookEventMessage",
+                "ResultMessage", "PermissionRequestMessage", "PermissionResponseMessage",
+            ):
+                metadata.setdefault("has_tool_uses", False)
+                metadata.setdefault("has_tool_results", False)
+                metadata.setdefault("has_thinking", False)
+                metadata.setdefault("has_permission_requests", False)
+                metadata.setdefault("has_permission_responses", False)
 
             # Add display metadata if present (Issue #310)
             if display:
@@ -4530,6 +4677,9 @@ class SessionCoordinator:
         if session_id in self._display_projections:
             self._display_projections[session_id].reset()
             coord_logger.debug(f"Reset DisplayProjection for session {session_id}")
+        # Issue #2026: a pending orphan delta from before the reset would
+        # reference tool_ids the fresh projection no longer knows about.
+        self._pending_orphan_deltas.pop(session_id, None)
 
     def _mark_tools_orphaned(self, session_id: str) -> list[str]:
         """
@@ -4543,8 +4693,79 @@ class SessionCoordinator:
             orphaned = projection.mark_tools_orphaned()
             if orphaned:
                 coord_logger.info(f"Marked {len(orphaned)} tools as orphaned for session {session_id}")
+                # Issue #2026: this mutation bypasses process_message(), so under
+                # the delta-only design it would otherwise never reach any future
+                # DisplayMetadata for this session. Stash it for
+                # _compute_display_metadata_for_storage() to attach to whatever
+                # message comes next (e.g. the interrupt system message
+                # _send_interrupt_message() stores immediately after this call).
+                self._pending_orphan_deltas[session_id] = projection.build_orphaned_delta(orphaned).to_dict()
             return orphaned
         return []
+
+    def _compute_display_metadata_for_storage(
+        self, session_id: str, message_data: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Pre-store hook (Issue #2026, Part B2): compute this message's
+        DisplayMetadata once, before it's persisted, so a later reload can read the
+        value back verbatim (O(1) dict lookup) instead of replaying session history
+        to reconstruct it — the structural cause of #2006/#2028's quadratic,
+        event-loop-blocking reload bug.
+
+        Called from two places, both BEFORE the record reaches storage:
+        - ClaudeSDK's `display_hook` (wired at SDK construction), for the live SDK
+          streaming path (`claude_sdk.py`'s `_store_sdk_message`).
+        - `_store_processed_message()`, for synthetic system messages (client_launched,
+          interrupt, session_failed, mcp_server_degraded, stderr).
+
+        Non-fatal by design, exactly like the display computation this replaces used
+        to be: any failure here is logged and swallowed, and the caller stores the
+        message with no `display` key rather than failing the whole write. Mirrors
+        the same StoredMessage-construction logic _create_message_callback() used to
+        run itself, after storage — moved here, before storage, so it runs exactly
+        once per message instead of twice (this method's caller stamps the result
+        back onto message_data/converted_message, and _create_message_callback()
+        reads that already-computed value rather than recomputing it).
+        """
+        try:
+            parsed_message = self.message_processor.process_message(message_data, source="sdk")
+            projection = self._get_display_projection(session_id)
+            # Issue #2007: parsed_message.content is always a flattened string, so
+            # StoredMessage.get_tool_uses()/get_tool_results() (which gate on
+            # isinstance(content, list)) always returned [], making this projection
+            # a no-op. Feed the real content-block list instead.
+            projection_content = parsed_message.content
+            if parsed_message.metadata:
+                if parsed_message.type.value == 'assistant':
+                    tool_uses = parsed_message.metadata.get('tool_uses')
+                    if tool_uses:
+                        projection_content = tool_uses
+                elif parsed_message.type.value == 'user':
+                    tool_results = parsed_message.metadata.get('tool_results')
+                    if tool_results:
+                        projection_content = tool_results
+            legacy_dict = {
+                'type': parsed_message.type.value,
+                'timestamp': parsed_message.timestamp,
+                'session_id': session_id,
+                'content': projection_content,
+            }
+            if parsed_message.metadata:
+                legacy_dict.update(parsed_message.metadata)
+            stored_msg = legacy_to_stored(legacy_dict)
+            display_metadata = projection.process_message(stored_msg)
+            result = display_metadata.to_dict() if display_metadata else None
+        except Exception as proj_error:
+            coord_logger.debug(f"Pre-store DisplayProjection computation failed: {proj_error}")
+            result = None
+
+        # Issue #2026: attach any pending orphaned-tool delta from
+        # _mark_tools_orphaned() — consumed exactly once, by whichever message
+        # for this session gets its display computed next.
+        pending = self._pending_orphan_deltas.pop(session_id, None)
+        if pending:
+            result = _merge_display_deltas(pending, result)
+        return result
 
     # ============================================================
     # Issue #494: ToolCallUpdate Storage
@@ -5082,6 +5303,17 @@ class SessionCoordinator:
             # Prepare for storage using MessageProcessor
             storage_data = self.message_processor.prepare_for_storage(parsed_message)
 
+            # Issue #2026 (Part B2): compute display once, before this message is
+            # persisted (see _compute_display_metadata_for_storage()'s docstring).
+            # Stamped onto message_data too (not just storage_data) so the
+            # subsequent `callback(message_data)` call every caller of this method
+            # makes afterward reads the same already-computed value instead of
+            # _create_message_callback() recomputing it a second time.
+            display = self._compute_display_metadata_for_storage(session_id, message_data)
+            if display:
+                storage_data["display"] = display
+                message_data["display"] = display
+
             # Store in session storage
             storage = self._storage_managers.get(session_id)
             if storage:
@@ -5151,38 +5383,19 @@ class SessionCoordinator:
                 # Process message using unified MessageProcessor
                 parsed_message = self.message_processor.process_message(message_data, source="sdk")
 
-                # Issue #310: Process through DisplayProjection for tool lifecycle tracking
-                display_metadata = None
-                try:
-                    projection = self._get_display_projection(session_id)
-                    # Issue #2007: parsed_message.content is always a flattened string, so
-                    # StoredMessage.get_tool_uses()/get_tool_results() (which gate on
-                    # isinstance(content, list)) always returned [] here, making this
-                    # projection a no-op. Feed the real content-block list instead.
-                    projection_content = parsed_message.content
-                    if parsed_message.metadata:
-                        if parsed_message.type.value == 'assistant':
-                            tool_uses = parsed_message.metadata.get('tool_uses')
-                            if tool_uses:
-                                projection_content = tool_uses
-                        elif parsed_message.type.value == 'user':
-                            tool_results = parsed_message.metadata.get('tool_results')
-                            if tool_results:
-                                projection_content = tool_results
-                    # Convert to StoredMessage format for projection processing
-                    legacy_dict = {
-                        'type': parsed_message.type.value,
-                        'timestamp': parsed_message.timestamp,
-                        'session_id': session_id,
-                        'content': projection_content,
-                    }
-                    if parsed_message.metadata:
-                        legacy_dict.update(parsed_message.metadata)
-                    stored_msg = legacy_to_stored(legacy_dict)
-                    display_metadata = projection.process_message(stored_msg)
-                except Exception as proj_error:
-                    coord_logger.debug(f"DisplayProjection processing failed: {proj_error}")
-                    # Non-fatal - continue without display metadata
+                # Issue #2026 (Part B2): display is now computed once, before this
+                # message reaches storage, by _compute_display_metadata_for_storage()
+                # — wired as ClaudeSDK's `display_hook` for the live SDK streaming
+                # path, and called directly by _store_processed_message() for
+                # synthetic system messages. Both stamp the result back onto this
+                # same message_data dict before invoking this callback. Reusing that
+                # value here (rather than calling DisplayProjection a second time)
+                # is what keeps its per-tool state from being mutated twice for the
+                # same message — the previous post-store computation is removed
+                # entirely, not just relocated.
+                display_metadata_dict = (
+                    message_data.get('display') if isinstance(message_data, dict) else None
+                )
 
                 # Track latest meaningful message (issue #291, issue #1497)
                 # Only track user and assistant messages — system messages are SDK runtime
@@ -5441,11 +5654,14 @@ class SessionCoordinator:
                 callbacks = self._message_callbacks.get(session_id, [])
                 # logger.info(f"Processing message for session {session_id}, found {len(callbacks)} callbacks")
 
-                # Issue #310: Attach display metadata to parsed message for WebSocket broadcast
-                if display_metadata:
+                # Issue #310/#2026: attach the pre-store-computed display metadata to
+                # the parsed message for WebSocket broadcast — already a dict (see
+                # _compute_display_metadata_for_storage()'s return type), not a
+                # DisplayMetadata object, since it was computed before storage.
+                if display_metadata_dict:
                     if parsed_message.metadata is None:
                         parsed_message.metadata = {}
-                    parsed_message.metadata['display'] = display_metadata.to_dict()
+                    parsed_message.metadata['display'] = display_metadata_dict
 
                 # Issue #894: Inject stable retry_message_id for api_retry sequences
                 msg_subtype = parsed_message.metadata.get('subtype') if parsed_message.metadata else None
