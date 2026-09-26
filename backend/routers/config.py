@@ -89,6 +89,11 @@ def build_router(webui) -> APIRouter:
                 if not isinstance(val, bool):
                     raise ValueError("block_cross_session_messaging must be a boolean")
                 config.features.block_cross_session_messaging = val
+            if "auto_mode_server_classifier" in features:
+                val = features["auto_mode_server_classifier"]
+                if not isinstance(val, bool):
+                    raise ValueError("auto_mode_server_classifier must be a boolean")
+                config.features.auto_mode_server_classifier = val
 
         # Merge proxy section (issue #1050)
         if "proxy" in body:

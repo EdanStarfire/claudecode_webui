@@ -1319,10 +1319,10 @@ class ClaudeSDK:
 
         Note: most categories here are additive/opt-in (a var is only added when a
         flag is true, or removed to opt back in to CC's own default). The
-        always-set category (e.g. CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH) is the
-        exception — it is emitted unconditionally because the WebUI default
-        diverges from CC's own CLI default, and omitting it would silently
-        revert to CC's default.
+        always-set category (e.g. CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH,
+        CLAUDE_CODE_AUTO_MODE_SERVER) is the exception — it is emitted
+        unconditionally because the WebUI default diverges from CC's own CLI
+        default, and omitting it would silently revert to CC's default.
 
         Issue #2010: CLAUDE_CODE_ENABLE_TASKS and CLAUDE_CODE_ENABLE_TODO_TOOLS are two
         independent CLI gates, ANDed together by the CLI (task tools are available only
@@ -1362,6 +1362,16 @@ class ClaudeSDK:
         # flag still forces it to run synchronously, silently nullifying the toggle.
         if app_cfg.features.allow_background_agent:
             env_vars["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "0"
+
+        # Issue #2009: CLAUDE_CODE_AUTO_MODE_SERVER — always-set (not opt-in), same rationale as
+        # CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH (#1669): the CLI's own default for this var is
+        # documented to change server-side-by-default coverage in a future release regardless of
+        # our CLI version, so we pin our own explicit choice rather than ever let it drift
+        # silently. Also see permission_denied handling gap (pre-existing, independent of this
+        # toggle) noted in issue #2009's plan Risk #2.
+        env_vars["CLAUDE_CODE_AUTO_MODE_SERVER"] = (
+            "1" if app_cfg.features.auto_mode_server_classifier else "0"
+        )
 
         # Per-session opt-back-in: remove suppression keys when session expresses preference
         # Issues #709, #906: auto-memory

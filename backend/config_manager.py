@@ -170,6 +170,7 @@ class FeaturesConfig:
     resume_batch_delay_seconds: int = 5  # Issue #1791 — default pause between resume batches
     enable_experimental_nav_header: bool = False  # Issue #1723 — opt-in compact breadcrumb nav header
     block_cross_session_messaging: bool = True  # Issue #1901/#1899 — force crossSessionInbound="refuse" and deny outbound SendMessage/ListAgents to non-local targets
+    auto_mode_server_classifier: bool = True  # Issue #2009 — server-side Auto Mode classifier (free when eligible, silent fallback to local otherwise; default on per owner decision, may revisit after real-world observation)
 
 
 @dataclass
@@ -280,6 +281,9 @@ class AppConfig:
             block_cross_session_messaging=features_data.get(
                 "block_cross_session_messaging", True
             ),
+            auto_mode_server_classifier=features_data.get(
+                "auto_mode_server_classifier", True
+            ),
         )
         proxy_data = data.get("proxy", {})
         proxy = ProxyConfig(
@@ -373,6 +377,7 @@ class AppConfig:
                 "resume_batch_delay_seconds": self.features.resume_batch_delay_seconds,
                 "enable_experimental_nav_header": self.features.enable_experimental_nav_header,
                 "block_cross_session_messaging": self.features.block_cross_session_messaging,
+                "auto_mode_server_classifier": self.features.auto_mode_server_classifier,
             },
             "proxy": {
                 "proxy_image": self.proxy.proxy_image,

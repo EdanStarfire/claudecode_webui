@@ -129,6 +129,25 @@
       </small>
     </div>
 
+    <div class="form-check form-switch mb-3">
+      <input
+        class="form-check-input"
+        type="checkbox"
+        id="autoModeServerClassifier"
+        :checked="config?.auto_mode_server_classifier"
+        @change="toggleAutoModeServerClassifier"
+      >
+      <label class="form-check-label" for="autoModeServerClassifier">
+        Server-side Auto Mode classifier
+      </label>
+      <small class="form-text text-muted d-block">
+        Routes the Auto Mode safety classifier through Anthropic's server instead of separate
+        billed classifier requests, when the session is eligible — free, with a silent fallback
+        to local classification otherwise (default: on). A temporary CLI setting Anthropic may
+        remove in a future release. Takes effect on the next session start, not mid-session.
+      </small>
+    </div>
+
     <div class="mb-3">
       <label class="form-label" for="resumeBatchSize">Resume batch size</label>
       <input
@@ -327,6 +346,13 @@ function toggleAllowBackgroundAgent(event) {
   emit('update:config', {
     ...props.config,
     allow_background_agent: event.target.checked
+  })
+}
+
+function toggleAutoModeServerClassifier(event) {
+  emit('update:config', {
+    ...props.config,
+    auto_mode_server_classifier: event.target.checked
   })
 }
 
