@@ -825,8 +825,12 @@ data/
 │   ├── sdk_debug.log               # SDK integration
 │   ├── storage.log                 # File operations
 │   ├── polling.log                 # Poll transport signal logging
+│   ├── frontend.log                # Raw combined capture of Frontend's own stdout/stderr
+│   │                                # (bypass content + supervisor lifecycle events), rotated;
+│   │                                # installed by src/frontend_log_tee.py (issue #2027)
 │   └── backend/                    # Backend subprocess's own logs (issue #498)
-│       └── backend.log             # Backend's stdout/stderr, piped by backend_supervisor.py
+│       └── backend.log             # Backend's stdout/stderr, piped and rotated by
+│                                    # backend_supervisor.py (issue #2027)
 │
 ├── projects/{uuid}/                # One folder per project
 │   └── state.json                  # ProjectInfo serialized
@@ -854,6 +858,18 @@ data/
         ├── short_term_memory.json  # (Future)
         └── long_term_memory.json   # (Future)
 ```
+
+**Issue #2027**: `backend.log` and `frontend.log` are both size-capped and
+backup-bounded (`shared/raw_log_rotator.py::RotatingRawLogWriter` — the
+`RotatingFileHandler` equivalent for raw byte streams, not Python
+`LogRecord`s), so neither grows unbounded the way `backend.log` used to.
+Category log files (`sdk_debug.log`, `storage.log`, etc.) no longer echo
+their own DEBUG/INFO content to the console/combined logs — only ERROR+
+still reaches both the console and `error.log` for every category, exactly
+as before. `src.backend_supervisor`'s own lifecycle logs (spawn, unexpected
+exit with code/signal, restart scheduled, degraded, stopped) reach the
+console unconditionally, independent of any `--debug-*` flag, and are
+therefore captured into `frontend.log` by the tee.
 
 ## API Endpoint Reference
 

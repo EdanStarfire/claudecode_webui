@@ -3,7 +3,8 @@
 This module provides a multi-tier logging system with:
 - Category-based debug logging to separate files (e.g., polling.log, sdk_debug.log)
 - Unified error logging to error.log (all ERROR+ messages route here)
-- Console output for errors (always) and debug messages (when enabled via CLI flags)
+- Console output for ERROR+ only (issue #2027: category DEBUG/INFO content lives
+  only in its own rotated file, never echoed to console/combined logs)
 - Standardized log formatting with timestamps and category tags
 
 Usage Patterns
@@ -247,13 +248,11 @@ def configure_logging(
         'polling': {
             'file': f"{log_dir}/polling.log",
             'enabled': _log_config['debug_polling'],
-            'console': _log_config['debug_polling'],
             'level': logging.DEBUG
         },
         'polling_verbose': {
             'file': f"{log_dir}/polling_verbose.log",
             'enabled': _log_config['debug_all_polling'],
-            'console': _log_config['debug_all_polling'],
             'level': logging.DEBUG
         },
         # Enable SDK logging when either SDK or permissions debugging is active,
@@ -261,85 +260,73 @@ def configure_logging(
         'sdk_debug': {
             'file': f"{log_dir}/sdk_debug.log",
             'enabled': _log_config['debug_sdk'] or _log_config['debug_permissions'],
-            'console': _log_config['debug_sdk'] or _log_config['debug_permissions'],
             'level': logging.DEBUG
         },
         'coordinator': {
             'file': f"{log_dir}/coordinator.log",
             'enabled': True,  # Always enabled
-            'console': True,  # Always to console
             'level': logging.DEBUG if debug_all else logging.INFO
+            # Issue #2027: no longer console-mirrored — coordinator's INFO-level
+            # operational lines now live only in coordinator.log, not the terminal.
         },
         'storage': {
             'file': f"{log_dir}/storage.log",
             'enabled': _log_config['debug_storage'],
-            'console': _log_config['debug_storage'],
             'level': logging.DEBUG
         },
         'parser': {
             'file': f"{log_dir}/parser.log",
             'enabled': _log_config['debug_parser'],
-            'console': _log_config['debug_parser'],
             'level': logging.DEBUG
         },
         'error_handler': {
             'file': f"{log_dir}/error.log",
             'enabled': _log_config['debug_error_handler'],
-            'console': _log_config['debug_error_handler'],
             'level': logging.DEBUG
         },
         'session_manager': {
             'file': f"{log_dir}/session_manager.log",
             'enabled': _log_config['debug_session_manager'],
-            'console': _log_config['debug_session_manager'],
             'level': logging.DEBUG
         },
         'legion': {
             'file': f"{log_dir}/legion.log",
             'enabled': _log_config['debug_legion'],
-            'console': _log_config['debug_legion'],
             'level': logging.DEBUG
         },
         'template_manager': {
             'file': f"{log_dir}/template_manager.log",
             'enabled': _log_config['debug_template_manager'],
-            'console': _log_config['debug_template_manager'],
             'level': logging.DEBUG
         },
         'skill_manager': {
             'file': f"{log_dir}/skill_manager.log",
             'enabled': _log_config['debug_skill_manager'],
-            'console': _log_config['debug_skill_manager'],
             'level': logging.DEBUG
         },
         'queue_manager': {
             'file': f"{log_dir}/queue_manager.log",
             'enabled': _log_config['debug_queue_manager'],
-            'console': _log_config['debug_queue_manager'],
             'level': logging.DEBUG
         },
         'queue_processor': {
             'file': f"{log_dir}/queue_processor.log",
             'enabled': _log_config['debug_queue_processor'],
-            'console': _log_config['debug_queue_processor'],
             'level': logging.DEBUG
         },
         'archive': {
             'file': f"{log_dir}/archive.log",
             'enabled': _log_config['debug_archive'],
-            'console': _log_config['debug_archive'],
             'level': logging.DEBUG
         },
         'project_manager': {
             'file': f"{log_dir}/project_manager.log",
             'enabled': _log_config['debug_project_manager'],
-            'console': _log_config['debug_project_manager'],
             'level': logging.DEBUG
         },
         'profile_manager': {
             'file': f"{log_dir}/profile_manager.log",
             'enabled': _log_config['debug_profile_manager'],
-            'console': _log_config['debug_profile_manager'],
             'level': logging.DEBUG
         },
         # oauth_manager.py/oauth_callback_listener_manager.py/shared_connection_manager.py
@@ -350,13 +337,11 @@ def configure_logging(
         'oauth': {
             'file': f"{log_dir}/oauth.log",
             'enabled': _log_config['debug_oauth'],
-            'console': _log_config['debug_oauth'],
             'level': logging.DEBUG
         },
         'mcp_shared': {
             'file': f"{log_dir}/mcp_shared.log",
             'enabled': _log_config['debug_oauth'],
-            'console': _log_config['debug_oauth'],
             'level': logging.DEBUG
         },
         # Issue #1931: frontend debug-buffer submissions are explicit, rare, user/app-
@@ -365,7 +350,6 @@ def configure_logging(
         'client_debug': {
             'file': f"{log_dir}/client_debug.log",
             'enabled': True,
-            'console': False,
             'level': logging.INFO
         }
     }
@@ -389,18 +373,28 @@ def configure_logging(
             file_handler.setFormatter(formatter)
             logger.addHandler(file_handler)
 
-            # Console handler if enabled
-            if config['console']:
-                console_handler = logging.StreamHandler()
-                console_handler.setLevel(config['level'])
-                console_handler.setFormatter(formatter)
-                logger.addHandler(console_handler)
-
         # Always add error handler to send ERROR+ to error.log
         logger.addHandler(error_handler)
 
         # Always add console error handler for ERROR+ to console
         logger.addHandler(console_error_handler)
+
+    # Issue #2027 AC4: the supervisor's own lifecycle logs (spawn, unexpected exit,
+    # restart scheduled, degraded, stopped) must reach the console unconditionally —
+    # no --debug-* flag gates this. install_frontend_log_tee() (src/frontend_log_tee.py)
+    # already captures all of Frontend's stdout/stderr into frontend.log, so making
+    # this logger's output reach the console is sufficient; no separate lifecycle
+    # file is needed. propagate=False (like the category loggers above) so ERROR+
+    # lines aren't also duplicated onto the console via root's console_error_handler.
+    supervisor_logger = logging.getLogger("src.backend_supervisor")
+    supervisor_logger.setLevel(logging.INFO)
+    supervisor_logger.handlers.clear()
+    supervisor_logger.propagate = False
+    supervisor_console_handler = logging.StreamHandler()
+    supervisor_console_handler.setLevel(logging.INFO)
+    supervisor_console_handler.setFormatter(formatter)
+    supervisor_logger.addHandler(supervisor_console_handler)
+    supervisor_logger.addHandler(error_handler)
 
     # Configure root logger for general errors
     root_logger = logging.getLogger()

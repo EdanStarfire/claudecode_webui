@@ -35,6 +35,7 @@ from shared.git_restart import (
     run_git_command,
     validate_git_ref_component,
 )
+from src.frontend_log_tee import uninstall_frontend_log_tee
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +278,12 @@ async def _finish_restart(webui) -> None:
             await webui.backend_supervisor.stop()
         except Exception:
             logger.warning("Error stopping Backend during restart")
+    # Issue #2027: os.execv never returns into the interpreter's normal
+    # shutdown sequence, so frontend_log_tee's atexit-registered drain would
+    # never run — without this, the new process image would inherit fd 1/2
+    # still pointing at the old tee's now-readerless pipe and eventually hang
+    # once its kernel buffer fills.
+    uninstall_frontend_log_tee()
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
 

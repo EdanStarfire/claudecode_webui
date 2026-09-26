@@ -34,7 +34,7 @@ build-backend = "hatchling.build"
 packages = ["src", "backend", "shared"]
 
 [tool.pytest.ini_options]
-testpaths = ["src/tests", "backend/tests"]
+testpaths = ["src/tests", "backend/tests", "shared/tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]

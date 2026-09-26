@@ -8,11 +8,37 @@ allocation) that's impractical to exercise live repeatedly.
 """
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from shared.raw_log_rotator import RotatingRawLogWriter
 from src.backend_supervisor import BackendSupervisor, _allocate_free_port
+
+
+class FakeStreamReader:
+    """Minimal async-iterable stand-in for asyncio.StreamReader, used since the
+    log pump now reads from process.stdout (a PIPE) instead of a shared fd."""
+
+    def __init__(self, chunks: list[bytes] | None = None):
+        self._chunks = list(chunks or [])
+
+    async def read(self, n: int) -> bytes:
+        if self._chunks:
+            return self._chunks.pop(0)
+        return b""
+
+
+async def _never_exits():
+    """AsyncMock side_effect for a process.wait() that should never resolve.
+
+    Must be an actual async function (not a lambda returning a coroutine) so
+    AsyncMock awaits it — a lambda would just return the inner coroutine
+    object unawaited, leaving it un-run and making the mocked "returncode"
+    that coroutine object instead of ever genuinely hanging.
+    """
+    await asyncio.sleep(100)
 
 
 def test_allocate_free_port_returns_distinct_ports():
@@ -90,14 +116,30 @@ async def test_wait_ready_times_out_if_never_live(tmp_path):
 async def test_monitor_loop_restarts_after_unexpected_exit(tmp_path):
     sup = BackendSupervisor(data_dir=tmp_path)
     sup.log_dir.mkdir(parents=True, exist_ok=True)
-    sup._log_file = open(sup.log_dir / "backend.log", "ab")
+    sup._rotator = RotatingRawLogWriter(sup.log_dir / "backend.log")
 
     proc1 = MagicMock()
     proc1.wait = AsyncMock(return_value=1)
     proc1.returncode = None
+    proc1.stdout = FakeStreamReader()
+    # proc2 represents the still-running respawned process at the point stop()
+    # is called: its wait() must stay pending until terminate()/kill() is
+    # actually invoked (mirroring a real subprocess), not resolve instantly —
+    # otherwise the monitor loop would observe a spurious second "exit" and
+    # crash-loop again, and not hang forever either — otherwise sup.stop()'s
+    # own wait_for() calls below would stall for the real _SHUTDOWN_TIMEOUT.
     proc2 = MagicMock()
-    proc2.wait = AsyncMock(side_effect=lambda: asyncio.sleep(100))  # never exits
+    proc2_terminated = asyncio.Event()
+    proc2.terminate = MagicMock(side_effect=proc2_terminated.set)
+    proc2.kill = MagicMock(side_effect=proc2_terminated.set)
+
+    async def _proc2_wait():
+        await proc2_terminated.wait()
+        return -15  # SIGTERM
+
+    proc2.wait = AsyncMock(side_effect=_proc2_wait)
     proc2.returncode = None
+    proc2.stdout = FakeStreamReader()
 
     call_count = 0
 
@@ -121,20 +163,78 @@ async def test_monitor_loop_restarts_after_unexpected_exit(tmp_path):
         await sup.stop()
 
     assert call_count == 2  # initial spawn (proc1) + one restart (proc2)
-    sup._log_file.close()
 
 
 @pytest.mark.asyncio
-async def test_monitor_loop_marks_degraded_after_exceeding_restart_cap(tmp_path):
+@pytest.mark.parametrize(
+    "returncode, expected_fragments",
+    [
+        # T2/AC5/AC6: a SIGKILL'd Backend must log both the raw code and
+        # resolved signal name, at ERROR (so it reaches error.log).
+        pytest.param(-9, ["code=-9", "signal=SIGKILL"], id="sigkill"),
+        # Regression guard for the warning->error bump (AC6): a plain nonzero
+        # exit (not signal-based) must also log at ERROR, not warning.
+        pytest.param(1, ["code=1"], id="plain-nonzero-exit"),
+        # Regression guard: an unmapped real-time signal number (not in
+        # Python's signal.Signals enum) must not crash the monitor loop —
+        # still log the raw code, just without a resolved signal name.
+        pytest.param(-32, ["code=-32"], id="unmapped-realtime-signal"),
+    ],
+)
+async def test_unexpected_exit_logs_at_error_level(
+    tmp_path, caplog, returncode, expected_fragments
+):
     sup = BackendSupervisor(data_dir=tmp_path)
     sup.log_dir.mkdir(parents=True, exist_ok=True)
-    sup._log_file = open(sup.log_dir / "backend.log", "ab")
+    sup._rotator = RotatingRawLogWriter(sup.log_dir / "backend.log")
+
+    proc = MagicMock()
+    proc.wait = AsyncMock(return_value=returncode)
+    proc.returncode = None
+    proc.stdout = FakeStreamReader()
+    sup._process = proc
+
+    respawned = MagicMock()
+    respawned.wait = AsyncMock(side_effect=_never_exits)
+    respawned.returncode = None
+    respawned.stdout = FakeStreamReader()
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return respawned
+
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_create_subprocess_exec), \
+         caplog.at_level(logging.ERROR, logger="src.backend_supervisor"):
+        monitor_task = asyncio.create_task(sup._monitor_loop())
+        for _ in range(50):  # bounded wait for the loop to observe the exit
+            if any("exited unexpectedly" in r.getMessage() for r in caplog.records):
+                break
+            await asyncio.sleep(0.05)
+        sup._stopping = True
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            pass
+
+    exit_records = [r for r in caplog.records if "exited unexpectedly" in r.getMessage()]
+    assert len(exit_records) == 1
+    assert exit_records[0].levelno == logging.ERROR
+    for fragment in expected_fragments:
+        assert fragment in exit_records[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_monitor_loop_marks_degraded_after_exceeding_restart_cap(tmp_path, caplog):
+    sup = BackendSupervisor(data_dir=tmp_path)
+    sup.log_dir.mkdir(parents=True, exist_ok=True)
+    sup._rotator = RotatingRawLogWriter(sup.log_dir / "backend.log")
 
     import asyncio
 
     proc = MagicMock()
     proc.wait = AsyncMock(return_value=1)  # always "crashes" immediately
     proc.returncode = None
+    proc.stdout = FakeStreamReader()
 
     async def fake_create_subprocess_exec(*args, **kwargs):
         return proc
@@ -144,18 +244,23 @@ async def test_monitor_loop_marks_degraded_after_exceeding_restart_cap(tmp_path)
         await sup._spawn()
         # Drive the monitor loop directly (no sleep-based backoff) by patching sleep to a no-op,
         # so the test doesn't take the real exponential-backoff wall-clock time.
-        with patch("asyncio.sleep", new=AsyncMock(return_value=None)):
+        with patch("asyncio.sleep", new=AsyncMock(return_value=None)), \
+             caplog.at_level(logging.ERROR, logger="src.backend_supervisor"):
             await asyncio.wait_for(sup._monitor_loop(), timeout=5)
 
     assert sup.degraded is True
-    sup._log_file.close()
+    degraded_records = [
+        r for r in caplog.records
+        if "marking degraded" in r.getMessage() and r.levelno == logging.ERROR
+    ]
+    assert degraded_records, "degraded transition must be logged at ERROR level (AC6)"
 
 
 @pytest.mark.asyncio
-async def test_stop_terminates_process_and_closes_log(tmp_path):
+async def test_stop_terminates_process_and_drains_log_pump(tmp_path):
     sup = BackendSupervisor(data_dir=tmp_path)
     sup.log_dir.mkdir(parents=True, exist_ok=True)
-    sup._log_file = open(sup.log_dir / "backend.log", "ab")
+    sup._rotator = RotatingRawLogWriter(sup.log_dir / "backend.log")
 
     import asyncio
 
@@ -163,10 +268,31 @@ async def test_stop_terminates_process_and_closes_log(tmp_path):
     proc.returncode = None
     proc.wait = AsyncMock(return_value=0)
     proc.terminate = MagicMock()
+    proc.stdout = FakeStreamReader([b"tail output\n"])
     sup._process = proc
+    sup._pump_tasks.append(asyncio.create_task(sup._pump_log(proc)))
     sup._monitor_task = asyncio.create_task(asyncio.sleep(100))
 
     await sup.stop()
 
     proc.terminate.assert_called_once()
-    assert sup._log_file.closed
+    assert all(task.done() for task in sup._pump_tasks)
+    assert (sup.log_dir / "backend.log").read_bytes() == b"tail output\n"
+
+
+@pytest.mark.asyncio
+async def test_pump_log_keeps_draining_after_write_failure(tmp_path):
+    """Regression: if RotatingRawLogWriter.write() ever raises (e.g. disk
+    full), _pump_log must keep draining the pipe rather than dying — a dead
+    pump leaves Backend's stdout pipe unread, which fills its kernel buffer
+    and blocks Backend's own writes forever."""
+    sup = BackendSupervisor(data_dir=tmp_path)
+    sup._rotator = MagicMock()
+    sup._rotator.write = MagicMock(side_effect=OSError("disk full"))
+
+    proc = MagicMock()
+    proc.stdout = FakeStreamReader([b"chunk-1", b"chunk-2"])
+
+    await sup._pump_log(proc)  # must return normally, not raise
+
+    assert sup._rotator.write.call_count == 1

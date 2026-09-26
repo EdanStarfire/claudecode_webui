@@ -10,6 +10,7 @@ skip auto-start and point at a manually-configured Backend instead.
 """
 
 import argparse
+import os
 import secrets
 import sys
 from pathlib import Path
@@ -22,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from shared.logging_config import configure_logging
 from src.backend_supervisor import BackendSupervisor
 from src.frontend_config import check_network_binding, ensure_config_file, load_frontend_config
+from src.frontend_log_tee import install_frontend_log_tee
 from src.web_server import create_app
 
 # Backend debug flags passed through to an auto-started Backend (issue #498) —
@@ -110,21 +112,33 @@ def main():
 
     args = parser.parse_args()
 
+    # Validate and create data directory. Resolved before any other startup
+    # step (config-file loading, network-binding checks, etc.) so the log tee
+    # below can be installed as early as possible — it then captures tracebacks
+    # from those later steps too, not just from configure_logging() onward.
+    data_dir_path = Path(args.data_dir).resolve()
+    try:
+        data_dir_path.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"Failed to create data directory {data_dir_path}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Issue #2027 AC3/AC4: raw combined capture of Frontend's own stdout/stderr
+    # (bypass content + supervisor lifecycle logs), installed before anything
+    # else can print/crash.
+    install_frontend_log_tee(data_dir_path / "logs" / "frontend.log")
+    # os.execv (system.py's restart route) keeps the same pid across a restart —
+    # this marker makes frontend.log's pre-/post-restart segments distinguishable.
+    print(f"Frontend starting (pid={os.getpid()})")
+
+    print(f"Using data directory: {data_dir_path}")
+
     # Ensure config file exists (creates with safe defaults on first run)
     config_file = ensure_config_file()
     frontend_config = load_frontend_config(config_file)
 
     # Validate network binding permission
     if not check_network_binding(args.host, frontend_config, config_file):
-        sys.exit(1)
-
-    # Validate and create data directory
-    data_dir_path = Path(args.data_dir).resolve()
-    try:
-        data_dir_path.mkdir(parents=True, exist_ok=True)
-        print(f"Using data directory: {data_dir_path}")
-    except Exception as e:
-        print(f"Failed to create data directory {data_dir_path}: {e}", file=sys.stderr)
         sys.exit(1)
 
     # Configure logging with debug flags

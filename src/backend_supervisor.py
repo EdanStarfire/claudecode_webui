@@ -14,11 +14,13 @@ is constructed.
 import asyncio
 import logging
 import secrets
+import signal
 import sys
 import time
 from pathlib import Path
 
 from shared.net_utils import allocate_free_port
+from shared.raw_log_rotator import RotatingRawLogWriter
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +68,8 @@ class BackendSupervisor:
         self.base_url = f"http://{self.host}:{self.port}"
 
         self._process: asyncio.subprocess.Process | None = None
-        self._log_file = None
+        self._rotator: RotatingRawLogWriter | None = None
+        self._pump_tasks: list[asyncio.Task] = []
         self._restart_timestamps: list[float] = []
         self._degraded = False
         self._monitor_task: asyncio.Task | None = None
@@ -105,15 +108,51 @@ class BackendSupervisor:
     async def _spawn(self) -> None:
         self._process = await asyncio.create_subprocess_exec(
             *self._build_command(),
-            stdout=self._log_file,
+            stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
         logger.info("Spawned Backend subprocess (pid=%s) on %s", self._process.pid, self.base_url)
+        self._pump_tasks.append(
+            asyncio.create_task(self._pump_log(self._process), name="backend_supervisor_log_pump")
+        )
+
+    async def _pump_log(self, process: asyncio.subprocess.Process) -> None:
+        """Read the subprocess's piped stdout/stderr and feed it to the rotator.
+
+        Rotation is purely a parent-side file-handle swap (AC2) — the pipe read
+        loop doesn't care whether backend.log just rolled over. The write is
+        offloaded to a thread since it's blocking file I/O and this coroutine
+        runs on Frontend's single shared event loop. If a write ever fails
+        (e.g. disk full), this keeps draining the pipe without persisting
+        further — the alternative (giving up on the loop entirely) would let
+        the pipe's kernel buffer fill and block Backend's own stdout writes.
+        """
+        assert process.stdout is not None
+        assert self._rotator is not None
+        write_failed = False
+        while True:
+            chunk = await process.stdout.read(65536)
+            if not chunk:
+                break
+            if write_failed:
+                continue
+            try:
+                await asyncio.to_thread(self._rotator.write, chunk)
+            except OSError:
+                write_failed = True
+                logger.exception(
+                    "backend.log write failed; continuing to drain Backend's "
+                    "output without persisting it"
+                )
 
     async def start(self) -> None:
         """Spawn the Backend subprocess and start the crash-monitor loop."""
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        self._log_file = open(self.log_dir / "backend.log", "ab")
+        self._rotator = RotatingRawLogWriter(self.log_dir / "backend.log")
+        # AC7: a pre-existing oversized backend.log gets rolled over via an O(1)
+        # rename before the first spawn, so a multi-GB leftover file never stalls
+        # startup.
+        self._rotator.rotate_if_oversized()
         await self._spawn()
         self._monitor_task = asyncio.create_task(
             self._monitor_loop(), name="backend_supervisor_monitor"
@@ -156,7 +195,20 @@ class BackendSupervisor:
             if self._stopping:
                 return
 
-            logger.warning("Backend subprocess exited unexpectedly (code=%s)", returncode)
+            # AC5: negative returncode means killed by signal -returncode
+            # (asyncio subprocess convention). AC6: this is genuinely error-level —
+            # bumped from warning so it reaches error.log.
+            signal_suffix = ""
+            if returncode < 0:
+                try:
+                    signal_suffix = f" signal={signal.Signals(-returncode).name}"
+                except ValueError:
+                    # Signal number not in Python's Signals enum (e.g. an
+                    # unmapped realtime signal) — still log the raw code.
+                    pass
+            logger.error(
+                "Backend subprocess exited unexpectedly (code=%s%s)", returncode, signal_suffix
+            )
             now = time.monotonic()
             self._restart_timestamps = [
                 t for t in self._restart_timestamps if now - t < _RESTART_WINDOW_SECONDS
@@ -191,6 +243,11 @@ class BackendSupervisor:
                 await self._monitor_task
             except asyncio.CancelledError:
                 pass
+            except Exception:
+                # A crash inside the monitor loop (e.g. it observed an exit it
+                # couldn't fully process) must not abort the rest of shutdown —
+                # the Backend subprocess still needs to be terminated below.
+                logger.exception("Monitor task raised during shutdown")
 
         if self._process is not None and self._process.returncode is None:
             self._process.terminate()
@@ -201,6 +258,17 @@ class BackendSupervisor:
                 self._process.kill()
                 await self._process.wait()
 
-        if self._log_file is not None:
-            self._log_file.close()
+        # The process exiting closes its end of the stdout pipe, so each pump
+        # task's read() loop should already be at (or very near) EOF here.
+        for task in self._pump_tasks:
+            if not task.done():
+                try:
+                    await asyncio.wait_for(task, timeout=_SHUTDOWN_TIMEOUT)
+                except (TimeoutError, asyncio.CancelledError):
+                    logger.warning(
+                        "Log pump task did not drain in time; any buffered "
+                        "output not yet written may be lost"
+                    )
+                    task.cancel()
+
         logger.info("Backend subprocess stopped")
