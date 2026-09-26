@@ -5,6 +5,25 @@
       <span class="archived-input-text">Archived session — read only</span>
     </div>
 
+    <!-- Hydration error banner (issue #2035): a thrown/timed-out step in the session
+         data-hydration chain (history/resources) — distinct from transport-level
+         disconnection below. The status chip can still read active/green while this
+         shows, since process state and hydration state are independent signals.
+         Checked ahead of the generic "Disconnected" banner below: the hydration chain
+         stops before ever calling connectSession() on error, so isConnected stays
+         false for the entire error window (most visibly on a session's very first
+         hydration in a tab) — without this ordering, that generic banner would mask
+         the whole reason this feature exists. -->
+    <div
+      v-else-if="hydrationError"
+      class="alert alert-danger mb-0 py-2 px-3 small d-flex align-items-center gap-2"
+      role="alert"
+    >
+      <span class="flex-shrink-0">⚠</span>
+      <span>{{ hydrationErrorMessage }}</span>
+      <button class="btn btn-sm btn-outline-danger ms-auto" @click="sessionStore.retryHydration(viewSessionId)">Retry</button>
+    </div>
+
     <!-- Connection warning banner -->
     <div
       v-else-if="!isConnected"
@@ -156,7 +175,9 @@ import { usePollingStore } from '@/stores/polling'
 import { useResourceStore } from '@/stores/resource'
 import { useUIStore } from '@/stores/ui'
 import { useSessionState } from '@/composables/useSessionState'
+import { useHydrationStage } from '@/composables/useHydrationStage'
 import { api, getAuthToken } from '@/utils/api'
+import { HYDRATION_STAGE_LABELS } from '@/utils/hydrationStage'
 import AttachmentList from './AttachmentList.vue'
 import SlashCommandDropdown from './SlashCommandDropdown.vue'
 
@@ -261,6 +282,9 @@ const backendBannerMessage = computed(() => wsStore.backendStatus === 'degraded'
   : 'Backend unreachable — messages cannot be processed until it recovers')
 const { isStarting } = useSessionState(currentSession)
 
+// Issue #2035: session data-hydration stage visibility, independent of process state.
+const { hydrationStage, hydrationError, hydrationErrorMessage } = useHydrationStage(viewSessionId)
+
 // Check if input has content (text or valid attachments)
 const hasContent = computed(() => !!inputText.value.trim() || attachments.value.filter(a => !a.error).length > 0)
 
@@ -271,8 +295,11 @@ const inputPlaceholder = computed(() => {
   if (isStarting.value) {
     return 'Session is starting...'
   }
+  if (hydrationError.value) {
+    return 'Failed to load session data — see banner above'
+  }
   if (!isConnected.value) {
-    return 'Waiting for connection...'
+    return HYDRATION_STAGE_LABELS[hydrationStage.value] || 'Waiting for connection...'
   }
   return 'Type your message to Claude Code...'
 })

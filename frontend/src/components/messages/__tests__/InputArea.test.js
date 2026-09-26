@@ -5,6 +5,7 @@ import { screen, fireEvent } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { renderWithStores } from '@/test-utils/render'
 import InputArea from '@/components/messages/InputArea.vue'
+import { HYDRATION_STAGE_LABELS } from '@/utils/hydrationStage'
 
 const apiMock = vi.hoisted(() => ({
   get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), patch: vi.fn()
@@ -320,6 +321,102 @@ describe('InputArea', () => {
       expect(document.body.querySelectorAll('textarea[aria-hidden="true"]').length).toBe(1)
 
       expect(() => wrapper.unmount()).not.toThrow()
+    })
+  })
+
+  // Issue #2035: session data-hydration stage visibility. The error banner is checked
+  // ahead of the existing "Disconnected"/backend-outage banners in the v-else-if chain,
+  // specifically so it still shows on a session's very first hydration in a tab — the
+  // chain stops before ever calling connectSession() on error, so isConnected stays
+  // false for the whole error window in that (most common) case. Verified against a
+  // real browser capture during manual testing: before this ordering, the generic
+  // "Disconnected" banner silently won and the diagnostic banner never appeared.
+  describe('hydration stage visibility (#2035)', () => {
+    async function setup({ stage, error, sessionConnected = false }) {
+      const { pinia } = renderWithStores(InputArea, {
+        provide: { viewSessionId: viewSessionIdRef },
+        stubs: { AttachmentList: true, SlashCommandDropdown: true }
+      })
+      const { useSessionStore } = await import('@/stores/session')
+      const { usePollingStore } = await import('@/stores/polling')
+      const sessionStore = useSessionStore(pinia)
+      const pollingStore = usePollingStore(pinia)
+      sessionStore.currentSessionId = SESSION_ID
+      pollingStore.sessionConnected = sessionConnected
+      sessionStore.hydrationStageBySession.set(SESSION_ID, {
+        stage,
+        error: error || null,
+        controller: new AbortController(),
+      })
+      await nextTick()
+      return { sessionStore, pollingStore }
+    }
+
+    for (const [stage, label] of Object.entries(HYDRATION_STAGE_LABELS)) {
+      it(`placeholder shows the ${stage} label while disconnected and mid-hydration`, async () => {
+        await setup({ stage, sessionConnected: false })
+        expect(screen.getByPlaceholderText(label)).toBeTruthy()
+      })
+    }
+
+    it('shows the error banner with the captured stage/message when otherwise connected, and Retry calls retryHydration', async () => {
+      const { sessionStore } = await setup({
+        stage: 'error',
+        error: { stage: 'loading_history', message: 'boom', kind: 'thrown' },
+        sessionConnected: true,
+      })
+      vi.spyOn(sessionStore, 'retryHydration').mockResolvedValue(undefined)
+
+      expect(screen.getByText(/Failed to load session data \(loading_history\) — boom/)).toBeTruthy()
+
+      await fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+      expect(sessionStore.retryHydration).toHaveBeenCalledWith(SESSION_ID)
+    })
+
+    it('shows the error banner (not the generic "Disconnected" banner) on a session\'s very first hydration, where isConnected is still false', async () => {
+      // The hydration chain never reaches connectSession() on error, so isConnected
+      // stays false throughout — this is the realistic, most common trigger case.
+      await setup({
+        stage: 'error',
+        error: { stage: 'loading_history', message: 'boom', kind: 'thrown' },
+        sessionConnected: false,
+      })
+
+      expect(screen.getByText(/Failed to load session data \(loading_history\) — boom/)).toBeTruthy()
+      expect(screen.queryByText('Disconnected')).toBeFalsy()
+    })
+
+    it('shows a timeout-flavored message when the error kind is timeout', async () => {
+      await setup({
+        stage: 'error',
+        error: { stage: 'loading_resources', message: 'Timed out after 20s during loading_resources', kind: 'timeout' },
+        sessionConnected: true,
+      })
+      expect(screen.getByText(/Timed out loading session data \(loading_resources\)/)).toBeTruthy()
+    })
+
+    it('placeholder reflects the hydration error instead of the generic "Waiting for connection..." fallback', async () => {
+      await setup({
+        stage: 'error',
+        error: { stage: 'loading_history', message: 'boom', kind: 'thrown' },
+        sessionConnected: false,
+      })
+      expect(screen.getByPlaceholderText('Failed to load session data — see banner above')).toBeTruthy()
+    })
+
+    it(':disabled is unaffected by hydration stage alone — governed only by isStarting/isConnected/isBackendUnavailable', async () => {
+      const { pollingStore } = await setup({
+        stage: 'error',
+        error: { stage: 'loading_history', message: 'boom', kind: 'thrown' },
+        sessionConnected: true,
+      })
+      // Connected + not starting + backend ok: NOT disabled, even with a live hydration error.
+      expect(screen.getByRole('textbox')).not.toBeDisabled()
+
+      pollingStore.sessionConnected = false
+      await nextTick()
+      // Disconnected: disabled again, exactly as pre-#2035 — hydration state alone didn't change this gate.
+      expect(screen.getByRole('textbox')).toBeDisabled()
     })
   })
 })

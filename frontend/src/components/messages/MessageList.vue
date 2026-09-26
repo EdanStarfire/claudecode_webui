@@ -16,7 +16,15 @@
           @chip-click="onGutterChipClick"
         />
 
-        <div v-if="displayableItems.length === 0" class="text-muted text-center py-5">
+        <div v-if="displayableItems.length === 0 && isHydrationLoading" class="text-muted text-center py-5">
+          <div class="spinner-border spinner-border-sm mb-2" role="status"></div>
+          <div>{{ hydrationStageLabel }}</div>
+        </div>
+        <div v-else-if="displayableItems.length === 0 && hydrationStage === 'error'" class="text-center py-5">
+          <div class="text-danger mb-2">⚠ {{ hydrationErrorMessage }}</div>
+          <button class="btn btn-sm btn-outline-danger" @click="sessionStore.retryHydration(viewSessionId)">Retry</button>
+        </div>
+        <div v-else-if="displayableItems.length === 0" class="text-muted text-center py-5">
           No messages yet. Start a conversation!
         </div>
 
@@ -134,6 +142,8 @@ import { useVirtualNavigation, forceFreshMeasurements } from '@/composables/useV
 import { parseTimestamp, formatDateSeparatorLabel } from '@/utils/time'
 import { getEffectiveStatusForTool } from '@/composables/useToolStatus'
 import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
+import { useHydrationStage } from '@/composables/useHydrationStage'
+import { HYDRATION_STAGE_LABELS } from '@/utils/hydrationStage'
 
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
@@ -143,6 +153,10 @@ const uiStore = useUIStore()
 // Every computed in this component reads from this id, not the global currentSessionId,
 // so cached instances under KeepAlive never display another session's data.
 const viewSessionId = inject('viewSessionId', ref(null))
+
+// Issue #2035: session data-hydration stage visibility for the empty-state area.
+const { hydrationStage, isHydrationLoading, hydrationErrorMessage } = useHydrationStage(viewSessionId)
+const hydrationStageLabel = computed(() => HYDRATION_STAGE_LABELS[hydrationStage.value] || '')
 
 const messagesArea = ref(null)
 const messagesContent = ref(null)
