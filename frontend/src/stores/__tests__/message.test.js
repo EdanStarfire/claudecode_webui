@@ -1328,6 +1328,117 @@ describe('applyDisplayMetadata status-regression guard (Issue #2007)', () => {
     const toolCall = store.toolCallsBySession.get('sess-1').find(tc => tc.id === 'toolu_read_1')
     expect(toolCall.status).toBe('completed')
   })
+
+  // Issue #2026 (Part B1): the backend now sends only the tool_states/orphaned_tools/
+  // linked_permissions entries a given message actually touched, not the full
+  // cumulative snapshot every message used to carry. This is safe specifically
+  // because applyDisplayMetadata() already merges into a persistent per-session
+  // cache (backendToolStates, via toolStatesCache.set()) rather than replacing it —
+  // a stream of per-message deltas must reconstruct the same end state a stream of
+  // full snapshots would have. These two tests are the ones that would have caught a
+  // regression to "only ever remembers the most recent message's tool" (e.g. a naive
+  // .clear() before applying) — the existing tests above never distinguish the two
+  // because they only ever send a single tool per test in the first place.
+  it('accumulates tool state across two messages that each carry a delta for a different tool', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'toolu_delta_a',
+      name: 'Read',
+      input: { file_path: '/a.py' },
+      status: 'pending',
+    })
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'toolu_delta_b',
+      name: 'Read',
+      input: { file_path: '/b.py' },
+      status: 'pending',
+    })
+
+    // Message 1's delta only mentions tool A (backend-computed delta shape).
+    store.addMessage('sess-1', makeMessage({
+      type: 'user',
+      content: 'result a',
+      metadata: {
+        display: {
+          tool_states: {
+            toolu_delta_a: { state: 'completed', visible: true, collapsed: false, style: 'success' }
+          },
+          orphaned_tools: [],
+          linked_permissions: {}
+        }
+      }
+    }))
+
+    // Message 2's delta only mentions tool B — tool A's entry is absent here, not
+    // merely unchanged-and-resent, matching the real per-message delta shape.
+    store.addMessage('sess-1', makeMessage({
+      type: 'user',
+      content: 'result b',
+      metadata: {
+        display: {
+          tool_states: {
+            toolu_delta_b: { state: 'failed', visible: true, collapsed: false, style: 'error' }
+          },
+          orphaned_tools: [],
+          linked_permissions: {}
+        }
+      }
+    }))
+
+    const toolCalls = store.toolCallsBySession.get('sess-1')
+    expect(toolCalls.find(tc => tc.id === 'toolu_delta_a').status).toBe('completed')
+    expect(toolCalls.find(tc => tc.id === 'toolu_delta_b').status).toBe('error')
+    expect(store.getBackendToolState('sess-1', 'toolu_delta_a').state).toBe('completed')
+    expect(store.getBackendToolState('sess-1', 'toolu_delta_b').state).toBe('failed')
+  })
+
+  it('accumulates linked_permissions across two messages that each carry a delta for a different request', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'toolu_perm_1',
+      name: 'Bash',
+      input: { command: 'rm -rf /tmp/x' },
+      status: 'awaiting_permission',
+      request_id: 'req_1',
+    })
+    store.handleToolCall('sess-1', {
+      tool_use_id: 'toolu_perm_2',
+      name: 'Bash',
+      input: { command: 'rm -rf /tmp/y' },
+      status: 'awaiting_permission',
+      request_id: 'req_2',
+    })
+
+    // Message 1's delta links only req_1; message 2's delta links only req_2 — the
+    // real per-message delta shape (not both, resent, every time).
+    store.addMessage('sess-1', makeMessage({
+      type: 'permission_request',
+      content: 'permission requested',
+      metadata: {
+        display: { tool_states: {}, orphaned_tools: [], linked_permissions: { req_1: 'toolu_perm_1' } }
+      }
+    }))
+    store.addMessage('sess-1', makeMessage({
+      type: 'permission_request',
+      content: 'permission requested',
+      metadata: {
+        display: { tool_states: {}, orphaned_tools: [], linked_permissions: { req_2: 'toolu_perm_2' } }
+      }
+    }))
+
+    // Both links must have survived — resolved indirectly through the public
+    // handlePermissionResponse() API, since permissionToToolMap itself is internal.
+    store.handlePermissionResponse('sess-1', { request_id: 'req_1', decision: 'allow' })
+    store.handlePermissionResponse('sess-1', { request_id: 'req_2', decision: 'deny' })
+
+    const toolCalls = store.toolCallsBySession.get('sess-1')
+    expect(toolCalls.find(tc => tc.id === 'toolu_perm_1').status).toBe('executing')
+    expect(toolCalls.find(tc => tc.id === 'toolu_perm_2').status).toBe('completed')
+  })
 })
 
 describe('openPermissionsForSession (#1746 stage: permissions)', () => {

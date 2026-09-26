@@ -498,6 +498,13 @@ class MockClaudeSDK:
         else:
             self.message_callback = None
 
+        # Issue #2026: forwarded to the shadow ClaudeSDK _start_raw_replay() builds,
+        # so raw-mode fixture replay also computes/persists `display` — otherwise
+        # silently absorbed and dropped by **kwargs like every other ignored
+        # ClaudeSDK-only parameter, and the shadow instance would use ClaudeSDK's
+        # own default of None (no display_hook at all).
+        self.display_hook = kwargs.get("display_hook")
+
         # Compatibility attributes that ClaudeSDK has
         config = kwargs.get("config")
         if config is not None:
@@ -722,6 +729,7 @@ class MockClaudeSDK:
             working_directory=str(self.working_directory),
             storage_manager=self.storage_manager,
             message_callback=self._raw_message_callback,
+            display_hook=self.display_hook,
             error_callback=self.error_callback,
         )
         for sdk_message in raw_replay.messages:

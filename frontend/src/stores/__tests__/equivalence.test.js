@@ -138,35 +138,38 @@ async function replayRestPath(fixture) {
 // fixtures below are expected to diverge again for exactly #2002's original reason
 // until #2026 lands.
 //
-// mock-sdk-synthetic (T1's builder-regenerable fixture) independently reproduces the
-// same divergence: its rest_history.json is built by reprocessing the real stored
-// messages.jsonl through the SAME real _convert_stored_message_to_websocket() method
-// (see generate_synthetic_fixture.py's _reconstruct_rest_history_messages() —
-// deliberately NOT built from the live path's own accumulator, which would make this
-// check tautological and prove nothing about the harness's ability to catch a genuine
-// divergence). Confirming the same bug shows up on synthetic data too is useful
-// evidence #2002 is a systemic backend gap, not an artifact of one real recording — not
-// a reason to weaken this harness.
+// mock-sdk-synthetic (T1's builder-regenerable fixture) independently reproduced the
+// same divergence prior to #2026 (its rest_history.json is built by reprocessing the
+// real stored messages.jsonl through the SAME real _convert_stored_message_to_
+// websocket() method — see generate_synthetic_fixture.py's
+// _reconstruct_rest_history_messages() — deliberately NOT built from the live path's
+// own accumulator, which would make this check tautological). #2026 closed the gap
+// this method causes (Part A's content/metadata synthesis, plus persisting the
+// live-computed `display` value instead of never storing it at all) without
+// reintroducing #2006's quadratic replay-at-read-time — see #2026's Risk Analysis for
+// the structural argument for why replay-at-read-time was the wrong shape regardless
+// of caching. This fixture now converges and is removed from the map below; confirming
+// that on regenerable synthetic data (not just by inspection) is what makes this
+// removal trustworthy rather than asserted.
 //
-// 2026-09-23-primary has a second, additive reason it can never converge even after
-// #2026 re-fixes #2002: its raw_log.jsonl/rest_history.json are static files captured
-// once against the real Anthropic API (owner-only-regenerable; see provenance.json),
-// frozen before #2007's live-path fixes existed — they still literally contain a
-// captured interrupt_success event, un-stored stderr lines, and display.tool_states ==
-// {} on every captured live message from the old no-op projection. No code change, now
-// or later, can retroactively alter what's already captured in this file; closing that
-// part of the gap requires a live re-capture against real API credentials (owner-gated,
-// not filed as a separate issue).
+// 2026-09-23-primary has a second, independent reason it can never converge even
+// after #2026 fixes #2002: its raw_log.jsonl/rest_history.json are static files
+// captured once against the real Anthropic API (owner-only-regenerable; see
+// provenance.json), frozen before #2007's live-path fixes existed — they still
+// literally contain a captured interrupt_success event, un-stored stderr lines, and
+// display.tool_states == {} on every captured live message from the old no-op
+// projection. No code change, now or later, can retroactively alter what's already
+// captured in this file; closing that part of the gap requires a live re-capture
+// against real API credentials (owner-gated, not filed as a separate issue).
 //
-// A normalizer permissive enough to hide any of this would also hide a real regression,
-// defeating AC2's purpose — so both fixtures are captured as it.fails() expected
-// failures, naming the fixture and citing the relevant issue, rather than silently
-// skipped or normalized away. it.fails() means: if either starts passing, the suite
-// FAILS until someone removes that fixture's entry here — the test can't silently go
-// stale, and this file is the single place to update when that happens.
+// A normalizer permissive enough to hide this would also hide a real regression,
+// defeating AC2's purpose — so this fixture stays captured as an it.fails() expected
+// failure, naming the fixture and citing the relevant issue, rather than silently
+// skipped or normalized away. it.fails() means: if it starts passing, the suite FAILS
+// until someone removes its entry here — the test can't silently go stale, and this
+// file is the single place to update when that happens.
 const KNOWN_DIVERGENT_FIXTURES = new Map([
-  ['2026-09-23-primary', 'issue #2002 (reopened by #2028) + frozen pre-#2007 capture — see comment above'],
-  ['mock-sdk-synthetic', 'issue #2002 (reopened by #2028) — see comment above'],
+  ['2026-09-23-primary', 'pre-#2007 frozen real-API capture, owner-gated re-recording — see comment above'],
 ])
 
 describe('fixture equivalence — live event path vs. REST reload path (issue #1999, AC1/AC2)', () => {

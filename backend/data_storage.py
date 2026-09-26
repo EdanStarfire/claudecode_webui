@@ -5,6 +5,7 @@ Handles persistent storage of session data including activity logs,
 message history, and state persistence.
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -92,8 +93,25 @@ class DataStorageManager:
             if not self.messages_file.exists():
                 return messages
 
-            with open(self.messages_file, encoding='utf-8') as f:
-                lines = f.readlines()
+            # Issue #2026 (AC3 hardening): read_messages() pays O(total file size)
+            # I/O on every call (reads the whole file before slicing to the
+            # requested page) — not the dominant cost per #2026's own incident data,
+            # but a real, if currently small, synchronous slice on the event loop.
+            # asyncio.to_thread ensures this file read can never itself become a
+            # blocking slice as sessions grow past what's been load-tested so far.
+            #
+            # Split on '\n' only — NOT str.splitlines(), which also breaks on
+            # U+2028/U+2029/U+0085/etc. append_message() writes with
+            # ensure_ascii=False, so a stored message whose content contains one of
+            # those characters verbatim would have splitlines() fragment that single
+            # JSON record into multiple invalid-JSON pieces (silently dropped by the
+            # per-line try/except below) and shift every subsequent line's
+            # offset/limit-based page index. The old `f.readlines()` this replaces
+            # only ever split on '\n' (text-mode universal-newline translation
+            # already normalizes '\r\n'/'\r' to '\n' before this point, in both the
+            # old and new code), so '\n'-only splitting is the faithful equivalent.
+            text = await asyncio.to_thread(self.messages_file.read_text, encoding='utf-8')
+            lines = text.split('\n')
 
             # Apply offset and limit
             start_idx = offset
