@@ -48,7 +48,8 @@ def reset_logging():
     logger_names = [
         'polling', 'polling_verbose', 'sdk_debug',
         'coordinator', 'storage', 'parser', 'error_handler',
-        'session_manager', 'legion', 'template_manager', 'client_debug'
+        'session_manager', 'legion', 'template_manager', 'client_debug',
+        'src.backend_supervisor',
     ]
     for name in logger_names:
         logger = logging.getLogger(name)
@@ -208,7 +209,8 @@ class TestIndividualDebugFlags:
         configure_logging(debug_polling=True, log_dir=temp_log_dir)
 
         poll_logger = logging.getLogger('polling')
-        # Should have: file handler + console + error.log + console error
+        # Should have: file handler + error.log + console error (issue #2027:
+        # category DEBUG/INFO content is no longer separately console-mirrored)
         assert len(poll_logger.handlers) >= 3
 
     def test_debug_sdk_flag(self, temp_log_dir):
@@ -259,6 +261,66 @@ class TestIndividualDebugFlags:
 
         assert len(logging.getLogger('oauth').handlers) >= 3
         assert len(logging.getLogger('mcp_shared').handlers) >= 3
+
+
+class TestConsoleCategoryDedup:
+    """Issue #2027: category loggers no longer console-mirror their own
+    DEBUG/INFO content — only ERROR+ still reaches the console, via the
+    always-attached, ERROR-level console_error_handler."""
+
+    def test_enabled_category_has_no_console_handler_for_own_content(self, temp_log_dir):
+        configure_logging(debug_all=True, log_dir=temp_log_dir)
+
+        for name in ('polling', 'sdk_debug', 'storage', 'coordinator'):
+            logger = logging.getLogger(name)
+            non_error_stream_handlers = [
+                h for h in logger.handlers
+                if isinstance(h, logging.StreamHandler)
+                and not isinstance(h, logging.handlers.RotatingFileHandler)
+                and h.level != logging.ERROR
+            ]
+            assert non_error_stream_handlers == [], (
+                f"{name} logger must not console-mirror its own DEBUG/INFO content"
+            )
+
+    def test_coordinator_console_handler_is_error_only(self, temp_log_dir):
+        """Coordinator is always-enabled (unlike other categories, no debug flag
+        gates it) — confirm its console handler is now ERROR-only too."""
+        configure_logging(log_dir=temp_log_dir)
+
+        coordinator_logger = logging.getLogger('coordinator')
+        stream_handlers = [
+            h for h in coordinator_logger.handlers
+            if isinstance(h, logging.StreamHandler)
+            and not isinstance(h, logging.handlers.RotatingFileHandler)
+        ]
+        assert all(h.level == logging.ERROR for h in stream_handlers)
+
+
+class TestSupervisorLifecycleLogging:
+    """Issue #2027 AC4: src.backend_supervisor's own logger must reach the
+    console unconditionally, regardless of any --debug-* flag."""
+
+    def test_supervisor_logger_has_always_on_console_handler(self, temp_log_dir):
+        configure_logging(log_dir=temp_log_dir)
+
+        supervisor_logger = logging.getLogger('src.backend_supervisor')
+        assert supervisor_logger.getEffectiveLevel() <= logging.INFO
+        stream_handlers = [
+            h for h in supervisor_logger.handlers
+            if isinstance(h, logging.StreamHandler)
+            and not isinstance(h, logging.handlers.RotatingFileHandler)
+        ]
+        assert any(h.level == logging.INFO for h in stream_handlers)
+
+    def test_supervisor_logger_error_reaches_error_log(self, temp_log_dir):
+        configure_logging(log_dir=temp_log_dir)
+
+        supervisor_logger = logging.getLogger('src.backend_supervisor')
+        supervisor_logger.error('Backend subprocess exited unexpectedly (code=-9 signal=SIGKILL)')
+
+        error_log = Path(temp_log_dir) / 'error.log'
+        assert 'code=-9 signal=SIGKILL' in error_log.read_text()
 
 
 class TestLogFileCreation:
