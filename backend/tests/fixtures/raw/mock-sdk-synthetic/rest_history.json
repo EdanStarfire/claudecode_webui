@@ -3,7 +3,7 @@
     {
       "type": "assistant",
       "content": "I'll read that file for you.",
-      "timestamp": 1790172732.0788023,
+      "timestamp": 1790383292.1211548,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "has_tool_uses": true,
@@ -17,12 +17,12 @@
           }
         ]
       },
-      "message_id": "78e23ad4-ed29-4b30-9681-3f2692a0d3b6"
+      "message_id": "821054ef-7d80-4a36-af41-5bc72e79190a"
     },
     {
       "type": "user",
       "content": "",
-      "timestamp": 1790172732.0790322,
+      "timestamp": 1790383292.1214275,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "has_tool_results": true,
@@ -34,12 +34,12 @@
           }
         ]
       },
-      "message_id": "29aa5efb-da46-41bf-9026-9106701b1778"
+      "message_id": "73b332dc-8504-481f-bc49-54c2b058899a"
     },
     {
       "type": "system",
       "content": "Agent spawned: Explore the repository structure",
-      "timestamp": 1790172732.0791671,
+      "timestamp": 1790383292.121607,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "subtype": "task_started",
@@ -55,12 +55,12 @@
         "tool_use_id": null
       },
       "subtype": "task_started",
-      "message_id": "76f2abe8-7309-4034-9e0d-65c23a95540b"
+      "message_id": "19b2ce83-425f-43ac-9715-380602314dcc"
     },
     {
       "type": "system",
       "content": "Agent progress: Reading files in src/ [Read]",
-      "timestamp": 1790172732.0792754,
+      "timestamp": 1790383292.1217709,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "subtype": "task_progress",
@@ -80,12 +80,12 @@
         }
       },
       "subtype": "task_progress",
-      "message_id": "cd2a714d-8e56-4461-83b9-b6115192c7de"
+      "message_id": "2e86f6ab-f40e-4436-b961-9ad98b2af95c"
     },
     {
       "type": "system",
       "content": "Agent completed: Explored the repository structure and summarized key directories.",
-      "timestamp": 1790172732.0794222,
+      "timestamp": 1790383292.121909,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "subtype": "task_notification",
@@ -107,20 +107,20 @@
         }
       },
       "subtype": "task_notification",
-      "message_id": "96225283-310c-4250-935e-1462122c18ea"
+      "message_id": "2371d95c-10ea-47d8-8036-21d2e312768c"
     },
     {
       "type": "assistant",
       "content": "Welcome back \u2014 resuming where we left off.",
-      "timestamp": 1790172732.0795705,
+      "timestamp": 1790383292.122091,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {},
-      "message_id": "13ad2c39-8f3c-4ac6-a07a-3cc3293a2d23"
+      "message_id": "782964a2-d71d-40d7-bbdc-cf9513f9dbc2"
     },
     {
       "type": "result",
       "content": "",
-      "timestamp": 1790172732.0797,
+      "timestamp": 1790383292.1222167,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "subtype": "success",
@@ -136,7 +136,7 @@
         "deferred_tool_use": null
       },
       "subtype": "success",
-      "message_id": "4f616b1e-1370-432e-8478-4f6b6b3f4776"
+      "message_id": "f088d4cb-ae77-4e7f-98f6-23f45f9ac60b"
     }
   ],
   "total_count": 7,

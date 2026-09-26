@@ -2946,9 +2946,10 @@ class SessionCoordinator:
                 self.mark_session_tools_interrupted(session_id)
 
                 # Send interrupt system message via callback system (following client_launched pattern)
+                # Issue #2007: this call's dispatch through _create_message_callback() also
+                # resets is_processing = False (relocated from the removed interrupt_success
+                # message onto this subtype's dispatch branch).
                 await self._send_interrupt_message(session_id)
-
-                # Note: Processing state will be reset by the SDK's interrupt handling in the message processing loop
             else:
                 logger.warning(f"Failed to initiate interrupt for session {session_id}")
                 # Reset processing state if interrupt initiation failed
@@ -5154,12 +5155,26 @@ class SessionCoordinator:
                 display_metadata = None
                 try:
                     projection = self._get_display_projection(session_id)
+                    # Issue #2007: parsed_message.content is always a flattened string, so
+                    # StoredMessage.get_tool_uses()/get_tool_results() (which gate on
+                    # isinstance(content, list)) always returned [] here, making this
+                    # projection a no-op. Feed the real content-block list instead.
+                    projection_content = parsed_message.content
+                    if parsed_message.metadata:
+                        if parsed_message.type.value == 'assistant':
+                            tool_uses = parsed_message.metadata.get('tool_uses')
+                            if tool_uses:
+                                projection_content = tool_uses
+                        elif parsed_message.type.value == 'user':
+                            tool_results = parsed_message.metadata.get('tool_results')
+                            if tool_results:
+                                projection_content = tool_results
                     # Convert to StoredMessage format for projection processing
                     legacy_dict = {
                         'type': parsed_message.type.value,
                         'timestamp': parsed_message.timestamp,
                         'session_id': session_id,
-                        'content': parsed_message.content,
+                        'content': projection_content,
                     }
                     if parsed_message.metadata:
                         legacy_dict.update(parsed_message.metadata)
@@ -5397,8 +5412,19 @@ class SessionCoordinator:
                                 self._subagent_usage_by_session.get(session_id), _sub_usage
                             )
 
-                # Reset processing state on interrupt_success
-                elif parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'interrupt_success':
+                # Issue #2007: interrupt_success was removed (redundant with the already-
+                # stored 'interrupt' message sent by _send_interrupt_message()); its
+                # is_processing reset is relocated onto this subtype instead, since
+                # _send_interrupt_message() fires under the exact same condition
+                # interrupt_success used to (sdk.interrupt_session() returned True).
+                # Known narrow gap: _send_interrupt_message() wraps its store-then-callback
+                # sequence in one try/except, so if the storage write fails AND its own
+                # internal fallback also fails, this branch never runs and is_processing
+                # stays stuck True. This is not a new risk shape — it's the same one every
+                # other _store_processed_message()-then-callback sender in this file already
+                # has (client_launched, mcp_server_degraded, session_failed) — just newly
+                # applicable here since the reset used to be delivered independent of storage.
+                elif parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'interrupt':
                     try:
                         await self.session_manager.update_processing_state(session_id, False)
                         coord_logger.info(f"Reset processing state for session {session_id} after interrupt")
@@ -5557,6 +5583,7 @@ class SessionCoordinator:
                     "session_id": session_id,
                     "timestamp": get_unix_timestamp()
                 }
+                await self._store_processed_message(session_id, stderr_message)
                 await message_callback(stderr_message)
             except Exception:
                 logger.exception(f"Error in stderr callback for session {session_id}")

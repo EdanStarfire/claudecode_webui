@@ -1312,7 +1312,33 @@ export const useMessageStore = defineStore('message', () => {
               'failed': 'error',
               'orphaned': 'completed'  // Orphaned shows as completed with special styling
             }
-            toolCall.status = stateToStatus[info.state] || info.state
+            const newStatus = stateToStatus[info.state] || info.state
+
+            // Issue #2007: DisplayProjection's per-session snapshot is cumulative
+            // (every tool ever seen, not a delta) and only ever tracks
+            // pending -> completed/failed on the live path — it never models the
+            // live awaiting_permission/running states the dedicated ToolCallUpdate
+            // pipeline (#324, see handleToolCall() above) already reports. Without
+            // this guard, any later message in the session re-attaches a stale
+            // 'pending' entry for a still-in-progress tool here, silently
+            // reverting its status — the same class of regression
+            // handleToolCall()'s own terminal-status guard exists to prevent,
+            // extended to a full ordering (handleToolCall()'s binary
+            // terminal/non-terminal check doesn't cover executing/
+            // permission_required regressing back to pending, which this path
+            // can produce since DisplayProjection never reports those states).
+            const statusRank = {
+              pending: 0,
+              permission_required: 1,
+              executing: 1,
+              completed: 2,
+              error: 2,
+            }
+            const existingRank = statusRank[toolCall.status] ?? 0
+            const newRank = statusRank[newStatus] ?? 0
+            if (newRank >= existingRank) {
+              toolCall.status = newStatus
+            }
             toolCall.backendState = info  // Store full backend state for reference
           }
         }

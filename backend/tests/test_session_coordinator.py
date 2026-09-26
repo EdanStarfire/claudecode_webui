@@ -1283,19 +1283,23 @@ class TestIssue1002IsProcessingStuckDuringProcessing:
     async def test_interrupt_success_resets_processing_state(
         self, temp_coordinator, sample_session_config
     ):
-        """interrupt_success must reset is_processing to False."""
+        """Issue #2007: interrupt_success was removed; its is_processing reset was
+        relocated onto the already-stored 'interrupt' message's dispatch branch
+        (subtype 'interrupt', matching _send_interrupt_message()'s real payload
+        shape). This rewritten test proves the relocated trigger still resets
+        is_processing, preserving #1002/#1029/#748's original regression coverage."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
         await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
 
         await coordinator.session_manager.update_processing_state(session_id, True)
 
-        # Simulate interrupt_success message arriving via the message callback
+        # Simulate the stored 'interrupt' message arriving via the message callback
         callback = coordinator._create_message_callback(session_id)
         await callback({
             "type": "system",
-            "content": "Session interrupted successfully",
-            "subtype": "interrupt_success",
+            "content": "User Interrupted Processing",
+            "subtype": "interrupt",
             "session_id": session_id,
             "timestamp": 1234567890.0,
         })
@@ -1307,19 +1311,22 @@ class TestIssue1002IsProcessingStuckDuringProcessing:
     async def test_pivot_interrupt_then_send_processing_state(
         self, temp_coordinator, sample_session_config
     ):
-        """PIVOT: after interrupt clears is_processing, a new send_message sets it True."""
+        """PIVOT: after interrupt clears is_processing, a new send_message sets it True.
+
+        Issue #2007: simulates the stored 'interrupt' message (subtype 'interrupt')
+        rather than the removed interrupt_success — see test above for why."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
         await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
 
         await coordinator.session_manager.update_processing_state(session_id, True)
 
-        # Simulate interrupt_success — is_processing should become False
+        # Simulate the stored 'interrupt' message — is_processing should become False
         callback = coordinator._create_message_callback(session_id)
         await callback({
             "type": "system",
-            "content": "Session interrupted successfully",
-            "subtype": "interrupt_success",
+            "content": "User Interrupted Processing",
+            "subtype": "interrupt",
             "session_id": session_id,
             "timestamp": 1234567890.0,
         })
@@ -3682,6 +3689,156 @@ class TestIssue1837StderrCallbackClassification:
         forwarded = mock_message_callback.call_args[0][0]
         assert forwarded["subtype"] == "stderr"
         assert forwarded["content"] == "#5 [2/8] RUN pip install -r requirements.txt"
+
+    @pytest.mark.asyncio
+    async def test_failure_line_is_stored(self, temp_coordinator, sample_session_config):
+        """Issue #2007: failure-classified stderr lines must now be persisted to
+        messages.jsonl, not just broadcast live — previously they bypassed storage
+        entirely despite the method's own docstring documenting persistence as the
+        original intent (issue #517)."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        stderr_callback = coordinator._create_stderr_callback(session_id)
+        await stderr_callback("Container exited with code 137")
+
+        storage_manager = coordinator._storage_managers[session_id]
+        messages = await storage_manager.read_messages()
+        stderr_messages = [m for m in messages if m.get("metadata", {}).get("subtype") == "stderr"]
+        assert len(stderr_messages) == 1
+        assert stderr_messages[0]["content"] == "Container exited with code 137"
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_line_is_stored(self, temp_coordinator, sample_session_config):
+        """Issue #2007: ambiguous-classified stderr lines must also be persisted,
+        matching the failure-classification case."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        stderr_callback = coordinator._create_stderr_callback(session_id)
+        await stderr_callback("#5 [2/8] RUN pip install -r requirements.txt")
+
+        storage_manager = coordinator._storage_managers[session_id]
+        messages = await storage_manager.read_messages()
+        stderr_messages = [m for m in messages if m.get("metadata", {}).get("subtype") == "stderr"]
+        assert len(stderr_messages) == 1
+
+    @pytest.mark.asyncio
+    async def test_routine_line_not_stored(self, temp_coordinator, sample_session_config):
+        """Routine-classified lines must still never reach storage (issue #871/#1837
+        behavior is unchanged by the #2007 storage fix for failure/ambiguous)."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        stderr_callback = coordinator._create_stderr_callback(session_id)
+        await stderr_callback("#17 DONE 6.9s")
+
+        storage_manager = coordinator._storage_managers[session_id]
+        messages = await storage_manager.read_messages()
+        stderr_messages = [m for m in messages if m.get("metadata", {}).get("subtype") == "stderr"]
+        assert len(stderr_messages) == 0
+
+
+class TestIssue2007DisplayProjectionContentBlocks:
+    """Issue #2007 (Gap B): _create_message_callback() fed DisplayProjection a
+    flattened content string (always `str | None`), so StoredMessage.get_tool_uses()/
+    get_tool_results() (which gate on isinstance(content, list)) always returned [],
+    making the projection a structural no-op for ordinary messages. Fixed by feeding
+    the real tool_uses/tool_results content-block list instead."""
+
+    @pytest.mark.asyncio
+    async def test_tool_use_then_result_transitions_pending_to_completed(
+        self, temp_coordinator, sample_session_config
+    ):
+        from claude_agent_sdk import AssistantMessage, UserMessage
+        from claude_agent_sdk.types import ToolResultBlock, ToolUseBlock
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        cb_inner = coordinator._create_message_callback(session_id)
+
+        received = []
+
+        async def subscriber(sid, msg):
+            received.append(msg)
+
+        coordinator.add_message_callback(session_id, subscriber)
+
+        tool_use_id = "toolu_2007_test"
+
+        assistant_msg = {
+            "type": "assistant",
+            "sdk_message": AssistantMessage(
+                content=[ToolUseBlock(id=tool_use_id, name="Read", input={"file_path": "/x.py"})],
+                model="claude-3-5-sonnet-20241022",
+            ),
+            "session_id": session_id,
+            "timestamp": 1.0,
+        }
+        await cb_inner(assistant_msg)
+
+        assert len(received) == 1
+        tool_states = received[0].metadata["display"]["tool_states"]
+        assert tool_states[tool_use_id]["state"] == "pending"
+
+        user_msg = {
+            "type": "user",
+            "sdk_message": UserMessage(
+                content=[ToolResultBlock(tool_use_id=tool_use_id, content="file contents", is_error=False)],
+            ),
+            "session_id": session_id,
+            "timestamp": 2.0,
+        }
+        await cb_inner(user_msg)
+
+        assert len(received) == 2
+        tool_states = received[1].metadata["display"]["tool_states"]
+        assert tool_states[tool_use_id]["state"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_tool_use_then_error_result_transitions_to_failed(
+        self, temp_coordinator, sample_session_config
+    ):
+        from claude_agent_sdk import AssistantMessage, UserMessage
+        from claude_agent_sdk.types import ToolResultBlock, ToolUseBlock
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        cb_inner = coordinator._create_message_callback(session_id)
+
+        received = []
+
+        async def subscriber(sid, msg):
+            received.append(msg)
+
+        coordinator.add_message_callback(session_id, subscriber)
+
+        tool_use_id = "toolu_2007_test_fail"
+
+        assistant_msg = {
+            "type": "assistant",
+            "sdk_message": AssistantMessage(
+                content=[ToolUseBlock(id=tool_use_id, name="Bash", input={"command": "false"})],
+                model="claude-3-5-sonnet-20241022",
+            ),
+            "session_id": session_id,
+            "timestamp": 1.0,
+        }
+        await cb_inner(assistant_msg)
+
+        user_msg = {
+            "type": "user",
+            "sdk_message": UserMessage(
+                content=[ToolResultBlock(tool_use_id=tool_use_id, content="command failed", is_error=True)],
+            ),
+            "session_id": session_id,
+            "timestamp": 2.0,
+        }
+        await cb_inner(user_msg)
+
+        assert len(received) == 2
+        tool_states = received[1].metadata["display"]["tool_states"]
+        assert tool_states[tool_use_id]["state"] == "failed"
 
 
 class TestIssue1902ResultErrorHandling:
