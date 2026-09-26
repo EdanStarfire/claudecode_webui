@@ -522,6 +522,17 @@ class ClaudeSDK:
                 except Exception:
                     logger.exception(f"Recorder failed to capture interrupt for session {self.session_id}")
 
+            # Notify through callback
+            if self.message_callback:
+                await self._safe_callback(self.message_callback, {
+                    "type": "system",
+                    "content": "Session interrupted successfully",
+                    "subtype": "interrupt_success",
+                    "session_id": self.session_id,
+                    "timestamp": time.time(),
+                    "message_id": str(uuid.uuid4()),
+                })
+
             return True
 
         except Exception as e:
@@ -897,6 +908,27 @@ class ClaudeSDK:
                             self._session_health_checks["total_queries_sent"] += 1
                             self._session_health_checks["last_successful_query"] = time.time()
                             sdk_logger.debug("Query sent to SDK, responses will be handled by global consumer")
+
+                        elif message_type == "interrupt_request":
+                            # Handle interrupt request directly
+                            sdk_logger.info(f"INTERRUPT RECEIVED for session {self.session_id}")
+                            try:
+                                await client.interrupt()
+                                sdk_logger.info(f"INTERRUPT SENT successfully to SDK for session {self.session_id}")
+
+                                # Notify through callback
+                                if self.message_callback:
+                                    await self._safe_callback(self.message_callback, {
+                                        "type": "system",
+                                        "content": "Session interrupted successfully",
+                                        "subtype": "interrupt_success",
+                                        "session_id": self.session_id,
+                                        "timestamp": time.time(),
+                                        "message_id": str(uuid.uuid4()),
+                                    })
+                            except Exception:
+                                logger.exception("Failed to send interrupt")
+
 
                         self._message_queue.task_done()
 

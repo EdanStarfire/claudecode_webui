@@ -14,18 +14,11 @@ Covers:
   their live-delivered and stored copies (Story 1 acceptance criteria).
 - `_store_processed_message` mints an id even when no storage manager is
   registered for the session, so the live dict is never identity-less.
+- `interrupt_success` (claude_sdk.py, two send sites — direct-interrupt path and
+  the queued interrupt_request path) carries its own freshly-minted id, per the
+  confirmed Option A decision: no stored counterpart is added for this subtype.
 - The "no record_id" safeguard still fires for a genuinely identity-less message
   (Story 2 acceptance criteria / Test Scenario 4).
-
-Superseded by issue #2007: `interrupt_success` was removed entirely (both the
-reachable direct-interrupt send site and a second, confirmed-dead queue-driven
-send site), rather than being left permanently unstored per this file's original
-"confirmed Option A" decision. Deletion satisfies the same constraint Option A
-was solving for (avoid duplicating the already-stored `interrupt` message on
-every interrupt) by a different route: the stored `interrupt` message becomes
-the sole live+reload confirmation. See `TestIssue1972InterruptSuccessRecordIdentity`
-in `test_claude_sdk.py` (removed by #2007 — it tested message constructions that
-no longer exist).
 """
 
 from __future__ import annotations
