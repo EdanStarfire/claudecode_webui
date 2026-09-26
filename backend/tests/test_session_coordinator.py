@@ -469,65 +469,6 @@ class TestSessionCoordinator:
         all_contents = [m["content"] for page in (page1, page2, page3) for m in page["messages"]]
         assert all_contents == [f"message-{i}" for i in range(5)]
 
-    @pytest.mark.asyncio
-    async def test_issue_2002_display_projection_survives_pagination(
-        self, temp_coordinator, sample_session_config
-    ):
-        """Regression test for #2002 (Gap 2b): a tool_use/tool_result pair that
-        completes on an earlier page must still show as completed (not pending)
-        when a later page is fetched. `display` (DisplayProjection) is never
-        persisted, so it's reconstructed at reload time from a fresh projection
-        instance per request — this only works if that instance first replays
-        the discarded prefix [0, offset), not just the requested page's own
-        slice, since a naive per-page-only replay would never see the tool_use/
-        tool_result pair that established the tool's lifecycle.
-        """
-        coordinator = temp_coordinator
-        session_id = await coordinator.create_session(**sample_session_config)
-
-        storage = coordinator._storage_managers[session_id]
-
-        # Page 1 (indices 0-1): a tool_use immediately completed by its
-        # tool_result, stored in the real _type/data StoredMessage format
-        # (unlike the #1747 test above, which uses the legacy dict format).
-        await storage.append_message({
-            "_type": "AssistantMessage",
-            "timestamp": 1.0,
-            "session_id": session_id,
-            "data": {
-                "content": [
-                    {"type": "tool_use", "id": "tool-1", "name": "Bash", "input": {"command": "ls"}}
-                ],
-            },
-        })
-        await storage.append_message({
-            "_type": "UserMessage",
-            "timestamp": 2.0,
-            "session_id": session_id,
-            "data": {
-                "content": [
-                    {"type": "tool_result", "tool_use_id": "tool-1", "content": "ok", "is_error": False}
-                ],
-            },
-        })
-        # Page 2 (index 2): a message uninvolved in the tool lifecycle itself —
-        # its own display should still reflect tool-1 as already completed.
-        await storage.append_message({
-            "_type": "SystemMessage",
-            "timestamp": 3.0,
-            "session_id": session_id,
-            "data": {"subtype": "status", "data": {}},
-        })
-
-        # Fetch page 2 only — offset lands after both the tool_use and its
-        # completing tool_result, which are never re-requested.
-        page2 = await coordinator.get_session_messages(session_id, limit=1, offset=2)
-        assert page2["total_count"] == 3
-        assert len(page2["messages"]) == 1
-
-        display = page2["messages"][0]["metadata"]["display"]
-        assert display["tool_states"]["tool-1"]["state"] == "completed"
-
     def test_add_message_callback(self, temp_coordinator):
         """Test adding message callback."""
         coordinator = temp_coordinator
@@ -2559,12 +2500,7 @@ class TestConvertStoredMessageToWebsocket:
                 "subtype": "task_updated",
                 "task_id": "task-xyz",
                 "status": "completed",
-                # Issue #2002: TaskUpdatedMessage carries no tool_use_id field at
-                # all (unlike the other three Task* message types) — its real
-                # dataclass fields are subtype/data/task_id/patch/status/
-                # session_id/uuid. session_id maps to metadata.task_session_id,
-                # matching TaskUpdatedHandler (message_parser.py).
-                "session_id": "sess-updated",
+                "tool_use_id": "toolu_aaa",
                 "uuid": "uuid-456",
             },
         }
@@ -2573,7 +2509,7 @@ class TestConvertStoredMessageToWebsocket:
         meta = result["metadata"]
         assert meta["task_id"] == "task-xyz"
         assert meta["status"] == "completed"
-        assert meta["task_session_id"] == "sess-updated"
+        assert meta["tool_use_id"] == "toolu_aaa"
         assert meta["uuid"] == "uuid-456"
 
     def test_issue_1657_task_started_unchanged(self, coordinator):
@@ -2663,11 +2599,7 @@ class TestConvertStoredMessageToWebsocket:
         }
         result = coordinator._convert_stored_message_to_websocket(stored)
         assert result is not None
-        # Issue #2002 (Gap 1): default content parity — a status SystemMessage
-        # without permissionMode doesn't synthesize its own content, so it now
-        # falls back to "System message" like the live SDK-object path does,
-        # instead of staying blank.
-        assert result["content"] == "System message"
+        assert result["content"] == ""
         assert result["metadata"]["subtype"] == "status"
 
     def test_issue_1756_api_retry_synthesizes_content(self, coordinator):

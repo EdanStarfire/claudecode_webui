@@ -29,14 +29,10 @@ minimally-constructed instance (`object.__new__`) since that method needs no
 other coordinator state. This is deliberate, not incidental: an earlier version
 of this script built `rest_history.json` from the same accumulator the live
 path used, which made the equivalence harness's check against this fixture
-tautological. Before issue #2002, this fixture independently reproduced #2002's
-divergence too (see `frontend/src/stores/__tests__/equivalence.test.js`'s git
-history) — confirmatory evidence the bug was systemic, not an artifact of one
-real recording. Since #2002 fixed `_convert_stored_message_to_websocket()`,
-this fixture now converges and is no longer listed in
-`KNOWN_DIVERGENT_FIXTURES` — note this script still doesn't attach `display`
-(DisplayProjection) to any message, since it bypasses `get_session_messages()`
-entirely, so it doesn't exercise #2002's Gap 2/2b at all, only Gap 1.
+tautological. As a direct consequence, this fixture is expected to reproduce
+issue #2002's divergence too (see `frontend/src/stores/__tests__/
+equivalence.test.js`'s `KNOWN_DIVERGENT_FIXTURES`) — that's confirmatory
+evidence the bug is systemic, not an artifact of one real recording.
 
 Usage:
     uv run python -m backend.tests.fixtures.generate_synthetic_fixture
@@ -262,13 +258,10 @@ def _reconstruct_rest_history_messages(stored_records: list[dict[str, Any]]) -> 
     equivalence check tautological (see issue #1999 PR discussion) — it could
     prove the replay mechanics ran without crashing, never that the harness
     catches a genuine live-vs-reload divergence. Reprocessing the real stored
-    JSONL rows through the real reconstruction method closes that gap — before
-    issue #2002 fixed it, this independently reproduced that same tracked bug
-    on synthetic data too, confirming it was a systemic backend gap, not an
-    artifact of one real recording. Calling _convert_stored_message_to_
-    websocket() directly here (bypassing get_session_messages()) also means
-    this fixture never exercises #2002's DisplayProjection reconstruction
-    (Gap 2/2b) — only its field-parity fixes (Gap 1).
+    JSONL rows through the real reconstruction method closes that gap — and,
+    expected per #2002, reproduces that same tracked bug on synthetic data too
+    (sparser content/metadata than the live path), confirming #2002 is a
+    systemic backend gap, not an artifact of one real recording.
     """
     coordinator = object.__new__(SessionCoordinator)
     messages = []
