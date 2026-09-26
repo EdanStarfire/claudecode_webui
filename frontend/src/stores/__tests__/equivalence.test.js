@@ -115,54 +115,58 @@ async function replayRestPath(fixture) {
 // _convert_stored_message_to_websocket() reconstructed messages from stored
 // StoredMessage rows for a REST reload without running them through DisplayProjection
 // or message_parser.py's default-content/default-metadata synthesis the live path
-// always applies. Fixed in issue #2002 (field-parity in
-// _convert_stored_message_to_websocket() plus a request-local DisplayProjection replay
-// — with pagination-prefix replay so tools that completed on an earlier page still
-// show correctly on a later one — in get_session_messages()/get_archive_messages()).
+// always applies — e.g. every "init"-subtype system message reloaded with content:""
+// instead of the live path's synthesized "System message", and dozens of
+// has_*/tool_uses/tool_results/thinking/display/model/usage metadata keys were simply
+// absent rather than explicitly false/empty. Measured against the primary fixture:
+// ~76% of non-tool_call messages differed in `content` on reload, and nearly every
+// message was missing 5-15 metadata keys the live path always sets.
 //
-// mock-sdk-synthetic (independently rebuilt by reprocessing messages.jsonl through the
-// same real _convert_stored_message_to_websocket()) now converges fully and runs
-// through the normal it.each() below.
+// Fixed in issue #2006 (field-parity in _convert_stored_message_to_websocket() plus a
+// request-local DisplayProjection replay — with pagination-prefix replay so tools that
+// completed on an earlier page still showed correctly on a later one — in
+// get_session_messages()/get_archive_messages()). #2006 shipped a production
+// regression: the DisplayProjection prefix replay ran the entire discarded [0, offset)
+// prefix synchronously on the event loop on every paged request, which is quadratic in
+// session length — confirmed in production by issue #2026, where a 22,334-record
+// session froze the Backend for 1-3+ minutes, disconnecting every client. #2006's
+// reload-path additions were reverted in issue #2028 (keeping #2014's independent
+// live-path fixes — stderr storage, interrupt_success removal, DisplayProjection
+// content-block feed — which never depended on the reverted code), restoring #main to
+// a safe-to-run-in-production state while the correct non-quadratic, non-blocking fix
+// that preserves #2006's parity goal is worked on in #2026. This reopens #2002: both
+// fixtures below are expected to diverge again for exactly #2002's original reason
+// until #2026 lands.
 //
-// 2026-09-23-primary still diverges, but no longer for #2002's reason — every field
-// #2002 measured (content synthesis, ~40 metadata keys, tool_results content-block
-// joining, local-command-response unwrapping, etc.) now matches exactly. What was left
-// were two narrower, genuinely separate, pre-existing gaps in the LIVE path itself
-// (not the REST reload path #2002 touches), found by diffing this real fixture's raw
-// captured live events against messages.jsonl:
-//   1. Live-only system messages (interrupt_success; two hook "stderr" events) were
-//      injected directly into _create_message_callback(), bypassing
-//      ClaudeSDK._store_sdk_message() entirely — never written to messages.jsonl at
-//      all, so no reload-time reconstruction could recover them.
-//   2. DisplayProjection was a structural no-op on the live path for ordinary
-//      messages: _create_message_callback() fed it a StoredMessage built from
-//      legacy_to_stored({content: parsed_message.content, ...parsed_message.metadata}),
-//      and StoredMessage.get_tool_uses()/get_tool_results() only ever look at
-//      data["content"] — which there was parsed_message.content, always a
-//      human-readable string, never the real content-block list.
-// Both were live-write/live-callback-pipeline bugs, explicitly out of #2002's scope
-// (see its plan's "Not in scope" section) and orthogonal to each other and to #2002's
-// original finding.
+// mock-sdk-synthetic (T1's builder-regenerable fixture) independently reproduces the
+// same divergence: its rest_history.json is built by reprocessing the real stored
+// messages.jsonl through the SAME real _convert_stored_message_to_websocket() method
+// (see generate_synthetic_fixture.py's _reconstruct_rest_history_messages() —
+// deliberately NOT built from the live path's own accumulator, which would make this
+// check tautological and prove nothing about the harness's ability to catch a genuine
+// divergence). Confirming the same bug shows up on synthetic data too is useful
+// evidence #2002 is a systemic backend gap, not an artifact of one real recording — not
+// a reason to weaken this harness.
 //
-// Fixed in issue #2007: stderr messages classified failure/ambiguous are now stored;
-// interrupt_success is removed entirely (the already-stored "interrupt" message is the
-// sole live+reload confirmation, so there's one fewer message per interrupt, not a
-// stored duplicate); DisplayProjection is now fed the real tool_uses/tool_results
-// content-block list instead of the flattened string.
+// 2026-09-23-primary has a second, additive reason it can never converge even after
+// #2026 re-fixes #2002: its raw_log.jsonl/rest_history.json are static files captured
+// once against the real Anthropic API (owner-only-regenerable; see provenance.json),
+// frozen before #2007's live-path fixes existed — they still literally contain a
+// captured interrupt_success event, un-stored stderr lines, and display.tool_states ==
+// {} on every captured live message from the old no-op projection. No code change, now
+// or later, can retroactively alter what's already captured in this file; closing that
+// part of the gap requires a live re-capture against real API credentials (owner-gated,
+// not filed as a separate issue).
 //
-// This fixture still won't converge, and the exclusion below can't be removed as part
-// of #2007 — 2026-09-23-primary's raw_log.jsonl/rest_history.json are static files
-// captured once against the real Anthropic API (owner-only-regenerable; see
-// provenance.json), frozen before the #2007 fix existed. They still literally contain
-// a captured interrupt_success event and un-stored stderr lines from the old code, and
-// display.tool_states == {} on every captured live message from the old no-op
-// projection — no code change, now or later, can retroactively alter what's already
-// captured in these files. Closing this loop requires a live re-capture of this fixture
-// (or a fresh equivalent) against real API credentials, confirming convergence, and
-// then removing this entry — deliberately out of scope for #2007 (owner-gated
-// follow-up, not filed as a separate issue).
+// A normalizer permissive enough to hide any of this would also hide a real regression,
+// defeating AC2's purpose — so both fixtures are captured as it.fails() expected
+// failures, naming the fixture and citing the relevant issue, rather than silently
+// skipped or normalized away. it.fails() means: if either starts passing, the suite
+// FAILS until someone removes that fixture's entry here — the test can't silently go
+// stale, and this file is the single place to update when that happens.
 const KNOWN_DIVERGENT_FIXTURES = new Map([
-  ['2026-09-23-primary', 'issue #2007 — frozen pre-fix capture; needs live re-capture to converge, see comment above'],
+  ['2026-09-23-primary', 'issue #2002 (reopened by #2028) + frozen pre-#2007 capture — see comment above'],
+  ['mock-sdk-synthetic', 'issue #2002 (reopened by #2028) — see comment above'],
 ])
 
 describe('fixture equivalence — live event path vs. REST reload path (issue #1999, AC1/AC2)', () => {
