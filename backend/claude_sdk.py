@@ -273,6 +273,7 @@ class ClaudeSDK:
         self.effort = config.effort
         self.auto_memory_mode = config.auto_memory_mode
         self.auto_memory_directory = config.auto_memory_directory
+        self.task_tools_mode = config.task_tools_mode
         self.auto_mode_environment = config.auto_mode_environment
         self.auto_mode_allow = config.auto_mode_allow
         self.auto_mode_soft_deny = config.auto_mode_soft_deny
@@ -1322,9 +1323,26 @@ class ClaudeSDK:
         exception — it is emitted unconditionally because the WebUI default
         diverges from CC's own CLI default, and omitting it would silently
         revert to CC's default.
+
+        Issue #2010: CLAUDE_CODE_ENABLE_TASKS and CLAUDE_CODE_ENABLE_TODO_TOOLS are two
+        independent CLI gates, ANDed together by the CLI (task tools are available only
+        when both pass). CLAUDE_CODE_ENABLE_TASKS is a tri-state kill switch: unset/"true"
+        defers to the CLI's own per-model-family allowlist, "false" forces tools off for
+        every model. CLAUDE_CODE_ENABLE_TODO_TOOLS auto-passes for a hardcoded allowlist of
+        older/recognized Claude model families and only consults the env var for models
+        outside that list (which today includes the entire Claude 5 family and any
+        non-Claude model). task_tools_mode controls both together: "default" omits both
+        (defers to the CLI's own gating), "on"/"off" force both to "true"/"false" so the
+        combined gate is overridden uniformly regardless of model family.
         """
-        # Always-on
-        env_vars: dict[str, str] = {"CLAUDE_CODE_ENABLE_TASKS": "true"}
+        env_vars: dict[str, str] = {}
+        if self.task_tools_mode == "on":
+            env_vars["CLAUDE_CODE_ENABLE_TASKS"] = "true"
+            env_vars["CLAUDE_CODE_ENABLE_TODO_TOOLS"] = "true"
+        elif self.task_tools_mode == "off":
+            env_vars["CLAUDE_CODE_ENABLE_TASKS"] = "false"
+            env_vars["CLAUDE_CODE_ENABLE_TODO_TOOLS"] = "false"
+        # "default" (and any unrecognized value): omit both, defer to the CLI's own gating
 
         # Issue #411: Enable Agent Teams when experimental flag is set
         if self.experimental:

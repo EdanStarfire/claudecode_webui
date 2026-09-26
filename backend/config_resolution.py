@@ -56,6 +56,7 @@ PROFILE_AREAS: dict[str, set[str]] = {
     },
     "features": {
         "history_distillation_enabled", "auto_memory_mode", "auto_memory_directory",
+        "task_tools_mode",
         "skill_creating_enabled", "enable_streaming_text",
         "max_subagent_spawn_depth", "extra_env",
         "inject_timestamps_enabled", "timestamp_injection_frequency",

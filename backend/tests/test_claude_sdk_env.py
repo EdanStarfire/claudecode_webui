@@ -44,11 +44,29 @@ def _suppression_off_config() -> AppConfig:
 
 
 class TestResolveEnvVars:
-    def test_enable_tasks_always_set(self):
-        sdk = _make_sdk()
+    def test_task_tools_mode_default_omits_both_vars(self):
+        config = SessionConfig(task_tools_mode="default")
+        sdk = _make_sdk(config=config)
+        with patch("backend.config_manager.load_config", return_value=_suppression_off_config()):
+            env = sdk._resolve_env_vars()
+        assert "CLAUDE_CODE_ENABLE_TASKS" not in env
+        assert "CLAUDE_CODE_ENABLE_TODO_TOOLS" not in env
+
+    def test_task_tools_mode_on_sets_both_true(self):
+        config = SessionConfig(task_tools_mode="on")
+        sdk = _make_sdk(config=config)
         with patch("backend.config_manager.load_config", return_value=_suppression_off_config()):
             env = sdk._resolve_env_vars()
         assert env["CLAUDE_CODE_ENABLE_TASKS"] == "true"
+        assert env["CLAUDE_CODE_ENABLE_TODO_TOOLS"] == "true"
+
+    def test_task_tools_mode_off_sets_both_false(self):
+        config = SessionConfig(task_tools_mode="off")
+        sdk = _make_sdk(config=config)
+        with patch("backend.config_manager.load_config", return_value=_suppression_off_config()):
+            env = sdk._resolve_env_vars()
+        assert env["CLAUDE_CODE_ENABLE_TASKS"] == "false"
+        assert env["CLAUDE_CODE_ENABLE_TODO_TOOLS"] == "false"
 
     def test_global_defaults_applied_to_env_dict(self):
         # Use session config that does not opt back in to anything

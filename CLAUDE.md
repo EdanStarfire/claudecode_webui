@@ -185,6 +185,21 @@ Session config and templates retain their existing override fields:
 For other suppression flags, per-session `extra_env` has the highest priority
 and can set or unset any env var.
 
+## Task Tracking Tools Gating (issue #2010)
+
+`task_tools_mode` on `SessionConfig` (`"default" | "on" | "off"`, default `"default"`) controls
+`CLAUDE_CODE_ENABLE_TASKS` and `CLAUDE_CODE_ENABLE_TODO_TOOLS` together — two independent CLI
+gates, ANDed by the CLI, that must both pass for TodoWrite/Task* tools to be available.
+`CLAUDE_CODE_ENABLE_TASKS` is a tri-state kill switch (unset/`"true"` defers to the CLI's own
+per-model-family allowlist; `"false"` forces tools off for every model).
+`CLAUDE_CODE_ENABLE_TODO_TOOLS` auto-passes for a hardcoded allowlist of older/recognized Claude
+model families and only consults the env var for models outside that list — which as of CLI
+2.1.281 includes the entire Claude 5 family and any non-Claude model. `task_tools_mode="on"`/
+`"off"` force both vars to `"true"`/`"false"` uniformly, overriding the CLI's per-model gating;
+`"default"` omits both and defers entirely to the CLI. Same 3-tier Profile → Template → Session
+cascade as `auto_memory_mode`, resolved in `backend/claude_sdk.py::_resolve_env_vars()`. See the
+issue #2010 investigation notes for the CLI-binary-level trace this is based on.
+
 ## Verifying Configuration
 
 The injected env dict is logged at debug level by `claude_sdk.py` when `--debug-sdk` is enabled.
