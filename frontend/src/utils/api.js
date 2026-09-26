@@ -28,6 +28,24 @@ class APIError extends Error {
   }
 }
 
+// ==================== Request Body Compression (Issue #2029) ====================
+
+// Bodies larger than this get gzip-compressed before sending, when the browser
+// supports CompressionStream (older Safari doesn't — falls back to uncompressed).
+const COMPRESS_REQUEST_THRESHOLD = 8 * 1024
+
+async function gzipEncode(text) {
+  const inputBytes = new TextEncoder().encode(text)
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(inputBytes)
+      controller.close()
+    }
+  }).pipeThrough(new CompressionStream('gzip'))
+  const compressedBuffer = await new Response(stream).arrayBuffer()
+  return new Uint8Array(compressedBuffer)
+}
+
 /**
  * Make an API request
  * @param {string} endpoint - API endpoint path
@@ -43,13 +61,27 @@ async function apiRequest(endpoint, options = {}) {
       authHeaders['Authorization'] = `Bearer ${token}`
     }
 
+    let body = options.body
+    const compressionHeaders = {}
+    if (
+      typeof body === 'string' &&
+      body.length > COMPRESS_REQUEST_THRESHOLD &&
+      typeof window !== 'undefined' &&
+      typeof window.CompressionStream === 'function'
+    ) {
+      body = await gzipEncode(body)
+      compressionHeaders['Content-Encoding'] = 'gzip'
+    }
+
     const response = await fetch(endpoint, {
+      ...options,
+      body,
       headers: {
         'Content-Type': 'application/json',
         ...authHeaders,
+        ...compressionHeaders,
         ...options.headers
-      },
-      ...options
+      }
     })
 
     // Handle non-OK responses

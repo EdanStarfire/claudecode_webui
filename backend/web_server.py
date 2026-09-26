@@ -22,9 +22,11 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 
 from shared.event_queue import EventQueue
 from shared.git_restart import run_git_command
+from shared.gzip_request_middleware import GZipRequestMiddleware
 
 from .analytics.audit_writer import AuditWriter
 from .analytics.database import AnalyticsDB
@@ -216,12 +218,25 @@ class BackendApp:
         # Setup routes
         self._setup_routes()
 
+        # Issue #2029: add_middleware() inserts at index 0, so the LAST call here ends
+        # up outermost (closest to the client) once reversed() builds the stack.
+        # Registration order (first to last call) must therefore be: GZipRequestMiddleware
+        # (innermost — only concerns request bodies), AuthMiddleware, GZipMiddleware
+        # (outermost — response compression).
+        self.app.add_middleware(GZipRequestMiddleware)
+
         # Backend AuthMiddleware always validates the backend-scoped token — unlike the
         # Frontend's browser-facing auth, there's no "auth disabled" mode here: the token
         # is generated (or supplied) at process start regardless of deployment shape.
         if self.auth_token:
             self.app.add_middleware(AuthMiddleware, auth_token=self.auth_token)
             logger.info("Backend authentication middleware enabled")
+
+        self.app.add_middleware(
+            GZipMiddleware,
+            minimum_size=500,
+            exclude_content_types=(*DEFAULT_EXCLUDED_CONTENT_TYPES, "application/octet-stream"),
+        )
 
         @self.app.get("/health")
         async def health_check():

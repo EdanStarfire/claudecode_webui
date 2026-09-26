@@ -10,7 +10,10 @@ convention of `side_effect=httpx.ConnectError("refused")` seen in
 test_oauth_callback_relay.py.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+import asyncio
+import gzip
+import os
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -29,13 +32,18 @@ def _make_client() -> BackendClient:
     return client
 
 
-def _make_request(method: str = "GET", path: str = "/api/sessions", body: bytes = b"") -> Request:
+def _make_request(
+    method: str = "GET",
+    path: str = "/api/sessions",
+    body: bytes = b"",
+    headers: list[tuple[bytes, bytes]] | None = None,
+) -> Request:
     scope = {
         "type": "http",
         "method": method,
         "path": path,
         "query_string": b"",
-        "headers": [],
+        "headers": headers or [],
     }
 
     async def receive():
@@ -44,13 +52,34 @@ def _make_request(method: str = "GET", path: str = "/api/sessions", body: bytes 
     return Request(scope, receive)
 
 
+async def _aiter_bytes(chunks: list[bytes]):
+    for chunk in chunks:
+        yield chunk
+
+
+def _make_streaming_response(
+    content: bytes = b"{}", status_code: int = 200, headers: dict | None = None
+) -> MagicMock:
+    """A MagicMock standing in for httpx's Response under relay()'s stream=True path.
+
+    `aiter_raw()` must be a plain (non-async) callable returning an async iterator —
+    real code does `async for chunk in backend_resp.aiter_raw()`, not
+    `await backend_resp.aiter_raw()`.
+    """
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.headers = headers if headers is not None else {}
+    resp.aiter_raw = MagicMock(return_value=_aiter_bytes([content]))
+    return resp
+
+
 # --- relay() ---
 
 
 @pytest.mark.asyncio
 async def test_issue_1844_relay_records_failure_and_reraises_on_request_error():
     client = _make_client()
-    client._client.request = AsyncMock(side_effect=httpx.ConnectError("refused"))
+    client._client.send = AsyncMock(side_effect=httpx.ConnectError("refused"))
 
     with pytest.raises(httpx.ConnectError):
         await client.relay(_make_request(), "/api/sessions")
@@ -67,15 +96,39 @@ async def test_issue_1844_relay_records_success_even_on_error_status_body():
     client.reachability.record_failure(httpx.ConnectError("refused"))
     assert client.reachability.is_unreachable is True
 
-    backend_resp = MagicMock()
-    backend_resp.status_code = 500
-    backend_resp.headers = {}
-    backend_resp.content = b'{"detail": "boom"}'
-    client._client.request = AsyncMock(return_value=backend_resp)
+    backend_resp = _make_streaming_response(b'{"detail": "boom"}', status_code=500)
+    client._client.send = AsyncMock(return_value=backend_resp)
 
     await client.relay(_make_request(), "/api/sessions")
 
     assert client.reachability.is_unreachable is False
+
+
+@pytest.mark.asyncio
+async def test_issue_2029_relay_closes_response_on_mid_stream_failure():
+    """Review finding: aiter_raw() only closes the connection itself once its own
+    iteration completes normally. A failure partway through (Backend crash/restart
+    mid-stream) must still close the response, or the httpx connection leaks out of
+    the pool — repeated occurrences during Backend flakiness/restarts would
+    eventually exhaust it."""
+
+    async def _raise_mid_stream():
+        yield b"partial"
+        raise httpx.ReadError("connection reset")
+
+    client = _make_client()
+    backend_resp = MagicMock()
+    backend_resp.status_code = 200
+    backend_resp.headers = {}
+    backend_resp.is_closed = False
+    backend_resp.aiter_raw = MagicMock(return_value=_raise_mid_stream())
+    backend_resp.aclose = AsyncMock()
+    client._client.send = AsyncMock(return_value=backend_resp)
+
+    with pytest.raises(httpx.ReadError):
+        await client.relay(_make_request(), "/api/sessions")
+
+    backend_resp.aclose.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -84,15 +137,11 @@ async def test_issue_1933_relay_omits_timeout_kwarg_when_not_given():
     explicitly passing `timeout=None` to httpx disables the timeout entirely rather
     than falling back to the client default, so the kwarg must be omitted outright."""
     client = _make_client()
-    backend_resp = MagicMock()
-    backend_resp.status_code = 200
-    backend_resp.headers = {}
-    backend_resp.content = b"{}"
-    client._client.request = AsyncMock(return_value=backend_resp)
+    client._client.send = AsyncMock(return_value=_make_streaming_response())
 
     await client.relay(_make_request(), "/api/sessions")
 
-    _, kwargs = client._client.request.call_args
+    _, kwargs = client._client.build_request.call_args
     assert "timeout" not in kwargs
 
 
@@ -102,16 +151,179 @@ async def test_issue_1933_relay_forwards_explicit_timeout():
     across a large fleet) must be able to give the client-side call matching
     headroom above the default relay timeout."""
     client = _make_client()
-    backend_resp = MagicMock()
-    backend_resp.status_code = 200
-    backend_resp.headers = {}
-    backend_resp.content = b"{}"
-    client._client.request = AsyncMock(return_value=backend_resp)
+    client._client.send = AsyncMock(return_value=_make_streaming_response())
 
     await client.relay(_make_request(), "/api/legions/legion-1/halt-all", timeout=120.0)
 
-    _, kwargs = client._client.request.call_args
+    _, kwargs = client._client.build_request.call_args
     assert kwargs["timeout"] == 120.0
+
+
+# --- relay() response pass-through / decode (issue #2029, AC4) ---
+
+
+@pytest.mark.asyncio
+async def test_issue_2029_relay_passes_through_gzip_body_unchanged_when_accept_encoding_matches():
+    """AC4's core claim: when the inbound Accept-Encoding already covers Backend's
+    Content-Encoding, relay() must not decompress at all — a weaker "the decoded
+    output looks right" assertion could pass even if the code secretly decompressed
+    and recompressed, hiding the exact CPU work AC4 says to avoid. Only a call-count
+    assertion on gzip.decompress actually proves true byte-for-byte pass-through."""
+    import gzip as gzip_module
+
+    client = _make_client()
+    compressed = gzip_module.compress(b'{"large": "payload"}')
+    backend_resp = _make_streaming_response(
+        compressed, headers={"content-encoding": "gzip", "content-type": "application/json"}
+    )
+    client._client.send = AsyncMock(return_value=backend_resp)
+
+    request = _make_request(headers=[(b"accept-encoding", b"gzip, deflate, br")])
+
+    with patch("src.backend_client.gzip.decompress") as mock_decompress:
+        response = await client.relay(request, "/api/sessions/1/messages")
+
+    mock_decompress.assert_not_called()
+    assert response.headers["content-encoding"] == "gzip"
+    assert bytes(response.body) == compressed
+
+
+@pytest.mark.asyncio
+async def test_issue_2029_relay_decodes_on_accept_encoding_mismatch():
+    """The rare non-browser-caller path: no matching Accept-Encoding means relay()
+    must decode locally and strip content-encoding so Frontend's own outer
+    GZipMiddleware can make an independent compression decision for that caller."""
+    import gzip as gzip_module
+
+    client = _make_client()
+    raw = b'{"large": "payload"}'
+    compressed = gzip_module.compress(raw)
+    backend_resp = _make_streaming_response(
+        compressed, headers={"content-encoding": "gzip", "content-type": "application/json"}
+    )
+    client._client.send = AsyncMock(return_value=backend_resp)
+
+    # No Accept-Encoding header at all — the mismatch path.
+    request = _make_request()
+
+    response = await client.relay(request, "/api/sessions/1/messages")
+
+    assert "content-encoding" not in response.headers
+    assert bytes(response.body) == raw
+
+
+@pytest.mark.asyncio
+async def test_issue_2029_relay_decompress_mismatch_uses_thread_above_threshold():
+    """Mirrors Starlette's own thread_minimum_size discipline — a large decode-mismatch
+    body must go through asyncio.to_thread, not run inline on the event loop."""
+    import gzip as gzip_module
+
+    from src import backend_client as backend_client_module
+
+    client = _make_client()
+    # Random (incompressible) bytes so the *compressed* size — what the threshold
+    # check actually inspects — also exceeds the threshold, unlike highly repetitive
+    # data whose gzip'd form would stay tiny regardless of the original size.
+    raw = os.urandom(backend_client_module._DECOMPRESS_THREAD_THRESHOLD + 1024)
+    compressed = gzip_module.compress(raw)
+    backend_resp = _make_streaming_response(compressed, headers={"content-encoding": "gzip"})
+    client._client.send = AsyncMock(return_value=backend_resp)
+
+    with patch(
+        "src.backend_client.asyncio.to_thread", new=AsyncMock(wraps=asyncio.to_thread)
+    ) as mock_to_thread:
+        response = await client.relay(_make_request(), "/api/sessions/1/messages")
+
+    mock_to_thread.assert_called_once()
+    assert bytes(response.body) == raw
+
+
+def test_issue_2029_accept_encoding_covers_honors_q_zero():
+    """Review finding: a naive membership check would treat `gzip;q=0` (explicit
+    RFC 7231 refusal) as accepting gzip, wrongly taking the pass-through branch for a
+    caller that opted out of gzip specifically."""
+    from src.backend_client import _accept_encoding_covers
+
+    assert _accept_encoding_covers("gzip;q=0, br", "gzip") is False
+    assert _accept_encoding_covers("gzip;q=0.5, br", "gzip") is True
+    assert _accept_encoding_covers("gzip", "gzip") is True
+    assert _accept_encoding_covers("*;q=0", "gzip") is False
+    assert _accept_encoding_covers("*", "gzip") is True
+    assert _accept_encoding_covers("br", "gzip") is False
+
+
+# --- relay() request-body compression (issue #2029, AC6) ---
+
+
+@pytest.mark.asyncio
+async def test_issue_2029_relay_compresses_large_uncompressed_request_body():
+    client = _make_client()
+    client._client.send = AsyncMock(return_value=_make_streaming_response())
+
+    large_body = b"x" * 9000  # above the 8 KiB compression threshold
+    request = _make_request(method="POST", body=large_body)
+
+    await client.relay(request, "/api/sessions/1/messages")
+
+    _, kwargs = client._client.build_request.call_args
+    assert kwargs["headers"]["content-encoding"] == "gzip"
+    assert kwargs["content"] != large_body
+    assert gzip.decompress(kwargs["content"]) == large_body
+
+
+@pytest.mark.asyncio
+async def test_issue_2029_relay_leaves_small_request_body_uncompressed():
+    client = _make_client()
+    client._client.send = AsyncMock(return_value=_make_streaming_response())
+
+    small_body = b"x" * 100
+    request = _make_request(method="POST", body=small_body)
+
+    await client.relay(request, "/api/sessions/1/messages")
+
+    _, kwargs = client._client.build_request.call_args
+    assert "content-encoding" not in kwargs["headers"]
+    assert kwargs["content"] == small_body
+
+
+@pytest.mark.asyncio
+async def test_issue_2029_relay_forwards_already_gzipped_request_body_unchanged():
+    """Pass-through symmetry with the response side — if the browser's body already
+    arrived gzip-encoded, relay() must not decompress+recompress it."""
+    client = _make_client()
+    client._client.send = AsyncMock(return_value=_make_streaming_response())
+
+    compressed_body = gzip.compress(b"x" * 9000)
+    request = _make_request(
+        method="POST", body=compressed_body, headers=[(b"content-encoding", b"gzip")]
+    )
+
+    await client.relay(request, "/api/sessions/1/messages")
+
+    _, kwargs = client._client.build_request.call_args
+    assert kwargs["content"] == compressed_body
+    assert kwargs["headers"]["content-encoding"] == "gzip"
+
+
+@pytest.mark.asyncio
+async def test_issue_2029_relay_does_not_recompress_non_gzip_encoded_request_body():
+    """Review finding: the old check only special-cased 'gzip' specifically, so a
+    body already encoded with e.g. brotli/deflate would get gzip-compressed on top —
+    producing bytes Backend's GZipRequestMiddleware (gzip-only) can't correctly
+    unwrap. Any pre-existing Content-Encoding must be left alone."""
+    client = _make_client()
+    client._client.send = AsyncMock(return_value=_make_streaming_response())
+
+    already_encoded_body = b"\x1b\x25\xb1" + b"x" * 9000  # stand-in for e.g. brotli bytes
+    request = _make_request(
+        method="POST", body=already_encoded_body, headers=[(b"content-encoding", b"br")]
+    )
+
+    await client.relay(request, "/api/sessions/1/messages")
+
+    _, kwargs = client._client.build_request.call_args
+    assert kwargs["content"] == already_encoded_body
+    assert kwargs["headers"]["content-encoding"] == "br"
 
 
 # --- get_json() ---

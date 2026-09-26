@@ -456,6 +456,7 @@ dependencies = [
     { name = "keyrings-cryptfile" },
     { name = "litellm", extra = ["proxy"] },
     { name = "pydantic" },
+    { name = "starlette" },
     { name = "uvicorn" },
     { name = "websockets" },
 ]
@@ -489,6 +490,7 @@ requires-dist = [
     { name = "litellm", extras = ["proxy"], specifier = ">=1.50.0,<2.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.7.0" },
     { name = "pydantic", specifier = ">=2.5.0" },
+    { name = "starlette", specifier = ">=1.4.0" },
     { name = "uvicorn", specifier = ">=0.24.0" },
     { name = "websockets", specifier = ">=12.0" },
 ]
