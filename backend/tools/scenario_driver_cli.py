@@ -37,10 +37,13 @@ itself.
 Every step failure raises a message naming the scenario, the awaited event,
 and the last events seen, and this CLI exits non-zero. Pass
 `--checkpoint <path>` on the original run to have it write progress after
-each completed scenario; on a rerun, pass `--resume <path>` (instead of
-`--scratch-repo`) to reattach to the still-live session/minion by ID and
-continue from `last_completed_scenario_id + 1` — see `runner.reattach()`'s
-docstring for what this requires of the underlying instance.
+each completed scenario; on a rerun, pass `--resume <path>` (alongside
+`--scratch-repo`, which stays required but is ignored when resuming — the
+checkpoint's own recorded scratch repo is used) to reattach to the still-live
+session/minion by ID and continue from `last_completed_scenario_id + 1`. Each
+stream is fast-forwarded to its current head on reattach, so events from the
+failed attempt are never replayed — see `runner.reattach()`'s docstring for
+what this requires of the underlying instance.
 `--from-scenario N` alone (no checkpoint) starts a *fresh* run at scenario N,
 for skipping ahead manually without resuming state.
 """
@@ -60,7 +63,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", required=True, help="Frontend API base URL")
     parser.add_argument("--token", default=None, help="Frontend API bearer token")
-    parser.add_argument("--scratch-repo", required=True, type=Path, help="Scratch repository path")
+    parser.add_argument("--scratch-repo", required=True, type=Path, help="Scratch repository path (ignored with --resume)")
     parser.add_argument("--fixture-name", required=True, help="Output fixture directory name")
     parser.add_argument("--from-scenario", type=int, default=1, help="Resume from this scenario id")
     parser.add_argument("--checkpoint", type=Path, default=None, help="Checkpoint file path")

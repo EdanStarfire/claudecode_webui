@@ -124,6 +124,13 @@ async def bootstrap(ctx: DriverContext, *, scratch_repo: Path, project_name: str
         },
     )
     minion_id = minion_result["minion_id"]
+    # Parent the Test Minion under the main session, so the main session (the only
+    # one whose raw log is exported) is the minion's overseer and the natural
+    # destination of its comms — needed for the "inter-minion comm" marker.
+    await ctx.post_json(
+        f"/api/legions/{project_id}/minions/{minion_id}/reparent",
+        json={"new_parent_id": main_session_id},
+    )
 
     # Attach the minion's own poll consumer immediately after creation,
     # before starting it — its own init/system messages must not be missed.

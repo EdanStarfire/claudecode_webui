@@ -8,7 +8,11 @@ re-deriving it, keeping each action a pure, testable function of
 
 from __future__ import annotations
 
+import asyncio
+import time
 from pathlib import Path
+
+import httpx
 
 from .context import DriverContext
 from .poll_consumer import TaggedEvent, wait_for_ready
@@ -98,6 +102,32 @@ async def interrupt(ctx: DriverContext, _matched: list[TaggedEvent] | None, *, s
     return await ctx.post_empty(f"/api/sessions/{session_id}/interrupt")
 
 
+async def ensure_session_active(
+    ctx: DriverContext, _matched: list[TaggedEvent] | None, *, session_id: str, timeout: float = 60.0
+) -> None:
+    """Polls the session's REST state (not the event stream) until it's
+    `active`, starting it whenever it's `created`/`terminated`. Used after a
+    session or app restart, where an event-based wait is unreliable:
+    `state_change` "active" also fires at every turn's end, so one from before
+    the restart can match immediately. Only valid once the restart has already
+    moved the session out of `active` (true once the session-restart endpoint
+    returns, and after `wait_for_server_ready` for an app restart)."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            data = await ctx.get_json(f"/api/sessions/{session_id}")
+            state = (data.get("session") or data).get("state")
+            if state == "active":
+                return
+            if state in ("created", "terminated"):
+                await ctx.post_empty(f"/api/sessions/{session_id}/start")
+        except Exception:
+            state = None  # server mid-restart; keep polling
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"session {session_id} not active after {timeout}s (last state: {state})")
+        await asyncio.sleep(1.0)
+
+
 async def restart_session(ctx: DriverContext, _matched: list[TaggedEvent] | None, *, session_id: str) -> dict:
     return await ctx.post_empty(f"/api/sessions/{session_id}/restart")
 
@@ -107,14 +137,34 @@ async def restart_server(ctx: DriverContext, _matched: list[TaggedEvent] | None)
 
 
 async def wait_for_server_ready(
-    ctx: DriverContext, _matched: list[TaggedEvent] | None, *, timeout: float = 120.0
+    ctx: DriverContext,
+    _matched: list[TaggedEvent] | None,
+    *,
+    timeout: float = 120.0,
+    down_timeout: float = 15.0,
 ) -> None:
     """`restart_server`'s response arrives before the re-exec that tears the
     process down (`_finish_restart()` in `src/routers/system.py` fires
     ~0.5s later, fire-and-forget), so any action immediately after
     `restart_server` needs this gate first to avoid racing that teardown
-    window."""
+    window. `/ready` alone can't close it — the old process still answers
+    `ready: true` until it goes down — so this first waits (bounded by
+    `down_timeout`) for the old process to stop answering, then for `/ready`."""
+    await _wait_for_server_down(ctx.base_url, timeout=down_timeout)
     await wait_for_ready(ctx.base_url, timeout=timeout)
+
+
+async def _wait_for_server_down(base_url: str, *, timeout: float) -> None:
+    """Returns once `GET /health` stops getting an answer, or after `timeout`
+    regardless (so a re-exec too fast to observe can't hang the run)."""
+    deadline = time.monotonic() + timeout
+    async with httpx.AsyncClient() as client:
+        while time.monotonic() < deadline:
+            try:
+                await client.get(f"{base_url.rstrip('/')}/health", timeout=1.0)
+            except httpx.HTTPError:
+                return
+            await asyncio.sleep(0.1)
 
 
 async def upload_file(ctx: DriverContext, _matched: list[TaggedEvent] | None, *, session_id: str, file_path: Path) -> dict:
@@ -127,6 +177,44 @@ async def upload_file(ctx: DriverContext, _matched: list[TaggedEvent] | None, *,
         )
     resp.raise_for_status()
     return resp.json()
+
+
+async def send_prompt_with_upload(
+    ctx: DriverContext,
+    _matched: list[TaggedEvent] | None,
+    *,
+    session_id: str,
+    file_path: Path,
+    message: str,
+) -> dict:
+    """Uploads `file_path` then sends `message` with it attached, mirroring
+    InputArea.vue's sendMessage(): the stored path is appended to the message
+    text (that's what tells the model where the file is) and a structured
+    `metadata.attachments` entry is sent alongside."""
+    info = (await upload_file(ctx, None, session_id=session_id, file_path=file_path))["file"]
+    size_kb = f"{info['size_bytes'] / 1024:.1f}"
+    line = f"- {info['original_name']} ({size_kb} KB): {info['stored_path']}"
+    if info.get("resource_id"):
+        line += f"\n  Resource ID: {info['resource_id']}"
+    if info.get("markdown"):
+        line += f"\n  Markdown: `{info['markdown']}`"
+    content = (
+        f"{message}\n\n---\nAttached files (use Read tool to access, or embed via "
+        f"markdown URL):\n{line}"
+    )
+    metadata = {
+        "attachments": [{
+            "filename": info["original_name"],
+            "resource_id": info.get("resource_id"),
+            "size": info["size_bytes"],
+            "type": info.get("mime_type"),
+            "stored_path": info["stored_path"],
+        }]
+    }
+    return await ctx.post_json(
+        f"/api/sessions/{session_id}/messages",
+        json={"message": content, "metadata": metadata},
+    )
 
 
 async def send_comm(

@@ -162,6 +162,21 @@ class PollConsumer:
             await self.buffer.append(self.stream, event)
         self.cursor = batch.next_cursor
 
+    async def fast_forward(self) -> None:
+        """Moves the cursor to the stream's current head, discarding every event
+        already queued (a `timeout=0` poll returns all of them at once). Used on
+        resume so events from before the reattach — notably a failed attempt at
+        the scenario being retried — can never match that scenario's waits."""
+        async with httpx.AsyncClient(base_url=self.base_url) as client:
+            resp = await client.get(
+                self._path(),
+                params={"since": self.cursor, "timeout": 0},
+                headers=self._headers(),
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+        self.cursor = parse_poll_response(resp.json()).next_cursor
+
     async def run(self) -> None:
         async with httpx.AsyncClient(base_url=self.base_url) as client:
             while not self._stop.is_set():
