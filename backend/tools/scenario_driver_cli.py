@@ -1,11 +1,48 @@
 #!/usr/bin/env python3
 """CLI entrypoint for the scripted scenario driver (issue #2038).
 
-Usage:
+Runs all 22 scenarios in `scenario_driver/scenarios.py` against a live
+Frontend API instance, then exports the resulting session's raw log as a
+named fixture. See `scenarios.py`'s module docstring for how to add or
+change a scenario.
+
+## Prerequisites
+
+- The Backend the target Frontend talks to must have been started with
+  `--enable-session-recording` — the final export step 403s otherwise (a
+  dev-only capability, not an end-user feature; see `backend/fixture_export.py`).
+- The target host must be loopback/private, or pass `--allow-remote`
+  explicitly (AC1's production guard — there's no other "is this prod"
+  signal available from the API itself).
+- For a real, non-mock run: the Backend process's own environment needs live
+  Claude credentials already available to it (e.g. `claude auth login`
+  already completed there) — this CLI never handles credentials itself, it's
+  a plain HTTP client of the Frontend API.
+
+## Usage
+
     uv run python -m backend.tools.scenario_driver_cli \\
         --url http://127.0.0.1:8001 --token <frontend-token> \\
-        --scratch-repo /tmp/scenario-scratch --output-dir backend/tests/fixtures/raw \\
+        --scratch-repo /tmp/scenario-scratch \\
         --fixture-name 2026-09-23-primary
+
+The exported fixture lands under `backend/tests/fixtures/raw/<fixture-name>/`
+on whichever machine the *Backend* is running on (not necessarily the machine
+this CLI runs on) — export happens server-side via
+`POST /api/sessions/{id}/export-fixture`; this CLI never writes fixture files
+itself.
+
+## Resuming a failed run
+
+Every step failure raises a message naming the scenario, the awaited event,
+and the last events seen (AC5), and this CLI exits non-zero. Pass
+`--checkpoint <path>` on the original run to have it write progress after
+each completed scenario; on a rerun, pass `--resume <path>` (instead of
+`--scratch-repo`) to reattach to the still-live session/minion by ID and
+continue from `last_completed_scenario_id + 1` — see `runner.reattach()`'s
+docstring for the "this assumes the instance is still alive between
+invocations" tradeoff. `--from-scenario N` alone (no checkpoint) starts a
+*fresh* run at scenario N, for skipping ahead manually without resuming state.
 """
 
 import argparse

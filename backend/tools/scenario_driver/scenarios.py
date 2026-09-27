@@ -17,6 +17,53 @@ keep tool usage predictable for the real, credentialed run (UC1); the mock
 SDK's raw-log replay never re-decides anything from a prompt (see the
 Known Limitations in the approved plan), so prompt wording only matters
 there for readability.
+
+## Adding a new scenario
+
+1. Pick an unused `id` (list order is run order, not `id` order — ids don't
+   need to stay contiguous, though keeping them so makes `--from-scenario`
+   and checkpoints easier to reason about) and append a new
+   `scenarios.append(Scenario(id=..., title=..., steps=[...]))` block
+   anywhere in `build_scenarios()`.
+2. Each `Step` does, in order: wait (optional), then act (optional) — the
+   wait's matched events are passed to the action, or `None` if there was no
+   wait. Three common shapes:
+   - Pure action (nothing to wait for first):
+     `Step(action=partial(actions.send_prompt, session_id=m, message="..."))`
+   - Pure wait (no response needed): `Step(wait=_wait_result(m, "<id>"))`
+   - Wait for an event, then respond to it:
+     `Step(wait=WaitSpec(predicate=..., description="scenario <id>: ...",
+     timeout_s=...), action=partial(actions.answer_permission, session_id=m,
+     decision="allow"))`
+3. Reuse an existing `predicates.py` matcher (`tool_call_awaiting_permission`,
+   `result_message`, `system_subtype`, `task_event`, `state_change`,
+   `resource_registered`, `minion_comm_notification`, ...) rather than
+   writing a new one inline. Only add a new predicate function when none of
+   the existing shapes fit — and verify the real event shape against a live
+   session first, not just from reading `message_parser.py`/`web_server.py`:
+   most session-stream events are wrapped as `{"type": "message", "data":
+   {...}}` (see `predicates._message_data()`), but a few — `assistant_delta`,
+   `usage_updated`, `context_update`, `resource_registered`, and everything
+   on the UI stream (`state_change`, `notification`) — are bare top-level
+   dicts instead. Getting this distinction wrong is the single most common
+   way a new wait silently times out; this was discovered by empirical
+   testing against a real session mid-implementation, not by code reading.
+4. Reuse an existing `actions.py` function the same way; add a new one only
+   for a genuinely new HTTP call, keeping the `(ctx, matched, **kwargs)`
+   signature so it slots into `functools.partial(...)` like the others.
+5. If the new scenario should count toward one of
+   `backend.fixture_export.REQUIRED_MARKERS`, set `coverage_markers=(...)`
+   — otherwise leave the default empty tuple.
+   `test_required_markers_all_covered_by_scenarios` only requires each
+   marker be claimed once across the whole list, not by every scenario that
+   happens to touch it.
+6. Give every `description` a `"scenario <id>: ..."` prefix — that string is
+   exactly what `ScenarioError`'s message surfaces on failure (AC5), so a
+   vague description makes a real failure harder to diagnose.
+7. If the scenario needs a specific permission mode, set it explicitly as
+   the scenario's own first step (`partial(actions.set_permission_mode,
+   session_id=m, mode="default")`) rather than relying on a prior scenario
+   having left it in the right state — keeps scenarios reorderable per AC3.
 """
 
 from __future__ import annotations
