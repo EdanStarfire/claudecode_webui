@@ -1,7 +1,7 @@
-"""Scratch-repo reset and project/session/minion bootstrap (AC1, AC2).
+"""Scratch-repo reset and project/session/minion bootstrap (issue #2038).
 
 `guard_target()` (context.py) is the production guard; this module handles
-the rest of AC1/AC2's deterministic setup: a fixed scratch repository, a
+the rest of the deterministic setup: a fixed scratch repository, a
 recording-enabled main session, and a Test Minion whose fixed system prompt
 makes its replies deterministic.
 """
@@ -44,11 +44,11 @@ class DriverSetup:
 
 
 def reset_scratch_repo(scratch_repo: Path) -> None:
-    """Resets the scratch repository to fixed contents (AC2). A git repo is
-    reset via `git clean`/`git checkout`; anything else is wiped and rebuilt
-    from scratch — either way, ends with exactly the fixed files the 22
-    scenarios need to exist up front (currently just scenario 20's upload
-    fixture; every other scenario creates its own files as it runs).
+    """Resets the scratch repository to fixed contents. A git repo is reset
+    via `git clean`/`git checkout`; anything else is wiped and rebuilt from
+    scratch — either way, ends with exactly the fixed files the scenarios
+    need to exist up front (currently just the upload fixture; every other
+    scenario creates its own files as it runs).
     """
     scratch_repo.mkdir(parents=True, exist_ok=True)
     if (scratch_repo / ".git").is_dir():
@@ -65,11 +65,11 @@ def reset_scratch_repo(scratch_repo: Path) -> None:
 
 
 async def bootstrap(ctx: DriverContext, *, scratch_repo: Path, project_name: str = "scenario-driver") -> DriverSetup:
-    """Creates the project, main recording-enabled session, and Test Minion
-    (AC2), starting each stream's `PollConsumer` as early as possible — the
-    Test Minion's specifically right after its own creation, before it's
-    started, per AC4's edge case ("must be followed from creation, not only
-    after the comm is sent").
+    """Creates the project, main recording-enabled session, and Test Minion,
+    starting each stream's `PollConsumer` as early as possible — the Test
+    Minion's specifically right after its own creation, before it's started,
+    so its own init/system messages are followed from the start rather than
+    only once it starts replying.
     """
     reset_scratch_repo(scratch_repo)
 
@@ -105,10 +105,10 @@ async def bootstrap(ctx: DriverContext, *, scratch_repo: Path, project_name: str
     consumers.append(session_consumer)
 
     await ctx.post_empty(f"/api/sessions/{main_session_id}/start")
-    # start_session() sets STARTING and returns immediately — the real SDK
-    # calls mark_session_active() asynchronously once it's actually ready,
-    # which is what flips this to ACTIVE (backend/session_manager.py). A
-    # scenario's first send_prompt would otherwise race this and 409.
+    # start_session() sets STARTING and returns immediately; the real SDK's
+    # mark_session_active() callback (backend/session_manager.py) flips it
+    # to ACTIVE asynchronously once actually ready. Sending a prompt before
+    # that happens 409s, so this waits for the state change first.
     _, resume_index = await wait_for(
         buffer, predicates.state_change(main_session_id, "active"),
         resume_index=resume_index, timeout=60.0,
@@ -125,7 +125,7 @@ async def bootstrap(ctx: DriverContext, *, scratch_repo: Path, project_name: str
     )
     minion_id = minion_result["minion_id"]
 
-    # AC4: attach the minion's own poll consumer immediately after creation,
+    # Attach the minion's own poll consumer immediately after creation,
     # before starting it — its own init/system messages must not be missed.
     minion_consumer = PollConsumer(
         stream="minion", base_url=ctx.base_url, token=ctx.token, buffer=buffer, session_id=minion_id

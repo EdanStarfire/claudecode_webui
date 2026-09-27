@@ -1,4 +1,4 @@
-"""Orchestration, checkpointing, and error reporting (AC5, AC8).
+"""Orchestration, checkpointing, and error reporting (issue #2038).
 
 Runs a scenario list in order against one shared event buffer, writing a
 checkpoint after each scenario completes so `--resume` can reattach to the
@@ -18,7 +18,7 @@ from .setup import DriverSetup
 
 
 class ScenarioError(Exception):
-    """AC5: names the scenario and the underlying cause — a `WaitTimeoutError`
+    """Names the scenario and the underlying cause — a `WaitTimeoutError`
     already carries the awaited event and the last events seen; any other
     exception (e.g. an action's HTTP call failing) is named just as clearly
     rather than crashing the whole run with no scenario context."""
@@ -78,11 +78,9 @@ def _write_checkpoint(checkpoint_path: Path, setup: DriverSetup, last_completed_
 
 
 async def reattach(ctx: DriverContext, checkpoint: Checkpoint) -> DriverSetup:
-    """`--resume`: reattaches to the still-live session/minion by ID rather
-    than reconstructing state — relies on the underlying instance still being
-    alive between driver invocations (an explicit, approved tradeoff over
-    real checkpoint/rollback state; a full rerun from scenario 1 is the
-    fallback if it isn't)."""
+    """Resuming from a checkpoint reattaches to the still-live session/minion
+    by ID rather than reconstructing full driver state — if the underlying
+    instance was torn down, a full rerun from scenario 1 is required."""
     buffer = SharedEventBuffer()
     consumers = [
         PollConsumer(stream="ui", base_url=ctx.base_url, token=ctx.token, buffer=buffer),

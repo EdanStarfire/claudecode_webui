@@ -12,8 +12,8 @@ change a scenario.
   `--enable-session-recording` — the final export step 403s otherwise (a
   dev-only capability, not an end-user feature; see `backend/fixture_export.py`).
 - The target host must be loopback/private, or pass `--allow-remote`
-  explicitly (AC1's production guard — there's no other "is this prod"
-  signal available from the API itself).
+  explicitly — there's no other "is this prod" signal available from the
+  API itself.
 - For a real, non-mock run: the Backend process's own environment needs live
   Claude credentials already available to it (e.g. `claude auth login`
   already completed there) — this CLI never handles credentials itself, it's
@@ -35,14 +35,14 @@ itself.
 ## Resuming a failed run
 
 Every step failure raises a message naming the scenario, the awaited event,
-and the last events seen (AC5), and this CLI exits non-zero. Pass
+and the last events seen, and this CLI exits non-zero. Pass
 `--checkpoint <path>` on the original run to have it write progress after
 each completed scenario; on a rerun, pass `--resume <path>` (instead of
 `--scratch-repo`) to reattach to the still-live session/minion by ID and
 continue from `last_completed_scenario_id + 1` — see `runner.reattach()`'s
-docstring for the "this assumes the instance is still alive between
-invocations" tradeoff. `--from-scenario N` alone (no checkpoint) starts a
-*fresh* run at scenario N, for skipping ahead manually without resuming state.
+docstring for what this requires of the underlying instance.
+`--from-scenario N` alone (no checkpoint) starts a *fresh* run at scenario N,
+for skipping ahead manually without resuming state.
 """
 
 import argparse

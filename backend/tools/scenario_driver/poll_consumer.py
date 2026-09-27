@@ -1,4 +1,4 @@
-"""Poll consumers and the shared event buffer (AC4, AC6).
+"""Poll consumers and the shared event buffer (issue #2038).
 
 Three `PollConsumer`s (UI stream, main session, Test Minion session) run as
 concurrent `asyncio.Task`s, each long-polling its own Frontend API endpoint
@@ -7,12 +7,11 @@ and appending every event it sees — tagged with its stream — into one
 buffer so out-of-band events (background task chatter, comm replies from
 other streams) never look like a mismatch — they're just skipped.
 
-Reconnection (AC6): no boot/instance ID exists anywhere in this codebase. A
-consumer treats a `reset`/`evicted` poll response, or several consecutive
-transport failures, as "the server may have restarted" — it waits for
-`GET /ready` to report true, then resumes long-polling with its cursor reset
-to whatever the first post-recovery response hands back. The same path
-serves scenario 21 (full app restart) and any incidental transport blip.
+Reconnection: a consumer treats several consecutive transport failures as a
+signal the server may have restarted — it waits for `GET /ready` to report
+true, then resumes long-polling with its cursor reset to whatever the first
+post-recovery response hands back. The same path serves a full app restart
+and any incidental transport blip.
 """
 
 from __future__ import annotations
@@ -155,14 +154,10 @@ class PollConsumer:
 
         self.consecutive_failures = 0
         batch = parse_poll_response(resp.json())
-        # `events_since()` (shared/event_queue.py) always hands back every
-        # currently-buffered event alongside a reset/evicted signal — "here's
-        # everything we have" — precisely so a resyncing consumer doesn't lose
-        # them. A reset/evicted signal from a live server (not a transport
-        # failure) still means our cursor space is stale, so the cursor is
-        # adopted either way; a concurrent full-app restart is separately
-        # caught by the transport-failure branch above, so this branch alone
-        # doesn't wait for /ready on its own.
+        # A reset/evicted response still carries a complete event batch, so
+        # events are always buffered and the cursor is always adopted,
+        # regardless of that flag. Full-app-restart recovery is handled by
+        # the transport-failure branch above, not here.
         for event in batch.events:
             await self.buffer.append(self.stream, event)
         self.cursor = batch.next_cursor

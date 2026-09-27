@@ -1,10 +1,11 @@
-"""Predicate builders for `Step.wait` specs (AC3/AC4).
+"""Predicate builders for `Step.wait` specs (issue #2038).
 
-Match against the REAL live poll-event shapes (confirmed by reading
+These match the live poll-event shapes broadcast by
 `backend/permission_service.py`, `backend/message_parser.py`,
 `backend/web_server.py`, `backend/session_coordinator.py`, and
-`backend/mcp/resource_mcp_tools.py` — not the raw_log.jsonl recording shape
-and not guessed from fixture_export.py's marker heuristics):
+`backend/mcp/resource_mcp_tools.py`. This is a different, richer shape than
+`raw_log.jsonl`'s recording format — see `backend/fixture_export.py` for that
+one:
 
 - Session-stream, tool/message-lifecycle events arrive wrapped:
   `{"type": "message", "session_id": ..., "data": {...}, "timestamp": ...}`.
@@ -45,8 +46,7 @@ def result_message(session_id: str) -> Predicate:
 def assistant_delta(session_id: str) -> Predicate:
     """Unlike most session-stream events, `assistant_delta` is bare/top-level
     (`{"type": "assistant_delta", "session_id": ..., "data": {...}}`), not
-    wrapped in the generic `{"type": "message", "data": {...}}` envelope —
-    confirmed against a real live session, not just code-reading."""
+    wrapped in the generic `{"type": "message", "data": {...}}` envelope."""
 
     def _match(tagged: TaggedEvent) -> bool:
         event = tagged.event

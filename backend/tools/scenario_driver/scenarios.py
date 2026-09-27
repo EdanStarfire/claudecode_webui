@@ -1,22 +1,21 @@
-"""Scenario data (AC3, AC7) — all 22 equivalence-fixture recording scenarios
-from issue #2038's own table, transcribed as data: each `Step` is (optionally)
-a wait followed by (optionally) an action, referencing the fixed action/
-predicate libraries in `actions.py`/`predicates.py`. Adding scenario 23 or
-reordering existing ones is a pure data edit to `build_scenarios()` — no new
-control flow.
+"""Scenario data (issue #2038) — all 22 equivalence-fixture recording
+scenarios, transcribed as data: each `Step` is (optionally) a wait followed
+by (optionally) an action, referencing the fixed action/predicate libraries
+in `actions.py`/`predicates.py`. Adding a new scenario or reordering existing
+ones is a pure data edit to `build_scenarios()` — no new control flow.
 
 `coverage_markers` cross-references `backend.fixture_export.REQUIRED_MARKERS`
 by name; `backend/tests/test_scenario_driver_dry_run.py` asserts every
 required marker is claimed by at least one scenario here, catching drift
 between the two files early. Each scenario that needs a specific permission
 mode sets it explicitly as its own first step (not inherited from a prior
-scenario) so scenarios stay reorderable per AC3.
+scenario) so scenarios stay reorderable.
 
-Prompts are directive per AC7 — naming the exact tool and call count — to
-keep tool usage predictable for the real, credentialed run (UC1); the mock
-SDK's raw-log replay never re-decides anything from a prompt (see the
-Known Limitations in the approved plan), so prompt wording only matters
-there for readability.
+Prompts are directive — naming the exact tool and call count — to keep tool
+usage predictable for a real, credentialed run against a live model. The
+mock SDK's raw-log replay never re-decides anything from a prompt (it
+replays pre-recorded output regardless of what's sent), so prompt wording
+only matters there for readability.
 
 ## Adding a new scenario
 
@@ -46,8 +45,8 @@ there for readability.
    `usage_updated`, `context_update`, `resource_registered`, and everything
    on the UI stream (`state_change`, `notification`) — are bare top-level
    dicts instead. Getting this distinction wrong is the single most common
-   way a new wait silently times out; this was discovered by empirical
-   testing against a real session mid-implementation, not by code reading.
+   way a new wait silently times out — verify against a real session's
+   actual poll response, not just by reading the message-construction code.
 4. Reuse an existing `actions.py` function the same way; add a new one only
    for a genuinely new HTTP call, keeping the `(ctx, matched, **kwargs)`
    signature so it slots into `functools.partial(...)` like the others.
@@ -58,12 +57,12 @@ there for readability.
    marker be claimed once across the whole list, not by every scenario that
    happens to touch it.
 6. Give every `description` a `"scenario <id>: ..."` prefix — that string is
-   exactly what `ScenarioError`'s message surfaces on failure (AC5), so a
-   vague description makes a real failure harder to diagnose.
+   exactly what `ScenarioError`'s message surfaces on failure, so a vague
+   description makes a real failure harder to diagnose.
 7. If the scenario needs a specific permission mode, set it explicitly as
    the scenario's own first step (`partial(actions.set_permission_mode,
    session_id=m, mode="default")`) rather than relying on a prior scenario
-   having left it in the right state — keeps scenarios reorderable per AC3.
+   having left it in the right state — keeps scenarios reorderable.
 """
 
 from __future__ import annotations
@@ -145,8 +144,8 @@ def build_scenarios(
 ) -> list[Scenario]:
     """Scenario definitions are parameterized by the IDs setup.py creates at
     run time (unknown until the session/legion/minion actually exist) — still
-    plain data, just resolved once instead of hardcoded, per AC3. `scratch_repo`
-    is the `Path` setup.py resets/populates — needed for scenario 20's upload,
+    plain data, just resolved once instead of hardcoded. `scratch_repo` is
+    the `Path` setup.py resets/populates — needed for scenario 20's upload,
     which reads a local file from it."""
     m = main_session_id
 

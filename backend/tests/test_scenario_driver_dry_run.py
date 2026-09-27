@@ -1,34 +1,26 @@
-"""Scenario driver dry-run tests (issue #2038, Phase 5).
+"""Scenario driver dry-run tests (issue #2038).
 
-T1/T2/T3 as literally specified in the issue assume the mock SDK's raw-log
-replay is interactive (fires a live permission callback per prompt, gates on
-`send_message`). It isn't: `backend/mock_sdk.py`'s raw-replay path
-(`_start_raw_replay`/`RawFixtureReplay._parse()`) only reconstructs
-`kind == "sdk_message"` records from `raw_log.jsonl` and wires no
-`permission_callback` at all — confirmed by reading the code, then confirmed
-empirically against a real live session (see the PR description for the
-manual validation run: scenarios 1, 3, and 4 completed end-to-end against a
-real, credentialed Claude Code session, including verifying the resulting
-files on disk). Only 3 of the 9 `REQUIRED_MARKERS` (streaming deltas,
-subagent task with progress, compaction) are things passive raw replay can
-produce at all; the rest depend on mechanics raw replay doesn't implement.
-Real end-to-end validation of the interactive flows (permission prompts,
-comms, restarts) needs live credentials and was done manually, matching the
-issue's own "Out of Scope: CI integration" — this file covers what's
-actually testable without credentials:
+The mock SDK's raw-log replay is not interactive: `backend/mock_sdk.py`'s
+raw-replay path (`_start_raw_replay`/`RawFixtureReplay._parse()`) only
+reconstructs `kind == "sdk_message"` records from `raw_log.jsonl` and wires
+no `permission_callback` at all. Only 3 of the 9 `REQUIRED_MARKERS`
+(streaming deltas, subagent task with progress, compaction) are things
+passive raw replay can produce; the rest depend on mechanics raw replay
+doesn't implement, and need a real, credentialed session to exercise instead
+— out of scope for this suite, which covers what's testable without
+credentials:
 
 - T1 (reduced scope): mock replay of the existing fixture produces at least
   one event for each of the 3 passively-replayable markers, and
   `predicates.py` correctly matches them.
 - T2: with one `StreamEvent` record stripped from a copy of the fixture, the
-  corresponding wait step times out with a message naming the awaited event
-  — AC5's requirement, independent of whether the underlying replay is
-  interactive.
-- T3: `PollConsumer`'s reconnect logic (AC6) survives a full Backend+Frontend
+  corresponding wait step times out with a message naming the awaited event,
+  independent of whether the underlying replay is interactive.
+- T3: `PollConsumer`'s reconnect logic survives a full Backend+Frontend
   process restart — pure poll-transport behavior, unrelated to whether the
   SDK underneath is mocked or real.
 - Self-check: every `fixture_export.REQUIRED_MARKERS` entry is claimed by at
-  least one scenario in `scenarios.py` (AC8/AC3 drift guard).
+  least one scenario in `scenarios.py` — a drift guard between the two files.
 """
 
 import asyncio
@@ -160,8 +152,8 @@ def _all_events(base_url: str, token: str, session_id: str) -> list[TaggedEvent]
 
 
 def test_required_markers_all_covered_by_scenarios():
-    """AC8/AC3 drift guard: catches scenarios.py/fixture_export.py drift at
-    test time rather than only at export time."""
+    """Drift guard: catches scenarios.py/fixture_export.py drift at test
+    time rather than only at export time."""
     scenarios = build_scenarios(
         main_session_id="m", minion_id="mm", legion_id="l", scratch_repo=Path("/tmp/unused")
     )
@@ -213,7 +205,7 @@ def test_t1_mock_replay_produces_passively_replayable_markers(tmp_path: Path):
 def test_t2_missing_event_times_out_with_clear_message(tmp_path: Path):
     """T2: strip every `StreamEvent` record from a copy of the fixture, then
     assert the wait for a streaming delta times out naming the awaited
-    event — the mock-replay-compatible half of AC5's requirement."""
+    event."""
     mutated_root = tmp_path / "fixtures"
     mutated_name = f"{PRIMARY_FIXTURE}-no-stream"
     mutated_dir = mutated_root / mutated_name
@@ -265,8 +257,8 @@ def test_t2_missing_event_times_out_with_clear_message(tmp_path: Path):
 @pytest.mark.skipif(not RAW_FIXTURES_DIR.exists(), reason="raw fixtures directory not present")
 @pytest.mark.timeout(150)  # two full backend+frontend boot cycles needs more than the 30s default
 def test_t3_poll_consumer_reconnects_after_full_app_restart(tmp_path: Path):
-    """T3: a full Backend+Frontend process restart (AC6, scenario 21) —
-    `PollConsumer` detects the outage, waits for `/ready`, and resumes."""
+    """T3: a full Backend+Frontend process restart — `PollConsumer` detects
+    the outage, waits for `/ready`, and resumes."""
     backend_port = _free_port()
     frontend_port = _free_port()
     backend_token = secrets.token_urlsafe(16)

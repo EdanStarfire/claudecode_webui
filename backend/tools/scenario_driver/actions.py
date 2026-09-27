@@ -1,4 +1,4 @@
-"""Action primitives (AC2, AC7 support) — one small async function per action
+"""Action primitives (issue #2038) — one small async function per action
 type, each a thin HTTP call against the Frontend API. Actions that need data
 from a just-observed event (e.g. a permission `request_id`) take the matched
 event(s) from the preceding `wait_for()` call as an argument, rather than
@@ -18,8 +18,8 @@ def _tool_call_data(matched: list[TaggedEvent]) -> dict:
     """Permission-lifecycle events are unified into the `tool_call` message
     type (no distinct `permission_request` event exists) — the fields live
     under `event["data"]`, e.g. `{"type": "message", "data": {"type":
-    "tool_call", "request_id": ..., "name": ..., "input": {...}, ...}}`
-    (confirmed against `backend/permission_service.py`'s live broadcast shape).
+    "tool_call", "request_id": ..., "name": ..., "input": {...}, ...}}`.
+    See `backend/permission_service.py` for where this shape is broadcast.
     """
     return matched[0].event["data"]
 
@@ -53,7 +53,7 @@ async def answer_permission(
     updated_input: dict | None = None,
 ) -> dict:
     """`decision` is `"allow"` or `"deny"`. Also used for ExitPlanMode's
-    permission prompt (same endpoint, per AC7's plan-mode scenario)."""
+    permission prompt, which uses this same endpoint."""
     request_id = _permission_request_id(matched)
     body = {
         "decision": decision,
@@ -75,13 +75,13 @@ async def answer_ask_user_question(
 ) -> dict:
     """AskUserQuestion is just the same `tool_call`/permission flow as any
     other tool (`data.name == "AskUserQuestion"`, no distinct event type or
-    endpoint). The frontend's own answer-building logic
-    (`PermissionPrompt.vue`'s `updatedInput = {questions, answers}`) copies
-    the original `input.questions` array back and adds an `answers` map
-    keyed by question text — confirmed against `permission_service.py`'s
-    `PermissionResponseMessage.updated_input` consumer. Exactly one of
-    `option_label`/`custom_text` should be given per question; skipping/
-    denying uses `answer_permission(decision="deny")` directly instead.
+    endpoint). The answer is sent as `updated_input`: the original
+    `input.questions` array copied back, plus an `answers` map keyed by
+    question text (matching `PermissionPrompt.vue`'s own answer-building
+    logic, consumed server-side as `PermissionResponseMessage.updated_input`
+    in `permission_service.py`). Exactly one of `option_label`/`custom_text`
+    should be given per question; skipping/denying uses
+    `answer_permission(decision="deny")` directly instead.
     """
     data = _tool_call_data(matched)
     questions = data.get("input", {}).get("questions", [])
@@ -111,9 +111,9 @@ async def wait_for_server_ready(
 ) -> None:
     """`restart_server`'s response arrives before the re-exec that tears the
     process down (`_finish_restart()` in `src/routers/system.py` fires
-    ~0.5s later, fire-and-forget) — any action right after `restart_server`
-    without this gate races that teardown window and gets an uncaught
-    connection error instead of a clear `ScenarioError`."""
+    ~0.5s later, fire-and-forget), so any action immediately after
+    `restart_server` needs this gate first to avoid racing that teardown
+    window."""
     await wait_for_ready(ctx.base_url, timeout=timeout)
 
 

@@ -1,7 +1,7 @@
 """DriverContext — the scenario driver's HTTP client and shared run state.
 
 A plain `httpx.AsyncClient` wrapper against the Frontend API, authenticating
-exactly like the browser does (`Authorization: Bearer <token>`, confirmed at
+exactly like the browser does (`Authorization: Bearer <token>`, matching
 `src/routers/core.py`'s `auth_check()`). No `backend/` imports outside this
 package's own core loop — every action is a real HTTP call.
 """
@@ -18,7 +18,7 @@ import httpx
 
 class UnsafeTargetError(Exception):
     """Raised when the driver is pointed at a host that doesn't look like a
-    loopback/private test instance and `--allow-remote` wasn't passed (AC1)."""
+    loopback/private test instance and `--allow-remote` wasn't passed."""
 
 
 def _is_loopback_or_private(host: str) -> bool:
@@ -34,9 +34,10 @@ def _is_loopback_or_private(host: str) -> bool:
 
 
 def guard_target(base_url: str, *, allow_remote: bool) -> None:
-    """AC1's production guard. There is no reliable "is this prod" signal from
+    """Refuses to run against anything that isn't loopback/private unless
+    `allow_remote` is set. There is no reliable "is this prod" signal from
     the API itself, so the safety gate is host-shape-based plus an explicit
-    opt-out — refuses anything that isn't loopback/private unless overridden.
+    opt-out.
     """
     if allow_remote:
         return

@@ -1,8 +1,7 @@
 """Shared parsing for the `{events, next_cursor, reset, evicted}` long-poll
 response body — the one piece of protocol logic every poll consumer needs,
 whether it's the stage 1b fault harness (`src/tests/simulation/fault_harness.py`)
-or the scripted scenario driver (`backend/tools/scenario_driver/`) (issue #2038,
-AC10).
+or the scripted scenario driver (`backend/tools/scenario_driver/`, issue #2038).
 """
 
 from dataclasses import dataclass
