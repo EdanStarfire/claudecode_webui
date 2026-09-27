@@ -34,6 +34,7 @@ import httpx
 
 import src.poll_relay as _relay_timeout_module
 from shared.event_queue import EventQueue, reset_occurred
+from shared.poll_protocol import parse_poll_response
 from src.poll_relay import PollRelay
 
 UI_PATH = "/api/poll/ui"
@@ -200,10 +201,11 @@ class BrowserClient:
         else:
             body = await self._frontend.poll_session(self._session_id, self.cursor, timeout=timeout)
 
-        if body["reset"] or body["evicted"]:
-            if body["reset"]:
+        batch = parse_poll_response(body)
+        if batch.reset or batch.evicted:
+            if batch.reset:
                 self.reset_count += 1
-            if body["evicted"]:
+            if batch.evicted:
                 self.evicted_count += 1
             # A real browser resyncs via a full REST reload here (message.js's
             # loadMessages(), see polling.js) — out of scope for this
@@ -211,15 +213,13 @@ class BrowserClient:
             # polling.test.js already cover that reload path). Adopting the
             # fresh cursor and continuing is enough to verify the transport
             # itself delivers everything AFTER the resync exactly once.
-            self.cursor = body["next_cursor"]
+            self.cursor = batch.next_cursor
             return
 
-        events = body["events"]
-        next_cursor = body["next_cursor"]
-        start_cursor = next_cursor - len(events) + 1
-        for i, event in enumerate(events):
+        start_cursor = batch.next_cursor - len(batch.events) + 1
+        for i, event in enumerate(batch.events):
             self.received.append((start_cursor + i, event))
-        self.cursor = next_cursor
+        self.cursor = batch.next_cursor
 
     async def run_until(self, stop_event: asyncio.Event, poll_timeout: float = 0.05) -> None:
         """Poll in a loop until `stop_event` is set — tolerates transient
