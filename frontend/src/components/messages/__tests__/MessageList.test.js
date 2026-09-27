@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { render, screen } from '@testing-library/vue'
+import { render, screen, fireEvent } from '@testing-library/vue'
 import { createPinia as _createPinia } from 'pinia'
 import { ref } from 'vue'
 import { renderWithStores } from '@/test-utils/render'
@@ -288,6 +288,55 @@ describe('MessageList', () => {
     const items = screen.getAllByRole('article')
     expect(items.length).toBe(1)
     expect(items[0].textContent).toBe('Real assistant reply')
+  })
+})
+
+// Issue #2035: three-way empty-state split (loading / error+retry / genuinely-empty),
+// keyed off sessionStore.hydrationStageBySession.
+describe('hydration-stage empty state (#2035)', () => {
+  async function setup(hydrationEntry) {
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: {
+        MessageItem: true,
+        TruncationBanner: true,
+        SubagentTimeline: true
+      }
+    })
+    const { useSessionStore } = await import('@/stores/session')
+    const sessionStore = useSessionStore(pinia)
+    if (hydrationEntry) {
+      sessionStore.hydrationStageBySession.set(SESSION_ID, hydrationEntry)
+    }
+    await new Promise(r => setTimeout(r, 10))
+    return { sessionStore }
+  }
+
+  it('shows a loading spinner + stage label while hydrating and no messages are loaded yet', async () => {
+    await setup({ stage: 'loading_resources', error: null, controller: new AbortController() })
+
+    expect(screen.getByText('Loading resources...')).toBeTruthy()
+    expect(screen.queryByText('No messages yet. Start a conversation!')).toBeFalsy()
+  })
+
+  it('shows the error message + Retry button when hydration failed, and Retry calls retryHydration', async () => {
+    const { sessionStore } = await setup({
+      stage: 'error',
+      error: { stage: 'loading_history', message: 'boom', kind: 'thrown' },
+      controller: new AbortController(),
+    })
+    vi.spyOn(sessionStore, 'retryHydration').mockResolvedValue(undefined)
+
+    expect(screen.getByText(/Failed to load session data \(loading_history\) — boom/)).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+    expect(sessionStore.retryHydration).toHaveBeenCalledWith(SESSION_ID)
+  })
+
+  it('shows the original "No messages yet" text unchanged once ready with genuinely no messages', async () => {
+    await setup(null) // no hydrationStageBySession entry => hydrationStage defaults to 'ready'
+
+    expect(screen.getByText('No messages yet. Start a conversation!')).toBeTruthy()
   })
 })
 

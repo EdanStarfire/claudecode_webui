@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { makeSession } from '@/test-utils/factories'
 
@@ -417,6 +417,188 @@ describe('session store', () => {
 
       expect(() => store.saveScrollPosition('sess-d', null)).not.toThrow()
       expect(store.scrollPositions.has('sess-d')).toBe(false)
+    })
+  })
+
+  describe('hydration stage tracking (#2035)', () => {
+    afterEach(async () => {
+      // Restore the module's default per-call-fresh-object behavior in case a test
+      // below overrode it with a fixed mockImplementation.
+      const { useResourceStore } = await import('@/stores/resource')
+      useResourceStore.mockImplementation(() => ({ loadResources: vi.fn().mockResolvedValue(undefined) }))
+    })
+
+    it('happy path progresses to ready and connects polling', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useSessionStore()
+
+      store.sessions.set('sess-hydrate', makeSession({ session_id: 'sess-hydrate', state: 'active' }))
+      apiMock.get.mockResolvedValue({ messages: [], total_count: 0, has_more: false, agents: [] })
+
+      await store.selectSession('sess-hydrate')
+
+      const entry = store.hydrationStageBySession.get('sess-hydrate')
+      expect(entry.stage).toBe('ready')
+      expect(pollingMock.connectSession).toHaveBeenCalledWith('sess-hydrate')
+    })
+
+    it('loadMessages() throwing surfaces a thrown error at loading_history and never connects polling', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useSessionStore()
+
+      store.sessions.set('sess-throw', makeSession({ session_id: 'sess-throw', state: 'active' }))
+      apiMock.get.mockImplementation((url) => {
+        if (url.includes('/messages')) return Promise.reject(new Error('boom'))
+        return Promise.resolve({ agents: [] })
+      })
+
+      await store.selectSession('sess-throw')
+
+      const entry = store.hydrationStageBySession.get('sess-throw')
+      expect(entry.stage).toBe('error')
+      expect(entry.error).toMatchObject({ stage: 'loading_history', kind: 'thrown', message: 'boom' })
+      expect(pollingMock.connectSession).not.toHaveBeenCalled()
+    })
+
+    it('loadMessages() hanging past 20s surfaces a timeout error', async () => {
+      vi.useFakeTimers()
+      try {
+        const { useSessionStore } = await import('@/stores/session')
+        const store = useSessionStore()
+
+        store.sessions.set('sess-hang', makeSession({ session_id: 'sess-hang', state: 'active' }))
+        apiMock.get.mockImplementation((url) => {
+          if (url.includes('/messages')) return new Promise(() => {}) // never resolves
+          return Promise.resolve({ agents: [] })
+        })
+
+        const selectPromise = store.selectSession('sess-hang')
+        await vi.advanceTimersByTimeAsync(20000)
+        await selectPromise
+
+        const entry = store.hydrationStageBySession.get('sess-hang')
+        expect(entry.stage).toBe('error')
+        expect(entry.error.kind).toBe('timeout')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('aborts a stale selection, clearing its stage entry, when switching sessions mid-hydration', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useSessionStore()
+
+      store.sessions.set('sess-a', makeSession({ session_id: 'sess-a', state: 'active' }))
+      store.sessions.set('sess-b', makeSession({ session_id: 'sess-b', state: 'active' }))
+
+      let resolveAMessages
+      apiMock.get.mockImplementation((url) => {
+        if (url.includes('/sessions/sess-a/messages')) {
+          return new Promise((resolve) => { resolveAMessages = resolve })
+        }
+        return Promise.resolve({ messages: [], total_count: 0, has_more: false, agents: [] })
+      })
+
+      const selectA = store.selectSession('sess-a')
+      await vi.waitFor(() => {
+        expect(store.hydrationStageBySession.get('sess-a')?.stage).toBe('loading_history')
+      })
+
+      const selectB = store.selectSession('sess-b')
+      resolveAMessages?.({ messages: [], total_count: 0, has_more: false })
+      await Promise.all([selectA, selectB])
+
+      expect(store.hydrationStageBySession.has('sess-a')).toBe(false)
+      expect(store.hydrationStageBySession.get('sess-b')?.stage).toBe('ready')
+    })
+
+    it('retryHydration resumes from the failed step without re-invoking already-succeeded steps', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const { useResourceStore } = await import('@/stores/resource')
+      const store = useSessionStore()
+
+      store.sessions.set('sess-retry', makeSession({ session_id: 'sess-retry', state: 'active' }))
+      apiMock.get.mockResolvedValue({ messages: [], total_count: 0, has_more: false, agents: [] })
+
+      // Fix useResourceStore()'s return value across calls (its default mock factory
+      // otherwise hands back a fresh loadResources spy on every call), so the rejection
+      // configured here is what both the initial attempt and the retry actually see.
+      const loadResourcesMock = vi.fn()
+      loadResourcesMock.mockRejectedValueOnce(new Error('network down'))
+      loadResourcesMock.mockResolvedValue(undefined)
+      useResourceStore.mockImplementation(() => ({ loadResources: loadResourcesMock }))
+
+      await store.selectSession('sess-retry')
+
+      let entry = store.hydrationStageBySession.get('sess-retry')
+      expect(entry.stage).toBe('error')
+      expect(entry.error.stage).toBe('loading_resources')
+
+      const messagesCallsAfterFirstAttempt = apiMock.get.mock.calls.filter(([url]) => url.includes('/messages')).length
+      expect(messagesCallsAfterFirstAttempt).toBe(1)
+
+      await store.retryHydration('sess-retry')
+
+      entry = store.hydrationStageBySession.get('sess-retry')
+      expect(entry.stage).toBe('ready')
+      const messagesCallsAfterRetry = apiMock.get.mock.calls.filter(([url]) => url.includes('/messages')).length
+      expect(messagesCallsAfterRetry).toBe(1) // not re-invoked by the retry — already succeeded
+    })
+
+    it('re-selecting the already-current session leaves a prior ready stage untouched', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useSessionStore()
+
+      store.sessions.set('sess-same', makeSession({ session_id: 'sess-same', state: 'active' }))
+      apiMock.get.mockResolvedValue({ messages: [], total_count: 0, has_more: false, agents: [] })
+
+      await store.selectSession('sess-same')
+      expect(store.hydrationStageBySession.get('sess-same')?.stage).toBe('ready')
+
+      await store.selectSession('sess-same')
+      expect(store.hydrationStageBySession.get('sess-same')?.stage).toBe('ready')
+    })
+
+    it('clears a stale error entry as soon as a fresh selection begins, before the new chain even resolves (builder-review fix)', async () => {
+      // Regression coverage for: reset/restart callers null out currentSessionId then
+      // re-call selectSession() for the same id (bypassing the wasAlreadyCurrent
+      // early-return) specifically to force a fresh attempt. Without clearing the old
+      // entry up front, the previous error/Retry banner would linger through this new
+      // attempt, and clicking that stale Retry could call retryHydration() with a
+      // controller that aborts the very selection now in flight.
+      const { useSessionStore } = await import('@/stores/session')
+      const store = useSessionStore()
+
+      store.sessions.set('sess-stale', makeSession({ session_id: 'sess-stale', state: 'active' }))
+      apiMock.get.mockImplementation((url) => {
+        if (url.includes('/messages')) return Promise.reject(new Error('boom'))
+        return Promise.resolve({ agents: [] })
+      })
+
+      await store.selectSession('sess-stale')
+      expect(store.hydrationStageBySession.get('sess-stale')?.stage).toBe('error')
+
+      // Mimic the reset/restart pattern: null out currentSessionId first.
+      store.currentSessionId = null
+
+      let resolveMessages
+      apiMock.get.mockImplementation((url) => {
+        if (url.includes('/messages')) return new Promise((resolve) => { resolveMessages = resolve })
+        return Promise.resolve({ agents: [] })
+      })
+      const reselect = store.selectSession('sess-stale')
+
+      // The stale error is gone: the fresh attempt reaches a genuine loading_history
+      // stage instead of the old selection's 'error' entry lingering in its place.
+      await vi.waitFor(() => {
+        expect(store.hydrationStageBySession.get('sess-stale')?.stage).toBe('loading_history')
+      })
+      expect(store.hydrationStageBySession.get('sess-stale')?.error).toBeNull()
+
+      resolveMessages?.({ messages: [], total_count: 0, has_more: false, agents: [] })
+      await reselect
+
+      expect(store.hydrationStageBySession.get('sess-stale')?.stage).toBe('ready')
     })
   })
 })

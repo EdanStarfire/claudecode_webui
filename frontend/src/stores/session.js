@@ -66,6 +66,128 @@ export const useSessionStore = defineStore('session', () => {
   const selectingSession = ref(false)
   let pendingSelectAbort = null  // AbortController for current selection
 
+  // ========== HYDRATION STAGE TRACKING (issue #2035) ==========
+  // Per-session visibility into the data-hydration chain inside selectSession(), so a
+  // hang or throw in hydrateBackgroundAgents()/loadMessages()/loadResources() surfaces
+  // a diagnosable stage + error instead of leaving the input silently disabled forever.
+  const hydrationStageBySession = ref(new Map())
+  // sessionId -> { stage, error, controller }
+  //   stage: 'loading_history' | 'loading_resources' | 'loading_extras'
+  //          | 'connecting_poll' | 'ready' | 'error'
+  //   error: { stage, message, kind: 'thrown' | 'timeout' } | null
+  //   controller: the AbortController that owns this entry (for abort-reset, never read by UI)
+
+  function setHydrationStage(sessionId, controller, stage) {
+    if (controller.signal.aborted) return
+    hydrationStageBySession.value.set(sessionId, { stage, error: null, controller })
+    hydrationStageBySession.value = new Map(hydrationStageBySession.value)
+  }
+
+  function setHydrationError(sessionId, controller, stage, error) {
+    if (controller.signal.aborted) return
+    hydrationStageBySession.value.set(sessionId, {
+      stage: 'error',
+      error: { stage, message: error?.message || String(error), kind: error?.isHydrationTimeout ? 'timeout' : 'thrown' },
+      controller,
+    })
+    hydrationStageBySession.value = new Map(hydrationStageBySession.value)
+  }
+
+  function clearHydrationStageIfOwned(sessionId, controller) {
+    const entry = hydrationStageBySession.value.get(sessionId)
+    if (entry && entry.controller === controller) {
+      hydrationStageBySession.value.delete(sessionId)
+      hydrationStageBySession.value = new Map(hydrationStageBySession.value)
+    }
+  }
+
+  const HYDRATION_STEP_TIMEOUT_MS = 20000
+
+  function withTimeout(promise, ms, stageLabel) {
+    let timeoutId
+    const timeout = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => {
+        const err = new Error(`Timed out after ${ms / 1000}s during ${stageLabel}`)
+        err.isHydrationTimeout = true
+        reject(err)
+      }, ms)
+    })
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId))
+  }
+
+  /**
+   * Issue #2035: the shared data-hydration chain, extracted out of both call sites in
+   * selectSession() (the ephemeral-informational-view branch and the main auto-start
+   * branch) so stage-tracking/timeout/retry logic exists in exactly one place.
+   * `includeUsage: false` preserves the ephemeral branch's one real existing behavioral
+   * difference — it never calls loadUsage() today.
+   */
+  async function runDataHydrationChain(sessionId, abortController, { includeUsage = true } = {}) {
+    const messageStore = await import('./message')
+    const msgStore = messageStore.useMessageStore()
+
+    if (!msgStore.messagesBySession.has(sessionId)) {
+      setHydrationStage(sessionId, abortController, 'loading_history')
+      try {
+        await withTimeout(msgStore.hydrateBackgroundAgents(sessionId), HYDRATION_STEP_TIMEOUT_MS, 'loading_history')
+        if (abortController.signal.aborted) { clearHydrationStageIfOwned(sessionId, abortController); return false }
+        await withTimeout(msgStore.loadMessages(sessionId), HYDRATION_STEP_TIMEOUT_MS, 'loading_history')
+      } catch (error) {
+        if (abortController.signal.aborted) { clearHydrationStageIfOwned(sessionId, abortController); return false }
+        setHydrationError(sessionId, abortController, 'loading_history', error)
+        return false
+      }
+    }
+    if (abortController.signal.aborted) { clearHydrationStageIfOwned(sessionId, abortController); return false }
+
+    setHydrationStage(sessionId, abortController, 'loading_resources')
+    const resourceStore = await import('./resource')
+    try {
+      await withTimeout(resourceStore.useResourceStore().loadResources(sessionId), HYDRATION_STEP_TIMEOUT_MS, 'loading_resources')
+    } catch (error) {
+      if (abortController.signal.aborted) { clearHydrationStageIfOwned(sessionId, abortController); return false }
+      setHydrationError(sessionId, abortController, 'loading_resources', error)
+      return false
+    }
+    if (abortController.signal.aborted) { clearHydrationStageIfOwned(sessionId, abortController); return false }
+
+    setHydrationStage(sessionId, abortController, 'loading_extras')
+    const linksStoreModule = await import('./links')
+    linksStoreModule.useLinksStore().loadLinks(sessionId)
+    if (includeUsage) {
+      const usageStore = await import('./usage')
+      usageStore.useUsageStore().loadUsage(sessionId)
+    }
+    if (abortController.signal.aborted) { clearHydrationStageIfOwned(sessionId, abortController); return false }
+
+    setHydrationStage(sessionId, abortController, 'connecting_poll')
+    const wsStore = await import('./polling')
+    await wsStore.usePollingStore().connectSession(sessionId)
+
+    if (abortController.signal.aborted) { clearHydrationStageIfOwned(sessionId, abortController); return false }
+    setHydrationStage(sessionId, abortController, 'ready')
+    return true
+  }
+
+  /**
+   * Retry the data-hydration chain after an error. Because runDataHydrationChain()
+   * re-checks messagesBySession.has(sessionId) itself, calling it again automatically
+   * skips whichever step already succeeded and resumes at the failed one — no separate
+   * "resume from stage X" parameter needed.
+   */
+  async function retryHydration(sessionId) {
+    if (pendingSelectAbort) {
+      pendingSelectAbort.abort()
+    }
+    const controller = new AbortController()
+    pendingSelectAbort = controller
+    try {
+      await runDataHydrationChain(sessionId, controller)
+    } finally {
+      if (pendingSelectAbort === controller) pendingSelectAbort = null
+    }
+  }
+
   // ========== COMPUTED ==========
 
   const currentSession = computed(() =>
@@ -305,6 +427,14 @@ export const useSessionStore = defineStore('session', () => {
     const abortController = new AbortController()
     pendingSelectAbort = abortController
 
+    // Issue #2035: a fresh selection attempt must not keep showing a stale
+    // hydration-error/loading entry from a previous attempt (e.g. across a
+    // reset/restart that re-selects the same sessionId) — without this, the old
+    // banner (and its Retry button) would linger through the auto-start wait below,
+    // and clicking Retry on it would abort this brand-new selection out from under it.
+    hydrationStageBySession.value.delete(sessionId)
+    hydrationStageBySession.value = new Map(hydrationStageBySession.value)
+
     // Set mutex flag
     selectingSession.value = true
 
@@ -393,31 +523,9 @@ export const useSessionStore = defineStore('session', () => {
 
         // No archives (or no project_id / fetch failed): show informational view
         // Set currentSessionId but skip auto-start entirely
-        const messageStore = await import('./message')
-        const msgStore = messageStore.useMessageStore()
-        if (!msgStore.messagesBySession.has(sessionId)) {
-          // Issue #1746 (stage: subagents): seed background-agent leg state from the backend's
-          // reduced snapshot BEFORE loadMessages() replays history, so subagent narration
-          // routing (which resolves via task_id) has taskIdByLaunchToolUseId already populated.
-          await msgStore.hydrateBackgroundAgents(sessionId)
-          await msgStore.loadMessages(sessionId)
-        }
+        const ephemeralHydrated = await runDataHydrationChain(sessionId, abortController, { includeUsage: false })
 
-        if (abortController.signal.aborted) return
-
-        const resourceStore = await import('./resource')
-        await resourceStore.useResourceStore().loadResources(sessionId)
-
-        if (abortController.signal.aborted) return
-
-        // Issue #1530: Load agent-registered links
-        const linksStoreModule = await import('./links')
-        linksStoreModule.useLinksStore().loadLinks(sessionId)
-
-        const wsStore = await import('./polling')
-        await wsStore.usePollingStore().connectSession(sessionId)
-
-        if (!abortController.signal.aborted) {
+        if (ephemeralHydrated) {
           console.log(`Selected ephemeral session ${sessionId} (no auto-start)`)
         }
         return
@@ -496,49 +604,13 @@ export const useSessionStore = defineStore('session', () => {
         return
       }
 
-      // Load messages for this session — only on first visit.
-      // On switch-back, the preserved polling cursor replays any missed events,
-      // avoiding the multi-second reload and spurious tool-state regression warnings.
-      const messageStore = await import('./message')
-      const msgStore = messageStore.useMessageStore()
-      if (!msgStore.messagesBySession.has(sessionId)) {
-        // Issue #1746 (stage: subagents): seed background-agent leg state from the backend's
-        // reduced snapshot BEFORE loadMessages() replays history, so subagent narration
-        // routing (which resolves via task_id) has taskIdByLaunchToolUseId already populated.
-        await msgStore.hydrateBackgroundAgents(sessionId)
-        await msgStore.loadMessages(sessionId)
-      }
+      // Load messages, resources, links/usage, and connect polling for this session —
+      // only the steps not already satisfied are re-run (e.g. on switch-back, the
+      // preserved polling cursor replays any missed events instead of a full reload).
+      const hydrated = await runDataHydrationChain(sessionId, abortController)
 
-      // Check abort after message load
-      if (abortController.signal.aborted) {
-        console.log(`Selection of ${sessionId} aborted after message load`)
-        return
-      }
-
-      // Issue #404: Load resources (images and files) for this session
-      const resourceStore = await import('./resource')
-      await resourceStore.useResourceStore().loadResources(sessionId)
-
-      // Check abort after resource load
-      if (abortController.signal.aborted) {
-        console.log(`Selection of ${sessionId} aborted after resource load`)
-        return
-      }
-
-      // Issue #1530: Load agent-registered links for this session
-      const linksStoreModule = await import('./links')
-      linksStoreModule.useLinksStore().loadLinks(sessionId)
-
-      // Issue #1125: Load existing usage data for cost badge
-      const usageStore = await import('./usage')
-      usageStore.useUsageStore().loadUsage(sessionId)
-
-      // CRITICAL: Await polling connection to prevent race conditions
-      const wsStore = await import('./polling')
-      await wsStore.usePollingStore().connectSession(sessionId)
-
-      // Final check - only log success if not aborted
-      if (!abortController.signal.aborted) {
+      // Final check - only log success if it actually completed (not aborted, not errored)
+      if (hydrated) {
         console.log(`Selected session ${sessionId}`)
       }
     } finally {
@@ -588,7 +660,9 @@ export const useSessionStore = defineStore('session', () => {
       initData.value.delete(deletedId)
       archiveInitData.value.delete(deletedId)
       scrollPositions.value.delete(deletedId)
+      hydrationStageBySession.value.delete(deletedId)
     }
+    hydrationStageBySession.value = new Map(hydrationStageBySession.value)
 
     // Issue #1530: Clear links for deleted sessions
     import('./links').then(({ useLinksStore }) => {
@@ -957,6 +1031,7 @@ export const useSessionStore = defineStore('session', () => {
     archiveChanges,
     effectiveConfigBySession,
     templateBySession,
+    hydrationStageBySession,
 
     // Computed
     currentSession,
@@ -997,6 +1072,7 @@ export const useSessionStore = defineStore('session', () => {
     recordSessionReset,
     clearSessionSelection,
     markUnread,
-    markRead
+    markRead,
+    retryHydration
   }
 })
