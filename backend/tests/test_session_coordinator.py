@@ -2523,7 +2523,7 @@ class TestConvertStoredMessageToWebsocket:
                 "subtype": "task_updated",
                 "task_id": "task-xyz",
                 "status": "completed",
-                "tool_use_id": "toolu_aaa",
+                "session_id": "sess-live-1",
                 "uuid": "uuid-456",
             },
         }
@@ -2532,8 +2532,14 @@ class TestConvertStoredMessageToWebsocket:
         meta = result["metadata"]
         assert meta["task_id"] == "task-xyz"
         assert meta["status"] == "completed"
-        assert meta["tool_use_id"] == "toolu_aaa"
         assert meta["uuid"] == "uuid-456"
+        # Issue #2042 (Gap 3): task_session_id must be ported for reload/live
+        # parity, matching the live TaskUpdatedHandler.
+        assert meta["task_session_id"] == "sess-live-1"
+        # Issue #2042: the live path's TaskUpdatedHandler never sets tool_use_id
+        # at all (message_parser.py's TaskUpdatedHandler docstring: "the SDK does
+        # not expose one for this frame type") — reload must not fabricate it.
+        assert "tool_use_id" not in meta
 
     def test_issue_1657_task_started_unchanged(self, coordinator):
         stored = {
@@ -2691,6 +2697,75 @@ class TestConvertStoredMessageToWebsocket:
         assert result["messages"][0]["content"] == "Claude Code Launched"
         assert result["messages"][0]["metadata"]["subtype"] == "client_launched"
 
+    @pytest.mark.asyncio
+    async def test_issue_2042_legacy_branch_propagates_display(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Gap 2: a legacy dict-shaped record (no _type discriminator) with a
+        top-level `display` key — as client_launched/interrupt are stored — must
+        have that `display` propagated into metadata on reload, matching what
+        _convert_stored_message_to_websocket() already does for _type-discriminated
+        records."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        mock_storage = AsyncMock()
+        mock_storage.read_messages.return_value = [
+            {
+                "type": "system",
+                "content": "Claude Code Launched",
+                "timestamp": 1700000000.0,
+                "metadata": {"subtype": "client_launched"},
+                "display": {"tool_states": {}, "orphaned_tools": [], "linked_permissions": {}},
+            }
+        ]
+        mock_storage.get_message_count.return_value = 1
+        coordinator._storage_managers[session_id] = mock_storage
+
+        result = await coordinator.get_session_messages(session_id, limit=10, offset=0)
+        assert len(result["messages"]) == 1
+        assert result["messages"][0]["metadata"]["display"] == {
+            "tool_states": {}, "orphaned_tools": [], "linked_permissions": {},
+        }
+
+    @pytest.mark.asyncio
+    async def test_issue_2042_legacy_branch_comm_message_gets_shared_defaults(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Gap 5: a comm/attachment user message stored directly by ClaudeSDK's
+        conversation loop (metadata carries only {"comm": {...}}, bypassing
+        MessageProcessor entirely) must still get UserMessageHandler's shared
+        defaults on reload — tool_uses/tool_results/has_*/role/session_id."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        mock_storage = AsyncMock()
+        mock_storage.read_messages.return_value = [
+            {
+                "type": "user",
+                "content": "Hello from another minion",
+                "timestamp": 1700000000.0,
+                "session_id": session_id,
+                "metadata": {"comm": {"comm_type": "info", "summary": "Hello"}},
+            }
+        ]
+        mock_storage.get_message_count.return_value = 1
+        coordinator._storage_managers[session_id] = mock_storage
+
+        result = await coordinator.get_session_messages(session_id, limit=10, offset=0)
+        assert len(result["messages"]) == 1
+        meta = result["messages"][0]["metadata"]
+        assert meta["comm"] == {"comm_type": "info", "summary": "Hello"}
+        assert meta["tool_uses"] == []
+        assert meta["tool_results"] == []
+        assert meta["has_tool_uses"] is False
+        assert meta["has_tool_results"] is False
+        assert meta["has_thinking"] is False
+        assert meta["has_permission_requests"] is False
+        assert meta["has_permission_responses"] is False
+        assert meta["role"] is None
+        assert meta["session_id"] == session_id
+
     def test_issue_1985_assistant_message_record_id_and_turn_id(self, coordinator):
         """record_id (top-level message_id) and turn_id (data.message_id) are distinct
         concepts and must not be conflated when reloading an AssistantMessage record."""
@@ -2777,6 +2852,115 @@ class TestConvertStoredMessageToWebsocket:
         assert result is not None
         assert "message_id" not in result
         assert "turn_id" not in result["metadata"]
+
+    def test_issue_2042_system_message_always_sets_six_defaults(self, coordinator):
+        """Gap 1: SystemMessage/HookEventMessage reload metadata must always carry
+        working_directory/permissions/tools/model/system_prompt/error_details, matching
+        the live path's key *presence* — even though the live path's real SDK-object
+        branch never actually derives non-None values for these either (a separate,
+        out-of-scope live-path gap), so the reload values are always the same constants,
+        not read from `data` (which doesn't carry them at this nesting level anyway)."""
+        stored = {
+            "_type": "SystemMessage",
+            "timestamp": 1700000000.0,
+            "data": {"subtype": "init", "data": {"cwd": "/tmp/x", "tools": ["Read"]}},
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        meta = result["metadata"]
+        for key in (
+            "working_directory", "permissions", "model", "system_prompt", "error_details",
+        ):
+            assert key in meta
+            assert meta[key] is None
+        assert meta["tools"] == []
+
+    def test_issue_2042_hook_event_message_always_sets_six_defaults(self, coordinator):
+        """Gap 1 also covers HookEventMessage, not just SystemMessage."""
+        stored = {
+            "_type": "HookEventMessage",
+            "timestamp": 1700000000.0,
+            "data": {"subtype": "hook_started", "data": {"hook_name": "pre_tool_use"}},
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        meta = result["metadata"]
+        for key in (
+            "working_directory", "permissions", "model", "system_prompt", "error_details",
+        ):
+            assert key in meta
+            assert meta[key] is None
+        assert meta["tools"] == []
+
+    def test_issue_2042_tool_result_text_only_blocks_joined_to_string(self, coordinator):
+        """Gap 4: a tool_result content block list containing only text items is
+        joined into a single string, matching UserMessageHandler's live-path
+        normalization (message_parser.py:999-1014)."""
+        stored = {
+            "_type": "UserMessage",
+            "timestamp": 1700000000.0,
+            "data": {
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_1",
+                        "content": [
+                            {"type": "text", "text": "first line"},
+                            {"type": "text", "text": "second line"},
+                        ],
+                    },
+                ],
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        tool_results = result["metadata"]["tool_results"]
+        assert len(tool_results) == 1
+        assert tool_results[0]["content"] == "first line\nsecond line"
+
+    def test_issue_2042_tool_result_rich_content_preserved_as_list(self, coordinator):
+        """Gap 4: a tool_result content block list with any non-text item (e.g. an
+        image) is preserved as-is, not joined."""
+        stored = {
+            "_type": "UserMessage",
+            "timestamp": 1700000000.0,
+            "data": {
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_2",
+                        "content": [
+                            {"type": "text", "text": "see image"},
+                            {"type": "image", "source": {"data": "base64..."}},
+                        ],
+                    },
+                ],
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        tool_results = result["metadata"]["tool_results"]
+        assert len(tool_results) == 1
+        assert isinstance(tool_results[0]["content"], list)
+        assert len(tool_results[0]["content"]) == 2
+
+    def test_issue_2042_tool_result_none_content_coerced_to_string(self, coordinator):
+        """Gap 4: non-list, non-string content (e.g. a bare None) is coerced via
+        str(), matching UserMessageHandler's final fallback (message_parser.py:1015-1017)."""
+        stored = {
+            "_type": "UserMessage",
+            "timestamp": 1700000000.0,
+            "data": {
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_3", "content": None},
+                ],
+            },
+        }
+        result = coordinator._convert_stored_message_to_websocket(stored)
+        assert result is not None
+        tool_results = result["metadata"]["tool_results"]
+        assert len(tool_results) == 1
+        assert tool_results[0]["content"] == "None"
 
 
 class TestIssue1985IdentityParity:
