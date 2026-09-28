@@ -164,38 +164,16 @@ async function replayRestPath(fixture) {
 // the real export pipeline to confirm the fix: messagesBySession now converges
 // perfectly between the live and REST paths for this fixture.
 //
-// toolCallsBySession, however, does NOT yet converge — #2042's verification pass
-// surfaced a separate, substantial, previously-hidden divergence (masked until now by
-// the messages-array divergence above always failing first). It is NOT one of the 5
-// backend gaps #2042 fixed, and #2042 is scoped backend-only — this needs its own
-// investigation/issue. Observed differences for this fixture's live vs. REST
-// toolCallsBySession:
-//   - `signature` and default `timestamp` are computed once, at tool-call creation,
-//     in frontend/src/stores/message.js's handleToolCall() (~line 1175/1199) — but
-//     `input` can still be updated by later events (~line 1094-1095). If the
-//     first-seen live event for a tool_use_id doesn't yet carry final input, both
-//     fields go stale for that tool call's entire lifetime on the live path, while
-//     the REST path (built from final stored state) does not have this problem.
-//   - Denied-permission tool calls: `backendStatus` ("denied" live vs "failed" REST),
-//     `permissionRequestId` (present on REST, undefined live), and `result` shape
-//     (`{message: "Permission denied"}` live vs `{content: "User denied permission"}`
-//     REST) all differ.
-//   - Orphaned/interrupted tool calls: `backendState.state`/`style` and `status`
-//     disagree between the two paths (e.g. "interrupted"/"orphaned" REST vs
-//     "failed"/"error" or "pending"/"default" live for the same tool call).
-// This fixture stays captured as a known divergence — see the comment on
-// KNOWN_DIVERGENT_FIXTURES's construction below for why a normalizer isn't the fix.
-const KNOWN_DIVERGENT_FIXTURES = new Map([
-  [
-    '2026-09-23-primary',
-    'toolCallsBySession diverges between live and REST reload paths (signature/' +
-    'timestamp staleness in message.js\'s handleToolCall(), denied-permission result ' +
-    'shape, orphaned/interrupted tool-call state reconciliation) — see comment above. ' +
-    'messagesBySession itself now converges (fixed in #2042); this remaining ' +
-    'divergence is frontend/toolCallsBySession-only and out of #2042\'s backend-only ' +
-    'scope — needs its own issue.',
-  ],
-])
+// toolCallsBySession also now converges (fixed in #2044), closing the substantial,
+// previously-hidden divergence #2042's verification pass surfaced (masked until then
+// by the messages-array divergence above always failing first). Root causes fixed in
+// message.js's handleToolCall()/applyDisplayMetadata()/markToolUseOrphaned():
+// stale signature/timestamp on tool-call creation, a later lower-authority update
+// silently overwriting an already-resolved denied/interrupted tool call, a statusRank
+// tie letting a stale "failed" DisplayProjection replay overwrite "completed", and
+// markToolUseOrphaned() never stamping backendState. This fixture is fully removed
+// from KNOWN_DIVERGENT_FIXTURES below and now runs under the normal convergence check.
+const KNOWN_DIVERGENT_FIXTURES = new Map([])
 
 describe('fixture equivalence — live event path vs. REST reload path (issue #1999, AC1/AC2)', () => {
   // AC1's fail-not-skip guard: listRawFixtureNames() throws (rather than returning an

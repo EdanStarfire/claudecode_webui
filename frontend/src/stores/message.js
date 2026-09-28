@@ -1084,6 +1084,15 @@ export const useMessageStore = defineStore('message', () => {
         console.warn(`Ignoring status regression for tool ${toolUseId}: ${existing.status} → ${frontendStatus}`)
         return
       }
+      // A tool already resolved via denial or interruption is terminal in a stronger sense
+      // than plain 'completed'/'error' — a later conflicting tool_call update (e.g. a
+      // duplicate/stale "failed" event) must not override the specific resolution already
+      // recorded.
+      const lockedBackendStatuses = ['denied', 'interrupted']
+      if (lockedBackendStatuses.includes(existing.backendStatus) && toolCall.status !== existing.backendStatus) {
+        console.warn(`Ignoring conflicting update for locked tool ${toolUseId}: ${existing.backendStatus} → ${toolCall.status}`)
+        return
+      }
 
       existing.status = frontendStatus
       existing.backendStatus = toolCall.status
@@ -1093,6 +1102,14 @@ export const useMessageStore = defineStore('message', () => {
       // events are still streaming); a subsequent event carries the fully-assembled input.
       if (toolCall.input !== undefined && toolCall.input !== null) {
         existing.input = toolCall.input
+        existing.signature = createToolSignature(existing.name, existing.input)
+      }
+      // Gated on turn_id like existing.messageId just below: a genuine live ToolCallUpdate
+      // always carries turn_id, but the REST reload path can synthesize extra bookend
+      // tool_call events (e.g. around an interrupted tool) that lack turn_id and carry a
+      // stale/fallback created_at — those must not clobber the real captured timestamp.
+      if (toolCall.created_at && toolCall.turn_id) {
+        existing.timestamp = toolCall.created_at
       }
 
       // Issue #1774: persist AskUserQuestion answers independent of `.input`, which gets
@@ -1109,7 +1126,7 @@ export const useMessageStore = defineStore('message', () => {
       // Update permission fields
       if (toolCall.permission) {
         existing.suggestions = toolCall.permission.suggestions || []
-        existing.permissionRequestId = toolCall.request_id  // request_id is added by backend for correlation
+        existing.permissionRequestId = toolCall.request_id ?? existing.permissionRequestId  // request_id is added by backend for correlation
       }
       // Populate permissionToToolMap for handlePermissionResponse correlation
       if (toolCall.request_id && toolCall.status === 'awaiting_permission') {
@@ -1331,15 +1348,20 @@ export const useMessageStore = defineStore('message', () => {
               pending: 0,
               permission_required: 1,
               executing: 1,
-              completed: 2,
               error: 2,
+              completed: 3,
             }
             const existingRank = statusRank[toolCall.status] ?? 0
             const newRank = statusRank[newStatus] ?? 0
-            if (newRank >= existingRank) {
+            // Once a tool reaches a terminal rank (error/completed), only a strictly-higher-rank
+            // update may touch it — a same-rank DisplayProjection replay (e.g. a stale/duplicate
+            // "failed" landing after the authoritative pipeline already marked it "completed") must
+            // not silently overwrite state a more specific mechanism already resolved. Below the
+            // terminal threshold, same-rank ties are still allowed (e.g. executing <-> permission_required).
+            if (newRank > existingRank || (newRank === existingRank && existingRank < 2)) {
               toolCall.status = newStatus
+              toolCall.backendState = info  // Store full backend state for reference
             }
-            toolCall.backendState = info  // Store full backend state for reference
           }
         }
       }
@@ -1413,6 +1435,13 @@ export const useMessageStore = defineStore('message', () => {
         toolCall.isExpanded = false
         toolCall.backendStatus = 'interrupted'
         toolCall.status = 'completed'
+        toolCall.backendState = {
+          state: 'interrupted',
+          visible: true,
+          collapsed: false,
+          style: 'orphaned',
+          linked_permission_id: toolCall.backendState?.linked_permission_id ?? null,
+        }
       }
     }
     // Trigger reactivity
