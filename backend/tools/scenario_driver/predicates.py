@@ -150,6 +150,20 @@ def resource_registered(session_id: str) -> Predicate:
     return _match
 
 
+def comm_delivered() -> Predicate:
+    """A comm delivered INTO a session's message stream (e.g. a minion's
+    `send_comm` reply reaching the main session) — an ordinary message whose
+    `metadata.comm` is set, the same field `fixture_export._check_markers()`
+    keys "inter-minion comm" on. Scope it to one session's stream via
+    `WaitSpec.stream`."""
+
+    def _match(tagged: TaggedEvent) -> bool:
+        data = _message_data(tagged)
+        return data is not None and "comm" in (data.get("metadata") or {})
+
+    return _match
+
+
 def minion_comm_notification(from_minion_name: str | None = None) -> Predicate:
     """This UI notification fires for EVERY non-SYSTEM/SPAWN/DISPOSE comm,
     both directions — including the driver's own outbound `send_comm` REST

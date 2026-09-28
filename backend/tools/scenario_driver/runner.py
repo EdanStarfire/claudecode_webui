@@ -80,7 +80,13 @@ def _write_checkpoint(checkpoint_path: Path, setup: DriverSetup, last_completed_
 async def reattach(ctx: DriverContext, checkpoint: Checkpoint) -> DriverSetup:
     """Resuming from a checkpoint reattaches to the still-live session/minion
     by ID rather than reconstructing full driver state — if the underlying
-    instance was torn down, a full rerun from scenario 1 is required."""
+    instance was torn down, a full rerun from scenario 1 is required.
+
+    Each consumer is fast-forwarded to its stream's current head before
+    starting, rather than resuming from the checkpoint's saved cursors: those
+    point at the end of the last *completed* scenario, so everything the failed
+    attempt emitted after that would otherwise be replayed and could satisfy
+    the retried scenario's waits immediately."""
     buffer = SharedEventBuffer()
     consumers = [
         PollConsumer(stream="ui", base_url=ctx.base_url, token=ctx.token, buffer=buffer),
@@ -95,6 +101,7 @@ async def reattach(ctx: DriverContext, checkpoint: Checkpoint) -> DriverSetup:
     ]
     for consumer in consumers:
         consumer.cursor = checkpoint.cursors.get(consumer.stream, 0)
+        await consumer.fast_forward()
         consumer.start()
 
     return DriverSetup(
@@ -130,7 +137,7 @@ async def run(
                     stream, base_predicate = step.wait.stream, predicate
                     predicate = lambda tagged, s=stream, p=base_predicate: tagged.source == s and p(tagged)  # noqa: E731
                 try:
-                    matched, resume_index = await wait_for(
+                    matched, next_index = await wait_for(
                         setup.buffer,
                         predicate,
                         resume_index=resume_index,
@@ -140,6 +147,8 @@ async def run(
                     )
                 except WaitTimeoutError as exc:
                     raise ScenarioError(scenario, exc) from exc
+                if step.wait.consume:
+                    resume_index = next_index
             if step.action is not None:
                 try:
                     await step.action(ctx, matched)

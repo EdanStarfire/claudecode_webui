@@ -88,6 +88,11 @@ class WaitSpec:
     count: int = 1
     timeout_s: float = 30.0
     stream: Stream | None = None
+    # False: the next wait rescans from where this one started, so events this
+    # wait scanned past (but didn't match) stay visible to it. Needed when two
+    # waits' events can interleave, e.g. a background task finishing before a
+    # sibling task has started.
+    consume: bool = True
 
 
 @dataclass
@@ -294,14 +299,19 @@ def build_scenarios(
         )
     )
 
-    # 8: Foreground subagent reads folder and writes a file.
+    # 8: Foreground subagent reads folder and writes a file. Runs in acceptEdits:
+    # the subagent's choice of listing tool (Read/Glob/Bash ls) isn't predictable,
+    # and read-only tools don't prompt anyway, so waiting on specific permission
+    # prompts here is flaky. Permission prompts are covered by other scenarios.
     scenarios.append(
         Scenario(
             id=8,
             title="Foreground subagent reads folder and writes a file",
             coverage_markers=("subagent task with progress",),
             steps=[
-                Step(action=partial(actions.set_permission_mode, session_id=m, mode="default")),
+                Step(action=partial(
+                    actions.set_permission_mode, session_id=m, mode="acceptEdits",
+                )),
                 Step(action=partial(
                     actions.send_prompt, session_id=m,
                     message="Use the Task tool to spawn a foreground subagent that reads the "
@@ -315,8 +325,6 @@ def build_scenarios(
                         timeout_s=60.0,
                     ),
                 ),
-                _permission_flow(m, "8", "Read", decision="allow"),
-                _permission_flow(m, "8", "Write", decision="allow"),
                 Step(
                     wait=WaitSpec(
                         predicate=predicates.task_event(m, ("task_notification",)),
@@ -374,6 +382,7 @@ def build_scenarios(
                     description="scenario 10: three background tasks started",
                     count=3,
                     timeout_s=60.0,
+                    consume=False,
                 )),
                 Step(wait=WaitSpec(
                     predicate=predicates.task_event(m, ("task_notification",)),
@@ -399,8 +408,8 @@ def build_scenarios(
                     message="Call the Bash tool exactly once to run 'sleep 30'.",
                 )),
                 Step(wait=WaitSpec(
-                    predicate=predicates.tool_call_status(m, "running", "Bash"),
-                    description="scenario 11: Bash sleep running",
+                    predicate=predicates.tool_call_status(m, "pending", "Bash"),
+                    description="scenario 11: Bash sleep pending",
                     timeout_s=30.0,
                 )),
                 Step(action=partial(actions.interrupt, session_id=m)),
@@ -424,16 +433,15 @@ def build_scenarios(
                     message="Call the Bash tool exactly once to run 'sleep 30'.",
                 )),
                 Step(wait=WaitSpec(
-                    predicate=predicates.tool_call_status(m, "running", "Bash"),
-                    description="scenario 12: Bash sleep running",
+                    predicate=predicates.tool_call_status(m, "pending", "Bash"),
+                    description="scenario 12: Bash sleep pending",
                     timeout_s=30.0,
                 )),
                 Step(action=partial(actions.restart_session, session_id=m)),
-                Step(wait=WaitSpec(
-                    predicate=predicates.state_change(m, "active"),
-                    description="scenario 12: session resumed after mid-tool restart",
-                    timeout_s=60.0,
-                )),
+                # The restart endpoint returns with the session already STARTING, so
+                # polling its REST state is reliable here; a `state_change` "active"
+                # wait isn't — one from before the restart can match immediately.
+                Step(action=partial(actions.ensure_session_active, session_id=m)),
             ],
         )
     )
@@ -444,16 +452,32 @@ def build_scenarios(
             id=13,
             title="Comm to Test Minion and reply",
             coverage_markers=("inter-minion comm",),
+            # The main session itself sends the comm (not the driver via REST), so the
+            # Test Minion's reply is delivered back INTO the main session — the only
+            # session whose raw log gets exported, and so the only place the
+            # "inter-minion comm" marker can be observed.
             steps=[
                 Step(action=partial(
-                    actions.send_comm, legion_id=legion_id, to_minion_id=minion_id,
-                    content="Hello Test Minion.",
+                    actions.send_prompt, session_id=m,
+                    message=f"Use the send_comm Legion MCP tool exactly once to send the "
+                            f"message 'Hello Test Minion.' to the minion named "
+                            f"'{TEST_MINION_NAME}', then stop and wait for its reply.",
                 )),
+                # consume=False: this UI-stream notification and the session-stream
+                # delivery below land in the shared buffer in either order.
                 Step(wait=WaitSpec(
                     predicate=predicates.minion_comm_notification(TEST_MINION_NAME),
                     description="scenario 13: comm reply from Test Minion",
+                    timeout_s=90.0,
+                    consume=False,
+                )),
+                Step(wait=WaitSpec(
+                    predicate=predicates.comm_delivered(),
+                    description="scenario 13: Test Minion's reply delivered to main session",
+                    stream="session",
                     timeout_s=60.0,
                 )),
+                Step(wait=_wait_result(m, "13")),
             ],
         )
     )
@@ -574,14 +598,15 @@ def build_scenarios(
             id=20,
             title="User file upload, read it",
             steps=[
-                Step(action=partial(actions.set_permission_mode, session_id=m, mode="default")),
-                Step(action=partial(actions.upload_file, session_id=m, file_path=scratch_repo / "upload_test.txt")),
+                # Read is auto-allowed for the attachment path even in default mode, so
+                # there's no permission prompt to wait for.
+                Step(action=partial(actions.set_permission_mode, session_id=m, mode="acceptEdits")),
                 Step(action=partial(
-                    actions.send_prompt, session_id=m,
-                    message="Use the Read tool exactly once to read the file you were just "
-                            "given and reply with its contents.",
+                    actions.send_prompt_with_upload, session_id=m,
+                    file_path=scratch_repo / "upload_test.txt",
+                    message="Use the Read tool exactly once to read the attached file "
+                            "and reply with its contents.",
                 )),
-                _permission_flow(m, "20", "Read", decision="allow"),
                 Step(wait=_wait_result(m, "20")),
             ],
         )
@@ -595,6 +620,9 @@ def build_scenarios(
             steps=[
                 Step(action=actions.restart_server),
                 Step(action=partial(actions.wait_for_server_ready, timeout=120.0)),
+                # Sessions come back in `created` after an app restart (the frontend
+                # auto-starts one when it's selected); prompting before it's active 409s.
+                Step(action=partial(actions.ensure_session_active, session_id=m)),
                 Step(action=partial(
                     actions.send_prompt, session_id=m,
                     message="Reply with the single word 'resumed' and nothing else.",

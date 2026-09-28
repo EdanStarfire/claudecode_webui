@@ -152,15 +152,41 @@ async function replayRestPath(fixture) {
 // that on regenerable synthetic data (not just by inspection) is what makes this
 // removal trustworthy rather than asserted.
 //
-// 2026-09-23-primary has a second, independent reason it can never converge even
-// after #2026 fixes #2002: its raw_log.jsonl/rest_history.json are static files
-// captured once against the real Anthropic API (owner-only-regenerable; see
-// provenance.json), frozen before #2007's live-path fixes existed — they still
-// literally contain a captured interrupt_success event, un-stored stderr lines, and
-// display.tool_states == {} on every captured live message from the old no-op
-// projection. No code change, now or later, can retroactively alter what's already
-// captured in this file; closing that part of the gap requires a live re-capture
-// against real API credentials (owner-gated, not filed as a separate issue).
+// 2026-09-23-primary (issue #2017) was re-captured live against a real Anthropic API
+// (claude-agent-sdk==0.2.159), on a checkout that already includes #2032's reload/live
+// display-parity fix — so the OLD reason this fixture used to diverge (a frozen
+// pre-#2007 capture containing a captured interrupt_success event, un-stored stderr
+// lines, and display.tool_states == {} from the old no-op projection) no longer
+// applies: this file has none of that. Verified: grepping the re-captured
+// raw_log.jsonl/rest_history.json for "interrupt_success" and "stderr" finds zero
+// matches, and display.tool_states now carries real per-tool entries on both the live
+// and reload paths (e.g. {"toolu_...": {"state": "completed", ...}}), not `{}`.
+//
+// The re-capture still diverges, but for different, currently-real gaps in
+// backend/session_coordinator.py's _convert_stored_message_to_websocket() that #2032's
+// port of message_parser.py's defaults left incomplete:
+//   1. SystemMessage/HookEventMessage reload metadata never sets the six keys
+//      message_parser.py's SystemMessageHandler always defaults live (`working_directory`,
+//      `permissions`, `tools`, `model`, `system_prompt`, `error_details`) — only the five
+//      has_*/session_id keys are ported (session_coordinator.py's shared setdefault
+//      block). Affects ~210 of this fixture's 365 messages (every system message).
+//   2. `display` is entirely absent on reload for `client_launched` and `interrupt`
+//      subtypes — #2032's pre-store display_hook apparently isn't wired for whatever
+//      code path stores these two subtypes.
+//   3. TaskUpdatedMessage reload sets `tool_use_id` (always null) but never
+//      `task_session_id`, which the live path sets and the reload path omits — a
+//      field-name mismatch, not a missing-default gap.
+//   4. Tool-result content that was a plain string live is wrapped as
+//      `[{"type": "text", "text": ...}]` on reload — a storage/reconstruction
+//      normalization difference for UserMessage tool_result blocks.
+//   5. Two user messages (a Legion comm report, an attachment message) reload with
+//      *only* their `comm`/`attachments` metadata key and none of the usual has_*/
+//      session_id/tool_uses/tool_results/role defaults — they appear to hit a legacy
+//      dict-shaped conversion branch that skips the shared defaults block entirely.
+// None of these were introduced by #2017's re-capture — they're pre-existing gaps in
+// the reload path that this fixture (now free of its old, unrelated divergence) is the
+// first to surface. Not fixed here: out of scope for a fixture re-capture, and each is
+// backend/session_coordinator.py work, not scenario_driver work.
 //
 // A normalizer permissive enough to hide this would also hide a real regression,
 // defeating AC2's purpose — so this fixture stays captured as an it.fails() expected
@@ -169,7 +195,13 @@ async function replayRestPath(fixture) {
 // until someone removes its entry here — the test can't silently go stale, and this
 // file is the single place to update when that happens.
 const KNOWN_DIVERGENT_FIXTURES = new Map([
-  ['2026-09-23-primary', 'pre-#2007 frozen real-API capture, owner-gated re-recording — see comment above'],
+  [
+    '2026-09-23-primary',
+    'reload-path gaps in _convert_stored_message_to_websocket() left after #2032 ' +
+    '(missing SystemMessage metadata defaults, missing display for client_launched/' +
+    'interrupt, TaskUpdatedMessage task_session_id, tool_result content-block ' +
+    'normalization, legacy-branch comm/attachment messages) — see comment above',
+  ],
 ])
 
 describe('fixture equivalence — live event path vs. REST reload path (issue #1999, AC1/AC2)', () => {

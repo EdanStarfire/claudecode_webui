@@ -22,19 +22,7 @@ FIXTURES_RAW_DIR = Path(__file__).parent / "fixtures" / "raw"
 # provenance.json starts matching the installed SDK version again without actually
 # updating the entry (e.g. after a real re-capture) — forcing removal of the stale
 # entry rather than letting it drift unnoticed either direction.
-KNOWN_SDK_VERSION_DRIFT_FIXTURES = {
-    "2026-09-23-primary": (
-        "issue #2017",
-        "captured against claude-agent-sdk==0.2.152 (#1998); frozen ahead of the "
-        "0.2.152->0.2.159 bump (#2008) because re-capturing requires a live SDK "
-        "session with real Anthropic credentials (see SCENARIO_CHECKLIST.md), which "
-        "is an owner-gated manual task tracked in #2017. CHANGELOG review of "
-        "claude-agent-sdk 0.2.153-0.2.159 found no message-shape-affecting changes in "
-        "that range (only two opt-in, unadopted features: SystemPromptPreset.snapshot, "
-        "ClaudeAgentOptions.verbatim_prompts), so this fixture is still considered "
-        "representative in the interim.",
-    ),
-}
+KNOWN_SDK_VERSION_DRIFT_FIXTURES: dict[str, tuple[str, str]] = {}
 
 
 def installed_sdk_version() -> str:
