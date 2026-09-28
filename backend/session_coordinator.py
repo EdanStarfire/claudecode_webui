@@ -3783,9 +3783,38 @@ class SessionCoordinator:
             if _type == "UserMessage" and isinstance(data.get("content"), list):
                 for block in data["content"]:
                     if isinstance(block, dict) and "tool_use_id" in block:
+                        # Issue #2042 (Gap 4): mirror UserMessageHandler's live-path
+                        # normalization (message_parser.py:999-1017) exactly — a
+                        # text-only content block list is joined into a single string;
+                        # content with any non-text item (images, etc.) is preserved
+                        # as-is; any other non-string content (e.g. a bare `None`) is
+                        # coerced to str(), same as the live path's own final fallback.
+                        block_content = block.get("content")
+                        normalized_content = block_content
+                        if isinstance(block_content, list):
+                            has_non_text = any(
+                                isinstance(item, dict) and item.get("type") != "text"
+                                for item in block_content
+                            )
+                            if not has_non_text:
+                                text_parts_content = [
+                                    item.get("text", "")
+                                    for item in block_content
+                                    if isinstance(item, dict) and item.get("type") == "text"
+                                ]
+                                normalized_content = (
+                                    "\n".join(text_parts_content)
+                                    if text_parts_content else str(block_content)
+                                )
+                        elif not isinstance(block_content, str):
+                            normalized_content = str(block_content)
                         # Issue #2026: see the matching tool_uses comment above —
                         # same message-level timestamp, not a fresh clock read.
-                        tool_results.append({**block, "timestamp": timestamp})
+                        tool_results.append({
+                            **block,
+                            "content": normalized_content,
+                            "timestamp": timestamp,
+                        })
             if _type == "UserMessage":
                 metadata["has_tool_results"] = bool(tool_results)
                 metadata["tool_results"] = tool_results
@@ -3886,12 +3915,12 @@ class SessionCoordinator:
                 elif _type == "TaskUpdatedMessage":
                     metadata["subtype"] = "task_updated"
                     metadata["task_id"] = data.get("task_id")
+                    metadata["task_session_id"] = data.get("session_id")
                     metadata["status"] = data.get("status")
                     # Issue #1746: patch carries the changed fields (e.g. status,
                     # end_time) — status is sometimes only reported inside patch,
                     # not the top-level field.
                     metadata["patch"] = data.get("patch")
-                    metadata["tool_use_id"] = data.get("tool_use_id")
                     metadata["uuid"] = data.get("uuid")
                     content = "Agent task updated"
 
@@ -3964,6 +3993,30 @@ class SessionCoordinator:
                     if not content:
                         content = "System message"
                     metadata["is_error"] = False
+                    # Issue #2042 (Gap 1): SystemMessageHandler always sets these six
+                    # keys live — but only in its *legacy dict-input* branch
+                    # (message_parser.py:542-549); its real SDK-object branch (the one
+                    # that actually runs for a live SystemMessage/HookEventMessage)
+                    # never reads cwd/permissionMode/tools/model/system_prompt at all,
+                    # so they stay at that branch's None/None/[]/None/None literal
+                    # defaults (message_parser.py:397-403) unconditionally — a
+                    # separate, pre-existing, out-of-scope live-path gap (see this
+                    # method's own note further down about ClaudeSDK._convert_sdk_
+                    # message() never copying these onto its wrapper dict). Reload
+                    # parity therefore means these six keys are *always* present with
+                    # these same constant values, not derived from `data`: `data` here
+                    # is dataclasses.asdict(sdk_msg), shaped {"subtype", "data": {...
+                    # cwd, tools, model, permissionMode ...}} — the real values sit one
+                    # level deeper (already separately exposed as metadata["init_data"]
+                    # above) and reading data.get("cwd") etc. directly would silently
+                    # start surfacing real values on reload while live keeps returning
+                    # None, reopening exactly the divergence this fix exists to close.
+                    metadata["working_directory"] = None
+                    metadata["permissions"] = None
+                    metadata["tools"] = []
+                    metadata["model"] = None
+                    metadata["system_prompt"] = None
+                    metadata["error_details"] = None
 
             # Handle ResultMessage
             if _type == "ResultMessage":
@@ -4335,6 +4388,32 @@ class SessionCoordinator:
                     elif isinstance(raw_message.get("metadata"), dict) and raw_message.get("type") and raw_message.get("content") is not None:
                         # Message is already processed, prepare for WebSocket
                         metadata = raw_message["metadata"].copy()
+
+                        # Issue #2042 (Gap 2): records stored via
+                        # prepare_for_storage() (legacy dict shape, no _type
+                        # discriminator) carry `display` at the top level, same as
+                        # _convert_stored_message_to_websocket() handles — this
+                        # branch never propagated it into metadata.
+                        display = raw_message.get("display")
+                        if display:
+                            metadata["display"] = display
+
+                        # Issue #2042 (Gap 5): comm/attachment user messages are
+                        # stored directly by ClaudeSDK._conversation_loop(), bypassing
+                        # MessageProcessor entirely, so their metadata never picked up
+                        # UserMessageHandler's shared defaults. Port them here for
+                        # reload/live parity, matching only what UserMessageHandler
+                        # itself always sets.
+                        if raw_message["type"] == "user":
+                            metadata.setdefault("tool_uses", [])
+                            metadata.setdefault("tool_results", [])
+                            metadata.setdefault("has_tool_uses", False)
+                            metadata.setdefault("has_tool_results", False)
+                            metadata.setdefault("has_thinking", False)
+                            metadata.setdefault("has_permission_requests", False)
+                            metadata.setdefault("has_permission_responses", False)
+                            metadata.setdefault("role", None)
+                        metadata.setdefault("session_id", raw_message.get("session_id"))
 
                         websocket_data = {
                             "type": raw_message["type"],
