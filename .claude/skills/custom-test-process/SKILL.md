@@ -1,6 +1,6 @@
 ---
 name: custom-test-process
-description: Project-specific test process. Starts the Frontend API (which auto-starts Backend), vite server, runs pytest, and verifies health/ready endpoints for claudecode_webui.
+description: Project-specific test process. Starts the Frontend API (which auto-starts Backend), vite server, runs pytest and vitest, and verifies health/ready endpoints for claudecode_webui.
 allowed-tools: [Bash, Skill]
 ---
 
@@ -83,15 +83,35 @@ cd frontend && VITE_BACKEND_PORT=${FRONTEND_API_PORT} npm run dev -- --port ${VI
 
 Without this, the frontend would proxy requests to port 8001 (the default) instead of the issue-specific Frontend API port.
 
-### 3. Run Unit Tests
+### 3. Install Frontend Dependencies (if needed)
+
+Only needed once per worktree — skip if `frontend/node_modules` already exists.
+Plain `npm install` fails in builder containers (`npm error Cannot read
+properties of null (reading 'edgesOut')`); `--legacy-peer-deps` resolves it —
+verified 2026-09-29. This install runs **only inside the builder's own
+worktree** — never in the production checkout, since it's scoped to
+`frontend/node_modules` under `cwd`, a gitignored, worktree-local directory.
+
+```bash
+if [ ! -d frontend/node_modules ]; then
+    (cd frontend && npm install --legacy-peer-deps)
+fi
+```
+
+### 4. Run Unit Tests
 
 Both test suites — the split is real, they cover different processes:
 
 ```bash
 uv run pytest backend/tests/ src/tests/ -v
+(cd frontend && npx vitest run --pool=forks --no-file-parallelism)
 ```
 
-### 4. Verify Health/Ready Endpoints
+The `--pool=forks --no-file-parallelism` flags hedge a previously observed
+sandbox bus-error crash under vitest's default worker-thread pool — cost is
+longer runtime (~2x), not correctness.
+
+### 5. Verify Health/Ready Endpoints
 
 ```bash
 # Check Frontend API liveness (always true once the process is up)
@@ -107,7 +127,7 @@ ps aux | grep -E "main.py|backend.main" | grep -v grep
 curl -s http://localhost:${VITE_PORT}
 ```
 
-### 5. Leave Servers Running
+### 6. Leave Servers Running
 
 **CRITICAL:** Do NOT stop servers after testing. Leave them running for user review.
 The `custom-cleanup-process` skill handles stopping servers later — it must stop
@@ -116,7 +136,7 @@ Backend child (SIGTERM, wait, then SIGKILL — `src/backend_supervisor.py`). Do
 not try to separately find and kill the Backend process; Frontend owns its
 lifecycle.
 
-### 6. Report Server URLs to User
+### 7. Report Server URLs to User
 
 When reporting that servers are running, include the auth token in the URLs:
 
@@ -133,9 +153,10 @@ Frontend<->Backend hop should need it.
 
 - Frontend API starts without errors and its auto-started Backend becomes ready
   (confirmed via `/ready`, not just `/health` — see step 1)
-- Two distinct real processes are actually running (`ps aux` check, step 4) —
+- Two distinct real processes are actually running (`ps aux` check, step 5) —
   don't just trust a green health check; confirm the process split is real
-- Both test suites pass (`backend/tests/` and `src/tests/`)
+- Both pytest suites pass (`backend/tests/` and `src/tests/`)
+- vitest run passes (in addition to both pytest suites)
 - No regressions introduced
 
 ## Usage by Generic Skills

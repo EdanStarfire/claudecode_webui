@@ -25,7 +25,21 @@ Check if frontend code was modified:
 git diff --name-only HEAD~1 | grep -q "^frontend/" && echo "Frontend changed"
 ```
 
-If frontend code changed, build it:
+If frontend code changed, build it. First, install dependencies if needed —
+only needed once per worktree, skip if `frontend/node_modules` already
+exists. Plain `npm install` fails in builder containers (`npm error Cannot
+read properties of null (reading 'edgesOut')`); `--legacy-peer-deps` resolves
+it — verified 2026-09-29. This install runs **only inside the builder's own
+worktree** — never in the production checkout, since it's scoped to
+`frontend/node_modules` under `cwd`, a gitignored, worktree-local directory.
+
+```bash
+if [ ! -d frontend/node_modules ]; then
+    (cd frontend && npm install --legacy-peer-deps)
+fi
+```
+
+Then build:
 ```bash
 # Clean stale build artifacts so old hashed chunks don't linger across worktree checkouts
 rm -rf frontend/dist
