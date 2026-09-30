@@ -9,12 +9,10 @@ and drives them through a real (unconnected) `backend.claude_sdk.ClaudeSDK` inst
 wired to a real `backend.session_recorder.SessionRecorder`, exactly mirroring
 `backend/mock_sdk.py`'s `MockClaudeSDK._start_raw_replay()` pattern.
 
-This fixture is intentionally scoped to just 5 of the real 9 scenario markers
-`backend.fixture_export.REQUIRED_MARKERS` checks for (see module docstring there):
-  - streaming deltas
-  - tool call with permission prompt
-  - subagent task with progress
-  - session restart
+This fixture covers all 9 scenario markers `backend.fixture_export.REQUIRED_MARKERS`
+checks for (issue #2037 Stage C) — coverage is asserted against the real
+`backend.fixture_export._check_markers()`, not a separately-maintained heuristic (see
+`main()` below).
 
 A future builder without Anthropic credentials can re-run this script to
 regenerate `backend/tests/fixtures/raw/mock-sdk-synthetic/` from scratch — that's
@@ -54,6 +52,7 @@ from claude_agent_sdk import (
     PermissionResultAllow,
     ResultMessage,
     StreamEvent,
+    SystemMessage,
     TaskNotificationMessage,
     TaskProgressMessage,
     TaskStartedMessage,
@@ -66,6 +65,7 @@ from claude_agent_sdk import (
 
 from backend.claude_sdk import ClaudeSDK
 from backend.data_storage import DataStorageManager
+from backend.fixture_export import REQUIRED_MARKERS, _check_markers
 from backend.message_parser import MessageParser, MessageProcessor
 from backend.session_coordinator import SessionCoordinator
 from backend.session_recorder import SessionRecorder
@@ -76,13 +76,10 @@ _FIXTURE_NAME = "mock-sdk-synthetic"
 _FIXTURE_DIR = Path(__file__).resolve().parent / "raw" / _FIXTURE_NAME
 _SESSION_ID = "mock-sdk-synthetic-session"
 
-_SELF_CHECK_MARKERS = (
-    "stream_event",
-    "assistant_message_with_tool_use",
-    "permission_invocation_response_pair",
-    "task_started_or_progress",
-    "lifecycle_restart",
-)
+# Tool name the synthetic permission_callback (see generate()) denies, so the
+# "denied permission" marker's round trip produces a real decision="deny" instead of
+# a hand-set one the real _can_use_tool_callback() code path never actually reached.
+_DENIED_TOOL_NAME = "Write"
 
 
 def _json_default(obj: Any) -> Any:
@@ -107,7 +104,7 @@ async def _run_scenario(shadow_sdk: ClaudeSDK, recorder: SessionRecorder) -> Non
     """Drive the synthetic scenario dataclasses through the shadow SDK instance,
     in order, with the lifecycle restart marker interleaved partway through.
     """
-    # --- Marker 1: streaming deltas ---
+    # --- Marker: streaming deltas ---
     stream_event = StreamEvent(
         uuid="synthetic-se-1",
         session_id=_SESSION_ID,
@@ -119,7 +116,7 @@ async def _run_scenario(shadow_sdk: ClaudeSDK, recorder: SessionRecorder) -> Non
     )
     await shadow_sdk._process_sdk_message(stream_event)
 
-    # --- Marker 2: tool call with permission prompt ---
+    # --- Marker: tool call with permission prompt ---
     tool_use_id = "synthetic-tu-1"
     assistant_msg = AssistantMessage(
         content=[
@@ -161,7 +158,178 @@ async def _run_scenario(shadow_sdk: ClaudeSDK, recorder: SessionRecorder) -> Non
     )
     await shadow_sdk._process_sdk_message(user_result_msg)
 
-    # --- Marker 3: subagent task with progress ---
+    # --- Marker: denied permission ---
+    # Same real round trip as marker 2's Read tool, but for a tool name the synthetic
+    # permission_callback (see generate()) is wired to deny, so decision="deny" comes
+    # from a real _can_use_tool_callback() outcome, not a hand-set value.
+    denied_tool_use_id = "synthetic-tu-deny-1"
+    denied_tool_input = {"file_path": "/etc/synthetic-example.conf", "content": "updated"}
+    denied_assistant_msg = AssistantMessage(
+        content=[
+            TextBlock(text="I'll update that config file for you."),
+            ToolUseBlock(id=denied_tool_use_id, name=_DENIED_TOOL_NAME, input=denied_tool_input),
+        ],
+        model="claude-sonnet-4-5",
+        session_id=_SESSION_ID,
+        uuid="synthetic-am-deny-1",
+    )
+    await shadow_sdk._process_sdk_message(denied_assistant_msg)
+
+    denied_context = ToolPermissionContext(tool_use_id=denied_tool_use_id, suggestions=[])
+    recorder.record_permission_invocation(_DENIED_TOOL_NAME, denied_tool_input, suggestions=None)
+    denied_result = await shadow_sdk._can_use_tool_callback(
+        _DENIED_TOOL_NAME, denied_tool_input, denied_context
+    )
+    denied_decision = "allow" if isinstance(denied_result, PermissionResultAllow) else "deny"
+    recorder.record_permission_response(
+        _DENIED_TOOL_NAME, denied_decision, getattr(denied_result, "message", None)
+    )
+
+    denied_result_msg = UserMessage(
+        content=[
+            ToolResultBlock(
+                tool_use_id=denied_tool_use_id,
+                content=f"Permission to use {_DENIED_TOOL_NAME} was denied by the user.",
+                is_error=True,
+            )
+        ],
+        uuid="synthetic-um-deny-1",
+    )
+    await shadow_sdk._process_sdk_message(denied_result_msg)
+
+    # --- Marker: AskUserQuestion ---
+    # Same real permission round trip shape as above, but for AskUserQuestion — the
+    # synthetic permission_callback allows it (only _DENIED_TOOL_NAME is denied), so
+    # this also exercises _check_markers()'s permission_invocation/response detection
+    # path for AskUserQuestion, not just the AssistantMessage content-block path.
+    ask_tool_use_id = "synthetic-tu-ask-1"
+    ask_question_input = {
+        "questions": [
+            {
+                "question": "Which environment should I target?",
+                "header": "Environment",
+                "options": [
+                    {"label": "staging", "description": "Deploy to the staging environment"},
+                    {"label": "production", "description": "Deploy to the production environment"},
+                ],
+                "multiSelect": False,
+            }
+        ]
+    }
+    ask_assistant_msg = AssistantMessage(
+        content=[
+            TextBlock(text="I need clarification before proceeding."),
+            ToolUseBlock(id=ask_tool_use_id, name="AskUserQuestion", input=ask_question_input),
+        ],
+        model="claude-sonnet-4-5",
+        session_id=_SESSION_ID,
+        uuid="synthetic-am-ask-1",
+    )
+    await shadow_sdk._process_sdk_message(ask_assistant_msg)
+
+    ask_context = ToolPermissionContext(tool_use_id=ask_tool_use_id, suggestions=[])
+    recorder.record_permission_invocation("AskUserQuestion", ask_question_input, suggestions=None)
+    ask_result = await shadow_sdk._can_use_tool_callback(
+        "AskUserQuestion", ask_question_input, ask_context
+    )
+    ask_decision = "allow" if isinstance(ask_result, PermissionResultAllow) else "deny"
+    recorder.record_permission_response(
+        "AskUserQuestion", ask_decision, getattr(ask_result, "message", None)
+    )
+
+    ask_result_msg = UserMessage(
+        content=[
+            ToolResultBlock(
+                tool_use_id=ask_tool_use_id,
+                content="staging",
+                is_error=False,
+            )
+        ],
+        uuid="synthetic-um-ask-1",
+    )
+    await shadow_sdk._process_sdk_message(ask_result_msg)
+
+    # --- Marker: interrupt mid-tool ---
+    # Mirrors the "session restart" precedent already used below: recorder.
+    # record_interrupt() is the exact real method SDK.interrupt_session() calls on a
+    # live client.interrupt() round trip — reachable only via a live subprocess
+    # connection, so it's called directly here rather than reconstructed.
+    interrupt_tool_use_id = "synthetic-tu-interrupt-1"
+    interrupt_assistant_msg = AssistantMessage(
+        content=[
+            TextBlock(text="Running a long-lived command."),
+            ToolUseBlock(id=interrupt_tool_use_id, name="Bash", input={"command": "sleep 100"}),
+        ],
+        model="claude-sonnet-4-5",
+        session_id=_SESSION_ID,
+        uuid="synthetic-am-interrupt-1",
+    )
+    await shadow_sdk._process_sdk_message(interrupt_assistant_msg)
+
+    recorder.record_interrupt()
+
+    interrupt_result_msg = UserMessage(
+        content=[
+            ToolResultBlock(
+                tool_use_id=interrupt_tool_use_id,
+                content="Tool execution interrupted by user.",
+                is_error=True,
+            )
+        ],
+        uuid="synthetic-um-interrupt-1",
+    )
+    await shadow_sdk._process_sdk_message(interrupt_result_msg)
+
+    # --- Marker: compaction ---
+    compaction_msg = SystemMessage(
+        subtype="compact_boundary",
+        data={"trigger": "auto", "pre_tokens": 150000, "post_tokens": 12000},
+    )
+    await shadow_sdk._process_sdk_message(compaction_msg)
+
+    # --- Marker: inter-minion comm ---
+    # The real call site (comm_router.py's CommRouter._send_to_minion, ~line 507)
+    # delivers via SessionCoordinator.send_message() -> ClaudeSDK.send_message(),
+    # which only enqueues onto a live, connected conversation loop's _message_queue —
+    # unusable here (no connected loop). Replicated by hand: the exact "user"-type
+    # dict shape ClaudeSDK._conversation_loop() builds for an outgoing queued message
+    # (claude_sdk.py's user_message dict, ~line 876) with metadata matching
+    # comm_router.py's exact comm_metadata shape (~line 451-463), fed directly to
+    # shadow_sdk.message_callback — the same broadcast step the live path takes, just
+    # not routed through the message queue itself. Deliberately not also persisted via
+    # storage_manager.append_message() (unlike the live path): that would store a
+    # flat {"type": "user", ...} dict with no _type/data StoredMessage shape, which
+    # _convert_stored_message_to_websocket() (keyed entirely off _type) can't
+    # reconstruct — a separate, real backend gap outside Stage C's scope. Only the
+    # marker-detection surface (the queue_event raw_log record) needs replicating.
+    comm_content = "Please proceed with the next step."
+    comm_trailing_instruction = (
+        "Always send messages to Minion #Planner using the `send_comm` tool."
+    )
+    comm_metadata = {
+        "comm": {
+            "from_name": "planner",
+            "from_display_name": "Planner",
+            "from_minion_id": "synthetic-minion-1",
+            "comm_type": "task",
+            "summary": "Synthetic comm for fixture coverage",
+            "content": comm_content,
+            "trailing_instruction": comm_trailing_instruction,
+        }
+    }
+    comm_message = {
+        "type": "user",
+        # Mirrors comm_router.py's formatted_message, which appends the trailing
+        # instruction to the delivered body (not just comm_metadata.trailing_instruction).
+        "content": f"{comm_content}\n\n---\n{comm_trailing_instruction}",
+        "session_id": _SESSION_ID,
+        "timestamp": datetime.now(UTC).timestamp(),
+        "metadata": comm_metadata,
+        "message_id": "synthetic-comm-1",
+    }
+    await shadow_sdk.message_callback(comm_message)
+
+    # --- Marker: subagent task with progress ---
     task_id = "synthetic-task-1"
     task_started = TaskStartedMessage(
         subtype="task_started",
@@ -199,7 +367,7 @@ async def _run_scenario(shadow_sdk: ClaudeSDK, recorder: SessionRecorder) -> Non
     )
     await shadow_sdk._process_sdk_message(task_notification)
 
-    # --- Marker 4: session restart (mid-stream) ---
+    # --- Marker: session restart (mid-stream) ---
     # The real call site (SessionCoordinator.restart_session -> recorder.record_lifecycle)
     # requires the full SessionCoordinator/SessionManager object graph, which is too heavy
     # to spin up here — calling SessionRecorder.record_lifecycle("restart") directly is the
@@ -284,46 +452,6 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
             continue
         records.append(json.loads(line))
     return records
-
-
-def _self_verify(raw_records: list[dict[str, Any]]) -> dict[str, bool]:
-    """Mirrors (but does not call) backend.fixture_export._check_markers()'s
-    heuristics — checks this fixture's own narrower 5-check set (per the issue's
-    section 6), not the real 9-marker gate.
-    """
-    found = dict.fromkeys(_SELF_CHECK_MARKERS, False)
-    task_types = {"TaskStartedMessage", "TaskProgressMessage"}
-
-    pending_invocation_tool: str | None = None
-
-    for record in raw_records:
-        kind = record.get("kind")
-
-        if kind == "sdk_message":
-            _type = record.get("_type")
-            if _type == "StreamEvent":
-                found["stream_event"] = True
-            elif _type in task_types:
-                found["task_started_or_progress"] = True
-            elif _type == "AssistantMessage":
-                content = (record.get("data") or {}).get("content") or []
-                for block in content:
-                    if isinstance(block, dict) and "id" in block and "name" in block:
-                        # ToolUseBlock-shaped: {id, name, input} — TextBlock only has {text}
-                        found["assistant_message_with_tool_use"] = True
-
-        elif kind == "permission_invocation":
-            pending_invocation_tool = record.get("tool_name")
-        elif kind == "permission_response":
-            if pending_invocation_tool is not None and record.get("tool_name") == pending_invocation_tool:
-                found["permission_invocation_response_pair"] = True
-            pending_invocation_tool = None
-
-        elif kind == "lifecycle":
-            if record.get("action") == "restart":
-                found["lifecycle_restart"] = True
-
-    return found
 
 
 def _build_synthetic_state() -> dict[str, Any]:
@@ -413,11 +541,14 @@ def _build_provenance() -> dict[str, Any]:
     }
 
 
-async def generate() -> dict[str, bool]:
-    """Build the mock-sdk-synthetic fixture and write it to
-    backend/tests/fixtures/raw/mock-sdk-synthetic/. Returns the self-verification
-    marker results (see _self_verify()).
+async def generate(output_dir: Path | None = None) -> dict[str, bool]:
+    """Build the mock-sdk-synthetic fixture and write it to `output_dir` (default:
+    the committed backend/tests/fixtures/raw/mock-sdk-synthetic/, so running this
+    module directly keeps regenerating the committed copy unchanged). Returns the
+    real fixture_export._check_markers() coverage results for the generated
+    raw_log.jsonl.
     """
+    fixture_dir = output_dir if output_dir is not None else _FIXTURE_DIR
     with tempfile.TemporaryDirectory(prefix="mock_sdk_synthetic_") as tmp:
         session_dir = Path(tmp) / _SESSION_ID
         session_dir.mkdir(parents=True, exist_ok=True)
@@ -474,36 +605,42 @@ async def generate() -> dict[str, bool]:
                 "timestamp": datetime.now(UTC).isoformat(),
             })
 
+        def permission_callback(tool_name: str, input_params: dict[str, Any], context: Any) -> bool:
+            # Denies _DENIED_TOOL_NAME only, so the "denied permission" marker's round
+            # trip (see _run_scenario) produces a real deny decision; every other
+            # synthetic tool call (including AskUserQuestion) is allowed.
+            return tool_name != _DENIED_TOOL_NAME
+
         shadow_sdk = ClaudeSDK(
             session_id=_SESSION_ID,
             working_directory=str(session_dir),
             storage_manager=storage_manager,
             message_callback=message_callback,
             error_callback=None,
-            permission_callback=lambda tool_name, input_params, context: True,
+            permission_callback=permission_callback,
             recorder=recorder,
         )
 
         await _run_scenario(shadow_sdk, recorder)
         recorder.close()
 
-        _FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
+        fixture_dir.mkdir(parents=True, exist_ok=True)
 
         raw_log_src = session_dir / "raw_log.jsonl"
-        raw_log_dst = _FIXTURE_DIR / "raw_log.jsonl"
+        raw_log_dst = fixture_dir / "raw_log.jsonl"
         raw_log_dst.write_text(
             raw_log_src.read_text(encoding="utf-8") if raw_log_src.exists() else "",
             encoding="utf-8",
         )
 
         messages_src = session_dir / "messages.jsonl"
-        messages_dst = _FIXTURE_DIR / "messages.jsonl"
+        messages_dst = fixture_dir / "messages.jsonl"
         messages_dst.write_text(
             messages_src.read_text(encoding="utf-8") if messages_src.exists() else "",
             encoding="utf-8",
         )
 
-        (_FIXTURE_DIR / "state.json").write_text(
+        (fixture_dir / "state.json").write_text(
             json.dumps(_build_synthetic_state(), indent=2, default=str), encoding="utf-8"
         )
 
@@ -521,16 +658,16 @@ async def generate() -> dict[str, bool]:
             "offset": 0,
             "has_more": False,
         }
-        (_FIXTURE_DIR / "rest_history.json").write_text(
+        (fixture_dir / "rest_history.json").write_text(
             json.dumps(rest_history, indent=2, default=str), encoding="utf-8"
         )
 
-        (_FIXTURE_DIR / "provenance.json").write_text(
+        (fixture_dir / "provenance.json").write_text(
             json.dumps(_build_provenance(), indent=2), encoding="utf-8"
         )
 
         raw_records = _read_jsonl(raw_log_dst)
-        return _self_verify(raw_records)
+        return _check_markers(raw_records)
 
 
 def main() -> int:
@@ -538,17 +675,22 @@ def main() -> int:
 
     print(f"Fixture written to: {_FIXTURE_DIR}")
     all_ok = True
-    for marker, present in marker_results.items():
+    for marker in REQUIRED_MARKERS:
+        present = marker_results.get(marker, False)
         status = "✔" if present else "✘"
         print(f"  {status} {marker}")
         if not present:
             all_ok = False
 
     if not all_ok:
-        print("Self-verification FAILED: one or more required markers missing.", file=sys.stderr)
+        print(
+            f"Coverage check FAILED: one or more of REQUIRED_MARKERS missing "
+            f"({sum(marker_results.values())}/{len(REQUIRED_MARKERS)} found).",
+            file=sys.stderr,
+        )
         return 1
 
-    print("Self-verification passed: all required markers present.")
+    print(f"Coverage check passed: all {len(REQUIRED_MARKERS)} REQUIRED_MARKERS present.")
     return 0
 
 
