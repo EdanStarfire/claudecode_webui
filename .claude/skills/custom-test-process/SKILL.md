@@ -111,6 +111,12 @@ The `--pool=forks --no-file-parallelism` flags hedge a previously observed
 sandbox bus-error crash under vitest's default worker-thread pool — cost is
 longer runtime (~2x), not correctness.
 
+The pytest pass also regenerates the equivalence-fixture data vitest's
+`equivalence.test.js` consumes (`backend/tests/test_equivalence_replay_generation.py`,
+issue #2037 Stage B, writing to `backend/tests/fixtures/generated/`, gitignored) — the
+two suites aren't fully independent, pytest must run first for vitest to exercise
+fresh data instead of the older committed `backend/tests/fixtures/raw/` fallback.
+
 ### 5. Verify Health/Ready Endpoints
 
 ```bash

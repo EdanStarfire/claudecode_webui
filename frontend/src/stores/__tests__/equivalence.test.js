@@ -4,6 +4,7 @@ import {
   listRawFixtureNames,
   loadRawFixture,
   normalizeForComparison,
+  hasGeneratedFixture,
 } from './helpers/fixtureEquivalence'
 
 // Issue #1999 (US1, AC1/AC2): feeds each recorded raw fixture (backend/tests/fixtures/raw/)
@@ -173,15 +174,43 @@ async function replayRestPath(fixture) {
 // tie letting a stale "failed" DisplayProjection replay overwrite "completed", and
 // markToolUseOrphaned() never stamping backendState. This fixture is fully removed
 // from KNOWN_DIVERGENT_FIXTURES below and now runs under the normal convergence check.
-const KNOWN_DIVERGENT_FIXTURES = new Map([])
+//
+// mock-sdk-synthetic re-enters KNOWN_DIVERGENT_FIXTURES here (issue #2037 Stage B,
+// tracked separately as #2052): once this fixture is replayed for real by
+// backend/tests/test_equivalence_replay_generation.py instead of using its previously
+// hand-synthesized raw_log.jsonl/rest_history.json pair, its single Read tool call's
+// toolCalls[].timestamp (ToolCallUpdate.created_at) reproducibly diverges by ~1-2ms
+// between the live path (session_coordinator.py's create_tool_call() stamping
+// time.time() at live tool_use detection) and the REST reload path (get_session_
+// messages()'s no-stored-ToolCallUpdate reconstruction branch, which for this
+// fixture's tool call falls back to the containing AssistantMessage's own stored
+// timestamp — itself not a fixed value for this fixture, so effectively another
+// independent near-"now" computation). Invisible before because the previously
+// committed fixture files were both generated offline from the same messages.jsonl by
+// generate_synthetic_fixture.py, baking in identical timestamps by construction rather
+// than exercising the two independent code paths a real replay does.
+const KNOWN_DIVERGENT_FIXTURES = new Map([
+  [
+    'mock-sdk-synthetic',
+    'issue #2052 — tool call created_at diverges by ~1-2ms between live and REST ' +
+    'reload paths once replayed for real (see comment above)',
+  ],
+])
 
 describe('fixture equivalence — live event path vs. REST reload path (issue #1999, AC1/AC2)', () => {
   // AC1's fail-not-skip guard: listRawFixtureNames() throws (rather than returning an
   // empty list) if backend/tests/fixtures/raw/ is empty or missing, so a misconfigured
   // checkout fails this suite loudly instead of silently reporting zero tests.
   const fixtureNames = listRawFixtureNames()
-  const expectedToConverge = fixtureNames.filter(name => !KNOWN_DIVERGENT_FIXTURES.has(name))
-  const expectedToDiverge = fixtureNames.filter(name => KNOWN_DIVERGENT_FIXTURES.has(name))
+  // Issue #2037 Stage B: some KNOWN_DIVERGENT_FIXTURES entries (mock-sdk-synthetic) only
+  // diverge against real-pipeline-replayed data — the committed raw/{name}/ fallback used
+  // when backend/tests/fixtures/generated/{name}/ is absent (e.g. a standalone `npx vitest
+  // run` with no prior pytest run) converges deterministically by construction. Gating on
+  // hasGeneratedFixture() keeps that fallback scenario passing normally instead of
+  // asserting a divergence that can't manifest against the committed data.
+  const isExpectedToDiverge = name => KNOWN_DIVERGENT_FIXTURES.has(name) && hasGeneratedFixture(name)
+  const expectedToConverge = fixtureNames.filter(name => !isExpectedToDiverge(name))
+  const expectedToDiverge = fixtureNames.filter(name => isExpectedToDiverge(name))
 
   async function checkConvergence(name) {
     const fixture = loadRawFixture(name)
