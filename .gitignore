@@ -211,6 +211,9 @@ test_data/
 test_data_*/
 data-e2e/
 
+# Regenerated on every pytest run by test_equivalence_replay_generation.py (#2037) — never committed
+backend/tests/fixtures/generated/
+
 # Claude settings
 .claude/settings.local.json
 

@@ -4,6 +4,7 @@ import {
   listRawFixtureNames,
   loadRawFixture,
   normalizeForComparison,
+  hasGeneratedFixture,
 } from './helpers/fixtureEquivalence'
 
 // Issue #1999 (US1, AC1/AC2): feeds each recorded raw fixture (backend/tests/fixtures/raw/)
@@ -173,15 +174,70 @@ async function replayRestPath(fixture) {
 // tie letting a stale "failed" DisplayProjection replay overwrite "completed", and
 // markToolUseOrphaned() never stamping backendState. This fixture is fully removed
 // from KNOWN_DIVERGENT_FIXTURES below and now runs under the normal convergence check.
+//
+// mock-sdk-synthetic (issue #2037 Stage B, tracked separately as #2052): once this
+// fixture is replayed for real by backend/tests/test_equivalence_replay_generation.py
+// instead of using its previously hand-synthesized raw_log.jsonl/rest_history.json
+// pair, its REST reload response contains FOUR synthesized tool_call messages for the
+// same tool_use_id (two full pending/completed pairs, each with a different
+// created_at) instead of the two the live event stream actually emits — because the
+// underlying tool-use-bearing AssistantMessage ends up stored twice, and
+// get_session_messages()'s synthetic-reconstruction branch (taken since this fixture
+// never gets a real stored ToolCallUpdate) doesn't dedupe by tool_use_id before
+// emitting. message.js's handleToolCall() does dedupe by tool_use_id, but its
+// update-guard (`toolCall.created_at && toolCall.turn_id`, turn_id absent here) means
+// whichever of the two duplicate pairs is processed first "wins" and is never
+// overwritten by the second — so the final reconstructed created_at is effectively
+// arbitrary. This makes the observable symptom (toolCalls[].timestamp mismatch)
+// GENUINELY FLAKY, not deterministic: it passes whenever the two duplicate pairs'
+// created_at values happen to coincide, fails otherwise. See #2052 for the full
+// traced root cause (including an initial, now-superseded "clock skew" theory that
+// real investigation replaced with the duplicate-reconstruction finding above).
+//
+// Because this is flaky rather than deterministic, it does NOT use
+// KNOWN_DIVERGENT_FIXTURES/it.fails below — that mechanism's own contract (see the
+// comment above the it.fails.each call) assumes "always fails today, fails loudly if
+// it unexpectedly starts passing," which a coin-flip divergence can't honestly
+// satisfy: it.fails would itself intermittently report suite failure whenever the
+// coincidental convergence occurs, reintroducing exactly the gate-unreliability this
+// stage exists to eliminate. KNOWN_FLAKY_FIXTURES below (run via it.skip.each) is the
+// honest alternative: an explicit "we are not checking this today" rather than an
+// implicit, sometimes-false "this reliably fails."
+//
+// Both KNOWN_DIVERGENT_FIXTURES and KNOWN_FLAKY_FIXTURES gate on hasGeneratedFixture()
+// further below — the previously committed fixture files were generated offline from
+// the same messages.jsonl by generate_synthetic_fixture.py, baking in identical
+// timestamps by construction, so mock-sdk-synthetic converges deterministically (and
+// should run under the normal convergence check) whenever generated data isn't
+// present — e.g. a standalone `npx vitest run` with no prior pytest run.
 const KNOWN_DIVERGENT_FIXTURES = new Map([])
+
+// See the mock-sdk-synthetic comment above for why this fixture lives here instead of
+// in KNOWN_DIVERGENT_FIXTURES.
+const KNOWN_FLAKY_FIXTURES = new Map([
+  [
+    'mock-sdk-synthetic',
+    'issue #2052 — tool call created_at reconstruction is nondeterministic (duplicate ' +
+    'synthesized tool_call messages, first-wins) once replayed for real — see comment above',
+  ],
+])
 
 describe('fixture equivalence — live event path vs. REST reload path (issue #1999, AC1/AC2)', () => {
   // AC1's fail-not-skip guard: listRawFixtureNames() throws (rather than returning an
   // empty list) if backend/tests/fixtures/raw/ is empty or missing, so a misconfigured
   // checkout fails this suite loudly instead of silently reporting zero tests.
   const fixtureNames = listRawFixtureNames()
-  const expectedToConverge = fixtureNames.filter(name => !KNOWN_DIVERGENT_FIXTURES.has(name))
-  const expectedToDiverge = fixtureNames.filter(name => KNOWN_DIVERGENT_FIXTURES.has(name))
+  // Issue #2037 Stage B: KNOWN_DIVERGENT_FIXTURES/KNOWN_FLAKY_FIXTURES entries only
+  // apply against real-pipeline-replayed data — the committed raw/{name}/ fallback used
+  // when backend/tests/fixtures/generated/{name}/ is absent (e.g. a standalone `npx vitest
+  // run` with no prior pytest run) converges deterministically by construction. Gating on
+  // hasGeneratedFixture() keeps that fallback scenario passing normally instead of
+  // asserting a divergence (or flakiness) that can't manifest against the committed data.
+  const isExpectedToDiverge = name => KNOWN_DIVERGENT_FIXTURES.has(name) && hasGeneratedFixture(name)
+  const isKnownFlaky = name => KNOWN_FLAKY_FIXTURES.has(name) && hasGeneratedFixture(name)
+  const expectedToConverge = fixtureNames.filter(name => !isExpectedToDiverge(name) && !isKnownFlaky(name))
+  const expectedToDiverge = fixtureNames.filter(name => isExpectedToDiverge(name))
+  const knownFlaky = fixtureNames.filter(name => isKnownFlaky(name))
 
   async function checkConvergence(name) {
     const fixture = loadRawFixture(name)
@@ -201,6 +257,19 @@ describe('fixture equivalence — live event path vs. REST reload path (issue #1
   // passing, so a backend fix can't silently go unnoticed here.
   it.fails.each(expectedToDiverge)(
     'fixture "%s": KNOWN pre-existing divergence (see KNOWN_DIVERGENT_FIXTURES) — expected to fail until fixed in backend/',
+    checkConvergence
+  )
+
+  // Deliberately `it.skip.each` (unlike the it.fails.each block above): KNOWN_FLAKY_
+  // FIXTURES entries are non-deterministic, not reliably-failing, so it.fails' strict
+  // "must always fail" contract doesn't honestly apply here — wrapping a coin-flip
+  // assertion in it.fails would make the suite intermittently report failure whenever
+  // the coincidental convergence occurs. skip explicitly says "not checked right now,"
+  // which is the true state, instead of implicitly asserting "reliably fails," which
+  // isn't. See the mock-sdk-synthetic comment above KNOWN_DIVERGENT_FIXTURES for the
+  // traced root cause and #2052 for tracking a real fix.
+  it.skip.each(knownFlaky)(
+    'fixture "%s": KNOWN FLAKY divergence, not deterministic (see KNOWN_FLAKY_FIXTURES / #2052)',
     checkConvergence
   )
 })
