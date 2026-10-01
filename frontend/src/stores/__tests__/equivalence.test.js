@@ -175,34 +175,17 @@ async function replayRestPath(fixture) {
 // markToolUseOrphaned() never stamping backendState. This fixture is fully removed
 // from KNOWN_DIVERGENT_FIXTURES below and now runs under the normal convergence check.
 //
-// mock-sdk-synthetic (issue #2037 Stage B, tracked separately as #2052): once this
-// fixture is replayed for real by backend/tests/test_equivalence_replay_generation.py
-// instead of using its previously hand-synthesized raw_log.jsonl/rest_history.json
-// pair, its REST reload response contains FOUR synthesized tool_call messages for the
-// same tool_use_id (two full pending/completed pairs, each with a different
-// created_at) instead of the two the live event stream actually emits — because the
-// underlying tool-use-bearing AssistantMessage ends up stored twice, and
-// get_session_messages()'s synthetic-reconstruction branch (taken since this fixture
-// never gets a real stored ToolCallUpdate) doesn't dedupe by tool_use_id before
-// emitting. message.js's handleToolCall() does dedupe by tool_use_id, but its
-// update-guard (`toolCall.created_at && toolCall.turn_id`, turn_id absent here) means
-// whichever of the two duplicate pairs is processed first "wins" and is never
-// overwritten by the second — so the final reconstructed created_at is effectively
-// arbitrary. This makes the observable symptom (toolCalls[].timestamp mismatch)
-// GENUINELY FLAKY, not deterministic: it passes whenever the two duplicate pairs'
-// created_at values happen to coincide, fails otherwise. See #2052 for the full
-// traced root cause (including an initial, now-superseded "clock skew" theory that
-// real investigation replaced with the duplicate-reconstruction finding above).
-//
-// Because this is flaky rather than deterministic, it does NOT use
-// KNOWN_DIVERGENT_FIXTURES/it.fails below — that mechanism's own contract (see the
-// comment above the it.fails.each call) assumes "always fails today, fails loudly if
-// it unexpectedly starts passing," which a coin-flip divergence can't honestly
-// satisfy: it.fails would itself intermittently report suite failure whenever the
-// coincidental convergence occurs, reintroducing exactly the gate-unreliability this
-// stage exists to eliminate. KNOWN_FLAKY_FIXTURES below (run via it.skip.each) is the
-// honest alternative: an explicit "we are not checking this today" rather than an
-// implicit, sometimes-false "this reliably fails."
+// mock-sdk-synthetic's flakiness (issue #2037 Stage B, fixed in #2052) was a
+// two-part race: `_schedule_tool_call_update_storage()` persists a ToolCallUpdate via
+// fire-and-forget `asyncio.ensure_future()` with no ordering guarantee relative to its
+// triggering AssistantMessage's own storage write, and this fixture's zero-latency
+// tight-loop replay (unlike real SDK timing) reliably starved that write until after
+// the AssistantMessage. `get_session_messages()`'s synthetic-reconstruction dedup
+// relied on a single forward pass, so an out-of-order ToolCallUpdate was missed and a
+// redundant synthetic pending/completed pair was generated alongside it. The fix made
+// the reload path's dedup order-independent: `stored_tool_update_ids` is now built via
+// a full pre-scan of `raw_messages` before the per-message loop runs, rather than
+// populated only as ToolCallUpdate records are encountered in file order.
 //
 // Both KNOWN_DIVERGENT_FIXTURES and KNOWN_FLAKY_FIXTURES gate on hasGeneratedFixture()
 // further below — the previously committed fixture files were generated offline from
@@ -212,15 +195,9 @@ async function replayRestPath(fixture) {
 // present — e.g. a standalone `npx vitest run` with no prior pytest run.
 const KNOWN_DIVERGENT_FIXTURES = new Map([])
 
-// See the mock-sdk-synthetic comment above for why this fixture lives here instead of
-// in KNOWN_DIVERGENT_FIXTURES.
-const KNOWN_FLAKY_FIXTURES = new Map([
-  [
-    'mock-sdk-synthetic',
-    'issue #2052 — tool call created_at reconstruction is nondeterministic (duplicate ' +
-    'synthesized tool_call messages, first-wins) once replayed for real — see comment above',
-  ],
-])
+// mock-sdk-synthetic's flake is fixed (see comment above) — no fixtures are
+// currently known-flaky.
+const KNOWN_FLAKY_FIXTURES = new Map([])
 
 describe('fixture equivalence — live event path vs. REST reload path (issue #1999, AC1/AC2)', () => {
   // AC1's fail-not-skip guard: listRawFixtureNames() throws (rather than returning an
