@@ -4364,7 +4364,23 @@ class SessionCoordinator:
 
             # Issue #494: Track tool_use_ids that have stored ToolCallUpdate entries.
             # Synthetic reconstruction is skipped for these IDs.
+            # Issue #2052: pre-scanned up front rather than populated only as
+            # ToolCallUpdate records are encountered in the loop below — storage
+            # append order does not guarantee a ToolCallUpdate lands before its
+            # triggering AssistantMessage, so a single forward pass could miss it.
+            # A malformed/legacy record (e.g. non-dict `data`) is skipped rather
+            # than raised, matching the per-record isolation the main loop below
+            # already gives this same lookup via _convert_stored_message_to_websocket().
             stored_tool_update_ids: set[str] = set()
+            for raw_message in raw_messages:
+                if raw_message.get("_type") != "ToolCallUpdate":
+                    continue
+                try:
+                    tool_use_id = raw_message.get("data", {}).get("tool_use_id")
+                except AttributeError:
+                    continue
+                if tool_use_id:
+                    stored_tool_update_ids.add(tool_use_id)
 
             for raw_message in raw_messages:
                 try:
@@ -4380,7 +4396,25 @@ class SessionCoordinator:
                                 parsed_messages.append(tool_call_msg)
                                 tc_id = tool_call_msg.get("tool_use_id")
                                 if tc_id:
+                                    # Already in the pre-scanned set above; re-adding here
+                                    # is a no-op kept for diff minimality, not load-bearing.
                                     stored_tool_update_ids.add(tc_id)
+                                    # Issue #2052: keep active_history_tools in sync with
+                                    # real stored ToolCall state too, not just synthetically
+                                    # reconstructed tools — otherwise a tool whose last
+                                    # stored update is non-terminal (still "pending"/
+                                    # "running" when the session ends) is invisible to the
+                                    # interrupt/orphan sweeps below, which only walk
+                                    # active_history_tools.
+                                    reconstructed = ToolCall.from_dict(tool_call_msg)
+                                    if reconstructed.status in (
+                                        ToolState.COMPLETED, ToolState.FAILED,
+                                        ToolState.DENIED, ToolState.INTERRUPTED,
+                                        ToolState.ORPHANED,
+                                    ):
+                                        active_history_tools.pop(tc_id, None)
+                                    else:
+                                        active_history_tools[tc_id] = reconstructed
                             continue
 
                         websocket_data = self._convert_stored_message_to_websocket(raw_message)

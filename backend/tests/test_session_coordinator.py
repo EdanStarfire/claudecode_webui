@@ -421,6 +421,145 @@ class TestSessionCoordinator:
         mock_storage.read_messages.assert_called_once_with(limit=10, offset=0)
 
     @pytest.mark.asyncio
+    async def test_issue_2052_tool_call_update_out_of_order_not_duplicated(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Regression test for #2052: ToolCallUpdate storage append order is not
+        causally guaranteed relative to its triggering AssistantMessage (the write
+        path schedules the update via fire-and-forget asyncio.ensure_future()).
+        get_session_messages() must dedupe stored_tool_update_ids via a full
+        pre-scan, not just entries seen earlier in the forward pass, otherwise an
+        out-of-order ToolCallUpdate is missed and a redundant synthetic pending
+        ToolCall is generated alongside it.
+        """
+        from backend.models.messages import StoredMessage, ToolCall, ToolState
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        tool_call_update = StoredMessage.from_tool_call_update(
+            ToolCall(
+                tool_use_id="tu-1",
+                session_id=session_id,
+                name="Bash",
+                input={"command": "echo hi"},
+                status=ToolState.PENDING,
+                created_at=1700000000.0,
+            )
+        ).to_dict()
+
+        mock_storage = AsyncMock()
+        mock_storage.read_messages.return_value = [
+            # AssistantMessage referencing tu-1 appears BEFORE its ToolCallUpdate,
+            # matching the real pipeline's out-of-order race under tight-loop replay.
+            {
+                "type": "assistant",
+                "content": "running a command",
+                "metadata": {
+                    "has_tool_uses": True,
+                    "tool_uses": [{"id": "tu-1", "name": "Bash", "input": {"command": "echo hi"}}],
+                },
+            },
+            tool_call_update,
+        ]
+        mock_storage.get_message_count.return_value = 2
+        coordinator._storage_managers[session_id] = mock_storage
+
+        # Issue #2052 (follow-up): the real stored ToolCallUpdate is now tracked in
+        # active_history_tools too, so a non-ACTIVE session would have this pending
+        # tool correctly swept into "interrupted" by the end-of-function orphan
+        # sweep — a second, legitimate tool_call entry, not a dedup failure. Keep
+        # the session ACTIVE here to isolate this test to the dedup fix alone.
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        result = await coordinator.get_session_messages(session_id, limit=10, offset=0)
+
+        tool_call_messages = [
+            m for m in result["messages"]
+            if m.get("type") == "tool_call" and m.get("tool_use_id") == "tu-1"
+        ]
+        assert len(tool_call_messages) == 1
+        assert tool_call_messages[0]["status"] == "pending"
+
+    @pytest.mark.asyncio
+    async def test_issue_2052_dangling_real_update_swept_as_interrupted(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Companion to test_issue_2052_tool_call_update_out_of_order_not_duplicated:
+        before #2052, a tool_use_id with only a non-terminal stored ToolCallUpdate
+        (e.g. "pending") never entered active_history_tools, so the end-of-function
+        orphan sweep (for sessions not ACTIVE/PAUSED/STARTING) never saw it and it
+        stayed stuck at "pending" forever on reload — a real divergence from the
+        live path, caught by the frontend equivalence fixture 2026-09-23-primary
+        while fixing the #2052 dedup race. get_session_messages() must track real
+        stored ToolCall state in active_history_tools too so the sweep still runs.
+        """
+        from backend.models.messages import StoredMessage, ToolCall, ToolState
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        tool_call_update = StoredMessage.from_tool_call_update(
+            ToolCall(
+                tool_use_id="tu-2",
+                session_id=session_id,
+                name="Bash",
+                input={"command": "sleep 30"},
+                status=ToolState.PENDING,
+                created_at=1700000000.0,
+            )
+        ).to_dict()
+
+        mock_storage = AsyncMock()
+        mock_storage.read_messages.return_value = [
+            {
+                "type": "assistant",
+                "content": "running a command",
+                "metadata": {
+                    "has_tool_uses": True,
+                    "tool_uses": [{"id": "tu-2", "name": "Bash", "input": {"command": "sleep 30"}}],
+                },
+            },
+            tool_call_update,
+        ]
+        mock_storage.get_message_count.return_value = 2
+        coordinator._storage_managers[session_id] = mock_storage
+
+        # Session left in its default (non-ACTIVE) post-create_session state, as if
+        # terminated/restarted while the tool was still pending.
+        result = await coordinator.get_session_messages(session_id, limit=10, offset=0)
+
+        tool_call_messages = [
+            m for m in result["messages"]
+            if m.get("type") == "tool_call" and m.get("tool_use_id") == "tu-2"
+        ]
+        assert [m["status"] for m in tool_call_messages] == ["pending", "interrupted"]
+
+    @pytest.mark.asyncio
+    async def test_issue_2052_malformed_tool_call_update_data_isolated(
+        self, temp_coordinator, sample_session_config
+    ):
+        """The #2052 pre-scan must isolate a malformed stored record (non-dict
+        `data`) to that one record, not let an AttributeError escape and abort
+        get_session_messages() for the whole session — matching the resilience
+        the rest of the function already gives per-record processing.
+        """
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        mock_storage = AsyncMock()
+        mock_storage.read_messages.return_value = [
+            {"_type": "ToolCallUpdate", "timestamp": 1700000000.0, "data": None},
+            {"type": "user", "content": "Hello", "metadata": {}},
+        ]
+        mock_storage.get_message_count.return_value = 2
+        coordinator._storage_managers[session_id] = mock_storage
+
+        result = await coordinator.get_session_messages(session_id, limit=10, offset=0)
+
+        assert any(m.get("content") == "Hello" for m in result["messages"])
+
+    @pytest.mark.asyncio
     async def test_get_session_messages_no_storage(self, temp_coordinator):
         """Test getting messages when no storage manager exists."""
         coordinator = temp_coordinator
