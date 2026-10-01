@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from .claude_sdk import SDK_ACTIVE_STATES, ClaudeSDK, SessionInfo, SessionState
-from .raw_replay import reconstruct_sdk_message
+from .raw_replay import KNOWN_UNHANDLED_SDK_TYPES, reconstruct_sdk_message
 
 logger = logging.getLogger(__name__)
 
@@ -424,15 +424,17 @@ class RawFixtureReplay:
             record = json.loads(line)
             if record.get("kind") != "sdk_message":
                 continue
-            try:
-                self.messages.append(
-                    reconstruct_sdk_message(record["_type"], record["data"])
-                )
-            except ValueError:
+            _type = record["_type"]
+            if _type in KNOWN_UNHANDLED_SDK_TYPES:
                 logger.warning(
-                    f"Skipping unrecognized raw_log sdk_message type "
-                    f"{record.get('_type')!r} in {self.session_dir}"
+                    f"Skipping known-unhandled raw_log sdk_message type {_type!r} "
+                    f"in {self.session_dir} ({KNOWN_UNHANDLED_SDK_TYPES[_type]})"
                 )
+                continue
+            try:
+                self.messages.append(reconstruct_sdk_message(_type, record["data"]))
+            except ValueError as e:
+                raise ValueError(f"{e} (fixture: {self.session_dir})") from e
 
 
 class MockClaudeSDK:

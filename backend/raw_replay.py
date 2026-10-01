@@ -77,6 +77,16 @@ _MESSAGE_TYPES: dict[str, type] = {
     )
 }
 
+# SDK type name -> issue reference, for a type this codebase knows about but hasn't
+# implemented reconstruction for yet. Mirrors KNOWN_DIVERGENT_FIXTURES in
+# equivalence.test.js (#1999/#2007) and KNOWN_SDK_VERSION_DRIFT_FIXTURES in
+# test_sdk_version_drift.py (#1998 AC5): an honest, referenced exception, not a
+# silent skip. Empty until a real gap is found and filed. Consulted only by
+# RawFixtureReplay._parse() and test_raw_replay_sdk_coverage.py — this module's own
+# reconstruct_sdk_message() keeps raising unconditionally for anything not in
+# _MESSAGE_TYPES, regardless of this map's contents.
+KNOWN_UNHANDLED_SDK_TYPES: dict[str, str] = {}
+
 
 def _reconstruct_content_block(block: dict[str, Any]) -> Any:
     keys = set(block.keys())
