@@ -79,6 +79,16 @@ async function setBatchSizeAndConfirm(batchSize) {
   await fireEvent.click(screen.getByText('Confirm Resume'))
 }
 
+// Variant for tests under vi.useFakeTimers() — the shared flush() above relies
+// on a real setTimeout, which never resolves once fake timers are active.
+async function setBatchSizeAndConfirmFake(batchSize) {
+  await fireEvent.click(screen.getByText(/Resume Sessions/))
+  await vi.advanceTimersByTimeAsync(0)
+  const input = screen.getByLabelText('Resume batch size')
+  await fireEvent.update(input, String(batchSize))
+  await fireEvent.click(screen.getByText('Confirm Resume'))
+}
+
 describe('ProjectOverview - Throttled Resume Sessions (issue #1733)', () => {
   it('resumes all sessions in a single batch when count is under the configured batch size', async () => {
     const project = makeProject({ project_id: 'p1', session_ids: ['s1', 's2', 's3'] })
@@ -92,31 +102,35 @@ describe('ProjectOverview - Throttled Resume Sessions (issue #1733)', () => {
     expect(deferred.pending.length).toBe(3)
   })
 
-  // Pre-existing failure, unrelated to #2037 — tracked as #2048
-  it.fails('chunks resume into sequential batches, with no batch exceeding the configured size', async () => {
+  it('chunks resume into sequential batches, with no batch exceeding the configured size', async () => {
     const ids = ['s1', 's2', 's3', 's4', 's5']
     const project = makeProject({ project_id: 'p1', session_ids: ids })
     const sessions = ids.map(id => makeSession({ session_id: id, project_id: 'p1', state: 'TERMINATED' }))
     const deferred = createDeferredPostMock()
 
     await mountForResume(project, sessions, { stoppedIds: ids })
-    await setBatchSizeAndConfirm(2)
-    await flush()
 
-    // First batch of 2 in flight; nothing more should have been dispatched yet
-    expect(deferred.pending.length).toBe(2)
+    vi.useFakeTimers()
+    try {
+      await setBatchSizeAndConfirmFake(2)
 
-    deferred.resolveNext(2)
-    await flush()
-    expect(deferred.pending.length).toBe(2) // second batch of 2
+      // First batch of 2 in flight; nothing more should have been dispatched yet
+      expect(deferred.pending.length).toBe(2)
 
-    deferred.resolveNext(2)
-    await flush()
-    expect(deferred.pending.length).toBe(1) // final batch of 1
+      deferred.resolveNext(2)
+      await vi.advanceTimersByTimeAsync(5000) // default inter-batch delay
+      expect(deferred.pending.length).toBe(2) // second batch of 2
 
-    deferred.resolveNext(1)
-    await flush()
-    expect(apiMock.post).toHaveBeenCalledTimes(5)
+      deferred.resolveNext(2)
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(deferred.pending.length).toBe(1) // final batch of 1
+
+      deferred.resolveNext(1)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(apiMock.post).toHaveBeenCalledTimes(5)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('keeps a failed session in the stopped set for retry while pruning successes', async () => {
@@ -153,8 +167,7 @@ describe('ProjectOverview - Throttled Resume Sessions (issue #1733)', () => {
     expect(deferred.pending.length).toBe(1)
   })
 
-  // Pre-existing failure, unrelated to #2037 — tracked as #2048
-  it.fails('counts queued (processing) and fresh sessions together against the same batch limit', async () => {
+  it('counts queued (processing) and fresh sessions together against the same batch limit', async () => {
     const ids = ['s1', 's2', 's3', 's4']
     const project = makeProject({ project_id: 'p1', session_ids: ids })
     const sessions = ids.map(id => makeSession({ session_id: id, project_id: 'p1', state: 'TERMINATED' }))
@@ -162,13 +175,18 @@ describe('ProjectOverview - Throttled Resume Sessions (issue #1733)', () => {
 
     // s1, s2 were mid-processing when stopped (resume via queue-message); s3, s4 are fresh starts
     await mountForResume(project, sessions, { stoppedIds: ids, processingIds: ['s1', 's2'] })
-    await setBatchSizeAndConfirm(2)
-    await flush()
 
-    expect(deferred.pending.length).toBe(2)
-    deferred.resolveNext(2)
-    await flush()
-    expect(deferred.pending.length).toBe(2)
+    vi.useFakeTimers()
+    try {
+      await setBatchSizeAndConfirmFake(2)
+
+      expect(deferred.pending.length).toBe(2)
+      deferred.resolveNext(2)
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(deferred.pending.length).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
