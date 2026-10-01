@@ -65,10 +65,16 @@ def _accept_encoding_covers(accept_encoding: str, encoding: str) -> bool:
 class BackendClient:
     """Thin HTTP client for talking to the Backend control-plane process."""
 
-    def __init__(self, base_url: str, token: str, timeout: float = 30.0):
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        timeout: float = 30.0,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self._token = token
-        self._client = httpx.AsyncClient(base_url=self.base_url, timeout=timeout)
+        self._client = httpx.AsyncClient(base_url=self.base_url, timeout=timeout, transport=transport)
         self.reachability = BackendReachabilityTracker()
 
     async def aclose(self) -> None:

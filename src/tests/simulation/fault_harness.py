@@ -44,6 +44,21 @@ def session_path(session_id: str) -> str:
     return f"/api/poll/session/{session_id}"
 
 
+async def wait_until(predicate, timeout: float = 5.0, interval: float = 0.02) -> bool:
+    """Poll `predicate()` until it's truthy or `timeout` elapses. Returns whether it
+    became truthy. Shared by this module's own callers and by harness-adjacent test
+    files (e.g. backend/tests/test_fault_harness_real_backend_client.py) that would
+    otherwise each hand-roll the same deadline-loop shape.
+    """
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(interval)
+    return predicate()
+
+
 class FakeBackend:
     """Stands in for Backend's real poll endpoints (backend/routers/poll.py) —
     same `wait_for_events()` -> `events_since()` -> `reset_occurred()` logic,
@@ -263,13 +278,55 @@ class BrowserClient:
 
 
 # AC4's four named fault types, plus "none" as the non-fault baseline (T2's fault matrix).
-FAULT_TYPES = ("none", "backend_restart", "frontend_restart", "eviction", "freeze")
+# AC6 adds "backend_down"/"slow_ready" (previously-unused FakeBackend primitives) and
+# the combined "eviction_during_backend_restart" fault.
+FAULT_TYPES = (
+    "none",
+    "backend_restart",
+    "frontend_restart",
+    "eviction",
+    "freeze",
+    "backend_down",
+    "slow_ready",
+    "eviction_during_backend_restart",
+)
 
 # Faults that destroy already-buffered-but-undelivered history (a client that hadn't yet
 # caught up loses that range, by design — the same real-world tradeoff #1889 documents).
 # Faults NOT in this set are required to lose nothing at all: every appended event must
-# eventually be delivered, exactly once.
-_DESTRUCTIVE_FAULTS = frozenset({"backend_restart", "eviction"})
+# eventually be delivered, exactly once. "backend_down"/"slow_ready" answer late or not
+# at all but never drop already-buffered history, so neither belongs here.
+_DESTRUCTIVE_FAULTS = frozenset(
+    {"backend_restart", "eviction", "eviction_during_backend_restart"}
+)
+
+# Hold duration shared by "freeze"/"backend_down"/"slow_ready" — short enough to stay
+# well within run_fault_scenario's default settle_timeout=5.0.
+_FAULT_HOLD_SECONDS = 0.2
+
+
+def _restart_settle_seconds() -> float:
+    """Settle delay shared by every fault that calls backend.restart(): gives the
+    relay's poll loop one full cycle to observe the fresh, near-empty post-restart
+    queue before more events pile up. Without this, a relay that (by coincidence)
+    already caught up to exactly cursor N before the restart can poll a post-restart
+    queue that (again by coincidence, e.g. a symmetric pre/post-fault event split) has
+    ALSO reached cursor N by the time it looks — EventQueue has no epoch/generation
+    concept, only a monotonic-per-instance cursor, so `events_since(N)` against a
+    same-valued current cursor reads as "already caught up" rather than "these are N
+    entirely different events from a new epoch," silently losing them with no reset
+    signal. A real relay is exceedingly unlikely to hit this by chance; a deterministic
+    test with round event counts hits it reliably — see test_fault_simulation.py's
+    dedicated xfail test, which deliberately skips this mitigation to engineer the
+    collision in isolation.
+
+    A function, not a module-level constant: `_relay_timeout_module._POLL_TIMEOUT_
+    SECONDS` is monkeypatched per-test (see test_fault_simulation.py's
+    `_fast_poll_timing` fixture) — baking the multiplication into a constant computed
+    once at import time would freeze in the unpatched real value instead of picking up
+    the test's patched one.
+    """
+    return _relay_timeout_module._POLL_TIMEOUT_SECONDS * 1.5
 
 # The "eviction" fault's retained-window size and its companion no-yield append burst
 # (run_fault_scenario) are two halves of one mechanism, not independent constants: the
@@ -288,27 +345,34 @@ async def _inject_fault(
         return
     if fault == "backend_restart":
         backend.restart()
-        # Give the relay's poll loop one full cycle to observe the fresh,
-        # near-empty post-restart queue before more events pile up. Without
-        # this, a relay that (by coincidence) already caught up to exactly
-        # cursor N before the restart can poll a post-restart queue that
-        # (again by coincidence, e.g. a symmetric pre/post-fault event split)
-        # has ALSO reached cursor N by the time it looks — EventQueue has no
-        # epoch/generation concept, only a monotonic-per-instance cursor, so
-        # `events_since(N)` against a same-valued current cursor reads as
-        # "already caught up" rather than "these are N entirely different
-        # events from a new epoch," silently losing them with no reset
-        # signal. A real relay is exceedingly unlikely to hit this by chance;
-        # a deterministic test with round event counts hits it reliably.
-        await asyncio.sleep(_relay_timeout_module._POLL_TIMEOUT_SECONDS * 1.5)
+        await asyncio.sleep(_restart_settle_seconds())
     elif fault == "frontend_restart":
         await frontend.restart()
     elif fault == "eviction":
         backend.evict_to(session_id, n=_EVICTION_WINDOW)
     elif fault == "freeze":
         client.paused = True
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(_FAULT_HOLD_SECONDS)
         client.paused = False
+    elif fault == "backend_down":
+        backend.go_down()
+        await asyncio.sleep(_FAULT_HOLD_SECONDS)
+        backend.come_up()
+    elif fault == "slow_ready":
+        backend.slow_ready(_FAULT_HOLD_SECONDS)
+        await asyncio.sleep(_FAULT_HOLD_SECONDS)
+        backend.slow_ready(0)
+    elif fault == "eviction_during_backend_restart":
+        # No yield between restart and evict_to — same "deny the relay a chance
+        # to observe the intermediate state" reasoning the plain "eviction" fault
+        # already relies on (see run_fault_scenario's burst-append comment):
+        # exercises both hazards compounding (fresh cursor space AND a tiny
+        # retained window) rather than either alone. Same cursor-collision
+        # hazard as the plain "backend_restart" fault above (this fault
+        # restarts too) — same mitigation, see _restart_settle_seconds().
+        backend.restart()
+        backend.evict_to(session_id, n=_EVICTION_WINDOW)
+        await asyncio.sleep(_restart_settle_seconds())
     else:
         raise ValueError(f"Unknown fault type: {fault!r} — expected one of {FAULT_TYPES}")
 
@@ -359,7 +423,9 @@ async def run_fault_scenario(
     # time it next looks — otherwise a relay polling every few milliseconds
     # can outrun a fault that only shrinks the retained window, and the fault
     # would never become observable.
-    burst_len = _EVICTION_BURST_LEN if fault == "eviction" else 0
+    burst_len = (
+        _EVICTION_BURST_LEN if fault in ("eviction", "eviction_during_backend_restart") else 0
+    )
     burst_remaining = 0
     expected_seqs: list[int] = []
     # The tail: events appended once the stream is well past the fault point.

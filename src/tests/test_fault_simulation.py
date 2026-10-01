@@ -10,16 +10,23 @@ files (never imported as Python), since src/ is structurally forbidden from
 importing backend/ (see src/tests/test_import_boundary.py).
 """
 
+import asyncio
 import json
 import time
 from pathlib import Path
 
+import httpx
 import pytest
 
 from src.tests.simulation.fault_harness import (
     _DESTRUCTIVE_FAULTS,
     FAULT_TYPES,
+    BrowserClient,
+    FakeBackend,
+    FakeFrontend,
     run_fault_scenario,
+    session_path,
+    wait_until,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -212,6 +219,71 @@ async def test_scale_fixture_completes_in_bounded_time_with_no_event_loss():
 
 
 @pytest.mark.asyncio
+async def test_backend_down_recovers_with_no_loss():
+    """AC6: a Backend that stops answering polls entirely (connection refused)
+    must not lose any events — once it comes back up, the relay catches up
+    from exactly where it left off. First confirms go_down() genuinely
+    produces a connection failure directly against FakeBackend (BrowserClient
+    itself never observes this: FakeFrontend/PollRelay mediates and retries
+    internally, catching httpx.RequestError in its own loop — the same
+    shielding a real browser gets from polling.js never seeing a raw
+    connection error either), then confirms the full scenario loses nothing.
+    """
+    probe_backend = FakeBackend()
+    probe_backend.go_down()
+    with pytest.raises(httpx.ConnectError):
+        await probe_backend.get_json(session_path("probe-session"))
+
+    result = await run_fault_scenario("backend_down", _SAMPLE_EVENTS)
+    client = result["client"]
+
+    delivered_seqs = {event.get("_fault_harness_seq") for _, event in client.received_deduped()}
+    missing = set(result["expected_seqs"]) - delivered_seqs
+    assert not missing, f"backend_down: {len(missing)} event(s) lost despite recovery"
+    assert len(client.received) == len(client.received_deduped())
+
+
+@pytest.mark.asyncio
+async def test_slow_ready_recovers_with_no_loss_and_no_spurious_signal():
+    """AC6: a Backend that's up but slow to answer (e.g. mid-startup) must not
+    lose any events and must not raise a spurious reset/evicted signal — only
+    timing is affected, nothing about queue state changed."""
+    result = await run_fault_scenario("slow_ready", _SAMPLE_EVENTS)
+    client = result["client"]
+
+    delivered_seqs = {event.get("_fault_harness_seq") for _, event in client.received_deduped()}
+    missing = set(result["expected_seqs"]) - delivered_seqs
+    assert not missing, f"slow_ready: {len(missing)} event(s) lost despite recovery"
+    assert len(client.received) == len(client.received_deduped())
+    assert client.reset_count == 0
+    assert client.evicted_count == 0
+
+
+@pytest.mark.asyncio
+async def test_eviction_during_backend_restart_surfaces_both_signals():
+    """AC6: the combined fault (a Backend restart immediately followed by an
+    eviction, no yield in between) exercises both hazards compounding — fresh
+    cursor space AND a tiny retained window. Mirrors
+    test_backend_restart_is_visible_as_a_reset_to_the_browser/
+    test_eviction_is_visible_to_the_browser's style: at least one of the two
+    signals must surface, never a silent gap.
+
+    fault_at_fraction=0.15 (not 0.1, unlike the plain "eviction" test):
+    0.1 puts the fault at exactly 20 pre-fault events — the same value as
+    _EVICTION_BURST_LEN, a coincidental round-number match that (like the
+    collision item 4's dedicated test deliberately engineers for
+    backend_restart alone) can land the post-restart burst exactly on the
+    relay's stale cursor and mask the signal despite genuine data loss.
+    0.15 avoids that coincidence.
+    """
+    result = await run_fault_scenario(
+        "eviction_during_backend_restart", _SAMPLE_EVENTS, fault_at_fraction=0.15
+    )
+    client = result["client"]
+    assert client.reset_count >= 1 or client.evicted_count >= 1
+
+
+@pytest.mark.asyncio
 async def test_frontend_restart_reseeds_from_backends_real_cursor_space():
     """US2's Technical Approach: FakeFrontend.restart() discards PollRelay/local
     EventQueue and rebuilds against the SAME, unaffected FakeBackend — the
@@ -223,3 +295,70 @@ async def test_frontend_restart_reseeds_from_backends_real_cursor_space():
     delivered_seqs = {event.get("_fault_harness_seq") for _, event in client.received_deduped()}
     assert set(result["expected_seqs"]) <= delivered_seqs
     assert len(client.received) == len(client.received_deduped())
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(
+    strict=True,
+    reason="epic #1990 stage 5: EventQueue has no epoch/generation concept, so a same-valued cursor across a Backend-restart boundary reads as 'already caught up' instead of signaling a new epoch, silently dropping the colliding event(s) with no reset signal — fix is EventQueue epoch/generation tracking, out of scope until stage 5",
+)
+async def test_cursor_collision_silently_drops_colliding_post_restart_events():
+    """AC6 item 4: deliberately engineers the exact "round event counts"
+    cursor collision that `_inject_fault()`'s `backend_restart` branch's sleep
+    workaround exists to avoid — bypassing `run_fault_scenario()`'s general
+    helper (and that sleep) entirely, constructing the harness directly.
+
+    With NO settle delay after `backend.restart()`, a post-restart burst
+    sized to exactly match the client's already-observed pre-restart cursor
+    recreates the collision: the relay's stale `since` equals the fresh
+    queue's current cursor once the burst completes, so `events_since()`
+    reads "already caught up" rather than "these are N entirely different
+    events from a new epoch" — silently dropping every colliding event with
+    no reset/evicted signal.
+
+    This asserts the CORRECT behavior (every post-restart event eventually
+    delivered, or at minimum an explicit reset/evicted signal raised for the
+    gap) — which fails today because of the hazard above, giving the
+    intended "xfail" result. `strict=True` means the day `EventQueue` gains
+    epoch/generation tracking (stage 5) and this assertion starts passing,
+    the test flips to an unexpected xpass and fails the suite, forcing this
+    marker's removal instead of letting it go stale.
+    """
+    session_id = "cursor-collision-session"
+    backend = FakeBackend()
+    frontend = FakeFrontend(backend)
+    client = BrowserClient(frontend, session_id=session_id)
+
+    stop_event = asyncio.Event()
+    poll_task = asyncio.create_task(client.run_until(stop_event, poll_timeout=0.05))
+
+    pre_restart_count = 10
+    for i in range(pre_restart_count):
+        backend.queue_for(session_id).append({"phase": "pre", "i": i})
+        await asyncio.sleep(0)  # let the relay observe each pre-restart append promptly
+
+    await wait_until(lambda: len(client.received) >= pre_restart_count, timeout=2.0, interval=0.01)
+    assert len(client.received) == pre_restart_count, "setup failed: client never caught up pre-restart"
+
+    # The collision itself: restart with no settle delay, then a same-sized
+    # burst with no yield in between — the fresh queue's cursor lands on
+    # exactly the value the relay's stale `since` already holds.
+    backend.restart()
+    for i in range(pre_restart_count):
+        backend.queue_for(session_id).append({"phase": "post", "i": i})
+
+    # Fixed wait, not a predicate loop: this is the collision itself under test — there
+    # is no "done" condition to poll for, since the whole point is that nothing should
+    # (but today, nothing does) visibly happen for these colliding events.
+    await asyncio.sleep(2.0)
+
+    stop_event.set()
+    await poll_task
+    await frontend.stop()
+
+    post_restart_received = [e for _, e in client.received if e.get("phase") == "post"]
+    assert (
+        len(post_restart_received) == pre_restart_count
+        or client.reset_count >= 1
+        or client.evicted_count >= 1
+    )
