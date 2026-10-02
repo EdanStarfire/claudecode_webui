@@ -642,7 +642,7 @@ class ProxyAddon:
                                     f"[proxy] Refresh failed for {record['name']}: {exc}"
                                 )
                                 await self._emit_ui_event("secret_refresh_failed", {
-                                    "name": record["name"],
+                                    "secret_name": record["name"],
                                     "error": str(exc),
                                 })
 
