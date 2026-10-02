@@ -176,7 +176,7 @@ import { useResourceStore } from '@/stores/resource'
 import { useUIStore } from '@/stores/ui'
 import { useSessionState } from '@/composables/useSessionState'
 import { useHydrationStage } from '@/composables/useHydrationStage'
-import { api, getAuthToken } from '@/utils/api'
+import { api, getAuthToken, triggerReauth } from '@/utils/api'
 import { HYDRATION_STAGE_LABELS } from '@/utils/hydrationStage'
 import AttachmentList from './AttachmentList.vue'
 import SlashCommandDropdown from './SlashCommandDropdown.vue'
@@ -666,6 +666,8 @@ async function uploadFile(attachment) {
       headers,
       body: formData
     })
+
+    if (response.status === 401) triggerReauth(401)
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))

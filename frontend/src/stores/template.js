@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { api, getAuthToken } from '@/utils/api'
+import { api, getAuthToken, triggerReauth } from '@/utils/api'
 
 export const useTemplateStore = defineStore('template', () => {
   // templates Map: template_id → template object
@@ -65,6 +65,7 @@ export const useTemplateStore = defineStore('template', () => {
     const token = getAuthToken()
     const headers = token ? { Authorization: `Bearer ${token}` } : {}
     const response = await fetch(`/api/templates/${templateId}/export`, { headers })
+    if (response.status === 401) triggerReauth(401)
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     const blob = await response.blob()
     const disposition = response.headers.get('Content-Disposition') || ''

@@ -90,7 +90,7 @@ import { usePollingStore } from './stores/polling'
 import { useSessionStore } from './stores/session'
 import { useProjectStore } from './stores/project'
 import { useTaskStore } from './stores/task'
-import { apiGet, getAuthToken, setAuthToken } from './utils/api'
+import { apiGet, getAuthToken, setAuthToken, authRequired } from './utils/api'
 
 const uiStore = useUIStore()
 const showAuthPrompt = ref(false)
@@ -154,6 +154,16 @@ watch(() => taskStore.currentHasTasks, (hasTasks, hadTasks) => {
     uiStore.setRightPanelVisible(true)
   }
 })
+
+// Issue #2040: re-show the auth prompt if any call site detects a 401 after the
+// initial mount's one-shot check already passed. { immediate: true } covers the
+// theoretical edge case of authRequired flipping true before this watcher attaches;
+// in practice nothing calls the API before the initial auth check resolves.
+watch(authRequired, (required) => {
+  if (required) {
+    showAuthPrompt.value = true
+  }
+}, { immediate: true })
 
 // Initialize app on mount
 onMounted(async () => {

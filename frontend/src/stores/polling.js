@@ -8,7 +8,7 @@ import { useQueueStore } from './queue'
 import { useUIStore } from './ui'
 import { useEditHistoryStore } from './editHistory'
 import { notify } from '@/composables/useNotifications'
-import { getAuthToken, api } from '@/utils/api'
+import { getAuthToken, api, triggerReauth } from '@/utils/api'
 import { pushDebugEvent } from '@/composables/useDebugBuffer'
 
 export const usePollingStore = defineStore('polling', () => {
@@ -245,6 +245,15 @@ export const usePollingStore = defineStore('polling', () => {
         uiConnected.value = true
         const response = await fetch(url, { signal: uiAbortController.signal })
 
+        if (response.status === 401) {
+          triggerReauth(401)
+          // stopUIPolling() (not a bare flag flip) so stopAppDataRetryWatcher() actually
+          // runs — otherwise appDataRetryInterval keeps firing every 15s with nothing
+          // left to stop it until a full page reload.
+          stopUIPolling()
+          return
+        }
+
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`)
         }
@@ -320,6 +329,12 @@ export const usePollingStore = defineStore('polling', () => {
         const cursor = (typeof rawCursor === 'number') ? rawCursor : 0
         const url = getPollUrl(`/api/poll/session/${sessionId}`, cursor)
         const response = await fetch(url, { signal: sessionAbortController.signal })
+
+        if (response.status === 401) {
+          triggerReauth(401)
+          sessionConnected.value = false
+          break
+        }
 
         if (response.status === 404) {
           // Session not found - stop polling

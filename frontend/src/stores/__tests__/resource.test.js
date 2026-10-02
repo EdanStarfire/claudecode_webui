@@ -3,10 +3,12 @@ import { setActivePinia, createPinia } from 'pinia'
 
 const apiGetMock = vi.hoisted(() => vi.fn())
 const apiDeleteMock = vi.hoisted(() => vi.fn())
+const triggerReauthMock = vi.hoisted(() => vi.fn())
 vi.mock('@/utils/api', () => ({
   apiGet: apiGetMock,
   apiDelete: apiDeleteMock,
-  getAuthToken: vi.fn(() => null)
+  getAuthToken: vi.fn(() => null),
+  triggerReauth: triggerReauthMock
 }))
 vi.mock('@/stores/session', () => ({
   useSessionStore: vi.fn(() => ({ currentSessionId: 'sess-1' }))
@@ -16,6 +18,7 @@ beforeEach(() => {
   setActivePinia(createPinia())
   apiGetMock.mockReset()
   apiDeleteMock.mockReset()
+  triggerReauthMock.mockReset()
 })
 
 function makeResource(overrides = {}) {
@@ -482,5 +485,41 @@ describe('resource store — versioning/grouping (issue #1680)', () => {
       expect(apiDeleteMock).toHaveBeenCalledWith('/api/sessions/sess-1/resources/r1')
       expect(store.resourcesForSession('sess-1')).toHaveLength(0)
     })
+  })
+})
+
+describe('fetchTextContent — 401 re-auth (issue #2040)', () => {
+  it('calls triggerReauth on a 401', async () => {
+    const { useResourceStore } = await import('@/stores/resource')
+    const store = useResourceStore()
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: () => Promise.resolve('')
+    }))
+
+    const result = await store.fetchTextContent('sess-1', 'r1')
+
+    expect(result).toBeNull()
+    expect(triggerReauthMock).toHaveBeenCalledWith(401)
+    vi.unstubAllGlobals()
+  })
+
+  it('does not call triggerReauth on a 500', async () => {
+    const { useResourceStore } = await import('@/stores/resource')
+    const store = useResourceStore()
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: () => Promise.resolve('')
+    }))
+
+    const result = await store.fetchTextContent('sess-1', 'r2')
+
+    expect(result).toBeNull()
+    expect(triggerReauthMock).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
   })
 })

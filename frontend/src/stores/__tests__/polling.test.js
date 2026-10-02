@@ -9,15 +9,18 @@ const apiMock = vi.hoisted(() => ({
   delete: vi.fn(),
   patch: vi.fn()
 }))
+const triggerReauthMock = vi.hoisted(() => vi.fn())
 vi.mock('@/utils/api', () => ({
   api: apiMock,
-  getAuthToken: vi.fn().mockReturnValue(null)
+  getAuthToken: vi.fn().mockReturnValue(null),
+  triggerReauth: triggerReauthMock
 }))
 vi.mock('@/composables/useNotifications', () => ({ notify: vi.fn() }))
 
 beforeEach(() => {
   setActivePinia(createPinia())
   Object.values(apiMock).forEach(fn => fn.mockReset())
+  triggerReauthMock.mockReset()
 })
 
 // Shared by the stall-heal watchdog describe blocks below (#1795 and #1974) — both fake
@@ -463,6 +466,172 @@ describe('polling store - backendStatus (issue #1989)', () => {
     await flush()
 
     expect(pollingStore.backendStatus).toBe('ok')
+  })
+})
+
+describe('polling store - 401 re-auth (issue #2040)', () => {
+  it('startUIPolling: a 401 calls triggerReauth, sets uiConnected false, and does not schedule a backoff retry', async () => {
+    vi.useFakeTimers()
+    try {
+      const { usePollingStore } = await import('@/stores/polling')
+      const pollingStore = usePollingStore()
+
+      const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ detail: 'unauthorized' })
+      })
+
+      pollingStore.startUIPolling()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(triggerReauthMock).toHaveBeenCalledWith(401)
+      expect(pollingStore.uiConnected).toBe(false)
+
+      const callsAfterFirst = fetchSpy.mock.calls.length
+      // No backoff wait/retry: advancing well past the first backoff delay (2000ms)
+      // must not produce a second fetch call, since the loop already returned.
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(fetchSpy.mock.calls.length).toBe(callsAfterFirst)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('startUIPolling: a 401 goes through stopUIPolling() so the periodic app-data retry watcher is also stopped (no leaked interval)', async () => {
+    vi.useFakeTimers()
+    try {
+      const { usePollingStore } = await import('@/stores/polling')
+      const { useUIStore } = await import('@/stores/ui')
+      const pollingStore = usePollingStore()
+      const uiStore = useUIStore()
+
+      // A real-world confluence: app-data load had already failed before the 401 hit,
+      // so the periodic watcher (started by startUIPolling()) would otherwise keep
+      // retrying loadAppData() every 15s forever once the UI-poll loop exits.
+      uiStore.setAppDataStatus('failed')
+      apiMock.get.mockResolvedValue({})
+
+      vi.spyOn(global, 'fetch').mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ detail: 'unauthorized' })
+      })
+
+      pollingStore.startUIPolling()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(pollingStore.uiConnected).toBe(false)
+
+      apiMock.get.mockClear()
+      // Past the periodic watcher's 15s interval — if stopAppDataRetryWatcher() wasn't
+      // called, this would fire retryStaleAppData() -> loadAppData() -> /api/projects
+      // and /api/sessions.
+      await vi.advanceTimersByTimeAsync(16000)
+
+      expect(apiMock.get).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('_runSessionPollLoop (via connectSession): a 401 calls triggerReauth, sets sessionConnected false, and stops the loop', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useSessionStore } = await import('@/stores/session')
+    const pollingStore = usePollingStore()
+    const sessionStore = useSessionStore()
+
+    sessionStore.sessions.set('sess-401', makeSession({ session_id: 'sess-401' }))
+    apiMock.get.mockResolvedValue({ cursor: 0 })
+
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve({ detail: 'unauthorized' })
+    })
+
+    await pollingStore.connectSession('sess-401')
+    await flush()
+
+    expect(triggerReauthMock).toHaveBeenCalledWith(401)
+    expect(pollingStore.sessionConnected).toBe(false)
+
+    const callsAfterFirst = fetchSpy.mock.calls.length
+    await flush()
+    // Loop must have exited (break) rather than continuing to poll.
+    expect(fetchSpy.mock.calls.length).toBe(callsAfterFirst)
+  })
+
+  it('_runSessionPollLoop: existing 404 "session not found" behavior is unaffected (regression check)', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useSessionStore } = await import('@/stores/session')
+    const pollingStore = usePollingStore()
+    const sessionStore = useSessionStore()
+
+    sessionStore.sessions.set('sess-404', makeSession({ session_id: 'sess-404' }))
+    apiMock.get.mockResolvedValue({ cursor: 0 })
+
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 404,
+      json: () => Promise.resolve({ detail: 'not found' })
+    })
+
+    await pollingStore.connectSession('sess-404')
+    await flush()
+
+    expect(triggerReauthMock).not.toHaveBeenCalled()
+    expect(pollingStore.sessionConnected).toBe(false)
+  })
+
+  it('startUIPolling: a 403 still enters the existing generic catch/backoff path, unchanged (regression check)', async () => {
+    vi.useFakeTimers()
+    try {
+      const { usePollingStore } = await import('@/stores/polling')
+      const pollingStore = usePollingStore()
+
+      vi.spyOn(global, 'fetch').mockResolvedValue({
+        ok: false,
+        status: 403,
+        json: () => Promise.resolve({ detail: 'forbidden' })
+      })
+
+      pollingStore.startUIPolling()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(triggerReauthMock).not.toHaveBeenCalled()
+      expect(pollingStore.uiConnected).toBe(false)
+      expect(pollingStore.uiRetryCount).toBe(1)
+
+      pollingStore.stopUIPolling()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('startUIPolling: a 500 still enters the existing generic catch/backoff path, unchanged (regression check)', async () => {
+    vi.useFakeTimers()
+    try {
+      const { usePollingStore } = await import('@/stores/polling')
+      const pollingStore = usePollingStore()
+
+      vi.spyOn(global, 'fetch').mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: () => Promise.resolve({ detail: 'server error' })
+      })
+
+      pollingStore.startUIPolling()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(triggerReauthMock).not.toHaveBeenCalled()
+      expect(pollingStore.uiConnected).toBe(false)
+      expect(pollingStore.uiRetryCount).toBe(1)
+
+      pollingStore.stopUIPolling()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

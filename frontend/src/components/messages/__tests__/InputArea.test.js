@@ -13,7 +13,8 @@ const apiMock = vi.hoisted(() => ({
 vi.mock('@/utils/api', () => ({
   api: apiMock,
   getAuthToken: vi.fn().mockReturnValue(null),
-  setAuthToken: vi.fn()
+  setAuthToken: vi.fn(),
+  triggerReauth: vi.fn()
 }))
 vi.mock('@/composables/useNotifications', () => ({ notify: vi.fn() }))
 // Issue #1746 (stage: permissions) follow-up: must be real Vue refs, not plain {value} objects —

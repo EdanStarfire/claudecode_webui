@@ -9,9 +9,12 @@ const apiMock = vi.hoisted(() => ({
   patch: vi.fn(),
 }))
 
+const triggerReauthMock = vi.hoisted(() => vi.fn())
+
 vi.mock('@/utils/api', () => ({
   api: apiMock,
   getAuthToken: vi.fn(() => null),
+  triggerReauth: triggerReauthMock,
 }))
 
 beforeEach(() => {
@@ -108,5 +111,39 @@ describe('template store', () => {
     await store.importTemplate(envelope, true)
     expect(apiMock.post).toHaveBeenCalledWith('/api/templates/import', { ...envelope, overwrite: true })
     expect(store.templates.size).toBe(1)
+  })
+})
+
+describe('exportTemplate — 401 re-auth (issue #2040)', () => {
+  it('calls triggerReauth on a 401', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      headers: { get: () => null }
+    }))
+
+    const { useTemplateStore } = await import('@/stores/template')
+    const store = useTemplateStore()
+
+    await expect(store.exportTemplate('tmpl-1')).rejects.toThrow()
+
+    expect(triggerReauthMock).toHaveBeenCalledWith(401)
+    vi.unstubAllGlobals()
+  })
+
+  it('does not call triggerReauth on a 500', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      headers: { get: () => null }
+    }))
+
+    const { useTemplateStore } = await import('@/stores/template')
+    const store = useTemplateStore()
+
+    await expect(store.exportTemplate('tmpl-1')).rejects.toThrow()
+
+    expect(triggerReauthMock).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
   })
 })
