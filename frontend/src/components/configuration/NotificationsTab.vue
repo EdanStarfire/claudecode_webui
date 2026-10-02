@@ -347,7 +347,8 @@ const nativeEventOptions = [
   { key: 'task_complete', label: 'Agent task completion' },
   { key: 'session_error', label: 'Session errors' },
   { key: 'minion_comm', label: 'Minion communications (Legion)' },
-  { key: 'session_restart_error', label: 'Session restart errors' }
+  { key: 'session_restart_error', label: 'Session restart errors' },
+  { key: 'session_self_restart', label: 'Session self-restart success' }
 ]
 
 const trayEventOptions = [
@@ -355,7 +356,8 @@ const trayEventOptions = [
   { key: 'task_complete', label: 'Agent task completion' },
   { key: 'session_error', label: 'Session errors' },
   { key: 'minion_comm', label: 'Minion communications (Legion)' },
-  { key: 'session_restart_error', label: 'Session restart errors' }
+  { key: 'session_restart_error', label: 'Session restart errors' },
+  { key: 'session_self_restart', label: 'Session self-restart success' }
 ]
 
 onMounted(() => {

@@ -276,6 +276,40 @@ export const usePollingStore = defineStore('polling', () => {
           retryStaleAppData()
         }
 
+        if (data.evicted || data.reset) {
+          // Issue #2065 AC7: mirrors the session stream's resync-on-evicted/reset — neither an
+          // evicted cursor nor a reset queue can be trusted to deliver a gapless slice, so
+          // re-fetch the UI stream's own ground truth (projects + sessions) instead of risking a
+          // permanent gap by applying this response's events as a complete slice. No
+          // isCurrentGeneration-style guard needed here, unlike the session loop's version — the
+          // UI loop has exactly one poll generation at a time, with no stall-heal-reconnect flow
+          // creating an overlapping second one.
+          pushDebugEvent('polling', data.evicted ? 'poll-evicted' : 'poll-reset', {
+            stream: 'ui', staleCursor: uiCursor, next_cursor: data.next_cursor,
+            eventCount: data.events?.length ?? 0, generation: myGeneration
+          })
+          // Review finding: this resync replaces the dropped events entirely, including any
+          // session_deleted this cycle would otherwise have carried — loadAppData()'s own
+          // fetchSessions() only removes a vanished id from the `sessions` Map (it has no
+          // reason to know about the other per-session stores), so without this, a deletion
+          // that happens to land in the same evicted/reset cycle would leak exactly the state
+          // AC6 added removeSessionsFromStores() to clean up. Diff the session id set
+          // before/after the resync and run the same cleanup any other session_deleted goes
+          // through for whatever vanished.
+          const sessionStore = useSessionStore()
+          const idsBeforeResync = new Set(sessionStore.sessions.keys())
+          await loadAppData()
+          const vanishedIds = [...idsBeforeResync].filter(id => !sessionStore.sessions.has(id))
+          if (vanishedIds.length > 0) {
+            const wasCurrentSessionRemoved = await sessionStore.removeSessionsFromStores(vanishedIds)
+            if (wasCurrentSessionRemoved) {
+              router.push('/')
+            }
+          }
+          uiCursor = data.next_cursor
+          continue
+        }
+
         if (data.events && data.events.length > 0) {
           for (const event of data.events) {
             dispatchEvent(event, 'ui')
@@ -284,11 +318,6 @@ export const usePollingStore = defineStore('polling', () => {
         pushDebugEvent('polling', 'poll-cycle', {
           stream: 'ui', cursorBefore: uiCursor, cursorAfter: data.next_cursor, generation: myGeneration
         })
-        if (data.reset) {
-          pushDebugEvent('polling', 'poll-reset', {
-            stream: 'ui', staleCursor: uiCursor, next_cursor: data.next_cursor, eventCount: data.events?.length ?? 0, generation: myGeneration
-          })
-        }
         uiCursor = data.next_cursor
 
       } catch (err) {
@@ -803,15 +832,6 @@ export const usePollingStore = defineStore('polling', () => {
   // dispatchEvent below); UI_EVENT_HANDLERS entries read whatever session id they need
   // from payload.data.
   const UI_EVENT_HANDLERS = {
-    sessions_list: (payload) => {
-      const sessionStore = useSessionStore()
-      if (payload.sessions && Array.isArray(payload.sessions)) {
-        payload.sessions.forEach(session => {
-          sessionStore.updateSession(session.session_id, session)
-        })
-      }
-    },
-
     state_change: (payload) => {
       const sessionStore = useSessionStore()
       if (payload.data && payload.data.session_id && payload.data.session) {
@@ -1006,6 +1026,21 @@ export const usePollingStore = defineStore('polling', () => {
       })
     },
 
+    server_restarting: (payload) => {
+      const uiStore = useUIStore()
+      // The initiating tab's own doRestart() already drives phase='progress' locally — it
+      // also receives this exact broadcast on its own UI poll (global ui_queue, every tab
+      // reads it), and must not have its own in-progress modal reset out from under it.
+      if (uiStore.restartInProgress) return
+      uiStore.showRestartModal({ remote: true, message: payload.message })
+    },
+
+    session_self_restart: (payload) => {
+      const { session_id: sessionId, reason } = payload.data || {}
+      console.log(`[session_self_restart] Session ${sessionId} restarted successfully${reason ? ` (reason: ${reason})` : ''}`)
+      notify('session_self_restart', { sessionId, reason })
+    },
+
     rate_limits_update: (payload) => {
       const uiStore = useUIStore()
       uiStore.setRateLimits(payload.data)
@@ -1097,6 +1132,29 @@ export const usePollingStore = defineStore('polling', () => {
     // Issue #1486: streaming text delta — forward to message store for RAF-batched mutation
     assistant_delta: (payload, sessionId) => {
       useMessageStore().handleAssistantDelta(sessionId, payload.data)
+    },
+
+    secret_refresh_failed: (payload) => {
+      // backend/routers/secrets.py's proxy-sidecar event route — same fact as the UI-stream
+      // secret_refresh_failed handler above, just nested under `data` instead of flat, and
+      // arriving via a different transport (Docker proxy addon -> session queue, instead of
+      // VaultRefreshManager -> UI queue). Routes to the identical, already-silent treatment
+      // (useSecretsStore().handleSecretRefreshFailed has no toast/notify even on the UI-stream
+      // path) so there's exactly one visible outcome for this fact regardless of transport.
+      const secretName = payload.data?.secret_name
+      if (secretName) {
+        useSecretsStore().handleSecretRefreshFailed(secretName, payload.data?.error || '')
+      }
+    },
+
+    proxy_event: (payload) => {
+      // Registered catch-all default (backend/routers/secrets.py's event_type = body.get(
+      // "type", "proxy_event")) — confirmed nothing in the live codebase currently emits it
+      // (the one real caller, backend/docker/proxy/addon.py's _emit_ui_event, always passes an
+      // explicit real type). No UI surface exists for this yet because nothing produces it;
+      // this just acknowledges the registered type instead of silently warning/dropping it, so
+      // a future real producer surfaces in the console instead of vanishing outright.
+      console.log('[proxy_event]', payload.data)
     },
   }
 

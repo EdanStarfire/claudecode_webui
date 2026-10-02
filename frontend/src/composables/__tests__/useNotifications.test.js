@@ -34,6 +34,7 @@ describe('useNotifications — tray settings (#1725)', () => {
       session_error: true,
       minion_comm: false,
       session_restart_error: true,
+      session_self_restart: true,
     })
   })
 
@@ -53,6 +54,7 @@ describe('useNotifications — tray settings (#1725)', () => {
       session_error: true,
       minion_comm: true,
       session_restart_error: true,
+      session_self_restart: true,
     })
   })
 

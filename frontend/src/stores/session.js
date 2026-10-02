@@ -664,6 +664,35 @@ export const useSessionStore = defineStore('session', () => {
     }
     hydrationStageBySession.value = new Map(hydrationStageBySession.value)
 
+    // Issue #1974: stop the poll loop for the deleted session(s) if one is currently
+    // displayed in this tab — a still-in-flight response landing afterward could
+    // otherwise resurrect per-session state the cleanup below tears down. Moved ahead of
+    // the Issue #2065 AC6 store-clearing block below (review finding): that block's own
+    // run of awaited dynamic imports widened the same window this comment already
+    // describes, so the disconnect now happens before any of it rather than after.
+    const pollingStore = (await import('./polling')).usePollingStore()
+    if (deletedIds.includes(currentSessionId.value)) {
+      await pollingStore.disconnectSession()
+    }
+
+    // Issue #2065 AC6: clear every per-session store session_reset already clears, plus
+    // queue/task/diff — previously left populated indefinitely (a real memory leak, and a
+    // stale-data risk if a session id were ever reused).
+    const messageStore = (await import('./message')).useMessageStore()
+    const resourceStore = (await import('./resource')).useResourceStore()
+    const editHistoryStore = (await import('./editHistory')).useEditHistoryStore()
+    const queueStore = (await import('./queue')).useQueueStore()
+    const taskStore = (await import('./task')).useTaskStore()
+    const diffStore = (await import('./diff')).useDiffStore()
+    for (const deletedId of deletedIds) {
+      messageStore.clearMessages(deletedId)
+      resourceStore.clearResources(deletedId)
+      editHistoryStore.clearHistory(deletedId)
+      queueStore.removeSessionQueue(deletedId)
+      taskStore.clearTasks(deletedId)
+      diffStore.clearDiff(deletedId)
+    }
+
     // Issue #1530: Clear links for deleted sessions
     import('./links').then(({ useLinksStore }) => {
       const linksStore = useLinksStore()
@@ -671,14 +700,6 @@ export const useSessionStore = defineStore('session', () => {
         linksStore.clearLinks(deletedId)
       }
     })
-
-    // Issue #1974: stop the poll loop for the deleted session(s) if one is currently
-    // displayed in this tab — a still-in-flight response landing afterward could
-    // otherwise resurrect the per-session polling state the cleanup below tears down.
-    const pollingStore = (await import('./polling')).usePollingStore()
-    if (deletedIds.includes(currentSessionId.value)) {
-      await pollingStore.disconnectSession()
-    }
 
     // Issue #1974: tear down the polling store's per-session state (cursor, heartbeat,
     // heal-in-flight mutex, frozen-time snapshot) for deleted sessions.
@@ -691,7 +712,14 @@ export const useSessionStore = defineStore('session', () => {
 
     // If deleted current session (or it was a cascaded child), clear selection
     const wasCurrentSessionRemoved = deletedIds.includes(currentSessionId.value)
+
+    // Issue #2065 AC6 (review finding): only clear the rate-limit display if the removed
+    // session was the one currently shown. session_reset's equivalent call is unconditional,
+    // but that's only safe there because a reset is always triggered while viewing that exact
+    // session; a deleted session can be a background one, and blindly nulling the global
+    // rateLimits ref would wipe the display for whatever session the user IS currently viewing.
     if (wasCurrentSessionRemoved) {
+      useUIStore().setRateLimits(null)
       currentSessionId.value = null
       // Navigation is handled by the caller
     }

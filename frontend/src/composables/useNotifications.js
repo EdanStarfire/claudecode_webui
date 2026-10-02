@@ -22,6 +22,7 @@ const DEFAULT_SETTINGS = {
     session_error: true,
     minion_comm: false,
     session_restart_error: true,
+    session_self_restart: true,
   },
   nativeEnabled: false,
   nativeEvents: {
@@ -30,6 +31,7 @@ const DEFAULT_SETTINGS = {
     session_error: true,
     minion_comm: false,
     session_restart_error: true,
+    session_self_restart: true,
   },
   // Issue #1725: tray defaults to ON — passive/non-intrusive, unlike sound/native which opt-in
   trayEnabled: true,
@@ -39,6 +41,7 @@ const DEFAULT_SETTINGS = {
     session_error: true,
     minion_comm: false,
     session_restart_error: true,
+    session_self_restart: true,
   }
 }
 
@@ -48,7 +51,8 @@ const NATIVE_TITLES = {
   task_complete: 'Task Complete',
   session_error: 'Session Error',
   minion_comm: 'Minion Communication',
-  session_restart_error: 'Session Restart Error'
+  session_restart_error: 'Session Restart Error',
+  session_self_restart: 'Session Restarted'
 }
 
 // Event-specific TTS message templates
@@ -73,6 +77,9 @@ const TTS_TEMPLATES = {
   session_restart_error: (ctx) => {
     const id = ctx?.sessionId || 'Session'
     return `Restart error for ${id}: ${ctx?.error || 'unknown error'}`
+  },
+  session_self_restart: (ctx) => {
+    return `Session ${ctx?.sessionId || 'unknown'} restarted successfully`
   }
 }
 
@@ -192,6 +199,10 @@ const TONE_DEFS = {
   session_restart_error(gain) {
     // Low square wave warning (same as session_error)
     playTone(220, 0.4, 'square', gain * 0.5)
+  },
+  session_self_restart(gain) {
+    // Reuses the existing ascending-arpeggio "success" tone
+    TONE_DEFS.task_complete(gain)
   }
 }
 

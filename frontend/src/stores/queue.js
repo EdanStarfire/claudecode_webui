@@ -135,6 +135,19 @@ export const useQueueStore = defineStore('queue', () => {
     }
   }
 
+  /**
+   * Local-only cleanup for a session that's gone (deleted) — unlike clearQueue()/
+   * clearHistory(), this does not hit the backend; there is nothing left to clear there.
+   */
+  function removeSessionQueue(sessionId) {
+    queuesBySession.value.delete(sessionId)
+    queuesBySession.value = new Map(queuesBySession.value)
+    pausedBySession.value.delete(sessionId)
+    pausedBySession.value = new Map(pausedBySession.value)
+    paginationBySession.value.delete(sessionId)
+    paginationBySession.value = new Map(paginationBySession.value)
+  }
+
   async function pauseQueue(sessionId, paused) {
     try {
       const data = await api.put(`/api/sessions/${sessionId}/queue/pause`, { paused })
@@ -193,6 +206,7 @@ export const useQueueStore = defineStore('queue', () => {
     requeueItem,
     clearQueue,
     clearHistory,
+    removeSessionQueue,
     pauseQueue,
     handleQueueUpdate,
     updatePauseState,

@@ -12,7 +12,10 @@ const apiMock = vi.hoisted(() => ({
 vi.mock('@/utils/api', () => ({ api: apiMock, getAuthToken: vi.fn() }))
 vi.mock('@/composables/useNotifications', () => ({ notify: vi.fn() }))
 vi.mock('@/stores/resource', () => ({
-  useResourceStore: vi.fn(() => ({ loadResources: vi.fn().mockResolvedValue(undefined) }))
+  useResourceStore: vi.fn(() => ({
+    loadResources: vi.fn().mockResolvedValue(undefined),
+    clearResources: vi.fn()
+  }))
 }))
 vi.mock('@/stores/usage', () => ({
   useUsageStore: vi.fn(() => ({ loadUsage: vi.fn() }))
@@ -160,6 +163,75 @@ describe('session store', () => {
     await store.deleteSession('sess-parent')
 
     expect(pollingMock.disconnectSession).toHaveBeenCalled()
+  })
+
+  describe('removeSessionsFromStores scope widening (issue #2065 AC6)', () => {
+    it('clears messages, resources, edit history, queue, task, and diff state for the removed session', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const { useMessageStore } = await import('@/stores/message')
+      const { useResourceStore } = await import('@/stores/resource')
+      const { useEditHistoryStore } = await import('@/stores/editHistory')
+      const { useQueueStore } = await import('@/stores/queue')
+      const { useTaskStore } = await import('@/stores/task')
+      const { useDiffStore } = await import('@/stores/diff')
+
+      const store = useSessionStore()
+      const messageStore = useMessageStore()
+      // Fix useResourceStore()'s return value across calls (its default mock factory
+      // otherwise hands back a fresh clearResources spy on every call) — mirrors the
+      // existing pattern above for selectSession's own loadResources assertions.
+      const resourceStore = { loadResources: vi.fn().mockResolvedValue(undefined), clearResources: vi.fn() }
+      useResourceStore.mockImplementation(() => resourceStore)
+      const editHistoryStore = useEditHistoryStore()
+      const queueStore = useQueueStore()
+      const taskStore = useTaskStore()
+      const diffStore = useDiffStore()
+
+      const sid = 'sess-ac6'
+      store.sessions.set(sid, makeSession({ session_id: sid }))
+
+      // Seed per-session state directly in each store's own Map/Set.
+      messageStore.messagesBySession.set(sid, [{ id: 'm1', type: 'user' }])
+      editHistoryStore.entriesBySession.set(sid, [{ id: 'e1' }])
+      queueStore.queuesBySession.set(sid, [{ queue_id: 'q1' }])
+      queueStore.pausedBySession.set(sid, true)
+      taskStore.tasksBySession.set(sid, new Map([['t1', { id: 't1' }]]))
+      taskStore.sessionsWithTasks.add(sid)
+      diffStore.diffBySession.set(sid, { files: ['a.js'] })
+
+      await store.removeSessionsFromStores([sid])
+
+      expect(messageStore.messagesBySession.has(sid)).toBe(false)
+      expect(resourceStore.clearResources).toHaveBeenCalledWith(sid)
+      expect(editHistoryStore.entriesBySession.has(sid)).toBe(false)
+      expect(queueStore.queuesBySession.has(sid)).toBe(false)
+      expect(queueStore.pausedBySession.has(sid)).toBe(false)
+      expect(taskStore.tasksBySession.has(sid)).toBe(false)
+      expect(taskStore.sessionsWithTasks.has(sid)).toBe(false)
+      expect(diffStore.diffBySession.has(sid)).toBe(false)
+    })
+
+    it('only clears the rate-limit display when the removed session was the current one', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const { useUIStore } = await import('@/stores/ui')
+
+      const store = useSessionStore()
+      const uiStore = useUIStore()
+
+      store.sessions.set('sess-current', makeSession({ session_id: 'sess-current' }))
+      store.sessions.set('sess-background', makeSession({ session_id: 'sess-background' }))
+      store.currentSessionId = 'sess-current'
+      uiStore.setRateLimits({ requests_remaining: 10 })
+
+      // Deleting a different, non-current (background) session must not touch the
+      // currently-displayed session's rate-limit badge.
+      await store.removeSessionsFromStores(['sess-background'])
+      expect(uiStore.rateLimits).toEqual({ requests_remaining: 10 })
+
+      // Deleting the current session does clear it.
+      await store.removeSessionsFromStores(['sess-current'])
+      expect(uiStore.rateLimits).toBeNull()
+    })
   })
 
   it('getInput/setInput caches per session', async () => {
