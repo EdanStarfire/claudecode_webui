@@ -24,6 +24,7 @@ from typing import Literal
 
 import httpx
 
+from shared.event_envelope import EventEnvelope
 from shared.poll_protocol import parse_poll_response
 
 Stream = Literal["ui", "session", "minion"]
@@ -32,7 +33,7 @@ Stream = Literal["ui", "session", "minion"]
 @dataclass(frozen=True)
 class TaggedEvent:
     source: Stream
-    event: dict
+    event: EventEnvelope
     seq: int
 
 
@@ -46,7 +47,7 @@ class WaitTimeoutError(Exception):
         self.description = description
         self.matched_so_far = matched_so_far
         self.last_n_events = last_n_events
-        seen = [f"{e.source}:{e.event.get('type', '?')}" for e in last_n_events]
+        seen = [f"{e.source}:{e.event.type}" for e in last_n_events]
         super().__init__(
             f"Timed out waiting for: {description}. "
             f"Matched {len(matched_so_far)} event(s) so far. "
@@ -64,7 +65,7 @@ class SharedEventBuffer:
         self._events: list[TaggedEvent] = []
         self.condition = asyncio.Condition()
 
-    async def append(self, source: Stream, event: dict) -> None:
+    async def append(self, source: Stream, event: EventEnvelope) -> None:
         async with self.condition:
             self._events.append(TaggedEvent(source=source, event=event, seq=len(self._events)))
             self.condition.notify_all()

@@ -24,6 +24,8 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 
+from shared.event_emitter import emit
+from shared.event_envelope import QUEUE_AUDIT, QUEUE_SESSION, QUEUE_UI
 from shared.event_queue import EventQueue
 from shared.git_restart import run_git_command
 from shared.gzip_request_middleware import GZipRequestMiddleware
@@ -375,22 +377,21 @@ class BackendApp:
         """Forward watchdog alerts to AuditWriter and wake audit long-poll."""
         try:
             await self._audit_writer.on_watchdog_alert(alert)
-            self.audit_queue.append({"type": "audit_event", "data": alert})
+            emit(self.audit_queue, QUEUE_AUDIT, "audit_event", {"data": alert})
         except Exception:
             logger.exception("_on_watchdog_alert_audit error (non-fatal)")
 
     async def _wake_audit_queue(self) -> None:
         """Signal audit long-poll that new rows are available after a flush."""
         try:
-            self.audit_queue.append({"type": "audit_event_flush"})
+            emit(self.audit_queue, QUEUE_AUDIT, "audit_event_flush", {})
         except Exception:
             logger.exception("_wake_audit_queue error (non-fatal)")
 
     async def _broadcast_comm_notification_to_ui(self, comm):
         """Issue #699: Push comm notification event to UI poll queue for audio alerts."""
         try:
-            self.ui_queue.append({
-                "type": "notification",
+            emit(self.ui_queue, QUEUE_UI, "notification", {
                 "data": {
                     "event_type": "minion_comm",
                     "comm_type": comm.comm_type.value if hasattr(comm.comm_type, 'value') else str(comm.comm_type),
@@ -407,14 +408,14 @@ class BackendApp:
         """Broadcast schedule event to UI poll queue."""
         try:
             event["legion_id"] = legion_id
-            self.ui_queue.append(event)
+            emit(self.ui_queue, QUEUE_UI, event["type"], {k: v for k, v in event.items() if k != "type"})
         except Exception:
             logger.exception("Error appending schedule event")
 
     def _broadcast_project_updated(self, project: dict) -> None:
         """Emit project_updated to the global UI poll queue."""
         try:
-            self.ui_queue.append({"type": "project_updated", "data": {"project": project}})
+            emit(self.ui_queue, QUEUE_UI, "project_updated", {"data": {"project": project}})
             logger.debug("Appended project_updated for project %s", project.get("project_id"))
         except Exception:
             logger.exception("Error appending project_updated")
@@ -422,7 +423,7 @@ class BackendApp:
     def _broadcast_project_deleted(self, project_id: str) -> None:
         """Emit project_deleted to the global UI poll queue."""
         try:
-            self.ui_queue.append({"type": "project_deleted", "data": {"project_id": project_id}})
+            emit(self.ui_queue, QUEUE_UI, "project_deleted", {"data": {"project_id": project_id}})
             logger.debug("Appended project_deleted for project %s", project_id)
         except Exception:
             logger.exception("Error appending project_deleted")
@@ -430,7 +431,7 @@ class BackendApp:
     def _broadcast_session_deleted(self, session_id: str) -> None:
         """Emit session_deleted to the global UI poll queue (Issue #1986)."""
         try:
-            self.ui_queue.append({"type": "session_deleted", "data": {"session_id": session_id}})
+            emit(self.ui_queue, QUEUE_UI, "session_deleted", {"data": {"session_id": session_id}})
             logger.debug("Appended session_deleted for session %s", session_id)
         except Exception:
             logger.exception("Error appending session_deleted")
@@ -438,8 +439,7 @@ class BackendApp:
     def _broadcast_state_change(self, session_id: str, session_dict: dict, timestamp: str | None = None) -> None:
         """Emit state_change to the global UI poll queue."""
         try:
-            self.ui_queue.append({
-                "type": "state_change",
+            emit(self.ui_queue, QUEUE_UI, "state_change", {
                 "data": {"session_id": session_id, "session": session_dict, "timestamp": timestamp}
             })
             logger.info("Appended state_change for session %s", session_id)
@@ -449,8 +449,7 @@ class BackendApp:
     def _broadcast_server_restarting(self, pull_output: str, sync_output: str) -> None:
         """Emit server_restarting to the global UI poll queue."""
         try:
-            self.ui_queue.append({
-                "type": "server_restarting",
+            emit(self.ui_queue, QUEUE_UI, "server_restarting", {
                 "message": "Server is restarting...",
                 "pull_output": pull_output,
                 "sync_output": sync_output,
@@ -462,7 +461,7 @@ class BackendApp:
     def _broadcast_mcp_oauth_complete(self, server_id: str) -> None:
         """Emit mcp_oauth_complete to the global UI poll queue."""
         try:
-            self.ui_queue.append({"type": "mcp_oauth_complete", "server_id": server_id})
+            emit(self.ui_queue, QUEUE_UI, "mcp_oauth_complete", {"server_id": server_id})
         except Exception:
             logger.exception("Error appending mcp_oauth_complete")
 
@@ -482,8 +481,7 @@ class BackendApp:
         panel has no other way to learn the outcome of a flow completed in a
         cross-origin popup (see render_oauth_callback()'s on_denied docstring)."""
         try:
-            self.ui_queue.append({
-                "type": "secret_oauth_complete",
+            emit(self.ui_queue, QUEUE_UI, "secret_oauth_complete", {
                 "flow_id": flow_id,
                 "success": success,
                 "secret_name": secret_name,
@@ -640,10 +638,9 @@ class BackendApp:
         """Issue #1387: Emit secret_refreshed or secret_refresh_failed to the UI poll queue."""
         try:
             if error is None:
-                self.ui_queue.append({"type": "secret_refreshed", "secret_name": secret_name})
+                emit(self.ui_queue, QUEUE_UI, "secret_refreshed", {"secret_name": secret_name})
             else:
-                self.ui_queue.append({
-                    "type": "secret_refresh_failed",
+                emit(self.ui_queue, QUEUE_UI, "secret_refresh_failed", {
                     "secret_name": secret_name,
                     "error": error,
                 })
@@ -653,14 +650,14 @@ class BackendApp:
     def _broadcast_mcp_oauth_refreshed(self, server_id: str) -> None:
         """Issue #976: Emit mcp_oauth_refreshed to the global UI poll queue."""
         try:
-            self.ui_queue.append({"type": "mcp_oauth_refreshed", "server_id": server_id})
+            emit(self.ui_queue, QUEUE_UI, "mcp_oauth_refreshed", {"server_id": server_id})
         except Exception:
             logger.exception("Error appending mcp_oauth_refreshed")
 
     def _broadcast_rate_limits_update(self, data: dict) -> None:
         """Issue #899: Emit rate_limits_update to the global UI poll queue."""
         try:
-            self.ui_queue.append({"type": "rate_limits_update", "data": data})
+            emit(self.ui_queue, QUEUE_UI, "rate_limits_update", {"data": data})
         except Exception:
             logger.exception("Error appending rate_limits_update")
 
@@ -668,8 +665,7 @@ class BackendApp:
         """Issue #404: Called by ResourceMCPTools when a resource is registered."""
         try:
             if session_id in self.session_queues:
-                self.session_queues[session_id].append({
-                    "type": "resource_registered",
+                emit(self.session_queues[session_id], QUEUE_SESSION, "resource_registered", {
                     "resource": resource_metadata,
                     "timestamp": datetime.now(UTC).isoformat()
                 })
@@ -681,8 +677,7 @@ class BackendApp:
         """Issue #1530: Called by LinksMCPTools when a link is registered or updated."""
         try:
             if session_id in self.session_queues:
-                self.session_queues[session_id].append({
-                    "type": "link_registered",
+                emit(self.session_queues[session_id], QUEUE_SESSION, "link_registered", {
                     "link": link,
                     "timestamp": datetime.now(UTC).isoformat(),
                 })
@@ -694,8 +689,7 @@ class BackendApp:
         """Issue #500: Real-time queue status updates."""
         try:
             if session_id in self.session_queues:
-                self.session_queues[session_id].append({
-                    "type": "queue_update",
+                emit(self.session_queues[session_id], QUEUE_SESSION, "queue_update", {
                     "action": action,
                     "item": item,
                     "pending_count": self.coordinator.queue_manager.get_pending_count(session_id),
@@ -708,8 +702,7 @@ class BackendApp:
         """Append usage_updated event to session poll queue (issue #1125)."""
         try:
             if session_id in self.session_queues:
-                self.session_queues[session_id].append({
-                    "type": "usage_updated",
+                emit(self.session_queues[session_id], QUEUE_SESSION, "usage_updated", {
                     "session_id": session_id,
                     "usage": usage,
                     "timestamp": datetime.now(UTC).isoformat(),
@@ -836,8 +829,7 @@ class BackendApp:
                         )
                         return
                     if session_id in self.session_queues:
-                        self.session_queues[session_id].append({
-                            "type": "assistant_delta",
+                        emit(self.session_queues[session_id], QUEUE_SESSION, "assistant_delta", {
                             "session_id": session_id,
                             "data": {
                                 "uuid": message_data["uuid"],
@@ -879,18 +871,14 @@ class BackendApp:
                         f"record_id — frontend dedup identity unresolved"
                     )
 
-                # Wrap in standard poll queue envelope
-                serialized = {
-                    "type": "message",
-                    "session_id": session_id,
-                    "data": websocket_data,
-                    "timestamp": datetime.now(UTC).isoformat()
-                }
-
                 # Issue #1694: Append the assistant envelope — and mark it on the message-
                 # emitted barrier — BEFORE emitting tool_call updates below.
                 if session_id in self.session_queues:
-                    self.session_queues[session_id].append(serialized)
+                    emit(self.session_queues[session_id], QUEUE_SESSION, "message", {
+                        "session_id": session_id,
+                        "data": websocket_data,
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    })
                     logger.info(f"Appended message to session queue for {session_id}")
 
                 # Issue #1957/#1958: the barrier keys on the TURN-level Anthropic id — now the
@@ -911,8 +899,7 @@ class BackendApp:
                 if msg_type_str == "result" and session_id in self.session_queues:
                     ctx = await self.coordinator.get_context_usage(session_id)
                     if ctx and ctx.get("totalTokens"):
-                        self.session_queues[session_id].append({
-                            "type": "context_update",
+                        emit(self.session_queues[session_id], QUEUE_SESSION, "context_update", {
                             "session_id": session_id,
                             "input_tokens": ctx["totalTokens"],
                             "context_window": ctx["maxTokens"],
@@ -962,14 +949,12 @@ class BackendApp:
                         tool_call_data = tool_call.to_dict()
                         tool_call_data["type"] = "tool_call"
 
-                        websocket_message = {
-                            "type": "message",
-                            "session_id": session_id,
-                            "data": tool_call_data,
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        }
                         if session_id in self.session_queues:
-                            self.session_queues[session_id].append(websocket_message)
+                            emit(self.session_queues[session_id], QUEUE_SESSION, "message", {
+                                "session_id": session_id,
+                                "data": tool_call_data,
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            })
                         logger.debug(f"Emitted tool_call pending for {tool_name} ({tool_id}) in session {session_id}")
 
             # Handle tool_results in user messages
@@ -1003,14 +988,12 @@ class BackendApp:
                             tool_call_data = updated_tool_call.to_dict()
                             tool_call_data["type"] = "tool_call"
 
-                            websocket_message = {
-                                "type": "message",
-                                "session_id": session_id,
-                                "data": tool_call_data,
-                                "timestamp": datetime.now(UTC).isoformat(),
-                            }
                             if session_id in self.session_queues:
-                                self.session_queues[session_id].append(websocket_message)
+                                emit(self.session_queues[session_id], QUEUE_SESSION, "message", {
+                                    "session_id": session_id,
+                                    "data": tool_call_data,
+                                    "timestamp": datetime.now(UTC).isoformat(),
+                                })
                             logger.debug(
                                 f"Emitted tool_call {'failed' if is_error else 'completed'} "
                                 f"for {tool_use_id} in session {session_id}"
@@ -1049,14 +1032,12 @@ class BackendApp:
                         tool_call_data["type"] = "tool_call"
                         tool_call_data["request_id"] = metadata.get('request_id')
 
-                        websocket_message = {
-                            "type": "message",
-                            "session_id": session_id,
-                            "data": tool_call_data,
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        }
                         if session_id in self.session_queues:
-                            self.session_queues[session_id].append(websocket_message)
+                            emit(self.session_queues[session_id], QUEUE_SESSION, "message", {
+                                "session_id": session_id,
+                                "data": tool_call_data,
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            })
                         logger.debug(
                             f"Emitted tool_call awaiting_permission for {tool_name} "
                             f"({tool_use_id}) in session {session_id}"
@@ -1091,14 +1072,12 @@ class BackendApp:
                         tool_call_data = updated_tool_call.to_dict()
                         tool_call_data["type"] = "tool_call"
 
-                        websocket_message = {
-                            "type": "message",
-                            "session_id": session_id,
-                            "data": tool_call_data,
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        }
                         if session_id in self.session_queues:
-                            self.session_queues[session_id].append(websocket_message)
+                            emit(self.session_queues[session_id], QUEUE_SESSION, "message", {
+                                "session_id": session_id,
+                                "data": tool_call_data,
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            })
                         logger.debug(
                             f"Emitted tool_call {'running' if granted else 'denied'} "
                             f"for {tool_use_id} in session {session_id}"
@@ -1126,8 +1105,7 @@ class BackendApp:
     def _on_tool_call_broadcast(self, session_id: str, tool_call_data: dict):
         """Issue #520: Append tool_call message to session poll queue. Called synchronously from coordinator."""
         if session_id in self.session_queues:
-            self.session_queues[session_id].append({
-                "type": "tool_call",
+            emit(self.session_queues[session_id], QUEUE_SESSION, "tool_call", {
                 "session_id": session_id,
                 "data": tool_call_data,
                 "timestamp": datetime.now(UTC).isoformat(),
@@ -1136,11 +1114,7 @@ class BackendApp:
     async def _on_session_reset(self, session_id: str):
         """Issue #500: Append session_reset to UI queue so frontend clears stale messages."""
         try:
-            message = {
-                "type": "session_reset",
-                "data": {"session_id": session_id},
-            }
-            self.ui_queue.append(message)
+            emit(self.ui_queue, QUEUE_UI, "session_reset", {"data": {"session_id": session_id}})
             logger.info(f"Appended session_reset for {session_id} to UI queue")
         except Exception:
             logger.exception("Error appending session_reset")

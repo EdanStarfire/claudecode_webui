@@ -6,10 +6,12 @@ or the scripted scenario driver (`backend/tools/scenario_driver/`, issue #2038).
 
 from dataclasses import dataclass
 
+from shared.event_envelope import EventEnvelope
+
 
 @dataclass
 class PollBatch:
-    events: list[dict]
+    events: list[EventEnvelope]
     next_cursor: int
     reset: bool
     evicted: bool
@@ -17,7 +19,7 @@ class PollBatch:
 
 def parse_poll_response(body: dict) -> PollBatch:
     return PollBatch(
-        events=body["events"],
+        events=[EventEnvelope.from_dict(e) for e in body["events"]],
         next_cursor=body["next_cursor"],
         reset=body["reset"],
         evicted=body["evicted"],

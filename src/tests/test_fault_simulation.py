@@ -24,6 +24,7 @@ from src.tests.simulation.fault_harness import (
     BrowserClient,
     FakeBackend,
     FakeFrontend,
+    resolve_delivered_seqs,
     run_fault_scenario,
     session_path,
     wait_until,
@@ -125,7 +126,7 @@ async def test_fault_matrix_delivers_exactly_once(fault):
         f"fault={fault}: {len(received) - len(deduped)} event(s) delivered more than once"
     )
 
-    delivered_seqs = {event.get("_fault_harness_seq") for _, event in deduped}
+    delivered_seqs = resolve_delivered_seqs(deduped, result["seq_identity"])
     missing_tail = set(result["tail_seqs"]) - delivered_seqs
     assert not missing_tail, (
         f"fault={fault}: {len(missing_tail)} tail event(s) never delivered — transport did not recover"
@@ -143,7 +144,7 @@ async def test_non_destructive_faults_lose_nothing(fault):
     result = await run_fault_scenario(fault, _SAMPLE_EVENTS)
     client = result["client"]
 
-    delivered_seqs = {event.get("_fault_harness_seq") for _, event in client.received_deduped()}
+    delivered_seqs = resolve_delivered_seqs(client.received_deduped(), result["seq_identity"])
     missing = set(result["expected_seqs"]) - delivered_seqs
     assert not missing, f"fault={fault}: {len(missing)} event(s) lost despite being non-destructive"
 
@@ -175,7 +176,7 @@ async def test_freeze_client_resumes_with_no_loss_and_no_duplicates():
     result = await run_fault_scenario("freeze", _SAMPLE_EVENTS)
     client = result["client"]
     assert len(client.received) == len(client.received_deduped())
-    delivered_seqs = {event.get("_fault_harness_seq") for _, event in client.received_deduped()}
+    delivered_seqs = resolve_delivered_seqs(client.received_deduped(), result["seq_identity"])
     assert set(result["expected_seqs"]) <= delivered_seqs
 
 
@@ -196,8 +197,8 @@ async def test_scale_fixture_completes_in_bounded_time_with_no_event_loss():
     rewrites identity fields for consumers that dedup by content, e.g. the
     frontend's message_id-keyed store), this harness's own exactly-once
     tracking is purely cursor/seq-based (see BrowserClient.received_deduped()
-    and run_fault_scenario()'s `_fault_harness_seq` tagging) — verbatim
-    repetition is sufficient here.
+    and run_fault_scenario()'s `seq_identity` out-of-band identity map) —
+    verbatim repetition is sufficient here.
     """
     target_count = 20_000
     scaled_events = [
@@ -210,7 +211,7 @@ async def test_scale_fixture_completes_in_bounded_time_with_no_event_loss():
 
     client = result["client"]
     assert len(client.received) == len(client.received_deduped()), "duplicate delivery at scale"
-    delivered_seqs = {event.get("_fault_harness_seq") for _, event in client.received_deduped()}
+    delivered_seqs = resolve_delivered_seqs(client.received_deduped(), result["seq_identity"])
     assert set(result["expected_seqs"]) <= delivered_seqs, "event loss at scale"
 
     # Bounded, not tight: this is a regression guard against the harness going
@@ -237,7 +238,7 @@ async def test_backend_down_recovers_with_no_loss():
     result = await run_fault_scenario("backend_down", _SAMPLE_EVENTS)
     client = result["client"]
 
-    delivered_seqs = {event.get("_fault_harness_seq") for _, event in client.received_deduped()}
+    delivered_seqs = resolve_delivered_seqs(client.received_deduped(), result["seq_identity"])
     missing = set(result["expected_seqs"]) - delivered_seqs
     assert not missing, f"backend_down: {len(missing)} event(s) lost despite recovery"
     assert len(client.received) == len(client.received_deduped())
@@ -251,7 +252,7 @@ async def test_slow_ready_recovers_with_no_loss_and_no_spurious_signal():
     result = await run_fault_scenario("slow_ready", _SAMPLE_EVENTS)
     client = result["client"]
 
-    delivered_seqs = {event.get("_fault_harness_seq") for _, event in client.received_deduped()}
+    delivered_seqs = resolve_delivered_seqs(client.received_deduped(), result["seq_identity"])
     missing = set(result["expected_seqs"]) - delivered_seqs
     assert not missing, f"slow_ready: {len(missing)} event(s) lost despite recovery"
     assert len(client.received) == len(client.received_deduped())
@@ -292,7 +293,7 @@ async def test_frontend_restart_reseeds_from_backends_real_cursor_space():
     its next poll resumes seamlessly from Backend's still-intact history."""
     result = await run_fault_scenario("frontend_restart", _SAMPLE_EVENTS)
     client = result["client"]
-    delivered_seqs = {event.get("_fault_harness_seq") for _, event in client.received_deduped()}
+    delivered_seqs = resolve_delivered_seqs(client.received_deduped(), result["seq_identity"])
     assert set(result["expected_seqs"]) <= delivered_seqs
     assert len(client.received) == len(client.received_deduped())
 
@@ -356,7 +357,7 @@ async def test_cursor_collision_silently_drops_colliding_post_restart_events():
     await poll_task
     await frontend.stop()
 
-    post_restart_received = [e for _, e in client.received if e.get("phase") == "post"]
+    post_restart_received = [e for _, e in client.received if e.data.get("phase") == "post"]
     assert (
         len(post_restart_received) == pre_restart_count
         or client.reset_count >= 1

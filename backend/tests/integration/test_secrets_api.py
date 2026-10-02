@@ -5,6 +5,10 @@ Tests: GET /api/secrets, POST /api/secrets, PATCH /api/secrets/{name},
        DELETE /api/secrets/{name}
 
 Keyring is mocked so tests run without OS keyring.
+
+Also covers POST /api/sessions/{id}/events (issue #2063 AC4) — the proxy-sidecar
+session-event-emit boundary, which validates the event `type` against the shared
+event registry before queuing.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -474,3 +478,64 @@ async def test_issue_1867_refresh_only_oauth2_secret_refreshes_successfully(
     data = refresh_resp.json()
     assert data["refresh"]["last_refresh_status"] == "success"
     assert mock_keyring["e2e-oauth"] == "refreshed-access-token"
+
+
+# ---------------------------------------------------------------------------
+# POST /api/sessions/{id}/events (issue #2063 AC4)
+# ---------------------------------------------------------------------------
+
+
+async def _create_started_session(env):
+    """Create and start a session, returning (session_id, secret_fetch_token)."""
+    client = env["client"]
+    project = await env["create_test_project"]("Events Project")
+    session = await env["create_test_session"](project["project_id"], "single_turn")
+    sid = session["session_id"]
+
+    resp = await client.post(f"/api/sessions/{sid}/start")
+    assert resp.status_code == 200, resp.text
+
+    import asyncio
+
+    token = None
+    for _ in range(50):
+        info_resp = await client.get(f"/api/sessions/{sid}")
+        token = info_resp.json()["session"].get("secret_fetch_token")
+        if token:
+            break
+        await asyncio.sleep(0.2)
+    assert token, "secret_fetch_token was never generated for started session"
+    return sid, token
+
+
+@pytest.mark.asyncio
+async def test_emit_session_event_rejects_unregistered_type(api_integration_env, mock_keyring):
+    """POST /api/sessions/{id}/events rejects a `type` not in the shared registry."""
+    sid, token = await _create_started_session(api_integration_env)
+    client = api_integration_env["client"]
+
+    resp = await client.post(
+        f"/api/sessions/{sid}/events",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"type": "totally_made_up_event_type", "data": {}},
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_emit_session_event_accepts_registered_type(api_integration_env, mock_keyring):
+    """POST /api/sessions/{id}/events accepts secret_refresh_failed — the type AC4's
+    endpoint actually exists for (proxy sidecar surfacing a failed secret refresh)."""
+    sid, token = await _create_started_session(api_integration_env)
+    client = api_integration_env["client"]
+
+    resp = await client.post(
+        f"/api/sessions/{sid}/events",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "type": "secret_refresh_failed",
+            "data": {"secret_name": "some-secret", "error": "token expired"},
+        },
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json() == {"queued": True}

@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Any
 from claude_agent_sdk import PermissionUpdate
 from claude_agent_sdk.types import PermissionRuleValue
 
+from shared.event_emitter import emit
+from shared.event_envelope import QUEUE_SESSION
 from shared.event_queue import EventQueue
 from shared.logging_config import get_logger
 
@@ -254,14 +256,12 @@ class PermissionService:
                             tool_call_data["type"] = "tool_call"
                             tool_call_data["request_id"] = request_id  # For permission response correlation
 
-                            websocket_message = {
-                                "type": "message",
-                                "session_id": session_id,
-                                "data": tool_call_data,
-                                "timestamp": datetime.now(UTC).isoformat(),
-                            }
                             if session_id in self.session_queues:
-                                self.session_queues[session_id].append(websocket_message)
+                                emit(self.session_queues[session_id], QUEUE_SESSION, "message", {
+                                    "session_id": session_id,
+                                    "data": tool_call_data,
+                                    "timestamp": datetime.now(UTC).isoformat(),
+                                })
                             debug_logger.info(f"Appended tool_call awaiting_permission for {tool_name} in session {session_id}")
                     else:
                         # Issue #616: No ToolCall found after retries — auto-deny to prevent deadlock
@@ -543,14 +543,12 @@ class PermissionService:
                             tool_call_data = updated_tool_call.to_dict()
                             tool_call_data["type"] = "tool_call"
 
-                            websocket_message = {
-                                "type": "message",
-                                "session_id": session_id,
-                                "data": tool_call_data,
-                                "timestamp": datetime.now(UTC).isoformat(),
-                            }
                             if session_id in self.session_queues:
-                                self.session_queues[session_id].append(websocket_message)
+                                emit(self.session_queues[session_id], QUEUE_SESSION, "message", {
+                                    "session_id": session_id,
+                                    "data": tool_call_data,
+                                    "timestamp": datetime.now(UTC).isoformat(),
+                                })
                             debug_logger.info(
                                 f"Appended tool_call {'running' if granted else 'denied'} "
                                 f"for {tool_name} in session {session_id}"

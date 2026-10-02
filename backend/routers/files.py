@@ -7,6 +7,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
+from shared.event_emitter import emit
+from shared.event_envelope import QUEUE_SESSION
 from shared.exception_handlers import handle_exceptions
 
 from ..file_upload import FileUploadError, FileUploadManager
@@ -253,8 +255,7 @@ def build_router(webui) -> APIRouter:
 
         # Append removal to session poll queue
         if session_id in webui.session_queues:
-            webui.session_queues[session_id].append({
-                "type": "resource_removed",
+            emit(webui.session_queues[session_id], QUEUE_SESSION, "resource_removed", {
                 "resource_id": resource_id,
             })
 

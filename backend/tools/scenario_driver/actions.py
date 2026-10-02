@@ -25,7 +25,7 @@ def _tool_call_data(matched: list[TaggedEvent]) -> dict:
     "tool_call", "request_id": ..., "name": ..., "input": {...}, ...}}`.
     See `backend/permission_service.py` for where this shape is broadcast.
     """
-    return matched[0].event["data"]
+    return matched[0].event.data
 
 
 def _permission_request_id(matched: list[TaggedEvent]) -> str:

@@ -27,6 +27,8 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from shared.event_emitter import emit
+from shared.event_envelope import QUEUE_UI
 from shared.exception_handlers import handle_exceptions
 from shared.git_restart import (
     get_git_branches_info,
@@ -455,8 +457,7 @@ def build_router(webui) -> APIRouter:
         # other, since mixing disciplines on one EventQueue instance can silently
         # drop or wipe events.
         try:
-            webui.ui_queue.append({
-                "type": "server_restarting",
+            emit(webui.ui_queue, QUEUE_UI, "server_restarting", {
                 "message": "Server is restarting...",
                 "pull_output": pull_output,
                 "sync_output": sync_output,
