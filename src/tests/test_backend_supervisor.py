@@ -203,6 +203,7 @@ async def test_unexpected_exit_logs_at_error_level(
         return respawned
 
     with patch("asyncio.create_subprocess_exec", side_effect=fake_create_subprocess_exec), \
+         patch.object(logging.getLogger("src.backend_supervisor"), "propagate", True), \
          caplog.at_level(logging.ERROR, logger="src.backend_supervisor"):
         monitor_task = asyncio.create_task(sup._monitor_loop())
         for _ in range(50):  # bounded wait for the loop to observe the exit
@@ -245,6 +246,7 @@ async def test_monitor_loop_marks_degraded_after_exceeding_restart_cap(tmp_path,
         # Drive the monitor loop directly (no sleep-based backoff) by patching sleep to a no-op,
         # so the test doesn't take the real exponential-backoff wall-clock time.
         with patch("asyncio.sleep", new=AsyncMock(return_value=None)), \
+             patch.object(logging.getLogger("src.backend_supervisor"), "propagate", True), \
              caplog.at_level(logging.ERROR, logger="src.backend_supervisor"):
             await asyncio.wait_for(sup._monitor_loop(), timeout=5)
 
