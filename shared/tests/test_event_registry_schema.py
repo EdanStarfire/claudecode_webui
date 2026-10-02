@@ -33,6 +33,18 @@ def test_secret_refresh_failed_is_registered_on_both_queues():
     assert spec.queues == frozenset({QUEUE_UI, QUEUE_SESSION})
 
 
+def test_required_keys_for_falls_back_to_default_without_override():
+    spec = TOP_LEVEL_EVENT_TYPES["notification"]
+    assert not spec.required_keys_by_queue
+    assert spec.required_keys_for(QUEUE_UI) == spec.required_keys
+
+
+def test_required_keys_for_uses_queue_specific_override():
+    spec = TOP_LEVEL_EVENT_TYPES["secret_refresh_failed"]
+    assert spec.required_keys_for(QUEUE_SESSION) == frozenset({"data"})
+    assert spec.required_keys_for(QUEUE_UI) == frozenset({"secret_name", "error"})
+
+
 def test_sessions_list_is_deliberately_not_registered():
     # AC7: nothing on the server produces it — it's a dead case in polling.js, resolved by
     # removing the frontend case in 2a-B, not by registering a phantom type here.

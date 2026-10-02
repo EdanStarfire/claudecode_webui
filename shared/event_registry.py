@@ -15,6 +15,15 @@ from shared.event_envelope import QUEUE_AUDIT, QUEUE_SESSION, QUEUE_UI
 class EventTypeSpec:
     queues: frozenset[str]  # one or more of QUEUE_UI/QUEUE_SESSION/QUEUE_AUDIT
     required_keys: frozenset[str] = field(default_factory=frozenset)
+    # compare=False keeps EventTypeSpec hashable under @dataclass(frozen=True) — a plain
+    # dict field would otherwise make the auto-generated __hash__ raise TypeError for
+    # every spec, not just the ones that populate this override.
+    required_keys_by_queue: dict[str, frozenset[str]] = field(
+        default_factory=dict, compare=False
+    )
+
+    def required_keys_for(self, family: str) -> frozenset[str]:
+        return self.required_keys_by_queue.get(family, self.required_keys)
 
 
 TOP_LEVEL_EVENT_TYPES: dict[str, EventTypeSpec] = {
@@ -39,7 +48,9 @@ TOP_LEVEL_EVENT_TYPES: dict[str, EventTypeSpec] = {
     ),
     "secret_refreshed": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"secret_name"})),
     "secret_refresh_failed": EventTypeSpec(
-        frozenset({QUEUE_UI, QUEUE_SESSION}), frozenset({"secret_name", "error"})
+        frozenset({QUEUE_UI, QUEUE_SESSION}),
+        required_keys=frozenset({"secret_name", "error"}),  # web_server.py's flat UI-queue shape
+        required_keys_by_queue={QUEUE_SESSION: frozenset({"data"})},  # routers/secrets.py's wrapped shape
     ),
     "mcp_oauth_refreshed": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"server_id"})),
     "rate_limits_update": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"data"})),

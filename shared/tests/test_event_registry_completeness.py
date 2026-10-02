@@ -65,6 +65,13 @@ DYNAMIC_DEFAULT_RE = re.compile(r'get\(\s*"type",\s*"(\w+)"\s*\)')
 # this pins its literal event type(s) by static scan instead (issue #2063 AC4/T3).
 ADDON_EMIT_LITERAL_RE = re.compile(r'_emit_ui_event\(\s*"(\w+)"')
 
+# addon.py's secret_refresh_failed call's nested dict field names — pins the fixed
+# "secret_name" key (was "name", a pre-existing bug no consumer matched) so a future
+# revert can't silently reintroduce the unmatched field name (issue #2063 §3c/3d).
+ADDON_SECRET_REFRESH_FAILED_FIELDS_RE = re.compile(
+    r'_emit_ui_event\(\s*"secret_refresh_failed"\s*,\s*\{([^}]*)\}', re.DOTALL
+)
+
 # Matches both `"subtype": "x"` (dict-literal construction) and `["subtype"] = "x"`
 # (item-assignment) forms — both are used across the 3 subtype-producer modules.
 SUBTYPE_LITERAL_RE = re.compile(r'(?:"subtype":|\["subtype"\]\s*=)\s*"(\w+)"')
@@ -133,6 +140,27 @@ def test_addon_literal_event_types_are_registered():
             f"addon.py's literal event type {event_type!r} must be registered for "
             f"QUEUE_SESSION (the stream routers/secrets.py relays it onto), got {spec.queues}"
         )
+
+
+def test_addon_secret_refresh_failed_uses_secret_name_field():
+    """Pins the fixed field name (issue #2063 §3c): addon.py's secret_refresh_failed call
+    must send "secret_name", not "name" — the original, pre-existing bug that no consumer
+    (the eventual 2b session-stream handler, nor QUEUE_UI's secret_refresh_failed consumer)
+    matched. Fails loudly if a future revert silently reintroduces the unmatched key."""
+    source = (REPO_ROOT / "backend/docker/proxy/addon.py").read_text()
+    match = ADDON_SECRET_REFRESH_FAILED_FIELDS_RE.search(source)
+    assert match, (
+        "Expected backend/docker/proxy/addon.py's _emit_ui_event(\"secret_refresh_failed\", "
+        "{...}) call — update this test if that call site moved."
+    )
+    body = match.group(1)
+    assert '"secret_name":' in body, (
+        "addon.py's secret_refresh_failed payload must use \"secret_name\" "
+        '(found no such key) — "name" is the pre-existing bug this test guards against.'
+    )
+    assert '"name":' not in body, (
+        'addon.py\'s secret_refresh_failed payload must not use the unmatched "name" key.'
+    )
 
 
 def test_registry_is_not_missing_any_producer_module():

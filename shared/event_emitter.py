@@ -8,7 +8,9 @@ both halves of T1 to run as actual, non-mocked calls)."""
 
 import logging
 from contextlib import contextmanager
+from datetime import UTC, datetime
 
+from shared.event_envelope import QUEUE_SESSION
 from shared.event_queue import EventQueue
 from shared.event_registry import TOP_LEVEL_EVENT_TYPES
 
@@ -42,7 +44,7 @@ def _validate(family: str, event_type: str, payload: dict) -> None:
                 f"event type {event_type!r} not valid on queue family {family!r} "
                 f"(registered for {sorted(spec.queues)})"
             )
-        missing = spec.required_keys - payload.keys()
+        missing = spec.required_keys_for(family) - payload.keys()
         if missing:
             problems.append(f"event type {event_type!r} missing required key(s): {sorted(missing)}")
 
@@ -61,3 +63,33 @@ def emit(queue: EventQueue, family: str, event_type: str, payload: dict) -> int:
     its own)."""
     _validate(family, event_type, payload)
     return queue.append({"type": event_type, **payload})
+
+
+# ---------------------------------------------------------------------------
+# ISSUE #2063 AC5 SHIM. Stage 2b (#2065) deletes this function and replaces its
+# 7 call sites with a single emit() of the canonical bare shape, once the browser
+# dispatcher no longer needs the legacy wrapped form.
+# ---------------------------------------------------------------------------
+def emit_tool_call(queue: EventQueue, session_id: str, tool_call_data: dict) -> None:
+    """Emits one logical tool_call fact as BOTH shapes the browser currently
+    dispatches: the canonical bare `tool_call` envelope, and the legacy
+    `message`-wrapped form `polling.js`'s dispatcher still reads directly
+    (not routed through this shim). Both emissions share one timestamp —
+    generated once, here — so they describe the identical instant rather than
+    two independently-stamped moments.
+    """
+    tool_call_data.setdefault("type", "tool_call")
+    timestamp = datetime.now(UTC).isoformat()
+    emit(queue, QUEUE_SESSION, "tool_call", {
+        "session_id": session_id,
+        "data": tool_call_data,
+        "timestamp": timestamp,
+    })
+    # A fresh copy, not the same `tool_call_data` object as above — so the two queued
+    # entries don't alias one mutable dict (a later in-place mutation of one must not
+    # silently corrupt the other, already-queued, entry).
+    emit(queue, QUEUE_SESSION, "message", {
+        "session_id": session_id,
+        "data": dict(tool_call_data),
+        "timestamp": timestamp,
+    })

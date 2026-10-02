@@ -332,11 +332,18 @@ async def test_emission_order_envelope_before_tool_call_pending(tmp_path):
         ("create_tool_call", "tu1"),
     ]
 
-    # Ordering: the envelope entry is queued ahead of the tool_call PENDING entry
+    # Ordering: the envelope entry is queued ahead of the tool_call PENDING entries.
+    # Issue #2063 AC5 shim: emit_tool_call() appends BOTH the canonical bare `tool_call`
+    # envelope and the legacy `message`-wrapped form for one logical tool_call update, so
+    # the pending transition now lands as two queue entries, not one.
     queue = webui.session_queues[session_id]
-    assert len(queue) == 2
+    assert len(queue) == 3
     assert queue[0]["data"].get("type") != "tool_call"
+    assert queue[0]["type"] != "tool_call"
+    assert queue[1]["type"] == "tool_call"
     assert queue[1]["data"]["type"] == "tool_call"
+    assert queue[2]["type"] == "message"
+    assert queue[2]["data"]["type"] == "tool_call"
 
 
 @pytest.mark.asyncio

@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 
-from shared.event_emitter import emit
+from shared.event_emitter import emit, emit_tool_call
 from shared.event_envelope import QUEUE_AUDIT, QUEUE_SESSION, QUEUE_UI
 from shared.event_queue import EventQueue
 from shared.git_restart import run_git_command
@@ -950,11 +950,7 @@ class BackendApp:
                         tool_call_data["type"] = "tool_call"
 
                         if session_id in self.session_queues:
-                            emit(self.session_queues[session_id], QUEUE_SESSION, "message", {
-                                "session_id": session_id,
-                                "data": tool_call_data,
-                                "timestamp": datetime.now(UTC).isoformat(),
-                            })
+                            emit_tool_call(self.session_queues[session_id], session_id, tool_call_data)
                         logger.debug(f"Emitted tool_call pending for {tool_name} ({tool_id}) in session {session_id}")
 
             # Handle tool_results in user messages
@@ -989,11 +985,7 @@ class BackendApp:
                             tool_call_data["type"] = "tool_call"
 
                             if session_id in self.session_queues:
-                                emit(self.session_queues[session_id], QUEUE_SESSION, "message", {
-                                    "session_id": session_id,
-                                    "data": tool_call_data,
-                                    "timestamp": datetime.now(UTC).isoformat(),
-                                })
+                                emit_tool_call(self.session_queues[session_id], session_id, tool_call_data)
                             logger.debug(
                                 f"Emitted tool_call {'failed' if is_error else 'completed'} "
                                 f"for {tool_use_id} in session {session_id}"
@@ -1033,11 +1025,7 @@ class BackendApp:
                         tool_call_data["request_id"] = metadata.get('request_id')
 
                         if session_id in self.session_queues:
-                            emit(self.session_queues[session_id], QUEUE_SESSION, "message", {
-                                "session_id": session_id,
-                                "data": tool_call_data,
-                                "timestamp": datetime.now(UTC).isoformat(),
-                            })
+                            emit_tool_call(self.session_queues[session_id], session_id, tool_call_data)
                         logger.debug(
                             f"Emitted tool_call awaiting_permission for {tool_name} "
                             f"({tool_use_id}) in session {session_id}"
@@ -1073,11 +1061,7 @@ class BackendApp:
                         tool_call_data["type"] = "tool_call"
 
                         if session_id in self.session_queues:
-                            emit(self.session_queues[session_id], QUEUE_SESSION, "message", {
-                                "session_id": session_id,
-                                "data": tool_call_data,
-                                "timestamp": datetime.now(UTC).isoformat(),
-                            })
+                            emit_tool_call(self.session_queues[session_id], session_id, tool_call_data)
                         logger.debug(
                             f"Emitted tool_call {'running' if granted else 'denied'} "
                             f"for {tool_use_id} in session {session_id}"
@@ -1105,11 +1089,7 @@ class BackendApp:
     def _on_tool_call_broadcast(self, session_id: str, tool_call_data: dict):
         """Issue #520: Append tool_call message to session poll queue. Called synchronously from coordinator."""
         if session_id in self.session_queues:
-            emit(self.session_queues[session_id], QUEUE_SESSION, "tool_call", {
-                "session_id": session_id,
-                "data": tool_call_data,
-                "timestamp": datetime.now(UTC).isoformat(),
-            })
+            emit_tool_call(self.session_queues[session_id], session_id, tool_call_data)
 
     async def _on_session_reset(self, session_id: str):
         """Issue #500: Append session_reset to UI queue so frontend clears stale messages."""
