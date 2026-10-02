@@ -664,6 +664,24 @@ export const useSessionStore = defineStore('session', () => {
     }
     hydrationStageBySession.value = new Map(hydrationStageBySession.value)
 
+    // Issue #2065 AC6: clear every per-session store session_reset already clears, plus
+    // queue/task/diff — previously left populated indefinitely (a real memory leak, and a
+    // stale-data risk if a session id were ever reused).
+    const messageStore = (await import('./message')).useMessageStore()
+    const resourceStore = (await import('./resource')).useResourceStore()
+    const editHistoryStore = (await import('./editHistory')).useEditHistoryStore()
+    const queueStore = (await import('./queue')).useQueueStore()
+    const taskStore = (await import('./task')).useTaskStore()
+    const diffStore = (await import('./diff')).useDiffStore()
+    for (const deletedId of deletedIds) {
+      messageStore.clearMessages(deletedId)
+      resourceStore.clearResources(deletedId)
+      editHistoryStore.clearHistory(deletedId)
+      queueStore.removeSessionQueue(deletedId)
+      taskStore.clearTasks(deletedId)
+      diffStore.clearDiff(deletedId)
+    }
+
     // Issue #1530: Clear links for deleted sessions
     import('./links').then(({ useLinksStore }) => {
       const linksStore = useLinksStore()
@@ -691,7 +709,15 @@ export const useSessionStore = defineStore('session', () => {
 
     // If deleted current session (or it was a cascaded child), clear selection
     const wasCurrentSessionRemoved = deletedIds.includes(currentSessionId.value)
+
+    // Issue #2065 AC6 (review finding): only clear the rate-limit display if the removed
+    // session was the one currently shown. session_reset's equivalent call is unconditional,
+    // but that's only safe there because a reset is always triggered while viewing that exact
+    // session; a deleted session can be a background one, and blindly nulling the global
+    // rateLimits ref would wipe the display for whatever session the user IS currently viewing.
     if (wasCurrentSessionRemoved) {
+      const uiStore = (await import('./ui')).useUIStore()
+      uiStore.setRateLimits(null)
       currentSessionId.value = null
       // Navigation is handled by the caller
     }

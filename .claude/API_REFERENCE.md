@@ -235,15 +235,15 @@ of hand-copying it.
 | `resource_removed` | session | `resource_id` |
 | `proxy_event` | session | `data` |
 
-**Orphan types** (registered, produced, not yet handled by the browser — tracked for stage 2b,
-issue #2063 AC7):
-- `server_restarting`: intended behavior is a cross-tab imminent-restart notice (every connected
-  tab calling `uiStore.showRestartModal()`, not just the one that initiated a restart).
-- `session_self_restart`: intended behavior is a lightweight success acknowledgment, paralleling
-  the existing `session_restart_error` handler (`frontend/src/stores/polling.js`).
-
-**`sessions_list`** is handled by the browser today (`polling.js`) but produced by nothing
-server-side — a dead case, removed in stage 2b, not given a registry entry here.
+Stage 2b-B (#2065 AC7) wired up both previously-orphaned UI types: `server_restarting`
+is a cross-tab imminent-restart notice (every connected tab's `UI_EVENT_HANDLERS` calls
+`uiStore.showRestartModal({remote: true, message})`, not just the one that initiated the
+restart — guarded on `uiStore.restartInProgress` so the initiating tab's own locally-driven
+modal isn't reset out from under it), and `session_self_restart` is a lightweight success
+acknowledgment paralleling `session_restart_error` (`frontend/src/stores/polling.js`). Same
+stage also added session-stream handlers for `secret_refresh_failed`/`proxy_event` (both
+routed to `useSecretsStore()`/`console.log` respectively) and removed the dead `sessions_list`
+UI case (handled by the browser pre-2b-B but produced by nothing server-side).
 
 #### `message`'s nested `data.type` (`MessageType` enum, `backend/message_parser.py`, + `tool_call`)
 

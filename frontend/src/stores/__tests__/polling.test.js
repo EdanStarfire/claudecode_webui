@@ -1051,6 +1051,83 @@ describe('polling store - loadAppData / appDataStatus (issue #1977)', () => {
   })
 })
 
+describe('polling store - UI-stream evicted/reset consistency (issue #2065 AC7)', () => {
+  it('reset=true triggers loadAppData() and does not dispatch the carried events', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useUIStore } = await import('@/stores/ui')
+    const pollingStore = usePollingStore()
+    const uiStore = useUIStore()
+
+    mockAppDataEndpoints()
+    const setRateLimitsSpy = vi.spyOn(uiStore, 'setRateLimits')
+
+    sequencedFetchMock([
+      {
+        // A carried event in the same response as reset=true — must be dropped in favor
+        // of the fallback resync, not dispatched as if it were a trustworthy slice.
+        events: [{ type: 'rate_limits_update', data: { requests_remaining: 999 } }],
+        next_cursor: 5,
+        reset: true,
+      },
+    ])
+
+    pollingStore.startUIPolling()
+    await flush()
+    pollingStore.stopUIPolling()
+
+    expect(apiMock.get).toHaveBeenCalledWith('/api/projects')
+    expect(apiMock.get).toHaveBeenCalledWith('/api/sessions')
+    expect(setRateLimitsSpy).not.toHaveBeenCalledWith({ requests_remaining: 999 })
+  })
+
+  it('evicted=true triggers loadAppData() and does not dispatch the carried events', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useUIStore } = await import('@/stores/ui')
+    const pollingStore = usePollingStore()
+    const uiStore = useUIStore()
+
+    mockAppDataEndpoints()
+    const setRateLimitsSpy = vi.spyOn(uiStore, 'setRateLimits')
+
+    sequencedFetchMock([
+      {
+        events: [{ type: 'rate_limits_update', data: { requests_remaining: 999 } }],
+        next_cursor: 5,
+        evicted: true,
+      },
+    ])
+
+    pollingStore.startUIPolling()
+    await flush()
+    pollingStore.stopUIPolling()
+
+    expect(apiMock.get).toHaveBeenCalledWith('/api/projects')
+    expect(apiMock.get).toHaveBeenCalledWith('/api/sessions')
+    expect(setRateLimitsSpy).not.toHaveBeenCalledWith({ requests_remaining: 999 })
+  })
+
+  it('a normal response with no evicted/reset still dispatches its events as before', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useUIStore } = await import('@/stores/ui')
+    const pollingStore = usePollingStore()
+    const uiStore = useUIStore()
+
+    const setRateLimitsSpy = vi.spyOn(uiStore, 'setRateLimits')
+
+    sequencedFetchMock([
+      { events: [{ type: 'rate_limits_update', data: { requests_remaining: 42 } }], next_cursor: 1 },
+    ])
+
+    pollingStore.startUIPolling()
+    await flush()
+    pollingStore.stopUIPolling()
+
+    expect(setRateLimitsSpy).toHaveBeenCalledWith({ requests_remaining: 42 })
+    // No app-data resync should have been triggered for a plain, non-evicted/reset cycle.
+    expect(apiMock.get).not.toHaveBeenCalledWith('/api/projects')
+  })
+})
+
 describe('polling store - stall-heal watchdog (#1795)', () => {
   // These tests fake only Date so checkSessionStall()'s Date.now() comparisons are
   // controllable, while setTimeout/setInterval stay real — that keeps the background

@@ -450,8 +450,8 @@ export const useUIStore = defineStore('ui', () => {
   }
 
   // Restart modal (issue #434)
-  function showRestartModal() {
-    showModal('restart-server')
+  function showRestartModal(data = null) {
+    showModal('restart-server', data)
   }
 
   // Browsing project management

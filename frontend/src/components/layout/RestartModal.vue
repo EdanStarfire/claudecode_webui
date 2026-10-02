@@ -166,6 +166,18 @@
             </template>
           </div>
 
+          <!-- Phase 3: Remote-initiated restart notice (issue #2065 AC7) -->
+          <div v-else-if="phase === 'remote-notice'" class="text-center py-3">
+            <div class="spinner-border" role="status"></div>
+            <div class="mt-2">{{ remoteMessage }}</div>
+            <div v-if="uiStore.restartStatus === 'reconnecting'" class="text-muted small mt-1">
+              Waiting for server to come back... {{ reconnectCountdown }}s remaining
+            </div>
+            <div v-else-if="uiStore.restartStatus === 'error'" class="mt-2 text-danger">
+              {{ errorMessage }}
+            </div>
+          </div>
+
           <!-- Phase 2: Progress -->
           <div v-else-if="phase === 'progress'" class="text-center py-3">
             <div v-if="uiStore.restartStatus === 'pulling'" class="mb-3">
@@ -231,7 +243,8 @@ const uiStore = useUIStore()
 const modalElement = ref(null)
 let modalInstance = null
 
-const phase = ref('confirm') // confirm | progress
+const phase = ref('confirm') // confirm | progress | remote-notice
+const remoteMessage = ref('')
 const gitLoading = ref(false)
 const gitStatus = ref(null)
 const gitError = ref(null)
@@ -613,6 +626,7 @@ function cleanup() {
 function resetState() {
   modalGeneration++
   phase.value = 'confirm'
+  remoteMessage.value = ''
   gitStatus.value = null
   gitError.value = null
   errorMessage.value = ''
@@ -647,6 +661,15 @@ watch(
   () => uiStore.currentModal,
   async (modal) => {
     if (modal?.name === 'restart-server' && modalInstance) {
+      if (modal.data?.remote) {
+        modalGeneration++
+        phase.value = 'remote-notice'
+        remoteMessage.value = modal.data.message || 'Server is restarting...'
+        modalInstance.show()
+        uiStore.restartInProgress = true
+        startHealthPoll()
+        return
+      }
       resetState()
       modalInstance.show()
       await detectMode()
