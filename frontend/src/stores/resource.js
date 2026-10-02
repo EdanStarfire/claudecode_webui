@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useSessionStore } from './session'
-import { apiGet, apiDelete, getAuthToken } from '../utils/api'
+import { apiGet, apiDelete, getAuthToken, triggerReauth } from '../utils/api'
 import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, FILE_TYPE_ICONS } from '../utils/fileTypes'
 
 /**
@@ -840,6 +840,7 @@ export const useResourceStore = defineStore('resource', () => {
         headers['Authorization'] = `Bearer ${token}`
       }
       const response = await fetch(url, { headers })
+      if (response.status === 401) triggerReauth(401)
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
       const text = await response.text()

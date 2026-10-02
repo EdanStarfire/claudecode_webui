@@ -3,6 +3,8 @@
  * Replaces the broken APIClient with clean fetch wrappers
  */
 
+import { ref } from 'vue'
+
 // ==================== Auth Token Management (Issue #728) ====================
 
 export function getAuthToken() {
@@ -15,6 +17,26 @@ export function setAuthToken(token) {
 
 export function clearAuthToken() {
   sessionStorage.removeItem('auth_token')
+}
+
+// ==================== Re-Auth Detection (Issue #2040) ====================
+
+// Shared flag: true once any call site has observed a 401. Plain module-level ref
+// (not a Pinia store) so this file — already imported by every store — doesn't need
+// to import a store itself. Dies naturally on the full reload onAuthenticated() does
+// to recover, so it never needs an explicit reset.
+export const authRequired = ref(false)
+
+// Centralized "is this an auth problem" decision point (issue #2040). Deliberately
+// 401-only: both Frontend's and Backend's AuthMiddleware return 401 exclusively for a
+// bad/missing token; every 403 in the codebase is an unrelated, already-authenticated
+// authorization check and must keep today's generic retry behavior untouched.
+// The authRequired.value check is what dedups concurrent 401s (UI poll + session poll +
+// a REST call failing around the same moment) into a single trigger.
+export function triggerReauth(status) {
+  if (status !== 401 || authRequired.value) return
+  clearAuthToken()
+  authRequired.value = true
 }
 
 // ==================== API Error ====================
@@ -92,6 +114,8 @@ async function apiRequest(endpoint, options = {}) {
       } catch {
         errorData = { detail: response.statusText }
       }
+
+      triggerReauth(response.status)
 
       throw new APIError(
         errorData.detail || `HTTP ${response.status}: ${response.statusText}`,
