@@ -7,6 +7,13 @@ import { useResourceStore } from './resource'
 import { useQueueStore } from './queue'
 import { useUIStore } from './ui'
 import { useEditHistoryStore } from './editHistory'
+import { useMcpStore } from './mcp'
+import { useMcpConfigStore } from './mcpConfig'
+import { useSecretsStore } from './secrets'
+import { useScheduleStore } from './schedule'
+import { useLinksStore } from './links'
+import { useUsageStore } from './usage'
+import router from '@/router'
 import { notify } from '@/composables/useNotifications'
 import { getAuthToken, api, triggerReauth } from '@/utils/api'
 import { pushDebugEvent } from '@/composables/useDebugBuffer'
@@ -271,7 +278,7 @@ export const usePollingStore = defineStore('polling', () => {
 
         if (data.events && data.events.length > 0) {
           for (const event of data.events) {
-            handleUIMessage(event)
+            dispatchEvent(event, 'ui')
           }
         }
         pushDebugEvent('polling', 'poll-cycle', {
@@ -418,7 +425,7 @@ export const usePollingStore = defineStore('polling', () => {
 
         if (data.events && data.events.length > 0) {
           for (const event of data.events) {
-            handleSessionMessage(event, sessionId)
+            dispatchEvent(event, 'session', sessionId)
           }
         }
         pushDebugEvent('polling', 'poll-cycle', {
@@ -791,346 +798,328 @@ export const usePollingStore = defineStore('polling', () => {
   function disconnectLegion() {}
 
   // ========== MESSAGE HANDLERS ==========
-  function handleUIMessage(payload) {
-    const sessionStore = useSessionStore()
-    const projectStore = useProjectStore()
+  // Each handler: (payload, sessionId) => void. sessionId is only meaningful for
+  // SESSION_EVENT_HANDLERS (always equal to the current session, enforced by
+  // dispatchEvent below); UI_EVENT_HANDLERS entries read whatever session id they need
+  // from payload.data.
+  const UI_EVENT_HANDLERS = {
+    sessions_list: (payload) => {
+      const sessionStore = useSessionStore()
+      if (payload.sessions && Array.isArray(payload.sessions)) {
+        payload.sessions.forEach(session => {
+          sessionStore.updateSession(session.session_id, session)
+        })
+      }
+    },
 
-    switch (payload.type) {
-      case 'sessions_list':
-        if (payload.sessions && Array.isArray(payload.sessions)) {
-          payload.sessions.forEach(session => {
-            sessionStore.updateSession(session.session_id, session)
-          })
-        }
-        break
+    state_change: (payload) => {
+      const sessionStore = useSessionStore()
+      if (payload.data && payload.data.session_id && payload.data.session) {
+        const priorSession = sessionStore.sessions.get(payload.data.session_id)
+        const wasProcessing = priorSession?.is_processing
+        const priorState = priorSession?.state
 
-      case 'state_change':
-        if (payload.data && payload.data.session_id && payload.data.session) {
-          const priorSession = sessionStore.sessions.get(payload.data.session_id)
-          const wasProcessing = priorSession?.is_processing
-          const priorState = priorSession?.state
+        sessionStore.updateSession(payload.data.session_id, payload.data.session)
 
-          sessionStore.updateSession(payload.data.session_id, payload.data.session)
+        const changedSessionId = payload.data.session_id
+        const newState = payload.data.session.state
 
-          const changedSessionId = payload.data.session_id
-          const newState = payload.data.session.state
-
-          if (newState === 'error') {
-            console.log(`[UI state_change] Session ${changedSessionId} entered error state, reloading messages`)
-            const messageStore = useMessageStore()
-            messageStore.clearMessages(changedSessionId)
-            // Fix 3: do NOT reset cursor — backend EventQueue survives error state,
-            // cursor is still valid. Resetting it produced ?since=undefined (422 wedge).
-            // Issue #1746 (stage: subagents): re-seed background-agent leg state BEFORE
-            // replaying history — clearMessages() just wiped this session's taskLegsByTaskId,
-            // and loadMessages() no longer reconstructs it from history (hydrateBackgroundAgents
-            // is the sole source now). Without this, an error-state reload permanently loses
-            // subagent leg/task_id state for the session.
-            messageStore.hydrateBackgroundAgents(changedSessionId).then(() => {
-              messageStore.loadMessages(changedSessionId)
-            })
-          }
-
-          if (newState === 'active') {
-            import('./mcp').then(({ useMcpStore }) => {
-              const mcpStore = useMcpStore()
-              mcpStore.fetchMcpStatus(changedSessionId)
-            })
-          }
-
-          if (newState === 'error' && priorState !== 'error') {
-            notify('session_error', { sessionName: payload.data.session.name || 'Session', sessionId: changedSessionId })
-          }
-          if (wasProcessing && !payload.data.session.is_processing) {
-            notify('task_complete', { sessionName: payload.data.session.name || 'Session', sessionId: changedSessionId })
-          }
-          if (newState === 'paused' && priorState !== 'paused') {
-            notify('permission_prompt', { sessionName: payload.data.session.name || 'Session', sessionId: changedSessionId })
-          }
-        }
-        break
-
-      case 'session_reset': {
-        const resetSessionId = payload.data?.session_id
-        if (resetSessionId) {
+        if (newState === 'error') {
+          console.log(`[UI state_change] Session ${changedSessionId} entered error state, reloading messages`)
           const messageStore = useMessageStore()
-          messageStore.clearMessages(resetSessionId)
-          const resourceStore = useResourceStore()
-          resourceStore.clearResources(resetSessionId)
-          const editHistoryStore = useEditHistoryStore()
-          editHistoryStore.clearHistory(resetSessionId)
-          const uiStore = useUIStore()
-          uiStore.setRateLimits(null)
-          const sessionStore2 = useSessionStore()
-          sessionStore2.recordSessionReset(resetSessionId)
-          // Deliberately not routed through clearSessionPollingKeys()/sessionHealInFlight:
-          // unlike resetSessionCursor()'s and cleanupSessionPollingState()'s callers (which
-          // always disconnect the poll loop first, aborting any in-flight heal via its own
-          // currentSessionId check), this handler reacts to an async server event that can
-          // arrive at any time, including genuinely mid-heal for this exact session —
-          // clearing the #1954 mutex here could let a second heal start concurrently with
-          // one still finishing.
-          delete sessionCursors[resetSessionId]
-          // Issue #1979: if a stall-heal reconnect is actively in flight for this exact
-          // session, its heartbeat is deliberately left stale (not yet reseeded) so
-          // checkSessionStall() keeps reporting the genuine stall until a real poll
-          // response lands. Deleting it here would erase that signal and make the
-          // indicator transiently read healthy mid-heal. Skip this piece only — every
-          // other part of session_reset's handling above/below still runs unconditionally.
-          if (!sessionHealInFlight[resetSessionId]) {
-            delete sessionPollHeartbeatAt[resetSessionId]
-            delete frozenMsAtHeartbeat[resetSessionId]
-            // Issue #1960: prevent a reset session's stalled flag from leaking onto whatever
-            // session is current afterward — mirrors resetSessionCursor()'s same guard.
-            sessionStalled.value = false
+          messageStore.clearMessages(changedSessionId)
+          // Fix 3: do NOT reset cursor — backend EventQueue survives error state,
+          // cursor is still valid. Resetting it produced ?since=undefined (422 wedge).
+          // Issue #1746 (stage: subagents): re-seed background-agent leg state BEFORE
+          // replaying history — clearMessages() just wiped this session's taskLegsByTaskId,
+          // and loadMessages() no longer reconstructs it from history (hydrateBackgroundAgents
+          // is the sole source now). Without this, an error-state reload permanently loses
+          // subagent leg/task_id state for the session.
+          messageStore.hydrateBackgroundAgents(changedSessionId).then(() => {
+            messageStore.loadMessages(changedSessionId)
+          })
+        }
+
+        if (newState === 'active') {
+          useMcpStore().fetchMcpStatus(changedSessionId)
+        }
+
+        if (newState === 'error' && priorState !== 'error') {
+          notify('session_error', { sessionName: payload.data.session.name || 'Session', sessionId: changedSessionId })
+        }
+        if (wasProcessing && !payload.data.session.is_processing) {
+          notify('task_complete', { sessionName: payload.data.session.name || 'Session', sessionId: changedSessionId })
+        }
+        if (newState === 'paused' && priorState !== 'paused') {
+          notify('permission_prompt', { sessionName: payload.data.session.name || 'Session', sessionId: changedSessionId })
+        }
+      }
+    },
+
+    session_reset: (payload) => {
+      const resetSessionId = payload.data?.session_id
+      if (resetSessionId) {
+        const messageStore = useMessageStore()
+        messageStore.clearMessages(resetSessionId)
+        const resourceStore = useResourceStore()
+        resourceStore.clearResources(resetSessionId)
+        const editHistoryStore = useEditHistoryStore()
+        editHistoryStore.clearHistory(resetSessionId)
+        const uiStore = useUIStore()
+        uiStore.setRateLimits(null)
+        const sessionStore = useSessionStore()
+        sessionStore.recordSessionReset(resetSessionId)
+        // Deliberately not routed through clearSessionPollingKeys()/sessionHealInFlight:
+        // unlike resetSessionCursor()'s and cleanupSessionPollingState()'s callers (which
+        // always disconnect the poll loop first, aborting any in-flight heal via its own
+        // currentSessionId check), this handler reacts to an async server event that can
+        // arrive at any time, including genuinely mid-heal for this exact session —
+        // clearing the #1954 mutex here could let a second heal start concurrently with
+        // one still finishing.
+        delete sessionCursors[resetSessionId]
+        // Issue #1979: if a stall-heal reconnect is actively in flight for this exact
+        // session, its heartbeat is deliberately left stale (not yet reseeded) so
+        // checkSessionStall() keeps reporting the genuine stall until a real poll
+        // response lands. Deleting it here would erase that signal and make the
+        // indicator transiently read healthy mid-heal. Skip this piece only — every
+        // other part of session_reset's handling above/below still runs unconditionally.
+        if (!sessionHealInFlight[resetSessionId]) {
+          delete sessionPollHeartbeatAt[resetSessionId]
+          delete frozenMsAtHeartbeat[resetSessionId]
+          // Issue #1960: prevent a reset session's stalled flag from leaking onto whatever
+          // session is current afterward — mirrors resetSessionCursor()'s same guard.
+          sessionStalled.value = false
+        }
+      }
+    },
+
+    project_updated: (payload) => {
+      const sessionStore = useSessionStore()
+      const projectStore = useProjectStore()
+      if (payload.data && payload.data.project) {
+        const project = payload.data.project
+        projectStore.updateProjectLocal(project.project_id, project)
+        sessionStore.fetchSessions()
+      }
+    },
+
+    project_deleted: (payload) => {
+      const projectStore = useProjectStore()
+      if (payload.data && payload.data.project_id) {
+        projectStore.projects.delete(payload.data.project_id)
+      }
+    },
+
+    session_deleted: (payload) => {
+      const sessionStore = useSessionStore()
+      if (payload.data?.session_id) {
+        sessionStore.removeSessionsFromStores([payload.data.session_id]).then((wasCurrentSessionRemoved) => {
+          if (wasCurrentSessionRemoved) {
+            router.push('/')
           }
-        }
-        break
-      }
-
-      case 'project_updated':
-        if (payload.data && payload.data.project) {
-          const project = payload.data.project
-          projectStore.updateProjectLocal(project.project_id, project)
-          sessionStore.fetchSessions()
-        }
-        break
-
-      case 'project_deleted':
-        if (payload.data && payload.data.project_id) {
-          projectStore.projects.delete(payload.data.project_id)
-        }
-        break
-
-      case 'session_deleted':
-        if (payload.data?.session_id) {
-          sessionStore.removeSessionsFromStores([payload.data.session_id]).then((wasCurrentSessionRemoved) => {
-            if (wasCurrentSessionRemoved) {
-              import('../router').then(({ default: router }) => {
-                router.push('/')
-              })
-            }
-          })
-        }
-        break
-
-      case 'notification':
-        if (payload.data?.event_type === 'minion_comm') {
-          notify('minion_comm', {
-            commType: payload.data.comm_type,
-            fromMinion: payload.data.from_minion_name || 'Minion',
-            sessionId: payload.data.session_id
-          })
-        }
-        break
-
-      case 'mcp_oauth_complete': {
-        const serverId = payload.server_id
-        if (serverId) {
-          import('./mcpConfig').then(({ useMcpConfigStore }) => {
-            const mcpStore = useMcpConfigStore()
-            mcpStore.fetchOAuthStatus(serverId)
-            // Issue #1387: complete any pending Reconnect flow for this server
-            if (mcpStore.pendingReconnect.get(serverId)) {
-              mcpStore.completeReconnect(serverId).then(() => {
-                import('./secrets').then(({ useSecretsStore }) => {
-                  useSecretsStore().fetchSecrets()
-                })
-              }).catch(e => console.error('[Reconnect] import-as-secret failed:', e))
-            }
-          })
-        }
-        break
-      }
-
-      case 'mcp_oauth_refreshed': {
-        // Issue #976: Background refresh succeeded — update status indicator
-        const serverId = payload.server_id
-        if (serverId) {
-          import('./mcpConfig').then(({ useMcpConfigStore }) => {
-            useMcpConfigStore().fetchOAuthStatus(serverId)
-          })
-        }
-        break
-      }
-
-      case 'secret_refreshed': {
-        // Issue #1387: VaultRefreshManager background refresh succeeded
-        const secretName = payload.secret_name
-        if (secretName) {
-          import('./secrets').then(({ useSecretsStore }) => {
-            useSecretsStore().handleSecretRefreshed(secretName)
-          })
-        }
-        break
-      }
-
-      case 'secret_refresh_failed': {
-        // Issue #1387: VaultRefreshManager background refresh permanently failed
-        const secretName = payload.secret_name
-        if (secretName) {
-          import('./secrets').then(({ useSecretsStore }) => {
-            useSecretsStore().handleSecretRefreshFailed(secretName, payload.error || '')
-          })
-        }
-        break
-      }
-
-      case 'secret_oauth_complete': {
-        // Issue #1871: standalone vault-secret guided-authorization flow finished
-        // (success or failure) — mirrors mcp_oauth_complete, but fires on failure
-        // too since the settings panel has no other way to learn the outcome of a
-        // flow completed in a cross-origin popup.
-        if (payload.flow_id) {
-          import('./secrets').then(({ useSecretsStore }) => {
-            useSecretsStore().handleSecretOAuthComplete(payload)
-          })
-        }
-        break
-      }
-
-      case 'schedule_updated':
-        import('./schedule').then(({ useScheduleStore }) => {
-          const scheduleStore = useScheduleStore()
-          scheduleStore.handleScheduleEvent(payload.legion_id || payload.data?.legion_id, payload)
         })
-        break
-
-      case 'schedule_execution':
-        import('./schedule').then(({ useScheduleStore }) => {
-          const scheduleStore = useScheduleStore()
-          scheduleStore.handleScheduleExecution(payload.legion_id || payload.data?.legion_id, payload)
-        })
-        break
-
-      case 'schedule_monitor_error':
-        import('./schedule').then(({ useScheduleStore }) => {
-          const scheduleStore = useScheduleStore()
-          scheduleStore.handleScheduleMonitorError(
-            payload.legion_id || payload.data?.legion_id, payload
-          )
-        })
-        break
-
-      case 'session_restart_error':
-        console.error(
-          `[session_restart_error] Session ${payload.data?.session_id}: ${payload.data?.error}`
-        )
-        notify('session_restart_error', {
-          sessionId: payload.data?.session_id,
-          error: payload.data?.error,
-        })
-        break
-
-      case 'rate_limits_update': {
-        const uiStore = useUIStore()
-        uiStore.setRateLimits(payload.data)
-        break
       }
+    },
 
-      case 'session_watchdog_alert': {
-        const uiStore = useUIStore()
-        uiStore.pushAlert(payload)
-        notify('session_error', { sessionName: payload.session_name || 'Session', sessionId: payload.session_id })
-        break
+    notification: (payload) => {
+      if (payload.data?.event_type === 'minion_comm') {
+        notify('minion_comm', {
+          commType: payload.data.comm_type,
+          fromMinion: payload.data.from_minion_name || 'Minion',
+          sessionId: payload.data.session_id
+        })
       }
+    },
 
-      default:
-        console.warn('Unknown UI poll message type:', payload.type)
-    }
+    mcp_oauth_complete: (payload) => {
+      const serverId = payload.server_id
+      if (serverId) {
+        const mcpConfigStore = useMcpConfigStore()
+        mcpConfigStore.fetchOAuthStatus(serverId)
+        // Issue #1387: complete any pending Reconnect flow for this server
+        if (mcpConfigStore.pendingReconnect.get(serverId)) {
+          mcpConfigStore.completeReconnect(serverId).then(() => {
+            useSecretsStore().fetchSecrets()
+          }).catch(e => console.error('[Reconnect] import-as-secret failed:', e))
+        }
+      }
+    },
+
+    mcp_oauth_refreshed: (payload) => {
+      // Issue #976: Background refresh succeeded — update status indicator
+      const serverId = payload.server_id
+      if (serverId) {
+        useMcpConfigStore().fetchOAuthStatus(serverId)
+      }
+    },
+
+    secret_refreshed: (payload) => {
+      // Issue #1387: VaultRefreshManager background refresh succeeded
+      const secretName = payload.secret_name
+      if (secretName) {
+        useSecretsStore().handleSecretRefreshed(secretName)
+      }
+    },
+
+    secret_refresh_failed: (payload) => {
+      // Issue #1387: VaultRefreshManager background refresh permanently failed
+      const secretName = payload.secret_name
+      if (secretName) {
+        useSecretsStore().handleSecretRefreshFailed(secretName, payload.error || '')
+      }
+    },
+
+    secret_oauth_complete: (payload) => {
+      // Issue #1871: standalone vault-secret guided-authorization flow finished
+      // (success or failure) — mirrors mcp_oauth_complete, but fires on failure
+      // too since the settings panel has no other way to learn the outcome of a
+      // flow completed in a cross-origin popup.
+      if (payload.flow_id) {
+        useSecretsStore().handleSecretOAuthComplete(payload)
+      }
+    },
+
+    schedule_updated: (payload) => {
+      const scheduleStore = useScheduleStore()
+      scheduleStore.handleScheduleEvent(payload.legion_id || payload.data?.legion_id, payload)
+    },
+
+    schedule_execution: (payload) => {
+      const scheduleStore = useScheduleStore()
+      scheduleStore.handleScheduleExecution(payload.legion_id || payload.data?.legion_id, payload)
+    },
+
+    schedule_monitor_error: (payload) => {
+      const scheduleStore = useScheduleStore()
+      scheduleStore.handleScheduleMonitorError(
+        payload.legion_id || payload.data?.legion_id, payload
+      )
+    },
+
+    session_restart_error: (payload) => {
+      console.error(
+        `[session_restart_error] Session ${payload.data?.session_id}: ${payload.data?.error}`
+      )
+      notify('session_restart_error', {
+        sessionId: payload.data?.session_id,
+        error: payload.data?.error,
+      })
+    },
+
+    rate_limits_update: (payload) => {
+      const uiStore = useUIStore()
+      uiStore.setRateLimits(payload.data)
+    },
+
+    session_watchdog_alert: (payload) => {
+      const uiStore = useUIStore()
+      uiStore.pushAlert(payload)
+      notify('session_error', { sessionName: payload.session_name || 'Session', sessionId: payload.session_id })
+    },
   }
 
-  function handleSessionMessage(payload, sessionId) {
-    const sessionStore = useSessionStore()
-    if (sessionStore.currentSessionId !== sessionId) {
+  const SESSION_EVENT_HANDLERS = {
+    message: (payload, sessionId) => {
+      const message = payload.data
+      if (!message || !message.type) {
+        console.warn('Received message event with invalid data:', payload)
+        return
+      }
+      if (message.type === 'tool_call') {
+        // 2a-C shim (shared/event_emitter.py::emit_tool_call) emits this as a legacy
+        // duplicate of the canonical bare `tool_call` event (handled below) so the
+        // pre-#2065 browser kept working unchanged. The bare event already applied this
+        // update; applying it again here would be a second no-op (already proven
+        // harmless/idempotent, #2069) but is pointless now that the browser no longer
+        // needs the wrapped shape. 2b-C deletes the shim server-side once this and the
+        // rest of #2065 land, at which point this branch — and this comment — can go too.
+        return
+      }
+      const messageStore = useMessageStore()
+      const sessionStore = useSessionStore()
+      if (message.type === 'system' &&
+          (message.subtype === 'init' || message.metadata?.subtype === 'init') &&
+          message.metadata?.init_data) {
+        sessionStore.storeInitData(sessionId, message.metadata.init_data)
+      }
+      // Issue #1027: SDK status events carrying permission mode changes
+      if (message.type === 'system' &&
+          (message.subtype === 'permission_mode_change' || message.metadata?.subtype === 'permission_mode_change') &&
+          message.metadata?.permission_mode) {
+        sessionStore.updateSession(sessionId, { current_permission_mode: message.metadata.permission_mode })
+      }
+      messageStore.addMessage(sessionId, message)
+    },
+
+    tool_call: (payload, sessionId) => {
+      useMessageStore().handleToolCall(sessionId, payload.data || payload)
+    },
+
+    resource_registered: (payload, sessionId) => {
+      if (payload.resource) {
+        const resourceStore = useResourceStore()
+        resourceStore.addResource(sessionId, payload.resource)
+      }
+    },
+
+    link_registered: (payload, sessionId) => {
+      if (payload.link) {
+        useLinksStore().addLink(sessionId, payload.link)
+      }
+    },
+
+    resource_removed: (payload, sessionId) => {
+      if (payload.resource_id) {
+        const resourceStore = useResourceStore()
+        resourceStore.handleResourceRemoved(sessionId, payload.resource_id)
+      }
+    },
+
+    queue_update: (payload, sessionId) => {
+      const queueStore = useQueueStore()
+      queueStore.handleQueueUpdate(sessionId, payload)
+    },
+
+    usage_updated: (payload) => {
+      useUsageStore().handleUsageUpdated(payload)
+    },
+
+    context_update: (payload, sessionId) => {
+      const sessionStore = useSessionStore()
+      const { input_tokens, context_window, context_pct } = payload
+      sessionStore.patchSession(sessionId, {
+        context_input_tokens: input_tokens,
+        context_window: context_window,
+        context_pct: context_pct,
+      })
+    },
+
+    // Issue #1486: streaming text delta — forward to message store for RAF-batched mutation
+    assistant_delta: (payload, sessionId) => {
+      useMessageStore().handleAssistantDelta(sessionId, payload.data)
+    },
+  }
+
+  function dispatchEvent(payload, stream, sessionId) {
+    if (stream === 'session') {
+      // The one place the current-session guard lives now (AC1). UI-stream events are
+      // never guarded — unchanged from today: handleUIMessage never checked currentSessionId,
+      // because UI events carry their own target session id in their payload and can
+      // legitimately apply to a session that isn't currently open (e.g. state_change for a
+      // background session).
+      const sessionStore = useSessionStore()
+      if (sessionStore.currentSessionId !== sessionId) return
+    }
+    const handlers = stream === 'ui' ? UI_EVENT_HANDLERS : SESSION_EVENT_HANDLERS
+    // Object.hasOwn guard: a plain object literal otherwise inherits Object.prototype, so a
+    // payload.type of e.g. "constructor"/"toString" would resolve to an inherited function
+    // and get invoked instead of hitting the unknown-type warning below.
+    const handler = Object.hasOwn(handlers, payload.type) ? handlers[payload.type] : undefined
+    if (!handler) {
+      console.warn(`Unknown ${stream} poll message type:`, payload.type)
       return
     }
-
-    const messageStore = useMessageStore()
-
-    switch (payload.type) {
-      case 'message': {
-        const message = payload.data
-        if (!message || !message.type) {
-          console.warn('Received message event with invalid data:', payload)
-          break
-        }
-        if (message.type === 'tool_call') {
-          messageStore.handleToolCall(sessionId, message)
-          break
-        }
-        if (message.type === 'system' &&
-            (message.subtype === 'init' || message.metadata?.subtype === 'init') &&
-            message.metadata?.init_data) {
-          sessionStore.storeInitData(sessionId, message.metadata.init_data)
-        }
-        // Issue #1027: SDK status events carrying permission mode changes
-        if (message.type === 'system' &&
-            (message.subtype === 'permission_mode_change' || message.metadata?.subtype === 'permission_mode_change') &&
-            message.metadata?.permission_mode) {
-          sessionStore.updateSession(sessionId, { current_permission_mode: message.metadata.permission_mode })
-        }
-        messageStore.addMessage(sessionId, message)
-        break
-      }
-
-      case 'tool_call':
-        messageStore.handleToolCall(sessionId, payload.data || payload)
-        break
-
-      case 'resource_registered':
-        if (payload.resource) {
-          const resourceStore = useResourceStore()
-          resourceStore.addResource(sessionId, payload.resource)
-        }
-        break
-
-      case 'link_registered':
-        if (payload.link) {
-          import('./links').then(({ useLinksStore }) => {
-            useLinksStore().addLink(sessionId, payload.link)
-          })
-        }
-        break
-
-      case 'resource_removed':
-        if (payload.resource_id) {
-          const resourceStore = useResourceStore()
-          resourceStore.handleResourceRemoved(sessionId, payload.resource_id)
-        }
-        break
-
-      case 'queue_update': {
-        const queueStore = useQueueStore()
-        queueStore.handleQueueUpdate(sessionId, payload)
-        break
-      }
-
-      case 'usage_updated': {
-        import('./usage').then(({ useUsageStore }) => {
-          useUsageStore().handleUsageUpdated(payload)
-        })
-        break
-      }
-
-      case 'context_update': {
-        const { input_tokens, context_window, context_pct } = payload
-        sessionStore.patchSession(sessionId, {
-          context_input_tokens: input_tokens,
-          context_window: context_window,
-          context_pct: context_pct,
-        })
-        break
-      }
-
-      // Issue #1486: streaming text delta — forward to message store for RAF-batched mutation
-      case 'assistant_delta':
-        messageStore.handleAssistantDelta(sessionId, payload.data)
-        break
-
-      default:
-        console.warn('Unknown session poll message type:', payload.type)
-    }
+    handler(payload, sessionId)
   }
 
   // ========== RETURN ==========
@@ -1146,6 +1135,10 @@ export const usePollingStore = defineStore('polling', () => {
     legionRetryCount,
     currentLegionId,
     overallStatus,
+    registeredEventTypes: {
+      ui: Object.keys(UI_EVENT_HANDLERS),
+      session: Object.keys(SESSION_EVENT_HANDLERS),
+    },
 
     connectUI,
     disconnectUI,
