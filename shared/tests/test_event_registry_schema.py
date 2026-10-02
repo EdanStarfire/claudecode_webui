@@ -69,3 +69,15 @@ def test_export_json_is_json_serializable():
     import json
 
     json.dumps(export_json())
+
+
+def test_export_json_includes_required_keys_by_queue():
+    exported = export_json()
+
+    secret_refresh_failed = exported["top_level_event_types"]["secret_refresh_failed"]
+    assert secret_refresh_failed["required_keys_by_queue"] == {"session": ["data"]}
+
+    for event_type in TOP_LEVEL_EVENT_TYPES:
+        if event_type == "secret_refresh_failed":
+            continue
+        assert exported["top_level_event_types"][event_type]["required_keys_by_queue"] == {}

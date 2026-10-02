@@ -137,71 +137,138 @@ Complete REST and WebSocket API reference for Claude WebUI. For backend architec
 
 ---
 
-## WebSocket Endpoints
+## Event Streaming (HTTP Long-Polling)
 
-### UI WebSocket — `/ws/ui`
+Issue #498 replaced WebSockets with HTTP long-polling across both tiers; issue #2063 (epic
+#1990 stage 2a) added a typed event registry server-side, with a temporary browser-compatibility
+shim for one event type. This section describes the real, current wire shape.
 
-Global UI state updates. One connection per browser tab.
+### Poll Endpoints
 
-**Server → Client Messages:**
+| Method | Path | Query params | Description |
+|---|---|---|---|
+| `GET` | `/api/poll/ui` | `since` (cursor, default 0), `timeout` (seconds) | Global UI event stream — one per browser tab |
+| `GET` | `/api/poll/session/{session_id}` | `since`, `timeout` | Per-session event stream |
 
-| Type | Payload | When |
-|------|---------|------|
-| `sessions_list` | `{sessions: [...]}` | Session list changes |
-| `state_change` | `{session_id, state, ...}` | Session state transitions |
-| `project_updated` | `{project_id, ...}` | Project metadata changes |
-| `project_deleted` | `{project_id}` | Project deleted |
-| `session_deleted` | `{session_id}` | Session deleted (fires once per session, including cascaded children) |
+Both exist on **both** tiers post-#498: Backend's are the real queues `SessionCoordinator`
+writes to; the Frontend API's read from a local `EventQueue` kept in sync by
+`src/poll_relay.py`'s background fan-out. The browser only ever talks to the Frontend API's copy.
 
-**Client → Server Messages:**
+### Poll Response Envelope
 
-| Type | Payload | Purpose |
-|------|---------|---------|
-| `ping` | `{}` | Keep-alive heartbeat |
+```json
+{
+  "events": [ /* array of event dicts — see Event Shape below */ ],
+  "next_cursor": 1234,
+  "reset": false,
+  "evicted": false
+}
+```
 
-### Session WebSocket — `/ws/session/{session_id}`
+- `next_cursor`: pass as `since` on the next poll.
+- `reset`: the cursor space restarted beneath the caller (e.g. a Backend restart) — treat as
+  "local view may be stale," not just "nothing new."
+- `evicted`: `since` predated the buffer's oldest retained event (genuinely-lost history,
+  distinct from a reset).
+- The Frontend API's own response additionally carries `backend_status` (issue #1997).
 
-Session-specific message streaming. One connection per active session view.
+Typed on both tiers via `shared/poll_protocol.py`'s `PollBatch`/`parse_poll_response()`
+(`events: list[EventEnvelope]`).
 
-**Server → Client Messages:**
+### Event Shape
 
-| Type | Payload | When |
-|------|---------|------|
-| `message` | `{type, content, ...}` | New message (assistant, system) |
-| `tool_call` | `{id, name, input, status, ...}` | Tool call lifecycle updates |
-| `permission_request` | `{request_id, tool_name, ...}` | Tool needs user approval |
-| `permission_response` | `{request_id, decision, ...}` | Permission decision echoed back |
-| `tool_result` | `{tool_use_id, content, ...}` | Tool execution result |
-| `state_change` | `{session_id, state, ...}` | Session state change |
-| `connection_established` | `{session_id}` | WebSocket connected |
-| `queue_update` | `{session_id, item, ...}` | Queue item status change |
-| `resource_registered` | `{session_id, resource, ...}` | New resource registered |
+Every element of `events` is `{"type": <registered type>, ...<payload>}`. The payload's own
+shape (top-level fields vs. nested under a `data` key) varies by `type` — see the registry table
+below for exactly which keys a given `type` requires — and is **unchanged from pre-#2063
+behavior**: this stage did not alter any wire bytes except `tool_call`'s (see that section
+below).
 
-**Client → Server Messages:**
+`shared/event_emitter.py`'s `emit()` is the *only* function allowed to write to an `EventQueue`
+(enforced by a static AST-scan test, `shared/tests/test_event_emitter_boundary.py`) and validates
+every event against the registry before appending — in production a mismatch is logged, not
+rejected, so a registry bug can never silently drop a user-visible event.
 
-| Type | Payload | Purpose |
-|------|---------|---------|
-| `send_message` | `{content, attachments?}` | Send user message |
-| `interrupt_session` | `{}` | Interrupt processing |
-| `permission_response` | `{request_id, decision, apply_suggestions?, clarification?, selected_suggestions?}` | Respond to permission request |
-| `permission_response_with_input` | `{request_id, decision, updated_input}` | Respond with modified input (AskUserQuestion) |
-| `ping` | `{}` | Keep-alive heartbeat |
+`shared/event_envelope.py`'s `EventEnvelope` is the typed, in-process representation `emit()`
+and `parse_poll_response()` use (`type`, `queue`, `sequence`, `timestamp`, `data`, `backend_id`,
+`scope`, plus a derived `event_id`) — **not yet the literal wire format**. Today's wire bytes are
+still the ad-hoc shape above; `EventEnvelope.from_dict()` tolerantly folds whatever a raw wire
+dict contains into `.data`. A future stage may move the wire format itself onto this typed
+model; this one does not.
 
-### Legion WebSocket — `/ws/legion/{legion_id}`
+### Event Type Registry
 
-Multi-agent communications. One connection per active timeline/spy view.
+Source of truth: `shared/event_registry.py`'s `TOP_LEVEL_EVENT_TYPES`. This table is for human
+reference — a programmatic consumer should call `shared.event_registry.export_json()` instead
+of hand-copying it.
 
-**Server → Client Messages:**
+| Type | Queue(s) | Required payload key(s) |
+|---|---|---|
+| `audit_event` | audit | `data` |
+| `audit_event_flush` | audit | — |
+| `notification` | ui | `data` |
+| `schedule_monitor_error` | ui | `legion_id`, `schedule_id`, `error` |
+| `schedule_updated` | ui | `schedule`, `deleted` |
+| `schedule_execution` | ui | `execution`, `schedule_id` |
+| `project_updated` | ui | `data` |
+| `project_deleted` | ui | `data` |
+| `session_deleted` | ui | `data` |
+| `state_change` | ui | `data` |
+| `server_restarting` | ui | `message` |
+| `mcp_oauth_complete` | ui | `server_id` |
+| `secret_oauth_complete` | ui | `flow_id`, `success` |
+| `secret_refreshed` | ui | `secret_name` |
+| `secret_refresh_failed` | ui, session | ui: `secret_name`, `error`; session: `data` |
+| `mcp_oauth_refreshed` | ui | `server_id` |
+| `rate_limits_update` | ui | `data` |
+| `session_reset` | ui | `data` |
+| `session_watchdog_alert` | ui | `session_id`, `watchdog`, `details` |
+| `session_self_restart` | ui | `data` |
+| `session_restart_error` | ui | `data` |
+| `resource_registered` | session | `resource` |
+| `link_registered` | session | `link` |
+| `queue_update` | session | `action`, `item` |
+| `usage_updated` | session | `session_id`, `usage` |
+| `assistant_delta` | session | `session_id`, `data` |
+| `message` | session | `session_id`, `data` |
+| `context_update` | session | `input_tokens`, `context_window`, `context_pct` |
+| `tool_call` | session | `session_id`, `data` |
+| `resource_removed` | session | `resource_id` |
+| `proxy_event` | session | `data` |
 
-| Type | Payload | When |
-|------|---------|------|
-| `comm` | `{comm_id, from, to, content, ...}` | New inter-agent communication |
-| `minion_created` | `{minion_id, ...}` | New minion spawned |
-| `schedule_updated` | `{schedule_id, event, ...}` | Schedule state change |
-| `ping` | `{}` | Server heartbeat |
+**Orphan types** (registered, produced, not yet handled by the browser — tracked for stage 2b,
+issue #2063 AC7):
+- `server_restarting`: intended behavior is a cross-tab imminent-restart notice (every connected
+  tab calling `uiStore.showRestartModal()`, not just the one that initiated a restart).
+- `session_self_restart`: intended behavior is a lightweight success acknowledgment, paralleling
+  the existing `session_restart_error` handler (`frontend/src/stores/polling.js`).
 
-**Client → Server Messages:**
+**`sessions_list`** is handled by the browser today (`polling.js`) but produced by nothing
+server-side — a dead case, removed in stage 2b, not given a registry entry here.
 
-| Type | Payload | Purpose |
-|------|---------|---------|
-| `ping` | `{}` | Keep-alive heartbeat |
+#### `message`'s nested `data.type` (`MessageType` enum, `backend/message_parser.py`, + `tool_call`)
+
+`system`, `assistant`, `user`, `result`, `tool_use`, `tool_result`, `tool_error`,
+`permission_request`, `permission_response`, `thinking`, `session_start`, `session_end`,
+`status_update`, `processing`, `error`, `warning`, `exception`, `unknown`, `tool_call`.
+
+#### `system`-typed messages' `subtype` field
+
+`client_launched`, `interrupt`, `mcp_server_degraded`, `session_failed`, `stderr`,
+`task_notification`, `task_progress`, `task_started`, `task_updated`, `unknown`,
+`local_command_response`, `agent_notification`, `api_retry`, `permission_mode_change`,
+`replay_complete`.
+
+### `tool_call` — Canonical Shape and Legacy Shim
+
+Stage 2a-C (issue #2063 AC5) introduced one canonical shape plus a temporary compatibility shim,
+both on the session stream, for every tool_call lifecycle transition:
+
+- **Canonical** (bare): `{"type": "tool_call", "session_id": ..., "data": {...}, "timestamp": ...}`
+- **Legacy shim** (removed in stage 2b): `{"type": "message", "session_id": ..., "data": {..., "type": "tool_call"}, "timestamp": ...}`
+
+Both are emitted for every transition today — `shared/event_emitter.py`'s `emit_tool_call()` is
+the single, clearly-marked function responsible, so stage 2b can delete it and collapse both
+call sites down to the canonical shape alone in one place. The `data` dict's fields follow the
+presence semantics `frontend/src/stores/message.js`'s `handleToolCall` relies on (e.g. an absent
+`turn_id` means "do not touch the timestamp"): `tool_use_id`, `status`, `turn_id`, `request_id`,
+`created_at`, and an optional `display` (`DisplayProjection`, issue #310) payload.

@@ -145,6 +145,10 @@ def export_json() -> dict:
             event_type: {
                 "queues": sorted(spec.queues),
                 "required_keys": sorted(spec.required_keys),
+                "required_keys_by_queue": {
+                    queue: sorted(keys)
+                    for queue, keys in sorted(spec.required_keys_by_queue.items())
+                },
             }
             for event_type, spec in TOP_LEVEL_EVENT_TYPES.items()
         },
