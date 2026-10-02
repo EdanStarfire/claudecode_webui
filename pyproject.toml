@@ -46,9 +46,10 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
 timeout = 30
-addopts = "--tb=short -v -m 'not slow'"
+addopts = "--tb=short -v -m 'not slow and not regenerate_fixture'"
 markers = [
-    "slow: marks tests as slow (deselected by default)"
+    "slow: marks tests as slow (deselected by default)",
+    "regenerate_fixture: writes to a committed backend/tests/fixtures/raw/ fixture — never run by default, invoke explicitly with -m regenerate_fixture",
 ]
 
 [tool.black]
