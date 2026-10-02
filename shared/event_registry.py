@@ -47,11 +47,15 @@ TOP_LEVEL_EVENT_TYPES: dict[str, EventTypeSpec] = {
     "session_watchdog_alert": EventTypeSpec(
         frozenset({QUEUE_UI}), frozenset({"session_id", "watchdog", "details"})
     ),
+    # required_keys={"data"} matches these two orphan types' sole producer
+    # (legion_mcp_tools.py's broadcast_ui_event() calls, which nest their fields
+    # under "data") — found via emit()'s registry validation during 2a-B; previously
+    # invisible since raw .append() never checked shape (issue #2063).
     "session_self_restart": EventTypeSpec(
-        frozenset({QUEUE_UI}), frozenset({"session_id", "restart_id"})
+        frozenset({QUEUE_UI}), frozenset({"data"})
     ),  # orphan, 2b
     "session_restart_error": EventTypeSpec(
-        frozenset({QUEUE_UI}), frozenset({"session_id", "restart_id", "error"})
+        frozenset({QUEUE_UI}), frozenset({"data"})
     ),
     "resource_registered": EventTypeSpec(frozenset({QUEUE_SESSION}), frozenset({"resource"})),
     "link_registered": EventTypeSpec(frozenset({QUEUE_SESSION}), frozenset({"link"})),

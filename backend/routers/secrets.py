@@ -12,6 +12,9 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from shared.event_emitter import emit
+from shared.event_envelope import QUEUE_SESSION
+from shared.event_registry import TOP_LEVEL_EVENT_TYPES
 from shared.exception_handlers import handle_exceptions
 
 from ._models import (
@@ -289,10 +292,12 @@ def build_router(webui) -> APIRouter:
         """
         body = await request.json()
         event_type = body.get("type", "proxy_event")
+        spec = TOP_LEVEL_EVENT_TYPES.get(event_type)
+        if spec is None or QUEUE_SESSION not in spec.queues:
+            raise HTTPException(status_code=400, detail=f"Unregistered event type: {event_type!r}")
         event_data = body.get("data", {})
         if session_id in webui.session_queues:
-            webui.session_queues[session_id].append({
-                "type": event_type,
+            emit(webui.session_queues[session_id], QUEUE_SESSION, event_type, {
                 "data": event_data,
                 "timestamp": datetime.now(UTC).isoformat(),
             })

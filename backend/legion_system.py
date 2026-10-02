@@ -15,6 +15,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from shared.event_emitter import emit
+from shared.event_envelope import QUEUE_UI
+
 if TYPE_CHECKING:
     from backend.config_manager import HistoryRetentionConfig
     from backend.data_storage import DataStorageManager
@@ -84,7 +87,7 @@ class LegionSystem:
         if self.ui_queue is None:
             return
         try:
-            self.ui_queue.append(event)
+            emit(self.ui_queue, QUEUE_UI, event["type"], {k: v for k, v in event.items() if k != "type"})
         except Exception:
             import logging
             logging.getLogger(__name__).exception("Failed to broadcast UI event: %s", event.get("type"))

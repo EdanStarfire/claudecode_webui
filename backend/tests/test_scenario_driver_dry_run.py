@@ -47,6 +47,7 @@ from backend.tools.scenario_driver.poll_consumer import (
     wait_for,
 )
 from backend.tools.scenario_driver.scenarios import build_scenarios
+from shared.event_envelope import EventEnvelope
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RAW_FIXTURES_DIR = REPO_ROOT / "backend" / "tests" / "fixtures" / "raw"
@@ -148,7 +149,10 @@ def _all_events(base_url: str, token: str, session_id: str) -> list[TaggedEvent]
         f"{base_url}/api/poll/session/{session_id}", params={"since": 0, "timeout": 2},
         headers={"Authorization": f"Bearer {token}"}, timeout=10,
     ).json()
-    return [TaggedEvent(source="session", event=e, seq=i) for i, e in enumerate(body["events"])]
+    return [
+        TaggedEvent(source="session", event=EventEnvelope.from_dict(e), seq=i)
+        for i, e in enumerate(body["events"])
+    ]
 
 
 def test_required_markers_all_covered_by_scenarios():
@@ -306,7 +310,7 @@ def test_t3_poll_consumer_reconnects_after_full_app_restart(tmp_path: Path):
             )
             deadline = time.monotonic() + 30.0
             while time.monotonic() < deadline:
-                if any(e.event.get("type") == "project_updated" for e in buffer.snapshot()):
+                if any(e.event.type == "project_updated" for e in buffer.snapshot()):
                     return
                 await asyncio.sleep(0.5)
             raise AssertionError("PollConsumer never resumed after full app restart")

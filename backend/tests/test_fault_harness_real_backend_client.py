@@ -142,7 +142,8 @@ async def test_real_backend_client_delivers_exactly_once_through_real_gzip():
     assert len(client.received) == len(sample_events)
     assert len(client.received) == len(client.received_deduped())
     delivered = [event for _, event in sorted(client.received, key=lambda pair: pair[0])]
-    assert delivered == sample_events
+    delivered_dicts = [{"type": e.type, **e.data} for e in delivered]
+    assert delivered_dicts == sample_events
 
 
 @pytest.mark.asyncio

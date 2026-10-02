@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from shared.event_emitter import emit
+from shared.event_envelope import QUEUE_UI
 from shared.logging_config import get_logger
 
 if TYPE_CHECKING:
@@ -293,7 +295,10 @@ class SessionWatchdogService:
             "fired_at": datetime.now(UTC).isoformat(),
         }
         try:
-            self._ui_queue.append(event)
+            emit(
+                self._ui_queue, QUEUE_UI, event["type"],
+                {k: v for k, v in event.items() if k != "type"},
+            )
             watchdog_logger.info(
                 f"Watchdog alert fired: session={session.session_id} type={watchdog} details={details}"
             )

@@ -30,9 +30,9 @@ Predicate = Callable[[TaggedEvent], bool]
 
 def _message_data(tagged: TaggedEvent) -> dict | None:
     event = tagged.event
-    if event.get("type") != "message":
+    if event.type != "message":
         return None
-    return event.get("data") or {}
+    return event.data or {}
 
 
 def result_message(session_id: str) -> Predicate:
@@ -50,7 +50,7 @@ def assistant_delta(session_id: str) -> Predicate:
 
     def _match(tagged: TaggedEvent) -> bool:
         event = tagged.event
-        return event.get("type") == "assistant_delta" and event.get("session_id") == session_id
+        return event.type == "assistant_delta" and event.data.get("session_id") == session_id
 
     return _match
 
@@ -104,9 +104,9 @@ def task_event(session_id: str, subtypes: tuple[str, ...]) -> Predicate:
 def state_change(session_id: str, state: str | None = None) -> Predicate:
     def _match(tagged: TaggedEvent) -> bool:
         event = tagged.event
-        if event.get("type") != "state_change":
+        if event.type != "state_change":
             return False
-        data = event.get("data") or {}
+        data = event.data or {}
         if data.get("session_id") != session_id:
             return False
         return state is None or (data.get("session") or {}).get("state") == state
@@ -117,9 +117,9 @@ def state_change(session_id: str, state: str | None = None) -> Predicate:
 def permission_mode_state_change(session_id: str, mode: str) -> Predicate:
     def _match(tagged: TaggedEvent) -> bool:
         event = tagged.event
-        if event.get("type") != "state_change":
+        if event.type != "state_change":
             return False
-        data = event.get("data") or {}
+        data = event.data or {}
         if data.get("session_id") != session_id:
             return False
         return (data.get("session") or {}).get("current_permission_mode") == mode
@@ -130,9 +130,9 @@ def permission_mode_state_change(session_id: str, mode: str) -> Predicate:
 def model_state_change(session_id: str, model: str) -> Predicate:
     def _match(tagged: TaggedEvent) -> bool:
         event = tagged.event
-        if event.get("type") != "state_change":
+        if event.type != "state_change":
             return False
-        data = event.get("data") or {}
+        data = event.data or {}
         if data.get("session_id") != session_id:
             return False
         return (data.get("session") or {}).get("current_model") == model
@@ -143,9 +143,9 @@ def model_state_change(session_id: str, model: str) -> Predicate:
 def resource_registered(session_id: str) -> Predicate:
     def _match(tagged: TaggedEvent) -> bool:
         event = tagged.event
-        if event.get("type") != "resource_registered":
+        if event.type != "resource_registered":
             return False
-        return (event.get("resource") or {}).get("session_id") == session_id
+        return (event.data.get("resource") or {}).get("session_id") == session_id
 
     return _match
 
@@ -177,9 +177,9 @@ def minion_comm_notification(from_minion_name: str | None = None) -> Predicate:
 
     def _match(tagged: TaggedEvent) -> bool:
         event = tagged.event
-        if event.get("type") != "notification":
+        if event.type != "notification":
             return False
-        data = event.get("data") or {}
+        data = event.data or {}
         if data.get("event_type") != "minion_comm":
             return False
         return from_minion_name is None or data.get("from_minion_name") == from_minion_name
