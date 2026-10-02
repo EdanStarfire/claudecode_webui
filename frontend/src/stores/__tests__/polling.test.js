@@ -1843,9 +1843,9 @@ describe('polling store - stall-heal cursor-atomicity fix (#1988)', () => {
 
   it('T1: every event appended during the heal window is delivered exactly once via the resumed poll, with zero history/sync REST calls (AC1, AC2)', async () => {
     const { pollingStore, sessionStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1988-t1', is_processing: false })
-    // handleSessionMessage() only applies an event when session.js's own currentSessionId
-    // (independent of polling.js's) matches — mirrors how the real app keeps them in sync
-    // via selectSession().
+    // dispatchEvent()'s session-stream guard only applies an event when session.js's own
+    // currentSessionId (independent of polling.js's) matches — mirrors how the real app
+    // keeps them in sync via selectSession().
     sessionStore.currentSessionId = sid
     const addMessageSpy = vi.spyOn(messageStore, 'addMessage')
 
@@ -1937,7 +1937,7 @@ describe('polling store - stall-heal cursor-atomicity fix (#1988)', () => {
 
   it('evicted fallback: does not apply the evicted response\'s own (incomplete) events — only the fresh reload\'s state', async () => {
     const { pollingStore, sessionStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1988-evicted-b', is_processing: false })
-    sessionStore.currentSessionId = sid // so a false negative can't hide behind handleSessionMessage()'s own currentSessionId guard
+    sessionStore.currentSessionId = sid // so a false negative can't hide behind dispatchEvent()'s own currentSessionId guard
     const addMessageSpy = vi.spyOn(messageStore, 'addMessage')
     vi.spyOn(messageStore, 'loadMessages').mockImplementation(async (sessionId) => {
       messageStore.loadedEventCursors.set(sessionId, 42)
@@ -1948,7 +1948,7 @@ describe('polling store - stall-heal cursor-atomicity fix (#1988)', () => {
       { events: [], next_cursor: 5 },
       {
         // The buffered-but-incomplete batch a real evicted response would still carry —
-        // must NOT be applied via handleSessionMessage(), since it can't be trusted as a
+        // must NOT be applied via dispatchEvent(), since it can't be trusted as a
         // gapless slice once the server has already dropped some history.
         events: [{ type: 'message', data: { type: 'assistant', id: 'unreliable-evicted-event' } }],
         next_cursor: 6,

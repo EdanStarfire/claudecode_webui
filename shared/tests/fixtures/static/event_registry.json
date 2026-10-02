@@ -1,0 +1,342 @@
+{
+  "known_optional_data_keys": [
+    "display"
+  ],
+  "message_data_types": [
+    "assistant",
+    "error",
+    "exception",
+    "permission_request",
+    "permission_response",
+    "processing",
+    "result",
+    "session_end",
+    "session_start",
+    "status_update",
+    "system",
+    "thinking",
+    "tool_call",
+    "tool_error",
+    "tool_result",
+    "tool_use",
+    "unknown",
+    "user",
+    "warning"
+  ],
+  "system_subtypes": [
+    "agent_notification",
+    "api_retry",
+    "client_launched",
+    "interrupt",
+    "local_command_response",
+    "mcp_server_degraded",
+    "permission_mode_change",
+    "replay_complete",
+    "session_failed",
+    "stderr",
+    "task_notification",
+    "task_progress",
+    "task_started",
+    "task_updated",
+    "unknown"
+  ],
+  "top_level_event_types": {
+    "assistant_delta": {
+      "queues": [
+        "session"
+      ],
+      "required_keys": [
+        "data",
+        "session_id"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "audit_event": {
+      "queues": [
+        "audit"
+      ],
+      "required_keys": [
+        "data"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "audit_event_flush": {
+      "queues": [
+        "audit"
+      ],
+      "required_keys": [],
+      "required_keys_by_queue": {}
+    },
+    "context_update": {
+      "queues": [
+        "session"
+      ],
+      "required_keys": [
+        "context_pct",
+        "context_window",
+        "input_tokens"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "link_registered": {
+      "queues": [
+        "session"
+      ],
+      "required_keys": [
+        "link"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "mcp_oauth_complete": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "server_id"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "mcp_oauth_refreshed": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "server_id"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "message": {
+      "queues": [
+        "session"
+      ],
+      "required_keys": [
+        "data",
+        "session_id"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "notification": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "data"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "project_deleted": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "data"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "project_updated": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "data"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "proxy_event": {
+      "queues": [
+        "session"
+      ],
+      "required_keys": [
+        "data"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "queue_update": {
+      "queues": [
+        "session"
+      ],
+      "required_keys": [
+        "action",
+        "item"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "rate_limits_update": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "data"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "resource_registered": {
+      "queues": [
+        "session"
+      ],
+      "required_keys": [
+        "resource"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "resource_removed": {
+      "queues": [
+        "session"
+      ],
+      "required_keys": [
+        "resource_id"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "schedule_execution": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "execution",
+        "schedule_id"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "schedule_monitor_error": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "error",
+        "legion_id",
+        "schedule_id"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "schedule_updated": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "deleted",
+        "schedule"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "secret_oauth_complete": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "flow_id",
+        "success"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "secret_refresh_failed": {
+      "queues": [
+        "session",
+        "ui"
+      ],
+      "required_keys": [
+        "error",
+        "secret_name"
+      ],
+      "required_keys_by_queue": {
+        "session": [
+          "data"
+        ]
+      }
+    },
+    "secret_refreshed": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "secret_name"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "server_restarting": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "message"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "session_deleted": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "data"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "session_reset": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "data"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "session_restart_error": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "data"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "session_self_restart": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "data"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "session_watchdog_alert": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "details",
+        "session_id",
+        "watchdog"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "state_change": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "data"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "tool_call": {
+      "queues": [
+        "session"
+      ],
+      "required_keys": [
+        "data",
+        "session_id"
+      ],
+      "required_keys_by_queue": {}
+    },
+    "usage_updated": {
+      "queues": [
+        "session"
+      ],
+      "required_keys": [
+        "session_id",
+        "usage"
+      ],
+      "required_keys_by_queue": {}
+    }
+  }
+}

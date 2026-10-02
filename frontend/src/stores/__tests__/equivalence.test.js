@@ -16,7 +16,7 @@ import {
 //
 // Deliberately does NOT route through mock_sdk.py's raw-layer replay: it replays
 // raw_log.jsonl's queue_event stream directly into polling.js's real poll loop (so
-// handleSessionMessage() — an internal, unexported closure — still runs via its only
+// dispatchEvent() — an internal, unexported closure — still runs via its only
 // real entry point, the session poll loop), and separately drives message.js's
 // loadMessages() against rest_history.json. See PLAN_1999's Risks section for why this
 // diverges from a hint left in #1998's mock_sdk.py docstrings.
@@ -66,8 +66,8 @@ async function replayLivePath(fixture) {
   const messageStore = useMessageStore()
   const pollingStore = usePollingStore()
 
-  // handleSessionMessage() only applies an event when session.js's own currentSessionId
-  // matches — mirrors how the real app keeps them in sync via selectSession().
+  // dispatchEvent()'s session-stream guard only applies an event when session.js's own
+  // currentSessionId matches — mirrors how the real app keeps them in sync via selectSession().
   sessionStore.currentSessionId = fixture.sessionId
 
   apiMock.get.mockImplementation((url) => {
