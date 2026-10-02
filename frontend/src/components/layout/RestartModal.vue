@@ -662,7 +662,12 @@ watch(
   async (modal) => {
     if (modal?.name === 'restart-server' && modalInstance) {
       if (modal.data?.remote) {
-        modalGeneration++
+        // Review finding: reuse resetState() (not just its modalGeneration++ line) so a
+        // second remote broadcast arriving while this phase is still showing clears any
+        // stray countdownInterval/healthPollInterval via its cleanup() call before
+        // startHealthPoll() below starts a fresh pair — otherwise the first pair leaks,
+        // never cleared, racing the new one.
+        resetState()
         phase.value = 'remote-notice'
         remoteMessage.value = modal.data.message || 'Server is restarting...'
         modalInstance.show()

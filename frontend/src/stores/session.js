@@ -664,6 +664,17 @@ export const useSessionStore = defineStore('session', () => {
     }
     hydrationStageBySession.value = new Map(hydrationStageBySession.value)
 
+    // Issue #1974: stop the poll loop for the deleted session(s) if one is currently
+    // displayed in this tab — a still-in-flight response landing afterward could
+    // otherwise resurrect per-session state the cleanup below tears down. Moved ahead of
+    // the Issue #2065 AC6 store-clearing block below (review finding): that block's own
+    // run of awaited dynamic imports widened the same window this comment already
+    // describes, so the disconnect now happens before any of it rather than after.
+    const pollingStore = (await import('./polling')).usePollingStore()
+    if (deletedIds.includes(currentSessionId.value)) {
+      await pollingStore.disconnectSession()
+    }
+
     // Issue #2065 AC6: clear every per-session store session_reset already clears, plus
     // queue/task/diff — previously left populated indefinitely (a real memory leak, and a
     // stale-data risk if a session id were ever reused).
@@ -690,14 +701,6 @@ export const useSessionStore = defineStore('session', () => {
       }
     })
 
-    // Issue #1974: stop the poll loop for the deleted session(s) if one is currently
-    // displayed in this tab — a still-in-flight response landing afterward could
-    // otherwise resurrect the per-session polling state the cleanup below tears down.
-    const pollingStore = (await import('./polling')).usePollingStore()
-    if (deletedIds.includes(currentSessionId.value)) {
-      await pollingStore.disconnectSession()
-    }
-
     // Issue #1974: tear down the polling store's per-session state (cursor, heartbeat,
     // heal-in-flight mutex, frozen-time snapshot) for deleted sessions.
     for (const deletedId of deletedIds) {
@@ -716,8 +719,7 @@ export const useSessionStore = defineStore('session', () => {
     // session; a deleted session can be a background one, and blindly nulling the global
     // rateLimits ref would wipe the display for whatever session the user IS currently viewing.
     if (wasCurrentSessionRemoved) {
-      const uiStore = (await import('./ui')).useUIStore()
-      uiStore.setRateLimits(null)
+      useUIStore().setRateLimits(null)
       currentSessionId.value = null
       // Navigation is handled by the caller
     }

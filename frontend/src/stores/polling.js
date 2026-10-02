@@ -288,7 +288,24 @@ export const usePollingStore = defineStore('polling', () => {
             stream: 'ui', staleCursor: uiCursor, next_cursor: data.next_cursor,
             eventCount: data.events?.length ?? 0, generation: myGeneration
           })
+          // Review finding: this resync replaces the dropped events entirely, including any
+          // session_deleted this cycle would otherwise have carried — loadAppData()'s own
+          // fetchSessions() only removes a vanished id from the `sessions` Map (it has no
+          // reason to know about the other per-session stores), so without this, a deletion
+          // that happens to land in the same evicted/reset cycle would leak exactly the state
+          // AC6 added removeSessionsFromStores() to clean up. Diff the session id set
+          // before/after the resync and run the same cleanup any other session_deleted goes
+          // through for whatever vanished.
+          const sessionStore = useSessionStore()
+          const idsBeforeResync = new Set(sessionStore.sessions.keys())
           await loadAppData()
+          const vanishedIds = [...idsBeforeResync].filter(id => !sessionStore.sessions.has(id))
+          if (vanishedIds.length > 0) {
+            const wasCurrentSessionRemoved = await sessionStore.removeSessionsFromStores(vanishedIds)
+            if (wasCurrentSessionRemoved) {
+              router.push('/')
+            }
+          }
           uiCursor = data.next_cursor
           continue
         }

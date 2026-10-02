@@ -144,6 +144,8 @@ export const useQueueStore = defineStore('queue', () => {
     queuesBySession.value = new Map(queuesBySession.value)
     pausedBySession.value.delete(sessionId)
     pausedBySession.value = new Map(pausedBySession.value)
+    paginationBySession.value.delete(sessionId)
+    paginationBySession.value = new Map(paginationBySession.value)
   }
 
   async function pauseQueue(sessionId, paused) {

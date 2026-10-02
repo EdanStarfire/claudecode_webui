@@ -16,17 +16,19 @@ beforeEach(() => {
 
 describe('queue store', () => {
   describe('removeSessionQueue (issue #2065 AC6)', () => {
-    it('removes the session from queuesBySession and pausedBySession', async () => {
+    it('removes the session from queuesBySession, pausedBySession, and paginationBySession', async () => {
       const { useQueueStore } = await import('@/stores/queue')
       const store = useQueueStore()
 
       store.queuesBySession.set('sess-1', [{ queue_id: 'q1' }])
       store.pausedBySession.set('sess-1', true)
+      store.paginationBySession.set('sess-1', { offset: 1, hasMore: true, total: 1, pendingCount: 1 })
 
       store.removeSessionQueue('sess-1')
 
       expect(store.queuesBySession.has('sess-1')).toBe(false)
       expect(store.pausedBySession.has('sess-1')).toBe(false)
+      expect(store.paginationBySession.has('sess-1')).toBe(false)
     })
 
     it('does not make any REST call, unlike clearQueue()/clearHistory()', async () => {
