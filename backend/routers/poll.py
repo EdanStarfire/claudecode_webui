@@ -6,11 +6,14 @@ requests. The Frontend API's src/routers/poll.py becomes a poll-relay client
 against these same endpoints (Phase 2) rather than a direct EventQueue consumer.
 """
 
+from dataclasses import asdict
+
 from fastapi import APIRouter, HTTPException
 
 from shared.event_queue import EventQueue, reset_occurred
 from shared.exception_handlers import handle_exceptions
 from shared.logging_config import get_logger
+from shared.poll_protocol import PollResponse
 
 _polling_logger = get_logger('polling', category='POLL')
 
@@ -31,7 +34,7 @@ def build_router(webui) -> APIRouter:
                 "poll ui returned %d event(s) since=%d next_cursor=%d",
                 len(events), since, next_cursor
             )
-        return {"events": events, "next_cursor": next_cursor, "reset": reset, "evicted": evicted}
+        return asdict(PollResponse(events=events, next_cursor=next_cursor, reset=reset, evicted=evicted))
 
     @router.get("/api/poll/cursor")
     @handle_exceptions("poll cursor")
@@ -78,6 +81,6 @@ def build_router(webui) -> APIRouter:
                 "poll session %s returned %d event(s) since=%d next_cursor=%d",
                 session_id, len(events), since, next_cursor
             )
-        return {"events": events, "next_cursor": next_cursor, "reset": reset, "evicted": evicted}
+        return asdict(PollResponse(events=events, next_cursor=next_cursor, reset=reset, evicted=evicted))
 
     return router

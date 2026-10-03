@@ -33,6 +33,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from backend.models.messages import ToolCall, ToolDisplayInfo, ToolState
+from shared.event_queue import EventQueue
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -284,7 +285,7 @@ async def test_emission_order_envelope_before_tool_call_pending(tmp_path):
     session_id = "sess-1694-order"
 
     webui = _make_webui(tmp_path)
-    webui.session_queues[session_id] = []
+    webui.session_queues[session_id] = EventQueue()
 
     call_order = []
     coordinator = MagicMock()
@@ -333,7 +334,7 @@ async def test_emission_order_envelope_before_tool_call_pending(tmp_path):
     ]
 
     # Ordering: the envelope entry is queued ahead of the tool_call PENDING entry.
-    queue = webui.session_queues[session_id]
+    queue, _, _ = webui.session_queues[session_id].events_since(0)
     assert len(queue) == 2
     assert queue[0]["data"].get("type") != "tool_call"
     assert queue[0]["type"] != "tool_call"
@@ -352,7 +353,7 @@ async def test_issue_1958_callback_separates_record_id_from_turn_id_barrier(tmp_
     session_id = "sess-1958-record-vs-turn"
 
     webui = _make_webui(tmp_path)
-    webui.session_queues[session_id] = []
+    webui.session_queues[session_id] = EventQueue()
 
     coordinator = MagicMock()
     marked = []
@@ -372,7 +373,7 @@ async def test_issue_1958_callback_separates_record_id_from_turn_id_barrier(tmp_
     callback = webui._create_message_callback(session_id)
     await callback(session_id, parsed_message)
 
-    queue = webui.session_queues[session_id]
+    queue, _, _ = webui.session_queues[session_id].events_since(0)
     assert len(queue) == 1
     # Live payload carries the PER-RECORD id — this is what #1955's frontend single-rule
     # dedup keys on, and it must differ per frame even across one shared Anthropic turn.
@@ -416,7 +417,7 @@ async def test_issue_1957_end_to_end_two_frames_one_turn_through_real_pipeline(t
     sdk.storage_manager = storage_manager
 
     webui = _make_webui(tmp_path)
-    webui.session_queues[session_id] = []
+    webui.session_queues[session_id] = EventQueue()
     coordinator = MagicMock()
     webui.coordinator = coordinator
     callback = webui._create_message_callback(session_id)
@@ -445,7 +446,7 @@ async def test_issue_1957_end_to_end_two_frames_one_turn_through_real_pipeline(t
     await sdk._store_sdk_message(frame_2)
     await callback(session_id, frame_2)
 
-    queue = webui.session_queues[session_id]
+    queue, _, _ = webui.session_queues[session_id].events_since(0)
     assert len(queue) == 2
     live_ids = [entry["data"]["message_id"] for entry in queue]
     assert live_ids[0] != live_ids[1], (
@@ -487,7 +488,7 @@ async def test_issue_1957_full_production_wiring_two_frames_distinct_live_ids(tm
 
     webui = _make_webui(tmp_path)
     webui._message_processor = MessageProcessor(MessageParser())
-    webui.session_queues[session_id] = []
+    webui.session_queues[session_id] = EventQueue()
     webui.coordinator = MagicMock()
 
     # Register web_server.py's real callback as a SessionCoordinator subscriber — exactly
@@ -513,7 +514,7 @@ async def test_issue_1957_full_production_wiring_two_frames_distinct_live_ids(tm
     await sdk_callback(frame_1)
     await sdk_callback(frame_2)
 
-    queue = webui.session_queues[session_id]
+    queue, _, _ = webui.session_queues[session_id].events_since(0)
     assert len(queue) == 2, f"Expected both frames to reach the poll queue, got {len(queue)}"
     live_ids = [entry["data"]["message_id"] for entry in queue]
     assert live_ids == ["frame-uuid-A", "frame-uuid-B"], (
@@ -559,7 +560,7 @@ async def test_permission_barrier_resolves_on_mark():
 
     from backend.permission_service import PermissionService
 
-    svc = PermissionService(coordinator=coord, session_queues={session_id: []})
+    svc = PermissionService(coordinator=coord, session_queues={session_id: EventQueue()})
 
     with (
         patch("backend.permission_service.PermissionRequestMessage") as mock_pr,
@@ -616,7 +617,7 @@ async def test_permission_barrier_fails_open_on_timeout(caplog):
 
     from backend.permission_service import PermissionService
 
-    svc = PermissionService(coordinator=coord, session_queues={session_id: []})
+    svc = PermissionService(coordinator=coord, session_queues={session_id: EventQueue()})
 
     with (
         patch("backend.permission_service.PermissionRequestMessage") as mock_pr,
@@ -678,7 +679,7 @@ async def test_permission_barrier_skipped_when_turn_id_absent():
 
     from backend.permission_service import PermissionService
 
-    svc = PermissionService(coordinator=coord, session_queues={session_id: []})
+    svc = PermissionService(coordinator=coord, session_queues={session_id: EventQueue()})
 
     with (
         patch("backend.permission_service.PermissionRequestMessage") as mock_pr,
@@ -731,7 +732,7 @@ async def test_issue_1958_multi_record_turn_full_production_wiring(tmp_path):
 
     webui = _make_webui(tmp_path)
     webui._message_processor = MessageProcessor(MessageParser())
-    webui.session_queues[session_id] = []
+    webui.session_queues[session_id] = EventQueue()
     webui.coordinator = MagicMock()
 
     # Register web_server.py's real callback as a SessionCoordinator subscriber, then use
@@ -770,7 +771,7 @@ async def test_issue_1958_multi_record_turn_full_production_wiring(tmp_path):
     for frame in frames:
         await sdk._process_sdk_message(frame)
 
-    queue = webui.session_queues[session_id]
+    queue, _, _ = webui.session_queues[session_id].events_since(0)
     assert len(queue) == 3, f"Expected all three records to reach the poll queue, got {len(queue)}"
 
     live_record_ids = [entry["data"]["message_id"] for entry in queue]
@@ -794,7 +795,7 @@ async def test_issue_1958_fail_loud_when_record_id_missing(tmp_path, caplog):
     impossible to reintroduce."""
     session_id = "sess-1958-fail-loud"
     webui = _make_webui(tmp_path)
-    webui.session_queues[session_id] = []
+    webui.session_queues[session_id] = EventQueue()
     webui.coordinator = MagicMock()
 
     parsed_message = MagicMock()
@@ -807,7 +808,7 @@ async def test_issue_1958_fail_loud_when_record_id_missing(tmp_path, caplog):
     with caplog.at_level("ERROR", logger="backend.web_server"):
         await callback(session_id, parsed_message)
 
-    queue = webui.session_queues[session_id]
+    queue, _, _ = webui.session_queues[session_id].events_since(0)
     assert len(queue) == 1
     assert "message_id" not in queue[0]["data"], (
         "No turn-level substitution allowed into websocket_data['message_id'] when "

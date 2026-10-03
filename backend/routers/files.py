@@ -255,9 +255,11 @@ def build_router(webui) -> APIRouter:
 
         # Append removal to session poll queue
         if session_id in webui.session_queues:
-            emit(webui.session_queues[session_id], QUEUE_SESSION, "resource_removed", {
-                "resource_id": resource_id,
-            })
+            emit(
+                webui.session_queues[session_id], QUEUE_SESSION, "resource_removed",
+                {"resource_id": resource_id},
+                scope=session_id,
+            )
 
         return {"status": "ok", "resource_id": resource_id}
 

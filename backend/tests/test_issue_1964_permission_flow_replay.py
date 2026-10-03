@@ -31,6 +31,7 @@ from backend.message_parser import MessageType, ParsedMessage
 from backend.mock_sdk import ActionType, MockClaudeSDK, SessionRecording
 from backend.models.messages import ToolState
 from backend.web_server import BackendApp
+from shared.event_queue import EventQueue
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -91,7 +92,7 @@ async def test_issue_1964_permission_flow_replay_full_lifecycle(tmp_path):
     session_id = "sess-1964-e2e"
 
     webui = BackendApp(data_dir=tmp_path)
-    webui.session_queues[session_id] = []
+    webui.session_queues[session_id] = EventQueue()
 
     coordinator = webui.coordinator
     coordinator.add_message_callback(session_id, webui._create_message_callback(session_id))
@@ -112,7 +113,7 @@ async def test_issue_1964_permission_flow_replay_full_lifecycle(tmp_path):
     assert await mock.start()
     assert await mock.send_message("Edit the file at /tmp/test.txt")
 
-    statuses = _tool_call_statuses(webui.session_queues[session_id], "toolu_perm01")
+    statuses = _tool_call_statuses(webui.session_queues[session_id].events_since(0)[0], "toolu_perm01")
     assert statuses == ["pending", "awaiting_permission", "running", "completed"], (
         f"Expected full unified ToolCall lifecycle from mock replay, got {statuses}"
     )
@@ -132,7 +133,7 @@ async def test_issue_1964_permission_response_deny_transitions_tool_call_to_deni
     tool_use_id = "toolu_deny01"
 
     webui = BackendApp(data_dir=tmp_path)
-    webui.session_queues[session_id] = []
+    webui.session_queues[session_id] = EventQueue()
 
     tool_call = webui.coordinator.create_tool_call(
         session_id=session_id,
@@ -158,7 +159,7 @@ async def test_issue_1964_permission_response_deny_transitions_tool_call_to_deni
     await webui._emit_tool_call_updates(session_id, parsed_message)
 
     assert tool_call.status == ToolState.DENIED
-    statuses = _tool_call_statuses(webui.session_queues[session_id], tool_use_id)
+    statuses = _tool_call_statuses(webui.session_queues[session_id].events_since(0)[0], tool_use_id)
     assert statuses == ["denied"]
 
 
@@ -172,7 +173,7 @@ async def test_issue_1964_permission_response_missing_tool_use_id_falls_back_to_
     tool_use_id = "toolu_fallback01"
 
     webui = BackendApp(data_dir=tmp_path)
-    webui.session_queues[session_id] = []
+    webui.session_queues[session_id] = EventQueue()
 
     tool_call = webui.coordinator.create_tool_call(
         session_id=session_id,
@@ -203,5 +204,5 @@ async def test_issue_1964_permission_response_missing_tool_use_id_falls_back_to_
     await webui._emit_tool_call_updates(session_id, parsed_message)
 
     assert tool_call.status == ToolState.RUNNING
-    statuses = _tool_call_statuses(webui.session_queues[session_id], tool_use_id)
+    statuses = _tool_call_statuses(webui.session_queues[session_id].events_since(0)[0], tool_use_id)
     assert statuses == ["running"]
