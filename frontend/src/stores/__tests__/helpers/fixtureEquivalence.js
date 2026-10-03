@@ -103,7 +103,8 @@ export function loadRawFixture(name) {
 
   const restHistory = JSON.parse(fs.readFileSync(restHistoryPath, 'utf-8'))
 
-  const sessionId = queueEvents.find(event => event?.session_id)?.session_id
+  const sessionEvent = queueEvents.find(event => event?.data?.session_id ?? event?.session_id)
+  const sessionId = sessionEvent?.data?.session_id ?? sessionEvent?.session_id
   if (!sessionId) {
     throw new Error(`No session_id found in the queue_event stream for fixture '${name}'`)
   }
