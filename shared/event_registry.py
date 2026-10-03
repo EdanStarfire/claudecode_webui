@@ -41,7 +41,7 @@ TOP_LEVEL_EVENT_TYPES: dict[str, EventTypeSpec] = {
     "project_deleted": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"data"})),
     "session_deleted": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"data"})),
     "state_change": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"data"})),
-    "server_restarting": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"message"})),  # orphan, 2b
+    "server_restarting": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"message"})),
     "mcp_oauth_complete": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"server_id"})),
     "secret_oauth_complete": EventTypeSpec(
         frozenset({QUEUE_UI}), frozenset({"flow_id", "success"})
@@ -58,13 +58,13 @@ TOP_LEVEL_EVENT_TYPES: dict[str, EventTypeSpec] = {
     "session_watchdog_alert": EventTypeSpec(
         frozenset({QUEUE_UI}), frozenset({"session_id", "watchdog", "details"})
     ),
-    # required_keys={"data"} matches these two orphan types' sole producer
+    # required_keys={"data"} matches these two types' sole producer
     # (legion_mcp_tools.py's broadcast_ui_event() calls, which nest their fields
     # under "data") — found via emit()'s registry validation during 2a-B; previously
     # invisible since raw .append() never checked shape (issue #2063).
     "session_self_restart": EventTypeSpec(
         frozenset({QUEUE_UI}), frozenset({"data"})
-    ),  # orphan, 2b
+    ),
     "session_restart_error": EventTypeSpec(
         frozenset({QUEUE_UI}), frozenset({"data"})
     ),

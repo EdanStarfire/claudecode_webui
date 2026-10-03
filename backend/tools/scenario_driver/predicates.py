@@ -7,14 +7,16 @@ These match the live poll-event shapes broadcast by
 `raw_log.jsonl`'s recording format — see `backend/fixture_export.py` for that
 one:
 
-- Session-stream, tool/message-lifecycle events arrive wrapped:
-  `{"type": "message", "session_id": ..., "data": {...}, "timestamp": ...}`.
-  Permission lifecycle has no distinct event type — it's the SAME `tool_call`
-  message type at every stage (`pending` -> `awaiting_permission` -> `running`/
-  `denied` -> `completed`/`failed`/`interrupted`), correlated by `tool_use_id`;
-  a `request_id` field only appears once status is `awaiting_permission`.
-- A few session-stream events are bare, unwrapped: `resource_registered`,
-  `link_registered`.
+- Session-stream tool/permission-lifecycle events arrive as the bare `tool_call` top-level
+  type: `{"type": "tool_call", "session_id": ..., "data": {...}, "timestamp": ...}`.
+  Permission lifecycle has no distinct event type — it's the SAME `tool_call` data shape at
+  every stage (`pending` -> `awaiting_permission` -> `running`/`denied` ->
+  `completed`/`failed`/`interrupted`), correlated by `tool_use_id`; a `request_id` field
+  only appears once status is `awaiting_permission`.
+- A few other session-stream events are also bare, unwrapped: `resource_registered`,
+  `link_registered`, `assistant_delta`. Most other session-stream lifecycle events
+  (`system` subtypes, `result`) still arrive wrapped in the generic `{"type": "message",
+  "data": {...}}` envelope — `tool_call` is the one type that moved to bare-only in #2065.
 - The UI stream's events are always bare: `state_change`, `notification`,
   `session_reset`.
 """
@@ -55,10 +57,22 @@ def assistant_delta(session_id: str) -> Predicate:
     return _match
 
 
+def _tool_call_data(tagged: TaggedEvent) -> dict | None:
+    """Issue #2065 stage 2b-C: the bare `tool_call` top-level event is the only shape
+    emitted now that the 2a-C shim (shared/event_emitter.py::emit_tool_call) is gone.
+    `EventEnvelope.from_dict()`'s key-folding makes `.data` identical in shape to what
+    `_message_data()` returned for the pre-2b-C wrapped form — only the outer `.type`
+    differs — so this is a straight swap of data source, not a reshape."""
+    event = tagged.event
+    if event.type != "tool_call":
+        return None
+    return event.data or {}
+
+
 def tool_call_awaiting_permission(session_id: str, tool_name: str | None = None) -> Predicate:
     def _match(tagged: TaggedEvent) -> bool:
-        data = _message_data(tagged)
-        if data is None or data.get("type") != "tool_call":
+        data = _tool_call_data(tagged)
+        if data is None:
             return False
         if data.get("status") != "awaiting_permission" or not data.get("request_id"):
             return False
@@ -71,8 +85,8 @@ def tool_call_awaiting_permission(session_id: str, tool_name: str | None = None)
 
 def tool_call_status(session_id: str, status: str, tool_name: str | None = None) -> Predicate:
     def _match(tagged: TaggedEvent) -> bool:
-        data = _message_data(tagged)
-        if data is None or data.get("type") != "tool_call" or data.get("status") != status:
+        data = _tool_call_data(tagged)
+        if data is None or data.get("status") != status:
             return False
         if data.get("session_id") != session_id:
             return False

@@ -1060,16 +1060,6 @@ export const usePollingStore = defineStore('polling', () => {
         console.warn('Received message event with invalid data:', payload)
         return
       }
-      if (message.type === 'tool_call') {
-        // 2a-C shim (shared/event_emitter.py::emit_tool_call) emits this as a legacy
-        // duplicate of the canonical bare `tool_call` event (handled below) so the
-        // pre-#2065 browser kept working unchanged. The bare event already applied this
-        // update; applying it again here would be a second no-op (already proven
-        // harmless/idempotent, #2069) but is pointless now that the browser no longer
-        // needs the wrapped shape. 2b-C deletes the shim server-side once this and the
-        // rest of #2065 land, at which point this branch — and this comment — can go too.
-        return
-      }
       const messageStore = useMessageStore()
       const sessionStore = useSessionStore()
       if (message.type === 'system' &&
