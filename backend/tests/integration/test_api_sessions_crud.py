@@ -544,7 +544,8 @@ class TestDeleteSession:
 
         events, _, _ = webui.ui_queue.events_since(cursor_before)
         session_deleted_events = [e for e in events if e["type"] == "session_deleted"]
-        assert session_deleted_events == [{"type": "session_deleted", "data": {"session_id": sid}}]
+        assert len(session_deleted_events) == 1
+        assert session_deleted_events[0]["data"] == {"session_id": sid}
 
         assert not any(record.levelname == "ERROR" for record in caplog.records)
         assert not any(record.exc_info for record in caplog.records)
@@ -577,7 +578,8 @@ class TestDeleteSession:
             assert resp_tab.status_code == 200
             events = resp_tab.json()["events"]
             session_deleted_events = [e for e in events if e["type"] == "session_deleted"]
-            assert session_deleted_events == [{"type": "session_deleted", "data": {"session_id": sid}}]
+            assert len(session_deleted_events) == 1
+            assert session_deleted_events[0]["data"] == {"session_id": sid}
 
 
 class TestHistoryArchivesStatus:

@@ -15,6 +15,8 @@ Covers:
 from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
+from shared.event_queue import EventQueue
+
 # ---------------------------------------------------------------------------
 # LegionSystem.broadcast_ui_event()
 # ---------------------------------------------------------------------------
@@ -24,7 +26,7 @@ def test_broadcast_ui_event_appends_to_queue():
     """broadcast_ui_event() appends the event to ui_queue when set."""
     from backend.legion_system import LegionSystem
 
-    queue = []
+    queue = EventQueue()
     system = LegionSystem(
         session_coordinator=Mock(),
         data_storage_manager=Mock(),
@@ -35,7 +37,10 @@ def test_broadcast_ui_event_appends_to_queue():
     event = {"type": "project_updated", "data": {"project": {"project_id": "p1"}}}
     system.broadcast_ui_event(event)
 
-    assert queue == [event]
+    events, _, _ = queue.events_since(0)
+    assert len(events) == 1
+    assert events[0]["type"] == "project_updated"
+    assert events[0]["data"] == event["data"]
 
 
 def test_broadcast_ui_event_safe_when_ui_queue_is_none():
@@ -63,8 +68,8 @@ def _make_webui(tmp_path: Path):
     from backend.web_server import BackendApp
 
     webui = BackendApp(data_dir=tmp_path)
-    # Replace ui_queue with a plain list so we can inspect appended events
-    webui.ui_queue = []
+    # Replace ui_queue with a fresh EventQueue so we can inspect appended events
+    webui.ui_queue = EventQueue()
     return webui
 
 
@@ -75,8 +80,9 @@ def test_broadcast_project_updated_event_shape(tmp_path):
 
     webui._broadcast_project_updated(project)
 
-    assert len(webui.ui_queue) == 1
-    event = webui.ui_queue[0]
+    events, _, _ = webui.ui_queue.events_since(0)
+    assert len(events) == 1
+    event = events[0]
     assert event["type"] == "project_updated"
     assert event["data"]["project"] == project
 
@@ -87,8 +93,9 @@ def test_broadcast_project_deleted_event_shape(tmp_path):
 
     webui._broadcast_project_deleted("proj-2")
 
-    assert len(webui.ui_queue) == 1
-    event = webui.ui_queue[0]
+    events, _, _ = webui.ui_queue.events_since(0)
+    assert len(events) == 1
+    event = events[0]
     assert event["type"] == "project_deleted"
     assert event["data"]["project_id"] == "proj-2"
 
@@ -99,8 +106,9 @@ def test_broadcast_session_deleted_event_shape(tmp_path):
 
     webui._broadcast_session_deleted("sess-3")
 
-    assert len(webui.ui_queue) == 1
-    event = webui.ui_queue[0]
+    events, _, _ = webui.ui_queue.events_since(0)
+    assert len(events) == 1
+    event = events[0]
     assert event["type"] == "session_deleted"
     assert event["data"]["session_id"] == "sess-3"
 
@@ -112,8 +120,9 @@ def test_broadcast_state_change_event_shape(tmp_path):
 
     webui._broadcast_state_change("sess-1", session_dict, "2026-01-01T00:00:00")
 
-    assert len(webui.ui_queue) == 1
-    event = webui.ui_queue[0]
+    events, _, _ = webui.ui_queue.events_since(0)
+    assert len(events) == 1
+    event = events[0]
     assert event["type"] == "state_change"
     assert event["data"]["session_id"] == "sess-1"
     assert event["data"]["session"] == session_dict
@@ -126,11 +135,12 @@ def test_broadcast_server_restarting_event_shape(tmp_path):
 
     webui._broadcast_server_restarting("pull ok", "sync ok")
 
-    assert len(webui.ui_queue) == 1
-    event = webui.ui_queue[0]
+    events, _, _ = webui.ui_queue.events_since(0)
+    assert len(events) == 1
+    event = events[0]
     assert event["type"] == "server_restarting"
-    assert event["pull_output"] == "pull ok"
-    assert event["sync_output"] == "sync ok"
+    assert event["data"]["pull_output"] == "pull ok"
+    assert event["data"]["sync_output"] == "sync ok"
     assert "timestamp" in event
 
 
@@ -140,10 +150,11 @@ def test_broadcast_mcp_oauth_complete_event_shape(tmp_path):
 
     webui._broadcast_mcp_oauth_complete("my-server")
 
-    assert len(webui.ui_queue) == 1
-    event = webui.ui_queue[0]
+    events, _, _ = webui.ui_queue.events_since(0)
+    assert len(events) == 1
+    event = events[0]
     assert event["type"] == "mcp_oauth_complete"
-    assert event["server_id"] == "my-server"
+    assert event["data"]["server_id"] == "my-server"
 
 
 # ---------------------------------------------------------------------------

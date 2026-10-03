@@ -45,6 +45,10 @@ def _make_webui(backend_supervisor=None):
     webui.backend_client.ready = AsyncMock(return_value=True)
     webui.backend_client.request_json = AsyncMock(return_value={"status": "restarting"})
     webui.ui_queue.append = MagicMock()
+    # emit() now reads current_cursor (a plain int on a real EventQueue) before
+    # appending — a bare MagicMock attribute here would make `current_cursor + 1`
+    # itself a MagicMock, which asdict()'s recursive deepcopy then can't handle.
+    webui.ui_queue.current_cursor = 0
     return webui
 
 

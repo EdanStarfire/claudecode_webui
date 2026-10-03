@@ -153,6 +153,9 @@ async def test_issue_680_monitor_detects_idle_and_restarts(mcp_tools):
     # Set up ui_queue mock
     from unittest.mock import MagicMock
     mock_ui_queue = MagicMock()
+    # emit() reads current_cursor (a plain int on a real EventQueue) before appending —
+    # a bare MagicMock attribute here would make `current_cursor + 1` itself a MagicMock.
+    mock_ui_queue.current_cursor = 0
     mcp_tools.system.ui_queue = mock_ui_queue
 
     with patch("backend.legion.mcp.legion_mcp_tools.asyncio.sleep", new_callable=AsyncMock):

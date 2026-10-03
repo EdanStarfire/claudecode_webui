@@ -14,12 +14,15 @@ directly) — the relay task's own poll call triggers it, so this router doesn't
 need to call it separately.
 """
 
+from dataclasses import asdict
+
 import httpx
 from fastapi import APIRouter, HTTPException
 
 from shared.event_queue import reset_occurred
 from shared.exception_handlers import handle_exceptions
 from shared.logging_config import get_logger
+from shared.poll_protocol import FrontendPollResponse
 
 from ..backend_reachability import is_backend_degraded, to_http_exception
 
@@ -57,13 +60,13 @@ def build_router(webui) -> APIRouter:
                 "poll ui returned %d event(s) since=%d next_cursor=%d",
                 len(events), since, next_cursor
             )
-        return {
-            "events": events,
-            "next_cursor": next_cursor,
-            "reset": reset,
-            "evicted": evicted,
-            "backend_status": _backend_status(webui),
-        }
+        return asdict(FrontendPollResponse(
+            events=events,
+            next_cursor=next_cursor,
+            reset=reset,
+            evicted=evicted,
+            backend_status=_backend_status(webui),
+        ))
 
     @router.get("/api/poll/cursor")
     @handle_exceptions("poll cursor")
@@ -113,12 +116,12 @@ def build_router(webui) -> APIRouter:
                 "poll session %s returned %d event(s) since=%d next_cursor=%d",
                 session_id, len(events), since, next_cursor
             )
-        return {
-            "events": events,
-            "next_cursor": next_cursor,
-            "reset": reset,
-            "evicted": evicted,
-            "backend_status": _backend_status(webui),
-        }
+        return asdict(FrontendPollResponse(
+            events=events,
+            next_cursor=next_cursor,
+            reset=reset,
+            evicted=evicted,
+            backend_status=_backend_status(webui),
+        ))
 
     return router

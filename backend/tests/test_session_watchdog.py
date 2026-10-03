@@ -71,7 +71,15 @@ def _make_watchdog(config: AppConfig | None = None) -> tuple[SessionWatchdogServ
     alerts: list[dict] = []
 
     class _FakeQueue:
+        def __init__(self):
+            self._cursor = 0
+
+        @property
+        def current_cursor(self):
+            return self._cursor
+
         def append(self, event):
+            self._cursor += 1
             alerts.append(event)
 
     watchdog = SessionWatchdogService(
@@ -97,8 +105,8 @@ class TestIdleAlertFires:
         )
         await watchdog._evaluate_session(session)
         assert len(alerts) == 1
-        assert alerts[0]["watchdog"] == "idle"
-        assert alerts[0]["details"]["idle_seconds"] > 300
+        assert alerts[0]["data"]["watchdog"] == "idle"
+        assert alerts[0]["data"]["details"]["idle_seconds"] > 300
 
     @pytest.mark.asyncio
     async def test_idle_alert_not_fired_before_timeout(self):
@@ -191,8 +199,8 @@ class TestErrorRateAlert:
         session = _make_session()
         await watchdog._evaluate_session(session)
         assert len(alerts) == 1
-        assert alerts[0]["watchdog"] == "error_rate"
-        assert alerts[0]["details"]["error_rate"] == pytest.approx(0.6)
+        assert alerts[0]["data"]["watchdog"] == "error_rate"
+        assert alerts[0]["data"]["details"]["error_rate"] == pytest.approx(0.6)
 
     @pytest.mark.asyncio
     async def test_error_rate_denied_counts_as_error(self):
@@ -297,7 +305,7 @@ class TestPerSessionIsolation:
         await watchdog._evaluate_session(session_b)
 
         assert len(alerts) == 1
-        assert alerts[0]["session_id"] == "sess-a"
+        assert alerts[0]["data"]["session_id"] == "sess-a"
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +449,6 @@ class TestAlertEventOnUIQueue:
         assert len(alerts) == 1
         ev = alerts[0]
         assert ev["type"] == "session_watchdog_alert"
-        assert ev["session_id"] == session.session_id
-        assert ev["watchdog"] == "idle"
-        assert "fired_at" in ev
+        assert ev["data"]["session_id"] == session.session_id
+        assert ev["data"]["watchdog"] == "idle"
+        assert "fired_at" in ev["data"]

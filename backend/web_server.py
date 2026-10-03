@@ -415,7 +415,10 @@ class BackendApp:
     def _broadcast_project_updated(self, project: dict) -> None:
         """Emit project_updated to the global UI poll queue."""
         try:
-            emit(self.ui_queue, QUEUE_UI, "project_updated", {"data": {"project": project}})
+            emit(
+                self.ui_queue, QUEUE_UI, "project_updated", {"data": {"project": project}},
+                scope=project.get("project_id"),
+            )
             logger.debug("Appended project_updated for project %s", project.get("project_id"))
         except Exception:
             logger.exception("Error appending project_updated")
@@ -423,7 +426,10 @@ class BackendApp:
     def _broadcast_project_deleted(self, project_id: str) -> None:
         """Emit project_deleted to the global UI poll queue."""
         try:
-            emit(self.ui_queue, QUEUE_UI, "project_deleted", {"data": {"project_id": project_id}})
+            emit(
+                self.ui_queue, QUEUE_UI, "project_deleted", {"data": {"project_id": project_id}},
+                scope=project_id,
+            )
             logger.debug("Appended project_deleted for project %s", project_id)
         except Exception:
             logger.exception("Error appending project_deleted")
@@ -431,7 +437,10 @@ class BackendApp:
     def _broadcast_session_deleted(self, session_id: str) -> None:
         """Emit session_deleted to the global UI poll queue (Issue #1986)."""
         try:
-            emit(self.ui_queue, QUEUE_UI, "session_deleted", {"data": {"session_id": session_id}})
+            emit(
+                self.ui_queue, QUEUE_UI, "session_deleted", {"data": {"session_id": session_id}},
+                scope=session_id,
+            )
             logger.debug("Appended session_deleted for session %s", session_id)
         except Exception:
             logger.exception("Error appending session_deleted")
@@ -439,9 +448,12 @@ class BackendApp:
     def _broadcast_state_change(self, session_id: str, session_dict: dict, timestamp: str | None = None) -> None:
         """Emit state_change to the global UI poll queue."""
         try:
-            emit(self.ui_queue, QUEUE_UI, "state_change", {
-                "data": {"session_id": session_id, "session": session_dict, "timestamp": timestamp}
-            })
+            emit(
+                self.ui_queue, QUEUE_UI, "state_change", {
+                    "data": {"session_id": session_id, "session": session_dict, "timestamp": timestamp}
+                },
+                scope=session_id,
+            )
             logger.info("Appended state_change for session %s", session_id)
         except Exception:
             logger.exception("Error appending state_change")
@@ -453,7 +465,6 @@ class BackendApp:
                 "message": "Server is restarting...",
                 "pull_output": pull_output,
                 "sync_output": sync_output,
-                "timestamp": datetime.now(UTC).isoformat(),
             })
         except Exception:
             logger.warning("Failed to append restart notice")
@@ -665,10 +676,11 @@ class BackendApp:
         """Issue #404: Called by ResourceMCPTools when a resource is registered."""
         try:
             if session_id in self.session_queues:
-                emit(self.session_queues[session_id], QUEUE_SESSION, "resource_registered", {
-                    "resource": resource_metadata,
-                    "timestamp": datetime.now(UTC).isoformat()
-                })
+                emit(
+                    self.session_queues[session_id], QUEUE_SESSION, "resource_registered",
+                    {"resource": resource_metadata},
+                    scope=session_id,
+                )
                 logger.debug(f"Appended resource_registered for {resource_metadata.get('resource_id')} to session {session_id}")
         except Exception:
             logger.exception("Error appending resource_registered")
@@ -677,10 +689,11 @@ class BackendApp:
         """Issue #1530: Called by LinksMCPTools when a link is registered or updated."""
         try:
             if session_id in self.session_queues:
-                emit(self.session_queues[session_id], QUEUE_SESSION, "link_registered", {
-                    "link": link,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                })
+                emit(
+                    self.session_queues[session_id], QUEUE_SESSION, "link_registered",
+                    {"link": link},
+                    scope=session_id,
+                )
                 logger.debug(f"Appended link_registered for '{link.get('label')}' to session {session_id}")
         except Exception:
             logger.exception("Error appending link_registered")
@@ -689,12 +702,15 @@ class BackendApp:
         """Issue #500: Real-time queue status updates."""
         try:
             if session_id in self.session_queues:
-                emit(self.session_queues[session_id], QUEUE_SESSION, "queue_update", {
-                    "action": action,
-                    "item": item,
-                    "pending_count": self.coordinator.queue_manager.get_pending_count(session_id),
-                    "timestamp": datetime.now(UTC).isoformat()
-                })
+                emit(
+                    self.session_queues[session_id], QUEUE_SESSION, "queue_update",
+                    {
+                        "action": action,
+                        "item": item,
+                        "pending_count": self.coordinator.queue_manager.get_pending_count(session_id),
+                    },
+                    scope=session_id,
+                )
         except Exception:
             logger.exception("Error appending queue_update")
 
@@ -702,11 +718,11 @@ class BackendApp:
         """Append usage_updated event to session poll queue (issue #1125)."""
         try:
             if session_id in self.session_queues:
-                emit(self.session_queues[session_id], QUEUE_SESSION, "usage_updated", {
-                    "session_id": session_id,
-                    "usage": usage,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                })
+                emit(
+                    self.session_queues[session_id], QUEUE_SESSION, "usage_updated",
+                    {"session_id": session_id, "usage": usage},
+                    scope=session_id,
+                )
         except Exception:
             logger.exception("Error appending usage_updated")
 
@@ -829,16 +845,20 @@ class BackendApp:
                         )
                         return
                     if session_id in self.session_queues:
-                        emit(self.session_queues[session_id], QUEUE_SESSION, "assistant_delta", {
-                            "session_id": session_id,
-                            "data": {
-                                "uuid": message_data["uuid"],
-                                "event": message_data["event"],
-                                "turn_id": message_data.get("turn_id"),
-                                "tool_use_id": message_data.get("tool_use_id"),
+                        emit(
+                            self.session_queues[session_id], QUEUE_SESSION, "assistant_delta",
+                            {
+                                "session_id": session_id,
+                                "data": {
+                                    "uuid": message_data["uuid"],
+                                    "event": message_data["event"],
+                                    "turn_id": message_data.get("turn_id"),
+                                    "tool_use_id": message_data.get("tool_use_id"),
+                                },
+                                "timestamp": datetime.now(UTC).isoformat(),
                             },
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        })
+                            scope=session_id,
+                        )
                     return
 
                 # Process message and prepare for poll queue using MessageProcessor
@@ -874,11 +894,15 @@ class BackendApp:
                 # Issue #1694: Append the assistant envelope — and mark it on the message-
                 # emitted barrier — BEFORE emitting tool_call updates below.
                 if session_id in self.session_queues:
-                    emit(self.session_queues[session_id], QUEUE_SESSION, "message", {
-                        "session_id": session_id,
-                        "data": websocket_data,
-                        "timestamp": datetime.now(UTC).isoformat(),
-                    })
+                    emit(
+                        self.session_queues[session_id], QUEUE_SESSION, "message",
+                        {
+                            "session_id": session_id,
+                            "data": websocket_data,
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        },
+                        scope=session_id,
+                    )
                     logger.info(f"Appended message to session queue for {session_id}")
 
                 # Issue #1957/#1958: the barrier keys on the TURN-level Anthropic id — now the
@@ -899,13 +923,17 @@ class BackendApp:
                 if msg_type_str == "result" and session_id in self.session_queues:
                     ctx = await self.coordinator.get_context_usage(session_id)
                     if ctx and ctx.get("totalTokens"):
-                        emit(self.session_queues[session_id], QUEUE_SESSION, "context_update", {
-                            "session_id": session_id,
-                            "input_tokens": ctx["totalTokens"],
-                            "context_window": ctx["maxTokens"],
-                            "context_pct": round(ctx["percentage"], 1),
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        })
+                        emit(
+                            self.session_queues[session_id], QUEUE_SESSION, "context_update",
+                            {
+                                "session_id": session_id,
+                                "input_tokens": ctx["totalTokens"],
+                                "context_window": ctx["maxTokens"],
+                                "context_pct": round(ctx["percentage"], 1),
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            },
+                            scope=session_id,
+                        )
 
             except Exception:
                 logger.exception("Error in message callback")
@@ -950,11 +978,15 @@ class BackendApp:
                         tool_call_data["type"] = "tool_call"
 
                         if session_id in self.session_queues:
-                            emit(self.session_queues[session_id], QUEUE_SESSION, "tool_call", {
-                                "session_id": session_id,
-                                "data": tool_call_data,
-                                "timestamp": datetime.now(UTC).isoformat(),
-                            })
+                            emit(
+                                self.session_queues[session_id], QUEUE_SESSION, "tool_call",
+                                {
+                                    "session_id": session_id,
+                                    "data": tool_call_data,
+                                    "timestamp": datetime.now(UTC).isoformat(),
+                                },
+                                scope=session_id,
+                            )
                         logger.debug(f"Emitted tool_call pending for {tool_name} ({tool_id}) in session {session_id}")
 
             # Handle tool_results in user messages
@@ -989,11 +1021,15 @@ class BackendApp:
                             tool_call_data["type"] = "tool_call"
 
                             if session_id in self.session_queues:
-                                emit(self.session_queues[session_id], QUEUE_SESSION, "tool_call", {
-                                    "session_id": session_id,
-                                    "data": tool_call_data,
-                                    "timestamp": datetime.now(UTC).isoformat(),
-                                })
+                                emit(
+                                    self.session_queues[session_id], QUEUE_SESSION, "tool_call",
+                                    {
+                                        "session_id": session_id,
+                                        "data": tool_call_data,
+                                        "timestamp": datetime.now(UTC).isoformat(),
+                                    },
+                                    scope=session_id,
+                                )
                             logger.debug(
                                 f"Emitted tool_call {'failed' if is_error else 'completed'} "
                                 f"for {tool_use_id} in session {session_id}"
@@ -1033,11 +1069,15 @@ class BackendApp:
                         tool_call_data["request_id"] = metadata.get('request_id')
 
                         if session_id in self.session_queues:
-                            emit(self.session_queues[session_id], QUEUE_SESSION, "tool_call", {
-                                "session_id": session_id,
-                                "data": tool_call_data,
-                                "timestamp": datetime.now(UTC).isoformat(),
-                            })
+                            emit(
+                                self.session_queues[session_id], QUEUE_SESSION, "tool_call",
+                                {
+                                    "session_id": session_id,
+                                    "data": tool_call_data,
+                                    "timestamp": datetime.now(UTC).isoformat(),
+                                },
+                                scope=session_id,
+                            )
                         logger.debug(
                             f"Emitted tool_call awaiting_permission for {tool_name} "
                             f"({tool_use_id}) in session {session_id}"
@@ -1073,11 +1113,15 @@ class BackendApp:
                         tool_call_data["type"] = "tool_call"
 
                         if session_id in self.session_queues:
-                            emit(self.session_queues[session_id], QUEUE_SESSION, "tool_call", {
-                                "session_id": session_id,
-                                "data": tool_call_data,
-                                "timestamp": datetime.now(UTC).isoformat(),
-                            })
+                            emit(
+                                self.session_queues[session_id], QUEUE_SESSION, "tool_call",
+                                {
+                                    "session_id": session_id,
+                                    "data": tool_call_data,
+                                    "timestamp": datetime.now(UTC).isoformat(),
+                                },
+                                scope=session_id,
+                            )
                         logger.debug(
                             f"Emitted tool_call {'running' if granted else 'denied'} "
                             f"for {tool_use_id} in session {session_id}"
@@ -1105,16 +1149,23 @@ class BackendApp:
     def _on_tool_call_broadcast(self, session_id: str, tool_call_data: dict):
         """Issue #520: Append tool_call message to session poll queue. Called synchronously from coordinator."""
         if session_id in self.session_queues:
-            emit(self.session_queues[session_id], QUEUE_SESSION, "tool_call", {
-                "session_id": session_id,
-                "data": tool_call_data,
-                "timestamp": datetime.now(UTC).isoformat(),
-            })
+            emit(
+                self.session_queues[session_id], QUEUE_SESSION, "tool_call",
+                {
+                    "session_id": session_id,
+                    "data": tool_call_data,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                },
+                scope=session_id,
+            )
 
     async def _on_session_reset(self, session_id: str):
         """Issue #500: Append session_reset to UI queue so frontend clears stale messages."""
         try:
-            emit(self.ui_queue, QUEUE_UI, "session_reset", {"data": {"session_id": session_id}})
+            emit(
+                self.ui_queue, QUEUE_UI, "session_reset", {"data": {"session_id": session_id}},
+                scope=session_id,
+            )
             logger.info(f"Appended session_reset for {session_id} to UI queue")
         except Exception:
             logger.exception("Error appending session_reset")

@@ -39,6 +39,7 @@ import pytest
 
 from backend.message_parser import MessageParser, MessageProcessor
 from backend.session_coordinator import SessionCoordinator
+from shared.event_queue import EventQueue
 
 
 def _make_webui(tmp_path):
@@ -55,7 +56,7 @@ def _wire_coordinator_to_webui(tmp_path, session_id: str):
     coord = SessionCoordinator(data_dir=tmp_path)
 
     webui = _make_webui(tmp_path)
-    webui.session_queues[session_id] = []
+    webui.session_queues[session_id] = EventQueue()
     webui.coordinator = MagicMock()
 
     webui_callback = webui._create_message_callback(session_id)
@@ -82,7 +83,7 @@ async def test_client_launched_live_id_matches_stored():
 
         await coord._send_client_launched_message(session_id)
 
-        queue = webui.session_queues[session_id]
+        queue, _, _ = webui.session_queues[session_id].events_since(0)
         assert len(queue) == 1
         live_id = queue[0]["data"].get("message_id")
         stored_id = storage_manager.append_message.call_args[0][0].get("message_id")
@@ -100,7 +101,7 @@ async def test_interrupt_message_live_id_matches_stored():
 
         await coord._send_interrupt_message(session_id)
 
-        queue = webui.session_queues[session_id]
+        queue, _, _ = webui.session_queues[session_id].events_since(0)
         assert len(queue) == 1
         live_id = queue[0]["data"].get("message_id")
         stored_id = storage_manager.append_message.call_args[0][0].get("message_id")
@@ -118,7 +119,7 @@ async def test_session_failure_live_id_matches_stored():
 
         await coord._send_session_failure_message(session_id, "boom", raw_error="boom traceback")
 
-        queue = webui.session_queues[session_id]
+        queue, _, _ = webui.session_queues[session_id].events_since(0)
         assert len(queue) == 1
         live_id = queue[0]["data"].get("message_id")
         stored_id = storage_manager.append_message.call_args[0][0].get("message_id")
@@ -139,13 +140,13 @@ async def test_lifecycle_message_stamped_without_storage_manager():
         assert session_id not in coord._storage_managers
 
         webui = _make_webui(tmp_path)
-        webui.session_queues[session_id] = []
+        webui.session_queues[session_id] = EventQueue()
         webui.coordinator = MagicMock()
         coord.add_message_callback(session_id, webui._create_message_callback(session_id))
 
         await coord._send_client_launched_message(session_id)
 
-        queue = webui.session_queues[session_id]
+        queue, _, _ = webui.session_queues[session_id].events_since(0)
         assert len(queue) == 1
         assert queue[0]["data"].get("message_id"), (
             "message_id must be minted even when no storage manager is registered"
@@ -161,7 +162,7 @@ async def test_safeguard_still_fires_for_genuinely_identity_less_message(caplog)
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         webui = _make_webui(tmp_path)
-        webui.session_queues[session_id] = []
+        webui.session_queues[session_id] = EventQueue()
         webui.coordinator = MagicMock()
 
         parsed_message = MagicMock()

@@ -298,6 +298,7 @@ class SessionWatchdogService:
             emit(
                 self._ui_queue, QUEUE_UI, event["type"],
                 {k: v for k, v in event.items() if k != "type"},
+                scope=session.session_id,
             )
             watchdog_logger.info(
                 f"Watchdog alert fired: session={session.session_id} type={watchdog} details={details}"

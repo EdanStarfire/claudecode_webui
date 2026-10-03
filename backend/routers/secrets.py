@@ -297,10 +297,14 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=400, detail=f"Unregistered event type: {event_type!r}")
         event_data = body.get("data", {})
         if session_id in webui.session_queues:
-            emit(webui.session_queues[session_id], QUEUE_SESSION, event_type, {
-                "data": event_data,
-                "timestamp": datetime.now(UTC).isoformat(),
-            })
+            emit(
+                webui.session_queues[session_id], QUEUE_SESSION, event_type,
+                {
+                    "data": event_data,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                },
+                scope=session_id,
+            )
         return {"queued": True}
 
     return router

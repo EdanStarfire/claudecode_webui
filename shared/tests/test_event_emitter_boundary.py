@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 from shared.event_emitter import emit, strict_mode
-from shared.event_envelope import QUEUE_UI
+from shared.event_envelope import FRONTEND_LOCAL_BACKEND_ID, QUEUE_UI, EventEnvelope
 from shared.event_queue import EventQueue
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -78,3 +78,68 @@ def test_session_self_restart_and_restart_error_payloads_validate_cleanly():
         emit(queue, QUEUE_UI, "session_restart_error", {
             "data": {"session_id": "s", "restart_id": "r", "error": "e", "timestamp": "t"},
         })
+
+
+def test_emit_produces_distinct_event_ids_for_successive_calls():
+    """AC3: two emit() calls on the same queue must never collide on event_id."""
+    queue = EventQueue()
+    emit(queue, QUEUE_UI, "state_change", {"data": {"session_id": "s"}})
+    emit(queue, QUEUE_UI, "state_change", {"data": {"session_id": "s"}})
+
+    events, _, _ = queue.events_since(0)
+    assert events[0]["event_id"] != events[1]["event_id"]
+
+
+def test_redelivery_of_the_same_envelope_reconstructs_the_same_event_id():
+    """Simulates redelivery: parsing the same already-emitted dict twice via
+    EventEnvelope.from_dict() must produce the same event_id both times."""
+    queue = EventQueue()
+    emit(queue, QUEUE_UI, "state_change", {"data": {"session_id": "s"}})
+    events, _, _ = queue.events_since(0)
+    delivered = events[0]
+
+    first = EventEnvelope.from_dict(delivered)
+    second = EventEnvelope.from_dict(delivered)
+    assert first.event_id == second.event_id
+
+
+def test_emit_returned_cursor_equals_the_precomputed_sequence():
+    """Design decision #1: emit() precomputes `sequence` from current_cursor before
+    append() runs, rather than patching it on afterward. The cursor append() hands
+    back must always equal that precomputed value for the auto-increment discipline."""
+    queue = EventQueue()
+    cursor = emit(queue, QUEUE_UI, "state_change", {"data": {"session_id": "s"}})
+
+    events, _, _ = queue.events_since(0)
+    assert events[0]["sequence"] == cursor
+
+
+def test_on_append_hook_receives_sequence_already_populated():
+    """Regression guard for the ordering bug precomputation avoids: the #1998 session
+    recorder's on_append hook fires synchronously inside append() — if sequence were
+    patched onto the event dict after append() returns, the hook would see it missing."""
+    seen = []
+    queue = EventQueue(on_append=lambda event: seen.append(dict(event)))
+    emit(queue, QUEUE_UI, "state_change", {"data": {"session_id": "s"}})
+
+    assert seen[0]["sequence"] == 1
+
+
+def test_frontend_local_backend_id_prevents_event_id_collision():
+    """A Frontend-local write (src/routers/system.py's server_restarting) and a
+    Backend-originated write relayed onto the same local ui_queue can land on
+    colliding sequence numbers across their two distinct source queues — distinct
+    backend_id values keep their event_ids distinct even then."""
+    frontend_local_queue = EventQueue()
+    backend_queue = EventQueue()
+
+    emit(
+        frontend_local_queue, QUEUE_UI, "server_restarting", {"message": "restarting"},
+        backend_id=FRONTEND_LOCAL_BACKEND_ID,
+    )
+    emit(backend_queue, QUEUE_UI, "server_restarting", {"message": "restarting"})
+
+    frontend_events, _, _ = frontend_local_queue.events_since(0)
+    backend_events, _, _ = backend_queue.events_since(0)
+    assert frontend_events[0]["sequence"] == backend_events[0]["sequence"]
+    assert frontend_events[0]["event_id"] != backend_events[0]["event_id"]

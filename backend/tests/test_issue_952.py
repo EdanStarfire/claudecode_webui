@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from shared.event_queue import EventQueue
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -69,20 +71,21 @@ async def test_issue_952_context_update_emitted_with_sdk_data(tmp_path):
         "percentage": 25.0,
         "model": "claude-sonnet-4-6",
     })
-    webui.session_queues[session_id] = []
+    webui.session_queues[session_id] = EventQueue()
 
     callback = webui._create_message_callback(session_id)
     parsed = _make_result_parsed_message()
     await callback(session_id, parsed)
 
-    context_events = [e for e in webui.session_queues[session_id] if e.get("type") == "context_update"]
+    events, _, _ = webui.session_queues[session_id].events_since(0)
+    context_events = [e for e in events if e.get("type") == "context_update"]
     assert context_events, "No context_update event emitted"
 
     event = context_events[0]
-    assert event["input_tokens"] == 50_000
-    assert event["context_window"] == 200_000
-    assert event["context_pct"] == 25.0
-    assert event["session_id"] == session_id
+    assert event["data"]["input_tokens"] == 50_000
+    assert event["data"]["context_window"] == 200_000
+    assert event["data"]["context_pct"] == 25.0
+    assert event["data"]["session_id"] == session_id
     assert "timestamp" in event
 
 
@@ -96,13 +99,14 @@ async def test_issue_952_no_context_update_when_sdk_returns_empty(tmp_path):
     webui = _make_webui(tmp_path)
     webui.coordinator = MagicMock()
     webui.coordinator.get_context_usage = AsyncMock(return_value={})
-    webui.session_queues[session_id] = []
+    webui.session_queues[session_id] = EventQueue()
 
     callback = webui._create_message_callback(session_id)
     parsed = _make_result_parsed_message()
     await callback(session_id, parsed)
 
-    context_events = [e for e in webui.session_queues[session_id] if e.get("type") == "context_update"]
+    events, _, _ = webui.session_queues[session_id].events_since(0)
+    context_events = [e for e in events if e.get("type") == "context_update"]
     assert not context_events, "context_update must not be emitted when SDK returns empty"
 
 
@@ -123,13 +127,14 @@ async def test_issue_952_no_context_update_on_non_result_message(tmp_path):
 
     # Override prepare_for_websocket to return non-result type
     webui._message_processor.prepare_for_websocket.return_value = {"type": "assistant"}
-    webui.session_queues[session_id] = []
+    webui.session_queues[session_id] = EventQueue()
 
     callback = webui._create_message_callback(session_id)
     parsed = _make_non_result_parsed_message()
     await callback(session_id, parsed)
 
-    context_events = [e for e in webui.session_queues[session_id] if e.get("type") == "context_update"]
+    events, _, _ = webui.session_queues[session_id].events_since(0)
+    context_events = [e for e in events if e.get("type") == "context_update"]
     assert not context_events, "context_update must not be emitted for non-result messages"
 
 
@@ -147,12 +152,13 @@ async def test_issue_952_context_pct_is_rounded(tmp_path):
         "maxTokens": 200_000,
         "percentage": 16.6665,
     })
-    webui.session_queues[session_id] = []
+    webui.session_queues[session_id] = EventQueue()
 
     callback = webui._create_message_callback(session_id)
     parsed = _make_result_parsed_message()
     await callback(session_id, parsed)
 
-    context_events = [e for e in webui.session_queues[session_id] if e.get("type") == "context_update"]
+    events, _, _ = webui.session_queues[session_id].events_since(0)
+    context_events = [e for e in events if e.get("type") == "context_update"]
     assert context_events
-    assert context_events[0]["context_pct"] == 16.7
+    assert context_events[0]["data"]["context_pct"] == 16.7

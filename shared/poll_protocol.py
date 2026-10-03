@@ -24,3 +24,16 @@ def parse_poll_response(body: dict) -> PollBatch:
         reset=body["reset"],
         evicted=body["evicted"],
     )
+
+
+@dataclass
+class PollResponse:
+    events: list[dict]
+    next_cursor: int
+    reset: bool
+    evicted: bool
+
+
+@dataclass
+class FrontendPollResponse(PollResponse):
+    backend_status: str
