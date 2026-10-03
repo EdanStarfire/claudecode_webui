@@ -32,6 +32,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.fixture_export import REQUIRED_MARKERS, _check_markers
 from backend.tests.integration import conftest as _integration_conftest
 
 api_integration_env = _integration_conftest.api_integration_env
@@ -45,6 +46,131 @@ GENERATED_FIXTURES_ROOT = Path(__file__).parent / "fixtures" / "generated"
 # fixtureEquivalence.js/equivalence.test.js replay it as one static REST response, not
 # a live paginated sequence.
 _REST_PAGE_SIZE = 10000
+
+# Issue #2055: fixture_export.REQUIRED_MARKERS split into what a real-pipeline raw
+# replay can currently prove it exercised (sdk_message-kind records, which
+# RawFixtureReplay._parse() already handles) vs. what it structurally cannot, given
+# RawFixtureReplay's current scope and what SessionRecorder actually captures for
+# the other record kinds. See #2055 for the full per-kind analysis of why each of
+# these isn't a simple "add a case to RawFixtureReplay" fix.
+_SDK_MESSAGE_BACKED_MARKERS = {
+    "streaming deltas",
+    "AskUserQuestion",
+    "subagent task with progress",
+    "compaction",
+}
+
+# Reasons (not consumed by code — documentation for why each marker is unprovable today):
+# - "tool call with permission prompt": RawFixtureReplay skips permission_invocation records
+# - "denied permission": RawFixtureReplay skips permission_response records
+# - "interrupt mid-tool": RawFixtureReplay skips interrupt records; the real
+#   ClaudeSDK.interrupt_session() is also a no-op without a live SDK client, so there is no
+#   real downstream effect to replay even if the record kind were handled
+# - "session restart": RawFixtureReplay skips lifecycle records
+# - "inter-minion comm": RawFixtureReplay skips queue_event records; the raw log only
+#   captures the EventQueue's processed output, not the input that produced it, so there is
+#   nothing to replay even if the record kind were handled
+_NOT_YET_EXERCISED_BY_RAW_REPLAY = {
+    "tool call with permission prompt",
+    "denied permission",
+    "interrupt mid-tool",
+    "session restart",
+    "inter-minion comm",
+}
+
+_TASK_SUBTYPES = {"task_started", "task_progress", "task_notification"}
+
+
+def _check_markers_from_queue_events(events: list[dict]) -> dict[str, bool]:
+    """Issue #2055: coverage-inventory pass over the LIVE events a real-pipeline
+    replay actually produced (test_generate_fixture_from_real_pipeline's own
+    `events` list), restricted to _SDK_MESSAGE_BACKED_MARKERS — the only markers
+    a real replay can currently produce any evidence for. Mirrors
+    fixture_export._check_markers()'s detection logic, translated from raw
+    SessionRecorder-shaped records to the processed poll-queue envelope shape
+    (`{"type": ..., "data": websocket_data, ...}`) these events actually have.
+    """
+    found = dict.fromkeys(_SDK_MESSAGE_BACKED_MARKERS, False)
+
+    for event in events:
+        if event.get("type") == "assistant_delta":
+            found["streaming deltas"] = True
+            continue
+
+        if event.get("type") != "message":
+            continue
+        data = event.get("data") or {}
+        metadata = data.get("metadata") or {}
+
+        if data.get("type") == "assistant":
+            tool_uses = metadata.get("tool_uses") or []
+            if any(tu.get("name") == "AskUserQuestion" for tu in tool_uses):
+                found["AskUserQuestion"] = True
+
+        elif data.get("type") == "system":
+            subtype = metadata.get("subtype")
+            if subtype in _TASK_SUBTYPES:
+                found["subagent task with progress"] = True
+            elif subtype == "compact_boundary":
+                found["compaction"] = True
+
+    return found
+
+
+def _static_markers_provable_by_live_replay(
+    static_raw_records: list[dict], check_markers_result: dict[str, bool]
+) -> dict[str, bool]:
+    """Issue #2055 code review: `fixture_export._check_markers()` answers "did ANY
+    record kind claim this marker," but two of the four `_SDK_MESSAGE_BACKED_MARKERS`
+    have a narrower real-pipeline path than that blended answer accounts for:
+
+    - "streaming deltas": `_check_markers()` flags any `StreamEvent` sdk_message record
+      regardless of `parent_tool_use_id`, but the live pipeline
+      (`backend/web_server.py`'s message callback) drops any `assistant_delta` whose
+      `parent_tool_use_id` is not None — subagent deltas are out of scope for v1 and
+      never reach the live event stream `_check_markers_from_queue_events` reads.
+    - "AskUserQuestion": `_check_markers()` also flags this from
+      `permission_invocation`/`permission_response` records — kinds `RawFixtureReplay`
+      structurally skips (see `_NOT_YET_EXERCISED_BY_RAW_REPLAY` above) — so a fixture
+      claiming it only via those kinds has nothing for live replay to reproduce.
+
+    Recomputes both from sdk_message records alone, under the same constraints the live
+    pipeline applies, so the per-marker comparison below never flags either as a false
+    "genuine regression."
+    """
+    markers = dict(check_markers_result)
+    markers["streaming deltas"] = any(
+        record.get("kind") == "sdk_message"
+        and record.get("_type") == "StreamEvent"
+        and (record.get("data") or {}).get("parent_tool_use_id") is None
+        for record in static_raw_records
+    )
+    markers["AskUserQuestion"] = any(
+        record.get("kind") == "sdk_message"
+        and record.get("_type") == "AssistantMessage"
+        and any(
+            isinstance(block, dict) and block.get("name") == "AskUserQuestion"
+            for block in (record.get("data") or {}).get("content") or []
+        )
+        for record in static_raw_records
+    )
+    return markers
+
+
+def test_marker_classification_matches_required_markers():
+    """Drift guard: fixture_export.REQUIRED_MARKERS changed without updating this
+    file's classification of which markers real-pipeline raw replay can currently
+    prove (see #2055). Kept inside a test function (not a module-level assert) so a
+    drift shows up as one clean, named test failure rather than a collection error
+    for the whole file — mirrors test_scenario_driver_dry_run.py's
+    test_required_markers_all_covered_by_scenarios."""
+    assert _SDK_MESSAGE_BACKED_MARKERS | _NOT_YET_EXERCISED_BY_RAW_REPLAY == set(
+        REQUIRED_MARKERS
+    ), (
+        "fixture_export.REQUIRED_MARKERS changed without updating this file's "
+        "classification of which markers real-pipeline raw replay can currently prove "
+        "(see #2055)"
+    )
 
 
 def _discover_fixture_names() -> list[str]:
@@ -145,12 +271,15 @@ async def test_generate_fixture_from_real_pipeline(api_integration_env, fixture_
     )
 
     raw_log_path = RAW_FIXTURES_ROOT / fixture_name / "raw_log.jsonl"
+    static_raw_records = []
     fixture_sdk_message_count = 0
     for line in raw_log_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
-        if json.loads(line).get("kind") == "sdk_message":
+        record = json.loads(line)
+        static_raw_records.append(record)
+        if record.get("kind") == "sdk_message":
             fixture_sdk_message_count += 1
     assert fixture_sdk_message_count > 0, (
         f"Fixture '{fixture_name}' has no sdk_message records to replay — a broken fixture, "
@@ -183,6 +312,27 @@ async def test_generate_fixture_from_real_pipeline(api_integration_env, fixture_
         f"{fixture_sdk_message_count} recorded sdk_message records — an empty live "
         f"stream from a fixture with recorded SDK messages is a bug, not a valid result."
     )
+
+    # Issue #2055: the fixture's own static raw_log.jsonl may claim coverage for an
+    # sdk_message-backed marker (per fixture_export._check_markers()) — if it does,
+    # the live replay above should have reproduced it too. Only markers the fixture
+    # actually claims are checked; a marker the fixture never claimed has nothing to
+    # verify (see _NOT_YET_EXERCISED_BY_RAW_REPLAY for the markers no real replay can
+    # currently prove either way).
+    static_markers = _static_markers_provable_by_live_replay(
+        static_raw_records, _check_markers(static_raw_records)
+    )
+    live_markers = _check_markers_from_queue_events(events)
+    for marker in _SDK_MESSAGE_BACKED_MARKERS:
+        if not static_markers.get(marker):
+            continue  # fixture never claimed this marker; nothing to verify
+        assert live_markers.get(marker), (
+            f"Fixture '{fixture_name}' raw_log.jsonl claims coverage for marker "
+            f"{marker!r} (sdk_message-backed — real-pipeline replay should reproduce "
+            f"it), but the live replay's event stream never exercised it. This is a "
+            f"genuine regression, not the known #2055 gap (which only covers "
+            f"{sorted(_NOT_YET_EXERCISED_BY_RAW_REPLAY)})."
+        )
 
     # (f) Only after (c)-(e)'s assertions pass: write the generated fixture directory.
     generated_dir = GENERATED_FIXTURES_ROOT / fixture_name
