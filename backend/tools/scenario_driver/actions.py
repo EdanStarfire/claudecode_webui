@@ -19,10 +19,10 @@ from .poll_consumer import TaggedEvent, wait_for_ready
 
 
 def _tool_call_data(matched: list[TaggedEvent]) -> dict:
-    """Permission-lifecycle events are unified into the `tool_call` message
-    type (no distinct `permission_request` event exists) — the fields live
-    under `event["data"]`, e.g. `{"type": "message", "data": {"type":
-    "tool_call", "request_id": ..., "name": ..., "input": {...}, ...}}`.
+    """Permission-lifecycle events are unified into the bare `tool_call` top-level
+    event type (no distinct `permission_request` event exists) — the fields live
+    under `event["data"]`, e.g. `{"type": "tool_call", "data": {"request_id": ...,
+    "name": ..., "input": {...}, ...}}`.
     See `backend/permission_service.py` for where this shape is broadcast.
     """
     return matched[0].event.data

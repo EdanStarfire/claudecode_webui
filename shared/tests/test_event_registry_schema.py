@@ -46,8 +46,9 @@ def test_required_keys_for_uses_queue_specific_override():
 
 
 def test_sessions_list_is_deliberately_not_registered():
-    # AC7: nothing on the server produces it — it's a dead case in polling.js, resolved by
-    # removing the frontend case in 2a-B, not by registering a phantom type here.
+    # AC5: nothing on the server produces it — it was a dead case in polling.js, removed
+    # from the frontend in stage 2b-B (#2065), not resolved by registering a phantom type
+    # here.
     assert "sessions_list" not in TOP_LEVEL_EVENT_TYPES
 
 

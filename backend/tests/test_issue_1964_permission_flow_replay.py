@@ -36,27 +36,9 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
 def _tool_call_statuses(queue: list[dict], tool_use_id: str) -> list[str]:
-    """Extract the ordered sequence of tool_call statuses broadcast for a tool_use_id.
-
-    Issue #2063 AC5 shim: emit_tool_call() appends BOTH the canonical bare `tool_call`
-    envelope and the legacy `message`-wrapped form for one logical update. Filtering on
-    the `message`-wrapped shape (this helper's original, pre-shim selection) counts each
-    logical transition once rather than double-counting its shim-added bare duplicate.
-    """
-    statuses = []
-    for entry in queue:
-        if entry.get("type") != "message":
-            continue
-        data = entry.get("data", {})
-        if data.get("type") == "tool_call" and data.get("tool_use_id") == tool_use_id:
-            statuses.append(data.get("status"))
-    return statuses
-
-
-def _bare_tool_call_statuses(queue: list[dict], tool_use_id: str) -> list[str]:
-    """Same extraction as `_tool_call_statuses()`, but over the shim's OTHER emitted
-    shape — the canonical bare `tool_call` envelope — so a test can assert the two
-    shapes agree rather than only ever reading one of them (issue #2063 AC5/AC10)."""
+    """Extract the ordered sequence of tool_call statuses broadcast for a tool_use_id,
+    from the bare `tool_call` top-level envelope — the only shape emitted since #2065
+    stage 2b-C deleted the 2a-C shim."""
     statuses = []
     for entry in queue:
         if entry.get("type") != "tool_call":
@@ -133,14 +115,6 @@ async def test_issue_1964_permission_flow_replay_full_lifecycle(tmp_path):
     statuses = _tool_call_statuses(webui.session_queues[session_id], "toolu_perm01")
     assert statuses == ["pending", "awaiting_permission", "running", "completed"], (
         f"Expected full unified ToolCall lifecycle from mock replay, got {statuses}"
-    )
-
-    # Issue #2063 AC5/AC10: the shim's canonical bare `tool_call` shape must carry the
-    # exact same status sequence as the legacy `message`-wrapped shape above — not just
-    # independently plausible-looking, but identical, since both describe one fact.
-    bare_statuses = _bare_tool_call_statuses(webui.session_queues[session_id], "toolu_perm01")
-    assert bare_statuses == statuses, (
-        f"emit_tool_call()'s bare and message-wrapped shapes diverged: {bare_statuses} != {statuses}"
     )
 
 
