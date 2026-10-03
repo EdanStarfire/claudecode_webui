@@ -3,6 +3,14 @@ import { ref, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../utils/api'
 import { useUIStore } from './ui'
+import { usePollingStore } from './polling'
+import { useMessageStore } from './message'
+import { useResourceStore } from './resource'
+import { useEditHistoryStore } from './editHistory'
+import { useQueueStore } from './queue'
+import { useTaskStore } from './task'
+import { useDiffStore } from './diff'
+import { useLinksStore } from './links'
 
 /**
  * Session Store - Manages session state and operations
@@ -670,7 +678,7 @@ export const useSessionStore = defineStore('session', () => {
     // the Issue #2065 AC6 store-clearing block below (review finding): that block's own
     // run of awaited dynamic imports widened the same window this comment already
     // describes, so the disconnect now happens before any of it rather than after.
-    const pollingStore = (await import('./polling')).usePollingStore()
+    const pollingStore = usePollingStore()
     if (deletedIds.includes(currentSessionId.value)) {
       await pollingStore.disconnectSession()
     }
@@ -678,12 +686,12 @@ export const useSessionStore = defineStore('session', () => {
     // Issue #2065 AC6: clear every per-session store session_reset already clears, plus
     // queue/task/diff — previously left populated indefinitely (a real memory leak, and a
     // stale-data risk if a session id were ever reused).
-    const messageStore = (await import('./message')).useMessageStore()
-    const resourceStore = (await import('./resource')).useResourceStore()
-    const editHistoryStore = (await import('./editHistory')).useEditHistoryStore()
-    const queueStore = (await import('./queue')).useQueueStore()
-    const taskStore = (await import('./task')).useTaskStore()
-    const diffStore = (await import('./diff')).useDiffStore()
+    const messageStore = useMessageStore()
+    const resourceStore = useResourceStore()
+    const editHistoryStore = useEditHistoryStore()
+    const queueStore = useQueueStore()
+    const taskStore = useTaskStore()
+    const diffStore = useDiffStore()
     for (const deletedId of deletedIds) {
       messageStore.clearMessages(deletedId)
       resourceStore.clearResources(deletedId)
@@ -694,12 +702,10 @@ export const useSessionStore = defineStore('session', () => {
     }
 
     // Issue #1530: Clear links for deleted sessions
-    import('./links').then(({ useLinksStore }) => {
-      const linksStore = useLinksStore()
-      for (const deletedId of deletedIds) {
-        linksStore.clearLinks(deletedId)
-      }
-    })
+    const linksStore = useLinksStore()
+    for (const deletedId of deletedIds) {
+      linksStore.clearLinks(deletedId)
+    }
 
     // Issue #1974: tear down the polling store's per-session state (cursor, heartbeat,
     // heal-in-flight mutex, frozen-time snapshot) for deleted sessions.
@@ -739,7 +745,7 @@ export const useSessionStore = defineStore('session', () => {
       // running past the delete, and a still-in-flight response landing afterward can
       // resurrect the per-session polling state the cleanup below is about to tear down.
       if (currentSessionId.value === sessionId) {
-        const pollingStore = (await import('./polling')).usePollingStore()
+        const pollingStore = usePollingStore()
         await pollingStore.disconnectSession()
       }
 

@@ -3,10 +3,13 @@ shared/event_emitter.py's emit(), mirroring src/tests/test_import_boundary.py's
 AST-scan + self-test pattern."""
 
 import ast
+import logging
 import tempfile
 from pathlib import Path
 
-from shared.event_emitter import emit, strict_mode
+import pytest
+
+from shared.event_emitter import EventRegistryViolationError, emit, strict_mode
 from shared.event_envelope import FRONTEND_LOCAL_BACKEND_ID, QUEUE_UI, EventEnvelope
 from shared.event_queue import EventQueue
 
@@ -143,3 +146,29 @@ def test_frontend_local_backend_id_prevents_event_id_collision():
     backend_events, _, _ = backend_queue.events_since(0)
     assert frontend_events[0]["sequence"] == backend_events[0]["sequence"]
     assert frontend_events[0]["event_id"] != backend_events[0]["event_id"]
+
+
+def test_strict_mode_raises_on_unregistered_event_type():
+    queue = EventQueue()
+    with strict_mode():
+        with pytest.raises(EventRegistryViolationError, match="unregistered event type"):
+            emit(queue, QUEUE_UI, "totally_made_up_type", {})
+
+
+def test_strict_mode_raises_on_missing_required_key():
+    queue = EventQueue()
+    with strict_mode():
+        # state_change is registered for QUEUE_UI with required_keys={"data"}.
+        with pytest.raises(EventRegistryViolationError, match="missing required key"):
+            emit(queue, QUEUE_UI, "state_change", {})
+
+
+def test_lenient_mode_logs_and_still_appends_on_registry_violation(caplog):
+    queue = EventQueue()
+    with caplog.at_level(logging.ERROR):
+        emit(queue, QUEUE_UI, "totally_made_up_type", {"foo": "bar"})
+
+    assert "unregistered event type" in caplog.text
+    events, _, _ = queue.events_since(0)
+    assert len(events) == 1
+    assert events[0]["type"] == "totally_made_up_type"
