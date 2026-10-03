@@ -3,7 +3,7 @@
     {
       "type": "assistant",
       "content": "I'll read that file for you.",
-      "timestamp": 1790803072.3872736,
+      "timestamp": 1791067179.2861812,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "has_tool_uses": true,
@@ -14,7 +14,7 @@
             "input": {
               "file_path": "/tmp/example.txt"
             },
-            "timestamp": 1790803072.3872736
+            "timestamp": 1791067179.2861812
           }
         ],
         "tool_results": [],
@@ -27,12 +27,12 @@
         "has_permission_requests": false,
         "has_permission_responses": false
       },
-      "message_id": "6a92255c-1b5a-4e3d-b25b-77278115fc5d"
+      "message_id": "6057e7b6-5554-45e2-9575-51a8f73db2a0"
     },
     {
       "type": "user",
       "content": "Tool results: 1 results",
-      "timestamp": 1790803072.3876028,
+      "timestamp": 1791067179.2865114,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "has_tool_results": true,
@@ -41,7 +41,7 @@
             "tool_use_id": "synthetic-tu-1",
             "content": "Line 1: hello\nLine 2: world\n",
             "is_error": false,
-            "timestamp": 1790803072.3876028
+            "timestamp": 1791067179.2865114
           }
         ],
         "tool_uses": [],
@@ -52,12 +52,12 @@
         "has_permission_requests": false,
         "has_permission_responses": false
       },
-      "message_id": "38398d71-cf03-4c47-8f23-56eb35ea3f8e"
+      "message_id": "a23ee304-128c-452d-9beb-4b1c56c48af3"
     },
     {
       "type": "assistant",
       "content": "I'll update that config file for you.",
-      "timestamp": 1790803072.3877978,
+      "timestamp": 1791067179.2867296,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "has_tool_uses": true,
@@ -69,7 +69,7 @@
               "file_path": "/etc/synthetic-example.conf",
               "content": "updated"
             },
-            "timestamp": 1790803072.3877978
+            "timestamp": 1791067179.2867296
           }
         ],
         "tool_results": [],
@@ -82,12 +82,12 @@
         "has_permission_requests": false,
         "has_permission_responses": false
       },
-      "message_id": "93c0d420-e424-4a1c-8e4d-a83002b1a8cf"
+      "message_id": "9e421711-42c2-43f9-ad25-bf8fb07160f8"
     },
     {
       "type": "user",
       "content": "Tool results: 1 results",
-      "timestamp": 1790803072.387973,
+      "timestamp": 1791067179.286918,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "has_tool_results": true,
@@ -96,7 +96,7 @@
             "tool_use_id": "synthetic-tu-deny-1",
             "content": "Permission to use Write was denied by the user.",
             "is_error": true,
-            "timestamp": 1790803072.387973
+            "timestamp": 1791067179.286918
           }
         ],
         "tool_uses": [],
@@ -107,12 +107,12 @@
         "has_permission_requests": false,
         "has_permission_responses": false
       },
-      "message_id": "dd4b6837-043b-45a2-a126-fc207685aee4"
+      "message_id": "47c35a2a-b88b-442d-bb89-ca14d879a074"
     },
     {
       "type": "assistant",
       "content": "I need clarification before proceeding.",
-      "timestamp": 1790803072.3880932,
+      "timestamp": 1791067179.2870533,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "has_tool_uses": true,
@@ -139,7 +139,7 @@
                 }
               ]
             },
-            "timestamp": 1790803072.3880932
+            "timestamp": 1791067179.2870533
           }
         ],
         "tool_results": [],
@@ -152,12 +152,12 @@
         "has_permission_requests": false,
         "has_permission_responses": false
       },
-      "message_id": "425f3552-fece-4c15-a011-515a70ea2278"
+      "message_id": "cd9afad9-6537-467b-8578-18668978b6e1"
     },
     {
       "type": "user",
       "content": "Tool results: 1 results",
-      "timestamp": 1790803072.3882902,
+      "timestamp": 1791067179.2872562,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "has_tool_results": true,
@@ -166,7 +166,7 @@
             "tool_use_id": "synthetic-tu-ask-1",
             "content": "staging",
             "is_error": false,
-            "timestamp": 1790803072.3882902
+            "timestamp": 1791067179.2872562
           }
         ],
         "tool_uses": [],
@@ -177,12 +177,12 @@
         "has_permission_requests": false,
         "has_permission_responses": false
       },
-      "message_id": "1f6447a6-0a93-4d40-b17c-9d7f23dacb33"
+      "message_id": "a139526b-23cb-4238-9e52-49d6e867c6b6"
     },
     {
       "type": "assistant",
       "content": "Running a long-lived command.",
-      "timestamp": 1790803072.3884096,
+      "timestamp": 1791067179.2873857,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "has_tool_uses": true,
@@ -193,7 +193,7 @@
             "input": {
               "command": "sleep 100"
             },
-            "timestamp": 1790803072.3884096
+            "timestamp": 1791067179.2873857
           }
         ],
         "tool_results": [],
@@ -206,12 +206,12 @@
         "has_permission_requests": false,
         "has_permission_responses": false
       },
-      "message_id": "fe202a48-218f-4f31-9353-51f47288e1b1"
+      "message_id": "5bbbc512-19a7-4fb9-b2fd-417b4791182f"
     },
     {
       "type": "user",
       "content": "Tool results: 1 results",
-      "timestamp": 1790803072.3885317,
+      "timestamp": 1791067179.287521,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "has_tool_results": true,
@@ -220,7 +220,7 @@
             "tool_use_id": "synthetic-tu-interrupt-1",
             "content": "Tool execution interrupted by user.",
             "is_error": true,
-            "timestamp": 1790803072.3885317
+            "timestamp": 1791067179.287521
           }
         ],
         "tool_uses": [],
@@ -231,12 +231,12 @@
         "has_permission_requests": false,
         "has_permission_responses": false
       },
-      "message_id": "ac6bb2f6-8640-4911-b359-37ae8df20dac"
+      "message_id": "3f6403f4-56d0-40e7-b6c8-27174ae29ec5"
     },
     {
       "type": "system",
       "content": "System message",
-      "timestamp": 1790803072.3886478,
+      "timestamp": 1791067179.2876499,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "subtype": "compact_boundary",
@@ -260,12 +260,12 @@
         "has_permission_responses": false
       },
       "subtype": "compact_boundary",
-      "message_id": "262dda6b-70dc-4783-a2ef-13b66dbb0a7b"
+      "message_id": "ee0a173a-3435-4653-bdb1-1d0479ec5c90"
     },
     {
       "type": "system",
       "content": "Agent spawned: Explore the repository structure",
-      "timestamp": 1790803072.3888183,
+      "timestamp": 1791067179.2878513,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "subtype": "task_started",
@@ -278,12 +278,12 @@
         "session_id": "mock-sdk-synthetic-session"
       },
       "subtype": "task_started",
-      "message_id": "f9b8dc9d-3d5f-4df0-94cc-89c21aed2a1b"
+      "message_id": "405ebfbf-46d9-4854-8efb-ebdfc20046dd"
     },
     {
       "type": "system",
       "content": "Agent progress: Reading files in src/ [Read]",
-      "timestamp": 1790803072.3889327,
+      "timestamp": 1791067179.2879643,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "subtype": "task_progress",
@@ -301,12 +301,12 @@
         "session_id": "mock-sdk-synthetic-session"
       },
       "subtype": "task_progress",
-      "message_id": "45f31ffb-2182-44f6-a738-15091a1c4dd6"
+      "message_id": "45ff5078-b433-4040-8095-3c33c60f94a5"
     },
     {
       "type": "system",
       "content": "Agent completed: Explored the repository structure and summarized key directories.",
-      "timestamp": 1790803072.3890448,
+      "timestamp": 1791067179.2880814,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "subtype": "task_notification",
@@ -325,12 +325,12 @@
         "session_id": "mock-sdk-synthetic-session"
       },
       "subtype": "task_notification",
-      "message_id": "d185baab-fdfd-48fe-bfd7-a8d516e35857"
+      "message_id": "afb8051d-73f4-4fcd-b88d-043747ee9c44"
     },
     {
       "type": "assistant",
       "content": "Welcome back \u2014 resuming where we left off.",
-      "timestamp": 1790803072.3891897,
+      "timestamp": 1791067179.2882621,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "has_tool_uses": false,
@@ -345,12 +345,12 @@
         "has_permission_requests": false,
         "has_permission_responses": false
       },
-      "message_id": "b8e36b54-6ec5-4fa0-9285-502d26000bde"
+      "message_id": "5da80eb1-e53e-47a6-acab-0479be07130b"
     },
     {
       "type": "result",
       "content": "Conversation success",
-      "timestamp": 1790803072.389341,
+      "timestamp": 1791067179.2883897,
       "session_id": "mock-sdk-synthetic-session",
       "metadata": {
         "subtype": "success",
@@ -377,7 +377,7 @@
         "has_permission_responses": false
       },
       "subtype": "success",
-      "message_id": "d47f7993-6e6d-4fdc-8879-615dad872cfd"
+      "message_id": "2cf78934-cefe-4abd-828d-ca4624818312"
     }
   ],
   "total_count": 14,
