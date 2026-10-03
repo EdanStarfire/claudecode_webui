@@ -69,6 +69,8 @@ from backend.fixture_export import REQUIRED_MARKERS, _check_markers
 from backend.message_parser import MessageParser, MessageProcessor
 from backend.session_coordinator import SessionCoordinator
 from backend.session_recorder import SessionRecorder
+from shared.event_emitter import emit
+from shared.event_envelope import QUEUE_SESSION
 from shared.event_queue import EventQueue
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -580,17 +582,20 @@ async def generate(output_dir: Path | None = None) -> dict[str, bool]:
             if isinstance(msg, dict) and msg.get("type") == "assistant_delta":
                 if msg.get("parent_tool_use_id") is not None:
                     return  # subagent deltas are dropped in production too
-                queue.append({
-                    "type": "assistant_delta",
-                    "session_id": _SESSION_ID,
-                    "data": {
-                        "uuid": msg["uuid"],
-                        "event": msg["event"],
-                        "turn_id": msg.get("turn_id"),
-                        "tool_use_id": msg.get("tool_use_id"),
+                emit(
+                    queue, QUEUE_SESSION, "assistant_delta",
+                    {
+                        "session_id": _SESSION_ID,
+                        "data": {
+                            "uuid": msg["uuid"],
+                            "event": msg["event"],
+                            "turn_id": msg.get("turn_id"),
+                            "tool_use_id": msg.get("tool_use_id"),
+                        },
+                        "timestamp": datetime.now(UTC).isoformat(),
                     },
-                    "timestamp": datetime.now(UTC).isoformat(),
-                })
+                    scope=_SESSION_ID,
+                )
                 return
 
             parsed_message = message_processor.process_message(msg, source="websocket")
@@ -598,12 +603,15 @@ async def generate(output_dir: Path | None = None) -> dict[str, bool]:
             if parsed_message.record_id:
                 websocket_data["message_id"] = parsed_message.record_id
 
-            queue.append({
-                "type": "message",
-                "session_id": _SESSION_ID,
-                "data": websocket_data,
-                "timestamp": datetime.now(UTC).isoformat(),
-            })
+            emit(
+                queue, QUEUE_SESSION, "message",
+                {
+                    "session_id": _SESSION_ID,
+                    "data": websocket_data,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                },
+                scope=_SESSION_ID,
+            )
 
         def permission_callback(tool_name: str, input_params: dict[str, Any], context: Any) -> bool:
             # Denies _DENIED_TOOL_NAME only, so the "denied permission" marker's round
