@@ -598,7 +598,10 @@ async def test_permission_barrier_fails_open_on_timeout(caplog):
     tc.tool_use_id = tool_use_id
     coord._tool_calls["Write"] = tc
     coord.get_tool_call_by_id = MagicMock(side_effect=lambda sid, tuid: tc if tuid == tool_use_id else None)
-    coord.update_tool_call_permission_request = MagicMock(return_value=None)
+    reached_update = asyncio.Event()
+    coord.update_tool_call_permission_request = MagicMock(
+        side_effect=lambda *a, **k: reached_update.set()
+    )
     coord.session_manager = MagicMock()
     coord.session_manager.get_session_info = AsyncMock(
         return_value=MagicMock(current_permission_mode="default")
@@ -620,7 +623,9 @@ async def test_permission_barrier_fails_open_on_timeout(caplog):
         patch("backend.permission_service.StoredMessage") as mock_sm,
         patch("backend.permission_service.PermissionInfo"),
         # Make wait_for immediately time out so the test runs in well under 2s
-        patch("backend.permission_service.asyncio.wait_for", side_effect=asyncio.TimeoutError),
+        patch(
+            "backend.permission_service.asyncio.wait_for", side_effect=asyncio.TimeoutError
+        ) as mock_wait_for,
         # configure_logging() (run by other test modules earlier in the same session)
         # unconditionally sets propagate=False on every category logger it manages,
         # including 'sdk_debug' — caplog's handler is only attached to the root
@@ -632,17 +637,22 @@ async def test_permission_barrier_fails_open_on_timeout(caplog):
         mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
 
         cb = svc.create_permission_callback(session_id)
-        start = time.monotonic()
         task = asyncio.create_task(cb("Write", {"file_path": "/y.py"}, ctx))
-        await asyncio.sleep(0.1)
+        # `asyncio.timeout` is a module attribute distinct from `asyncio.wait_for`,
+        # so it isn't affected by the `asyncio.wait_for` patch above (which, since
+        # modules are singletons, clobbers the real global `asyncio.wait_for` too).
+        async with asyncio.timeout(5.0):
+            await reached_update.wait()
         task.cancel()
         try:
             await task
         except (asyncio.CancelledError, Exception):
             pass
-        elapsed = time.monotonic() - start
 
-    assert elapsed < 1.0, "Fail-open must not block on the full ~2s deadline"
+    assert mock_wait_for.call_count == 1, (
+        "Barrier must fail open after exactly one immediate timeout, not retry or "
+        "block waiting out the full deadline"
+    )
     coord.update_tool_call_permission_request.assert_called(), (
         "Must proceed past the barrier (not auto-deny) once it fails open"
     )
