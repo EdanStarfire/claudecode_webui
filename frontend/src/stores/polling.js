@@ -952,7 +952,7 @@ export const usePollingStore = defineStore('polling', () => {
     },
 
     mcp_oauth_complete: (payload) => {
-      const serverId = payload.server_id
+      const serverId = payload.data?.server_id
       if (serverId) {
         const mcpConfigStore = useMcpConfigStore()
         mcpConfigStore.fetchOAuthStatus(serverId)
@@ -967,7 +967,7 @@ export const usePollingStore = defineStore('polling', () => {
 
     mcp_oauth_refreshed: (payload) => {
       // Issue #976: Background refresh succeeded — update status indicator
-      const serverId = payload.server_id
+      const serverId = payload.data?.server_id
       if (serverId) {
         useMcpConfigStore().fetchOAuthStatus(serverId)
       }
@@ -975,7 +975,7 @@ export const usePollingStore = defineStore('polling', () => {
 
     secret_refreshed: (payload) => {
       // Issue #1387: VaultRefreshManager background refresh succeeded
-      const secretName = payload.secret_name
+      const secretName = payload.data?.secret_name
       if (secretName) {
         useSecretsStore().handleSecretRefreshed(secretName)
       }
@@ -983,9 +983,9 @@ export const usePollingStore = defineStore('polling', () => {
 
     secret_refresh_failed: (payload) => {
       // Issue #1387: VaultRefreshManager background refresh permanently failed
-      const secretName = payload.secret_name
+      const secretName = payload.data?.secret_name
       if (secretName) {
-        useSecretsStore().handleSecretRefreshFailed(secretName, payload.error || '')
+        useSecretsStore().handleSecretRefreshFailed(secretName, payload.data?.error || '')
       }
     },
 
@@ -994,25 +994,25 @@ export const usePollingStore = defineStore('polling', () => {
       // (success or failure) — mirrors mcp_oauth_complete, but fires on failure
       // too since the settings panel has no other way to learn the outcome of a
       // flow completed in a cross-origin popup.
-      if (payload.flow_id) {
-        useSecretsStore().handleSecretOAuthComplete(payload)
+      if (payload.data?.flow_id) {
+        useSecretsStore().handleSecretOAuthComplete(payload.data)
       }
     },
 
     schedule_updated: (payload) => {
       const scheduleStore = useScheduleStore()
-      scheduleStore.handleScheduleEvent(payload.legion_id || payload.data?.legion_id, payload)
+      scheduleStore.handleScheduleEvent(payload.data?.legion_id, payload.data || {})
     },
 
     schedule_execution: (payload) => {
       const scheduleStore = useScheduleStore()
-      scheduleStore.handleScheduleExecution(payload.legion_id || payload.data?.legion_id, payload)
+      scheduleStore.handleScheduleExecution(payload.data?.legion_id, payload.data || {})
     },
 
     schedule_monitor_error: (payload) => {
       const scheduleStore = useScheduleStore()
       scheduleStore.handleScheduleMonitorError(
-        payload.legion_id || payload.data?.legion_id, payload
+        payload.data?.legion_id, payload.data || {}
       )
     },
 
@@ -1032,7 +1032,7 @@ export const usePollingStore = defineStore('polling', () => {
       // also receives this exact broadcast on its own UI poll (global ui_queue, every tab
       // reads it), and must not have its own in-progress modal reset out from under it.
       if (uiStore.restartInProgress) return
-      uiStore.showRestartModal({ remote: true, message: payload.message })
+      uiStore.showRestartModal({ remote: true, message: payload.data?.message })
     },
 
     session_self_restart: (payload) => {
@@ -1048,8 +1048,8 @@ export const usePollingStore = defineStore('polling', () => {
 
     session_watchdog_alert: (payload) => {
       const uiStore = useUIStore()
-      uiStore.pushAlert(payload)
-      notify('session_error', { sessionName: payload.session_name || 'Session', sessionId: payload.session_id })
+      uiStore.pushAlert(payload.data || {})
+      notify('session_error', { sessionName: payload.data?.session_name || 'Session', sessionId: payload.data?.session_id })
     },
   }
 
@@ -1081,37 +1081,37 @@ export const usePollingStore = defineStore('polling', () => {
     },
 
     resource_registered: (payload, sessionId) => {
-      if (payload.resource) {
+      if (payload.data?.resource) {
         const resourceStore = useResourceStore()
-        resourceStore.addResource(sessionId, payload.resource)
+        resourceStore.addResource(sessionId, payload.data.resource)
       }
     },
 
     link_registered: (payload, sessionId) => {
-      if (payload.link) {
-        useLinksStore().addLink(sessionId, payload.link)
+      if (payload.data?.link) {
+        useLinksStore().addLink(sessionId, payload.data.link)
       }
     },
 
     resource_removed: (payload, sessionId) => {
-      if (payload.resource_id) {
+      if (payload.data?.resource_id) {
         const resourceStore = useResourceStore()
-        resourceStore.handleResourceRemoved(sessionId, payload.resource_id)
+        resourceStore.handleResourceRemoved(sessionId, payload.data.resource_id)
       }
     },
 
     queue_update: (payload, sessionId) => {
       const queueStore = useQueueStore()
-      queueStore.handleQueueUpdate(sessionId, payload)
+      queueStore.handleQueueUpdate(sessionId, payload.data || {})
     },
 
     usage_updated: (payload) => {
-      useUsageStore().handleUsageUpdated(payload)
+      useUsageStore().handleUsageUpdated(payload.data || {})
     },
 
     context_update: (payload, sessionId) => {
       const sessionStore = useSessionStore()
-      const { input_tokens, context_window, context_pct } = payload
+      const { input_tokens, context_window, context_pct } = payload.data || {}
       sessionStore.patchSession(sessionId, {
         context_input_tokens: input_tokens,
         context_window: context_window,
