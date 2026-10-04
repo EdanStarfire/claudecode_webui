@@ -232,6 +232,28 @@ describe('session store', () => {
       await store.removeSessionsFromStores(['sess-current'])
       expect(uiStore.rateLimits).toBeNull()
     })
+
+    it('clears session state synchronously, before the returned promise settles (issue #2076 AC8)', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useSessionStore()
+      const messageStore = useMessageStore()
+
+      const sid = 'sess-sync'
+      store.sessions.set(sid, makeSession({ session_id: sid }))
+      messageStore.messagesBySession.set(sid, [{ id: 'm1', type: 'user' }])
+
+      const promise = store.removeSessionsFromStores([sid])
+      // Deliberately NOT awaited yet. If removeSessionsFromStores() still had any internal
+      // `await import(...)`, the function would have suspended at the first one and control
+      // would already be back here — before the mutation below ran — making this assertion
+      // fail intermittently depending on microtask timing. With zero internal awaits, the
+      // function body runs to completion (including this mutation) before even returning,
+      // so this holds deterministically every time.
+      expect(messageStore.messagesBySession.has(sid)).toBe(false)
+
+      await promise
+    })
   })
 
   it('getInput/setInput caches per session', async () => {

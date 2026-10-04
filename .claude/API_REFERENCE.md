@@ -177,29 +177,79 @@ Typed on both tiers via `shared/poll_protocol.py`'s `PollBatch`/`parse_poll_resp
 
 ### Event Shape
 
-Every element of `events` is `{"type": <registered type>, ...<payload>}`. The payload's own
-shape (top-level fields vs. nested under a `data` key) varies by `type` — see the registry table
-below for exactly which keys a given `type` requires — and is **unchanged from pre-#2063
-behavior**: this stage did not alter any wire bytes except `tool_call`'s (see that section
-below).
+Every element of `events` is a literal `EventEnvelope.to_dict()` (`shared/event_envelope.py`)
+— the wire bytes ARE the envelope, not an ad-hoc dict `EventEnvelope` merely parses:
 
-`shared/event_emitter.py`'s `emit()` is the *only* function allowed to write to an `EventQueue`
-(enforced by a static AST-scan test, `shared/tests/test_event_emitter_boundary.py`) and validates
-every event against the registry before appending — in production a mismatch is logged, not
-rejected, so a registry bug can never silently drop a user-visible event.
+```json
+{
+  "type": "state_change",
+  "queue": "ui",
+  "sequence": 42,
+  "timestamp": "2026-10-03T22:03:07.793169+00:00",
+  "data": {
+    "session_id": "20620d8a-05a9-4a04-a75b-63e0a637134a",
+    "session": { "state": "active", "is_processing": false },
+    "timestamp": null
+  },
+  "backend_id": "local",
+  "scope": "20620d8a-05a9-4a04-a75b-63e0a637134a",
+  "event_id": "local:ui:20620d8a-05a9-4a04-a75b-63e0a637134a:42"
+}
+```
 
-`shared/event_envelope.py`'s `EventEnvelope` is the typed, in-process representation `emit()`
-and `parse_poll_response()` use (`type`, `queue`, `sequence`, `timestamp`, `data`, `backend_id`,
-`scope`, plus a derived `event_id`) — **not yet the literal wire format**. Today's wire bytes are
-still the ad-hoc shape above; `EventEnvelope.from_dict()` tolerantly folds whatever a raw wire
-dict contains into `.data`. A future stage may move the wire format itself onto this typed
-model; this one does not.
+- `sequence`: the queue cursor assigned at append — monotonic per queue instance, not
+  globally unique across queues.
+- `backend_id`: `"local"` (`shared.event_envelope.DEFAULT_BACKEND_ID`) for every
+  Backend-originated event in today's single-backend-per-user deployment (issue #1818 will
+  introduce other values). `"frontend-local"`
+  (`shared.event_envelope.FRONTEND_LOCAL_BACKEND_ID`) for the one Frontend-tier-direct write
+  (`src/routers/system.py`'s `server_restarting`, issued on the Frontend's own local
+  `ui_queue` rather than relayed from Backend) — kept distinct so its independently-numbered
+  `sequence` can never collide with a relayed Backend event's `event_id` on the same queue.
+- `scope`: the session or project id this event is about, when one applies — omitted
+  entirely (not `null`) when there isn't one (see `EventEnvelope.to_dict()`).
+- `event_id`: `f"{backend_id}:{queue}:{scope or '-'}:{sequence}"` — deterministic (not a
+  random UUID, so replaying the same recorded fixture through the real pipeline twice
+  produces byte-identical fixtures), unique per distinct `emit()` call, and stable across
+  redelivery of the exact same already-emitted event.
+
+The payload every producer passes to `emit()` (`type`/`queue`/`backend_id`/`scope`/`sequence`
+are all supplied by `emit()` itself, never by the caller) becomes `data` — but some call sites
+nest their own fields under their own `"data"` key rather than passing them flat; either
+convention ends up delivered as the same flat `.data` shape, since
+`shared/event_envelope.py`'s `fold_payload()` unwraps a nested `"data"` key's contents into
+`.data` directly rather than leaving it as a nested field. The registry table below lists each
+type's required keys as checked *before* that unwrapping — for a type requiring concrete field
+names, those fields land in the delivered `.data` unchanged; for a type requiring `data` itself,
+that key's own contents (not a field literally named `data`) are what ends up in the delivered
+`.data`.
+
+`shared/event_emitter.py`'s `emit()` is the *only* function allowed to write to an
+`EventQueue` (enforced by a static AST-scan test, `shared/tests/test_event_emitter_boundary.py`)
+and validates every event's payload against the registry before constructing the envelope —
+in production a mismatch is logged, not rejected (`STRICT=False`), so a registry bug can
+never silently drop a user-visible event; tests can opt into the strict/raising behavior via
+`strict_mode()`.
+
+Both poll routes (`backend/routers/poll.py`, `src/routers/poll.py`) return a typed response —
+`shared/poll_protocol.py`'s `PollResponse` (`events`/`next_cursor`/`reset`/`evicted`) on
+Backend, `FrontendPollResponse` (adds `backend_status`) on the Frontend tier — constructed
+explicitly rather than built as an ad-hoc dict. `parse_poll_response()`/`PollBatch` remain the
+consumer-side typed read (`events: list[EventEnvelope]`), unchanged since #2063 — reading
+either a legacy flat dict or a real envelope dict through `EventEnvelope.from_dict()` already
+produced the same `.data` shape, so nothing there needed to change when the wire format
+caught up to it.
 
 ### Event Type Registry
 
 Source of truth: `shared/event_registry.py`'s `TOP_LEVEL_EVENT_TYPES`. This table is for human
 reference — a programmatic consumer should call `shared.event_registry.export_json()` instead
-of hand-copying it.
+of hand-copying it. The "Required payload key(s)" column lists keys the registry checks on
+the `payload` argument passed to `emit()`, *before* `fold_payload()` normalizes it into the
+envelope's `data` — rows naming concrete fields (e.g. `message`, `legion_id`) describe fields
+that land in `data` unchanged; rows naming `data` itself mean the producer nests its fields
+under that key, which `fold_payload()` then unwraps, so the literal key `data` never survives
+into the delivered envelope.
 
 | Type | Queue(s) | Required payload key(s) |
 |---|---|---|
@@ -258,17 +308,14 @@ UI case (handled by the browser pre-2b-B but produced by nothing server-side).
 `local_command_response`, `agent_notification`, `api_retry`, `permission_mode_change`,
 `replay_complete`.
 
-### `tool_call` — Canonical Shape and Legacy Shim
+### `tool_call` Shape
 
-Stage 2a-C (issue #2063 AC5) introduced one canonical shape plus a temporary compatibility shim,
-both on the session stream, for every tool_call lifecycle transition:
-
-- **Canonical** (bare): `{"type": "tool_call", "session_id": ..., "data": {...}, "timestamp": ...}`
-- **Legacy shim** (removed in stage 2b): `{"type": "message", "session_id": ..., "data": {..., "type": "tool_call"}, "timestamp": ...}`
-
-Both are emitted for every transition today — `shared/event_emitter.py`'s `emit_tool_call()` is
-the single, clearly-marked function responsible, so stage 2b can delete it and collapse both
-call sites down to the canonical shape alone in one place. The `data` dict's fields follow the
-presence semantics `frontend/src/stores/message.js`'s `handleToolCall` relies on (e.g. an absent
-`turn_id` means "do not touch the timestamp"): `tool_use_id`, `status`, `turn_id`, `request_id`,
-`created_at`, and an optional `display` (`DisplayProjection`, issue #310) payload.
+One canonical shape for every tool_call lifecycle transition on the session stream:
+`{"type": "tool_call", "queue": "session", "sequence": ..., "timestamp": ..., "data":
+{"tool_use_id": ..., "status": ..., "session_id": ..., ...}, "backend_id": "local", "scope":
+<session_id>, "event_id": ...}` — `data`'s fields follow the presence semantics
+`frontend/src/stores/message.js`'s `handleToolCall` relies on (e.g. an absent `turn_id` means
+"do not touch the timestamp"): `tool_use_id`, `status`, `turn_id`, `request_id`, `created_at`,
+`session_id`, and an optional `display` (`DisplayProjection`, issue #310) payload. The legacy
+message-wrapped duplicate shape and its `emit_tool_call()` shim (stage 2a-C) were removed in
+stage 2b-C (#2075) — this is the only shape that has ever existed on the wire since.
