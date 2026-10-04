@@ -27,7 +27,6 @@ from pathlib import Path
 
 import pytest
 
-from backend.message_parser import MessageType, ParsedMessage
 from backend.mock_sdk import ActionType, MockClaudeSDK, SessionRecording
 from backend.models.messages import ToolState
 from backend.web_server import BackendApp
@@ -126,7 +125,7 @@ async def test_issue_1964_permission_flow_replay_full_lifecycle(tmp_path):
 
 @pytest.mark.asyncio
 async def test_issue_1964_permission_response_deny_transitions_tool_call_to_denied(tmp_path):
-    """A synthetic permission_response ParsedMessage with decision=deny, applied
+    """A synthetic permission_response message dict with decision=deny, applied
     directly via _emit_tool_call_updates against a pre-seeded PENDING ToolCall,
     must transition it to denied."""
     session_id = "sess-1964-deny"
@@ -144,19 +143,21 @@ async def test_issue_1964_permission_response_deny_transitions_tool_call_to_deni
     )
     assert tool_call.status == ToolState.PENDING
 
-    parsed_message = ParsedMessage(
-        type=MessageType.PERMISSION_RESPONSE,
-        timestamp=1000.0,
-        session_id=session_id,
-        metadata={
+    # Issue #2084 (stage 3-B, §4): _emit_tool_call_updates() now reads the canonical
+    # dict shape directly (mechanical ParsedMessage -> dict signature change).
+    message_data = {
+        "type": "permission_response",
+        "timestamp": 1000.0,
+        "session_id": session_id,
+        "metadata": {
             "tool_use_id": tool_use_id,
             "tool_name": "Bash",
             "decision": "deny",
             "request_id": "perm-req-deny",
         },
-    )
+    }
 
-    await webui._emit_tool_call_updates(session_id, parsed_message)
+    await webui._emit_tool_call_updates(session_id, message_data)
 
     assert tool_call.status == ToolState.DENIED
     statuses = _tool_call_statuses(webui.session_queues[session_id].events_since(0)[0], tool_use_id)
@@ -189,19 +190,21 @@ async def test_issue_1964_permission_response_missing_tool_use_id_falls_back_to_
     )
     assert tool_call.status == ToolState.AWAITING_PERMISSION
 
-    parsed_message = ParsedMessage(
-        type=MessageType.PERMISSION_RESPONSE,
-        timestamp=1000.0,
-        session_id=session_id,
-        metadata={
+    # Issue #2084 (stage 3-B, §4): _emit_tool_call_updates() now reads the canonical
+    # dict shape directly (mechanical ParsedMessage -> dict signature change).
+    message_data = {
+        "type": "permission_response",
+        "timestamp": 1000.0,
+        "session_id": session_id,
+        "metadata": {
             "tool_name": "Edit",
             "decision": "allow",
             "request_id": "perm-req-fallback",
             # tool_use_id deliberately omitted
         },
-    )
+    }
 
-    await webui._emit_tool_call_updates(session_id, parsed_message)
+    await webui._emit_tool_call_updates(session_id, message_data)
 
     assert tool_call.status == ToolState.RUNNING
     statuses = _tool_call_statuses(webui.session_queues[session_id].events_since(0)[0], tool_use_id)

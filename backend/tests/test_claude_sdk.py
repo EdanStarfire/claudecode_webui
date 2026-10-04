@@ -759,20 +759,20 @@ class TestClaudeSDK:
     @pytest.mark.asyncio
     async def test_issue_1486_process_sdk_message_delta_bypasses_storage(self, sdk_instance):
         """Issue #1486: assistant_delta messages are forwarded to callback and NOT stored."""
+        from claude_agent_sdk import StreamEvent
+
         received = []
 
         async def mock_callback(msg):
             received.append(msg)
 
         sdk_instance.message_callback = mock_callback
-        delta_msg = {
-            "type": "assistant_delta",
-            "uuid": "msg-uuid-x",
-            "session_id": sdk_instance.session_id,
-            "parent_tool_use_id": None,
-            "event": {"type": "content_block_delta"},
-            "timestamp": 1.0,
-        }
+        delta_msg = StreamEvent(
+            uuid="msg-uuid-x",
+            session_id=sdk_instance.session_id,
+            event={"type": "content_block_delta"},
+            parent_tool_use_id=None,
+        )
         await sdk_instance._process_sdk_message(delta_msg)
 
         assert len(received) == 1
@@ -825,7 +825,7 @@ class TestClaudeSDK:
         """Issue #1987: turn_id stamped on assistant_delta frames during streaming equals
         the finalized message's metadata.turn_id, while the finalized message's own
         record_id (message_id) remains a distinct per-record identity."""
-        from claude_agent_sdk import StreamEvent
+        from claude_agent_sdk import AssistantMessage, StreamEvent, TextBlock
 
         def se(event_dict):
             return StreamEvent(uuid="u5", session_id=sdk_instance.session_id, event=event_dict)
@@ -842,16 +842,18 @@ class TestClaudeSDK:
         received = []
         sdk_instance.message_callback = lambda msg: received.append(msg)
 
-        final_frame = {
-            "type": "assistant", "content": "hi", "timestamp": 2.0,
-            "session_id": sdk_instance.session_id,
-            "metadata": {"turn_id": "msg_turn_1987"},
-        }
+        # Issue #2084 (stage 3-B): the finalized frame is now a real AssistantMessage
+        # routed through MessageRecord.from_sdk_message(), not a pre-shaped dict — only
+        # real SDK dataclass instances/StreamEvents reach _process_sdk_message() in
+        # production (claude_sdk.py's consume loop and mock_sdk.py's raw replay).
+        final_frame = AssistantMessage(
+            content=[TextBlock(text="hi")], model="m", message_id="msg_turn_1987",
+        )
         await sdk_instance._process_sdk_message(final_frame)
 
         assert len(received) == 1
         final = received[0]
-        assert final["metadata"]["turn_id"] == delta["turn_id"]
+        assert final["turn_id"] == delta["turn_id"]
         assert final["message_id"] != delta["turn_id"]
 
     def test_issue_1614_tool_use_id_stamped_on_input_json_delta(self, sdk_instance):
@@ -1133,22 +1135,24 @@ class TestIssue1958LivePathRecordIdentity:
         assert stored_ids[0] != stored_ids[1]
 
     @pytest.mark.asyncio
-    async def test_does_not_clobber_a_pre_existing_message_id(self, sdk_instance):
-        """A dict-shaped message can already carry its own message_id copied through from
-        the raw SDK dict (_convert_sdk_message's dict-like-objects branch) — the stamp
-        must not overwrite a genuine pre-existing identity."""
+    async def test_always_mints_a_fresh_message_id(self, sdk_instance):
+        """Issue #2084 (stage 3-B, AC6): MessageRecord.from_sdk_message() is now the
+        single minting point for every live SDK message, called unconditionally —
+        the old _convert_sdk_message dict-like-objects branch's "preserve a
+        pre-existing message_id copied through from the raw dict" behavior no longer
+        applies on the canonical path (real SDK callers never supply one)."""
+        from claude_agent_sdk import AssistantMessage, TextBlock
+
         storage_manager = Mock()
         storage_manager.append_message = AsyncMock()
         sdk_instance.storage_manager = storage_manager
 
-        frame = {
-            "type": "assistant", "content": "hi", "timestamp": 1.0,
-            "session_id": sdk_instance.session_id, "message_id": "pre-existing-id",
-        }
+        frame = AssistantMessage(content=[TextBlock(text="hi")], model="m")
         await sdk_instance._process_sdk_message(frame)
 
         stored_data = storage_manager.append_message.call_args[0][0]
-        assert stored_data["message_id"] == "pre-existing-id"
+        assert stored_data["message_id"]
+        assert stored_data["message_id"] != "pre-existing-id"
 
 
 class TestSetModel:
@@ -1523,3 +1527,49 @@ class TestStderrHandlerClassification:
         stderr_handler("Container was killed")
 
         assert sdk._stderr_buffer == ["#4 CACHED", "Container was killed"]
+
+
+class TestIssue2084AC2LiveStorageByteIdentity:
+    """Issue #2084 stage 3-B, AC2: the live message envelope handed to the
+    message_callback must be the exact same canonical dict handed to
+    storage_manager.append_message() for the same frame — one MessageRecord
+    built once, reused for both, not two independently-derived shapes. This is
+    the direct regression test for the historical live/stored divergence bugs
+    this epic cites (#1955/#1957/#1958/#2006/#2042/#2052/...)."""
+
+    @pytest.mark.asyncio
+    async def test_stored_and_live_dicts_are_identical(self, tmp_path):
+        from claude_agent_sdk import AssistantMessage, TextBlock
+
+        from backend.claude_sdk import ClaudeSDK
+        from backend.session_config import SessionConfig
+
+        storage_manager = Mock()
+        storage_manager.append_message = AsyncMock()
+
+        received = []
+
+        async def message_callback(msg):
+            received.append(msg)
+
+        sdk = ClaudeSDK(
+            session_id="sess-ac2",
+            working_directory=str(tmp_path),
+            config=SessionConfig(system_prompt="test"),
+            storage_manager=storage_manager,
+            message_callback=message_callback,
+        )
+
+        sdk_message = AssistantMessage(
+            content=[TextBlock(text="hello")], model="claude-sonnet-4-5",
+        )
+        await sdk._process_sdk_message(sdk_message)
+
+        assert len(received) == 1
+        stored_dict = storage_manager.append_message.call_args[0][0]
+        live_dict = received[0]
+
+        # Not just deep-equal — the exact same dict object, since both the
+        # storage write and the live callback invocation read from the one
+        # `record.to_dict()` call in _process_sdk_message().
+        assert stored_dict is live_dict

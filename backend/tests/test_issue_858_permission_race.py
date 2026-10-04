@@ -79,7 +79,6 @@ async def test_issue_858_immediate_find():
 
     with (
         patch("backend.permission_service.PermissionRequestMessage"),
-        patch("backend.permission_service.StoredMessage"),
         patch("backend.permission_service.PermissionInfo"),
     ):
         from backend.permission_service import PermissionService
@@ -140,11 +139,9 @@ async def test_issue_858_race_condition_resolved():
 
     with (
         patch("backend.permission_service.PermissionRequestMessage") as mock_pr_msg,
-        patch("backend.permission_service.StoredMessage") as mock_sm,
         patch("backend.permission_service.PermissionInfo"),
     ):
         mock_pr_msg.return_value = MagicMock()
-        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
 
         coord.update_tool_call_permission_request = MagicMock(return_value=None)
         coord.session_manager = MagicMock()
@@ -208,11 +205,9 @@ async def test_issue_858_multiple_concurrent_permissions():
         svc = PermissionService(coordinator=coord, session_queues={})
         with (
             patch("backend.permission_service.PermissionRequestMessage") as mock_pr,
-            patch("backend.permission_service.StoredMessage") as mock_sm,
             patch("backend.permission_service.PermissionInfo"),
         ):
             mock_pr.return_value = MagicMock()
-            mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
             coord.session_manager = MagicMock()
             coord.session_manager.get_session_info = AsyncMock(
                 return_value=MagicMock(current_permission_mode="default")
@@ -255,13 +250,11 @@ async def test_issue_858_timeout_auto_deny():
 
     with (
         patch("backend.permission_service.PermissionRequestMessage") as mock_pr,
-        patch("backend.permission_service.StoredMessage") as mock_sm,
         patch("backend.permission_service.PermissionInfo"),
         # Make wait_for immediately time out so the test runs in <1s
         patch("backend.permission_service.asyncio.wait_for", side_effect=asyncio.TimeoutError),
     ):
         mock_pr.return_value = MagicMock()
-        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
         coord.session_manager = MagicMock()
         coord.session_manager.get_session_info = AsyncMock(
             return_value=MagicMock(current_permission_mode="default")
@@ -385,11 +378,9 @@ async def test_issue_953_direct_lookup_skips_signature_matching():
 
     with (
         patch("backend.permission_service.PermissionRequestMessage") as mock_pr,
-        patch("backend.permission_service.StoredMessage") as mock_sm,
         patch("backend.permission_service.PermissionInfo"),
     ):
         mock_pr.return_value = MagicMock()
-        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
 
         cb = svc.create_permission_callback(session_id)
         task = asyncio.create_task(cb("Write", {"file_path": "/x.txt"}, ctx))
@@ -433,11 +424,9 @@ async def test_issue_953_fallback_to_signature_when_no_tool_use_id():
 
     with (
         patch("backend.permission_service.PermissionRequestMessage") as mock_pr,
-        patch("backend.permission_service.StoredMessage") as mock_sm,
         patch("backend.permission_service.PermissionInfo"),
     ):
         mock_pr.return_value = MagicMock()
-        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
 
         cb = svc.create_permission_callback(session_id)
         task = asyncio.create_task(cb("Edit", {"file_path": "/y.py"}, ctx))

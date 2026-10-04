@@ -66,7 +66,6 @@ from claude_agent_sdk import (
 from backend.claude_sdk import ClaudeSDK
 from backend.data_storage import DataStorageManager
 from backend.fixture_export import REQUIRED_MARKERS, _check_markers
-from backend.message_parser import MessageParser, MessageProcessor
 from backend.session_coordinator import SessionCoordinator
 from backend.session_recorder import SessionRecorder
 from shared.event_emitter import emit
@@ -567,18 +566,21 @@ async def generate(output_dir: Path | None = None) -> dict[str, bool]:
         # earlier version of this script produced a raw_log.jsonl with no
         # queue_event records at all, which the equivalence harness can't consume.
         queue = EventQueue(on_append=recorder.record_queue_event)
-        message_processor = MessageProcessor(MessageParser())
 
         async def message_callback(msg: dict[str, Any]) -> None:
             # Mirrors backend/web_server.py's BackendApp._create_message_callback()
             # exactly — the real code that turns a ClaudeSDK message_callback
             # invocation into a poll-queue envelope. That method lives on a
-            # BackendApp instance with a live self.session_queues/self._message_processor
-            # too heavy to construct standalone here; replicated by hand against the
-            # SAME MessageProcessor and EventQueue primitives it actually uses. This is
-            # the LIVE path only — rest_history.json is built completely independently,
-            # below, by re-processing stored messages.jsonl through the real REST
-            # reconstruction method (see the tautology note there).
+            # BackendApp instance with a live self.session_queues too heavy to
+            # construct standalone here; replicated by hand against the SAME
+            # EventQueue primitive it actually uses. Issue #2084 (stage 3-B): the
+            # real method became a pass-through once msg is always already the
+            # canonical MessageRecord.to_dict() shape — no more
+            # MessageProcessor.process_message()/prepare_for_websocket() re-
+            # derivation here either, mirroring that simplification exactly. This
+            # is the LIVE path only — rest_history.json is built completely
+            # independently, below, by re-processing stored messages.jsonl through
+            # the real REST reconstruction method (see the tautology note there).
             if isinstance(msg, dict) and msg.get("type") == "assistant_delta":
                 if msg.get("parent_tool_use_id") is not None:
                     return  # subagent deltas are dropped in production too
@@ -598,10 +600,7 @@ async def generate(output_dir: Path | None = None) -> dict[str, bool]:
                 )
                 return
 
-            parsed_message = message_processor.process_message(msg, source="websocket")
-            websocket_data = message_processor.prepare_for_websocket(parsed_message)
-            if parsed_message.record_id:
-                websocket_data["message_id"] = parsed_message.record_id
+            websocket_data = msg
 
             emit(
                 queue, QUEUE_SESSION, "message",

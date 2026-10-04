@@ -27,7 +27,7 @@ Usage:
 import json
 import time
 import uuid as uuid_lib
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 from typing import Any, Literal
 
@@ -1278,6 +1278,39 @@ def _sdk_message_to_parser_input(sdk_msg: Any, session_id: str, timestamp: float
     return message_data
 
 
+def _message_dict_to_record(
+    message_data: dict[str, Any],
+    session_id: str,
+    display: dict[str, Any] | None = None,
+) -> "MessageRecord":
+    """Bridge for synthetic system/lifecycle dicts (client_launched, interrupt,
+    session_failed, mcp_server_degraded, stderr, ...) that never originate from a real
+    SDK dataclass instance, so `from_sdk_message`'s `_sdk_message_to_parser_input`
+    flattening doesn't apply — these dicts already carry `type`/`subtype`/`content`
+    directly. Feeds the dict straight to the same `_MESSAGE_PARSER.parse_message()`
+    dispatch `from_sdk_message` uses internally, keeping one single parser-dispatch call
+    site for every system-typed record, live SDK-origin or synthetic.
+    """
+    message_data = dict(message_data)
+    message_data.setdefault("session_id", session_id)
+    message_data.setdefault("timestamp", time.time())
+    parsed = _MESSAGE_PARSER.parse_message(message_data)
+    canonical_type = parsed.type.value
+
+    return MessageRecord(
+        type=canonical_type,
+        timestamp=parsed.timestamp,
+        session_id=session_id,
+        message_id=_mint_message_id(),
+        turn_id=None,
+        sdk_uuid=None,
+        subtype=parsed.metadata.get("subtype") if canonical_type == "system" else None,
+        content=parsed.content,
+        display=display,
+        metadata=parsed.metadata,
+    )
+
+
 @dataclass
 class MessageRecord:
     """Canonical message shape superseding `StoredMessage`'s 5 legacy writer shapes
@@ -1313,12 +1346,25 @@ class MessageRecord:
             result["subtype"] = self.subtype
         if self.display is not None:
             result["display"] = self.display
-        if self.metadata:
+
+        if self.type == "tool_call":
+            # AC2: the live tool_call envelope has always been flat (every ToolCall field
+            # at the top level) — match that shape exactly rather than introduce a second,
+            # incompatible nesting convention for one record type. `self.metadata` already
+            # contains session_id/turn_id/display (from `tool_call.to_dict()`) identical to
+            # the top-level values just set above — .update() is a harmless same-value
+            # overwrite, not a real duplication.
+            result.update(self.metadata)
+        elif self.metadata:
             result["metadata"] = self.metadata
         return result
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "MessageRecord":
+        if data.get("type") == "tool_call":
+            metadata = {k: v for k, v in data.items() if k not in _MESSAGE_RECORD_CORE_KEYS}
+        else:
+            metadata = data.get("metadata", {})
         return cls(
             type=data.get("type", "unknown"),
             timestamp=data.get("timestamp", 0.0),
@@ -1329,7 +1375,7 @@ class MessageRecord:
             subtype=data.get("subtype"),
             content=data.get("content"),
             display=data.get("display"),
-            metadata=data.get("metadata", {}),
+            metadata=metadata,
         )
 
     @classmethod
@@ -1372,6 +1418,11 @@ class MessageRecord:
             # mechanism (StoredMessage.from_tool_call_update) exactly; stripped before
             # frontend propagation (session_coordinator.py:3692).
             metadata["_triggering_message"] = triggering_message
+            # Matches both live permission_service.py sites, which set this flat on the
+            # emitted tool_call payload (not just nested in _triggering_message).
+            request_id = triggering_message.get("request_id")
+            if request_id is not None:
+                metadata["request_id"] = request_id
 
         return cls(
             type="tool_call",
@@ -1434,3 +1485,12 @@ class MessageRecord:
             display=None,
             metadata={"error": error},
         )
+
+
+# Derived from the dataclass fields themselves (not hand-maintained) so a future
+# field added to MessageRecord is automatically treated as core by to_dict()/
+# from_dict()'s type=="tool_call" flatten/unflatten special case (§1) — adding a
+# field here can never silently fall out of sync with the dataclass it mirrors.
+_MESSAGE_RECORD_CORE_KEYS = {
+    f.name for f in fields(MessageRecord) if f.name != "metadata"
+}

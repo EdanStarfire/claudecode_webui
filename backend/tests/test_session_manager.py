@@ -1278,3 +1278,57 @@ class TestIssue1942WindowsRmtreeFallbackDispatch:
             text=True
         )
         assert result is fake_result
+
+
+class TestIssue2084MessageSchemaVersion:
+    """Issue #2084 stage 3-B, §7: message_schema_version is the per-session flag
+    that marks a session's stored records as always the canonical MessageRecord
+    shape — 0 (legacy/unknown) is the correct default for every session that
+    predates this field."""
+
+    @pytest.mark.asyncio
+    async def test_create_session_stamps_current_version(
+        self, temp_session_manager, sample_session_config
+    ):
+        from backend.models.messages import CURRENT_MESSAGE_SCHEMA_VERSION
+
+        manager = temp_session_manager
+        session_id = str(uuid.uuid4())
+        await manager.create_session(session_id, config=sample_session_config)
+
+        session_info = manager._active_sessions[session_id]
+        assert session_info.message_schema_version == CURRENT_MESSAGE_SCHEMA_VERSION
+
+    def test_to_dict_includes_message_schema_version(self):
+        session_id = "test-session-schema"
+        now = datetime.now(UTC)
+        info = SessionInfo(
+            session_id=session_id, state=SessionState.CREATED,
+            created_at=now, updated_at=now, message_schema_version=1,
+        )
+        assert info.to_dict()["message_schema_version"] == 1
+
+    def test_from_dict_round_trips_message_schema_version(self):
+        session_id = "test-session-schema-2"
+        now = datetime.now(UTC)
+        info = SessionInfo(
+            session_id=session_id, state=SessionState.CREATED,
+            created_at=now, updated_at=now, message_schema_version=1,
+        )
+        restored = SessionInfo.from_dict(info.to_dict())
+        assert restored.message_schema_version == 1
+
+    def test_from_dict_defaults_missing_key_to_zero(self):
+        """A pre-existing state.json written before this field existed must load
+        with message_schema_version == 0 (legacy/unknown), not crash or default
+        to the current version."""
+        session_id = "test-session-schema-legacy"
+        now = datetime.now(UTC)
+        legacy_dict = SessionInfo(
+            session_id=session_id, state=SessionState.CREATED,
+            created_at=now, updated_at=now,
+        ).to_dict()
+        del legacy_dict["message_schema_version"]
+
+        restored = SessionInfo.from_dict(legacy_dict)
+        assert restored.message_schema_version == 0

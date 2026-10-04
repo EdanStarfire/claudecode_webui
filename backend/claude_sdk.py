@@ -6,10 +6,8 @@ import json
 import logging
 import tempfile
 import time
-import uuid
 from collections.abc import Callable, Coroutine
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -19,7 +17,7 @@ from shared.logging_config import get_logger
 from .data_storage import DataStorageManager
 from .docker_utils import classify_docker_output
 from .message_parser import MessageParser, MessageProcessor
-from .models.messages import sdk_message_to_stored
+from .models.messages import MessageRecord
 from .models.permission_mode import PermissionMode
 from .session_config import SessionConfig
 from .task_utils import task_done_log_exception
@@ -872,31 +870,20 @@ class ClaudeSDK:
                             content = message_data["content"]
                             sdk_logger.debug(f"Processing user message: {content[:100]}...")
 
-                            # Create user message for storage and broadcast
-                            user_message = {
-                                "type": "user",
-                                "content": content,
-                                "session_id": self.session_id,
-                                "timestamp": datetime.now(UTC).timestamp()
-                            }
-                            if message_data.get("metadata"):
-                                user_message["metadata"] = message_data["metadata"]
-
-                            # Issue #1958: stamp the per-record identity unconditionally, same
-                            # as the SDK-inbound path in _process_sdk_message() — this outgoing
-                            # user message is broadcast via message_callback below regardless of
-                            # whether storage_manager is configured, and previously relied
-                            # entirely on DataStorageManager.append_message()'s own fallback
-                            # stamp, which never ran when storage was unset.
-                            user_message.setdefault('message_id', str(uuid.uuid4()))
+                            # Build the canonical user message record once, reused for both
+                            # storage and the live broadcast (Issue #2084 AC2/AC6).
+                            record = MessageRecord.from_user_input(
+                                content, self.session_id, metadata=message_data.get("metadata")
+                            )
+                            record_dict = record.to_dict()
 
                             # Store user message if storage available
                             if self.storage_manager:
-                                await self.storage_manager.append_message(user_message)
+                                await self.storage_manager.append_message(record_dict)
 
                             # Broadcast user message via callback for real-time display
                             if self.message_callback:
-                                await self._safe_callback(self.message_callback, user_message)
+                                await self._safe_callback(self.message_callback, record_dict)
                                 sdk_logger.debug("Broadcasted user message via callback")
 
                             self.info.message_count += 1
@@ -1506,15 +1493,14 @@ class ClaudeSDK:
                     await self._safe_callback(self.rate_limit_callback, sdk_message.rate_limit_info)
                 return
 
-            converted_message = self._convert_sdk_message(sdk_message)
-            self.info.last_activity = time.time()
-
-            # Issue #1486: assistant_delta is ephemeral — bypass storage, deliver directly.
-            # Deltas are cosmetic streaming previews (#1957), never reach the
-            # ParsedMessage/MessageProcessor pipeline, and don't need a record_id — stamping
+            # Issue #1486: StreamEvent deltas are ephemeral — bypass canonicalization,
+            # deliver directly. Deltas are cosmetic streaming previews (#1957), never
+            # reach the MessageRecord pipeline, and don't need a message_id — minting
             # one here would burn a uuid4() call on every single streamed token/thinking
             # chunk for a value nothing ever reads.
-            if converted_message.get("type") == "assistant_delta":
+            if StreamEvent is not None and isinstance(sdk_message, StreamEvent):
+                self.info.last_activity = time.time()
+                converted_message = self._convert_sdk_message(sdk_message)
                 ev = converted_message.get("event", {})
                 ev_type = ev.get("type", "?")
                 if ev_type == "content_block_delta":
@@ -1535,110 +1521,58 @@ class ClaudeSDK:
             # Debug log raw SDK response structure
             sdk_logger.debug(f"Raw SDK response: {sdk_message=}")
 
-            # Issue #1958: stamp the per-record identity here, unconditionally, right after
-            # conversion — NOT inside _store_sdk_message(), which only ever runs
-            # `if self.storage_manager`. Stamping was previously gated on storage being
-            # configured for the session; if it wasn't, a live message could reach the
-            # message callback with no record_id at all, silently falling through to
-            # turn-level substitution downstream. setdefault (not a blind assignment): a
-            # dict-shaped converted_message can already carry its own message_id copied
-            # through from the raw SDK dict (_convert_sdk_message's "dict-like objects"
-            # branch) — never clobber a genuine pre-existing identity.
-            converted_message.setdefault('message_id', str(uuid.uuid4()))
+            self.info.last_activity = time.time()
+
+            # Issue #2084 (stage 3-B): build the one canonical MessageRecord for this
+            # message and reuse it for both storage and the live callback — AC2. Falls
+            # back to a MessageRecord.from_error() record (rather than silently dropping
+            # the message) if canonicalization itself fails.
+            try:
+                record = MessageRecord.from_sdk_message(sdk_message, session_id=self.session_id, display=None)
+            except Exception as e:
+                logger.exception("Failed to build canonical message record")
+                record = MessageRecord.from_error(
+                    content=str(sdk_message), session_id=self.session_id, error=str(e)
+                )
 
             # Issue #2026 (Part B2): compute display metadata once, before this
             # message is persisted, so a later reload can read the value back
             # verbatim instead of replaying session history to reconstruct it — the
             # structural cause of #2006/#2028's quadratic, event-loop-blocking
-            # reload bug. Stamped onto converted_message (not just the storage
-            # record) so the message_callback invocation below reads the same
-            # already-computed value instead of recomputing it a second time.
-            # Non-fatal: any exception here is caught and logged, and the message
-            # is still stored/delivered with no `display`.
+            # reload bug. Non-fatal: any exception here is caught and logged, and the
+            # message is still stored/delivered with no `display`.
             if self.display_hook is not None:
                 try:
-                    computed_display = self.display_hook(converted_message)
+                    computed_display = self.display_hook(record.to_dict())
                     if computed_display:
-                        converted_message['display'] = computed_display
+                        record.display = computed_display
                 except Exception:
                     sdk_logger.debug("Pre-store display_hook failed", exc_info=True)
 
+            record_dict = record.to_dict()
+
             if self.storage_manager:
-                await self._store_sdk_message(converted_message)
+                try:
+                    await self.storage_manager.append_message(record_dict)
+                except Exception as e:
+                    logger.exception("Failed to store SDK message")
+                    error_record = MessageRecord.from_error(
+                        content=record_dict.get("content") or "",
+                        session_id=self.session_id,
+                        error=f"Storage failed: {e}",
+                        message_id=record_dict.get("message_id"),
+                    )
+                    await self.storage_manager.append_message(error_record.to_dict())
 
             if self.message_callback:
-                await self._safe_callback(self.message_callback, converted_message)
+                await self._safe_callback(self.message_callback, record_dict)
 
-            sdk_logger.debug(f"Processed SDK message: {converted_message.get('type', 'unknown')}")
+            sdk_logger.debug(f"Processed SDK message: {record.type}")
 
         except Exception as e:
             logger.exception("Failed to process SDK message")
             if self.error_callback:
                 await self._safe_callback(self.error_callback, "sdk_message_processing_failed", e)
-
-    async def _store_sdk_message(self, converted_message: dict[str, Any]):
-        """
-        Store the SDK message using unified StoredMessage format (Phase 0, Issue #310).
-
-        Uses the new dataclass-based StoredMessage for clean serialization, with fallback
-        to legacy MessageProcessor format for backward compatibility during migration.
-        """
-        # Issue #1958: the per-record identity is now stamped unconditionally in
-        # _process_sdk_message() immediately after _convert_sdk_message() returns, ahead of
-        # this method's `if self.storage_manager` gate — see the comment there. By the time
-        # this method runs, converted_message['message_id'] is always already present.
-
-        try:
-            # Get the SDK message object from converted message
-            sdk_msg = converted_message.get("sdk_message")
-
-            # Try to use new StoredMessage format if we have an SDK message object
-            if sdk_msg is not None and hasattr(sdk_msg, '__dataclass_fields__'):
-                # SDK message is a dataclass - use new format
-                stored_msg = sdk_message_to_stored(
-                    sdk_msg,
-                    session_id=self.session_id,
-                    timestamp=converted_message.get("timestamp"),
-                )
-                storage_data = stored_msg.to_dict()
-                storage_data['message_id'] = converted_message['message_id']
-                # Issue #2026 (Part B2): display was computed pre-store by the
-                # display_hook (see _process_sdk_message) and stamped onto
-                # converted_message — stored_msg.to_dict() has no display key of its
-                # own here since `stored_msg` was built without one, above.
-                if converted_message.get('display'):
-                    storage_data['display'] = converted_message['display']
-
-                sdk_logger.debug(f"Storing SDK message with new StoredMessage format: {stored_msg._type}")
-                await self.storage_manager.append_message(storage_data)
-                return
-
-            # Fallback: Use legacy MessageProcessor format for non-dataclass messages
-            # This handles dict messages, unknown types, and transition period
-            parsed_message = self._message_processor.process_message(converted_message, source="sdk")
-            storage_data = self._message_processor.prepare_for_storage(parsed_message)
-            storage_data['message_id'] = converted_message['message_id']
-            if converted_message.get('display'):
-                storage_data['display'] = converted_message['display']
-
-            if converted_message.get("sdk_message"):
-                storage_data["sdk_message_type"] = converted_message.get("sdk_message").__class__.__name__
-
-            sdk_logger.debug(f"Storing SDK message with legacy format: {storage_data.get('type', 'unknown')}")
-            await self.storage_manager.append_message(storage_data)
-
-        except Exception as e:
-            logger.exception("Failed to store SDK message")
-            # Ultimate fallback - minimal storage format
-            storage_message = {
-                "type": converted_message.get("type", "unknown"),
-                "content": converted_message.get("content", ""),
-                "session_id": converted_message.get("session_id"),
-                "timestamp": converted_message.get("timestamp"),
-                "message_id": converted_message.get('message_id'),
-                "error": f"Storage failed: {str(e)}"
-            }
-            await self.storage_manager.append_message(storage_message)
 
     def _capture_raw_sdk_data(self, sdk_message: Any) -> str | None:
         """Capture raw SDK message data in a standardized, serializable format."""

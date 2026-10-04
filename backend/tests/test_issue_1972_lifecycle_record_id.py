@@ -165,16 +165,14 @@ async def test_safeguard_still_fires_for_genuinely_identity_less_message(caplog)
         webui.session_queues[session_id] = EventQueue()
         webui.coordinator = MagicMock()
 
-        parsed_message = MagicMock()
-        parsed_message.type = MagicMock(value="system")
-        parsed_message.record_id = None
-        parsed_message.turn_id = None
-        parsed_message.metadata = {}
+        # Issue #2084 (stage 3-B, §4): the callback now receives the canonical dict
+        # directly, not a ParsedMessage object — message_id deliberately omitted.
+        message_data = {"type": "system", "metadata": {}}
 
         callback = webui._create_message_callback(session_id)
         with caplog.at_level("ERROR", logger="backend.web_server"):
-            await callback(session_id, parsed_message)
+            await callback(session_id, message_data)
 
-        assert any("record_id" in r.message for r in caplog.records), (
+        assert any("message_id" in r.message for r in caplog.records), (
             "A genuinely identity-less live message must still produce a logged error"
         )

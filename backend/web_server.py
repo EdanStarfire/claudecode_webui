@@ -35,7 +35,7 @@ from .analytics.database import AnalyticsDB
 from .analytics_store import AnalyticsStore
 from .application_service import ApplicationService
 from .message_parser import MessageParser, MessageProcessor
-from .models.messages import PermissionInfo, ToolState
+from .models.messages import MessageRecord, PermissionInfo, ToolState
 from .permission_service import PermissionService
 from .session_coordinator import SessionCoordinator
 from .skill_manager import SkillManager
@@ -833,7 +833,9 @@ class BackendApp:
     def _create_message_callback(self, session_id: str):
         """Create message callback for poll queue broadcasting using unified MessageProcessor"""
         async def callback(session_id: str, message_data: Any):
-            logger.info(f"Message callback triggered for session {session_id}, message type: {getattr(message_data, 'type', 'unknown')}")
+            # Issue #2084 (stage 3-B): message_data is always a dict now (the
+            # canonical MessageRecord shape), never a ParsedMessage object.
+            logger.info(f"Message callback triggered for session {session_id}, message type: {message_data.get('type', 'unknown')}")
             try:
                 # Issue #1486: assistant_delta — lightweight envelope, no MessageProcessor
                 if isinstance(message_data, dict) and message_data.get("type") == "assistant_delta":
@@ -861,34 +863,23 @@ class BackendApp:
                         )
                     return
 
-                # Process message and prepare for poll queue using MessageProcessor
-                if hasattr(message_data, '__dict__'):
-                    # Handle ParsedMessage objects (from MessageProcessor)
-                    websocket_data = self._message_processor.prepare_for_websocket(message_data)
-                    parsed_message = message_data
-                else:
-                    # Handle raw dict messages - process them first
-                    parsed_message = self._message_processor.process_message(message_data, source="websocket")
-                    websocket_data = self._message_processor.prepare_for_websocket(parsed_message)
+                # Issue #2084 (stage 3-B, §4, AC2): message_data is already the canonical
+                # MessageRecord.to_dict() built once upstream (claude_sdk.py /
+                # session_coordinator.py) — no second derivation via process_message()/
+                # prepare_for_websocket() here. websocket_data IS message_data.
+                websocket_data = message_data
+                msg_type_str = websocket_data.get("type", "")
 
-                # Issue #1958: record_id is the per-record identity, populated centrally by
-                # MessageProcessor.process_message() for every message on every path (live,
-                # replay, storage-read) from the same top-level `message_id` field storage has
-                # always used. Reading the named field replaces the old 4-branch dict-digging
-                # chain that silently fell through to the turn-level id on a miss — that
-                # silent substitution was the direct cause of #1955/#1957/#1957-followup.
-                msg_type = getattr(parsed_message, 'type', None)
-                if msg_type is not None:
-                    msg_type_str = msg_type.value if hasattr(msg_type, 'value') else str(msg_type)
-                else:
-                    msg_type_str = websocket_data.get("type", "")
-
-                if parsed_message.record_id:
-                    websocket_data['message_id'] = parsed_message.record_id
-                else:
+                # Issue #1958: message_id is the per-record identity, minted centrally by
+                # MessageRecord's factories for every message on every path (live, replay,
+                # storage-read) — the same top-level `message_id` field storage has always
+                # used. websocket_data already carries it; no separate record_id lookup or
+                # fallback-to-turn-id substitution needed (the direct cause of
+                # #1955/#1957/#1957-followup).
+                if not websocket_data.get('message_id'):
                     logger.error(
                         f"Live message for session {session_id} (type={msg_type_str}) has no "
-                        f"record_id — frontend dedup identity unresolved"
+                        f"message_id — frontend dedup identity unresolved"
                     )
 
                 # Issue #1694: Append the assistant envelope — and mark it on the message-
@@ -905,19 +896,18 @@ class BackendApp:
                     )
                     logger.info(f"Appended message to session queue for {session_id}")
 
-                # Issue #1957/#1958: the barrier keys on the TURN-level Anthropic id — now the
-                # first-class `parsed_message.turn_id` field, populated centrally by
-                # MessageProcessor.process_message() — NOT websocket_data['message_id'] above,
-                # which is the PER-RECORD id #1955's frontend dedup needs. Reusing
-                # websocket_data's value here would key the barrier on an identity
-                # tool_call.turn_id never matches, making every wait fail open (harmless but
-                # pointless — see #1694).
-                turn_id_for_barrier = getattr(parsed_message, 'turn_id', None)
+                # Issue #1957/#1958: the barrier keys on the TURN-level Anthropic id — the
+                # first-class `turn_id` field, minted centrally by MessageRecord's factories
+                # — NOT websocket_data['message_id'] above, which is the PER-RECORD id
+                # #1955's frontend dedup needs. Reusing that value here would key the
+                # barrier on an identity tool_call.turn_id never matches, making every wait
+                # fail open (harmless but pointless — see #1694).
+                turn_id_for_barrier = websocket_data.get('turn_id')
                 if turn_id_for_barrier:
                     self.coordinator.mark_assistant_message_emitted(session_id, turn_id_for_barrier)
 
                 # Issue #324: Emit tool_call messages for tool lifecycle events
-                await self._emit_tool_call_updates(session_id, parsed_message)
+                await self._emit_tool_call_updates(session_id, websocket_data)
 
                 # Issue #952: Emit context_update after result messages using SDK API
                 if msg_type_str == "result" and session_id in self.session_queues:
@@ -940,14 +930,17 @@ class BackendApp:
 
         return callback
 
-    async def _emit_tool_call_updates(self, session_id: str, parsed_message: Any):
-        """Issue #324: Emit unified tool_call messages for tool lifecycle events."""
-        try:
-            msg_type = getattr(parsed_message, 'type', None)
-            if msg_type:
-                msg_type = msg_type.value if hasattr(msg_type, 'value') else str(msg_type)
+    async def _emit_tool_call_updates(self, session_id: str, message_data: dict[str, Any]):
+        """Issue #324: Emit unified tool_call messages for tool lifecycle events.
 
-            metadata = getattr(parsed_message, 'metadata', {}) or {}
+        Issue #2084 (stage 3-B, §4): reads the same fields it always has
+        (metadata.tool_uses/tool_results/etc.) directly off the canonical dict instead
+        of a ParsedMessage object's attributes — a mechanical signature change
+        (ParsedMessage -> dict), not a logic change.
+        """
+        try:
+            msg_type = message_data.get('type')
+            metadata = message_data.get('metadata') or {}
 
             # Handle tool_use in assistant messages
             if msg_type == 'assistant':
@@ -955,9 +948,9 @@ class BackendApp:
                 # Issue #195: Propagate parent_tool_use_id from message to child tool_calls
                 parent_tool_use_id = metadata.get('parent_tool_use_id')
                 # Issue #1958: read the first-class field, not the raw metadata dict a second
-                # time — parsed_message.turn_id IS metadata.get('turn_id'), already resolved
-                # once by MessageProcessor.process_message().
-                turn_id = getattr(parsed_message, 'turn_id', None)
+                # time — turn_id IS metadata.get('turn_id'), already resolved once by
+                # MessageRecord.from_sdk_message().
+                turn_id = message_data.get('turn_id')
                 for tool_use in tool_uses:
                     tool_id = tool_use.get('id')
                     tool_name = tool_use.get('name')
@@ -974,8 +967,7 @@ class BackendApp:
                             turn_id=turn_id,
                         )
 
-                        tool_call_data = tool_call.to_dict()
-                        tool_call_data["type"] = "tool_call"
+                        tool_call_data = MessageRecord.from_tool_call(tool_call).to_dict()
 
                         if session_id in self.session_queues:
                             emit(
@@ -1017,8 +1009,17 @@ class BackendApp:
                         )
 
                         if updated_tool_call:
-                            tool_call_data = updated_tool_call.to_dict()
-                            tool_call_data["type"] = "tool_call"
+                            tool_call_data = MessageRecord.from_tool_call(
+                                updated_tool_call, triggering_message=tool_result
+                            ).to_dict()
+                            # Issue #2084 AC2 follow-up: _triggering_message is a
+                            # storage-only embedding (see _schedule_tool_call_update_
+                            # storage / _convert_stored_message_to_websocket's own pop
+                            # on reload) — never previously reached the frontend live;
+                            # keep that contract instead of leaking the raw triggering
+                            # payload onto the wire now that storage and live share
+                            # one constructor.
+                            tool_call_data.pop("_triggering_message", None)
 
                             if session_id in self.session_queues:
                                 emit(
@@ -1041,24 +1042,35 @@ class BackendApp:
             # coordinator update + broadcast here so replayed fixtures reach the same
             # unified tool_call states (awaiting_permission / running / denied) the
             # frontend actually renders.
+            #
+            # Issue #2084 (stage 3-B, §4): these fixture dicts carry their business
+            # fields (tool_use_id, tool_name, request_id, decision, ...) at the TOP
+            # level, not nested under "metadata" (confirmed against
+            # fixtures/permission_flow/messages.jsonl) — the old ParsedMessage-based
+            # signature got this data from the *parser's* enriched `.metadata`, not
+            # from the raw dict directly. Reading message_data's own top level first,
+            # falling back to metadata, covers both that raw-fixture shape and any
+            # already-parsed/nested-metadata caller (e.g. this function's own unit
+            # tests) without re-introducing a second parse pass.
             elif msg_type == 'permission_request':
-                tool_use_id = metadata.get('tool_use_id')
-                tool_name = metadata.get('tool_name', 'unknown')
+                tool_use_id = message_data.get('tool_use_id') or metadata.get('tool_use_id')
+                tool_name = message_data.get('tool_name') or metadata.get('tool_name', 'unknown')
                 if not tool_use_id:
+                    input_params = message_data.get('input_params') or metadata.get('input_params', {})
                     tool_call = self.coordinator.find_tool_call_by_signature(
-                        session_id, tool_name, metadata.get('input_params', {})
+                        session_id, tool_name, input_params
                     )
                     tool_use_id = tool_call.tool_use_id if tool_call else None
 
                 if tool_use_id:
                     permission_info = PermissionInfo(
                         message=f"Allow {tool_name}?",
-                        suggestions=metadata.get('suggestions', []),
-                        decision_reason=metadata.get('decision_reason'),
-                        blocked_path=metadata.get('blocked_path'),
-                        title=metadata.get('title'),
-                        display_name=metadata.get('display_name'),
-                        description=metadata.get('description'),
+                        suggestions=message_data.get('suggestions') or metadata.get('suggestions', []),
+                        decision_reason=message_data.get('decision_reason') or metadata.get('decision_reason'),
+                        blocked_path=message_data.get('blocked_path') or metadata.get('blocked_path'),
+                        title=message_data.get('title') or metadata.get('title'),
+                        display_name=message_data.get('display_name') or metadata.get('display_name'),
+                        description=message_data.get('description') or metadata.get('description'),
                     )
                     updated_tool_call = self.coordinator.update_tool_call_permission_request(
                         session_id, tool_use_id, permission_info
@@ -1066,7 +1078,9 @@ class BackendApp:
                     if updated_tool_call:
                         tool_call_data = updated_tool_call.to_dict()
                         tool_call_data["type"] = "tool_call"
-                        tool_call_data["request_id"] = metadata.get('request_id')
+                        tool_call_data["request_id"] = (
+                            message_data.get('request_id') or metadata.get('request_id')
+                        )
 
                         if session_id in self.session_queues:
                             emit(
@@ -1084,8 +1098,8 @@ class BackendApp:
                         )
 
             elif msg_type == 'permission_response':
-                tool_use_id = metadata.get('tool_use_id')
-                tool_name = metadata.get('tool_name', 'unknown')
+                tool_use_id = message_data.get('tool_use_id') or metadata.get('tool_use_id')
+                tool_name = message_data.get('tool_name') or metadata.get('tool_name', 'unknown')
                 if not tool_use_id:
                     # PermissionResponseHandler never populates metadata['input_params'] (a
                     # response doesn't carry the original tool call's params) — matching by
@@ -1101,12 +1115,14 @@ class BackendApp:
                         tool_use_id = awaiting[0].tool_use_id
 
                 if tool_use_id:
-                    granted = metadata.get('decision') == 'allow'
+                    decision = message_data.get('decision') or metadata.get('decision')
+                    granted = decision == 'allow'
+                    applied_updates = message_data.get('applied_updates') or metadata.get('applied_updates')
                     updated_tool_call = self.coordinator.update_tool_call_permission_response(
                         session_id,
                         tool_use_id,
                         granted,
-                        applied_updates=metadata.get('applied_updates') or None,
+                        applied_updates=applied_updates or None,
                     )
                     if updated_tool_call:
                         tool_call_data = updated_tool_call.to_dict()

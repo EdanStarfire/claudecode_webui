@@ -539,11 +539,6 @@ class SystemMessageHandler(MessageHandler):
                     attempt_str = f"{attempt}/{max_retries}" if attempt and max_retries else str(attempt or "?")
                     wait_str = f" (~{wait_sec}s)" if wait_sec else ""
                     extracted["content"] = f"API retry {attempt_str}{wait_str}"
-            extracted["metadata"]["working_directory"] = message_data.get("cwd")
-            extracted["metadata"]["permissions"] = message_data.get("permissionMode")
-            extracted["metadata"]["tools"] = message_data.get("tools", [])
-            extracted["metadata"]["model"] = message_data.get("model")
-            extracted["metadata"]["system_prompt"] = message_data.get("system_prompt")
             extracted["metadata"]["is_error"] = message_data.get("is_error", False)
             if extracted["metadata"]["is_error"]:
                 extracted["metadata"]["error_details"] = message_data.get("error_details")
@@ -558,6 +553,18 @@ class SystemMessageHandler(MessageHandler):
                     extracted["metadata"]["error_api_error_status"] = message_data.get("error_api_error_status")
                 if message_data.get("errors"):
                     extracted["metadata"]["errors"] = message_data.get("errors")
+
+        # #2046: unify cwd/permissions/tools/model extraction across both branches above —
+        # the dict/reload branch already had these at the top level; the SDK-object branch
+        # never promoted them out of `init_data`, leaving live init messages with None/[].
+        # `system_prompt` is confirmed never provided by the SDK itself (real fixture data),
+        # so it genuinely has nothing to fall back to.
+        init_data = extracted["metadata"].get("init_data") or {}
+        extracted["metadata"]["working_directory"] = message_data.get("cwd") or init_data.get("cwd")
+        extracted["metadata"]["permissions"] = message_data.get("permissionMode") or init_data.get("permissionMode")
+        extracted["metadata"]["tools"] = message_data.get("tools") or init_data.get("tools") or []
+        extracted["metadata"]["model"] = message_data.get("model") or init_data.get("model")
+        extracted["metadata"]["system_prompt"] = message_data.get("system_prompt")
 
         return extracted
 

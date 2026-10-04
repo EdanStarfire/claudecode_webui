@@ -436,6 +436,11 @@ class TestSessionCoordinator:
 
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
+        # Issue #2084 (stage 3-B, §7): this test exercises the legacy StoredMessage
+        # conversion path with hand-built legacy-shaped stored data — force the
+        # session back to the pre-3-B default so get_session_messages()'s new
+        # canonical fast path doesn't short-circuit past the behavior under test.
+        coordinator.session_manager._active_sessions[session_id].message_schema_version = 0
 
         tool_call_update = StoredMessage.from_tool_call_update(
             ToolCall(
@@ -498,6 +503,9 @@ class TestSessionCoordinator:
 
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
+        # Issue #2084 (stage 3-B, §7): see sibling test above — force legacy schema
+        # version so the canonical fast path doesn't short-circuit this scenario.
+        coordinator.session_manager._active_sessions[session_id].message_schema_version = 0
 
         tool_call_update = StoredMessage.from_tool_call_update(
             ToolCall(
@@ -2847,6 +2855,10 @@ class TestConvertStoredMessageToWebsocket:
         records."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
+        # Issue #2084 (stage 3-B, §7): exercises the legacy dict-enrichment branch
+        # directly — force the pre-3-B default so the canonical fast path doesn't
+        # short-circuit past it.
+        coordinator.session_manager._active_sessions[session_id].message_schema_version = 0
 
         mock_storage = AsyncMock()
         mock_storage.read_messages.return_value = [
@@ -2877,6 +2889,10 @@ class TestConvertStoredMessageToWebsocket:
         defaults on reload — tool_uses/tool_results/has_*/role/session_id."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
+        # Issue #2084 (stage 3-B, §7): exercises the legacy dict-enrichment branch
+        # directly — force the pre-3-B default so the canonical fast path doesn't
+        # short-circuit past it.
+        coordinator.session_manager._active_sessions[session_id].message_schema_version = 0
 
         mock_storage = AsyncMock()
         mock_storage.read_messages.return_value = [
@@ -4133,7 +4149,7 @@ class TestIssue2007DisplayProjectionContentBlocks:
         await cb_inner(assistant_msg)
 
         assert len(received) == 1
-        tool_states = received[0].metadata["display"]["tool_states"]
+        tool_states = received[0]["display"]["tool_states"]
         assert tool_states[tool_use_id]["state"] == "pending"
 
         user_msg = {
@@ -4148,7 +4164,7 @@ class TestIssue2007DisplayProjectionContentBlocks:
         await cb_inner(user_msg)
 
         assert len(received) == 2
-        tool_states = received[1].metadata["display"]["tool_states"]
+        tool_states = received[1]["display"]["tool_states"]
         assert tool_states[tool_use_id]["state"] == "completed"
 
     @pytest.mark.asyncio
@@ -4197,7 +4213,7 @@ class TestIssue2007DisplayProjectionContentBlocks:
         await cb_inner(user_msg)
 
         assert len(received) == 2
-        tool_states = received[1].metadata["display"]["tool_states"]
+        tool_states = received[1]["display"]["tool_states"]
         assert tool_states[tool_use_id]["state"] == "failed"
 
 

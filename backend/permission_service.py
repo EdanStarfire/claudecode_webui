@@ -24,11 +24,11 @@ from shared.event_queue import EventQueue
 from shared.logging_config import get_logger
 
 from .models.messages import (
+    MessageRecord,
     PermissionInfo,
     PermissionRequestMessage,
     PermissionResponseMessage,
     PermissionSuggestion,
-    StoredMessage,
 )
 from .session_manager import SessionState
 
@@ -121,9 +121,12 @@ class PermissionService:
                     description=description,         # Issue #1302
                 )
 
-                # Wrap in StoredMessage for triggering_message data (Issue #494: no longer stored separately)
-                stored_msg = StoredMessage.from_permission_request(permission_request)
-                storage_data = stored_msg.to_dict()
+                # Issue #2084 (stage 3-B, §5): the flat PermissionRequestMessage dict is the
+                # one triggering_message fed to both the ToolCallUpdate storage write (via
+                # update_tool_call_permission_request below) and the live tool_call
+                # emission (via MessageRecord.from_tool_call below) — no more StoredMessage
+                # wrapper, and no more two independently-built tool_call_data shapes.
+                request_dict = permission_request.to_dict()
 
                 # Issue #324: Update ToolCall to awaiting_permission and emit unified tool_call message
                 try:
@@ -247,14 +250,20 @@ class PermissionService:
                             session_id,
                             tool_call.tool_use_id,
                             permission_info,
-                            triggering_message=storage_data,  # Issue #494: embed permission request data
+                            triggering_message=request_dict,  # Issue #494: embed permission request data
                         )
 
                         if updated_tool_call:
-                            # Emit unified tool_call message
-                            tool_call_data = updated_tool_call.to_dict()
-                            tool_call_data["type"] = "tool_call"
-                            tool_call_data["request_id"] = request_id  # For permission response correlation
+                            # Emit unified tool_call message — request_id promoted onto the
+                            # flat payload automatically by MessageRecord.from_tool_call (§1).
+                            tool_call_data = MessageRecord.from_tool_call(
+                                updated_tool_call, triggering_message=request_dict
+                            ).to_dict()
+                            # _triggering_message is a storage-only embedding — never
+                            # previously reached the frontend live; strip it before
+                            # emitting (matches _convert_stored_message_to_websocket's
+                            # own pop on reload).
+                            tool_call_data.pop("_triggering_message", None)
 
                             if session_id in self.session_queues:
                                 emit(
@@ -511,9 +520,12 @@ class PermissionService:
                     updated_input=updated_input_data,
                 )
 
-                # Wrap in StoredMessage for triggering_message data (Issue #494: no longer stored separately)
-                stored_msg = StoredMessage.from_permission_response(permission_response_msg)
-                storage_data = stored_msg.to_dict()
+                # Issue #2084 (stage 3-B, §5): the flat PermissionResponseMessage dict is the
+                # one triggering_message fed to both the ToolCallUpdate storage write (via
+                # update_tool_call_permission_response below) and the live tool_call
+                # emission (via MessageRecord.from_tool_call below) — no more StoredMessage
+                # wrapper, and no more two independently-built tool_call_data shapes.
+                response_dict = permission_response_msg.to_dict()
 
                 # Issue #324: Update ToolCall after permission response and emit unified tool_call message
                 try:
@@ -538,14 +550,21 @@ class PermissionService:
                             session_id,
                             tool_call.tool_use_id,
                             granted,
-                            triggering_message=storage_data,  # Issue #494: embed permission response data
+                            triggering_message=response_dict,  # Issue #494: embed permission response data
                             applied_updates=applied_updates_dicts,
                         )
 
                         if updated_tool_call:
-                            # Emit unified tool_call message
-                            tool_call_data = updated_tool_call.to_dict()
-                            tool_call_data["type"] = "tool_call"
+                            # Emit unified tool_call message — request_id promoted onto the
+                            # flat payload automatically by MessageRecord.from_tool_call (§1).
+                            tool_call_data = MessageRecord.from_tool_call(
+                                updated_tool_call, triggering_message=response_dict
+                            ).to_dict()
+                            # _triggering_message is a storage-only embedding — never
+                            # previously reached the frontend live; strip it before
+                            # emitting (matches _convert_stored_message_to_websocket's
+                            # own pop on reload).
+                            tool_call_data.pop("_triggering_message", None)
 
                             if session_id in self.session_queues:
                                 emit(

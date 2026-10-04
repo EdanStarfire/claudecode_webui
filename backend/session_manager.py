@@ -22,6 +22,7 @@ from typing import Any
 
 from shared.logging_config import get_logger
 
+from .models.messages import CURRENT_MESSAGE_SCHEMA_VERSION
 from .models.permission_mode import PermissionMode
 from .session_config import CONFIG_FIELDS, DEFAULTS, SessionConfig
 from .slug_utils import slugify_name
@@ -152,6 +153,12 @@ class SessionInfo:
     # Runtime state, not part of the resolved config (config dict).
     last_timestamp_injection_date: str | None = None
 
+    # Issue #2084 (stage 3-B, §7): 0 = legacy/unknown shape (correct default for every
+    # session that predates this field); >= CURRENT_MESSAGE_SCHEMA_VERSION means every
+    # message this session's writers produce is already a canonical MessageRecord, so
+    # readers can skip the legacy-shape conversion fast path entirely for it.
+    message_schema_version: int = 0
+
     def __post_init__(self):
         if self.secret_placeholders is None:
             self.secret_placeholders = {}
@@ -192,6 +199,7 @@ class SessionInfo:
             "latest_message_time": self.latest_message_time.isoformat() if self.latest_message_time else None,
             "latest_message_type": self.latest_message_type,
             "links": self.links,
+            "message_schema_version": self.message_schema_version,
             "name": self.name,
             "order": self.order,
             "overseer_level": self.overseer_level,
@@ -262,6 +270,7 @@ class SessionInfo:
         data.setdefault("config", {})
         data.setdefault("links", [])
         data.setdefault("last_timestamp_injection_date", None)
+        data.setdefault("message_schema_version", 0)
         data.setdefault("error_subtype", None)
         data.setdefault("error_terminal_reason", None)
         data.setdefault("error_api_error_status", None)
@@ -281,7 +290,7 @@ class SessionInfo:
             "latest_message_time", "is_ephemeral", "queue_config", "queue_paused",
             "template_id", "config", "last_activity_at", "last_completion_at",
             "last_viewed_at", "secret_fetch_token", "secret_placeholders",
-            "links", "last_timestamp_injection_date",
+            "links", "last_timestamp_injection_date", "message_schema_version",
         }
         for k in list(data.keys()):
             if k not in known:
@@ -541,6 +550,9 @@ class SessionManager:
             can_spawn_minions=can_spawn_minions,
             template_id=config.template_id,
             config=config_dict,
+            # Issue #2084 (stage 3-B, §7): every session created from this stage
+            # forward writes exclusively canonical MessageRecord shapes.
+            message_schema_version=CURRENT_MESSAGE_SCHEMA_VERSION,
         )
 
         try:
