@@ -24,9 +24,23 @@ Usage:
     json_data = stored.to_dict()
 """
 
+import json
+import time
+import uuid as uuid_lib
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Literal
+
+from claude_agent_sdk import (
+    HookEventMessage,
+    ResultMessage,
+    TaskNotificationMessage,
+    TaskProgressMessage,
+    TaskStartedMessage,
+    TaskUpdatedMessage,
+)
+
+from backend.message_parser import MessageParser
 
 # ============================================================
 # Tool State Enum (Issue #310 - Display Projection)
@@ -1165,4 +1179,258 @@ class DisplayProjection:
             tool_states=tool_states,
             orphaned_tools=list(orphaned_tools) if orphaned_tools else [],
             linked_permissions=dict(linked_permissions) if linked_permissions else {},
+        )
+
+
+# ============================================================
+# Canonical MessageRecord (Issue #2084 stage 3-A)
+# ============================================================
+
+# Consumed by 3-B (new-session stamping) and 3-C (migration target) as the single
+# source for "what version am I writing/migrating to."
+CURRENT_MESSAGE_SCHEMA_VERSION = 1
+
+# SDK dataclasses whose `.uuid` is their own stable per-frame identity (as opposed to
+# AssistantMessage/UserMessage/ResultMessage, which also carry `.uuid` but not as a
+# turn-level identity — those are promoted to `sdk_uuid` only, never `turn_id`).
+_TASK_OR_HOOK_TYPES = (
+    TaskStartedMessage,
+    TaskProgressMessage,
+    TaskNotificationMessage,
+    TaskUpdatedMessage,
+    HookEventMessage,
+)
+
+# Mirrors ClaudeSDK._convert_sdk_message()'s flat-attribute whitelist (backend/claude_sdk.py)
+# exactly, including its gaps (e.g. ResultMessage.result/.structured_output are not copied
+# live) — this is the one place that whitelist is duplicated outside claude_sdk.py, since 3-A
+# is explicitly forbidden from touching that file (see plan §8) while still needing to feed
+# message_parser.py's handlers byte-identical input to the live path.
+_SDK_FLATTEN_ATTRS = (
+    "message", "data", "subtype", "error", "usage", "model_usage", "model",
+    "duration_ms", "total_cost_usd", "parent_tool_use_id", "stop_reason",
+    "errors", "permission_denials", "is_error", "num_turns", "duration_api_ms",
+    "api_error_status",
+)
+
+# Shared MessageParser instance: routes to the right handler (AssistantMessageHandler,
+# SystemMessageHandler, the four Task* handlers, etc.) based on the `sdk_message` object's
+# type, exactly like the live claude_sdk.py path does.
+_MESSAGE_PARSER = MessageParser()
+
+
+def _mint_message_id() -> str:
+    """The one function that mints `message_id` (Issue #2084 AC6)."""
+    return str(uuid_lib.uuid4())
+
+
+def _derive_turn_id(sdk_msg: Any, canonical_type: str) -> str | None:
+    """The one function that derives `turn_id` (Issue #2084 AC6).
+
+    `AssistantMessage.message_id` (the Anthropic API turn id) for assistant turns;
+    `sdk_msg.uuid` for Task*/HookEventMessage frames that already carry their own
+    stable id; `None` otherwise.
+    """
+    if canonical_type == "assistant":
+        # `or None` matches AssistantMessageHandler's own truthy guard (message_parser.py)
+        # so an empty-string message_id is treated as absent on both paths consistently.
+        return getattr(sdk_msg, "message_id", None) or None
+    if isinstance(sdk_msg, _TASK_OR_HOOK_TYPES):
+        return getattr(sdk_msg, "uuid", None)
+    return None
+
+
+def _sdk_message_to_parser_input(sdk_msg: Any, session_id: str, timestamp: float) -> dict[str, Any]:
+    """Build the `message_data` shape message_parser.py's handlers expect from a raw SDK
+    message object, replicating ClaudeSDK._convert_sdk_message()'s flattening so the reused
+    handlers produce output identical to the live path (see `_SDK_FLATTEN_ATTRS`)."""
+    message_data: dict[str, Any] = {
+        "sdk_message": sdk_msg,
+        "timestamp": timestamp,
+        "session_id": session_id,
+    }
+
+    if hasattr(sdk_msg, "content"):
+        content = sdk_msg.content
+        if isinstance(content, str):
+            message_data["content"] = content
+        elif isinstance(content, list):
+            text_parts = [block.text for block in content if hasattr(block, "text")]
+            message_data["content"] = " ".join(text_parts) if text_parts else ""
+
+    for attr in _SDK_FLATTEN_ATTRS:
+        if not hasattr(sdk_msg, attr):
+            continue
+        value = getattr(sdk_msg, attr)
+        if isinstance(value, (str, int, float, bool, type(None))):
+            message_data[attr] = value
+        elif isinstance(value, (dict, list)):
+            try:
+                json.dumps(value)
+                message_data[attr] = value
+            except (TypeError, ValueError):
+                pass
+
+    if isinstance(sdk_msg, ResultMessage) and sdk_msg.deferred_tool_use:
+        dt = sdk_msg.deferred_tool_use
+        message_data["deferred_tool_use"] = {"id": dt.id, "name": dt.name, "input": dt.input}
+
+    return message_data
+
+
+@dataclass
+class MessageRecord:
+    """Canonical message shape superseding `StoredMessage`'s 5 legacy writer shapes
+    (Issue #2084). Pure addition in stage 3-A — not wired into any live writer/reader yet.
+
+    Reuses every existing field name (no JSON key renames); `sdk_uuid` is the one new field.
+    """
+    type: str                                      # canonical lowercase MessageType value, or "tool_call"
+    timestamp: float
+    session_id: str
+    message_id: str                                # record identity (existing field name, minted once)
+    turn_id: str | None = None                      # owning assistant-turn identity, where applicable
+    sdk_uuid: str | None = None                     # SDK's own per-frame uuid, where present
+    subtype: str | None = None                      # only meaningful when type == "system"
+    content: str | None = None                      # existing universal text field
+    display: dict[str, Any] | None = None           # DisplayMetadata.to_dict() delta, where applicable
+    metadata: dict[str, Any] = field(default_factory=dict)  # existing catch-all
+
+    def to_dict(self) -> dict[str, Any]:
+        """Sparse-key serialization mirroring `prepare_for_storage`'s existing convention."""
+        result: dict[str, Any] = {
+            "type": self.type,
+            "timestamp": self.timestamp,
+            "session_id": self.session_id,
+            "message_id": self.message_id,
+            "content": self.content,
+        }
+        if self.turn_id is not None:
+            result["turn_id"] = self.turn_id
+        if self.sdk_uuid is not None:
+            result["sdk_uuid"] = self.sdk_uuid
+        if self.subtype is not None:
+            result["subtype"] = self.subtype
+        if self.display is not None:
+            result["display"] = self.display
+        if self.metadata:
+            result["metadata"] = self.metadata
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "MessageRecord":
+        return cls(
+            type=data.get("type", "unknown"),
+            timestamp=data.get("timestamp", 0.0),
+            session_id=data.get("session_id", ""),
+            message_id=data.get("message_id", ""),
+            turn_id=data.get("turn_id"),
+            sdk_uuid=data.get("sdk_uuid"),
+            subtype=data.get("subtype"),
+            content=data.get("content"),
+            display=data.get("display"),
+            metadata=data.get("metadata", {}),
+        )
+
+    @classmethod
+    def from_sdk_message(
+        cls,
+        sdk_msg: Any,
+        session_id: str,
+        display: dict[str, Any] | None = None,
+    ) -> "MessageRecord":
+        """Shape 1+2 replacement: every AssistantMessage/UserMessage/SystemMessage/
+        HookEventMessage/ResultMessage/Task* frame, via the existing per-type handlers."""
+        timestamp = time.time()
+        message_data = _sdk_message_to_parser_input(sdk_msg, session_id, timestamp)
+        parsed = _MESSAGE_PARSER.parse_message(message_data)
+        canonical_type = parsed.type.value
+
+        return cls(
+            type=canonical_type,
+            timestamp=parsed.timestamp,
+            session_id=session_id,
+            message_id=_mint_message_id(),
+            turn_id=_derive_turn_id(sdk_msg, canonical_type),
+            sdk_uuid=getattr(sdk_msg, "uuid", None),
+            subtype=parsed.metadata.get("subtype") if canonical_type == "system" else None,
+            content=parsed.content,
+            display=display,
+            metadata=parsed.metadata,
+        )
+
+    @classmethod
+    def from_tool_call(
+        cls,
+        tool_call: "ToolCall",
+        triggering_message: dict[str, Any] | None = None,
+    ) -> "MessageRecord":
+        """AC4: maps a ToolCallUpdate (shape 4) onto a canonical `type="tool_call"` record."""
+        metadata = tool_call.to_dict()
+        if triggering_message is not None:
+            # Plain flat dict, not a nested MessageRecord — matches today's embedding
+            # mechanism (StoredMessage.from_tool_call_update) exactly; stripped before
+            # frontend propagation (session_coordinator.py:3692).
+            metadata["_triggering_message"] = triggering_message
+
+        return cls(
+            type="tool_call",
+            timestamp=(
+                tool_call.completed_at or tool_call.started_at
+                or tool_call.created_at or time.time()
+            ),
+            session_id=tool_call.session_id,
+            message_id=_mint_message_id(),
+            turn_id=tool_call.turn_id,
+            sdk_uuid=None,
+            subtype=None,
+            content=None,
+            display=tool_call.display.to_dict() if tool_call.display else None,
+            metadata=metadata,
+        )
+
+    @classmethod
+    def from_user_input(
+        cls,
+        content: str,
+        session_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> "MessageRecord":
+        """Shape 3: bare outbound user/comm/attachment dict. `metadata` preserves the
+        `comm`/`attachments` keys exactly as CommRouter populates them today."""
+        return cls(
+            type="user",
+            timestamp=time.time(),
+            session_id=session_id,
+            message_id=_mint_message_id(),
+            turn_id=None,
+            sdk_uuid=None,
+            subtype=None,
+            content=content,
+            display=None,
+            metadata=dict(metadata) if metadata else {},
+        )
+
+    @classmethod
+    def from_error(
+        cls,
+        content: str,
+        session_id: str,
+        error: str,
+        message_id: str | None = None,
+    ) -> "MessageRecord":
+        """Shape 5: both error-fallback variants (claude_sdk.py's minimal dict and
+        session_coordinator.py's raw passthrough). Mints `message_id` only if the caller
+        didn't already have one to preserve."""
+        return cls(
+            type="error",
+            timestamp=time.time(),
+            session_id=session_id,
+            message_id=message_id or _mint_message_id(),
+            turn_id=None,
+            sdk_uuid=None,
+            subtype=None,
+            content=content,
+            display=None,
+            metadata={"error": error},
         )

@@ -129,6 +129,18 @@ SYSTEM_SUBTYPES: frozenset[str] = frozenset(
         "api_retry",
         "permission_mode_change",
         "replay_complete",  # mock-SDK fixture-replay-finished marker (backend/mock_sdk.py)
+        # Issue #2084 stage 3-A: real, currently-flowing SDK-native subtype values that are
+        # only ever *compared* in existing code, never literal-constructed — so the regex-based
+        # completeness scan above can't detect their absence, but they are real values a
+        # "reconciled" vocabulary (AC5) must list.
+        "init",                   # real SDK init-message subtype; code only used it as a
+                                   # fallback default (`... or "init"`), never literal-constructed
+        "hook_started",
+        "hook_response",
+        "status",
+        "compact_boundary",
+        "microcompact_boundary",  # explicitly distinct from compact_boundary (session_coordinator.py)
+        "tengu_api_retry",        # alternate spelling of api_retry, both real, both kept distinct
     }
 )
 
