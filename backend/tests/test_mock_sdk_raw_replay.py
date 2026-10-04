@@ -89,10 +89,11 @@ class TestMockClaudeSDKRawMode:
         # assistant/user/result), not the mock's own hand-rolled converter output.
         assert [m.get("type") for m in received] == ["system", "assistant", "user", "result"]
 
-        # Real _store_sdk_message() took the dataclass-faithful StoredMessage branch
-        # (sdk_message_to_stored), proven by the "_type" discriminator it stamps.
-        stored_types = [call.args[0].get("_type") for call in storage_manager.append_message.call_args_list]
-        assert stored_types == ["SystemMessage", "AssistantMessage", "UserMessage", "ResultMessage"]
+        # Issue #2084 (stage 3-B): storage now uses the canonical MessageRecord
+        # shape (plain "type", no "_type" discriminator) for the real live path —
+        # confirms raw replay still reaches the same single, canonical writer.
+        stored_types = [call.args[0].get("type") for call in storage_manager.append_message.call_args_list]
+        assert stored_types == ["system", "assistant", "user", "result"]
 
     @pytest.mark.asyncio
     async def test_send_message_is_a_safe_noop_in_raw_mode(self, tmp_path):

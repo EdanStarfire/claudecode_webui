@@ -20,23 +20,13 @@ from shared.event_queue import EventQueue
 
 
 def _make_result_parsed_message():
-    """Build a ParsedMessage-like mock with type='result'."""
-    msg = MagicMock()
-    type_mock = MagicMock()
-    type_mock.value = "result"
-    msg.type = type_mock
-    msg.metadata = {}
-    return msg
+    """Issue #2084 (stage 3-B, §4): the callback now receives the canonical
+    MessageRecord.to_dict() shape directly, not a ParsedMessage object."""
+    return {"type": "result", "metadata": {}}
 
 
 def _make_non_result_parsed_message():
-    """Build a ParsedMessage-like mock with type='assistant'."""
-    msg = MagicMock()
-    type_mock = MagicMock()
-    type_mock.value = "assistant"
-    msg.type = type_mock
-    msg.metadata = {}
-    return msg
+    return {"type": "assistant", "metadata": {}}
 
 
 def _make_webui(tmp_path):

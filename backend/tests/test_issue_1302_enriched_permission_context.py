@@ -274,20 +274,19 @@ class TestPermissionServiceExtraction:
         captured_requests: list[PermissionRequestMessage] = []
 
         import backend.permission_service as ps_module
-        original_sm = ps_module.StoredMessage
+        original_prm = ps_module.PermissionRequestMessage
 
-        class CapturingStoredMessage(original_sm):
-            @classmethod
-            def from_permission_request(cls, request, display=None):
-                captured_requests.append(request)
-                return original_sm.from_permission_request(request, display)
+        def capturing_prm(*args, **kwargs):
+            instance = original_prm(*args, **kwargs)
+            captured_requests.append(instance)
+            return instance
 
-        ps_module.StoredMessage = CapturingStoredMessage
+        ps_module.PermissionRequestMessage = capturing_prm
         try:
             callback = service.create_permission_callback(session_id)
             result = await callback("Read", {"file_path": "/etc/shadow"}, ctx)
         finally:
-            ps_module.StoredMessage = original_sm
+            ps_module.PermissionRequestMessage = original_prm
 
         assert result.get("behavior") == "deny"
         assert len(captured_requests) == 1
@@ -313,20 +312,19 @@ class TestPermissionServiceExtraction:
         captured_requests: list[PermissionRequestMessage] = []
 
         import backend.permission_service as ps_module
-        original_sm = ps_module.StoredMessage
+        original_prm = ps_module.PermissionRequestMessage
 
-        class CapturingStoredMessage(original_sm):
-            @classmethod
-            def from_permission_request(cls, request, display=None):
-                captured_requests.append(request)
-                return original_sm.from_permission_request(request, display)
+        def capturing_prm(*args, **kwargs):
+            instance = original_prm(*args, **kwargs)
+            captured_requests.append(instance)
+            return instance
 
-        ps_module.StoredMessage = CapturingStoredMessage
+        ps_module.PermissionRequestMessage = capturing_prm
         try:
             callback = service.create_permission_callback(session_id)
             await callback("Write", {"file_path": "/tmp/out.txt"}, ctx)
         finally:
-            ps_module.StoredMessage = original_sm
+            ps_module.PermissionRequestMessage = original_prm
 
         assert len(captured_requests) == 1
         req = captured_requests[0]
@@ -345,20 +343,19 @@ class TestPermissionServiceExtraction:
         captured_requests: list[PermissionRequestMessage] = []
 
         import backend.permission_service as ps_module
-        original_sm = ps_module.StoredMessage
+        original_prm = ps_module.PermissionRequestMessage
 
-        class CapturingStoredMessage(original_sm):
-            @classmethod
-            def from_permission_request(cls, request, display=None):
-                captured_requests.append(request)
-                return original_sm.from_permission_request(request, display)
+        def capturing_prm(*args, **kwargs):
+            instance = original_prm(*args, **kwargs)
+            captured_requests.append(instance)
+            return instance
 
-        ps_module.StoredMessage = CapturingStoredMessage
+        ps_module.PermissionRequestMessage = capturing_prm
         try:
             callback = service.create_permission_callback(session_id)
             await callback("Bash", {"command": "ls"}, None)
         finally:
-            ps_module.StoredMessage = original_sm
+            ps_module.PermissionRequestMessage = original_prm
 
         assert len(captured_requests) == 1
         req = captured_requests[0]

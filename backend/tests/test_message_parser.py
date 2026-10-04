@@ -1467,3 +1467,96 @@ class TestIssue1967CombinedTextAndToolUse:
 
         assert reparsed.metadata["tool_uses"] == parsed.metadata["tool_uses"]
         assert reparsed.turn_id == "msg_combined_1"
+
+
+class TestIssue2046SystemMessageInitDataPromotion:
+    """Issue #2046 (folded into #2084 stage 3-B, §6): a live SystemMessage(subtype=
+    "init")'s real SDK data (cwd, tools, model, permissionMode) must be promoted
+    into metadata on the live path, not just stashed under metadata['init_data']
+    and left unread — previously always None/[] on live, while the reload/dict
+    path (which already read these fields from its own top level) worked fine."""
+
+    def test_live_sdk_object_promotes_init_data_fields(self):
+        from claude_agent_sdk import SystemMessage
+
+        handler = SystemMessageHandler()
+        sdk_msg = SystemMessage(
+            subtype="init",
+            data={
+                "cwd": "/home/user/project",
+                "tools": ["Read", "Write", "Bash"],
+                "model": "claude-sonnet-4-5",
+                "permissionMode": "acceptEdits",
+            },
+        )
+        message_data = {
+            "sdk_message": sdk_msg,
+            "session_id": "sess-1",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+
+        assert parsed.metadata["working_directory"] == "/home/user/project"
+        assert parsed.metadata["tools"] == ["Read", "Write", "Bash"]
+        assert parsed.metadata["model"] == "claude-sonnet-4-5"
+        assert parsed.metadata["permissions"] == "acceptEdits"
+        # Confirmed against real fixture data: the SDK never provides this field —
+        # AC3's "still defaults to None where the SDK genuinely has nothing to
+        # offer" applies to exactly this one field.
+        assert parsed.metadata["system_prompt"] is None
+
+    def test_reload_dict_path_still_reads_top_level_fields(self):
+        """AC4: the reload path keeps working unchanged — same top-level dict
+        fields, not nested under init_data."""
+        handler = SystemMessageHandler()
+        message_data = {
+            "type": "system",
+            "subtype": "init",
+            "session_id": "sess-1",
+            "cwd": "/home/user/project",
+            "tools": ["Read", "Write"],
+            "model": "claude-sonnet-4-5",
+            "permissionMode": "acceptEdits",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+
+        assert parsed.metadata["working_directory"] == "/home/user/project"
+        assert parsed.metadata["tools"] == ["Read", "Write"]
+        assert parsed.metadata["model"] == "claude-sonnet-4-5"
+        assert parsed.metadata["permissions"] == "acceptEdits"
+
+    def test_live_and_reload_paths_converge_on_same_data(self):
+        """AC4 equivalence: the same init data produces identical metadata whether
+        it arrives via a real SDK object (live) or a reloaded dict (storage)."""
+        from claude_agent_sdk import SystemMessage
+
+        handler = SystemMessageHandler()
+        init_data = {
+            "cwd": "/home/user/project",
+            "tools": ["Read"],
+            "model": "claude-sonnet-4-5",
+            "permissionMode": "default",
+        }
+        sdk_msg = SystemMessage(subtype="init", data=dict(init_data))
+        live_parsed = handler.parse({
+            "sdk_message": sdk_msg, "session_id": "sess-1", "timestamp": 1.0,
+        })
+
+        reload_parsed = handler.parse({
+            "type": "system", "subtype": "init", "session_id": "sess-1",
+            "timestamp": 1.0, **init_data,
+        })
+
+        for key in ("working_directory", "tools", "model", "permissions"):
+            assert live_parsed.metadata[key] == reload_parsed.metadata[key]
+
+    def test_system_prompt_never_provided_by_sdk_defaults_to_none(self):
+        from claude_agent_sdk import SystemMessage
+
+        handler = SystemMessageHandler()
+        sdk_msg = SystemMessage(subtype="init", data={"cwd": "/x"})
+        parsed = handler.parse({
+            "sdk_message": sdk_msg, "session_id": "sess-1", "timestamp": 1.0,
+        })
+        assert parsed.metadata["system_prompt"] is None

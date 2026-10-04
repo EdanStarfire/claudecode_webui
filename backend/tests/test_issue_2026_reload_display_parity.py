@@ -156,6 +156,14 @@ class TestIssue2026AC6ConversionProportionality:
                     "has_more": end is not None and end < len(raw_messages),
                 }
 
+            async def get_archive_state(self, session_id, archive_id):
+                # Issue #2084 (stage 3-B, §7): this archive's records are the
+                # legacy `_type`-discriminated shape (_write_synthetic_records) —
+                # report schema_version 0 so get_archive_messages() routes through
+                # the conversion method this test is instrumenting, not the
+                # canonical fast path.
+                return {"state": {"message_schema_version": 0}}
+
         class _FakeLegionSystem:
             archive_manager = _FakeArchiveManager()
 
@@ -269,7 +277,9 @@ class TestIssue2026PreStoreHookNonFatal:
 
         stored = await storage_manager.read_messages()
         assert len(stored) == 1
-        assert stored[0]["_type"] == "AssistantMessage"
+        # Issue #2084 (stage 3-B): storage now uses the canonical MessageRecord
+        # shape (plain "type", no "_type" discriminator) for the live SDK path.
+        assert stored[0]["type"] == "assistant"
         assert "display" not in stored[0]
         assert len(received) == 1
 

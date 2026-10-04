@@ -409,7 +409,7 @@ class TestToDictFromDictRoundTrip:
 
     def test_full_record_round_trip(self):
         record = MessageRecord(
-            type="tool_call", timestamp=1.0, session_id="sess-1", message_id="m1",
+            type="system", timestamp=1.0, session_id="sess-1", message_id="m1",
             turn_id="t1", sdk_uuid="u1", subtype="init", content="hi",
             display={"state": "running"}, metadata={"name": "Edit"},
         )
@@ -430,6 +430,115 @@ class TestToDictFromDictRoundTrip:
         record = MessageRecord.from_sdk_message(sdk_msg, session_id="sess-1")
         restored = MessageRecord.from_dict(record.to_dict())
         assert restored == record
+
+
+class TestToolCallFlatShape:
+    """Issue #2084 stage 3-B, §1: tool_call records must be flat (matching the live
+    envelope every real emitter has always produced), not nested under `metadata`
+    the way 3-A's merged `from_tool_call()` originally shipped."""
+
+    def _make_tool_call(self, **overrides) -> ToolCall:
+        defaults = dict(
+            tool_use_id="tool-1", session_id="sess-1", name="Edit",
+            input={"file_path": "foo.py"}, status=ToolState.AWAITING_PERMISSION,
+            created_at=1.0, turn_id="turn-1",
+        )
+        defaults.update(overrides)
+        return ToolCall(**defaults)
+
+    def test_to_dict_is_flat_not_nested_under_metadata(self):
+        tool_call = self._make_tool_call()
+        data = MessageRecord.from_tool_call(tool_call).to_dict()
+
+        assert "metadata" not in data
+        assert data["tool_use_id"] == "tool-1"
+        assert data["name"] == "Edit"
+        assert data["input"] == {"file_path": "foo.py"}
+        assert data["status"] == "awaiting_permission"
+        # Core MessageRecord fields and the flattened ToolCall fields coexist at the
+        # same top level — a harmless same-value overwrite (session_id/turn_id match
+        # both the record's own fields and the embedded tool_call.to_dict() copy).
+        assert data["type"] == "tool_call"
+        assert data["session_id"] == "sess-1"
+        assert data["turn_id"] == "turn-1"
+
+    def test_from_dict_reconstructs_metadata_for_tool_call(self):
+        tool_call = self._make_tool_call()
+        data = MessageRecord.from_tool_call(tool_call).to_dict()
+        restored = MessageRecord.from_dict(data)
+
+        assert restored.type == "tool_call"
+        assert restored.metadata["tool_use_id"] == "tool-1"
+        assert restored.metadata["name"] == "Edit"
+        assert restored.metadata["status"] == "awaiting_permission"
+        # Core keys are not duplicated into the reconstructed metadata dict.
+        for core_key in ("type", "timestamp", "session_id", "message_id", "content"):
+            assert core_key not in restored.metadata
+
+    def test_dict_level_round_trip_is_stable(self):
+        """to_dict() output is stable under re-serialization (same dict both times),
+        even though the reconstructed MessageRecord.metadata intentionally excludes
+        the core fields already captured at the top level — no double-nesting, not a
+        round-trip break (session_id/turn_id/display are still present in the dict
+        itself, just no longer duplicated into the object's own .metadata attribute)."""
+        tool_call = self._make_tool_call(
+            display=ToolDisplayInfo(state=ToolState.AWAITING_PERMISSION, style="warning"),
+        )
+        record = MessageRecord.from_tool_call(tool_call)
+        data = record.to_dict()
+        restored = MessageRecord.from_dict(data)
+        assert restored.to_dict() == data
+
+    def test_reconstructed_metadata_is_toolcall_from_dict_compatible(self):
+        """Feeding the full to_dict() output (not just the stripped-down metadata)
+        into ToolCall.from_dict() reconstructs a valid ToolCall — matching what
+        _convert_stored_message_to_websocket already hands downstream code today."""
+        tool_call = self._make_tool_call(
+            display=ToolDisplayInfo(state=ToolState.AWAITING_PERMISSION, style="warning"),
+        )
+        data = MessageRecord.from_tool_call(tool_call).to_dict()
+        reconstructed = ToolCall.from_dict(data)
+        assert reconstructed.tool_use_id == "tool-1"
+        assert reconstructed.session_id == "sess-1"
+        assert reconstructed.turn_id == "turn-1"
+        assert reconstructed.status == ToolState.AWAITING_PERMISSION
+
+    def test_no_accidental_double_nesting(self):
+        """metadata must never itself contain a `metadata` key after a round trip."""
+        tool_call = self._make_tool_call()
+        record = MessageRecord.from_tool_call(tool_call)
+        restored = MessageRecord.from_dict(record.to_dict())
+        assert "metadata" not in restored.metadata
+
+    def test_request_id_promoted_from_permission_request_triggering_message(self):
+        tool_call = self._make_tool_call()
+        request = PermissionRequestMessage(
+            request_id="req-1", tool_name="Edit", session_id="sess-1", tool_use_id="tool-1",
+        )
+        data = MessageRecord.from_tool_call(tool_call, triggering_message=request.to_dict()).to_dict()
+
+        # Flat, not just nested in _triggering_message — this is what lets
+        # permission_service.py's live emission and the stored ToolCallUpdate agree.
+        assert data["request_id"] == "req-1"
+        assert data["_triggering_message"]["request_id"] == "req-1"
+
+    def test_request_id_promoted_from_permission_response_triggering_message(self):
+        tool_call = self._make_tool_call()
+        response = PermissionResponseMessage(
+            request_id="req-1", decision="allow", tool_name="Edit", session_id="sess-1",
+        )
+        data = MessageRecord.from_tool_call(tool_call, triggering_message=response.to_dict()).to_dict()
+        assert data["request_id"] == "req-1"
+
+    def test_no_request_id_when_triggering_message_lacks_one(self):
+        tool_call = self._make_tool_call()
+        data = MessageRecord.from_tool_call(tool_call, triggering_message={"tool_name": "Edit"}).to_dict()
+        assert "request_id" not in data
+
+    def test_no_request_id_without_triggering_message(self):
+        tool_call = self._make_tool_call()
+        data = MessageRecord.from_tool_call(tool_call).to_dict()
+        assert "request_id" not in data
 
 
 class TestSubtypeRegistryRoundTrip:

@@ -31,12 +31,14 @@ from .litellm_proxy_manager import make_model_alias
 from .mcp_config_manager import McpServerType
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import (
+    CURRENT_MESSAGE_SCHEMA_VERSION,
     DisplayProjection,
+    MessageRecord,
     PermissionInfo,
-    StoredMessage,
     ToolCall,
     ToolDisplayInfo,
     ToolState,
+    _message_dict_to_record,
     legacy_to_stored,
 )
 from .models.permission_mode import PermissionMode
@@ -74,6 +76,16 @@ STARTUP_ATTACH_TIMEOUT_SECONDS = 8.0
 _TASK_LIFECYCLE_STORED_TYPES = frozenset(
     {"TaskStartedMessage", "TaskProgressMessage", "TaskNotificationMessage", "TaskUpdatedMessage"}
 )
+
+
+def _is_canonical_schema_version(version: int) -> bool:
+    """Issue #2084 (stage 3-B, §7): the one place the "is this schema version
+    canonical" criterion is expressed — reused by every converter's fast-path gate
+    (get_session_messages, _get_task_leg_registry, get_archive_messages) so a
+    future change to the criterion (e.g. a 3-C migration state) only needs updating
+    here, not independently at each call site.
+    """
+    return version >= CURRENT_MESSAGE_SCHEMA_VERSION
 
 # Resource format groups for filtering
 _TEXT_RESOURCE_FORMATS = {
@@ -4161,11 +4173,23 @@ class SessionCoordinator:
         registry = TaskLegRegistry()
         storage = self._storage_managers.get(session_id)
         if storage:
+            # Issue #2084 (stage 3-B, §7): a canonical session's Task lifecycle frames
+            # are stored as plain `type == "system"` canonical records, never with the
+            # legacy `_type` discriminator — nothing left to convert for them either.
+            session_info = await self.session_manager.get_session_info(session_id)
+            is_canonical_session = bool(session_info) and (
+                _is_canonical_schema_version(session_info.message_schema_version)
+            )
             raw_messages = await storage.read_messages()
             for raw_message in raw_messages:
-                if raw_message.get("_type") not in _TASK_LIFECYCLE_STORED_TYPES:
-                    continue
-                ws_data = self._convert_stored_message_to_websocket(raw_message)
+                if is_canonical_session:
+                    if raw_message.get("type") != "system":
+                        continue
+                    ws_data = raw_message
+                else:
+                    if raw_message.get("_type") not in _TASK_LIFECYCLE_STORED_TYPES:
+                        continue
+                    ws_data = self._convert_stored_message_to_websocket(raw_message)
                 if not ws_data:
                     continue
                 metadata = ws_data.get("metadata") or {}
@@ -4207,12 +4231,24 @@ class SessionCoordinator:
         result = await self.legion_system.archive_manager.get_archive_messages(
             session_id, archive_id, offset=offset, limit=limit
         )
+
+        # Issue #2084 (stage 3-B, §7): the archived state.json snapshot carries the
+        # session's own message_schema_version — read from the archive itself, not
+        # live session_manager state (the originating session may be long disposed).
+        archive_state = await self.legion_system.archive_manager.get_archive_state(session_id, archive_id)
+        archived_state_dict = (archive_state or {}).get("state") or {}
+        is_canonical_session = _is_canonical_schema_version(
+            archived_state_dict.get("message_schema_version", 0)
+        )
+
         # Convert raw stored messages to frontend-expected websocket format
         converted = []
         for raw_msg in result.get("messages", []):
             try:
                 ws_data = None
-                if raw_msg.get("_type"):
+                if is_canonical_session:
+                    ws_data = raw_msg
+                elif raw_msg.get("_type"):
                     ws_data = self._convert_stored_message_to_websocket(raw_msg)
                 elif isinstance(raw_msg.get("metadata"), dict) and raw_msg.get("type"):
                     ws_data = {
@@ -4355,6 +4391,16 @@ class SessionCoordinator:
             raw_messages = await storage.read_messages(limit=limit, offset=offset)
             total_count = await storage.get_message_count()
 
+            # Issue #2084 (stage 3-B, §7): a canonical session's stored records are
+            # already the exact live shape (3-A kept every frontend-visible field name
+            # unchanged; §1 made tool_call records flat to match) — nothing left to
+            # convert for it. Computed once per call, not per record: a session either
+            # is canonical from creation or isn't, with no in-between until 3-C.
+            session_info = await self.session_manager.get_session_info(session_id)
+            is_canonical_session = bool(session_info) and (
+                _is_canonical_schema_version(session_info.message_schema_version)
+            )
+
             # Convert stored messages to WebSocket format and generate tool_call messages
             parsed_messages = []
 
@@ -4373,21 +4419,51 @@ class SessionCoordinator:
             # already gives this same lookup via _convert_stored_message_to_websocket().
             stored_tool_update_ids: set[str] = set()
             for raw_message in raw_messages:
-                if raw_message.get("_type") != "ToolCallUpdate":
-                    continue
-                try:
-                    tool_use_id = raw_message.get("data", {}).get("tool_use_id")
-                except AttributeError:
-                    continue
-                if tool_use_id:
-                    stored_tool_update_ids.add(tool_use_id)
+                if raw_message.get("_type") == "ToolCallUpdate":
+                    try:
+                        tool_use_id = raw_message.get("data", {}).get("tool_use_id")
+                    except AttributeError:
+                        continue
+                    if tool_use_id:
+                        stored_tool_update_ids.add(tool_use_id)
+                # Issue #2084 (stage 3-B, §1/§7): a canonical session's tool_call
+                # records are flat — tool_use_id lives at the top level, not under
+                # a nested "data" key.
+                elif is_canonical_session and raw_message.get("type") == "tool_call":
+                    tool_use_id = raw_message.get("tool_use_id")
+                    if tool_use_id:
+                        stored_tool_update_ids.add(tool_use_id)
 
             for raw_message in raw_messages:
                 try:
                     websocket_data = None
 
+                    # Issue #2084 (stage 3-B, §7): a canonical session's stored records
+                    # are already the exact live shape — nothing left to convert. The
+                    # tool_call case mirrors the legacy ToolCallUpdate branch below
+                    # exactly (same active_history_tools/stored_tool_update_ids
+                    # bookkeeping), just reading the flat canonical shape directly
+                    # instead of calling _convert_stored_message_to_websocket().
+                    if is_canonical_session and raw_message.get("type") == "tool_call":
+                        tool_call_msg = raw_message
+                        parsed_messages.append(tool_call_msg)
+                        tc_id = tool_call_msg.get("tool_use_id")
+                        if tc_id:
+                            stored_tool_update_ids.add(tc_id)
+                            reconstructed = ToolCall.from_dict(tool_call_msg)
+                            if reconstructed.status in (
+                                ToolState.COMPLETED, ToolState.FAILED,
+                                ToolState.DENIED, ToolState.INTERRUPTED,
+                                ToolState.ORPHANED,
+                            ):
+                                active_history_tools.pop(tc_id, None)
+                            else:
+                                active_history_tools[tc_id] = reconstructed
+                        continue
+                    elif is_canonical_session:
+                        websocket_data = raw_message
                     # Issue #310: Handle new StoredMessage format with _type discriminator
-                    if raw_message.get("_type"):
+                    elif raw_message.get("_type"):
                         # Issue #494: ToolCallUpdate entries are converted to tool_call messages
                         # directly and should NOT go through synthetic reconstruction
                         if raw_message["_type"] == "ToolCallUpdate":
@@ -4654,7 +4730,6 @@ class SessionCoordinator:
 
             # Issue #491: Mark any remaining unresolved tools as interrupted
             # (session may have been terminated without explicit interrupt/restart message)
-            session_info = await self.session_manager.get_session_info(session_id)
             if session_info and session_info.state not in (
                 SessionState.ACTIVE, SessionState.PAUSED, SessionState.STARTING
             ):
@@ -4904,7 +4979,7 @@ class SessionCoordinator:
             )
             return
         try:
-            stored_dict = StoredMessage.from_tool_call_update(
+            stored_dict = MessageRecord.from_tool_call(
                 tool_call, triggering_message
             ).to_dict()
         except Exception:
@@ -4959,8 +5034,7 @@ class SessionCoordinator:
                     # Store a new ToolCallUpdate with the reason attached
                     self._schedule_tool_call_update_storage(session_id, tool_call)
                     # Broadcast via existing tool_call broadcast mechanism
-                    tool_call_data = tool_call.to_dict()
-                    tool_call_data["type"] = "tool_call"
+                    tool_call_data = MessageRecord.from_tool_call(tool_call).to_dict()
                     for cb in self._tool_call_broadcast_callbacks:
                         try:
                             cb(session_id, tool_call_data)
@@ -5279,8 +5353,7 @@ class SessionCoordinator:
             )
             # Issue #520: Broadcast interrupted tool_call messages via WebSocket
             for tool_call in interrupted:
-                tool_call_data = tool_call.to_dict()
-                tool_call_data["type"] = "tool_call"
+                tool_call_data = MessageRecord.from_tool_call(tool_call).to_dict()
                 for cb in self._tool_call_broadcast_callbacks:
                     try:
                         cb(session_id, tool_call_data)
@@ -5403,48 +5476,54 @@ class SessionCoordinator:
         return None
 
     async def _store_processed_message(self, session_id: str, message_data: dict[str, Any]):
-        """Store message using unified MessageProcessor for consistent format.
+        """Store a synthetic system/lifecycle message via the canonical MessageRecord
+        bridge for plain dicts (Issue #2084 stage 3-B, §3).
 
-        Stamps `message_data["message_id"]` in place with the exact id written to
-        storage, so lifecycle senders' live-callback dict and stored record always
-        share one identity (issue #1972) — never two independently-minted UUIDs.
+        Stamps `message_data` in place to become the exact canonical record dict
+        written to storage, so lifecycle senders' live-callback dict and stored record
+        always share one identity and one shape (issue #1972, issue #2084 AC2) — never
+        two independently-minted/derived copies of the same message.
         """
         try:
-            # Process the message through MessageProcessor
-            parsed_message = self.message_processor.process_message(message_data, source="system")
-
-            # Prepare for storage using MessageProcessor
-            storage_data = self.message_processor.prepare_for_storage(parsed_message)
+            record = _message_dict_to_record(message_data, session_id, display=None)
 
             # Issue #2026 (Part B2): compute display once, before this message is
             # persisted (see _compute_display_metadata_for_storage()'s docstring).
-            # Stamped onto message_data too (not just storage_data) so the
-            # subsequent `callback(message_data)` call every caller of this method
-            # makes afterward reads the same already-computed value instead of
-            # _create_message_callback() recomputing it a second time.
             display = self._compute_display_metadata_for_storage(session_id, message_data)
             if display:
-                storage_data["display"] = display
-                message_data["display"] = display
+                record.display = display
 
-            # Store in session storage
-            storage = self._storage_managers.get(session_id)
-            if storage:
-                # logger.debug(f"Storing processed system message: {storage_data.get('type', 'unknown')}")
-                await storage.append_message(storage_data)
-                message_data["message_id"] = storage_data["message_id"]
-            else:
-                logger.warning(f"No storage manager found for session {session_id}")
-                message_data.setdefault("message_id", str(uuid4()))
-
+            record_dict = record.to_dict()
         except Exception:
-            logger.exception(f"Failed to store processed message for session {session_id}")
-            # Fallback to direct storage
+            logger.exception(f"Failed to canonicalize processed message for session {session_id}")
+            # Fallback to direct storage of the original (uncanonicalized) dict —
+            # message_data is intentionally left as-is here (canonicalization itself
+            # failed, so there is no canonical shape to stamp it into).
+            message_data.setdefault("message_id", str(uuid4()))
             storage = self._storage_managers.get(session_id)
             if storage:
-                await storage.append_message(message_data)
-            else:
-                message_data.setdefault("message_id", str(uuid4()))
+                try:
+                    await storage.append_message(message_data)
+                except Exception:
+                    logger.exception(f"Failed to store processed message for session {session_id}")
+            return
+
+        # Issue #2084 AC2: stamp message_data in place to become the canonical dict
+        # BEFORE attempting storage, so every caller's subsequent `callback(message_data)`
+        # call forwards the identical canonical shape downstream even if the storage
+        # write below fails — a storage hiccup must not silently revert the live
+        # envelope back to the pre-canonical shape.
+        message_data.clear()
+        message_data.update(record_dict)
+
+        storage = self._storage_managers.get(session_id)
+        if storage:
+            try:
+                await storage.append_message(record_dict)
+            except Exception:
+                logger.exception(f"Failed to store processed message for session {session_id}")
+        else:
+            logger.warning(f"No storage manager found for session {session_id}")
 
     def _build_permission_handler(
         self,
@@ -5501,14 +5580,11 @@ class SessionCoordinator:
                 # — wired as ClaudeSDK's `display_hook` for the live SDK streaming
                 # path, and called directly by _store_processed_message() for
                 # synthetic system messages. Both stamp the result back onto this
-                # same message_data dict before invoking this callback. Reusing that
-                # value here (rather than calling DisplayProjection a second time)
-                # is what keeps its per-tool state from being mutated twice for the
-                # same message — the previous post-store computation is removed
-                # entirely, not just relocated.
-                display_metadata_dict = (
-                    message_data.get('display') if isinstance(message_data, dict) else None
-                )
+                # same message_data dict before invoking this callback. Issue #2084
+                # AC2: message_data (forwarded to subscriber callbacks below, not
+                # parsed_message) already carries this `display` value at its own
+                # top level — MessageRecord.to_dict()'s shape — so there's nothing
+                # left to mirror here the way the pre-canonical-record code needed to.
 
                 # Track latest meaningful message (issue #291, issue #1497)
                 # Only track user and assistant messages — system messages are SDK runtime
@@ -5767,32 +5843,36 @@ class SessionCoordinator:
                 callbacks = self._message_callbacks.get(session_id, [])
                 # logger.info(f"Processing message for session {session_id}, found {len(callbacks)} callbacks")
 
-                # Issue #310/#2026: attach the pre-store-computed display metadata to
-                # the parsed message for WebSocket broadcast — already a dict (see
-                # _compute_display_metadata_for_storage()'s return type), not a
-                # DisplayMetadata object, since it was computed before storage.
-                if display_metadata_dict:
-                    if parsed_message.metadata is None:
-                        parsed_message.metadata = {}
-                    parsed_message.metadata['display'] = display_metadata_dict
-
-                # Issue #894: Inject stable retry_message_id for api_retry sequences
-                msg_subtype = parsed_message.metadata.get('subtype') if parsed_message.metadata else None
+                # Issue #894: Inject stable retry_message_id for api_retry sequences.
+                # Mutates message_data's own `metadata` dict directly — not
+                # parsed_message's — since message_data (not parsed_message) is what
+                # gets forwarded to subscriber callbacks below (Issue #2084 AC2).
+                msg_subtype = (
+                    message_data.get('metadata', {}).get('subtype')
+                    if isinstance(message_data, dict) else None
+                )
                 if msg_subtype == 'api_retry':
                     if session_id not in self._retry_sequences:
                         self._retry_sequences[session_id] = str(uuid4())
-                    if parsed_message.metadata is None:
-                        parsed_message.metadata = {}
-                    parsed_message.metadata['retry_message_id'] = self._retry_sequences[session_id]
+                    if isinstance(message_data, dict):
+                        message_data.setdefault('metadata', {})['retry_message_id'] = (
+                            self._retry_sequences[session_id]
+                        )
                 else:
                     self._retry_sequences.pop(session_id, None)
 
+                # Issue #2084 AC2: forward the canonical message_data dict itself to
+                # subscriber callbacks (e.g. web_server.py's), not the ParsedMessage
+                # this method derived above purely for its own internal bookkeeping
+                # (task registry, analytics, latest-message tracking, ...). Letting a
+                # second, independently-derived shape reach the live wire is exactly
+                # the bug class AC2 exists to kill.
                 for cb in callbacks:
                     try:
                         if asyncio.iscoroutinefunction(cb):
-                            await cb(session_id, parsed_message)
+                            await cb(session_id, message_data)
                         else:
-                            cb(session_id, parsed_message)
+                            cb(session_id, message_data)
                     except Exception:
                         logger.exception("Error in message callback")
 

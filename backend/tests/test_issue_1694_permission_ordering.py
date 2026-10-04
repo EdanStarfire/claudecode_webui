@@ -315,17 +315,20 @@ async def test_emission_order_envelope_before_tool_call_pending(tmp_path):
     coordinator.create_tool_call.side_effect = _create_tool_call
     webui.coordinator = coordinator
 
-    parsed_message = MagicMock()
-    parsed_message.type = MagicMock(value="assistant")
-    parsed_message.record_id = "frame-uuid-abc"
-    parsed_message.turn_id = "msg_abc"
-    parsed_message.metadata = {
+    # Issue #2084 (stage 3-B, §4): the callback now receives the canonical
+    # MessageRecord.to_dict() shape directly, not a ParsedMessage object.
+    message_data = {
+        "type": "assistant",
+        "message_id": "frame-uuid-abc",
         "turn_id": "msg_abc",
-        "tool_uses": [{"id": "tu1", "name": "Bash", "input": {"command": "ls"}}],
+        "metadata": {
+            "turn_id": "msg_abc",
+            "tool_uses": [{"id": "tu1", "name": "Bash", "input": {"command": "ls"}}],
+        },
     }
 
     callback = webui._create_message_callback(session_id)
-    await callback(session_id, parsed_message)
+    await callback(session_id, message_data)
 
     # Ordering: mark_assistant_message_emitted() happens before create_tool_call()
     assert call_order == [
@@ -345,11 +348,11 @@ async def test_emission_order_envelope_before_tool_call_pending(tmp_path):
 @pytest.mark.asyncio
 async def test_issue_1958_callback_separates_record_id_from_turn_id_barrier(tmp_path):
     """Issue #1957/#1958: for a live AssistantMessage, the live poll payload
-    (websocket_data['message_id']) must carry parsed_message.record_id (the PER-RECORD
-    identity), while the #1694 barrier must be marked with parsed_message.turn_id (the
-    PER-TURN Anthropic id) — even though the two values differ on the same message. This
-    is now a direct field read on ParsedMessage (populated centrally by
-    MessageProcessor.process_message()), not dict-digging through raw_data/metadata."""
+    (websocket_data['message_id']) must carry the per-record identity, while the #1694
+    barrier must be marked with the per-turn Anthropic id — even though the two values
+    differ on the same message. Issue #2084 (stage 3-B, §4): both are now direct
+    top-level fields on the canonical MessageRecord dict (message_id, turn_id) that the
+    callback receives directly — no ParsedMessage object, no dict-digging."""
     session_id = "sess-1958-record-vs-turn"
 
     webui = _make_webui(tmp_path)
@@ -361,17 +364,18 @@ async def test_issue_1958_callback_separates_record_id_from_turn_id_barrier(tmp_
     coordinator.create_tool_call.return_value = None
     webui.coordinator = coordinator
 
-    # A already-parsed ParsedMessage-shaped object, mirroring what
+    # The canonical MessageRecord.to_dict() shape, mirroring what
     # SessionCoordinator._create_message_callback() hands to this callback in
-    # production: record_id (per-record) and turn_id (per-turn) as distinct fields.
-    parsed_message = MagicMock()
-    parsed_message.type = MagicMock(value="assistant")
-    parsed_message.record_id = "frame-uuid-per-message"
-    parsed_message.turn_id = "msg_anthropic_turn_shared"
-    parsed_message.metadata = {"turn_id": "msg_anthropic_turn_shared"}
+    # production: message_id (per-record) and turn_id (per-turn) as distinct fields.
+    message_data = {
+        "type": "assistant",
+        "message_id": "frame-uuid-per-message",
+        "turn_id": "msg_anthropic_turn_shared",
+        "metadata": {"turn_id": "msg_anthropic_turn_shared"},
+    }
 
     callback = webui._create_message_callback(session_id)
-    await callback(session_id, parsed_message)
+    await callback(session_id, message_data)
 
     queue, _, _ = webui.session_queues[session_id].events_since(0)
     assert len(queue) == 1
@@ -393,14 +397,15 @@ async def test_issue_1957_end_to_end_two_frames_one_turn_through_real_pipeline(t
     frames' storage_manager.append_message() calls also each got that same distinct id
     (live and stored stay aligned per frame).
 
-    Issue #1958 moved the per-record UUID stamp out of _store_sdk_message() and into
-    _process_sdk_message() (see claude_sdk.py), so it now runs unconditionally regardless
-    of storage_manager. This test calls _store_sdk_message() directly (bypassing
-    _process_sdk_message()), so it stamps each frame's message_id itself first, exactly
-    mirroring what _process_sdk_message() would have done immediately beforehand in
-    production.
+    Issue #2084 (stage 3-B): _store_sdk_message() no longer exists — storage and the
+    live callback are now both driven by the one MessageRecord _process_sdk_message()
+    builds per real SDK message. This test calls _process_sdk_message() directly with
+    two real AssistantMessage frames sharing one Anthropic turn (same SDK-level
+    `.message_id`), via a thin one-arg adapter bridging to BackendApp's real two-arg
+    callback (mirroring the role SessionCoordinator._create_message_callback plays in
+    production, without needing the full SessionCoordinator wiring).
     """
-    import uuid
+    from claude_agent_sdk import AssistantMessage, TextBlock
 
     from backend.claude_sdk import ClaudeSDK
     from backend.session_config import SessionConfig
@@ -421,30 +426,23 @@ async def test_issue_1957_end_to_end_two_frames_one_turn_through_real_pipeline(t
     coordinator = MagicMock()
     webui.coordinator = coordinator
     callback = webui._create_message_callback(session_id)
-    sdk.message_callback = callback
 
-    shared_turn_metadata = {"turn_id": "msg_anthropic_turn_shared_e2e", "tool_uses": []}
-    frame_1 = {
-        "type": "assistant", "content": "Launching agent A", "timestamp": 1.0,
-        "session_id": session_id, "metadata": dict(shared_turn_metadata),
-        "message_id": str(uuid.uuid4()),
-    }
-    frame_2 = {
-        "type": "assistant", "content": "Launching agent B", "timestamp": 2.0,
-        "session_id": session_id, "metadata": dict(shared_turn_metadata),
-        "message_id": str(uuid.uuid4()),
-    }
+    async def message_callback_adapter(message_data):
+        await callback(session_id, message_data)
 
-    # Real _message_processor (not mocked) so process_message()/prepare_for_websocket()
-    # actually run and reflect the top-level message_id into parsed_message.record_id
-    # correctly.
-    from backend.message_parser import MessageParser, MessageProcessor
-    webui._message_processor = MessageProcessor(MessageParser())
+    sdk.message_callback = message_callback_adapter
 
-    await sdk._store_sdk_message(frame_1)
-    await callback(session_id, frame_1)
-    await sdk._store_sdk_message(frame_2)
-    await callback(session_id, frame_2)
+    frame_1 = AssistantMessage(
+        content=[TextBlock(text="Launching agent A")], model="m",
+        message_id="msg_anthropic_turn_shared_e2e",
+    )
+    frame_2 = AssistantMessage(
+        content=[TextBlock(text="Launching agent B")], model="m",
+        message_id="msg_anthropic_turn_shared_e2e",
+    )
+
+    await sdk._process_sdk_message(frame_1)
+    await sdk._process_sdk_message(frame_2)
 
     queue, _, _ = webui.session_queues[session_id].events_since(0)
     assert len(queue) == 2
@@ -564,11 +562,9 @@ async def test_permission_barrier_resolves_on_mark():
 
     with (
         patch("backend.permission_service.PermissionRequestMessage") as mock_pr,
-        patch("backend.permission_service.StoredMessage") as mock_sm,
         patch("backend.permission_service.PermissionInfo"),
     ):
         mock_pr.return_value = MagicMock()
-        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
 
         cb = svc.create_permission_callback(session_id)
         start = asyncio.get_event_loop().time()
@@ -621,7 +617,6 @@ async def test_permission_barrier_fails_open_on_timeout(caplog):
 
     with (
         patch("backend.permission_service.PermissionRequestMessage") as mock_pr,
-        patch("backend.permission_service.StoredMessage") as mock_sm,
         patch("backend.permission_service.PermissionInfo"),
         # Make wait_for immediately time out so the test runs in well under 2s
         patch(
@@ -635,7 +630,6 @@ async def test_permission_barrier_fails_open_on_timeout(caplog):
         caplog.at_level("WARNING", logger="sdk_debug"),
     ):
         mock_pr.return_value = MagicMock()
-        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
 
         cb = svc.create_permission_callback(session_id)
         task = asyncio.create_task(cb("Write", {"file_path": "/y.py"}, ctx))
@@ -683,11 +677,9 @@ async def test_permission_barrier_skipped_when_turn_id_absent():
 
     with (
         patch("backend.permission_service.PermissionRequestMessage") as mock_pr,
-        patch("backend.permission_service.StoredMessage") as mock_sm,
         patch("backend.permission_service.PermissionInfo"),
     ):
         mock_pr.return_value = MagicMock()
-        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
 
         cb = svc.create_permission_callback(session_id)
         task = asyncio.create_task(cb("Read", {"file_path": "/foo.txt"}, None))
@@ -788,34 +780,36 @@ async def test_issue_1958_multi_record_turn_full_production_wiring(tmp_path):
 @pytest.mark.asyncio
 async def test_issue_1958_fail_loud_when_record_id_missing(tmp_path, caplog):
     """Issue #1958 acceptance criteria: when a live message reaches web_server.py's
-    callback with no record_id, this must produce a visible logged error — NOT a silent
-    fallback to the turn-level id. Silent turn-level substitution on a record_id miss is
-    the exact anti-pattern behind #1955/#1957/#1957-followup; the rename replaces the old
-    4-branch dict-digging chain specifically to make this failure mode structurally
-    impossible to reintroduce."""
+    callback with no message_id, this must produce a visible logged error — NOT a silent
+    fallback to the turn-level id. Silent turn-level substitution on a message_id miss is
+    the exact anti-pattern behind #1955/#1957/#1957-followup. Issue #2084 (stage 3-B):
+    the callback now receives the canonical MessageRecord dict directly rather than a
+    ParsedMessage object, but the same structural guarantee holds — message_id is a
+    top-level field, never derived from turn_id."""
     session_id = "sess-1958-fail-loud"
     webui = _make_webui(tmp_path)
     webui.session_queues[session_id] = EventQueue()
     webui.coordinator = MagicMock()
 
-    parsed_message = MagicMock()
-    parsed_message.type = MagicMock(value="assistant")
-    parsed_message.record_id = None
-    parsed_message.turn_id = "msg_turn_only"
-    parsed_message.metadata = {"turn_id": "msg_turn_only"}
+    message_data = {
+        "type": "assistant",
+        "turn_id": "msg_turn_only",
+        "metadata": {"turn_id": "msg_turn_only"},
+        # message_id deliberately omitted
+    }
 
     callback = webui._create_message_callback(session_id)
     with caplog.at_level("ERROR", logger="backend.web_server"):
-        await callback(session_id, parsed_message)
+        await callback(session_id, message_data)
 
     queue, _, _ = webui.session_queues[session_id].events_since(0)
     assert len(queue) == 1
     assert "message_id" not in queue[0]["data"], (
         "No turn-level substitution allowed into websocket_data['message_id'] when "
-        "record_id is absent — this is the exact anti-pattern #1958 eliminates."
+        "it is absent — this is the exact anti-pattern #1958 eliminates."
     )
-    assert any("record_id" in r.message for r in caplog.records), (
-        "A missing record_id on the live path must produce a visible logged error"
+    assert any("message_id" in r.message for r in caplog.records), (
+        "A missing message_id on the live path must produce a visible logged error"
     )
 
 

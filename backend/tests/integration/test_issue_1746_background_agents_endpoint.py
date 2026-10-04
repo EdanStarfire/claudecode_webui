@@ -60,6 +60,11 @@ async def test_background_agents_endpoint_returns_hydrated_snapshot(api_integrat
     project = await env["create_test_project"]()
     session = await env["create_test_session"](project["project_id"])
     session_id = session["session_id"]
+    # Issue #2084 (stage 3-B, §7): this test writes legacy `_type`-shaped Task
+    # messages directly to storage — force the pre-3-B default so
+    # _get_task_leg_registry()'s canonical fast path doesn't short-circuit past
+    # the legacy hydration path under test.
+    coordinator.session_manager._active_sessions[session_id].message_schema_version = 0
 
     session_dir = await coordinator.session_manager.get_session_directory(session_id)
     storage = coordinator._storage_managers.get(session_id)
@@ -99,6 +104,11 @@ async def test_background_agents_endpoint_excludes_local_bash(api_integration_en
     project = await env["create_test_project"]()
     session = await env["create_test_session"](project["project_id"])
     session_id = session["session_id"]
+    # Issue #2084 (stage 3-B, §7): this test writes legacy `_type`-shaped Task
+    # messages directly to storage — force the pre-3-B default so
+    # _get_task_leg_registry()'s canonical fast path doesn't short-circuit past
+    # the legacy hydration path under test.
+    coordinator.session_manager._active_sessions[session_id].message_schema_version = 0
 
     session_dir = await coordinator.session_manager.get_session_directory(session_id)
     storage = coordinator._storage_managers.get(session_id)

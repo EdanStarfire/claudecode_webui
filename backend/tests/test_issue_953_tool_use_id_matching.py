@@ -182,11 +182,9 @@ async def test_permission_callback_uses_direct_lookup_when_tool_use_id_present()
 
     with (
         patch("backend.permission_service.PermissionRequestMessage") as mock_pr_msg,
-        patch("backend.permission_service.StoredMessage") as mock_sm,
         patch("backend.permission_service.PermissionInfo"),
     ):
         mock_pr_msg.return_value = MagicMock()
-        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
         coord.update_tool_call_permission_request = MagicMock(return_value=None)
         coord.session_manager = MagicMock()
         coord.session_manager.get_session_info = AsyncMock(
@@ -225,11 +223,9 @@ async def test_permission_callback_falls_back_to_signature_when_no_tool_use_id()
 
     with (
         patch("backend.permission_service.PermissionRequestMessage") as mock_pr_msg,
-        patch("backend.permission_service.StoredMessage") as mock_sm,
         patch("backend.permission_service.PermissionInfo"),
     ):
         mock_pr_msg.return_value = MagicMock()
-        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
         coord.update_tool_call_permission_request = MagicMock(return_value=None)
         coord.session_manager = MagicMock()
         coord.session_manager.get_session_info = AsyncMock(
@@ -273,10 +269,8 @@ async def test_permission_callback_extracts_agent_id_from_context():
 
     with (
         patch("backend.permission_service.PermissionRequestMessage", side_effect=capture_permission_request),
-        patch("backend.permission_service.StoredMessage") as mock_sm,
         patch("backend.permission_service.PermissionInfo"),
     ):
-        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
         coord.session_manager = MagicMock()
         coord.session_manager.get_session_info = AsyncMock(
             return_value=MagicMock(current_permission_mode="default")
@@ -316,11 +310,9 @@ async def test_direct_lookup_resolves_without_wait():
 
     with (
         patch("backend.permission_service.PermissionRequestMessage") as mock_pr_msg,
-        patch("backend.permission_service.StoredMessage") as mock_sm,
         patch("backend.permission_service.PermissionInfo"),
     ):
         mock_pr_msg.return_value = MagicMock()
-        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
         coord.update_tool_call_permission_request = MagicMock(return_value=None)
         coord.session_manager = MagicMock()
         coord.session_manager.get_session_info = AsyncMock(
@@ -356,12 +348,10 @@ async def test_permission_callback_with_none_context():
 
     with (
         patch("backend.permission_service.PermissionRequestMessage") as mock_pr_msg,
-        patch("backend.permission_service.StoredMessage") as mock_sm,
         patch("backend.permission_service.PermissionInfo"),
         patch("backend.permission_service.asyncio.wait_for", side_effect=asyncio.TimeoutError),
     ):
         mock_pr_msg.return_value = MagicMock()
-        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
         coord.session_manager = MagicMock()
         coord.session_manager.get_session_info = AsyncMock(
             return_value=MagicMock(current_permission_mode="default")

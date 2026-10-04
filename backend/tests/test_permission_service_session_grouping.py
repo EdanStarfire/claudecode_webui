@@ -91,11 +91,8 @@ async def test_two_concurrent_requests_same_session_only_resumes_after_both_reso
 
     with (
         patch("backend.permission_service.PermissionRequestMessage"),
-        patch("backend.permission_service.StoredMessage") as mock_sm,
         patch("backend.permission_service.PermissionInfo"),
     ):
-        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
-        mock_sm.from_permission_response.return_value = MagicMock(to_dict=lambda: {})
 
         from backend.permission_service import PermissionService
 
@@ -154,11 +151,8 @@ async def test_single_request_still_resumes_session_on_resolve():
 
     with (
         patch("backend.permission_service.PermissionRequestMessage"),
-        patch("backend.permission_service.StoredMessage") as mock_sm,
         patch("backend.permission_service.PermissionInfo"),
     ):
-        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
-        mock_sm.from_permission_response.return_value = MagicMock(to_dict=lambda: {})
 
         from backend.permission_service import PermissionService
 
@@ -306,11 +300,8 @@ async def test_two_different_sessions_do_not_interact():
 
     with (
         patch("backend.permission_service.PermissionRequestMessage"),
-        patch("backend.permission_service.StoredMessage") as mock_sm,
         patch("backend.permission_service.PermissionInfo"),
     ):
-        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
-        mock_sm.from_permission_response.return_value = MagicMock(to_dict=lambda: {})
 
         from backend.permission_service import PermissionService
 
@@ -365,10 +356,8 @@ async def test_cancelled_await_still_releases_pending_by_session():
 
     with (
         patch("backend.permission_service.PermissionRequestMessage"),
-        patch("backend.permission_service.StoredMessage") as mock_sm,
         patch("backend.permission_service.PermissionInfo"),
     ):
-        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
 
         from backend.permission_service import PermissionService
 
