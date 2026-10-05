@@ -39,7 +39,13 @@ class PopulationReport:
 
     @property
     def fully_canonical(self) -> bool:
-        return self.total == self.canonical
+        # Issue #2084 (stage 3-D-prep, §6, found in review): an unreadable
+        # state.json must never be silently treated as equivalent to "verified
+        # canonical" — it's exactly the kind of record a human needs to look at
+        # before the 3-D-cutover decision is safe, so it blocks readiness the
+        # same way a quarantined record does, even though every readable record
+        # happens to be canonical.
+        return self.total == self.canonical and not self.unreadable
 
 
 def _bucket(report: PopulationReport, record_id: str, data: dict) -> None:

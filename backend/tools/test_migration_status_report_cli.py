@@ -65,6 +65,25 @@ class TestScanLive:
         report = _scan_live(sessions_dir)
         assert report.unreadable == ["s-bad"]
         assert report.total == 0
+        # Issue #2084 (stage 3-D-prep, §6, found in review): an unreadable
+        # state.json must block readiness even though it's excluded from `total`
+        # (so it can't be silently counted as canonical by omission).
+        assert report.fully_canonical is False
+
+    def test_unreadable_state_json_blocks_fully_canonical_even_with_zero_other_records(
+        self, tmp_path
+    ):
+        """A population with ONLY an unreadable record (no canonical/legacy/
+        quarantined records at all) must not look "fully canonical" just because
+        total == canonical == 0."""
+        sessions_dir = tmp_path / "sessions"
+        bad = sessions_dir / "s-bad"
+        bad.mkdir(parents=True)
+        (bad / "state.json").write_text("NOT JSON", encoding="utf-8")
+
+        report = _scan_live(sessions_dir)
+        assert report.total == report.canonical == 0
+        assert report.fully_canonical is False
 
     def test_session_dir_without_state_json_skipped(self, tmp_path):
         sessions_dir = tmp_path / "sessions"
@@ -136,6 +155,26 @@ class TestRun:
         exit_code = run(tmp_path)
 
         assert exit_code == 1
+
+    def test_exit_nonzero_when_unreadable_state_json_present_even_if_rest_canonical(
+        self, tmp_path, capsys
+    ):
+        """Issue #2084 (stage 3-D-prep, §6, found in review): an unreadable
+        state.json must block the ready determination the same way a quarantined
+        record does — it must never be silently treated as equivalent to
+        "verified clean" just because every READABLE record happens canonical."""
+        _write_state(
+            tmp_path / "sessions" / "s1" / "state.json",
+            "s1", CURRENT_MESSAGE_SCHEMA_VERSION, {"state": "completed"},
+        )
+        bad = tmp_path / "sessions" / "s-bad"
+        bad.mkdir(parents=True)
+        (bad / "state.json").write_text("NOT JSON", encoding="utf-8")
+
+        exit_code = run(tmp_path)
+
+        assert exit_code == 1
+        assert "NOT READY" in capsys.readouterr().out
 
     def test_quarantined_ids_printed_in_output(self, tmp_path, capsys):
         _write_state(
