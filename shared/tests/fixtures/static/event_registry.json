@@ -122,6 +122,16 @@
       ],
       "required_keys_by_queue": {}
     },
+    "migration_notice": {
+      "queues": [
+        "session"
+      ],
+      "required_keys": [
+        "message",
+        "session_id"
+      ],
+      "required_keys_by_queue": {}
+    },
     "notification": {
       "queues": [
         "ui"

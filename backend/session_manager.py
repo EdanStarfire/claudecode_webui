@@ -159,6 +159,15 @@ class SessionInfo:
     # readers can skip the legacy-shape conversion fast path entirely for it.
     message_schema_version: int = 0
 
+    # Issue #2084 (stage 3-C, §4): background/on-demand migration bookkeeping, deliberately
+    # separate from message_schema_version — "what shape is the data" vs "where is the
+    # migration process" are different axes. None means never touched (every session that
+    # was canonical from creation, or hasn't been picked up by migration yet). Shape when
+    # present: {"state": "pending"|"in_progress"|"completed"|"quarantined",
+    # "started_at": <iso>, "completed_at": <iso>|None, "error": <str>|None,
+    # "materialized_tool_calls": <int>}.
+    message_migration_status: dict[str, Any] | None = None
+
     def __post_init__(self):
         if self.secret_placeholders is None:
             self.secret_placeholders = {}
@@ -200,6 +209,7 @@ class SessionInfo:
             "latest_message_type": self.latest_message_type,
             "links": self.links,
             "message_schema_version": self.message_schema_version,
+            "message_migration_status": self.message_migration_status,
             "name": self.name,
             "order": self.order,
             "overseer_level": self.overseer_level,
@@ -271,6 +281,7 @@ class SessionInfo:
         data.setdefault("links", [])
         data.setdefault("last_timestamp_injection_date", None)
         data.setdefault("message_schema_version", 0)
+        data.setdefault("message_migration_status", None)
         data.setdefault("error_subtype", None)
         data.setdefault("error_terminal_reason", None)
         data.setdefault("error_api_error_status", None)
@@ -291,6 +302,7 @@ class SessionInfo:
             "template_id", "config", "last_activity_at", "last_completion_at",
             "last_viewed_at", "secret_fetch_token", "secret_placeholders",
             "links", "last_timestamp_injection_date", "message_schema_version",
+            "message_migration_status",
         }
         for k in list(data.keys()):
             if k not in known:
@@ -903,6 +915,98 @@ class SessionManager:
                 return True
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} sdk_generated_name: {e}")
+                return False
+
+    async def try_claim_message_migration(self, session_id: str) -> bool:
+        """Issue #2084 (stage 3-C, §5/§6): atomically decide whether the caller is the
+        one to migrate this session right now.
+
+        Returns True (and marks the session "in_progress") only if the session is
+        still legacy (schema_version 0) AND no other caller has already claimed or
+        finished it — the background loop's tick and an on-demand trigger can race
+        on the same session, so whichever reaches this method first wins; the other
+        gets False and no-ops. Reuses SessionManager's existing per-session lock
+        (`_get_session_lock`) for this decision, distinct from
+        `DataStorageManager._write_lock`, which protects the actual file rewrite
+        from racing with a *live* append — a different hazard than this claim step.
+
+        A "quarantined" session is deliberately re-claimable (§7: on-demand migration
+        always retries once per session open, so a transient failure can self-heal
+        on a later open without a server restart).
+        """
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    return False
+                if session.message_schema_version != 0:
+                    return False
+                status = session.message_migration_status
+                if status is not None and status.get("state") in ("in_progress", "completed"):
+                    return False
+                session.message_migration_status = {
+                    "state": "in_progress",
+                    "started_at": datetime.now(UTC).isoformat(),
+                    "completed_at": None,
+                    "error": None,
+                    "materialized_tool_calls": 0,
+                }
+                session.updated_at = datetime.now(UTC)
+                await self._persist_session_state(session_id)
+                return True
+            except Exception as e:
+                logger.error(f"Failed to claim message migration for {session_id}: {e}")
+                return False
+
+    async def complete_message_migration(self, session_id: str, materialized_tool_calls: int) -> bool:
+        """Issue #2084 (stage 3-C, §4): flip message_schema_version and mark completed.
+
+        Schema version (the thing readers' fast path actually gates on) is set in the
+        same in-memory update as — and persisted no later than — message_migration_status
+        becoming "completed", so no reader can ever observe "completed" with a stale
+        schema version.
+        """
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    return False
+                started_at = (session.message_migration_status or {}).get("started_at")
+                session.message_schema_version = CURRENT_MESSAGE_SCHEMA_VERSION
+                session.message_migration_status = {
+                    "state": "completed",
+                    "started_at": started_at,
+                    "completed_at": datetime.now(UTC).isoformat(),
+                    "error": None,
+                    "materialized_tool_calls": materialized_tool_calls,
+                }
+                session.updated_at = datetime.now(UTC)
+                await self._persist_session_state(session_id)
+                return True
+            except Exception as e:
+                logger.error(f"Failed to complete message migration for {session_id}: {e}")
+                return False
+
+    async def quarantine_message_migration(self, session_id: str, error: str) -> bool:
+        """Issue #2084 (stage 3-C, §7): mark migration quarantined; schema_version stays 0."""
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    return False
+                started_at = (session.message_migration_status or {}).get("started_at")
+                session.message_migration_status = {
+                    "state": "quarantined",
+                    "started_at": started_at,
+                    "completed_at": datetime.now(UTC).isoformat(),
+                    "error": error,
+                    "materialized_tool_calls": 0,
+                }
+                session.updated_at = datetime.now(UTC)
+                await self._persist_session_state(session_id)
+                return True
+            except Exception as e:
+                logger.error(f"Failed to quarantine message migration for {session_id}: {e}")
                 return False
 
     async def update_permission_mode(
