@@ -596,3 +596,71 @@ async def test_no_flush_no_callback():
     await asyncio.sleep(0.5)
     await writer.stop()
     flush_mock.assert_not_called()
+
+
+# ------------------------------------------------------------------
+# Issue #2084 (stage 3-D-prep, §4): canonical `tool_call` flat-shape parity
+# with the stored_type == "ToolCallUpdate" branch above. Every live tool-call
+# write has used this flat shape unconditionally since 3-B's cutover (#2086);
+# before this stage, these records were silently dropped entirely.
+# ------------------------------------------------------------------
+
+async def _run_tool_call_update(status: str, *, tool_use_id="tu-old", name="Edit", ts=1.0):
+    db = MockDB()
+    writer = AuditWriter(db)
+    writer.start()
+    msg = {
+        "_type": "ToolCallUpdate",
+        "timestamp": ts,
+        "data": {"tool_use_id": tool_use_id, "name": name, "status": status, "input": {}},
+    }
+    await writer.on_message_append("s1", "proj1", msg)
+    await asyncio.sleep(0.3)
+    await writer.stop()
+    return db.rows
+
+
+async def _run_flat_tool_call(status: str, *, tool_use_id="tu-new", name="Edit", ts=1.0):
+    db = MockDB()
+    writer = AuditWriter(db)
+    writer.start()
+    msg = {
+        "type": "tool_call",
+        "timestamp": ts,
+        "tool_use_id": tool_use_id,
+        "name": name,
+        "status": status,
+        "input": {},
+    }
+    await writer.on_message_append("s1", "proj1", msg)
+    await asyncio.sleep(0.3)
+    await writer.stop()
+    return db.rows
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["pending", "awaiting_permission", "denied", "completed", "failed", "interrupted"],
+)
+@pytest.mark.asyncio
+async def test_flat_tool_call_matches_tool_call_update_for_every_status(status):
+    """A canonical flat `tool_call` message must produce the same audit event
+    (event_type/status/summary) as the equivalent nested ToolCallUpdate shape,
+    for every status transition."""
+    update_rows = await _run_tool_call_update(status)
+    flat_rows = await _run_flat_tool_call(status)
+
+    assert len(update_rows) == len(flat_rows) == 1
+    update_row, flat_row = update_rows[0], flat_rows[0]
+    # event_type, tool_name, status, summary must match; message_id/tool_use_id differ by design.
+    assert update_row[6] == flat_row[6]  # event_type
+    assert update_row[7] == flat_row[7]  # tool_name
+    assert update_row[8] == flat_row[8]  # status
+    assert update_row[9] == flat_row[9]  # summary
+
+
+@pytest.mark.asyncio
+async def test_flat_tool_call_running_status_emits_nothing():
+    """Mirrors ToolCallUpdate's running-state skip (noise, covered by started/permission)."""
+    rows = await _run_flat_tool_call("running")
+    assert rows == []

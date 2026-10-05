@@ -390,6 +390,61 @@ async def test_issue_722_stored_tool_call_non_comm_skipped(temp_dir):
 
 
 @pytest.mark.asyncio
+async def test_issue_2084_flat_tool_call_send_comm(temp_dir):
+    """Issue #2084 (stage 3-D-prep, §5): a canonical flat `tool_call`-shaped
+    mcp__legion__send_comm record must produce the same distilled entry as the
+    equivalent legacy ToolCallUpdate-shaped one — before this stage, canonical
+    tool_call records fell through every branch and were silently skipped."""
+    messages = [
+        {
+            "type": "tool_call",
+            "timestamp": 1700000000.0,
+            "name": "mcp__legion__send_comm",
+            "tool_use_id": "tu1",
+            "status": "completed",
+            "input": {
+                "to_minion_name": "Reviewer",
+                "summary": "Build complete",
+                "content": "All tests passing.",
+            },
+        },
+    ]
+    jsonl = temp_dir / "messages.jsonl"
+    output = temp_dir / "out.md"
+    _write_jsonl(jsonl, messages)
+
+    await distill_session_history(jsonl, output, "s1", "2024-01-01T00:00:00+00:00")
+    content = output.read_text()
+    assert "Comm (Outbound to Reviewer)" in content
+    assert "**Summary:** Build complete" in content
+    assert "All tests passing." in content
+    assert "Outbound: 1" in content
+
+
+@pytest.mark.asyncio
+async def test_issue_2084_flat_tool_call_non_comm_skipped(temp_dir):
+    """Canonical flat `tool_call` for a non-comm tool is skipped, mirroring the
+    legacy tool_use and ToolCallUpdate branches' same behavior."""
+    messages = [
+        {
+            "type": "tool_call",
+            "timestamp": 1700000000.0,
+            "name": "Read",
+            "tool_use_id": "tu2",
+            "status": "completed",
+            "input": {"file_path": "/some/file.py"},
+        },
+    ]
+    jsonl = temp_dir / "messages.jsonl"
+    output = temp_dir / "out.md"
+    _write_jsonl(jsonl, messages)
+
+    await distill_session_history(jsonl, output, "s1", "2024-01-01T00:00:00+00:00")
+    content = output.read_text()
+    assert "Total messages: 0" in content
+
+
+@pytest.mark.asyncio
 async def test_issue_722_stored_system_message(temp_dir):
     """StoredMessage SystemMessage applies exclusion filter."""
     messages = [

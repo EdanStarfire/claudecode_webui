@@ -508,6 +508,60 @@ class TestSessionManager:
             assert session_info.working_directory == sample_session_config.working_directory
 
     @pytest.mark.asyncio
+    async def test_stale_in_progress_migration_status_resets_on_startup(
+        self, sample_session_config
+    ):
+        """Issue #2084 (stage 3-D-prep, §1): a crash/restart between
+        try_claim_message_migration() and complete/quarantine_message_migration()
+        must not leave message_migration_status stuck at "in_progress" forever —
+        _pick_candidate() skips any non-None status permanently, and
+        try_claim_message_migration() itself rejects "in_progress"."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            manager1 = SessionManager(temp_path)
+            await manager1.initialize()
+            session_id = str(uuid.uuid4())
+            await manager1.create_session(session_id, config=sample_session_config)
+            manager1._active_sessions[session_id].message_schema_version = 0
+            assert await manager1.try_claim_message_migration(session_id)
+            assert (
+                manager1._active_sessions[session_id].message_migration_status["state"]
+                == "in_progress"
+            )
+
+            # Simulate a crash/restart: a fresh manager loads the same on-disk state.
+            manager2 = SessionManager(temp_path)
+            await manager2.initialize()
+
+            reloaded = manager2._active_sessions[session_id]
+            assert reloaded.message_migration_status is None
+            assert reloaded.message_schema_version == 0  # untouched by the self-heal
+
+    @pytest.mark.asyncio
+    async def test_non_in_progress_migration_status_untouched_on_startup(
+        self, sample_session_config
+    ):
+        """Sanity check: "quarantined" and "completed" statuses must survive a
+        restart unchanged — only "in_progress" is a crash orphan."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            manager1 = SessionManager(temp_path)
+            await manager1.initialize()
+            session_id = str(uuid.uuid4())
+            await manager1.create_session(session_id, config=sample_session_config)
+            manager1._active_sessions[session_id].message_schema_version = 0
+            await manager1.try_claim_message_migration(session_id)
+            await manager1.quarantine_message_migration(session_id, "boom")
+
+            manager2 = SessionManager(temp_path)
+            await manager2.initialize()
+
+            reloaded = manager2._active_sessions[session_id]
+            assert reloaded.message_migration_status["state"] == "quarantined"
+
+    @pytest.mark.asyncio
     async def test_concurrent_session_operations(self, temp_session_manager, sample_session_config):
         """Test concurrent session operations."""
         manager = temp_session_manager

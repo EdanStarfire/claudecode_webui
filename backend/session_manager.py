@@ -477,6 +477,25 @@ class SessionManager:
                                 state_changed = True
                                 session_logger.info(f"Reset processing state for session {session_info.session_id} from {original_processing} to False on startup")
 
+                            # Issue #2084 (stage 3-D-prep, §1): a crash/restart between
+                            # try_claim_message_migration() and complete/quarantine would
+                            # otherwise leave message_migration_status stuck at "in_progress"
+                            # forever — _pick_candidate() skips any non-None status permanently
+                            # and try_claim_message_migration() itself rejects "in_progress".
+                            # Resetting to None (not "quarantined") is deliberate: nothing was
+                            # actually running, so the background loop or an on-demand open can
+                            # simply re-pick it and try again clean.
+                            if (
+                                session_info.message_migration_status is not None
+                                and session_info.message_migration_status.get("state") == "in_progress"
+                            ):
+                                session_info.message_migration_status = None
+                                state_changed = True
+                                session_logger.info(
+                                    f"Reset stale in_progress message_migration_status for session "
+                                    f"{session_info.session_id} on startup (crash/restart during migration)"
+                                )
+
                             self._active_sessions[session_info.session_id] = session_info
 
                             # Save the updated state if it was modified

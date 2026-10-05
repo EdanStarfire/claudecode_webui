@@ -4683,6 +4683,13 @@ class SessionCoordinator:
         start_session()'s on-demand trigger."""
         self._message_migration_service = service
 
+    @property
+    def message_migration_service(self):
+        """Issue #2084 (stage 3-D-prep, §2): public read accessor so callers outside
+        SessionCoordinator (e.g. ArchiveManager's migrate-at-disposal) can reach the
+        same MessageMigrationService instance wired by set_message_migration_service()."""
+        return self._message_migration_service
+
     def set_migration_notice_callback(self, callback: Callable) -> None:
         """Issue #2084 (stage 3-C, §6): set callback(session_id) fired the first time
         on-demand migration actually runs (and succeeds) for a session."""

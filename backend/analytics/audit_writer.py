@@ -216,6 +216,48 @@ class AuditWriter:
                 "tool_call", tool_name, status, summary, message_id, extra,
             )
 
+        elif msg_type == "tool_call":
+            # Issue #2084 (stage 3-D-prep, §4): the canonical flat shape every live
+            # tool-call write has used since 3-B's cutover (#2086) — mirrors the
+            # stored_type == "ToolCallUpdate" branch above, reading flat top-level
+            # fields instead of a nested data dict.
+            tool_name = msg.get("name")
+            tool_use_id = msg.get("tool_use_id")
+            tc_status = msg.get("status", "pending")
+            tool_input = msg.get("input") or {}
+
+            if tc_status == "pending":
+                summary = _make_tool_summary(tool_name, tool_input)
+                extra = {"tool_name": tool_name, "tool_use_id": tool_use_id}
+                self._enqueue_with_ts(
+                    timestamp, source_ts, session_id, project_id, None, turn_id,
+                    "tool_call", tool_name, "started", summary, message_id, extra,
+                )
+            elif tc_status == "awaiting_permission":
+                summary = _truncate(f"Permission requested: {tool_name}")
+                extra = {"tool_name": tool_name, "tool_use_id": tool_use_id}
+                self._enqueue_with_ts(
+                    timestamp, source_ts, session_id, project_id, None, turn_id,
+                    "permission", tool_name, "requested", summary, message_id, extra,
+                )
+            elif tc_status == "denied":
+                summary = _truncate(f"Permission denied: {tool_name}")
+                extra = {"tool_name": tool_name, "tool_use_id": tool_use_id}
+                self._enqueue_with_ts(
+                    timestamp, source_ts, session_id, project_id, None, turn_id,
+                    "permission", tool_name, "denied", summary, message_id, extra,
+                )
+            elif tc_status in ("completed", "failed", "interrupted"):
+                is_error = tc_status != "completed"
+                audit_status = {"completed": "ok", "failed": "error", "interrupted": "interrupted"}[tc_status]
+                summary = _make_tool_result_summary(tool_name, {}, is_error)
+                extra = {"tool_name": tool_name, "tool_use_id": tool_use_id}
+                self._enqueue_with_ts(
+                    timestamp, source_ts, session_id, project_id, None, turn_id,
+                    "tool_call", tool_name, audit_status, summary, message_id, extra,
+                )
+            # running state: skip — covered by started/permission events
+
         elif msg_type in ("tool_result", "tool_error"):
             # Legacy type kept for backward compatibility with old JSONL files
             metadata = msg.get("metadata", {})

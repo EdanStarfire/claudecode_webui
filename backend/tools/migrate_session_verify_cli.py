@@ -21,10 +21,18 @@ flip) via the same migrate_session_messages() the background/on-demand paths use
 
 Usage:
     uv run python -m backend.tools.migrate_session_verify_cli <session_id> [--data-dir DIR] [--apply]
+
+Archive-targeting mode (issue #2084 stage 3-D-prep, §3) — same dry-run/--apply
+semantics, applied to a disposed session's frozen archive snapshot instead of a
+live session directory (needed since 3-C's background/on-demand migration only
+ever reaches live sessions; archives are otherwise permanently stuck at whatever
+message_schema_version they had at disposal time):
+    uv run python -m backend.tools.migrate_session_verify_cli --archive-dir <path> [--apply]
 """
 
 import argparse
 import asyncio
+import json
 import shutil
 import sys
 import time
@@ -37,8 +45,8 @@ from typing import Any
 from backend.data_storage import DataStorageManager
 from backend.message_migration import migrate_session_messages
 from backend.models.messages import CURRENT_MESSAGE_SCHEMA_VERSION
-from backend.session_coordinator import SessionCoordinator
-from backend.session_manager import SessionInfo
+from backend.session_coordinator import SessionCoordinator, _is_canonical_schema_version
+from backend.session_manager import SessionInfo, SessionState
 
 # Fields that are inherently conversion-time-variant in the existing (unmodified)
 # MessageProcessor fallback path, or migration-minted bookkeeping the live/
@@ -64,7 +72,7 @@ class VerificationReport:
         return not self.divergences
 
 
-def _normalize(msg: dict[str, Any]) -> dict[str, Any]:
+def _normalize(msg: dict[str, Any], *, ignore_tool_call_session_id: bool = False) -> dict[str, Any]:
     """Strip fields that are expected to legitimately differ between an ephemeral
     live read and a persisted canonical read (see module docstring).
 
@@ -77,12 +85,26 @@ def _normalize(msg: dict[str, Any]) -> dict[str, Any]:
     this comparison blind to migration corrupting or reassigning a real record's
     identity, exactly the kind of regression this tool is the final gate against
     (found in review).
+
+    ignore_tool_call_session_id (issue #2084 stage 3-D-prep, §3, found in review):
+    a synthesized tool_call's session_id is stamped from whatever accessor id
+    get_session_messages() was called with, not a stored identity. The
+    archive-targeting mode's "before"/"after" reads necessarily go through scratch
+    sessions registered under disposable ids (reusing the archive's own real
+    session_id for a scratch directory would risk colliding with a live session of
+    the same id in a real data dir), so those synthesized ids legitimately differ
+    from each other there. Scoped to a per-call opt-in rather than a module-global
+    ignore so the live-session path (verify_session_migration(), the actual 3-C ->
+    3-D gate) keeps comparing session_id and stays sensitive to a real migration
+    bug that mis-stamps it.
     """
     out = dict(msg)
     if out.get("type") == "tool_call":
         out.pop("message_id", None)
         for f in _IGNORED_TOOL_CALL_FIELDS:
             out.pop(f, None)
+        if ignore_tool_call_session_id:
+            out.pop("session_id", None)
     metadata = out.get("metadata")
     if isinstance(metadata, dict):
         out["metadata"] = {k: v for k, v in metadata.items() if k not in _IGNORED_METADATA_FIELDS}
@@ -129,13 +151,15 @@ def _diff(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> list[dic
 
 
 async def _build_scratch_session(
-    coordinator: SessionCoordinator, source_dir: Path, session_info: SessionInfo
+    coordinator: SessionCoordinator, source_dir: Path, session_state: SessionState
 ) -> tuple[str, Path]:
     """Register a throwaway session pointing at a private copy of the source
-    session's messages.jsonl, so get_session_messages() can be reused verbatim
+    directory's messages.jsonl, so get_session_messages() can be reused verbatim
     for the canonical "after" read — the real production code, not a
     reimplementation — without mutating or depending on the real session unless
-    --apply was passed."""
+    --apply was passed. source_dir is a plain Path (a live session directory or
+    an archive directory — the archive-targeting mode (§3) has no live SessionInfo
+    to pull a state from, hence taking session_state directly)."""
     scratch_id = f"verify-{uuid.uuid4()}"
     scratch_dir = coordinator.session_manager.sessions_dir / scratch_id
     scratch_dir.mkdir(parents=True, exist_ok=True)
@@ -144,7 +168,7 @@ async def _build_scratch_session(
     now = datetime.now(UTC)
     info = SessionInfo(
         session_id=scratch_id,
-        state=session_info.state,
+        state=session_state,
         created_at=now,
         updated_at=now,
         working_directory=str(scratch_dir),
@@ -225,7 +249,7 @@ async def verify_session_migration(
         after = await coordinator.get_session_messages(session_id)
         after_messages = [_normalize(m) for m in after["messages"]]
     else:
-        scratch_id, scratch_dir = await _build_scratch_session(coordinator, session_dir, session_info)
+        scratch_id, scratch_dir = await _build_scratch_session(coordinator, session_dir, session_info.state)
         try:
             scratch_storage = coordinator._storage_managers[scratch_id]
             # Pass the REAL session_id (not scratch_id) so materialized records
@@ -257,6 +281,119 @@ async def verify_session_migration(
     )
 
 
+async def verify_archive_migration(
+    coordinator: SessionCoordinator,
+    archive_dir: Path,
+    *,
+    apply: bool = False,
+) -> VerificationReport:
+    """Archive-targeting mode (§3): same dry-run/--apply semantics as
+    verify_session_migration(), applied to a disposed session's frozen archive
+    snapshot instead of a live session directory.
+
+    There's no live SessionInfo/SessionManager tracking an archived session, so
+    --apply read-modify-writes the archive's own state.json directly — mirroring
+    what SessionManager.complete_message_migration() does for a live session —
+    instead of going through the session-state machinery. The archive is treated
+    as TERMINATED for finalize()'s end-of-stream sweep: a disposed session is
+    never ACTIVE/PAUSED/STARTING by definition.
+    """
+    state_path = archive_dir / "state.json"
+    messages_path = archive_dir / "messages.jsonl"
+    if not state_path.exists() or not messages_path.exists():
+        raise ValueError(f"Archive {archive_dir} is missing state.json or messages.jsonl")
+
+    state_data = json.loads(state_path.read_text(encoding="utf-8"))
+    session_id = state_data.get("session_id")
+    if not session_id:
+        raise ValueError(f"Archive {archive_dir}'s state.json has no session_id")
+    if _is_canonical_schema_version(state_data.get("message_schema_version", 0)):
+        raise RuntimeError(f"Archive {archive_dir} is already canonical — nothing to migrate")
+
+    start_time = time.monotonic()
+    session_state = SessionState.TERMINATED
+
+    backup_dir: Path | None = None
+    if not apply:
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
+        backup_dir = archive_dir.parent / f"{archive_dir.name}-migration-verify-{timestamp}"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(messages_path, backup_dir / "messages.jsonl")
+        shutil.copy2(state_path, backup_dir / "state.json")
+
+    before_id, before_dir = await _build_scratch_session(coordinator, archive_dir, session_state)
+    try:
+        before = await coordinator.get_session_messages(before_id)
+        before_messages = [
+            _normalize(m, ignore_tool_call_session_id=True) for m in before["messages"]
+        ]
+    finally:
+        await _teardown_scratch_session(coordinator, before_id, before_dir)
+
+    if apply:
+        # Real migration, run directly against the archive's own files — a fresh
+        # throwaway asyncio.Lock() is safe here (no concurrent writer can ever
+        # touch a disposed session's archive, unlike a live session's messages.jsonl).
+        result = await migrate_session_messages(
+            archive_dir, session_id, session_state,
+            coordinator._convert_legacy_record_to_websocket, asyncio.Lock(),
+        )
+        existing_status = state_data.get("message_migration_status")
+        started_at = existing_status.get("started_at") if isinstance(existing_status, dict) else None
+        state_data["message_schema_version"] = CURRENT_MESSAGE_SCHEMA_VERSION
+        state_data["message_migration_status"] = {
+            "state": "completed",
+            "started_at": started_at,
+            "completed_at": datetime.now(UTC).isoformat(),
+            "error": None,
+            "materialized_tool_calls": result.materialized_tool_calls,
+        }
+        state_path.write_text(
+            json.dumps(state_data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+        after_id, after_dir = await _build_scratch_session(coordinator, archive_dir, session_state)
+        coordinator.session_manager._active_sessions[after_id].message_schema_version = (
+            CURRENT_MESSAGE_SCHEMA_VERSION
+        )
+        try:
+            after = await coordinator.get_session_messages(after_id)
+            after_messages = [
+                _normalize(m, ignore_tool_call_session_id=True) for m in after["messages"]
+            ]
+        finally:
+            await _teardown_scratch_session(coordinator, after_id, after_dir)
+    else:
+        scratch_id, scratch_dir = await _build_scratch_session(coordinator, archive_dir, session_state)
+        try:
+            scratch_storage = coordinator._storage_managers[scratch_id]
+            result = await migrate_session_messages(
+                scratch_dir, session_id, session_state,
+                coordinator._convert_legacy_record_to_websocket, scratch_storage._write_lock,
+            )
+            coordinator.session_manager._active_sessions[scratch_id].message_schema_version = (
+                CURRENT_MESSAGE_SCHEMA_VERSION
+            )
+            after = await coordinator.get_session_messages(scratch_id)
+            after_messages = [
+                _normalize(m, ignore_tool_call_session_id=True) for m in after["messages"]
+            ]
+        finally:
+            await _teardown_scratch_session(coordinator, scratch_id, scratch_dir)
+
+    divergences = _diff(before_messages, after_messages)
+
+    return VerificationReport(
+        session_id=session_id,
+        total_records_before=before["total_count"],
+        materialized_tool_calls=result.materialized_tool_calls,
+        divergences=divergences,
+        duration_seconds=time.monotonic() - start_time,
+        applied=apply,
+        archive_dir=backup_dir,
+    )
+
+
 def _print_report(report: VerificationReport) -> None:
     print(f"Session: {report.session_id}")
     print(f"Records before: {report.total_records_before}")
@@ -275,11 +412,16 @@ def _print_report(report: VerificationReport) -> None:
             print(f"    after:  {d['after']}")
 
 
-async def _run(session_id: str, data_dir: Path, apply: bool) -> int:
+async def _run(
+    session_id: str | None, archive_dir: Path | None, data_dir: Path, apply: bool
+) -> int:
     coordinator = SessionCoordinator(data_dir)
     await coordinator.initialize()
     try:
-        report = await verify_session_migration(coordinator, session_id, apply=apply)
+        if archive_dir is not None:
+            report = await verify_archive_migration(coordinator, archive_dir, apply=apply)
+        else:
+            report = await verify_session_migration(coordinator, session_id, apply=apply)
     except Exception as e:
         print(f"Verification failed: {e}", file=sys.stderr)
         return 1
@@ -292,9 +434,17 @@ async def _run(session_id: str, data_dir: Path, apply: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Verify (and optionally apply) message migration for one session"
+        description="Verify (and optionally apply) message migration for one session or archive"
     )
-    parser.add_argument("session_id", help="Session ID to verify/migrate")
+    parser.add_argument(
+        "session_id", nargs="?", default=None,
+        help="Session ID to verify/migrate (mutually exclusive with --archive-dir)",
+    )
+    parser.add_argument(
+        "--archive-dir", default=None,
+        help="Path to a disposed session's archive directory to verify/migrate "
+             "instead of a live session (mutually exclusive with session_id)",
+    )
     parser.add_argument(
         "--data-dir", default="./data",
         help="Data directory location (default: ./data)",
@@ -305,8 +455,12 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if bool(args.session_id) == bool(args.archive_dir):
+        parser.error("Specify exactly one of session_id or --archive-dir")
+
     data_dir = Path(args.data_dir).resolve()
-    return asyncio.run(_run(args.session_id, data_dir, args.apply))
+    archive_dir = Path(args.archive_dir).resolve() if args.archive_dir else None
+    return asyncio.run(_run(args.session_id, archive_dir, data_dir, args.apply))
 
 
 if __name__ == "__main__":

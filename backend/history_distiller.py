@@ -281,6 +281,30 @@ async def distill_session_history(
                             stats["comm_outbound"] += 1
                             stats["total"] += 1
 
+                    elif msg_type == "tool_call":
+                        # Issue #2084 (stage 3-D-prep, §5): the canonical flat shape —
+                        # mirrors the stored_type == "ToolCallUpdate" branch's send_comm
+                        # detection above, reading flat fields instead of a nested data dict.
+                        tool_name = msg.get("name", "")
+                        if tool_name == "mcp__legion__send_comm":
+                            tool_input = msg.get("input", {}) or {}
+                            recipient = tool_input.get("to_minion_name", "unknown")
+                            summary = tool_input.get("summary", "")
+                            comm_content = tool_input.get("content", "")
+                            body = ""
+                            if summary:
+                                body += f"**Summary:** {summary}\n"
+                            if comm_content:
+                                body += f"{comm_content}\n"
+                            if not body:
+                                body = "(no content)\n"
+                            entries.append(
+                                f"## {formatted_ts} - Comm (Outbound to {recipient})\n"
+                                f"{body}"
+                            )
+                            stats["comm_outbound"] += 1
+                            stats["total"] += 1
+
         # Calculate duration
         duration_str = "unknown"
         if first_ts is not None and last_ts is not None:
