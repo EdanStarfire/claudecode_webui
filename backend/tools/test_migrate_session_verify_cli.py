@@ -5,16 +5,20 @@ Not under backend/tests/ (pytest's testpaths) — opt-in, invoked explicitly:
     uv run pytest backend/tools/test_migrate_session_verify_cli.py
 """
 
+import json
+import uuid
 from pathlib import Path
 
 import pytest
 
+from backend.models.messages import CURRENT_MESSAGE_SCHEMA_VERSION
 from backend.session_config import SessionConfig
 from backend.session_coordinator import SessionCoordinator
 from backend.tools.migrate_session_verify_cli import (
     _diff,
     _group_by_logical_identity,
     _normalize,
+    verify_archive_migration,
     verify_session_migration,
 )
 
@@ -223,3 +227,77 @@ class TestVerifySessionMigrationApply:
 
         with pytest.raises(RuntimeError):
             await verify_session_migration(coordinator, session_id, apply=True)
+
+
+def _write_legacy_archive(archive_dir: Path, fixture_name: str, session_id: str) -> None:
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    (archive_dir / "messages.jsonl").write_text(
+        (FIXTURES_DIR / fixture_name / "messages.jsonl").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    state = {
+        "session_id": session_id,
+        "message_schema_version": 0,
+        "message_migration_status": None,
+    }
+    (archive_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+
+
+class TestVerifyArchiveMigrationDryRun:
+    """Issue #2084 (stage 3-D-prep, §3): --archive-dir mode, same dry-run
+    semantics as verify_session_migration() but with no live SessionInfo."""
+
+    @pytest.mark.asyncio
+    async def test_zero_divergence_and_archive_untouched(self, temp_coordinator, tmp_path):
+        archive_dir = tmp_path / "archive"
+        session_id = str(uuid.uuid4())
+        _write_legacy_archive(archive_dir, "permission_flow", session_id)
+
+        report = await verify_archive_migration(temp_coordinator, archive_dir, apply=False)
+
+        assert report.ok, report.divergences
+        assert report.applied is False
+        assert report.session_id == session_id
+
+        # Dry run must never touch the real archive's own files.
+        reloaded_state = json.loads((archive_dir / "state.json").read_text(encoding="utf-8"))
+        assert reloaded_state["message_schema_version"] == 0
+        assert reloaded_state["message_migration_status"] is None
+
+    @pytest.mark.asyncio
+    async def test_missing_files_raises(self, temp_coordinator, tmp_path):
+        archive_dir = tmp_path / "empty-archive"
+        archive_dir.mkdir()
+        with pytest.raises(ValueError):
+            await verify_archive_migration(temp_coordinator, archive_dir, apply=False)
+
+    @pytest.mark.asyncio
+    async def test_already_canonical_archive_raises(self, temp_coordinator, tmp_path):
+        archive_dir = tmp_path / "canon-archive"
+        archive_dir.mkdir()
+        (archive_dir / "messages.jsonl").write_text("", encoding="utf-8")
+        state = {
+            "session_id": "s1",
+            "message_schema_version": CURRENT_MESSAGE_SCHEMA_VERSION,
+        }
+        (archive_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+
+        with pytest.raises(RuntimeError):
+            await verify_archive_migration(temp_coordinator, archive_dir, apply=False)
+
+
+class TestVerifyArchiveMigrationApply:
+    @pytest.mark.asyncio
+    async def test_apply_flips_archive_state_json_in_place(self, temp_coordinator, tmp_path):
+        archive_dir = tmp_path / "archive"
+        session_id = str(uuid.uuid4())
+        _write_legacy_archive(archive_dir, "permission_flow", session_id)
+
+        report = await verify_archive_migration(temp_coordinator, archive_dir, apply=True)
+
+        assert report.ok, report.divergences
+        assert report.applied is True
+
+        reloaded_state = json.loads((archive_dir / "state.json").read_text(encoding="utf-8"))
+        assert reloaded_state["message_schema_version"] == CURRENT_MESSAGE_SCHEMA_VERSION
+        assert reloaded_state["message_migration_status"]["state"] == "completed"
