@@ -284,6 +284,7 @@ into the delivered envelope.
 | `tool_call` | session | `session_id`, `data` |
 | `resource_removed` | session | `resource_id` |
 | `proxy_event` | session | `data` |
+| `migration_notice` | session | `session_id`, `message` |
 
 Stage 2b-B (#2065 AC7) wired up both previously-orphaned UI types: `server_restarting`
 is a cross-tab imminent-restart notice (every connected tab's `UI_EVENT_HANDLERS` calls

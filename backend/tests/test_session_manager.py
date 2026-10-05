@@ -1332,3 +1332,41 @@ class TestIssue2084MessageSchemaVersion:
 
         restored = SessionInfo.from_dict(legacy_dict)
         assert restored.message_schema_version == 0
+
+    def test_to_dict_includes_message_migration_status(self):
+        session_id = "test-session-migration-status"
+        now = datetime.now(UTC)
+        status = {"state": "completed", "started_at": None, "completed_at": None,
+                   "error": None, "materialized_tool_calls": 3}
+        info = SessionInfo(
+            session_id=session_id, state=SessionState.CREATED,
+            created_at=now, updated_at=now, message_migration_status=status,
+        )
+        assert info.to_dict()["message_migration_status"] == status
+
+    def test_from_dict_round_trips_message_migration_status(self):
+        session_id = "test-session-migration-status-2"
+        now = datetime.now(UTC)
+        status = {"state": "quarantined", "started_at": None, "completed_at": None,
+                   "error": "boom", "materialized_tool_calls": 0}
+        info = SessionInfo(
+            session_id=session_id, state=SessionState.CREATED,
+            created_at=now, updated_at=now, message_migration_status=status,
+        )
+        restored = SessionInfo.from_dict(info.to_dict())
+        assert restored.message_migration_status == status
+
+    def test_from_dict_defaults_missing_migration_status_key_to_none(self):
+        """A pre-existing state.json written before this field existed (every
+        session that predates issue #2084 stage 3-C) must load with
+        message_migration_status == None, not crash."""
+        session_id = "test-session-migration-status-legacy"
+        now = datetime.now(UTC)
+        legacy_dict = SessionInfo(
+            session_id=session_id, state=SessionState.CREATED,
+            created_at=now, updated_at=now,
+        ).to_dict()
+        del legacy_dict["message_migration_status"]
+
+        restored = SessionInfo.from_dict(legacy_dict)
+        assert restored.message_migration_status is None

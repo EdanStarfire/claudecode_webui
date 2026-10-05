@@ -36,6 +36,13 @@ class DataStorageManager:
         self.on_append: list = []
         self._session_id: str | None = None
         self._project_id: str | None = None
+        # Issue #2084 (stage 3-C, §3): serializes append_message() against the
+        # background/on-demand migration driver, which holds this lock for its full
+        # duration (both streaming passes + the atomic swap) to prevent a live append
+        # landing between migration's pre-scan pass and its conversion pass. One
+        # instance per session (DataStorageManager is already constructed one-per-
+        # session) — no dict/keying needed.
+        self._write_lock = asyncio.Lock()
 
     async def initialize(self):
         """Initialize storage directory and files"""
@@ -59,31 +66,32 @@ class DataStorageManager:
 
     async def append_message(self, message_data: dict[str, Any]):
         """Append a message to the activity log (JSONL format)"""
-        try:
-            # Add timestamp if not present (Unix timestamp float for consistency)
-            if 'timestamp' not in message_data:
-                message_data['timestamp'] = get_unix_timestamp()
+        async with self._write_lock:
+            try:
+                # Add timestamp if not present (Unix timestamp float for consistency)
+                if 'timestamp' not in message_data:
+                    message_data['timestamp'] = get_unix_timestamp()
 
-            # Issue #1000: Assign stable message ID for frontend deduplication
-            if 'message_id' not in message_data:
-                message_data['message_id'] = str(uuid.uuid4())
+                # Issue #1000: Assign stable message ID for frontend deduplication
+                if 'message_id' not in message_data:
+                    message_data['message_id'] = str(uuid.uuid4())
 
-            # Append to JSONL file
-            with open(self.messages_file, 'a', encoding='utf-8') as f:
-                json.dump(message_data, f, ensure_ascii=False)
-                f.write('\n')
+                # Append to JSONL file
+                with open(self.messages_file, 'a', encoding='utf-8') as f:
+                    json.dump(message_data, f, ensure_ascii=False)
+                    f.write('\n')
 
-            storage_logger.debug(f"Appended message to {self.session_dir.name}")
+                storage_logger.debug(f"Appended message to {self.session_dir.name}")
 
-            # Invoke audit hooks (non-fatal)
-            for cb in self.on_append:
-                try:
-                    await cb(self._session_id, self._project_id, message_data)
-                except Exception:
-                    logger.exception("on_append callback error (non-fatal)")
-        except Exception:
-            logger.exception("Failed to append message")
-            raise
+                # Invoke audit hooks (non-fatal)
+                for cb in self.on_append:
+                    try:
+                        await cb(self._session_id, self._project_id, message_data)
+                    except Exception:
+                        logger.exception("on_append callback error (non-fatal)")
+            except Exception:
+                logger.exception("Failed to append message")
+                raise
 
     async def read_messages(self, limit: int | None = None, offset: int = 0) -> list[dict[str, Any]]:
         """Read messages from activity log with pagination"""

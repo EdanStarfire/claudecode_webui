@@ -53,6 +53,11 @@ from .task_registry import TASK_LIFECYCLE_SUBTYPES, TaskLegRegistry
 from .task_utils import task_done_log_exception
 from .timestamp_injection import maybe_inject_timestamp
 from .timestamp_utils import get_unix_timestamp
+from .tool_lifecycle_reconstruction import (
+    ToolLifecycleReconstructor,
+    parse_send_comm_sender_attachments,
+    prescan_stored_tool_calls,
+)
 
 # Get specialized logger for coordinator actions
 coord_logger = get_logger('coordinator', category='COORDINATOR')
@@ -575,6 +580,11 @@ class SessionCoordinator:
         # Issue #899: Rate limit state accumulator (rate_limit_type -> {used_percentage, resets_at})
         self._rate_limits_state: dict[str, dict] = {}
         self._rate_limit_broadcast_callback: Callable | None = None
+
+        # Issue #2084 (stage 3-C, §5/§6): wired by web_server.py after construction,
+        # mirroring self.coordinator._watchdog's own wiring pattern.
+        self._message_migration_service = None
+        self._migration_notice_callback: Callable | None = None
 
         # Issue #894: Track active api_retry sequence per session (session_id -> retry_message_id)
         self._retry_sequences: dict[str, str] = {}
@@ -1193,6 +1203,40 @@ class SessionCoordinator:
         """Get storage manager for a session"""
         return self._storage_managers.get(session_id)
 
+    async def get_or_create_storage_manager(self, session_id: str) -> DataStorageManager | None:
+        """Issue #2084 (stage 3-C): return the session's cached DataStorageManager if
+        one is active, else construct and cache one.
+
+        A session isn't guaranteed to have a live storage manager (only loaded while
+        the session is active/starting — see the `del self._storage_managers[...]`
+        sites), but migration (background or on-demand) needs the one real
+        `_write_lock` instance for a session regardless of whether it's currently
+        running, so a concurrent live start always finds and serializes against the
+        exact same lock instance this call caches.
+
+        The whole check-construct-cache body runs under SessionManager's existing
+        per-session lock (`_get_session_lock` — the same lock try_claim_message_
+        migration() already uses for its own atomicity). Without it, two concurrent
+        first-time callers (e.g. the background migration tick and a user's
+        start_session() racing on a session that's never had a storage manager
+        cached) could both see no cached instance, each construct their own
+        independent DataStorageManager with its own independent, unlocked
+        _write_lock, and silently orphan whichever one loses the final dict-assignment
+        race — reintroducing, one layer up, the exact lock-identity bug this method
+        exists to prevent (found in review).
+        """
+        async with self.session_manager._get_session_lock(session_id):
+            storage = self._storage_managers.get(session_id)
+            if storage:
+                return storage
+            session_dir = await self.session_manager.get_session_directory(session_id)
+            if not session_dir:
+                return None
+            storage = DataStorageManager(session_dir)
+            await storage.initialize()
+            self._storage_managers[session_id] = storage
+            return storage
+
     async def get_session_resources(
         self,
         session_id: str,
@@ -1579,14 +1623,40 @@ class SessionCoordinator:
                 session_info.secret_fetch_token = secrets.token_urlsafe(32)
                 await self.session_manager._persist_session_state(session_id)
 
-            # Create storage manager
-            session_dir = await self.session_manager.get_session_directory(session_id)
-            storage_manager = DataStorageManager(session_dir)
-            await storage_manager.initialize()
-            self._storage_managers[session_id] = storage_manager
-            # Issue #1172: re-apply audit hook each time start_session creates a new storage
-            # manager, since the previous manager (from create_session or last start) is replaced.
+            # Create storage manager — reuse a cached instance if one exists rather
+            # than unconditionally constructing a fresh one (issue #2084 stage 3-C: a
+            # fresh instance here would orphan the `_write_lock` a concurrent
+            # background/on-demand migration might already be holding for this exact
+            # session — see get_or_create_storage_manager()'s docstring — silently
+            # defeating the lock's entire coordination purpose). Safe to reuse:
+            # DataStorageManager holds no other per-lifecycle state, and
+            # _apply_audit_writer() below is idempotent (issue #1172).
+            storage_manager = await self.get_or_create_storage_manager(session_id)
+            session_dir = storage_manager.session_dir
             self._apply_audit_writer(storage_manager, session_id)
+
+            # Issue #2084 (stage 3-C, §6): on-demand migration — a legacy session opened
+            # before the background loop happens to pick it is migrated right here,
+            # blocking this start_session() call briefly (bounded by this one session's
+            # size, never affecting Backend readiness or any other session). Shares the
+            # same race-free claim as the background tick, so whichever reaches it first
+            # does the work; the other no-ops. Wrapped in its own try/except — a failure
+            # in this orthogonal subsystem (e.g. a bug in a newly-added SessionManager
+            # method) must never abort an otherwise-healthy session start; the migration
+            # itself already isolates and quarantines its own real failures (§7).
+            if session_info.message_schema_version == 0 and self._message_migration_service is not None:
+                try:
+                    migrated_now = await self._message_migration_service.migrate_one(session_id)
+                    if migrated_now:
+                        refreshed_info = await self.session_manager.get_session_info(session_id)
+                        status = (refreshed_info.message_migration_status or {}) if refreshed_info else {}
+                        if status.get("state") == "completed" and self._migration_notice_callback:
+                            try:
+                                self._migration_notice_callback(session_id)
+                            except Exception:
+                                logger.exception(f"Migration notice callback failed for {session_id}")
+                except Exception:
+                    logger.exception(f"On-demand message migration failed for {session_id}")
 
             # Issue #1059: Resolve effective config EARLY — before any CONFIG_FIELD read.
             # For template-linked sessions, session_info CONFIG_FIELDS are at dataclass defaults;
@@ -4363,6 +4433,86 @@ class SessionCoordinator:
             return {"has_history": False, "has_archives": False}
         return await self.legion_system.archive_manager.check_history_archives_exist(session_id)
 
+    def _convert_legacy_record_to_websocket(self, raw_message: dict[str, Any]) -> dict[str, Any] | None:
+        """Convert a non-canonical stored record to its websocket/canonical shape.
+
+        Issue #2084 (stage 3-C, §3): extracted from get_session_messages() so
+        message_migration.py's pass 2 reuses this exact dispatch — a materialized
+        migration record must be byte-identical to what a live reload would produce
+        for the same raw record, and reimplementing this independently risks silent
+        drift from the already-correct, already-tested original.
+        """
+        # Issue #2084 (stage 3-C): the live write path has unconditionally persisted
+        # tool_call lifecycle transitions in flat canonical shape since stage 3-B's
+        # cutover (#2086) — regardless of the session's own message_schema_version.
+        # So a still-legacy (schema_version 0) session that stayed active across that
+        # deploy can contain fully-canonical flat tool_call records interleaved with
+        # older legacy-shaped ones. ToolCall.to_dict() has no "content" key, so such a
+        # record would otherwise fail the "already processed" branch's content-is-
+        # not-None check below and be mis-dispatched through MessageProcessor's
+        # generic ToolCallHandler (type "tool_use" — a different, wrong shape
+        # entirely) — found via this stage's own fidelity testing. A flat tool_call
+        # record is self-identifying regardless of session-level canonical status,
+        # so it's always passed through here unconverted.
+        if raw_message.get("type") == "tool_call" and "tool_use_id" in raw_message:
+            return raw_message
+
+        # Issue #310: Handle new StoredMessage format with _type discriminator
+        if raw_message.get("_type"):
+            return self._convert_stored_message_to_websocket(raw_message)
+
+        # Check if message is already fully processed (has metadata)
+        if isinstance(raw_message.get("metadata"), dict) and raw_message.get("type") and raw_message.get("content") is not None:
+            # Message is already processed, prepare for WebSocket
+            metadata = raw_message["metadata"].copy()
+
+            # Issue #2042 (Gap 2): records stored via
+            # prepare_for_storage() (legacy dict shape, no _type
+            # discriminator) carry `display` at the top level, same as
+            # _convert_stored_message_to_websocket() handles — this
+            # branch never propagated it into metadata.
+            display = raw_message.get("display")
+            if display:
+                metadata["display"] = display
+
+            # Issue #2042 (Gap 5): comm/attachment user messages are
+            # stored directly by ClaudeSDK._conversation_loop(), bypassing
+            # MessageProcessor entirely, so their metadata never picked up
+            # UserMessageHandler's shared defaults. Port them here for
+            # reload/live parity, matching only what UserMessageHandler
+            # itself always sets.
+            if raw_message["type"] == "user":
+                metadata.setdefault("tool_uses", [])
+                metadata.setdefault("tool_results", [])
+                metadata.setdefault("has_tool_uses", False)
+                metadata.setdefault("has_tool_results", False)
+                metadata.setdefault("has_thinking", False)
+                metadata.setdefault("has_permission_requests", False)
+                metadata.setdefault("has_permission_responses", False)
+                metadata.setdefault("role", None)
+            metadata.setdefault("session_id", raw_message.get("session_id"))
+
+            websocket_data = {
+                "type": raw_message["type"],
+                "content": raw_message["content"],
+                "timestamp": raw_message.get("timestamp"),
+                "metadata": metadata,
+                "session_id": raw_message.get("session_id"),
+                "message_id": raw_message.get("message_id"),  # Issue #1000
+            }
+            # Maintain backward compatibility with subtype at root level
+            if metadata.get('subtype'):
+                websocket_data["subtype"] = metadata['subtype']
+            return websocket_data
+
+        # Message needs processing - run through MessageProcessor
+        processed_message = self.message_processor.process_message(raw_message, source="storage")
+        websocket_data = self.message_processor.prepare_for_websocket(processed_message)
+        # Issue #1000: Propagate message_id from storage for frontend dedup
+        if raw_message.get("message_id"):
+            websocket_data["message_id"] = raw_message["message_id"]
+        return websocket_data
+
     async def get_session_messages(
         self,
         session_id: str,
@@ -4404,145 +4554,35 @@ class SessionCoordinator:
             # Convert stored messages to WebSocket format and generate tool_call messages
             parsed_messages = []
 
-            # Issue #491: Track tool lifecycle state for generating tool_call messages
-            # Maps tool_use_id -> ToolCall being reconstructed from history
-            active_history_tools: dict[str, ToolCall] = {}
-
-            # Issue #494: Track tool_use_ids that have stored ToolCallUpdate entries.
-            # Synthetic reconstruction is skipped for these IDs.
-            # Issue #2052: pre-scanned up front rather than populated only as
-            # ToolCallUpdate records are encountered in the loop below — storage
-            # append order does not guarantee a ToolCallUpdate lands before its
-            # triggering AssistantMessage, so a single forward pass could miss it.
-            # A malformed/legacy record (e.g. non-dict `data`) is skipped rather
-            # than raised, matching the per-record isolation the main loop below
-            # already gives this same lookup via _convert_stored_message_to_websocket().
-            stored_tool_update_ids: set[str] = set()
-            for raw_message in raw_messages:
-                if raw_message.get("_type") == "ToolCallUpdate":
-                    try:
-                        tool_use_id = raw_message.get("data", {}).get("tool_use_id")
-                    except AttributeError:
-                        continue
-                    if tool_use_id:
-                        stored_tool_update_ids.add(tool_use_id)
-                # Issue #2084 (stage 3-B, §1/§7): a canonical session's tool_call
-                # records are flat — tool_use_id lives at the top level, not under
-                # a nested "data" key.
-                elif is_canonical_session and raw_message.get("type") == "tool_call":
-                    tool_use_id = raw_message.get("tool_use_id")
-                    if tool_use_id:
-                        stored_tool_update_ids.add(tool_use_id)
+            # Issue #2084 (stage 3-C, §1): tool lifecycle reconstruction (issue #491's
+            # active_history_tools/stored_tool_update_ids state machine) is extracted into
+            # ToolLifecycleReconstructor so this reload path and the background migration
+            # driver (message_migration.py) share one implementation. The pre-scan for
+            # stored_tool_update_ids (before any conversion/synthesis runs, per issue
+            # #2052) is likewise shared via prescan_stored_tool_calls() — both callers
+            # use the exact same matching logic, not two independent copies that could
+            # silently drift.
+            reconstructor = ToolLifecycleReconstructor(session_id)
+            prescan_stored_tool_calls(raw_messages, reconstructor)
 
             for raw_message in raw_messages:
                 try:
-                    websocket_data = None
-
                     # Issue #2084 (stage 3-B, §7): a canonical session's stored records
-                    # are already the exact live shape — nothing left to convert. The
-                    # tool_call case mirrors the legacy ToolCallUpdate branch below
-                    # exactly (same active_history_tools/stored_tool_update_ids
-                    # bookkeeping), just reading the flat canonical shape directly
-                    # instead of calling _convert_stored_message_to_websocket().
-                    if is_canonical_session and raw_message.get("type") == "tool_call":
-                        tool_call_msg = raw_message
-                        parsed_messages.append(tool_call_msg)
-                        tc_id = tool_call_msg.get("tool_use_id")
-                        if tc_id:
-                            stored_tool_update_ids.add(tc_id)
-                            reconstructed = ToolCall.from_dict(tool_call_msg)
-                            if reconstructed.status in (
-                                ToolState.COMPLETED, ToolState.FAILED,
-                                ToolState.DENIED, ToolState.INTERRUPTED,
-                                ToolState.ORPHANED,
-                            ):
-                                active_history_tools.pop(tc_id, None)
-                            else:
-                                active_history_tools[tc_id] = reconstructed
-                        continue
-                    elif is_canonical_session:
+                    # are already the exact live shape — nothing left to convert.
+                    # Issue #2084 (stage 3-C, §3): the non-canonical dispatch (legacy
+                    # StoredMessage/_type, already-processed dict, MessageProcessor
+                    # fallback) is extracted into _convert_legacy_record_to_websocket()
+                    # so message_migration.py's pass 2 reuses the exact same conversion
+                    # — never an independent reimplementation that could silently drift.
+                    # A converted ToolCallUpdate record and a canonical native tool_call
+                    # record both come back shaped {"type": "tool_call", ...};
+                    # reconstructor.feed() already recognizes that shape and only updates
+                    # tracking (no synthesis), so no separate early-continue branch is
+                    # needed here for either case (issue #494).
+                    if is_canonical_session:
                         websocket_data = raw_message
-                    # Issue #310: Handle new StoredMessage format with _type discriminator
-                    elif raw_message.get("_type"):
-                        # Issue #494: ToolCallUpdate entries are converted to tool_call messages
-                        # directly and should NOT go through synthetic reconstruction
-                        if raw_message["_type"] == "ToolCallUpdate":
-                            tool_call_msg = self._convert_stored_message_to_websocket(raw_message)
-                            if tool_call_msg:
-                                parsed_messages.append(tool_call_msg)
-                                tc_id = tool_call_msg.get("tool_use_id")
-                                if tc_id:
-                                    # Already in the pre-scanned set above; re-adding here
-                                    # is a no-op kept for diff minimality, not load-bearing.
-                                    stored_tool_update_ids.add(tc_id)
-                                    # Issue #2052: keep active_history_tools in sync with
-                                    # real stored ToolCall state too, not just synthetically
-                                    # reconstructed tools — otherwise a tool whose last
-                                    # stored update is non-terminal (still "pending"/
-                                    # "running" when the session ends) is invisible to the
-                                    # interrupt/orphan sweeps below, which only walk
-                                    # active_history_tools.
-                                    reconstructed = ToolCall.from_dict(tool_call_msg)
-                                    if reconstructed.status in (
-                                        ToolState.COMPLETED, ToolState.FAILED,
-                                        ToolState.DENIED, ToolState.INTERRUPTED,
-                                        ToolState.ORPHANED,
-                                    ):
-                                        active_history_tools.pop(tc_id, None)
-                                    else:
-                                        active_history_tools[tc_id] = reconstructed
-                            continue
-
-                        websocket_data = self._convert_stored_message_to_websocket(raw_message)
-                    # Check if message is already fully processed (has metadata)
-                    elif isinstance(raw_message.get("metadata"), dict) and raw_message.get("type") and raw_message.get("content") is not None:
-                        # Message is already processed, prepare for WebSocket
-                        metadata = raw_message["metadata"].copy()
-
-                        # Issue #2042 (Gap 2): records stored via
-                        # prepare_for_storage() (legacy dict shape, no _type
-                        # discriminator) carry `display` at the top level, same as
-                        # _convert_stored_message_to_websocket() handles — this
-                        # branch never propagated it into metadata.
-                        display = raw_message.get("display")
-                        if display:
-                            metadata["display"] = display
-
-                        # Issue #2042 (Gap 5): comm/attachment user messages are
-                        # stored directly by ClaudeSDK._conversation_loop(), bypassing
-                        # MessageProcessor entirely, so their metadata never picked up
-                        # UserMessageHandler's shared defaults. Port them here for
-                        # reload/live parity, matching only what UserMessageHandler
-                        # itself always sets.
-                        if raw_message["type"] == "user":
-                            metadata.setdefault("tool_uses", [])
-                            metadata.setdefault("tool_results", [])
-                            metadata.setdefault("has_tool_uses", False)
-                            metadata.setdefault("has_tool_results", False)
-                            metadata.setdefault("has_thinking", False)
-                            metadata.setdefault("has_permission_requests", False)
-                            metadata.setdefault("has_permission_responses", False)
-                            metadata.setdefault("role", None)
-                        metadata.setdefault("session_id", raw_message.get("session_id"))
-
-                        websocket_data = {
-                            "type": raw_message["type"],
-                            "content": raw_message["content"],
-                            "timestamp": raw_message.get("timestamp"),
-                            "metadata": metadata,
-                            "session_id": raw_message.get("session_id"),
-                            "message_id": raw_message.get("message_id"),  # Issue #1000
-                        }
-                        # Maintain backward compatibility with subtype at root level
-                        if metadata.get('subtype'):
-                            websocket_data["subtype"] = metadata['subtype']
                     else:
-                        # Message needs processing - run through MessageProcessor
-                        processed_message = self.message_processor.process_message(raw_message, source="storage")
-                        websocket_data = self.message_processor.prepare_for_websocket(processed_message)
-                        # Issue #1000: Propagate message_id from storage for frontend dedup
-                        if raw_message.get("message_id"):
-                            websocket_data["message_id"] = raw_message["message_id"]
+                        websocket_data = self._convert_legacy_record_to_websocket(raw_message)
 
                     if not websocket_data:
                         continue
@@ -4550,167 +4590,10 @@ class SessionCoordinator:
                     # Add the regular message to the response
                     parsed_messages.append(websocket_data)
 
-                    # Issue #491: Generate interleaved tool_call messages from message metadata
-                    # Issue #494: Skip synthetic reconstruction for tool_use_ids with stored updates
-                    msg_type = websocket_data.get("type", "")
-                    metadata = websocket_data.get("metadata", {})
-                    msg_timestamp = websocket_data.get("timestamp")
-
-                    # AssistantMessage with tool_uses → create pending ToolCall messages
-                    if metadata.get("has_tool_uses") and metadata.get("tool_uses"):
-                        # Issue #195: Propagate parent_tool_use_id to child tool_calls
-                        parent_tool_use_id = metadata.get("parent_tool_use_id")
-                        for tool_use in metadata["tool_uses"]:
-                            tool_use_id = tool_use.get("id")
-                            if not tool_use_id:
-                                continue
-                            # Issue #494: Skip if this tool has stored ToolCallUpdate entries
-                            if tool_use_id in stored_tool_update_ids:
-                                continue
-                            tool_call = ToolCall(
-                                tool_use_id=tool_use_id,
-                                session_id=session_id,
-                                name=tool_use.get("name", ""),
-                                input=tool_use.get("input", {}),
-                                status=ToolState.PENDING,
-                                created_at=msg_timestamp if isinstance(msg_timestamp, (int, float)) else 0.0,
-                                parent_tool_use_id=parent_tool_use_id,
-                                display=ToolDisplayInfo(
-                                    state=ToolState.PENDING,
-                                    visible=True,
-                                    collapsed=False,
-                                    style="default",
-                                ),
-                            )
-                            active_history_tools[tool_use_id] = tool_call
-                            tc_data = tool_call.to_dict()
-                            tc_data["type"] = "tool_call"
-                            parsed_messages.append(tc_data)
-
-                    # PermissionRequestMessage → update matching ToolCall to awaiting_permission
-                    if msg_type == "permission_request" or metadata.get("has_permission_requests"):
-                        perm_tool_name = metadata.get("tool_name", "")
-                        perm_request_id = metadata.get("request_id", "")
-                        perm_suggestions = metadata.get("suggestions", [])
-
-                        # Find matching tool by name+input signature
-                        matched_tool = None
-                        for tc in active_history_tools.values():
-                            if tc.name == perm_tool_name and tc.status == ToolState.PENDING:
-                                matched_tool = tc
-                                break
-                        # Fallback: match by tool name alone if unique pending
-                        if not matched_tool:
-                            candidates = [
-                                tc for tc in active_history_tools.values()
-                                if tc.name == perm_tool_name and tc.status in (
-                                    ToolState.PENDING, ToolState.AWAITING_PERMISSION
-                                )
-                            ]
-                            if len(candidates) == 1:
-                                matched_tool = candidates[0]
-
-                        if matched_tool:
-                            matched_tool.status = ToolState.AWAITING_PERMISSION
-                            matched_tool.requires_permission = True
-                            matched_tool.permission = PermissionInfo(
-                                message=websocket_data.get("content", ""),
-                                suggestions=perm_suggestions,
-                            )
-                            if matched_tool.display:
-                                matched_tool.display.state = ToolState.AWAITING_PERMISSION
-                                matched_tool.display.style = "warning"
-                            tc_data = matched_tool.to_dict()
-                            tc_data["type"] = "tool_call"
-                            tc_data["request_id"] = perm_request_id
-                            parsed_messages.append(tc_data)
-
-                    # PermissionResponseMessage → update matching ToolCall with decision
-                    if msg_type == "permission_response":
-                        perm_decision = metadata.get("decision", "")
-                        perm_request_id = metadata.get("request_id", "")
-                        perm_tool_name = metadata.get("tool_name", "")
-                        updated_input = metadata.get("updated_input")
-                        applied_updates = metadata.get("applied_updates", [])
-
-                        # Find matching tool awaiting permission
-                        matched_tool = None
-                        for tc in active_history_tools.values():
-                            if tc.name == perm_tool_name and tc.status == ToolState.AWAITING_PERMISSION:
-                                matched_tool = tc
-                                break
-
-                        if matched_tool:
-                            granted = perm_decision == "allow"
-                            matched_tool.permission_granted = granted
-                            if granted:
-                                matched_tool.status = ToolState.RUNNING
-                                if matched_tool.display:
-                                    matched_tool.display.state = ToolState.RUNNING
-                                    matched_tool.display.style = "default"
-                            else:
-                                matched_tool.status = ToolState.DENIED
-                                if matched_tool.display:
-                                    matched_tool.display.state = ToolState.DENIED
-                                    matched_tool.display.style = "error"
-
-                            tc_data = matched_tool.to_dict()
-                            tc_data["type"] = "tool_call"
-                            tc_data["request_id"] = perm_request_id
-                            if updated_input:
-                                tc_data["updated_input"] = updated_input
-                            if applied_updates:
-                                tc_data["applied_updates"] = applied_updates
-                            parsed_messages.append(tc_data)
-
-                            # Remove denied tools from tracking
-                            if not granted:
-                                active_history_tools.pop(matched_tool.tool_use_id, None)
-
-                    # UserMessage with tool_results → update matching ToolCall to completed/failed
-                    if metadata.get("has_tool_results") and metadata.get("tool_results"):
-                        for tool_result in metadata["tool_results"]:
-                            tool_use_id = tool_result.get("tool_use_id")
-                            if not tool_use_id:
-                                continue
-                            matched_tool = active_history_tools.pop(tool_use_id, None)
-                            if matched_tool:
-                                is_error = tool_result.get("is_error", False)
-                                result_content = tool_result.get("content", "")
-                                if is_error:
-                                    matched_tool.status = ToolState.FAILED
-                                    matched_tool.error = str(result_content) if result_content else "Tool execution failed"
-                                    if matched_tool.display:
-                                        matched_tool.display.state = ToolState.FAILED
-                                        matched_tool.display.style = "error"
-                                else:
-                                    matched_tool.status = ToolState.COMPLETED
-                                    matched_tool.result = result_content
-                                    if matched_tool.display:
-                                        matched_tool.display.state = ToolState.COMPLETED
-                                        matched_tool.display.style = "success"
-                                    # Issue #1593/#1730: resolve sender attachment resource IDs
-                                    if matched_tool.name == "mcp__legion__send_comm":
-                                        matched_tool.sender_attachments = (
-                                            self._parse_send_comm_sender_attachments(result_content)
-                                        )
-                                tc_data = matched_tool.to_dict()
-                                tc_data["type"] = "tool_call"
-                                parsed_messages.append(tc_data)
-
-                    # SystemMessage client_launched or interrupt → mark unresolved tools as interrupted
-                    if msg_type == "system":
-                        subtype = metadata.get("subtype", "")
-                        if subtype in ("client_launched", "interrupt"):
-                            for tool_use_id in list(active_history_tools.keys()):
-                                tc = active_history_tools.pop(tool_use_id)
-                                tc.status = ToolState.INTERRUPTED
-                                if tc.display:
-                                    tc.display.state = ToolState.INTERRUPTED
-                                    tc.display.style = "orphaned"
-                                tc_data = tc.to_dict()
-                                tc_data["type"] = "tool_call"
-                                parsed_messages.append(tc_data)
+                    # Issue #491/#2084 (stage 3-C, §1): interleaved tool_call messages,
+                    # generated by the shared ToolLifecycleReconstructor.
+                    for tc_data in reconstructor.feed(websocket_data):
+                        parsed_messages.append(tc_data)
 
                 except Exception as e:
                     logger.warning(f"Failed to prepare historical message for WebSocket: {e}")
@@ -4728,19 +4611,11 @@ class SessionCoordinator:
                     except Exception:
                         pass
 
-            # Issue #491: Mark any remaining unresolved tools as interrupted
-            # (session may have been terminated without explicit interrupt/restart message)
-            if session_info and session_info.state not in (
-                SessionState.ACTIVE, SessionState.PAUSED, SessionState.STARTING
-            ):
-                for tool_use_id in list(active_history_tools.keys()):
-                    tc = active_history_tools.pop(tool_use_id)
-                    tc.status = ToolState.INTERRUPTED
-                    if tc.display:
-                        tc.display.state = ToolState.INTERRUPTED
-                        tc.display.style = "orphaned"
-                    tc_data = tc.to_dict()
-                    tc_data["type"] = "tool_call"
+            # Issue #491/#2084 (stage 3-C, §1): trigger 6, end-of-stream sweep — mark any
+            # remaining unresolved tools as interrupted (session may have been terminated
+            # without an explicit interrupt/restart message ever appearing in the stream).
+            if session_info:
+                for tc_data in reconstructor.finalize(session_info.state):
                     parsed_messages.append(tc_data)
 
             # Calculate pagination metadata
@@ -4802,6 +4677,16 @@ class SessionCoordinator:
     def set_rate_limit_broadcast_callback(self, callback: Callable) -> None:
         """Issue #899: Set callback for broadcasting rate_limits_update to the UI poll queue."""
         self._rate_limit_broadcast_callback = callback
+
+    def set_message_migration_service(self, service) -> None:
+        """Issue #2084 (stage 3-C, §6): wire the MessageMigrationService used by
+        start_session()'s on-demand trigger."""
+        self._message_migration_service = service
+
+    def set_migration_notice_callback(self, callback: Callable) -> None:
+        """Issue #2084 (stage 3-C, §6): set callback(session_id) fired the first time
+        on-demand migration actually runs (and succeeds) for a session."""
+        self._migration_notice_callback = callback
 
     async def _on_rate_limits(self, rate_limit_info: Any) -> None:
         """Issue #899: Normalize a RateLimitInfo and broadcast updated state to UI poll queue."""
@@ -5295,29 +5180,13 @@ class SessionCoordinator:
     ) -> list[dict] | None:
         """Issue #1593/#1730: Parse sender resource IDs for mcp__legion__send_comm attachments.
 
-        Extracts the JSON footer embedded by `_handle_send_comm` in the tool
-        result text (format: `<!-- sender_attachments: [...] -->`). The footer
-        is captured immutably at the moment of that specific send_comm call, so
-        this parser returns the exact version delivered — unlike a filename
-        search against the resource log, which always resolves to the oldest
-        matching version regardless of which send_comm call is being displayed.
+        Issue #2084 (stage 3-C): delegates to the standalone
+        tool_lifecycle_reconstruction.parse_send_comm_sender_attachments() so this logic
+        has exactly one implementation, shared with ToolLifecycleReconstructor's own
+        has_tool_results trigger. Kept as an instance method (unused self) for existing
+        call sites/tests.
         """
-        import json as _json
-        import re
-
-        if not isinstance(result_content, str):
-            return None
-
-        match = re.search(r"<!-- sender_attachments: (.*?) -->", result_content, re.DOTALL)
-        if not match:
-            return None
-
-        try:
-            parsed = _json.loads(match.group(1))
-        except _json.JSONDecodeError:
-            return None
-
-        return parsed if isinstance(parsed, list) and parsed else None
+        return parse_send_comm_sender_attachments(result_content)
 
     def mark_session_tools_interrupted(self, session_id: str) -> list[ToolCall]:
         """

@@ -1146,6 +1146,15 @@ export const usePollingStore = defineStore('polling', () => {
       // a future real producer surfaces in the console instead of vanishing outright.
       console.log('[proxy_event]', payload.data)
     },
+
+    migration_notice: (payload) => {
+      // Issue #2084 (stage 3-C, §6): fired once per session, the first time its
+      // message history is upgraded to the canonical schema (on-demand or
+      // background migration). No dedicated toast UI yet (future stage) — this
+      // just acknowledges the registered type in the console instead of
+      // silently warning/dropping it.
+      console.log('[migration_notice]', payload.message)
+    },
   }
 
   function dispatchEvent(payload, stream, sessionId) {

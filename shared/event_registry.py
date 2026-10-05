@@ -81,6 +81,9 @@ TOP_LEVEL_EVENT_TYPES: dict[str, EventTypeSpec] = {
     ),
     "tool_call": EventTypeSpec(frozenset({QUEUE_SESSION}), frozenset({"session_id", "data"})),
     "resource_removed": EventTypeSpec(frozenset({QUEUE_SESSION}), frozenset({"resource_id"})),
+    "migration_notice": EventTypeSpec(
+        frozenset({QUEUE_SESSION}), frozenset({"session_id", "message"})
+    ),  # issue #2084 stage 3-C, §6: one-time "this session was upgraded" notice
     "proxy_event": EventTypeSpec(
         frozenset({QUEUE_SESSION}), frozenset({"data"})
     ),  # the arbitrary-type default; AC4 pins/validates this at the HTTP boundary in 2a-B
