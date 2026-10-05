@@ -1213,17 +1213,29 @@ class SessionCoordinator:
         `_write_lock` instance for a session regardless of whether it's currently
         running, so a concurrent live start always finds and serializes against the
         exact same lock instance this call caches.
+
+        The whole check-construct-cache body runs under SessionManager's existing
+        per-session lock (`_get_session_lock` — the same lock try_claim_message_
+        migration() already uses for its own atomicity). Without it, two concurrent
+        first-time callers (e.g. the background migration tick and a user's
+        start_session() racing on a session that's never had a storage manager
+        cached) could both see no cached instance, each construct their own
+        independent DataStorageManager with its own independent, unlocked
+        _write_lock, and silently orphan whichever one loses the final dict-assignment
+        race — reintroducing, one layer up, the exact lock-identity bug this method
+        exists to prevent (found in review).
         """
-        storage = self._storage_managers.get(session_id)
-        if storage:
+        async with self.session_manager._get_session_lock(session_id):
+            storage = self._storage_managers.get(session_id)
+            if storage:
+                return storage
+            session_dir = await self.session_manager.get_session_directory(session_id)
+            if not session_dir:
+                return None
+            storage = DataStorageManager(session_dir)
+            await storage.initialize()
+            self._storage_managers[session_id] = storage
             return storage
-        session_dir = await self.session_manager.get_session_directory(session_id)
-        if not session_dir:
-            return None
-        storage = DataStorageManager(session_dir)
-        await storage.initialize()
-        self._storage_managers[session_id] = storage
-        return storage
 
     async def get_session_resources(
         self,

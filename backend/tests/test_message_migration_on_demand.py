@@ -1,6 +1,7 @@
 """Tests for the on-demand migration trigger wired into start_session() (issue
 #2084 stage 3-C, §6)."""
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -143,3 +144,38 @@ class TestOnDemandTrigger:
         assert coordinator._storage_managers[session_id]._write_lock is (
             pre_existing_storage._write_lock
         )
+
+    @pytest.mark.asyncio
+    async def test_concurrent_get_or_create_storage_manager_first_access_is_race_free(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Issue #2084 (stage 3-C) regression lock, found in review one layer up
+        from the start_session() fix above: get_or_create_storage_manager() itself
+        is a check-then-create sequence with two await points (get_session_directory,
+        storage.initialize()) between the cache check and the cache write. Without
+        SessionManager's per-session lock guarding the whole body, two concurrent
+        *first-time* callers (e.g. the background migration tick and a user's
+        start_session() racing on a session that's never had a storage manager
+        cached) could each construct their own independent DataStorageManager with
+        its own independent, unlocked _write_lock, silently orphaning whichever one
+        loses the final dict-assignment race."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        # create_session() populates _storage_managers itself — drop it to simulate
+        # the real scenario this test targets: a dormant session (created before a
+        # backend restart, never reopened since) with no cached storage manager at
+        # all, same as what SessionWatchdogService/MessageMigrationService's startup
+        # scan would find for any pre-existing session on a fresh Backend process.
+        del coordinator._storage_managers[session_id]
+        assert session_id not in coordinator._storage_managers
+
+        results = await asyncio.gather(
+            coordinator.get_or_create_storage_manager(session_id),
+            coordinator.get_or_create_storage_manager(session_id),
+        )
+
+        first, second = results
+        assert first is not None and second is not None
+        assert first is second
+        assert first._write_lock is second._write_lock
+        assert coordinator._storage_managers[session_id] is first
