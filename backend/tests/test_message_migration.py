@@ -73,8 +73,15 @@ def _strip_volatile(msg: dict) -> dict:
     the ephemeral live synthesis never did) or inherently conversion-time-variant
     in the existing (unmodified) MessageProcessor fallback path.
 
-    - message_id: minted deterministically for materialized tool_call records
-      (§2) — the live path never persists these, so never had one to compare.
+    - message_id on a tool_call record only: minted deterministically for
+      materialized tool_call records (§2) — the live path never persists
+      these, so never had one to compare. Every OTHER message type's
+      message_id is a real, already-stable identifier propagated verbatim
+      from the stored record by both _convert_stored_message_to_websocket()
+      (session_coordinator.py:4217-4218) and the MessageProcessor fallback
+      branch (:4512-4513) — stripping it unconditionally would make this
+      fidelity test blind to migration corrupting or reassigning a real
+      record's identity (found in review).
     - top-level "timestamp" on a tool_call record: migration-added (§2) so a
       materialized record carries the same "every stored record has a
       timestamp" convention append_message() gives every live-written record;
@@ -84,13 +91,29 @@ def _strip_volatile(msg: dict) -> dict:
       unmigrated legacy session already disagree on it today, independent of
       migration.
     """
-    out = {k: v for k, v in msg.items() if k != "message_id"}
+    out = dict(msg)
     if out.get("type") == "tool_call":
+        out.pop("message_id", None)
         out.pop("timestamp", None)
     metadata = out.get("metadata")
     if isinstance(metadata, dict) and "processed_at" in metadata:
         out["metadata"] = {k: v for k, v in metadata.items() if k != "processed_at"}
     return out
+
+
+class TestStripVolatile:
+    def test_keeps_message_id_on_non_tool_call_records(self):
+        """Regression lock (found in review): message_id must only be stripped
+        for tool_call records — every other type's id is real and stable, and
+        the fidelity comparison must not be blind to migration corrupting it."""
+        out = _strip_volatile({"type": "assistant", "content": "hi", "message_id": "real-id"})
+        assert out["message_id"] == "real-id"
+
+    def test_strips_message_id_on_tool_call_only(self):
+        out = _strip_volatile(
+            {"type": "tool_call", "tool_use_id": "t1", "status": "pending", "message_id": "x"}
+        )
+        assert "message_id" not in out
 
 
 class TestMigrationFidelityAgainstFixtures:

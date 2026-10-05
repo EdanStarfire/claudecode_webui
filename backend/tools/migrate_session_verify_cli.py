@@ -66,9 +66,21 @@ class VerificationReport:
 
 def _normalize(msg: dict[str, Any]) -> dict[str, Any]:
     """Strip fields that are expected to legitimately differ between an ephemeral
-    live read and a persisted canonical read (see module docstring)."""
-    out = {k: v for k, v in msg.items() if k != "message_id"}
+    live read and a persisted canonical read (see module docstring).
+
+    message_id is only stripped for tool_call records — a synthesized tool_call
+    never had a stored id before migration (gets a fresh random one on every
+    legacy read, vs. migration's deterministic materialized id), so comparing it
+    would always false-positive. Every other message type's message_id is a real,
+    already-stable identifier through the legacy read's straight passthrough
+    (_convert_legacy_record_to_websocket()) — stripping it there too would make
+    this comparison blind to migration corrupting or reassigning a real record's
+    identity, exactly the kind of regression this tool is the final gate against
+    (found in review).
+    """
+    out = dict(msg)
     if out.get("type") == "tool_call":
+        out.pop("message_id", None)
         for f in _IGNORED_TOOL_CALL_FIELDS:
             out.pop(f, None)
     metadata = out.get("metadata")

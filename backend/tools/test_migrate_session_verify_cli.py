@@ -90,6 +90,19 @@ class TestDiffLogic:
         ]
         assert _diff(before, after) == []
 
+    def test_corrupted_message_id_on_non_tool_call_record_is_caught(self):
+        """Regression lock (found in review): the comparison pipeline — _normalize()
+        feeding _diff() — must not be blind to migration corrupting or reassigning
+        a real (non-tool_call) record's message_id. A tool_call record's id is
+        exempt (it never had a stable one before migration); every other type's
+        is a real identifier and must be compared."""
+        before = [_normalize({"type": "assistant", "content": "hi", "message_id": "original-id"})]
+        after = [_normalize({"type": "assistant", "content": "hi", "message_id": "corrupted-id"})]
+        divergences = _diff(before, after)
+        assert len(divergences) == 1
+        assert divergences[0]["before"][0]["message_id"] == "original-id"
+        assert divergences[0]["after"][0]["message_id"] == "corrupted-id"
+
     def test_missing_record_is_a_divergence(self):
         before = [{"type": "tool_call", "tool_use_id": "t1", "status": "completed"}]
         assert _diff(before, []) != []
@@ -114,8 +127,21 @@ class TestDiffLogic:
 
 
 class TestNormalize:
-    def test_strips_message_id(self):
-        assert "message_id" not in _normalize({"type": "system", "message_id": "x"})
+    def test_strips_message_id_on_tool_call_only(self):
+        """A synthesized tool_call never had a stable id before migration — only
+        it is exempt from message_id comparison."""
+        assert "message_id" not in _normalize(
+            {"type": "tool_call", "tool_use_id": "t1", "status": "pending", "message_id": "x"}
+        )
+
+    def test_keeps_message_id_on_every_other_type(self):
+        """Every other message type's message_id is a real, already-stable
+        identifier propagated verbatim from the stored record — stripping it
+        here would make the comparison blind to migration corrupting or
+        reassigning a real record's identity."""
+        for msg_type in ("system", "user", "assistant", "result", "permission_request"):
+            out = _normalize({"type": msg_type, "message_id": "x"})
+            assert out.get("message_id") == "x", f"message_id stripped for type={msg_type}"
 
     def test_strips_tool_call_timestamp_only(self):
         tc = _normalize({"type": "tool_call", "timestamp": 1.0, "created_at": 1.0})
