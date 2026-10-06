@@ -4,4 +4,4 @@
 {"_type": "AssistantMessage", "timestamp": 1000006.0, "session_id": "test-tool-use", "data": {"content": [{"type": "text", "text": "I'll read that file for you."}, {"type": "tool_use", "id": "toolu_01ABC", "name": "Read", "input": {"file_path": "/tmp/test.txt"}}], "model": "claude-sonnet-4-5-20250929"}}
 {"_type": "UserMessage", "timestamp": 1000006.5, "session_id": "test-tool-use", "data": {"content": [{"type": "tool_result", "tool_use_id": "toolu_01ABC", "content": "Hello world!", "is_error": false}]}}
 {"_type": "AssistantMessage", "timestamp": 1000007.0, "session_id": "test-tool-use", "data": {"content": [{"text": "The file contains: Hello world!"}], "model": "claude-sonnet-4-5-20250929"}}
-{"_type": "ResultMessage", "timestamp": 1000007.1, "session_id": "test-tool-use", "data": {"subtype": "success", "duration_ms": 2000, "is_error": false, "num_turns": 1, "total_cost_usd": 0.01}}
+{"_type": "ResultMessage", "timestamp": 1000007.1, "session_id": "test-tool-use", "data": {"subtype": "success", "duration_ms": 2000, "is_error": false, "num_turns": 1, "total_cost_usd": 0.01, "session_id": "test-tool-use", "duration_api_ms": 2000}}

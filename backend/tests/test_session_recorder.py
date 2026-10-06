@@ -18,7 +18,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from backend.raw_replay import reconstruct_sdk_message
+from backend.raw_replay import _reconstruct_content_block, reconstruct_sdk_message
 from backend.session_recorder import SessionRecorder
 
 
@@ -126,6 +126,49 @@ class TestRoundTripFidelity:
     def test_unknown_type_raises(self, recorder):
         with pytest.raises(ValueError, match="Unknown SDK message type"):
             reconstruct_sdk_message("SomeFutureMessageType", {})
+
+
+class TestReconstructContentBlockTypeKeyTolerance:
+    """Issue #2084 stage 3-E: a redundant "type" discriminator key alongside an
+    otherwise-fully-recognized content block shape should reconstruct normally —
+    some stale fixture data carries it, nothing in the current SDK capture path
+    omits it. Verifies the tolerance doesn't loosen strictness for genuinely
+    unrecognized shapes, which is load-bearing drift detection for the 2
+    raw_log.jsonl fixtures."""
+
+    def test_text_block_with_type_key(self):
+        result = _reconstruct_content_block({"text": "hello", "type": "text"})
+        assert isinstance(result, TextBlock)
+        assert result.text == "hello"
+
+    def test_tool_use_block_with_type_key(self):
+        result = _reconstruct_content_block(
+            {"id": "tu_1", "name": "Read", "input": {"file_path": "/tmp/x"}, "type": "tool_use"}
+        )
+        assert isinstance(result, ToolUseBlock)
+        assert result.id == "tu_1"
+        assert result.name == "Read"
+        assert result.input == {"file_path": "/tmp/x"}
+
+    def test_tool_result_block_with_type_key(self):
+        result = _reconstruct_content_block(
+            {
+                "tool_use_id": "tu_1",
+                "content": "ok",
+                "is_error": False,
+                "type": "tool_result",
+            }
+        )
+        assert isinstance(result, ToolResultBlock)
+        assert result.tool_use_id == "tu_1"
+        assert result.content == "ok"
+        assert result.is_error is False
+
+    def test_unknown_shape_with_type_key_still_raises(self):
+        """A "type" key doesn't blanket-exempt a block from strictness — an
+        otherwise-unrecognized remaining-key combination must still raise."""
+        with pytest.raises(ValueError, match="Unrecognized content block shape"):
+            _reconstruct_content_block({"type": "text", "unexpected_field": "x"})
 
 
 class TestCapturePoints:

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from .claude_sdk import SDK_ACTIVE_STATES, ClaudeSDK, SessionInfo, SessionState
+from .models.messages import MessageRecord, _message_dict_to_record
 from .raw_replay import KNOWN_UNHANDLED_SDK_TYPES, reconstruct_sdk_message
 
 logger = logging.getLogger(__name__)
@@ -533,135 +534,52 @@ class MockClaudeSDK:
         self.storage_manager = kwargs.get("storage_manager")
         self.session_manager = kwargs.get("session_manager")
 
-    # ---- Fixture → legacy dict conversion (issue #561) ----
-
-    _SDK_TYPE_MAP = {
-        "SystemMessage": "system",
-        "AssistantMessage": "assistant",
-        "ResultMessage": "result",
-        "UserMessage": "user",
-    }
-
-    def _convert_fixture_message(self, msg: dict) -> dict:
-        """Convert _type-based fixture message to legacy dict format.
-
-        The SessionCoordinator message callback expects dicts with
-        ``"type": "assistant"`` etc.  Fixture JSONL may store SDK-style
-        ``"_type": "AssistantMessage"`` dicts.  This method normalises
-        them so the existing MessageProcessor handlers can parse them.
-        """
-        sdk_type = msg.get("_type")
-        if not sdk_type:
-            # Already in legacy format
-            return msg
-
-        legacy_type = self._SDK_TYPE_MAP.get(sdk_type, "unknown")
-        converted = {
-            "type": legacy_type,
-            "timestamp": msg.get("timestamp", time.time()),
-            "session_id": msg.get("session_id", self.session_id),
-        }
-        data = msg.get("data", {})
-
-        if legacy_type == "system":
-            subtype = data.get("subtype") or data.get("type", "init")
-            converted["subtype"] = subtype
-            converted["content"] = data.get("content", f"System {subtype}")
-            # Preserve init data for session info feature
-            if data:
-                converted["metadata"] = {"subtype": subtype, "init_data": data}
-        elif legacy_type == "assistant":
-            # Extract text and tool_use content from content blocks
-            content_blocks = data.get("content", [])
-            text_parts = []
-            tool_uses = []
-            for block in content_blocks:
-                if isinstance(block, dict):
-                    if block.get("type") == "tool_use":
-                        tool_uses.append({
-                            "id": block.get("id"),
-                            "name": block.get("name"),
-                            "input": block.get("input", {}),
-                            "timestamp": converted["timestamp"],
-                        })
-                    elif "text" in block:
-                        text_parts.append(block["text"])
-            converted["content"] = "\n".join(text_parts) if text_parts else ""
-            if tool_uses:
-                converted["metadata"] = {
-                    "tool_uses": tool_uses,
-                    "tool_results": [],
-                    "has_tool_uses": True,
-                    "has_tool_results": False,
-                    "model": data.get("model"),
-                    "session_id": converted["session_id"],
-                }
-        elif legacy_type == "result":
-            subtype = data.get("subtype", "success")
-            converted["subtype"] = subtype
-            converted["content"] = f"Result: {subtype}"
-            converted["metadata"] = {
-                "subtype": subtype,
-                "duration_ms": data.get("duration_ms"),
-                "is_error": data.get("is_error", False),
-                "num_turns": data.get("num_turns"),
-                "total_cost_usd": data.get("total_cost_usd"),
-            }
-        elif legacy_type == "user":
-            # Extract text and tool_result content from content blocks
-            content_blocks = data.get("content", [])
-            text_parts = []
-            tool_results = []
-            if isinstance(content_blocks, list):
-                for block in content_blocks:
-                    if isinstance(block, dict):
-                        if block.get("type") == "tool_result":
-                            tool_results.append({
-                                "tool_use_id": block.get("tool_use_id"),
-                                "content": block.get("content", ""),
-                                "is_error": block.get("is_error", False),
-                                "timestamp": converted["timestamp"],
-                            })
-                        elif block.get("type") == "text":
-                            text_parts.append(block.get("text", ""))
-            elif isinstance(content_blocks, str):
-                text_parts.append(content_blocks)
-
-            if tool_results and not text_parts:
-                converted["content"] = f"Tool results: {len(tool_results)} results"
-            else:
-                converted["content"] = "\n".join(text_parts) if text_parts else ""
-            if tool_results:
-                converted["metadata"] = {
-                    "tool_uses": [],
-                    "tool_results": tool_results,
-                    "has_tool_uses": False,
-                    "has_tool_results": True,
-                    "session_id": converted["session_id"],
-                }
-        else:
-            converted["content"] = msg.get("content", "")
-
-        return converted
+    # ---- Fixture → canonical MessageRecord conversion (issue #2084 stage 3-E) ----
 
     async def _converting_callback(self, msg: dict) -> None:
-        """Wrapper that converts fixture messages, stores them, then calls the real callback."""
-        converted = self._convert_fixture_message(msg)
+        """Wrapper that converts fixture messages to canonical MessageRecord shape,
+        stores them, then calls the real callback.
 
-        # Persist to JSONL (mirrors ClaudeSDK._store_sdk_message)
+        Reuses the same construction primitives `_start_raw_replay()` uses, rather
+        than hand-rolling a second conversion implementation (issue #2084 stage 3-E).
+        """
+        sdk_type = msg.get("_type")
+        if sdk_type:
+            try:
+                # Real captured SDK message — reconstruct the real object and build
+                # the exact same canonical record the live path would.
+                sdk_obj = reconstruct_sdk_message(sdk_type, msg.get("data", {}))
+                record_dict = MessageRecord.from_sdk_message(
+                    sdk_obj, session_id=self.session_id
+                ).to_dict()
+            except Exception as e:
+                # A fixture-vs-installed-SDK drift signal (unrecognized _type or
+                # malformed data) degrades to an unconverted pass-through instead of
+                # dropping the message outright — mirrors the old behavior this
+                # unification replaced, for exactly the case it can't reconstruct.
+                logger.error(f"Failed to reconstruct replayed message ({sdk_type}): {e}")
+                record_dict = dict(msg)
+                record_dict.setdefault("session_id", self.session_id)
+        elif msg.get("type") == "user":
+            record_dict = MessageRecord.from_user_input(
+                msg.get("content", ""), self.session_id, metadata=msg.get("metadata")
+            ).to_dict()
+        elif msg.get("type") == "system":
+            record_dict = _message_dict_to_record(msg, self.session_id).to_dict()
+        else:
+            # permission_request/permission_response and anything else with no
+            # `_type`: pre-#324 shapes with no current canonical equivalent — pass
+            # through unconverted, exactly as today. Not part of this stage's scope.
+            record_dict = dict(msg)
+            record_dict.setdefault("session_id", self.session_id)
+
         if self.storage_manager:
             try:
-                storage_data = dict(converted)
-                storage_data.setdefault("session_id", self.session_id)
-                await self.storage_manager.append_message(storage_data)
+                await self.storage_manager.append_message(record_dict)
             except Exception as e:
                 logger.error(f"Failed to store replayed message: {e}")
-
         if self._raw_message_callback:
-            if asyncio.iscoroutinefunction(self._raw_message_callback):
-                await self._raw_message_callback(converted)
-            else:
-                self._raw_message_callback(converted)
+            await self._safe_callback(self._raw_message_callback, record_dict)
 
     async def start(self) -> bool:
         """

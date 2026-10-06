@@ -62,6 +62,7 @@ from claude_agent_sdk import (
 from backend.claude_sdk import ClaudeSDK
 from backend.data_storage import DataStorageManager
 from backend.fixture_export import REQUIRED_MARKERS, _check_markers
+from backend.models.messages import MessageRecord
 from backend.session_recorder import SessionRecorder
 from shared.event_emitter import emit
 from shared.event_envelope import QUEUE_SESSION
@@ -287,17 +288,11 @@ async def _run_scenario(shadow_sdk: ClaudeSDK, recorder: SessionRecorder) -> Non
     # The real call site (comm_router.py's CommRouter._send_to_minion, ~line 507)
     # delivers via SessionCoordinator.send_message() -> ClaudeSDK.send_message(),
     # which only enqueues onto a live, connected conversation loop's _message_queue —
-    # unusable here (no connected loop). Replicated by hand: the exact "user"-type
-    # dict shape ClaudeSDK._conversation_loop() builds for an outgoing queued message
-    # (claude_sdk.py's user_message dict, ~line 876) with metadata matching
-    # comm_router.py's exact comm_metadata shape (~line 451-463), fed directly to
-    # shadow_sdk.message_callback — the same broadcast step the live path takes, just
-    # not routed through the message queue itself. Deliberately not also persisted via
-    # storage_manager.append_message() (unlike the live path): that would store a
-    # flat {"type": "user", ...} dict with no _type/data StoredMessage shape, which
-    # _convert_stored_message_to_websocket() (keyed entirely off _type) can't
-    # reconstruct — a separate, real backend gap outside Stage C's scope. Only the
-    # marker-detection surface (the queue_event raw_log record) needs replicating.
+    # unusable here (no connected loop). Replicated by hand: builds the same canonical
+    # MessageRecord the live path builds (claude_sdk.py:875-884) via
+    # MessageRecord.from_user_input(), with metadata matching comm_router.py's exact
+    # comm_metadata shape (~line 451-463), then persists + broadcasts it exactly like
+    # the live path does (issue #2081).
     comm_content = "Please proceed with the next step."
     comm_trailing_instruction = (
         "Always send messages to Minion #Planner using the `send_comm` tool."
@@ -313,17 +308,14 @@ async def _run_scenario(shadow_sdk: ClaudeSDK, recorder: SessionRecorder) -> Non
             "trailing_instruction": comm_trailing_instruction,
         }
     }
-    comm_message = {
-        "type": "user",
-        # Mirrors comm_router.py's formatted_message, which appends the trailing
-        # instruction to the delivered body (not just comm_metadata.trailing_instruction).
-        "content": f"{comm_content}\n\n---\n{comm_trailing_instruction}",
-        "session_id": _SESSION_ID,
-        "timestamp": datetime.now(UTC).timestamp(),
-        "metadata": comm_metadata,
-        "message_id": "synthetic-comm-1",
-    }
-    await shadow_sdk.message_callback(comm_message)
+    record = MessageRecord.from_user_input(
+        f"{comm_content}\n\n---\n{comm_trailing_instruction}",
+        _SESSION_ID,
+        metadata=comm_metadata,
+    )
+    record_dict = record.to_dict()
+    await shadow_sdk.storage_manager.append_message(record_dict)
+    await shadow_sdk.message_callback(record_dict)
 
     # --- Marker: subagent task with progress ---
     task_id = "synthetic-task-1"
