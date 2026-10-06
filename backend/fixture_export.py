@@ -84,7 +84,9 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     records = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    # Split on '\n' only — NOT str.splitlines(), which also breaks on
+    # U+2028/U+2029/U+0085/etc. (issue #2096, same hazard as #2032).
+    for line in path.read_text(encoding="utf-8").split("\n"):
         line = line.strip()
         if not line:
             continue

@@ -34,6 +34,10 @@ _TERMINAL_TOOL_STATES = (
     ToolState.INTERRUPTED,
     ToolState.ORPHANED,
 )
+# Issue #2093: raw on-disk status strings (ToolState.value) for the same set, so
+# prescan_stored_tool_calls() can classify a raw record's status without first
+# constructing a ToolCall/ToolState.
+_TERMINAL_STATUS_VALUES = frozenset(state.value for state in _TERMINAL_TOOL_STATES)
 
 
 def parse_send_comm_sender_attachments(result_content: Any) -> list[dict] | None:
@@ -76,18 +80,31 @@ def prescan_stored_tool_calls(
     places (the risk a prior version of this code had: message_migration.py hand-
     rolled an equivalent loop that could silently drift from this one).
 
+    Issue #2093: also populates `terminal_tool_use_ids` up front for any raw record
+    whose own status is already terminal, regardless of where in the file it falls
+    relative to anything else — trigger 5 and finalize() consult this to avoid
+    synthesizing a duplicate "interrupted" record for a tool whose genuine terminal
+    record appears later in the stream than they do.
+
     `raw_records` may be a generator over a streamed file — this function holds no
     more than the current record in memory at a time.
     """
     for raw in raw_records:
         if raw.get("_type") == "ToolCallUpdate":
             try:
-                tool_use_id = raw.get("data", {}).get("tool_use_id")
+                data = raw.get("data", {})
+                tool_use_id = data.get("tool_use_id")
+                status = data.get("status")
             except AttributeError:
                 continue
             reconstructor.observe_stored_tool_call(tool_use_id)
+            if tool_use_id and status in _TERMINAL_STATUS_VALUES:
+                reconstructor.terminal_tool_use_ids.add(tool_use_id)
         elif raw.get("type") == "tool_call":
-            reconstructor.observe_stored_tool_call(raw.get("tool_use_id"))
+            tool_use_id = raw.get("tool_use_id")
+            reconstructor.observe_stored_tool_call(tool_use_id)
+            if tool_use_id and raw.get("status") in _TERMINAL_STATUS_VALUES:
+                reconstructor.terminal_tool_use_ids.add(tool_use_id)
 
 
 class ToolLifecycleReconstructor:
@@ -307,6 +324,11 @@ class ToolLifecycleReconstructor:
             subtype = metadata.get("subtype", "")
             if subtype in ("client_launched", "interrupt"):
                 for tool_use_id in list(self.active_history_tools.keys()):
+                    # Issue #2093: a genuine terminal explicit record for this
+                    # tool exists elsewhere in the file (known via pre-scan) —
+                    # do not synthesize a duplicate "interrupted" record for it.
+                    if tool_use_id in self.terminal_tool_use_ids:
+                        continue
                     tc = self.active_history_tools.pop(tool_use_id)
                     tc.status = ToolState.INTERRUPTED
                     if tc.display:
@@ -329,6 +351,10 @@ class ToolLifecycleReconstructor:
         if session_state in (SessionState.ACTIVE, SessionState.PAUSED, SessionState.STARTING):
             return synthesized
         for tool_use_id in list(self.active_history_tools.keys()):
+            # Issue #2093: same guard as trigger 5 — a genuine terminal explicit
+            # record for this tool exists elsewhere in the file.
+            if tool_use_id in self.terminal_tool_use_ids:
+                continue
             tc = self.active_history_tools.pop(tool_use_id)
             tc.status = ToolState.INTERRUPTED
             if tc.display:

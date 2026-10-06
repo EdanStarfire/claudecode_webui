@@ -39,7 +39,9 @@ def _load_source_queue_events(source_name: str) -> list[dict[str, Any]]:
     if not raw_log_path.exists():
         raise FileNotFoundError(f"raw_log.jsonl not found for fixture '{source_name}' at {raw_log_path}")
     events = []
-    for line in raw_log_path.read_text(encoding="utf-8").splitlines():
+    # Split on '\n' only — NOT str.splitlines(), which also breaks on
+    # U+2028/U+2029/U+0085/etc. (issue #2096, same hazard as #2032).
+    for line in raw_log_path.read_text(encoding="utf-8").split("\n"):
         line = line.strip()
         if not line:
             continue

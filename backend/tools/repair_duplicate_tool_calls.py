@@ -43,10 +43,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from backend.message_migration import _materialized_record_id
-from backend.tool_lifecycle_reconstruction import _TERMINAL_TOOL_STATES
+from backend.tool_lifecycle_reconstruction import _TERMINAL_STATUS_VALUES
 from backend.tools.migration_status_report_cli import _is_canonical, _is_ignored_population_dir
-
-_TERMINAL_STATUS_VALUES = frozenset(state.value for state in _TERMINAL_TOOL_STATES)
 
 
 @dataclass
@@ -89,8 +87,10 @@ def find_and_repair_duplicate_tool_calls(
     genuine/synthesized split). Zero or 2+ matches is ambiguous — report,
     don't guess.
     """
+    # Split on '\n' only — NOT str.splitlines(), which also breaks on
+    # U+2028/U+2029/U+0085/etc. (issue #2096, same hazard as #2032).
     non_blank_lines = [
-        line for line in messages_path.read_text(encoding="utf-8").splitlines() if line.strip()
+        line for line in messages_path.read_text(encoding="utf-8").split("\n") if line.strip()
     ]
     records = [json.loads(line) for line in non_blank_lines]
 

@@ -82,7 +82,9 @@ class SessionRecording:
             raise FileNotFoundError(f"messages.jsonl not found in {self.session_dir}")
 
         self.messages = []
-        for line in messages_path.read_text(encoding="utf-8").strip().splitlines():
+        # Split on '\n' only — NOT str.splitlines(), which also breaks on
+        # U+2028/U+2029/U+0085/etc. (issue #2096, same hazard as #2032).
+        for line in messages_path.read_text(encoding="utf-8").strip().split("\n"):
             if line.strip():
                 self.messages.append(json.loads(line))
 
@@ -418,7 +420,9 @@ class RawFixtureReplay:
         if not raw_log_path.exists():
             raise FileNotFoundError(f"raw_log.jsonl not found in {self.session_dir}")
 
-        for line in raw_log_path.read_text(encoding="utf-8").strip().splitlines():
+        # Split on '\n' only — NOT str.splitlines(), which also breaks on
+        # U+2028/U+2029/U+0085/etc. (issue #2096, same hazard as #2032).
+        for line in raw_log_path.read_text(encoding="utf-8").strip().split("\n"):
             if not line.strip():
                 continue
             record = json.loads(line)
