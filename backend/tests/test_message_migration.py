@@ -331,6 +331,125 @@ class TestOutOfOrderExplicitRecordDuplicate:
         assert statuses == ["interrupted", "pending"]
 
 
+class TestTrigger5AndFinalizeTerminalGuard:
+    """Issue #2093 (reopened) — a sibling gap to the one
+    TestOutOfOrderExplicitRecordDuplicate above fixed: trigger 5 (client_launched/
+    interrupt) and finalize() never checked terminal_tool_use_ids at all, unlike
+    triggers 1-4. This tool's own natural (unmodified) record order in the
+    2026-09-23-primary fixture IS the exact repro shape: a pending ToolCallUpdate,
+    then a genuine "interrupt" system message, then the genuine "interrupted"
+    ToolCallUpdate terminal record — in that order. Before this fix, trigger 5
+    would fire on the interrupt system message while the tool was still tracked
+    as open (the genuine terminal record not having been fed yet), synthesizing
+    a bogus duplicate "interrupted" record alongside the real one.
+    """
+
+    TOOL_USE_ID = "toolu_01BFmVrRcyGEqMFWex7e4Ccj"
+
+    def _load_real_records(self) -> tuple[dict, dict, dict, dict]:
+        raw_path = RAW_FIXTURES_DIR / "2026-09-23-primary" / "messages.jsonl"
+        records = [
+            json.loads(line)
+            for line in raw_path.read_text(encoding="utf-8").split("\n")
+            if line.strip()
+        ]
+        assistant = next(
+            r for r in records
+            if r.get("_type") == "AssistantMessage"
+            and any(
+                isinstance(c, dict) and c.get("id") == self.TOOL_USE_ID
+                for c in r.get("data", {}).get("content", [])
+            )
+        )
+        pending = next(
+            r for r in records
+            if r.get("_type") == "ToolCallUpdate"
+            and r["data"]["tool_use_id"] == self.TOOL_USE_ID
+            and r["data"]["status"] == "pending"
+        )
+        interrupt_message = next(
+            r for r in records
+            if r.get("type") == "system" and r.get("metadata", {}).get("subtype") == "interrupt"
+        )
+        interrupted = next(
+            r for r in records
+            if r.get("_type") == "ToolCallUpdate"
+            and r["data"]["tool_use_id"] == self.TOOL_USE_ID
+            and r["data"]["status"] == "interrupted"
+        )
+        return assistant, pending, interrupt_message, interrupted
+
+    @pytest.mark.asyncio
+    async def test_trigger5_interrupt_message_does_not_duplicate(
+        self, temp_coordinator, sample_session_config
+    ):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        coordinator.session_manager._active_sessions[session_id].message_schema_version = 0
+        storage = coordinator._storage_managers[session_id]
+
+        assistant, pending, interrupt_message, interrupted = self._load_real_records()
+        # Natural real-world order (§0): the non-terminal record is fed, then
+        # trigger 5's interrupt system message fires, and only THEN does the
+        # genuine terminal record appear later in the stream.
+        lines = [assistant, pending, interrupt_message, interrupted]
+        storage.messages_file.write_text(
+            "\n".join(json.dumps(r) for r in lines) + "\n", encoding="utf-8"
+        )
+
+        result = await migrate_session_messages(
+            storage.session_dir, session_id, SessionState.TERMINATED,
+            coordinator._convert_legacy_record_to_websocket, storage._write_lock,
+        )
+
+        assert result.materialized_tool_calls == 0
+
+        migrated = [
+            json.loads(line)
+            for line in storage.messages_file.read_text(encoding="utf-8").split("\n")
+            if line.strip()
+        ]
+        tool_calls = [m for m in migrated if m.get("type") == "tool_call"]
+        assert len(tool_calls) == 2
+        statuses = sorted(tc["status"] for tc in tool_calls)
+        assert statuses == ["interrupted", "pending"]
+
+    @pytest.mark.asyncio
+    async def test_finalize_sweep_does_not_duplicate_without_interrupt_message(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Symmetric to the trigger-5 test above: no client_launched/interrupt
+        message anywhere in the stream — finalize()'s end-of-stream sweep is the
+        only thing that could fire for a still-open tool."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        coordinator.session_manager._active_sessions[session_id].message_schema_version = 0
+        storage = coordinator._storage_managers[session_id]
+
+        assistant, pending, _interrupt_message, interrupted = self._load_real_records()
+        lines = [assistant, pending, interrupted]
+        storage.messages_file.write_text(
+            "\n".join(json.dumps(r) for r in lines) + "\n", encoding="utf-8"
+        )
+
+        result = await migrate_session_messages(
+            storage.session_dir, session_id, SessionState.TERMINATED,
+            coordinator._convert_legacy_record_to_websocket, storage._write_lock,
+        )
+
+        assert result.materialized_tool_calls == 0
+
+        migrated = [
+            json.loads(line)
+            for line in storage.messages_file.read_text(encoding="utf-8").split("\n")
+            if line.strip()
+        ]
+        tool_calls = [m for m in migrated if m.get("type") == "tool_call"]
+        assert len(tool_calls) == 2
+        statuses = sorted(tc["status"] for tc in tool_calls)
+        assert statuses == ["interrupted", "pending"]
+
+
 class TestMigrationQuarantine:
     @pytest.mark.asyncio
     async def test_corrupt_line_raises_and_leaves_source_untouched(

@@ -9,6 +9,7 @@ from backend.session_manager import SessionState
 from backend.tool_lifecycle_reconstruction import (
     ToolLifecycleReconstructor,
     parse_send_comm_sender_attachments,
+    prescan_stored_tool_calls,
 )
 
 SESSION_ID = "sess-1"
@@ -352,6 +353,100 @@ class TestTerminalRecordGuardAgainstOutOfOrderDuplicates:
         out = r.finalize(SessionState.TERMINATED)
         assert len(out) == 1
         assert out[0]["status"] == ToolState.INTERRUPTED.value
+
+
+class TestPrescanTerminalGuardForTrigger5AndFinalize:
+    """Issue #2093 (reopened): a sibling gap to the one
+    TestTerminalRecordGuardAgainstOutOfOrderDuplicates above fixed. That fix
+    only covered the explicit-record branch (feed()'s own reactive population
+    of terminal_tool_use_ids). Trigger 5 (client_launched/interrupt) and
+    finalize() never consulted terminal_tool_use_ids at all — so either could
+    synthesize a bogus duplicate "interrupted" record for a tool still sitting
+    in active_history_tools when a genuine terminal explicit record for that
+    same tool appears LATER in the stream than they do. prescan_stored_tool_calls()
+    now populates terminal_tool_use_ids proactively from each raw record's own
+    status field, regardless of file position, so the explicit branch's existing
+    `elif tc_id not in self.terminal_tool_use_ids` check (see above) already
+    excludes such a tool from active_history_tools before trigger 5/finalize
+    ever run — and both also gained the same guard triggers 1-4 already have,
+    as defense in depth.
+    """
+
+    def _explicit_tool_call(self, tool_use_id, status, **extra):
+        return {
+            "type": "tool_call",
+            "tool_use_id": tool_use_id,
+            "session_id": SESSION_ID,
+            "name": "Bash",
+            "input": {},
+            "status": status,
+            "created_at": 1.0,
+            "requires_permission": False,
+            **extra,
+        }
+
+    def test_trigger5_scenario_produces_zero_synthesized_records(self):
+        """The exact 3-record scenario verified empirically in the plan: a
+        pending explicit record, a client_launched system message, and the
+        genuine interrupted explicit record later in the stream."""
+        raw_records = [
+            self._explicit_tool_call("tu-1", "pending"),
+            _system("client_launched"),
+            self._explicit_tool_call("tu-1", "interrupted"),
+        ]
+        r = ToolLifecycleReconstructor(SESSION_ID)
+        prescan_stored_tool_calls(raw_records, r)
+
+        synthesized = []
+        for rec in raw_records:
+            synthesized.extend(r.feed(rec))
+
+        assert synthesized == []
+        assert "tu-1" not in r.active_history_tools
+
+    def test_finalize_scenario_produces_zero_synthesized_records(self):
+        """Symmetric scenario: same pending-then-interrupted records, but no
+        client_launched/interrupt message at all — finalize()'s end-of-stream
+        sweep is the only thing that could fire for a still-open tool."""
+        raw_records = [
+            self._explicit_tool_call("tu-1", "pending"),
+            self._explicit_tool_call("tu-1", "interrupted"),
+        ]
+        r = ToolLifecycleReconstructor(SESSION_ID)
+        prescan_stored_tool_calls(raw_records, r)
+
+        synthesized = []
+        for rec in raw_records:
+            synthesized.extend(r.feed(rec))
+        synthesized.extend(r.finalize(SessionState.TERMINATED))
+
+        assert synthesized == []
+
+    def test_trigger5_guard_fires_directly_for_a_known_terminal_tracked_tool(self):
+        """Exercises trigger 5's new guard line directly, independent of
+        prescan/explicit-record plumbing: a tool_use_id sitting in
+        active_history_tools (synthesized via trigger 1) that is already
+        known-terminal must not be popped/re-interrupted a second time."""
+        r = ToolLifecycleReconstructor(SESSION_ID)
+        r.feed(_assistant_with_tool_uses(tool_use_id="tu-1"))
+        assert "tu-1" in r.active_history_tools
+        r.terminal_tool_use_ids.add("tu-1")
+
+        out = r.feed(_system("client_launched"))
+
+        assert out == []
+        assert "tu-1" in r.active_history_tools
+
+    def test_finalize_guard_fires_directly_for_a_known_terminal_tracked_tool(self):
+        """Exercises finalize()'s new guard line directly, same setup as above."""
+        r = ToolLifecycleReconstructor(SESSION_ID)
+        r.feed(_assistant_with_tool_uses(tool_use_id="tu-1"))
+        r.terminal_tool_use_ids.add("tu-1")
+
+        out = r.finalize(SessionState.TERMINATED)
+
+        assert out == []
+        assert "tu-1" in r.active_history_tools
 
 
 class TestIdempotency:
