@@ -601,3 +601,111 @@ class TestArchiveMinionMigratesAtDisposal:
         state = json.loads((archive_dir / "state.json").read_text(encoding="utf-8"))
         assert state["message_schema_version"] == CURRENT_MESSAGE_SCHEMA_VERSION
         assert state["message_migration_status"] is None
+
+
+class TestArchiveSessionForResetMigratesAtReset:
+    """Issue #2091: _archive_session_for_reset() must migrate a still-legacy live
+    session to canonical shape before snapshotting too — the same migrate-at-
+    disposal fix as TestArchiveMinionMigratesAtDisposal above, applied to the
+    second, separate archive-creation path used by session reset."""
+
+    @pytest.fixture
+    async def real_coordinator(self, tmp_path):
+        coordinator = SessionCoordinator(tmp_path)
+        await coordinator.initialize()
+        service = MessageMigrationService(coordinator, coordinator.session_manager)
+        coordinator.set_message_migration_service(service)
+        yield coordinator
+        await coordinator.cleanup()
+
+    @pytest.fixture
+    async def legacy_minion(self, real_coordinator):
+        project = await real_coordinator.project_manager.create_project(
+            name="Test Project", working_directory="/test/project"
+        )
+        session_id = str(uuid.uuid4())
+        await real_coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(
+                permission_mode="acceptEdits",
+                system_prompt="Test system prompt",
+                allowed_tools=["bash", "edit", "read"],
+                model="claude-3-sonnet-20241022",
+            ),
+        )
+        real_coordinator.session_manager._active_sessions[session_id].message_schema_version = 0
+        storage = real_coordinator._storage_managers[session_id]
+        storage.messages_file.write_text(
+            (FIXTURES_DIR / "tool_use" / "messages.jsonl").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        return session_id
+
+    @staticmethod
+    def _latest_archive_dir(coordinator: SessionCoordinator, session_id: str) -> Path:
+        archives_root = coordinator.session_manager.data_dir / "archives" / "minions" / session_id
+        return max(archives_root.iterdir(), key=lambda p: p.name)
+
+    @pytest.mark.asyncio
+    async def test_reset_archive_is_canonical(self, real_coordinator, legacy_minion):
+        success = await real_coordinator._archive_session_for_reset(legacy_minion)
+
+        assert success is True
+        archive_dir = self._latest_archive_dir(real_coordinator, legacy_minion)
+        state = json.loads((archive_dir / "state.json").read_text(encoding="utf-8"))
+        assert state["message_schema_version"] == CURRENT_MESSAGE_SCHEMA_VERSION
+        assert state["message_migration_status"]["state"] == "completed"
+        assert (archive_dir / "messages.jsonl").read_text(encoding="utf-8").strip() != ""
+
+        # The live session itself is left canonical too (migrate_one() mutates
+        # the live SessionManager, not a disposable copy).
+        info = await real_coordinator.session_manager.get_session_info(legacy_minion)
+        assert info.message_schema_version == CURRENT_MESSAGE_SCHEMA_VERSION
+
+    @pytest.mark.asyncio
+    async def test_reset_succeeds_when_migration_quarantines(
+        self, real_coordinator, legacy_minion
+    ):
+        """A genuinely corrupt session must not block the reset archive — it
+        simply inherits the live session's quarantined status, same as disposal."""
+        storage = real_coordinator._storage_managers[legacy_minion]
+        storage.messages_file.write_text(
+            storage.messages_file.read_text(encoding="utf-8") + "NOT VALID JSON\n",
+            encoding="utf-8",
+        )
+
+        success = await real_coordinator._archive_session_for_reset(legacy_minion)
+
+        assert success is True
+        archive_dir = self._latest_archive_dir(real_coordinator, legacy_minion)
+        state = json.loads((archive_dir / "state.json").read_text(encoding="utf-8"))
+        assert state["message_migration_status"]["state"] == "quarantined"
+        assert state["message_schema_version"] == 0
+
+    @pytest.mark.asyncio
+    async def test_already_canonical_session_skips_migration(self, real_coordinator):
+        """A session already at CURRENT_MESSAGE_SCHEMA_VERSION must not be
+        re-migrated when archived for reset."""
+        project = await real_coordinator.project_manager.create_project(
+            name="Test Project 2", working_directory="/test/project2"
+        )
+        session_id = str(uuid.uuid4())
+        await real_coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(
+                permission_mode="acceptEdits",
+                system_prompt="Test system prompt",
+                allowed_tools=["bash"],
+                model="claude-3-sonnet-20241022",
+            ),
+        )
+
+        success = await real_coordinator._archive_session_for_reset(session_id)
+
+        assert success is True
+        archive_dir = self._latest_archive_dir(real_coordinator, session_id)
+        state = json.loads((archive_dir / "state.json").read_text(encoding="utf-8"))
+        assert state["message_schema_version"] == CURRENT_MESSAGE_SCHEMA_VERSION
+        assert state["message_migration_status"] is None
