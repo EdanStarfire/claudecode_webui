@@ -312,6 +312,48 @@ class TestExplicitRecordsSuppressAllSynthesisTriggers:
         assert out[0]["status"] == ToolState.INTERRUPTED.value
 
 
+class TestTerminalRecordGuardAgainstOutOfOrderDuplicates:
+    """Issue #2093: two genuine stored explicit records for the same tool_use_id
+    (one terminal, one non-terminal) landing out of chronological order in the
+    file must not resurrect tracking for an already-concluded tool — otherwise
+    finalize()'s end-of-stream sweep synthesizes a spurious duplicate record."""
+
+    def _explicit_tool_call(self, tool_use_id, status, **extra):
+        return {
+            "type": "tool_call",
+            "tool_use_id": tool_use_id,
+            "session_id": SESSION_ID,
+            "name": "Bash",
+            "input": {},
+            "status": status,
+            "created_at": 1.0,
+            "requires_permission": False,
+            **extra,
+        }
+
+    def test_terminal_then_out_of_order_nonterminal_is_not_resurrected(self):
+        r = ToolLifecycleReconstructor(SESSION_ID)
+        r.feed(self._explicit_tool_call("tu-1", "interrupted"))
+        out = r.feed(self._explicit_tool_call("tu-1", "running"))
+
+        assert out == []
+        assert "tu-1" not in r.active_history_tools
+
+        # The finalize sweep must not synthesize a spurious duplicate.
+        assert r.finalize(SessionState.TERMINATED) == []
+
+    def test_normal_chronological_order_still_tracks_as_open(self):
+        """Sanity check: a genuinely non-terminal record with no prior terminal
+        record for the same id must still be tracked and swept normally."""
+        r = ToolLifecycleReconstructor(SESSION_ID)
+        r.feed(self._explicit_tool_call("tu-1", "running"))
+        assert "tu-1" in r.active_history_tools
+
+        out = r.finalize(SessionState.TERMINATED)
+        assert len(out) == 1
+        assert out[0]["status"] == ToolState.INTERRUPTED.value
+
+
 class TestIdempotency:
     def test_two_separate_feed_sequences_on_same_records_produce_identical_output(self):
         records = [

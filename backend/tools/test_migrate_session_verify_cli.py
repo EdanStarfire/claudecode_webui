@@ -6,6 +6,7 @@ Not under backend/tests/ (pytest's testpaths) — opt-in, invoked explicitly:
 """
 
 import json
+import shutil
 import uuid
 from pathlib import Path
 
@@ -18,11 +19,22 @@ from backend.tools.migrate_session_verify_cli import (
     _diff,
     _group_by_logical_identity,
     _normalize,
+    _write_apply_backup,
     verify_archive_migration,
     verify_session_migration,
 )
 
 FIXTURES_DIR = Path(__file__).parent.parent / "tests" / "fixtures"
+
+
+def _snapshot_tree(root: Path) -> dict[str, bytes]:
+    """Issue #2094 AC5: full-tree snapshot (path -> content) for a byte-
+    identical-before/after assertion, not just the target file's own content."""
+    return {
+        str(p.relative_to(root)): p.read_bytes()
+        for p in sorted(root.rglob("*"))
+        if p.is_file()
+    }
 
 
 @pytest.fixture
@@ -175,11 +187,9 @@ class TestVerifySessionMigrationDryRun:
 
         assert report.ok, report.divergences
         assert report.applied is False
-        assert report.archive_dir is not None
-        assert report.archive_dir.exists()
-        assert (report.archive_dir / "messages.jsonl").read_text(encoding="utf-8") == (
-            FIXTURES_DIR / fixture_name / "messages.jsonl"
-        ).read_text(encoding="utf-8")
+        # Issue #2094 (AC1): dry run writes no files under --data-dir at all.
+        assert report.backup_dir is None
+        assert not (storage.session_dir.parent / "migration-backups").exists()
 
         # Dry run must never touch the real session file.
         info = await coordinator.session_manager.get_session_info(session_id)
@@ -190,6 +200,22 @@ class TestVerifySessionMigrationDryRun:
     async def test_unknown_session_raises(self, temp_coordinator):
         with pytest.raises(ValueError):
             await verify_session_migration(temp_coordinator, "no-such-session", apply=False)
+
+    @pytest.mark.asyncio
+    async def test_dry_run_leaves_data_dir_byte_identical(
+        self, temp_coordinator, sample_session_config, tmp_path
+    ):
+        """Issue #2094 AC5: the full --data-dir tree, not just the session's
+        own files, must be byte-identical before and after a dry run."""
+        coordinator = temp_coordinator
+        session_id, storage = await _make_legacy_session(
+            coordinator, sample_session_config, "permission_flow"
+        )
+        before = _snapshot_tree(tmp_path)
+
+        await verify_session_migration(coordinator, session_id, apply=False)
+
+        assert _snapshot_tree(tmp_path) == before
 
 
 class TestVerifySessionMigrationApply:
@@ -202,15 +228,81 @@ class TestVerifySessionMigrationApply:
             coordinator, sample_session_config, "permission_flow"
         )
 
+        original_messages = (FIXTURES_DIR / "permission_flow" / "messages.jsonl").read_text(
+            encoding="utf-8"
+        )
+
         report = await verify_session_migration(coordinator, session_id, apply=True)
 
         assert report.ok, report.divergences
         assert report.applied is True
-        assert report.archive_dir is None  # no preview snapshot needed for --apply
+        # Issue #2094 (AC2): apply mode now writes a pre-migration backup to a
+        # dedicated location outside data/sessions/ proper.
+        assert report.backup_dir is not None
+        assert report.backup_skipped is False
+        assert report.backup_dir == storage.session_dir.parent / "migration-backups" / session_id
+        assert (report.backup_dir / "messages.jsonl").read_text(encoding="utf-8") == original_messages
 
         info = await coordinator.session_manager.get_session_info(session_id)
         assert info.message_migration_status["state"] == "completed"
         assert info.message_schema_version != 0
+
+
+class TestWriteApplyBackup:
+    """Issue #2094 AC2: the idempotency check at the unit level, independent of
+    claim-status side effects — a second --apply CLI attempt separately refuses
+    via try_claim_message_migration() (exercised above), but the backup helper
+    itself must also never clobber an existing backup if ever called twice."""
+
+    def test_second_call_skips_without_overwriting(self, tmp_path):
+        messages_path = tmp_path / "messages.jsonl"
+        messages_path.write_text("original", encoding="utf-8")
+        state_path = tmp_path / "state.json"
+        state_path.write_text("{}", encoding="utf-8")
+        backup_dir = tmp_path / "backups" / "s1"
+
+        first = _write_apply_backup(backup_dir, messages_path, state_path)
+        assert first is True
+        assert (backup_dir / "messages.jsonl").read_text(encoding="utf-8") == "original"
+
+        messages_path.write_text("mutated-after-first-backup", encoding="utf-8")
+        second = _write_apply_backup(backup_dir, messages_path, state_path)
+        assert second is False
+        assert (backup_dir / "messages.jsonl").read_text(encoding="utf-8") == "original"
+
+    def test_failure_mid_copy_leaves_no_partial_backup_dir(self, tmp_path, monkeypatch):
+        """Issue #2094 (AC2, found in review): a crash between mkdir and the
+        copy2 calls must never leave a PARTIAL backup_dir behind — a retry
+        checks only backup_dir.exists() and would otherwise mistake it for a
+        complete backup and skip re-backing-up before an unsafe migration."""
+        messages_path = tmp_path / "messages.jsonl"
+        messages_path.write_text("original", encoding="utf-8")
+        state_path = tmp_path / "state.json"
+        state_path.write_text("{}", encoding="utf-8")
+        backup_dir = tmp_path / "backups" / "s1"
+
+        real_copy2 = shutil.copy2
+        call_count = {"n": 0}
+
+        def _flaky_copy2(src, dst):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise OSError("simulated disk failure mid-copy")
+            return real_copy2(src, dst)
+
+        monkeypatch.setattr(
+            "backend.tools.migrate_session_verify_cli.shutil.copy2", _flaky_copy2
+        )
+
+        with pytest.raises(OSError):
+            _write_apply_backup(backup_dir, messages_path, state_path)
+
+        assert not backup_dir.exists()
+
+        # A retry (with the failure no longer occurring) must succeed cleanly.
+        second = _write_apply_backup(backup_dir, messages_path, state_path)
+        assert second is True
+        assert (backup_dir / "messages.jsonl").read_text(encoding="utf-8") == "original"
 
     @pytest.mark.asyncio
     async def test_apply_refuses_when_already_completed_elsewhere(
@@ -258,11 +350,26 @@ class TestVerifyArchiveMigrationDryRun:
         assert report.ok, report.divergences
         assert report.applied is False
         assert report.session_id == session_id
+        # Issue #2094 (AC1): dry run writes no files under --data-dir at all.
+        assert report.backup_dir is None
 
         # Dry run must never touch the real archive's own files.
         reloaded_state = json.loads((archive_dir / "state.json").read_text(encoding="utf-8"))
         assert reloaded_state["message_schema_version"] == 0
         assert reloaded_state["message_migration_status"] is None
+
+    @pytest.mark.asyncio
+    async def test_dry_run_leaves_data_dir_byte_identical(self, temp_coordinator, tmp_path):
+        """Issue #2094 AC5: the full --data-dir tree must be byte-identical
+        before and after a dry run."""
+        archive_dir = tmp_path / "archives" / "minions" / "m1" / "ts1"
+        session_id = str(uuid.uuid4())
+        _write_legacy_archive(archive_dir, "permission_flow", session_id)
+        before = _snapshot_tree(tmp_path)
+
+        await verify_archive_migration(temp_coordinator, archive_dir, apply=False)
+
+        assert _snapshot_tree(tmp_path) == before
 
     @pytest.mark.asyncio
     async def test_missing_files_raises(self, temp_coordinator, tmp_path):
@@ -289,7 +396,10 @@ class TestVerifyArchiveMigrationDryRun:
 class TestVerifyArchiveMigrationApply:
     @pytest.mark.asyncio
     async def test_apply_flips_archive_state_json_in_place(self, temp_coordinator, tmp_path):
-        archive_dir = tmp_path / "archive"
+        # Nested as <data_dir>/archives/minions/<minion>/<archive> — apply
+        # mode's backup-path validation (issue #2094, found in review)
+        # requires this real-world layout.
+        archive_dir = tmp_path / "archives" / "minions" / "m1" / "ts1"
         session_id = str(uuid.uuid4())
         _write_legacy_archive(archive_dir, "permission_flow", session_id)
 
@@ -301,3 +411,64 @@ class TestVerifyArchiveMigrationApply:
         reloaded_state = json.loads((archive_dir / "state.json").read_text(encoding="utf-8"))
         assert reloaded_state["message_schema_version"] == CURRENT_MESSAGE_SCHEMA_VERSION
         assert reloaded_state["message_migration_status"]["state"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_apply_rejects_non_standard_archive_layout(self, temp_coordinator, tmp_path):
+        """Issue #2094 (AC2, found in review): --archive-dir is arbitrary user
+        input, unlike the scan tools which only ever walk DOWN from a known
+        root. apply mode must fail loudly rather than silently climbing to an
+        unintended backup location when the layout isn't
+        <data_dir>/archives/minions/<minion>/<archive>."""
+        archive_dir = tmp_path / "archive"  # flat, not nested under minions/
+        session_id = str(uuid.uuid4())
+        _write_legacy_archive(archive_dir, "permission_flow", session_id)
+
+        with pytest.raises(ValueError, match="minions"):
+            await verify_archive_migration(temp_coordinator, archive_dir, apply=True)
+
+        # Must fail before mutating anything.
+        reloaded_state = json.loads((archive_dir / "state.json").read_text(encoding="utf-8"))
+        assert reloaded_state["message_schema_version"] == 0
+
+    @pytest.mark.asyncio
+    async def test_apply_writes_backup_outside_scanned_archives_tree(
+        self, temp_coordinator, tmp_path
+    ):
+        """Issue #2094 (AC2): backup lands at
+        <archives_root>/migration-backups/<minion>/<archive>/ — structurally
+        outside <archives_root>/minions/, which _scan_archives() walks."""
+        archives_root = tmp_path / "archives"
+        archive_dir = archives_root / "minions" / "m1" / "ts1"
+        session_id = str(uuid.uuid4())
+        original_messages = (FIXTURES_DIR / "permission_flow" / "messages.jsonl").read_text(
+            encoding="utf-8"
+        )
+        _write_legacy_archive(archive_dir, "permission_flow", session_id)
+
+        report = await verify_archive_migration(temp_coordinator, archive_dir, apply=True)
+
+        assert report.ok, report.divergences
+        expected_backup_dir = archives_root / "migration-backups" / "m1" / "ts1"
+        assert report.backup_dir == expected_backup_dir
+        assert report.backup_skipped is False
+        assert (expected_backup_dir / "messages.jsonl").read_text(encoding="utf-8") == (
+            original_messages
+        )
+        assert (expected_backup_dir / "state.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_apply_backup_idempotent_if_already_present(self, temp_coordinator, tmp_path):
+        archives_root = tmp_path / "archives"
+        archive_dir = archives_root / "minions" / "m1" / "ts1"
+        session_id = str(uuid.uuid4())
+        _write_legacy_archive(archive_dir, "permission_flow", session_id)
+        backup_dir = archives_root / "migration-backups" / "m1" / "ts1"
+        backup_dir.mkdir(parents=True)
+        (backup_dir / "messages.jsonl").write_text("pre-existing-backup", encoding="utf-8")
+
+        report = await verify_archive_migration(temp_coordinator, archive_dir, apply=True)
+
+        assert report.ok, report.divergences
+        assert report.backup_skipped is True
+        # Pre-existing backup must not be overwritten.
+        assert (backup_dir / "messages.jsonl").read_text(encoding="utf-8") == "pre-existing-backup"

@@ -93,6 +93,29 @@ class TestScanLive:
         assert report.total == 0
         assert report.unreadable == []
 
+    def test_migration_backups_and_legacy_verify_dirs_not_counted(self, tmp_path):
+        """Issue #2094 (AC3): a stray migration-backups directory or a legacy
+        -migration-verify- leftover alongside real sessions must never be
+        silently counted as a real session."""
+        sessions_dir = tmp_path / "sessions"
+        _write_state(
+            sessions_dir / "s-real" / "state.json",
+            "s-real", CURRENT_MESSAGE_SCHEMA_VERSION, {"state": "completed"},
+        )
+        _write_state(
+            sessions_dir / "migration-backups" / "s-real" / "state.json",
+            "s-real", CURRENT_MESSAGE_SCHEMA_VERSION, {"state": "completed"},
+        )
+        _write_state(
+            sessions_dir / "s-real-migration-verify-20260101_000000_000000" / "state.json",
+            "s-real", 0, None,
+        )
+
+        report = _scan_live(sessions_dir)
+
+        assert report.total == 1
+        assert report.canonical == 1
+
 
 class TestScanArchives:
     def test_buckets_nested_minion_timestamp_structure(self, tmp_path):
@@ -121,6 +144,30 @@ class TestScanArchives:
         report = _scan_archives(tmp_path / "nonexistent")
         assert report.total == 0
         assert report.fully_canonical is True
+
+    def test_migration_backups_and_legacy_verify_dirs_not_counted(self, tmp_path):
+        """Issue #2094 (AC3): same filtering as the live-session scan, applied
+        at both the minion-dir and archive-dir levels."""
+        archives_dir = tmp_path / "archives" / "minions"
+        _write_state(
+            archives_dir / "m1" / "ts1" / "state.json",
+            "m1", CURRENT_MESSAGE_SCHEMA_VERSION, {"state": "completed"},
+        )
+        # A legacy dry-run leftover sibling of a real archive under the same minion.
+        _write_state(
+            archives_dir / "m1" / "ts1-migration-verify-20260101_000000_000000" / "state.json",
+            "m1", 0, None,
+        )
+        # A stray migration-backups directory at the minion-dir level.
+        _write_state(
+            archives_dir / "migration-backups" / "m1" / "ts1" / "state.json",
+            "m1", CURRENT_MESSAGE_SCHEMA_VERSION, {"state": "completed"},
+        )
+
+        report = _scan_archives(archives_dir)
+
+        assert report.total == 1
+        assert report.canonical == 1
 
 
 class TestRun:

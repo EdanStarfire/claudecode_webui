@@ -28,6 +28,7 @@ from pathlib import Path
 
 from backend.session_coordinator import SessionCoordinator, _is_canonical_schema_version
 from backend.tools.migrate_session_verify_cli import verify_archive_migration
+from backend.tools.migration_status_report_cli import _is_ignored_population_dir
 
 
 async def _run(data_dir: Path, apply: bool) -> int:
@@ -38,10 +39,10 @@ async def _run(data_dir: Path, apply: bool) -> int:
 
     targets = []
     for minion_dir in sorted(archives_root.iterdir()):
-        if not minion_dir.is_dir():
+        if not minion_dir.is_dir() or _is_ignored_population_dir(minion_dir.name):
             continue
         for archive_dir in sorted(minion_dir.iterdir()):
-            if not archive_dir.is_dir():
+            if not archive_dir.is_dir() or _is_ignored_population_dir(archive_dir.name):
                 continue
             state_path = archive_dir / "state.json"
             if not state_path.exists():
