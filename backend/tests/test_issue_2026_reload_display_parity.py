@@ -1,14 +1,19 @@
 """Tests for issue #2026: replay-free, non-blocking reload/live display parity.
 
 Covers:
-- AC6: _convert_stored_message_to_websocket() call count during a paginated
-  read is proportional to page size, not offset — the regression test that
-  would have caught #2006's quadratic prefix-replay bug before it shipped.
 - Part B2: the pre-store display hook never blocks storage on failure, and
   attaches a bounded delta (not a full cumulative snapshot) to the record.
+
+AC6 (per-page conversion work must be O(page size), never O(offset)) was
+originally covered here by instrumenting the legacy
+_convert_stored_message_to_websocket() call count. Issue #2084 (stage
+3-D-cutover) deleted that conversion function entirely — a canonical
+session's reload path (get_session_messages()/get_archive_messages()) now
+passes each stored record through verbatim, with no per-record conversion
+step left to recompute, so the quadratic-replay failure mode this covered
+is structurally unreachable rather than merely fixed.
 """
 
-import json
 from unittest.mock import patch
 
 import pytest
@@ -46,153 +51,6 @@ async def sample_session_config(temp_coordinator):
         ),
     }
 
-
-def _write_synthetic_records(messages_file, count: int) -> None:
-    """Write `count` minimal but valid _type-discriminated SystemMessage records
-    directly to the JSONL file, bypassing append_message()'s per-call file
-    open/close for setup speed — this test cares about read-path behavior, not
-    write-path performance.
-    """
-    lines = []
-    for i in range(count):
-        lines.append(json.dumps({
-            "_type": "SystemMessage",
-            "timestamp": 1700000000.0 + i,
-            "session_id": "synthetic-session",
-            "data": {"subtype": "status", "data": {}},
-            "message_id": f"synthetic-{i}",
-        }))
-    messages_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-class TestIssue2026AC6ConversionProportionality:
-    """AC6: per-page conversion work must be O(page size), never O(offset).
-
-    #2006's bug replayed the entire discarded [0, offset) prefix through
-    DisplayProjection on every paginated request — so _convert_stored_message_
-    to_websocket()'s call count for a single page grew with the page's offset,
-    not just its size. This test builds a 20,000+ record synthetic session and
-    asserts the call count for a late page is no larger than for the first
-    page, proportional to the page size requested — not the offset.
-    """
-
-    RECORD_COUNT = 20_000
-    PAGE_SIZE = 50
-
-    @pytest.mark.asyncio
-    async def test_call_count_is_page_size_not_offset(
-        self, temp_coordinator, sample_session_config
-    ):
-        coordinator = temp_coordinator
-        session_id = await coordinator.create_session(**sample_session_config)
-        storage = coordinator._storage_managers[session_id]
-        _write_synthetic_records(storage.messages_file, self.RECORD_COUNT)
-
-        call_count = {"n": 0}
-        original = coordinator._convert_stored_message_to_websocket
-
-        def counting_wrapper(stored_msg):
-            call_count["n"] += 1
-            return original(stored_msg)
-
-        coordinator._convert_stored_message_to_websocket = counting_wrapper
-
-        # First page: offset=0.
-        call_count["n"] = 0
-        result = await coordinator.get_session_messages(
-            session_id, limit=self.PAGE_SIZE, offset=0
-        )
-        assert len(result["messages"]) == self.PAGE_SIZE
-        first_page_calls = call_count["n"]
-
-        # Last page: offset near the end of a 20,000+ record session — under
-        # #2006's bug this would have replayed ~19,950 discarded prior records
-        # before ever producing this page's output.
-        late_offset = self.RECORD_COUNT - self.PAGE_SIZE
-        call_count["n"] = 0
-        result = await coordinator.get_session_messages(
-            session_id, limit=self.PAGE_SIZE, offset=late_offset
-        )
-        assert len(result["messages"]) == self.PAGE_SIZE
-        last_page_calls = call_count["n"]
-
-        # Both pages must do the same, bounded amount of conversion work —
-        # proportional to page size, independent of offset. A generous upper
-        # bound (4x page size) tolerates the tool_call synthesis this method's
-        # caller layers on top per real message, without masking a genuine
-        # O(offset) regression (which would be ~400x larger, not ~4x).
-        assert first_page_calls <= self.PAGE_SIZE * 4
-        assert last_page_calls <= self.PAGE_SIZE * 4
-        assert last_page_calls <= first_page_calls * 2
-
-    @pytest.mark.asyncio
-    async def test_archive_path_call_count_is_page_size_not_offset(
-        self, temp_coordinator, sample_session_config
-    ):
-        """AC5: the archive reload path shares the same conversion method and
-        must have the same non-quadratic shape."""
-        coordinator = temp_coordinator
-        session_id = await coordinator.create_session(**sample_session_config)
-        storage = coordinator._storage_managers[session_id]
-        _write_synthetic_records(storage.messages_file, self.RECORD_COUNT)
-
-        # Reuse get_session_messages()'s underlying conversion for a call-count
-        # baseline via direct instrumentation on the shared method, then drive
-        # get_archive_messages() through a minimal fake archive_manager, since
-        # spinning up a full legion archive for 20,000 records is unnecessary
-        # for this test's purpose (verifying get_archive_messages() delegates
-        # to the same non-quadratic conversion, not exercising ArchiveManager
-        # itself, which has its own tests).
-        raw_messages = await storage.read_messages()
-
-        class _FakeArchiveManager:
-            async def get_archive_messages(self, session_id, archive_id, offset=0, limit=None):
-                end = offset + limit if limit else None
-                page = raw_messages[offset:end]
-                return {
-                    "messages": page,
-                    "total_count": len(raw_messages),
-                    "offset": offset,
-                    "has_more": end is not None and end < len(raw_messages),
-                }
-
-            async def get_archive_state(self, session_id, archive_id):
-                # Issue #2084 (stage 3-B, §7): this archive's records are the
-                # legacy `_type`-discriminated shape (_write_synthetic_records) —
-                # report schema_version 0 so get_archive_messages() routes through
-                # the conversion method this test is instrumenting, not the
-                # canonical fast path.
-                return {"state": {"message_schema_version": 0}}
-
-        class _FakeLegionSystem:
-            archive_manager = _FakeArchiveManager()
-
-        coordinator.legion_system = _FakeLegionSystem()
-
-        call_count = {"n": 0}
-        original = coordinator._convert_stored_message_to_websocket
-
-        def counting_wrapper(stored_msg):
-            call_count["n"] += 1
-            return original(stored_msg)
-
-        coordinator._convert_stored_message_to_websocket = counting_wrapper
-
-        call_count["n"] = 0
-        await coordinator.get_archive_messages(
-            session_id, "archive-1", offset=0, limit=self.PAGE_SIZE
-        )
-        first_page_calls = call_count["n"]
-
-        late_offset = self.RECORD_COUNT - self.PAGE_SIZE
-        call_count["n"] = 0
-        await coordinator.get_archive_messages(
-            session_id, "archive-1", offset=late_offset, limit=self.PAGE_SIZE
-        )
-        last_page_calls = call_count["n"]
-
-        assert first_page_calls <= self.PAGE_SIZE
-        assert last_page_calls <= self.PAGE_SIZE
 
 
 class TestIssue2026PreStoreHookNonFatal:

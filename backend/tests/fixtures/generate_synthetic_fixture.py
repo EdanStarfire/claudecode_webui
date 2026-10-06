@@ -21,16 +21,12 @@ one-off throwaway.
 
 `rest_history.json` is built independently from the live path (see
 `_reconstruct_rest_history_messages()`): it reprocesses the real, stored
-`messages.jsonl` rows through `SessionCoordinator._convert_stored_message_to_
-websocket()` — the actual REST-reload reconstruction method, called on a
-minimally-constructed instance (`object.__new__`) since that method needs no
-other coordinator state. This is deliberate, not incidental: an earlier version
-of this script built `rest_history.json` from the same accumulator the live
-path used, which made the equivalence harness's check against this fixture
-tautological. As a direct consequence, this fixture is expected to reproduce
-issue #2002's divergence too (see `frontend/src/stores/__tests__/
-equivalence.test.js`'s `KNOWN_DIVERGENT_FIXTURES`) — that's confirmatory
-evidence the bug is systemic, not an artifact of one real recording.
+`messages.jsonl` rows the same way `SessionCoordinator.get_session_messages()`
+now does post-cutover (issue #2084 stage 3-D-cutover) — a canonical record
+returned verbatim, with no per-record conversion step left to perform. This
+is deliberate, not incidental: an earlier version of this script built
+`rest_history.json` from the same accumulator the live path used, which made
+the equivalence harness's check against this fixture tautological.
 
 Usage:
     uv run python -m backend.tests.fixtures.generate_synthetic_fixture
@@ -66,7 +62,6 @@ from claude_agent_sdk import (
 from backend.claude_sdk import ClaudeSDK
 from backend.data_storage import DataStorageManager
 from backend.fixture_export import REQUIRED_MARKERS, _check_markers
-from backend.session_coordinator import SessionCoordinator
 from backend.session_recorder import SessionRecorder
 from shared.event_emitter import emit
 from shared.event_envelope import QUEUE_SESSION
@@ -411,36 +406,19 @@ async def _run_scenario(shadow_sdk: ClaudeSDK, recorder: SessionRecorder) -> Non
 
 def _reconstruct_rest_history_messages(stored_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Rebuilds rest_history.json's message list via the REAL REST-reload
-    reconstruction method — backend.session_coordinator.SessionCoordinator.
-    _convert_stored_message_to_websocket() — instead of reusing anything the
-    live path (message_callback, above) computed. Reviewed (2026-09-23): that
-    method never reads `self` beyond calling two @staticmethods on the same
-    class (_extract_agent_name, _parse_agent_notification_label) — no
-    SessionManager, storage, or other coordinator state — so the smallest
-    viable real dependency is a completely uninitialized instance
-    (`object.__new__`, bypassing `__init__` and its full manager graph
-    entirely), not a hand-rolled approximation of the method's logic.
-
-    This is deliberately independent of the live path's own accumulator: an
-    earlier version of this script built rest_history.json from the exact
-    same list the live path's queue events were drawn from, making the
-    equivalence check tautological (see issue #1999 PR discussion) — it could
-    prove the replay mechanics ran without crashing, never that the harness
-    catches a genuine live-vs-reload divergence. Reprocessing the real stored
-    JSONL rows through the real reconstruction method closes that gap — and,
-    expected per #2002, reproduces that same tracked bug on synthetic data too
-    (sparser content/metadata than the live path), confirming #2002 is a
-    systemic backend gap, not an artifact of one real recording.
+    behavior — backend.session_coordinator.SessionCoordinator.get_session_messages().
+    Issue #2084 (stage 3-D-cutover) deleted the legacy per-record conversion step
+    entirely: a canonical record (the only shape that exists now) is returned
+    verbatim, with no reconstruction left to perform. This is deliberately
+    independent of the live path's own accumulator: an earlier version of this
+    script built rest_history.json from the exact same list the live path's
+    queue events were drawn from, making the equivalence check tautological
+    (see issue #1999 PR discussion) — it could prove the replay mechanics ran
+    without crashing, never that the harness catches a genuine live-vs-reload
+    divergence. Reprocessing the real stored JSONL rows independently of that
+    accumulator keeps that property.
     """
-    coordinator = object.__new__(SessionCoordinator)
-    messages = []
-    for stored in stored_records:
-        if stored.get("_type") == "ToolCallUpdate":
-            continue  # not produced by this fixture's scenario; nothing to reconstruct
-        websocket_data = coordinator._convert_stored_message_to_websocket(stored)
-        if websocket_data is not None:
-            messages.append(_json_safe(websocket_data))
-    return messages
+    return [_json_safe(stored) for stored in stored_records]
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:

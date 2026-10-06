@@ -78,8 +78,7 @@ class SessionRecorder:
     def record_sdk_message(self, sdk_message: Any) -> None:
         """Capture a raw SDK object or stream event, dataclass-faithfully.
 
-        Reuses the codebase's existing StoredMessage.from_sdk_message() idiom
-        (_type=type(sdk_msg).__name__, data=dataclasses.asdict(sdk_msg)). The
+        Uses _type=type(sdk_msg).__name__, data=dataclasses.asdict(sdk_msg). The
         one exception is ResultError — an Exception subclass, not a dataclass —
         which gets a distinct exception-shape capture so it round-trips via
         backend.raw_replay.reconstruct_sdk_message() the same way.

@@ -9,6 +9,10 @@ fragments that single JSON record into multiple invalid-JSON pieces instead
 of being treated as ordinary content. Each test below writes a record with an
 embedded U+2028 through the real write path (json.dumps(..., ensure_ascii=False))
 and asserts the fixed read site still parses it as exactly one intact record.
+
+Five of the original six sites remain covered below; the sixth
+(backend/tools/repair_duplicate_tool_calls.py) was deleted whole by issue
+#2084 (stage 3-D-cutover), taking its regression test with it.
 """
 
 import json
@@ -19,7 +23,6 @@ from backend.tests.fixtures.generate_synthetic_fixture import (
     _read_jsonl as synthetic_fixture_read_jsonl,
 )
 from backend.tests.fixtures.scale_fixture import _load_source_queue_events
-from backend.tools.repair_duplicate_tool_calls import find_and_repair_duplicate_tool_calls
 
 _SEPARATOR = "\u2028"  # U+2028 LINE SEPARATOR
 _CONTENT = f"line one{_SEPARATOR}line two"
@@ -104,21 +107,3 @@ def test_scale_fixture_load_source_queue_events_survives_embedded_separator(tmp_
 
     assert len(events) == 1
     assert events[0]["content"] == _CONTENT
-
-
-def test_repair_duplicate_tool_calls_survives_embedded_separator(tmp_path):
-    record = {
-        "type": "tool_call",
-        "tool_use_id": "tu-1",
-        "status": "completed",
-        "result": _CONTENT,
-    }
-    messages_path = tmp_path / "messages.jsonl"
-    messages_path.write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
-
-    result = find_and_repair_duplicate_tool_calls(messages_path, "sess-1", apply=False)
-
-    # A single record is never a duplicate — the point here is that reading
-    # it (previously via splitlines()) does not raise/crash and does not
-    # silently fragment/drop it.
-    assert result.clean

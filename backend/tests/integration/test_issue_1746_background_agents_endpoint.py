@@ -9,44 +9,37 @@ stored messages and returns the expected response shape.
 from __future__ import annotations
 
 import pytest
+from claude_agent_sdk import TaskNotificationMessage, TaskStartedMessage
+
+from backend.models.messages import MessageRecord
 
 
-def _stored_task_started(task_id, tool_use_id, session_id, ts):
-    return {
-        "_type": "TaskStartedMessage",
-        "timestamp": ts,
-        "session_id": session_id,
-        "data": {
-            "subtype": "task_started",
-            "data": {},
-            "task_id": task_id,
-            "description": "alpha: hydrated",
-            "uuid": f"uuid-{task_id}-started",
-            "session_id": "sub-" + session_id,
-            "tool_use_id": tool_use_id,
-            "task_type": "local_agent",
-        },
-    }
+def _canonical_stored(sdk_msg, session_id, ts):
+    """Issue #2084 (stage 3-D-cutover): build a stored record the same way the
+    live write path does (MessageRecord.from_sdk_message) — a canonical session's
+    Task lifecycle frames are plain `type == "system"` records, never the legacy
+    `_type`-discriminated StoredMessage shape this helper used to hand-build."""
+    stored = MessageRecord.from_sdk_message(sdk_msg, session_id=session_id).to_dict()
+    stored["timestamp"] = ts
+    return stored
+
+
+def _stored_task_started(task_id, tool_use_id, session_id, ts, task_type="local_agent"):
+    sdk_msg = TaskStartedMessage(
+        subtype="task_started", data={}, task_id=task_id,
+        description="alpha: hydrated", uuid=f"uuid-{task_id}-started",
+        session_id="sub-" + session_id, tool_use_id=tool_use_id, task_type=task_type,
+    )
+    return _canonical_stored(sdk_msg, session_id, ts)
 
 
 def _stored_task_notification(task_id, tool_use_id, session_id, status, ts):
-    return {
-        "_type": "TaskNotificationMessage",
-        "timestamp": ts,
-        "session_id": session_id,
-        "data": {
-            "subtype": "task_notification",
-            "data": {},
-            "task_id": task_id,
-            "status": status,
-            "output_file": "",
-            "summary": "done",
-            "uuid": f"uuid-{task_id}-notif",
-            "session_id": "sub-" + session_id,
-            "tool_use_id": tool_use_id,
-            "usage": None,
-        },
-    }
+    sdk_msg = TaskNotificationMessage(
+        subtype="task_notification", data={}, task_id=task_id,
+        status=status, output_file="", summary="done", uuid=f"uuid-{task_id}-notif",
+        session_id="sub-" + session_id, tool_use_id=tool_use_id,
+    )
+    return _canonical_stored(sdk_msg, session_id, ts)
 
 
 @pytest.mark.asyncio
@@ -60,11 +53,6 @@ async def test_background_agents_endpoint_returns_hydrated_snapshot(api_integrat
     project = await env["create_test_project"]()
     session = await env["create_test_session"](project["project_id"])
     session_id = session["session_id"]
-    # Issue #2084 (stage 3-B, §7): this test writes legacy `_type`-shaped Task
-    # messages directly to storage — force the pre-3-B default so
-    # _get_task_leg_registry()'s canonical fast path doesn't short-circuit past
-    # the legacy hydration path under test.
-    coordinator.session_manager._active_sessions[session_id].message_schema_version = 0
 
     session_dir = await coordinator.session_manager.get_session_directory(session_id)
     storage = coordinator._storage_managers.get(session_id)
@@ -104,11 +92,6 @@ async def test_background_agents_endpoint_excludes_local_bash(api_integration_en
     project = await env["create_test_project"]()
     session = await env["create_test_session"](project["project_id"])
     session_id = session["session_id"]
-    # Issue #2084 (stage 3-B, §7): this test writes legacy `_type`-shaped Task
-    # messages directly to storage — force the pre-3-B default so
-    # _get_task_leg_registry()'s canonical fast path doesn't short-circuit past
-    # the legacy hydration path under test.
-    coordinator.session_manager._active_sessions[session_id].message_schema_version = 0
 
     session_dir = await coordinator.session_manager.get_session_directory(session_id)
     storage = coordinator._storage_managers.get(session_id)
@@ -118,8 +101,7 @@ async def test_background_agents_endpoint_excludes_local_bash(api_integration_en
         await storage.initialize()
         coordinator._storage_managers[session_id] = storage
 
-    local_bash_started = _stored_task_started("t2", "tu-2", session_id, 1.5)
-    local_bash_started["data"]["task_type"] = "local_bash"
+    local_bash_started = _stored_task_started("t2", "tu-2", session_id, 1.5, task_type="local_bash")
 
     for msg in (
         _stored_task_started("t1", "tu-1", session_id, 1.0),
