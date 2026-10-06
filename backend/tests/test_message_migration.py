@@ -26,6 +26,7 @@ from backend.session_coordinator import SessionCoordinator
 from backend.session_manager import SessionState
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+RAW_FIXTURES_DIR = FIXTURES_DIR / "raw"
 
 
 @pytest.fixture
@@ -245,6 +246,89 @@ class TestMigrationIdempotency:
         migrated_content = storage.messages_file.read_text(encoding="utf-8")
         assert "garbage-from-interrupted-run" not in migrated_content
         assert result.materialized_tool_calls == TestMigrationFidelityAgainstFixtures.EXPECTED_MATERIALIZED["tool_use"]
+
+
+class TestOutOfOrderExplicitRecordDuplicate:
+    """Issue #2093: regression test using the committed 2026-09-23-primary
+    fixture's real interrupted-tool data (AC4). Two genuine stored
+    ToolCallUpdate records for the same tool_use_id (one terminal
+    "interrupted", one non-terminal "pending") landing out of chronological
+    order in the file must not resurrect the tool into tracking — otherwise
+    finalize()'s end-of-stream sweep synthesizes a spurious duplicate
+    "interrupted" record alongside the genuine one.
+    """
+
+    TOOL_USE_ID = "toolu_01BFmVrRcyGEqMFWex7e4Ccj"
+
+    def _load_real_records(self) -> tuple[dict, dict, dict]:
+        raw_path = RAW_FIXTURES_DIR / "2026-09-23-primary" / "messages.jsonl"
+        records = [
+            json.loads(line)
+            for line in raw_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assistant = next(
+            r for r in records
+            if r.get("_type") == "AssistantMessage"
+            and any(
+                isinstance(c, dict) and c.get("id") == self.TOOL_USE_ID
+                for c in r.get("data", {}).get("content", [])
+            )
+        )
+        pending = next(
+            r for r in records
+            if r.get("_type") == "ToolCallUpdate"
+            and r["data"]["tool_use_id"] == self.TOOL_USE_ID
+            and r["data"]["status"] == "pending"
+        )
+        interrupted = next(
+            r for r in records
+            if r.get("_type") == "ToolCallUpdate"
+            and r["data"]["tool_use_id"] == self.TOOL_USE_ID
+            and r["data"]["status"] == "interrupted"
+        )
+        return assistant, pending, interrupted
+
+    @pytest.mark.asyncio
+    async def test_out_of_order_terminal_record_does_not_duplicate_on_finalize(
+        self, temp_coordinator, sample_session_config
+    ):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        coordinator.session_manager._active_sessions[session_id].message_schema_version = 0
+        storage = coordinator._storage_managers[session_id]
+
+        assistant, pending, interrupted = self._load_real_records()
+        # Out-of-order hazard (§0): the terminal record lands BEFORE the
+        # non-terminal record for the same tool_use_id — the real-world
+        # race _schedule_tool_call_update_storage's independent
+        # asyncio.ensure_future() calls make possible.
+        lines = [assistant, interrupted, pending]
+        storage.messages_file.write_text(
+            "\n".join(json.dumps(r) for r in lines) + "\n", encoding="utf-8"
+        )
+
+        result = await migrate_session_messages(
+            storage.session_dir, session_id, SessionState.TERMINATED,
+            coordinator._convert_legacy_record_to_websocket, storage._write_lock,
+        )
+
+        # No synthesis should fire: both records are explicit (written through
+        # unchanged by convert_fn), and the stale out-of-order non-terminal
+        # record must not resurrect tracking, so finalize()'s end-of-stream
+        # sweep stays a no-op — no THIRD, synthesized duplicate "interrupted"
+        # record.
+        assert result.materialized_tool_calls == 0
+
+        migrated = [
+            json.loads(line)
+            for line in storage.messages_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        tool_calls = [m for m in migrated if m.get("type") == "tool_call"]
+        assert len(tool_calls) == 2
+        statuses = sorted(tc["status"] for tc in tool_calls)
+        assert statuses == ["interrupted", "pending"]
 
 
 class TestMigrationQuarantine:

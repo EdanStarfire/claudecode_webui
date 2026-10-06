@@ -2,12 +2,12 @@
 """Verify (and optionally apply) message migration for one session (issue #2084
 stage 3-C, §8) — the hard requirement for the 3-C -> 3-D gate.
 
-Default (no --apply) is a safe, non-destructive dry run:
-1. Copy messages.jsonl + state.json into a timestamped sibling directory
-   (plain shutil.copy2 — never scrub_state_for_archive(), which drops fields and
-   would corrupt a byte-level diff).
-2. Migrate a disposable copy of the session (never the real messages.jsonl).
-3. Reconstruct what the frontend would see two ways: (a) today's legacy read of
+Default (no --apply) is a safe, non-destructive dry run — no files are written
+under --data-dir at all (issue #2094 AC1: an earlier version of this tool wrote
+a full backup copy into the live data directory on every dry run, which was
+never used for anything but populating a printed path):
+1. Migrate a disposable copy of the session (never the real messages.jsonl).
+2. Reconstruct what the frontend would see two ways: (a) today's legacy read of
    the original data via SessionCoordinator.get_session_messages(), and (b) a
    canonical read of the migrated copy via the exact same method — the real
    production code path both times, not a reimplementation. Diff them per
@@ -15,9 +15,11 @@ Default (no --apply) is a safe, non-destructive dry run:
    materialized records legitimately change line count/order for a pre-#494
    session, which is the whole point of this stage.
 
-With --apply: after a clean dry-run-equivalent pass, actually perform the real
-migration (the atomic swap + message_schema_version/message_migration_status
-flip) via the same migrate_session_messages() the background/on-demand paths use.
+With --apply: after a clean dry-run-equivalent pass, write a pre-migration
+backup to a dedicated location outside the directories the scan-all tools walk
+(issue #2094 AC2), then actually perform the real migration (the atomic swap +
+message_schema_version/message_migration_status flip) via the same
+migrate_session_messages() the background/on-demand paths use.
 
 Usage:
     uv run python -m backend.tools.migrate_session_verify_cli <session_id> [--data-dir DIR] [--apply]
@@ -33,6 +35,7 @@ message_schema_version they had at disposal time):
 import argparse
 import asyncio
 import json
+import os
 import shutil
 import sys
 import time
@@ -65,11 +68,43 @@ class VerificationReport:
     divergences: list[dict[str, Any]] = field(default_factory=list)
     duration_seconds: float = 0.0
     applied: bool = False
-    archive_dir: Path | None = None
+    # Issue #2094: dry-run no longer writes any backup (it was unused for
+    # anything but populating this field — see module docstring). Only
+    # --apply ever sets this now, to the dedicated backup location (AC2).
+    backup_dir: Path | None = None
+    backup_skipped: bool = False
 
     @property
     def ok(self) -> bool:
         return not self.divergences
+
+
+def _write_apply_backup(backup_dir: Path, messages_path: Path, state_path: Path) -> bool:
+    """Idempotent pre-migration backup for --apply (issue #2094 AC2). Returns
+    True if a new backup was written, False if one already existed from a
+    prior attempt (skipped, not an error — the backup's mere presence on disk
+    is itself the idempotency marker, AC2).
+
+    Stages into a sibling tmp directory and atomically renames it into place
+    (found in review) — mirroring message_migration.py's own tmp-file +
+    os.replace() swap for the same reason: `backup_dir.exists()` is the sole
+    completeness signal a retry trusts, so a crash between mkdir and the two
+    copy2 calls must never leave a PARTIAL backup_dir behind for a retry to
+    mistake for a complete one.
+    """
+    if backup_dir.exists():
+        return False
+    staging_dir = backup_dir.parent / f".{backup_dir.name}.migration-backup-tmp-{uuid.uuid4().hex}"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copy2(messages_path, staging_dir / "messages.jsonl")
+        if state_path.exists():
+            shutil.copy2(state_path, staging_dir / "state.json")
+        os.replace(staging_dir, backup_dir)
+    except Exception:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+    return True
 
 
 def _normalize(msg: dict[str, Any], *, ignore_tool_call_session_id: bool = False) -> dict[str, Any]:
@@ -207,16 +242,6 @@ async def verify_session_migration(
     if session_dir is None:
         raise ValueError(f"Session {session_id} not found")
 
-    archive_dir: Path | None = None
-    if not apply:
-        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
-        archive_dir = session_dir.parent / f"{session_id}-migration-verify-{timestamp}"
-        archive_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(session_dir / "messages.jsonl", archive_dir / "messages.jsonl")
-        state_path = session_dir / "state.json"
-        if state_path.exists():
-            shutil.copy2(state_path, archive_dir / "state.json")
-
     # (a) today's legacy read, before any migration.
     before = await coordinator.get_session_messages(session_id)
     before_messages = [_normalize(m) for m in before["messages"]]
@@ -225,6 +250,8 @@ async def verify_session_migration(
     if session_info is None:
         raise ValueError(f"Session {session_id} not found")
 
+    backup_dir: Path | None = None
+    backup_skipped = False
     if apply:
         # Mirror the production claim step so message_migration_status bookkeeping
         # (started_at, state transitions) looks identical to a background/on-demand
@@ -238,6 +265,16 @@ async def verify_session_migration(
                 f"Session {session_id} is already migrated or has an in-progress "
                 "migration elsewhere — refusing to run --apply concurrently."
             )
+        # Issue #2094 (AC2): apply mode previously had no backup mechanism at
+        # all — migration ran directly against the real session_dir with only
+        # the atomic swap as protection. Dedicated location, outside
+        # data/sessions/ proper, so migration_status_report_cli.py's scan
+        # never counts it as a real session.
+        backup_dir = session_dir.parent / "migration-backups" / session_id
+        backup_written = _write_apply_backup(
+            backup_dir, session_dir / "messages.jsonl", session_dir / "state.json"
+        )
+        backup_skipped = not backup_written
         storage = await coordinator.get_or_create_storage_manager(session_id)
         result = await migrate_session_messages(
             session_dir, session_id, session_info.state,
@@ -277,7 +314,8 @@ async def verify_session_migration(
         divergences=divergences,
         duration_seconds=time.monotonic() - start_time,
         applied=apply,
-        archive_dir=archive_dir,
+        backup_dir=backup_dir,
+        backup_skipped=backup_skipped,
     )
 
 
@@ -314,12 +352,26 @@ async def verify_archive_migration(
     session_state = SessionState.TERMINATED
 
     backup_dir: Path | None = None
-    if not apply:
-        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
-        backup_dir = archive_dir.parent / f"{archive_dir.name}-migration-verify-{timestamp}"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(messages_path, backup_dir / "messages.jsonl")
-        shutil.copy2(state_path, backup_dir / "state.json")
+    backup_skipped = False
+    if apply:
+        # Issue #2094 (AC2): dedicated location outside data/archives/minions/,
+        # so _scan_archives() (which only walks archives_dir / "minions")
+        # never sees it. minion_id/archive_id mirror AC2's own example path.
+        # Structure is validated (found in review) because --archive-dir is
+        # arbitrary user input — unlike the other scan tools, which only ever
+        # walk DOWN from a known root, this climbs UP from it, so a
+        # non-standard path must fail loudly rather than silently writing the
+        # safety backup to an unintended location outside data_dir.
+        minion_id = archive_dir.parent.name
+        archive_id = archive_dir.name
+        if archive_dir.parent.parent.name != "minions":
+            raise ValueError(
+                f"Archive {archive_dir} is not nested as <data_dir>/archives/minions/"
+                "<minion>/<archive> — refusing to guess a backup location."
+            )
+        backup_dir = archive_dir.parent.parent.parent / "migration-backups" / minion_id / archive_id
+        backup_written = _write_apply_backup(backup_dir, messages_path, state_path)
+        backup_skipped = not backup_written
 
     before_id, before_dir = await _build_scratch_session(coordinator, archive_dir, session_state)
     try:
@@ -390,7 +442,8 @@ async def verify_archive_migration(
         divergences=divergences,
         duration_seconds=time.monotonic() - start_time,
         applied=apply,
-        archive_dir=backup_dir,
+        backup_dir=backup_dir,
+        backup_skipped=backup_skipped,
     )
 
 
@@ -399,8 +452,13 @@ def _print_report(report: VerificationReport) -> None:
     print(f"Records before: {report.total_records_before}")
     print(f"Materialized tool_call records: {report.materialized_tool_calls}")
     print(f"Mode: {'APPLIED' if report.applied else 'dry run'}")
-    if report.archive_dir:
-        print(f"Archive snapshot: {report.archive_dir}")
+    # Issue #2094 (AC4): one line reporting exactly what was (or wasn't) written.
+    if not report.applied:
+        print("Dry run: no files written under --data-dir")
+    elif report.backup_skipped:
+        print(f"Backup already present at: {report.backup_dir} (skipped)")
+    else:
+        print(f"Backup written to: {report.backup_dir}")
     print(f"Duration: {report.duration_seconds:.3f}s")
     if report.ok:
         print("Result: OK — zero field-level divergences")

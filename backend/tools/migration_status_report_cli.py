@@ -23,6 +23,19 @@ from pathlib import Path
 
 from backend.models.messages import CURRENT_MESSAGE_SCHEMA_VERSION
 
+# Issue #2094 (AC3): belt-and-suspenders directory-name filtering so a stray
+# verification/backup artifact never gets silently counted as a real
+# session/archive. "migration-backups" is the dedicated apply-mode backup
+# location (§3's own sibling of data/sessions, data/archives); the
+# "-migration-verify-" suffix is the legacy dry-run backup pattern this fix
+# retires, kept here in case any pre-fix leftovers still exist in production.
+_IGNORED_DIR_NAMES = frozenset({"migration-backups"})
+_LEGACY_VERIFY_SUFFIX_MARKER = "-migration-verify-"
+
+
+def _is_ignored_population_dir(name: str) -> bool:
+    return name in _IGNORED_DIR_NAMES or _LEGACY_VERIFY_SUFFIX_MARKER in name
+
 
 @dataclass
 class PopulationReport:
@@ -48,15 +61,20 @@ class PopulationReport:
         return self.total == self.canonical and not self.unreadable
 
 
-def _bucket(report: PopulationReport, record_id: str, data: dict) -> None:
+def _is_canonical(data: dict) -> bool:
     # Inlined rather than importing session_coordinator._is_canonical_schema_version
     # (the documented single source of this criterion) — that module pulls in the
     # full SDK/ClaudeSDK/SessionCoordinator dependency graph, which this tool
     # deliberately avoids so it stays cheap and dependency-light to run freely and
     # repeatedly. Keep this comparison identical to that function's if the
-    # criterion ever changes.
-    schema_version = data.get("message_schema_version", 0)
-    if schema_version >= CURRENT_MESSAGE_SCHEMA_VERSION:
+    # criterion ever changes. Exposed as a standalone function (issue #2093,
+    # found in review) so repair_duplicate_tool_calls.py's own canonical-check
+    # imports this one copy instead of re-inlining a third independent copy.
+    return data.get("message_schema_version", 0) >= CURRENT_MESSAGE_SCHEMA_VERSION
+
+
+def _bucket(report: PopulationReport, record_id: str, data: dict) -> None:
+    if _is_canonical(data):
         report.canonical += 1
         return
     status = data.get("message_migration_status")
@@ -78,7 +96,7 @@ def _scan_live(sessions_dir: Path) -> PopulationReport:
     if not sessions_dir.is_dir():
         return report
     for session_dir in sorted(sessions_dir.iterdir()):
-        if not session_dir.is_dir():
+        if not session_dir.is_dir() or _is_ignored_population_dir(session_dir.name):
             continue
         state_file = session_dir / "state.json"
         if not state_file.exists():
@@ -97,10 +115,10 @@ def _scan_archives(archives_dir: Path) -> PopulationReport:
     if not archives_dir.is_dir():
         return report
     for minion_dir in sorted(archives_dir.iterdir()):
-        if not minion_dir.is_dir():
+        if not minion_dir.is_dir() or _is_ignored_population_dir(minion_dir.name):
             continue
         for archive_dir in sorted(minion_dir.iterdir()):
-            if not archive_dir.is_dir():
+            if not archive_dir.is_dir() or _is_ignored_population_dir(archive_dir.name):
                 continue
             archive_id = f"{minion_dir.name}/{archive_dir.name}"
             state_file = archive_dir / "state.json"

@@ -108,6 +108,12 @@ class ToolLifecycleReconstructor:
         # before feed() runs, since storage append order does not guarantee a
         # ToolCallUpdate precedes its triggering AssistantMessage.
         self.stored_tool_update_ids: set[str] = set()
+        # Issue #2093: tool_use_ids that have already reached a terminal state via
+        # an explicit record — once here, a later non-terminal explicit record for
+        # the same id is necessarily stale/out-of-order (two genuine stored records
+        # for the same tool landing out of chronological order in the file) and
+        # must not resurrect tracking for it.
+        self.terminal_tool_use_ids: set[str] = set()
 
     def observe_stored_tool_call(self, tool_use_id: str | None) -> None:
         """Mark a tool_use_id as already covered by an explicit stored record."""
@@ -127,8 +133,13 @@ class ToolLifecycleReconstructor:
                 reconstructed = ToolCall.from_dict(converted)
                 if reconstructed.status in _TERMINAL_TOOL_STATES:
                     self.active_history_tools.pop(tc_id, None)
-                else:
+                    self.terminal_tool_use_ids.add(tc_id)
+                elif tc_id not in self.terminal_tool_use_ids:
                     self.active_history_tools[tc_id] = reconstructed
+                # else: stale out-of-order non-terminal record for an already-
+                # concluded tool (issue #2093) — the record itself is still
+                # written through unchanged by convert_fn upstream; only
+                # lifecycle tracking is suppressed here.
             return synthesized
 
         msg_type = converted.get("type", "")
