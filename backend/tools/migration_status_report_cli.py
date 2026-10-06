@@ -3,10 +3,8 @@
 the literal go/no-go signal for 3-D-cutover: "how many sessions, live or
 archived, are still non-canonical."
 
-Strictly read-only — no --apply, no mutation capability at all, by design,
-distinct from migrate_session_verify_cli.py's --apply (which targets one
-session/archive at a time and does perform a real migration). Reads each
-state.json directly rather than going through SessionManager.initialize()
+Strictly read-only — no --apply, no mutation capability at all, by design.
+Reads each state.json directly rather than going through SessionManager.initialize()
 (whose startup self-heal persists changes as a side effect of loading) — this
 tool must never write anything, even incidentally, so it's safe to run freely
 and repeatedly against a live data dir without any coordination.
@@ -62,14 +60,10 @@ class PopulationReport:
 
 
 def _is_canonical(data: dict) -> bool:
-    # Inlined rather than importing session_coordinator._is_canonical_schema_version
-    # (the documented single source of this criterion) — that module pulls in the
-    # full SDK/ClaudeSDK/SessionCoordinator dependency graph, which this tool
-    # deliberately avoids so it stays cheap and dependency-light to run freely and
-    # repeatedly. Keep this comparison identical to that function's if the
-    # criterion ever changes. Exposed as a standalone function (issue #2093,
-    # found in review) so repair_duplicate_tool_calls.py's own canonical-check
-    # imports this one copy instead of re-inlining a third independent copy.
+    # Inlined rather than importing from session_coordinator — that module pulls
+    # in the full SDK/ClaudeSDK/SessionCoordinator dependency graph, which this
+    # tool deliberately avoids so it stays cheap and dependency-light to run
+    # freely and repeatedly.
     return data.get("message_schema_version", 0) >= CURRENT_MESSAGE_SCHEMA_VERSION
 
 

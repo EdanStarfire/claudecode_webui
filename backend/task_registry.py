@@ -124,8 +124,7 @@ class TaskLegRegistry:
         """Apply one lifecycle frame's parsed metadata to the registry.
 
         `metadata` is the same shape message_parser's Task*Handler classes
-        produce (and the reload path's _convert_stored_message_to_websocket
-        reconstructs) — task_id, tool_use_id, description, status, patch.
+        produce — task_id, tool_use_id, description, status, patch.
         """
         task_id = metadata.get("task_id")
         if not task_id or subtype not in TASK_LIFECYCLE_SUBTYPES:

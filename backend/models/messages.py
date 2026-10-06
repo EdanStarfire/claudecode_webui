@@ -11,11 +11,10 @@ Key design principles:
 4. DisplayMetadata (Issue #310) attaches display projection to any message type
 
 Usage:
-    from claude_agent_sdk import AssistantMessage
     from backend.models.messages import StoredMessage, DisplayMetadata
 
-    # Wrap SDK message for storage
-    stored = StoredMessage.from_sdk_message(sdk_msg, session_id, timestamp)
+    # Wrap a legacy-shaped stored record
+    stored = StoredMessage(_type='AssistantMessage', timestamp=timestamp, session_id=session_id, data=data)
 
     # Add display projection
     stored.display = DisplayMetadata(tool_states={...})
@@ -27,7 +26,7 @@ Usage:
 import json
 import time
 import uuid as uuid_lib
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import dataclass, field, fields
 from enum import Enum
 from typing import Any, Literal
 
@@ -606,88 +605,6 @@ class StoredMessage:
     data: dict[str, Any]  # The actual message content (SDK asdict() or WebUI dataclass)
     display: DisplayMetadata | None = None  # Issue #310 projection
 
-    @classmethod
-    def from_sdk_message(
-        cls,
-        sdk_msg: Any,
-        session_id: str,
-        timestamp: float,
-        display: DisplayMetadata | None = None
-    ) -> 'StoredMessage':
-        """
-        Create from SDK message using dataclasses.asdict().
-
-        Args:
-            sdk_msg: SDK message object (AssistantMessage, UserMessage, etc.)
-            session_id: Session identifier
-            timestamp: Message timestamp
-            display: Optional display projection metadata
-        """
-        return cls(
-            _type=type(sdk_msg).__name__,
-            timestamp=timestamp,
-            session_id=session_id,
-            data=asdict(sdk_msg),
-            display=display,
-        )
-
-    @classmethod
-    def from_permission_request(
-        cls,
-        request: PermissionRequestMessage,
-        display: DisplayMetadata | None = None
-    ) -> 'StoredMessage':
-        """Create from permission request message."""
-        return cls(
-            _type='PermissionRequestMessage',
-            timestamp=request.timestamp,
-            session_id=request.session_id or '',
-            data=request.to_dict(),
-            display=display,
-        )
-
-    @classmethod
-    def from_permission_response(
-        cls,
-        response: PermissionResponseMessage,
-        display: DisplayMetadata | None = None
-    ) -> 'StoredMessage':
-        """Create from permission response message."""
-        return cls(
-            _type='PermissionResponseMessage',
-            timestamp=response.timestamp,
-            session_id=response.session_id or '',
-            data=response.to_dict(),
-            display=display,
-        )
-
-    @classmethod
-    def from_tool_call_update(
-        cls,
-        tool_call: ToolCall,
-        triggering_message: dict[str, Any] | None = None,
-    ) -> 'StoredMessage':
-        """
-        Create from a ToolCall lifecycle update (Issue #494).
-
-        Stores the ToolCall state at each transition (PENDING, AWAITING_PERMISSION,
-        RUNNING, COMPLETED, etc.) as a StoredMessage with _type="ToolCallUpdate".
-
-        The optional triggering_message embeds the raw SDK data that caused
-        this transition (e.g., the ToolUseBlock, PermissionRequestMessage data,
-        ToolResultBlock). It is stripped before frontend propagation.
-        """
-        import time as _time
-        data = tool_call.to_dict()
-        if triggering_message is not None:
-            data['_triggering_message'] = triggering_message
-        return cls(
-            _type='ToolCallUpdate',
-            timestamp=tool_call.completed_at or tool_call.started_at or tool_call.created_at or _time.time(),
-            session_id=tool_call.session_id,
-            data=data,
-        )
-
     def to_dict(self) -> dict[str, Any]:
         """Serialize for storage/WebSocket."""
         result = {
@@ -769,32 +686,6 @@ AllMessageTypes = SDKMessageType | WebUIMessageType
 # ============================================================
 # Conversion Utilities
 # ============================================================
-
-def sdk_message_to_stored(
-    sdk_msg: Any,
-    session_id: str,
-    timestamp: float | None = None,
-) -> StoredMessage:
-    """
-    Convert an SDK message object to StoredMessage format.
-
-    This is the primary entry point for converting SDK messages to the
-    unified storage format. It uses dataclasses.asdict() for clean serialization.
-
-    Args:
-        sdk_msg: SDK message object (AssistantMessage, UserMessage, etc.)
-        session_id: Session identifier
-        timestamp: Optional timestamp (defaults to current time)
-
-    Returns:
-        StoredMessage ready for storage/WebSocket transmission
-    """
-    import time
-    if timestamp is None:
-        timestamp = time.time()
-
-    return StoredMessage.from_sdk_message(sdk_msg, session_id, timestamp)
-
 
 def stored_to_legacy_format(stored: StoredMessage) -> dict[str, Any]:
     """
@@ -1414,9 +1305,9 @@ class MessageRecord:
         """AC4: maps a ToolCallUpdate (shape 4) onto a canonical `type="tool_call"` record."""
         metadata = tool_call.to_dict()
         if triggering_message is not None:
-            # Plain flat dict, not a nested MessageRecord — matches today's embedding
-            # mechanism (StoredMessage.from_tool_call_update) exactly; stripped before
-            # frontend propagation (session_coordinator.py:3692).
+            # Plain flat dict, not a nested MessageRecord — storage-only embedding,
+            # stripped before frontend propagation by the live broadcast sites
+            # (permission_service.py, web_server.py).
             metadata["_triggering_message"] = triggering_message
             # Matches both live permission_service.py sites, which set this flat on the
             # emitted tool_call payload (not just nested in _triggering_message).

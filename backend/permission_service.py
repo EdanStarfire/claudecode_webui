@@ -260,9 +260,7 @@ class PermissionService:
                                 updated_tool_call, triggering_message=request_dict
                             ).to_dict()
                             # _triggering_message is a storage-only embedding — never
-                            # previously reached the frontend live; strip it before
-                            # emitting (matches _convert_stored_message_to_websocket's
-                            # own pop on reload).
+                            # previously reached the frontend live; strip it before emitting.
                             tool_call_data.pop("_triggering_message", None)
 
                             if session_id in self.session_queues:
@@ -561,9 +559,7 @@ class PermissionService:
                                 updated_tool_call, triggering_message=response_dict
                             ).to_dict()
                             # _triggering_message is a storage-only embedding — never
-                            # previously reached the frontend live; strip it before
-                            # emitting (matches _convert_stored_message_to_websocket's
-                            # own pop on reload).
+                            # previously reached the frontend live; strip it before emitting.
                             tool_call_data.pop("_triggering_message", None)
 
                             if session_id in self.session_queues:

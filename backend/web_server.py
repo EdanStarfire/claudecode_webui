@@ -170,15 +170,6 @@ class BackendApp:
         )
         self.coordinator._watchdog = self._watchdog
 
-        # Issue #2084 (stage 3-C, §5/§6): background + on-demand message migration.
-        from .message_migration_service import MessageMigrationService
-        self._message_migration_service = MessageMigrationService(
-            coordinator=self.coordinator,
-            session_manager=self.coordinator.session_manager,
-        )
-        self.coordinator.set_message_migration_service(self._message_migration_service)
-        self.coordinator.set_migration_notice_callback(self._broadcast_migration_notice)
-
         from .config_manager import AppConfigManager
         from .litellm_proxy_manager import LiteLLMProxyManager
         from .provider_catalog import ProviderCatalogManager
@@ -735,22 +726,6 @@ class BackendApp:
         except Exception:
             logger.exception("Error appending usage_updated")
 
-    def _broadcast_migration_notice(self, session_id: str) -> None:
-        """Issue #2084 (stage 3-C, §6): one-time "this session was just upgraded"
-        notice, fired only when on-demand migration actually ran for this session."""
-        try:
-            if session_id in self.session_queues:
-                emit(
-                    self.session_queues[session_id], QUEUE_SESSION, "migration_notice",
-                    {
-                        "session_id": session_id,
-                        "message": "This session's message history was upgraded to the latest format.",
-                    },
-                    scope=session_id,
-                )
-        except Exception:
-            logger.exception("Error appending migration_notice")
-
     def _cleanup_pending_permissions_for_session(self, session_id: str):
         """Clean up pending permissions for a specific session by auto-denying them"""
         self.permission_service.cleanup_pending_for_session(session_id)
@@ -828,11 +803,6 @@ class BackendApp:
 
         # Issue #1130: Start session watchdog service
         await self._watchdog.start()
-
-        # Issue #2084 (stage 3-C, §5): start background message migration loop.
-        # Scheduling the task returns immediately — readiness is never gated by
-        # migration work (AC7).
-        await self._message_migration_service.start()
 
         # Issue #1127: Initialize audit subsystem
         try:
@@ -1043,12 +1013,10 @@ class BackendApp:
                                 updated_tool_call, triggering_message=tool_result
                             ).to_dict()
                             # Issue #2084 AC2 follow-up: _triggering_message is a
-                            # storage-only embedding (see _schedule_tool_call_update_
-                            # storage / _convert_stored_message_to_websocket's own pop
-                            # on reload) — never previously reached the frontend live;
-                            # keep that contract instead of leaking the raw triggering
-                            # payload onto the wire now that storage and live share
-                            # one constructor.
+                            # storage-only embedding — never previously reached the
+                            # frontend live; keep that contract instead of leaking the
+                            # raw triggering payload onto the wire now that storage and
+                            # live share one constructor.
                             tool_call_data.pop("_triggering_message", None)
 
                             if session_id in self.session_queues:
@@ -1233,9 +1201,6 @@ class BackendApp:
         # Issue #1130: Stop session watchdog service
         if hasattr(self, '_watchdog') and self._watchdog is not None:
             await self._watchdog.stop()
-        # Issue #2084 (stage 3-C): stop background message migration service
-        if hasattr(self, '_message_migration_service') and self._message_migration_service is not None:
-            await self._message_migration_service.stop()
         try:
             await self.litellm_proxy_manager.stop()
         except Exception:

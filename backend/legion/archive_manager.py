@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING
 
 from backend.history_distiller import distill_session_history
 from backend.models.archive_models import ArchiveResult, DisposalMetadata
-from backend.session_coordinator import _is_canonical_schema_version
 from backend.task_utils import task_done_log_exception
 from shared.logging_config import get_logger
 
@@ -272,31 +271,6 @@ class ArchiveManager:
                 is_reset=False,
                 will_be_deleted=will_be_deleted,
             )
-            # Issue #2084 (stage 3-D-prep, §2): migrate the live session directory to
-            # canonical shape, if it isn't already, before snapshotting — so new
-            # archives are canonical from the moment they're created, matching the
-            # on-demand migration entry point 3-C already built for session-open
-            # rather than inventing a second migration-triggering mechanism. If
-            # migration quarantines instead of completing, disposal proceeds anyway:
-            # snapshotting a still-legacy-but-quarantined session is strictly better
-            # than blocking disposal on a migration failure the user can't act on.
-            migration_service = self.system.session_coordinator.message_migration_service
-            if not _is_canonical_schema_version(session_info.message_schema_version) and migration_service is not None:
-                await migration_service.migrate_one(minion_id)
-                # migrate_one() mutates session_info in place via SessionManager, but
-                # this local session_info was already fetched above — reload so
-                # _scrub_and_copy_state()'s state.json copy reflects the post-migration
-                # version/status. Guard against None: the reload is a new await point
-                # a concurrent cascade/cleanup could race with, removing the session
-                # from SessionManager entirely before this returns — fall back to the
-                # pre-migration session_info rather than crash on the next attribute
-                # access below.
-                reloaded_info = await self.system.session_coordinator.session_manager.get_session_info(
-                    minion_id
-                )
-                if reloaded_info is not None:
-                    session_info = reloaded_info
-
             files_archived = await self.snapshot_artifacts(session_dir, archive_dir, ctx)
 
             # Create disposal metadata

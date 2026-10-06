@@ -511,11 +511,11 @@ class TestSessionManager:
     async def test_stale_in_progress_migration_status_resets_on_startup(
         self, sample_session_config
     ):
-        """Issue #2084 (stage 3-D-prep, §1): a crash/restart between
-        try_claim_message_migration() and complete/quarantine_message_migration()
-        must not leave message_migration_status stuck at "in_progress" forever —
-        _pick_candidate() skips any non-None status permanently, and
-        try_claim_message_migration() itself rejects "in_progress"."""
+        """Issue #2084 (stage 3-D-prep, §1): a crash/restart while
+        message_migration_status was left at "in_progress" (the now-deleted
+        MessageMigrationService's claim/complete/quarantine methods are what used
+        to set this historically) must not leave it stuck there forever — the
+        startup self-heal resets it to None so a later open can start clean."""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
 
@@ -524,11 +524,14 @@ class TestSessionManager:
             session_id = str(uuid.uuid4())
             await manager1.create_session(session_id, config=sample_session_config)
             manager1._active_sessions[session_id].message_schema_version = 0
-            assert await manager1.try_claim_message_migration(session_id)
-            assert (
-                manager1._active_sessions[session_id].message_migration_status["state"]
-                == "in_progress"
-            )
+            manager1._active_sessions[session_id].message_migration_status = {
+                "state": "in_progress",
+                "started_at": datetime.now(UTC).isoformat(),
+                "completed_at": None,
+                "error": None,
+                "materialized_tool_calls": 0,
+            }
+            await manager1._persist_session_state(session_id)
 
             # Simulate a crash/restart: a fresh manager loads the same on-disk state.
             manager2 = SessionManager(temp_path)
@@ -552,8 +555,14 @@ class TestSessionManager:
             session_id = str(uuid.uuid4())
             await manager1.create_session(session_id, config=sample_session_config)
             manager1._active_sessions[session_id].message_schema_version = 0
-            await manager1.try_claim_message_migration(session_id)
-            await manager1.quarantine_message_migration(session_id, "boom")
+            manager1._active_sessions[session_id].message_migration_status = {
+                "state": "quarantined",
+                "started_at": datetime.now(UTC).isoformat(),
+                "completed_at": datetime.now(UTC).isoformat(),
+                "error": "boom",
+                "materialized_tool_calls": 0,
+            }
+            await manager1._persist_session_state(session_id)
 
             manager2 = SessionManager(temp_path)
             await manager2.initialize()

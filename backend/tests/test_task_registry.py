@@ -341,61 +341,43 @@ async def test_live_pipeline_task_updated_killed_no_notification():
 # ---------------------------------------------------------------------------
 
 
+def _canonical_stored(sdk_msg, session_id, ts):
+    """Issue #2084 (stage 3-D-cutover): build a stored record the same way the
+    live write path does (MessageRecord.from_sdk_message) — a canonical session's
+    Task lifecycle frames are plain `type == "system"` records, never the legacy
+    `_type`-discriminated StoredMessage shape these helpers used to hand-build."""
+    from backend.models.messages import MessageRecord
+
+    stored = MessageRecord.from_sdk_message(sdk_msg, session_id=session_id).to_dict()
+    stored["timestamp"] = ts
+    return stored
+
+
 def _stored_task_started(task_id, tool_use_id, session_id, ts):
-    return {
-        "_type": "TaskStartedMessage",
-        "timestamp": ts,
-        "session_id": session_id,
-        "data": {
-            "subtype": "task_started",
-            "data": {},
-            "task_id": task_id,
-            "description": "alpha: hydrated",
-            "uuid": f"uuid-{task_id}-started",
-            "session_id": "sub-" + session_id,
-            "tool_use_id": tool_use_id,
-            "task_type": "local_agent",
-        },
-    }
+    sdk_msg = TaskStartedMessage(
+        subtype="task_started", data={}, task_id=task_id,
+        description="alpha: hydrated", uuid=f"uuid-{task_id}-started",
+        session_id="sub-" + session_id, tool_use_id=tool_use_id,
+    )
+    return _canonical_stored(sdk_msg, session_id, ts)
 
 
 def _stored_task_progress(task_id, tool_use_id, session_id, ts):
-    return {
-        "_type": "TaskProgressMessage",
-        "timestamp": ts,
-        "session_id": session_id,
-        "data": {
-            "subtype": "task_progress",
-            "data": {},
-            "task_id": task_id,
-            "description": "alpha: hydrated",
-            "usage": None,
-            "uuid": f"uuid-{task_id}-progress",
-            "session_id": "sub-" + session_id,
-            "tool_use_id": tool_use_id,
-            "last_tool_name": "Read",
-        },
-    }
+    sdk_msg = TaskProgressMessage(
+        subtype="task_progress", data={}, task_id=task_id,
+        description="alpha: hydrated", usage=None, uuid=f"uuid-{task_id}-progress",
+        session_id="sub-" + session_id, tool_use_id=tool_use_id,
+    )
+    return _canonical_stored(sdk_msg, session_id, ts)
 
 
 def _stored_task_notification(task_id, tool_use_id, session_id, status, ts):
-    return {
-        "_type": "TaskNotificationMessage",
-        "timestamp": ts,
-        "session_id": session_id,
-        "data": {
-            "subtype": "task_notification",
-            "data": {},
-            "task_id": task_id,
-            "status": status,
-            "output_file": "",
-            "summary": "done",
-            "uuid": f"uuid-{task_id}-notif",
-            "session_id": "sub-" + session_id,
-            "tool_use_id": tool_use_id,
-            "usage": None,
-        },
-    }
+    sdk_msg = TaskNotificationMessage(
+        subtype="task_notification", data={}, task_id=task_id,
+        status=status, output_file="", summary="done", uuid=f"uuid-{task_id}-notif",
+        session_id="sub-" + session_id, tool_use_id=tool_use_id,
+    )
+    return _canonical_stored(sdk_msg, session_id, ts)
 
 
 @pytest.mark.asyncio
@@ -408,7 +390,7 @@ async def test_reload_reconstruction_matches_live_streamed_sequence(tmp_path):
     session_id = "sess-parity"
 
     # Build the "live" registry directly via apply_frame, using the same
-    # metadata shape _convert_stored_message_to_websocket would produce.
+    # metadata shape a stored canonical system record carries.
     live_registry = TaskLegRegistry()
     live_registry.apply_frame(
         "task_started",

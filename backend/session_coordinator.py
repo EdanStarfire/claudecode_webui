@@ -31,7 +31,6 @@ from .litellm_proxy_manager import make_model_alias
 from .mcp_config_manager import McpServerType
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import (
-    CURRENT_MESSAGE_SCHEMA_VERSION,
     DisplayProjection,
     MessageRecord,
     PermissionInfo,
@@ -73,24 +72,6 @@ _SECRET_REF_RE = re.compile(r"\$\{secret:([^}]+)\}")
 # can't stall session start, but a still-in-flight open isn't cancelled and may
 # still succeed in time for the session's first tool call.
 STARTUP_ATTACH_TIMEOUT_SECONDS = 8.0
-
-# Issue #1746: stored "_type" discriminator (reload path, via StoredMessage)
-# for the four SDK Task lifecycle frame types — feeding TaskLegRegistry.
-# The parsed-"subtype" form (live path) is TASK_LIFECYCLE_SUBTYPES, imported
-# from task_registry so the two modules share one definition.
-_TASK_LIFECYCLE_STORED_TYPES = frozenset(
-    {"TaskStartedMessage", "TaskProgressMessage", "TaskNotificationMessage", "TaskUpdatedMessage"}
-)
-
-
-def _is_canonical_schema_version(version: int) -> bool:
-    """Issue #2084 (stage 3-B, §7): the one place the "is this schema version
-    canonical" criterion is expressed — reused by every converter's fast-path gate
-    (get_session_messages, _get_task_leg_registry, get_archive_messages) so a
-    future change to the criterion (e.g. a 3-C migration state) only needs updating
-    here, not independently at each call site.
-    """
-    return version >= CURRENT_MESSAGE_SCHEMA_VERSION
 
 # Resource format groups for filtering
 _TEXT_RESOURCE_FORMATS = {
@@ -580,11 +561,6 @@ class SessionCoordinator:
         # Issue #899: Rate limit state accumulator (rate_limit_type -> {used_percentage, resets_at})
         self._rate_limits_state: dict[str, dict] = {}
         self._rate_limit_broadcast_callback: Callable | None = None
-
-        # Issue #2084 (stage 3-C, §5/§6): wired by web_server.py after construction,
-        # mirroring self.coordinator._watchdog's own wiring pattern.
-        self._message_migration_service = None
-        self._migration_notice_callback: Callable | None = None
 
         # Issue #894: Track active api_retry sequence per session (session_id -> retry_message_id)
         self._retry_sequences: dict[str, str] = {}
@@ -1634,29 +1610,6 @@ class SessionCoordinator:
             storage_manager = await self.get_or_create_storage_manager(session_id)
             session_dir = storage_manager.session_dir
             self._apply_audit_writer(storage_manager, session_id)
-
-            # Issue #2084 (stage 3-C, §6): on-demand migration — a legacy session opened
-            # before the background loop happens to pick it is migrated right here,
-            # blocking this start_session() call briefly (bounded by this one session's
-            # size, never affecting Backend readiness or any other session). Shares the
-            # same race-free claim as the background tick, so whichever reaches it first
-            # does the work; the other no-ops. Wrapped in its own try/except — a failure
-            # in this orthogonal subsystem (e.g. a bug in a newly-added SessionManager
-            # method) must never abort an otherwise-healthy session start; the migration
-            # itself already isolates and quarantines its own real failures (§7).
-            if session_info.message_schema_version == 0 and self._message_migration_service is not None:
-                try:
-                    migrated_now = await self._message_migration_service.migrate_one(session_id)
-                    if migrated_now:
-                        refreshed_info = await self.session_manager.get_session_info(session_id)
-                        status = (refreshed_info.message_migration_status or {}) if refreshed_info else {}
-                        if status.get("state") == "completed" and self._migration_notice_callback:
-                            try:
-                                self._migration_notice_callback(session_id)
-                            except Exception:
-                                logger.exception(f"Migration notice callback failed for {session_id}")
-                except Exception:
-                    logger.exception(f"On-demand message migration failed for {session_id}")
 
             # Issue #1059: Resolve effective config EARLY — before any CONFIG_FIELD read.
             # For template-linked sessions, session_info CONFIG_FIELDS are at dataclass defaults;
@@ -3506,25 +3459,6 @@ class SessionCoordinator:
                 will_be_deleted=False,
             )
 
-            # Issue #2091: migrate the live session directory to canonical shape,
-            # if it isn't already, before snapshotting — mirrors archive_minion()'s
-            # migrate-at-disposal fix (#2090) so reset-archives aren't frozen in
-            # legacy shape either. Reload session_info afterward so any fields read
-            # from it below stay consistent with the post-migration state, mirroring
-            # archive_minion()'s own defensive reload; guard against None since the
-            # reload is a new await point a concurrent cleanup could race with,
-            # removing the session from SessionManager entirely.
-            migration_service = self.message_migration_service
-            if (
-                session_info
-                and not _is_canonical_schema_version(session_info.message_schema_version)
-                and migration_service is not None
-            ):
-                await migration_service.migrate_one(session_id)
-                reloaded_info = await self.session_manager.get_session_info(session_id)
-                if reloaded_info is not None:
-                    session_info = reloaded_info
-
             # Delegate to unified artifact snapshot
             archive_manager = self.legion_system.archive_manager
             await archive_manager.snapshot_artifacts(session_dir, archive_dir, ctx)
@@ -3772,488 +3706,18 @@ class SessionCoordinator:
                 return message[: -len(suffix)]
         return None
 
-    def _convert_stored_message_to_websocket(self, stored_msg: dict[str, Any]) -> dict[str, Any] | None:
-        """
-        Convert new StoredMessage format (_type discriminator) to WebSocket format.
-
-        Issue #310: The new dataclass-based StoredMessage uses _type as discriminator
-        and stores message data in the 'data' field. This method converts it to the
-        legacy format expected by the frontend.
-        """
-        try:
-            _type = stored_msg.get("_type", "")
-            data = stored_msg.get("data", {})
-            timestamp = stored_msg.get("timestamp")
-            session_id = stored_msg.get("session_id")
-            display = stored_msg.get("display")
-
-            # Issue #494: ToolCallUpdate messages are returned as tool_call type directly
-            if _type == "ToolCallUpdate":
-                tool_call_data = dict(data)
-                triggering = tool_call_data.pop("_triggering_message", None)
-                tool_call_data["type"] = "tool_call"
-                # Issue #1958 backward compat: this is a verbatim replay of the stored
-                # dict, bypassing ToolCall.from_dict()/to_dict() entirely — pre-rename
-                # records on disk carry the turn id under the old "message_id" key, not
-                # "turn_id". Promote it so #1694 permission-prompt anchoring still works
-                # for historical sessions instead of silently degrading to the
-                # last-bubble heuristic.
-                if not tool_call_data.get("turn_id") and tool_call_data.get("message_id"):
-                    tool_call_data["turn_id"] = tool_call_data["message_id"]
-                # Preserve request_id from triggering PermissionRequestMessage so that
-                # page-refresh recovery can still correlate permission responses.
-                if (
-                    triggering
-                    and not tool_call_data.get("request_id")
-                    and isinstance(triggering.get("data"), dict)
-                ):
-                    req_id = triggering["data"].get("request_id")
-                    if req_id:
-                        tool_call_data["request_id"] = req_id
-                return tool_call_data
-
-            # Map _type to legacy type string
-            type_mapping = {
-                "AssistantMessage": "assistant",
-                "UserMessage": "user",
-                "SystemMessage": "system",
-                "ResultMessage": "result",
-                "PermissionRequestMessage": "permission_request",
-                "PermissionResponseMessage": "permission_response",
-            }
-            legacy_type = type_mapping.get(_type, "system")
-
-            # Extract content from data
-            content = ""
-            if "content" in data:
-                raw_content = data["content"]
-                if isinstance(raw_content, str):
-                    content = raw_content
-                elif isinstance(raw_content, list):
-                    # Extract text from content blocks
-                    # For AssistantMessages, only include actual text - NOT tool_use blocks
-                    # Tool uses should be suppressed from content display (handled via metadata)
-                    texts = []
-                    for block in raw_content:
-                        if isinstance(block, dict):
-                            if "text" in block:
-                                texts.append(block["text"])
-                            # Skip thinking blocks - they go into metadata.thinking_blocks
-                            # Skip tool_use blocks - they go into metadata.tool_uses
-                            # Neither should contribute to the content string
-                    content = " ".join(texts) if texts else ""
-
-            # Issue #2026 (Part A): the live path's AssistantMessageHandler falls back
-            # to "Assistant response" when a turn has no text blocks (e.g. a tool-use-
-            # only turn) — port the same default so reload doesn't show a blank pill.
-            if _type == "AssistantMessage" and not content:
-                content = "Assistant response"
-
-            # Build metadata
-            metadata = {}
-
-            # Extract tool uses from AssistantMessage
-            tool_uses = []
-            if _type == "AssistantMessage" and isinstance(data.get("content"), list):
-                for block in data["content"]:
-                    if isinstance(block, dict) and "id" in block and "name" in block:
-                        # Issue #2026: stamp the message-level timestamp onto each
-                        # block — the live path's AssistantMessageHandler reads the
-                        # same already-set message_data["timestamp"] for every
-                        # tool_use it extracts, not a fresh clock read, so this is
-                        # what makes reload byte-identical to the live broadcast.
-                        tool_uses.append({**block, "timestamp": timestamp})
-            if _type == "AssistantMessage":
-                metadata["has_tool_uses"] = bool(tool_uses)
-                metadata["tool_uses"] = tool_uses
-                # Issue #2026: AssistantMessageHandler's tool_results default is a
-                # hardcoded empty list for this message type — never derived.
-                metadata["tool_results"] = []
-                metadata["model"] = data.get("model")
-                usage = data.get("usage")
-                if usage:
-                    metadata["usage"] = usage
-
-            # Issue #1985: propagate turn-level identity (distinct from record_id
-            # below), mirroring the live extraction at message_parser.py:622-623.
-            if _type == "AssistantMessage" and data.get("message_id"):
-                metadata["turn_id"] = data["message_id"]
-
-            # Extract tool results from UserMessage
-            tool_results = []
-            if _type == "UserMessage" and isinstance(data.get("content"), list):
-                for block in data["content"]:
-                    if isinstance(block, dict) and "tool_use_id" in block:
-                        # Issue #2042 (Gap 4): mirror UserMessageHandler's live-path
-                        # normalization (message_parser.py:999-1017) exactly — a
-                        # text-only content block list is joined into a single string;
-                        # content with any non-text item (images, etc.) is preserved
-                        # as-is; any other non-string content (e.g. a bare `None`) is
-                        # coerced to str(), same as the live path's own final fallback.
-                        block_content = block.get("content")
-                        normalized_content = block_content
-                        if isinstance(block_content, list):
-                            has_non_text = any(
-                                isinstance(item, dict) and item.get("type") != "text"
-                                for item in block_content
-                            )
-                            if not has_non_text:
-                                text_parts_content = [
-                                    item.get("text", "")
-                                    for item in block_content
-                                    if isinstance(item, dict) and item.get("type") == "text"
-                                ]
-                                normalized_content = (
-                                    "\n".join(text_parts_content)
-                                    if text_parts_content else str(block_content)
-                                )
-                        elif not isinstance(block_content, str):
-                            normalized_content = str(block_content)
-                        # Issue #2026: see the matching tool_uses comment above —
-                        # same message-level timestamp, not a fresh clock read.
-                        tool_results.append({
-                            **block,
-                            "content": normalized_content,
-                            "timestamp": timestamp,
-                        })
-            if _type == "UserMessage":
-                metadata["has_tool_results"] = bool(tool_results)
-                metadata["tool_results"] = tool_results
-                metadata["tool_uses"] = []
-                metadata["role"] = None
-                # Issue #2026: UserMessageHandler falls back to a synthesized
-                # "Tool results: N results" string when the message carries tool
-                # results but no direct text — the common shape for a stored
-                # tool-result turn, which has no top-level "content" string.
-                if tool_results and not content:
-                    content = f"Tool results: {len(tool_results)} results"
-                # Issue #2026: unwrap slash-command output turns (e.g. /cost,
-                # /context), matching UserMessageHandler's live-path handling.
-                if content and '<local-command-stdout>' in content:
-                    match = re.search(
-                        r'<local-command-stdout>(.*?)</local-command-stdout>', content, re.DOTALL
-                    )
-                    if match:
-                        content = match.group(1).strip()
-                    metadata["is_local_command_response"] = True
-                    metadata["subtype"] = "local_command_response"
-
-            # Extract parent_tool_use_id for Task subagent filtering (Issue #384, #195)
-            # Present on both UserMessage (prompt) and AssistantMessage (subagent responses)
-            if data.get("parent_tool_use_id"):
-                metadata["parent_tool_use_id"] = data["parent_tool_use_id"]
-
-            # Extract thinking blocks
-            thinking_blocks = []
-            if _type == "AssistantMessage" and isinstance(data.get("content"), list):
-                for block in data["content"]:
-                    if isinstance(block, dict) and "thinking" in block:
-                        thinking_blocks.append({
-                            "content": block["thinking"],
-                            "timestamp": timestamp,
-                        })
-            if _type == "AssistantMessage":
-                metadata["has_thinking"] = bool(thinking_blocks)
-                metadata["thinking_blocks"] = thinking_blocks
-                metadata["thinking_content"] = (
-                    " ".join(block["content"] for block in thinking_blocks)
-                    if thinking_blocks else ""
-                )
-
-            # Handle SystemMessage subtypes (including Task* subclasses)
-            if _type in ("SystemMessage", "HookEventMessage", "TaskStartedMessage", "TaskProgressMessage", "TaskNotificationMessage", "TaskUpdatedMessage"):
-                subtype = data.get("subtype")
-                if subtype:
-                    metadata["subtype"] = subtype
-                # Extract init_data if present. Issue #2026: only SystemMessage/
-                # HookEventMessage's live handler (SystemMessageHandler) ever exposes
-                # this as `init_data` — the Task* dataclasses below share the same
-                # `data` field but each has its own dedicated handler that never sets
-                # it, so setting it unconditionally for every _type in this tuple (as
-                # this code used to) put an extra key on Task* records the live path
-                # never sends.
-                if _type in ("SystemMessage", "HookEventMessage") and data.get("data"):
-                    metadata["init_data"] = data["data"]
-
-                # Issue #677: Extract task message metadata from stored format
-                if _type == "TaskStartedMessage":
-                    metadata["subtype"] = "task_started"
-                    metadata["task_id"] = data.get("task_id")
-                    metadata["description"] = data.get("description")
-                    metadata["task_session_id"] = data.get("session_id")
-                    metadata["task_type"] = data.get("task_type")
-                    metadata["uuid"] = data.get("uuid")
-                    metadata["tool_use_id"] = data.get("tool_use_id")
-                    agent_name = self._extract_agent_name(data.get("description"))
-                    content = f"Agent spawned: {agent_name}" if agent_name else "Agent spawned"
-                elif _type == "TaskProgressMessage":
-                    metadata["subtype"] = "task_progress"
-                    metadata["task_id"] = data.get("task_id")
-                    metadata["description"] = data.get("description")
-                    metadata["task_session_id"] = data.get("session_id")
-                    metadata["last_tool_name"] = data.get("last_tool_name")
-                    metadata["uuid"] = data.get("uuid")
-                    metadata["tool_use_id"] = data.get("tool_use_id")
-                    if data.get("usage"):
-                        metadata["usage"] = data["usage"]
-                    agent_name = self._extract_agent_name(data.get("description"))
-                    tool = f" [{data.get('last_tool_name')}]" if data.get("last_tool_name") else ""
-                    content = f"Agent progress: {agent_name}{tool}" if agent_name else f"Agent progress{tool}"
-                elif _type == "TaskNotificationMessage":
-                    metadata["subtype"] = "task_notification"
-                    metadata["task_id"] = data.get("task_id")
-                    metadata["status"] = data.get("status")
-                    metadata["summary"] = data.get("summary")
-                    metadata["task_session_id"] = data.get("session_id")
-                    metadata["output_file"] = data.get("output_file")
-                    metadata["uuid"] = data.get("uuid")
-                    metadata["tool_use_id"] = data.get("tool_use_id")
-                    if data.get("usage"):
-                        metadata["usage"] = data["usage"]
-                    status = data.get("status", "unknown")
-                    summary = data.get("summary") or ""
-                    content = f"Agent {status}: {summary}" if summary else f"Agent {status}"
-                elif _type == "TaskUpdatedMessage":
-                    metadata["subtype"] = "task_updated"
-                    metadata["task_id"] = data.get("task_id")
-                    metadata["task_session_id"] = data.get("session_id")
-                    metadata["status"] = data.get("status")
-                    # Issue #1746: patch carries the changed fields (e.g. status,
-                    # end_time) — status is sometimes only reported inside patch,
-                    # not the top-level field.
-                    metadata["patch"] = data.get("patch")
-                    metadata["uuid"] = data.get("uuid")
-                    content = "Agent task updated"
-
-                # Issue #571: Synthesize content for hook messages from stored format
-                elif subtype in ("hook_started", "hook_response"):
-                    hook_data = data.get("data") or {}
-                    # Issue #1676: background subagent notifications (agent_needs_input/agent_completed)
-                    if data.get("hook_event_name") == "Notification" or hook_data.get("hook_event_name") == "Notification":
-                        metadata["subtype"] = "agent_notification"
-                        metadata["notification_type"] = hook_data.get("notification_type")
-                        metadata["message"] = hook_data.get("message")
-                        metadata["title"] = hook_data.get("title")
-                        metadata["label"] = self._parse_agent_notification_label(hook_data.get("message"))
-                        # Issue #1676: HookEventMessage.uuid (top-level dataclass field, not part
-                        # of the nested hook payload) lets the frontend dismiss individual notifications.
-                        if data.get("uuid"):
-                            metadata["uuid"] = data["uuid"]
-                        content = hook_data.get("message") or content
-                    else:
-                        hook_name = hook_data.get("hook_name", hook_data.get("hookName", "unknown"))
-                        hook_event = hook_data.get("hook_event", hook_data.get("hookEvent", ""))
-                        if subtype == "hook_started":
-                            content = f"Hook: {hook_name} ({hook_event})" if hook_event else f"Hook: {hook_name}"
-                        else:
-                            exit_code = hook_data.get("exit_code", hook_data.get("exitCode"))
-                            if exit_code == 0:
-                                display = hook_data.get("stdout") or hook_data.get("outcome", "success")
-                            else:
-                                display = hook_data.get("stderr") or hook_data.get("outcome", "failed")
-                            content = f"Hook: {hook_name} \u2192 {display}"
-                            if exit_code is not None:
-                                metadata["exit_code"] = exit_code
-
-                # Issue #1756: Synthesize content for permission-mode-change status messages
-                elif subtype == "status":
-                    status_data = data.get("data") or {}
-                    permission_mode = status_data.get("permissionMode")
-                    if permission_mode:
-                        metadata["subtype"] = "permission_mode_change"
-                        metadata["permission_mode"] = permission_mode
-                        content = f"Permission mode changed to {permission_mode}"
-
-                # Issue #1756: Synthesize content for api_retry messages (mirrors
-                # message_parser.py SystemMessageHandler's live-path logic, lines 453-465)
-                elif subtype in ("api_retry", "tengu_api_retry"):
-                    retry_data = data.get("data") or {}
-                    attempt = retry_data.get("attempt") or retry_data.get("attemptNumber")
-                    max_retries = retry_data.get("max_retries") or retry_data.get("maxRetries")
-                    wait_ms = (
-                        retry_data.get("wait_ms")
-                        or retry_data.get("waitMs")
-                        or retry_data.get("retryAfterMs")
-                    )
-                    metadata["attempt"] = attempt
-                    metadata["max_retries"] = max_retries
-                    metadata["wait_sec"] = round(wait_ms / 1000) if wait_ms else None
-                    metadata["subtype"] = "api_retry"
-                    attempt_str = f"{attempt}/{max_retries}" if attempt and max_retries else str(attempt or "?")
-                    wait_str = f" (~{round(wait_ms / 1000)}s)" if wait_ms else ""
-                    content = f"API retry {attempt_str}{wait_str}"
-
-                # Issue #2026 (Part A): plain SystemMessage/HookEventMessage subtypes
-                # with no special-cased content synthesis above (most commonly "init")
-                # reload with content="" today, while the live path's
-                # SystemMessageHandler SDK-object branch falls back to the literal
-                # "System message" whenever the dataclass has no `content` attribute —
-                # true for every SystemMessage/HookEventMessage subtype currently
-                # emitted by the SDK. This is exactly #2002's "blank system pill" gap.
-                if _type in ("SystemMessage", "HookEventMessage"):
-                    if not content:
-                        content = "System message"
-                    metadata["is_error"] = False
-                    # Issue #2042 (Gap 1): SystemMessageHandler always sets these six
-                    # keys live — but only in its *legacy dict-input* branch
-                    # (message_parser.py:542-549); its real SDK-object branch (the one
-                    # that actually runs for a live SystemMessage/HookEventMessage)
-                    # never reads cwd/permissionMode/tools/model/system_prompt at all,
-                    # so they stay at that branch's None/None/[]/None/None literal
-                    # defaults (message_parser.py:397-403) unconditionally — a
-                    # separate, pre-existing, out-of-scope live-path gap (see this
-                    # method's own note further down about ClaudeSDK._convert_sdk_
-                    # message() never copying these onto its wrapper dict). Reload
-                    # parity therefore means these six keys are *always* present with
-                    # these same constant values, not derived from `data`: `data` here
-                    # is dataclasses.asdict(sdk_msg), shaped {"subtype", "data": {...
-                    # cwd, tools, model, permissionMode ...}} — the real values sit one
-                    # level deeper (already separately exposed as metadata["init_data"]
-                    # above) and reading data.get("cwd") etc. directly would silently
-                    # start surfacing real values on reload while live keeps returning
-                    # None, reopening exactly the divergence this fix exists to close.
-                    metadata["working_directory"] = None
-                    metadata["permissions"] = None
-                    metadata["tools"] = []
-                    metadata["model"] = None
-                    metadata["system_prompt"] = None
-                    metadata["error_details"] = None
-
-            # Handle ResultMessage
-            if _type == "ResultMessage":
-                # Issue #2026: match ResultMessageHandler's live-path default of
-                # "unknown" (message_parser.py:1167) exactly — a bare `.get("subtype")`
-                # with no default would render "Conversation None" below for a
-                # record with a missing/None subtype, which the live path never
-                # produces since "unknown" is a truthy string.
-                subtype = data.get("subtype") or "unknown"
-                is_error = data.get("is_error", False)
-                metadata["subtype"] = subtype
-                # Issue #2026: ResultMessageHandler's live-path content default is
-                # f"Conversation {subtype}" — NOT the SDK's own `result` text. This
-                # looks surprising (the stored record's data.result *is* the real
-                # answer text) but it's a genuine, separately-tracked live-path quirk:
-                # ClaudeSDK._convert_sdk_message()'s attribute-copy allowlist for
-                # ResultMessage never includes "result", so message_data.get("result")
-                # is always absent by the time ResultMessageHandler runs live. Parity
-                # here means reproducing what the live path actually sends, not
-                # "fixing" this — a separate, unrelated issue.
-                content = f"Conversation {subtype}"
-                metadata["is_error"] = is_error
-                metadata["error_type"] = data.get("error_type") if is_error else None
-                metadata["error_code"] = data.get("error_code") if is_error else None
-                metadata["stack_trace"] = data.get("stack_trace") if is_error else None
-                metadata["api_error_status"] = data.get("api_error_status")
-                # Copy usage data
-                for key in ["usage", "model_usage", "duration_ms", "duration_api_ms", "total_cost_usd", "num_turns"]:
-                    metadata[key] = data.get(key)
-                # Copy stop_reason for truncation detection
-                metadata["stop_reason"] = data.get("stop_reason")
-                # Copy errors and permission_denials for error display
-                metadata["errors"] = data.get("errors")
-                metadata["permission_denials"] = data.get("permission_denials", [])
-                # Copy deferred_tool_use for frontend deferral banner
-                metadata["deferred_tool_use"] = data.get("deferred_tool_use")
-
-            # Handle PermissionRequestMessage
-            if _type == "PermissionRequestMessage":
-                metadata["request_id"] = data.get("request_id")
-                metadata["tool_name"] = data.get("tool_name")
-                metadata["input_params"] = data.get("input_params", {})
-                suggestions = data.get("suggestions", [])
-                metadata["suggestions"] = suggestions
-                metadata["has_suggestions"] = len(suggestions) > 0
-                metadata["has_permission_requests"] = True
-                metadata["tool_use_id"] = data.get("tool_use_id")
-                metadata["agent_id"] = data.get("agent_id")
-                metadata["decision_reason"] = data.get("decision_reason")
-                metadata["blocked_path"] = data.get("blocked_path")
-                metadata["title"] = data.get("title")
-                metadata["display_name"] = data.get("display_name")
-                metadata["description"] = data.get("description")
-
-            # Handle PermissionResponseMessage
-            if _type == "PermissionResponseMessage":
-                metadata["request_id"] = data.get("request_id")
-                metadata["decision"] = data.get("decision")
-                metadata["tool_name"] = data.get("tool_name")
-                metadata["reasoning"] = data.get("reasoning")
-                metadata["response_time_ms"] = data.get("response_time_ms")
-                applied_updates = data.get("applied_updates", [])
-                metadata["applied_updates"] = applied_updates
-                metadata["applied_update_types"] = [
-                    u.get("type") for u in applied_updates if u.get("type")
-                ]
-                metadata["has_permission_responses"] = True
-                metadata["tool_use_id"] = data.get("tool_use_id")
-                # Include updated_input for AskUserQuestion answers
-                if data.get("updated_input"):
-                    metadata["updated_input"] = data["updated_input"]
-
-            # Issue #2026 (Part A): stamp session_id into metadata and always-explicit
-            # has_tool_uses/has_tool_results/has_thinking/has_permission_requests/
-            # has_permission_responses booleans, mirroring message_parser.py's
-            # handlers — the live path never omits these keys, it sets them False
-            # when not applicable. Task* dataclasses are excluded from the has_*
-            # defaults: each has its own dedicated live handler
-            # (TaskStartedHandler/etc.) that never sets these booleans at all.
-            if _type in (
-                "AssistantMessage", "UserMessage", "SystemMessage", "HookEventMessage",
-                "ResultMessage", "PermissionRequestMessage", "PermissionResponseMessage",
-                "TaskStartedMessage", "TaskProgressMessage", "TaskNotificationMessage",
-                "TaskUpdatedMessage",
-            ):
-                metadata.setdefault("session_id", session_id)
-            if _type in (
-                "AssistantMessage", "UserMessage", "SystemMessage", "HookEventMessage",
-                "ResultMessage", "PermissionRequestMessage", "PermissionResponseMessage",
-            ):
-                metadata.setdefault("has_tool_uses", False)
-                metadata.setdefault("has_tool_results", False)
-                metadata.setdefault("has_thinking", False)
-                metadata.setdefault("has_permission_requests", False)
-                metadata.setdefault("has_permission_responses", False)
-
-            # Add display metadata if present (Issue #310)
-            if display:
-                metadata["display"] = display
-
-            # Build websocket message
-            websocket_data = {
-                "type": legacy_type,
-                "content": content,
-                "timestamp": timestamp,
-                "session_id": session_id,
-                "metadata": metadata,
-            }
-
-            # Add subtype at root level for backward compatibility
-            if metadata.get("subtype"):
-                websocket_data["subtype"] = metadata["subtype"]
-
-            # Issue #1985: propagate record identity, matching the sibling branches
-            # at lines ~4113/4123-4124 for the legacy dict-shaped storage formats.
-            if stored_msg.get("message_id"):
-                websocket_data["message_id"] = stored_msg["message_id"]
-
-            return websocket_data
-
-        except Exception as e:
-            coord_logger.warning(f"Failed to convert StoredMessage to WebSocket format: {e}")
-            return None
 
     # ==================== TASK LEG REGISTRY (Issue #1746) ====================
 
     async def _get_task_leg_registry(self, session_id: str) -> TaskLegRegistry:
         """Get (lazily hydrating) the per-session TaskLegRegistry.
 
-        Hydration replays every stored Task lifecycle message once via
-        _convert_stored_message_to_websocket — the same reconstruction the
-        reload/history path already uses — so a page refresh and a
-        live-streamed session converge on identical state. Only cached once
-        a storage manager is available; if the session hasn't been started
-        yet in this process, an ephemeral empty registry is returned so a
-        later call (once storage exists) can still hydrate properly.
+        Hydration replays every stored Task lifecycle message once — so a
+        page refresh and a live-streamed session converge on identical
+        state. Only cached once a storage manager is available; if the
+        session hasn't been started yet in this process, an ephemeral empty
+        registry is returned so a later call (once storage exists) can
+        still hydrate properly.
         """
         registry = self._task_leg_registries.get(session_id)
         if registry is not None:
@@ -4262,29 +3726,14 @@ class SessionCoordinator:
         registry = TaskLegRegistry()
         storage = self._storage_managers.get(session_id)
         if storage:
-            # Issue #2084 (stage 3-B, §7): a canonical session's Task lifecycle frames
-            # are stored as plain `type == "system"` canonical records, never with the
-            # legacy `_type` discriminator — nothing left to convert for them either.
-            session_info = await self.session_manager.get_session_info(session_id)
-            is_canonical_session = bool(session_info) and (
-                _is_canonical_schema_version(session_info.message_schema_version)
-            )
             raw_messages = await storage.read_messages()
             for raw_message in raw_messages:
-                if is_canonical_session:
-                    if raw_message.get("type") != "system":
-                        continue
-                    ws_data = raw_message
-                else:
-                    if raw_message.get("_type") not in _TASK_LIFECYCLE_STORED_TYPES:
-                        continue
-                    ws_data = self._convert_stored_message_to_websocket(raw_message)
-                if not ws_data:
+                if raw_message.get("type") != "system":
                     continue
-                metadata = ws_data.get("metadata") or {}
+                metadata = raw_message.get("metadata") or {}
                 subtype = metadata.get("subtype")
                 if subtype:
-                    registry.apply_frame(subtype, metadata, ws_data.get("timestamp"))
+                    registry.apply_frame(subtype, metadata, raw_message.get("timestamp"))
             self._task_leg_registries[session_id] = registry
 
         return registry
@@ -4321,42 +3770,7 @@ class SessionCoordinator:
             session_id, archive_id, offset=offset, limit=limit
         )
 
-        # Issue #2084 (stage 3-B, §7): the archived state.json snapshot carries the
-        # session's own message_schema_version — read from the archive itself, not
-        # live session_manager state (the originating session may be long disposed).
-        archive_state = await self.legion_system.archive_manager.get_archive_state(session_id, archive_id)
-        archived_state_dict = (archive_state or {}).get("state") or {}
-        is_canonical_session = _is_canonical_schema_version(
-            archived_state_dict.get("message_schema_version", 0)
-        )
-
-        # Convert raw stored messages to frontend-expected websocket format
-        converted = []
-        for raw_msg in result.get("messages", []):
-            try:
-                ws_data = None
-                if is_canonical_session:
-                    ws_data = raw_msg
-                elif raw_msg.get("_type"):
-                    ws_data = self._convert_stored_message_to_websocket(raw_msg)
-                elif isinstance(raw_msg.get("metadata"), dict) and raw_msg.get("type"):
-                    ws_data = {
-                        "type": raw_msg["type"],
-                        "content": raw_msg.get("content", ""),
-                        "timestamp": raw_msg.get("timestamp"),
-                        "metadata": raw_msg.get("metadata", {}),
-                        "session_id": raw_msg.get("session_id"),
-                    }
-                    if raw_msg.get("metadata", {}).get("subtype"):
-                        ws_data["subtype"] = raw_msg["metadata"]["subtype"]
-                else:
-                    processed = self.message_processor.process_message(raw_msg, source="storage")
-                    ws_data = self.message_processor.prepare_for_websocket(processed)
-                if ws_data:
-                    converted.append(ws_data)
-            except Exception:
-                pass
-        result["messages"] = converted
+        result["messages"] = [msg for msg in result.get("messages", []) if msg]
         return result
 
     async def get_archive_state(self, session_id: str, archive_id: str) -> dict | None:
@@ -4452,86 +3866,6 @@ class SessionCoordinator:
             return {"has_history": False, "has_archives": False}
         return await self.legion_system.archive_manager.check_history_archives_exist(session_id)
 
-    def _convert_legacy_record_to_websocket(self, raw_message: dict[str, Any]) -> dict[str, Any] | None:
-        """Convert a non-canonical stored record to its websocket/canonical shape.
-
-        Issue #2084 (stage 3-C, §3): extracted from get_session_messages() so
-        message_migration.py's pass 2 reuses this exact dispatch — a materialized
-        migration record must be byte-identical to what a live reload would produce
-        for the same raw record, and reimplementing this independently risks silent
-        drift from the already-correct, already-tested original.
-        """
-        # Issue #2084 (stage 3-C): the live write path has unconditionally persisted
-        # tool_call lifecycle transitions in flat canonical shape since stage 3-B's
-        # cutover (#2086) — regardless of the session's own message_schema_version.
-        # So a still-legacy (schema_version 0) session that stayed active across that
-        # deploy can contain fully-canonical flat tool_call records interleaved with
-        # older legacy-shaped ones. ToolCall.to_dict() has no "content" key, so such a
-        # record would otherwise fail the "already processed" branch's content-is-
-        # not-None check below and be mis-dispatched through MessageProcessor's
-        # generic ToolCallHandler (type "tool_use" — a different, wrong shape
-        # entirely) — found via this stage's own fidelity testing. A flat tool_call
-        # record is self-identifying regardless of session-level canonical status,
-        # so it's always passed through here unconverted.
-        if raw_message.get("type") == "tool_call" and "tool_use_id" in raw_message:
-            return raw_message
-
-        # Issue #310: Handle new StoredMessage format with _type discriminator
-        if raw_message.get("_type"):
-            return self._convert_stored_message_to_websocket(raw_message)
-
-        # Check if message is already fully processed (has metadata)
-        if isinstance(raw_message.get("metadata"), dict) and raw_message.get("type") and raw_message.get("content") is not None:
-            # Message is already processed, prepare for WebSocket
-            metadata = raw_message["metadata"].copy()
-
-            # Issue #2042 (Gap 2): records stored via
-            # prepare_for_storage() (legacy dict shape, no _type
-            # discriminator) carry `display` at the top level, same as
-            # _convert_stored_message_to_websocket() handles — this
-            # branch never propagated it into metadata.
-            display = raw_message.get("display")
-            if display:
-                metadata["display"] = display
-
-            # Issue #2042 (Gap 5): comm/attachment user messages are
-            # stored directly by ClaudeSDK._conversation_loop(), bypassing
-            # MessageProcessor entirely, so their metadata never picked up
-            # UserMessageHandler's shared defaults. Port them here for
-            # reload/live parity, matching only what UserMessageHandler
-            # itself always sets.
-            if raw_message["type"] == "user":
-                metadata.setdefault("tool_uses", [])
-                metadata.setdefault("tool_results", [])
-                metadata.setdefault("has_tool_uses", False)
-                metadata.setdefault("has_tool_results", False)
-                metadata.setdefault("has_thinking", False)
-                metadata.setdefault("has_permission_requests", False)
-                metadata.setdefault("has_permission_responses", False)
-                metadata.setdefault("role", None)
-            metadata.setdefault("session_id", raw_message.get("session_id"))
-
-            websocket_data = {
-                "type": raw_message["type"],
-                "content": raw_message["content"],
-                "timestamp": raw_message.get("timestamp"),
-                "metadata": metadata,
-                "session_id": raw_message.get("session_id"),
-                "message_id": raw_message.get("message_id"),  # Issue #1000
-            }
-            # Maintain backward compatibility with subtype at root level
-            if metadata.get('subtype'):
-                websocket_data["subtype"] = metadata['subtype']
-            return websocket_data
-
-        # Message needs processing - run through MessageProcessor
-        processed_message = self.message_processor.process_message(raw_message, source="storage")
-        websocket_data = self.message_processor.prepare_for_websocket(processed_message)
-        # Issue #1000: Propagate message_id from storage for frontend dedup
-        if raw_message.get("message_id"):
-            websocket_data["message_id"] = raw_message["message_id"]
-        return websocket_data
-
     async def get_session_messages(
         self,
         session_id: str,
@@ -4560,58 +3894,34 @@ class SessionCoordinator:
             raw_messages = await storage.read_messages(limit=limit, offset=offset)
             total_count = await storage.get_message_count()
 
-            # Issue #2084 (stage 3-B, §7): a canonical session's stored records are
-            # already the exact live shape (3-A kept every frontend-visible field name
-            # unchanged; §1 made tool_call records flat to match) — nothing left to
-            # convert for it. Computed once per call, not per record: a session either
-            # is canonical from creation or isn't, with no in-between until 3-C.
             session_info = await self.session_manager.get_session_info(session_id)
-            is_canonical_session = bool(session_info) and (
-                _is_canonical_schema_version(session_info.message_schema_version)
-            )
 
             # Convert stored messages to WebSocket format and generate tool_call messages
             parsed_messages = []
 
             # Issue #2084 (stage 3-C, §1): tool lifecycle reconstruction (issue #491's
             # active_history_tools/stored_tool_update_ids state machine) is extracted into
-            # ToolLifecycleReconstructor so this reload path and the background migration
-            # driver (message_migration.py) share one implementation. The pre-scan for
-            # stored_tool_update_ids (before any conversion/synthesis runs, per issue
-            # #2052) is likewise shared via prescan_stored_tool_calls() — both callers
-            # use the exact same matching logic, not two independent copies that could
-            # silently drift.
+            # ToolLifecycleReconstructor. The pre-scan for stored_tool_update_ids (before
+            # any conversion/synthesis runs, per issue #2052) is likewise shared via
+            # prescan_stored_tool_calls() so this one matching logic has one
+            # implementation, not an independent copy that could silently drift.
             reconstructor = ToolLifecycleReconstructor(session_id)
             prescan_stored_tool_calls(raw_messages, reconstructor)
 
             for raw_message in raw_messages:
                 try:
-                    # Issue #2084 (stage 3-B, §7): a canonical session's stored records
-                    # are already the exact live shape — nothing left to convert.
-                    # Issue #2084 (stage 3-C, §3): the non-canonical dispatch (legacy
-                    # StoredMessage/_type, already-processed dict, MessageProcessor
-                    # fallback) is extracted into _convert_legacy_record_to_websocket()
-                    # so message_migration.py's pass 2 reuses the exact same conversion
-                    # — never an independent reimplementation that could silently drift.
-                    # A converted ToolCallUpdate record and a canonical native tool_call
-                    # record both come back shaped {"type": "tool_call", ...};
-                    # reconstructor.feed() already recognizes that shape and only updates
-                    # tracking (no synthesis), so no separate early-continue branch is
-                    # needed here for either case (issue #494).
-                    if is_canonical_session:
-                        websocket_data = raw_message
-                    else:
-                        websocket_data = self._convert_legacy_record_to_websocket(raw_message)
-
-                    if not websocket_data:
+                    if not raw_message:
                         continue
 
-                    # Add the regular message to the response
-                    parsed_messages.append(websocket_data)
+                    # Issue #494: a tool_call record comes back shaped
+                    # {"type": "tool_call", ...}; reconstructor.feed() already
+                    # recognizes that shape and only updates tracking (no
+                    # synthesis), so no separate early-continue branch is needed.
+                    parsed_messages.append(raw_message)
 
                     # Issue #491/#2084 (stage 3-C, §1): interleaved tool_call messages,
                     # generated by the shared ToolLifecycleReconstructor.
-                    for tc_data in reconstructor.feed(websocket_data):
+                    for tc_data in reconstructor.feed(raw_message):
                         parsed_messages.append(tc_data)
 
                 except Exception as e:
@@ -4696,23 +4006,6 @@ class SessionCoordinator:
     def set_rate_limit_broadcast_callback(self, callback: Callable) -> None:
         """Issue #899: Set callback for broadcasting rate_limits_update to the UI poll queue."""
         self._rate_limit_broadcast_callback = callback
-
-    def set_message_migration_service(self, service) -> None:
-        """Issue #2084 (stage 3-C, §6): wire the MessageMigrationService used by
-        start_session()'s on-demand trigger."""
-        self._message_migration_service = service
-
-    @property
-    def message_migration_service(self):
-        """Issue #2084 (stage 3-D-prep, §2): public read accessor so callers outside
-        SessionCoordinator (e.g. ArchiveManager's migrate-at-disposal) can reach the
-        same MessageMigrationService instance wired by set_message_migration_service()."""
-        return self._message_migration_service
-
-    def set_migration_notice_callback(self, callback: Callable) -> None:
-        """Issue #2084 (stage 3-C, §6): set callback(session_id) fired the first time
-        on-demand migration actually runs (and succeeds) for a session."""
-        self._migration_notice_callback = callback
 
     async def _on_rate_limits(self, rate_limit_info: Any) -> None:
         """Issue #899: Normalize a RateLimitInfo and broadcast updated state to UI poll queue."""

@@ -492,7 +492,7 @@ class TestToolCallFlatShape:
     def test_reconstructed_metadata_is_toolcall_from_dict_compatible(self):
         """Feeding the full to_dict() output (not just the stripped-down metadata)
         into ToolCall.from_dict() reconstructs a valid ToolCall — matching what
-        _convert_stored_message_to_websocket already hands downstream code today."""
+        get_session_messages()'s reconstructor already hands downstream code today."""
         tool_call = self._make_tool_call(
             display=ToolDisplayInfo(state=ToolState.AWAITING_PERMISSION, style="warning"),
         )
