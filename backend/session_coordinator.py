@@ -3506,6 +3506,25 @@ class SessionCoordinator:
                 will_be_deleted=False,
             )
 
+            # Issue #2091: migrate the live session directory to canonical shape,
+            # if it isn't already, before snapshotting — mirrors archive_minion()'s
+            # migrate-at-disposal fix (#2090) so reset-archives aren't frozen in
+            # legacy shape either. Reload session_info afterward so any fields read
+            # from it below stay consistent with the post-migration state, mirroring
+            # archive_minion()'s own defensive reload; guard against None since the
+            # reload is a new await point a concurrent cleanup could race with,
+            # removing the session from SessionManager entirely.
+            migration_service = self.message_migration_service
+            if (
+                session_info
+                and not _is_canonical_schema_version(session_info.message_schema_version)
+                and migration_service is not None
+            ):
+                await migration_service.migrate_one(session_id)
+                reloaded_info = await self.session_manager.get_session_info(session_id)
+                if reloaded_info is not None:
+                    session_info = reloaded_info
+
             # Delegate to unified artifact snapshot
             archive_manager = self.legion_system.archive_manager
             await archive_manager.snapshot_artifacts(session_dir, archive_dir, ctx)
