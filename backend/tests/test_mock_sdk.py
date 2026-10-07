@@ -14,6 +14,7 @@ Tests cover:
 """
 
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -502,6 +503,182 @@ class TestMockClaudeSDK:
         )
         assert mock.session_id == "test-kwargs"
         assert mock.current_permission_mode == "acceptEdits"
+
+
+# ─────────────────────────────────────────────────
+# _converting_callback Unification Tests (issue #2084 stage 3-E)
+# ─────────────────────────────────────────────────
+
+
+class TestConvertingCallbackUnification:
+    """_converting_callback must build the exact same canonical MessageRecord shape
+    the real construction primitives (reconstruct_sdk_message + MessageRecord.
+    from_sdk_message) would build directly — proving the unification onto those
+    primitives didn't silently diverge from what it's reusing."""
+
+    @pytest.mark.asyncio
+    async def test_unrecognized_sdk_type_degrades_instead_of_dropping(self):
+        """A `_type` that reconstruct_sdk_message() doesn't recognize (fixture-vs-
+        installed-SDK drift) must still be stored and broadcast — as an unconverted
+        pass-through — rather than silently vanishing. ReplayEngine/_safe_callback's
+        broad except-and-log around this callback means an uncaught exception here
+        would otherwise drop the message with no trace besides a log line."""
+        received = []
+
+        async def on_message(msg):
+            received.append(msg)
+
+        storage_manager = AsyncMock()
+        mock = MockClaudeSDK(
+            session_id="test-unknown-type",
+            working_directory="/tmp/test",
+            session_dir=str(FIXTURES_DIR / "single_turn"),
+            storage_manager=storage_manager,
+            message_callback=on_message,
+            speed_factor=0.0,
+        )
+
+        msg = {
+            "_type": "SomeFutureMessageType",
+            "timestamp": 1000000.0,
+            "session_id": "test-unknown-type",
+            "data": {"anything": "goes"},
+        }
+        await mock._converting_callback(msg)
+
+        assert len(received) == 1
+        assert received[0]["_type"] == "SomeFutureMessageType"
+        storage_manager.append_message.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_sdk_tagged_message_matches_direct_construction(self):
+        from backend.models.messages import MessageRecord
+        from backend.raw_replay import reconstruct_sdk_message
+        from backend.tests.test_synthetic_fixture_freshness import _strip_nondeterministic
+
+        received = []
+
+        async def on_message(msg):
+            received.append(msg)
+
+        mock = MockClaudeSDK(
+            session_id="test-unify",
+            working_directory="/tmp/test",
+            session_dir=str(FIXTURES_DIR / "single_turn"),
+            message_callback=on_message,
+            speed_factor=0.0,
+        )
+
+        sdk_msg = {
+            "_type": "AssistantMessage",
+            "timestamp": 1000012.5,
+            "session_id": "test-unify",
+            "data": {
+                "content": [{"text": "I'm doing well! How can I help you today?"}],
+                "model": "claude-sonnet-4-5-20250929",
+            },
+        }
+        await mock._converting_callback(sdk_msg)
+        assert len(received) == 1
+        via_callback = dict(received[0])
+
+        sdk_obj = reconstruct_sdk_message(sdk_msg["_type"], sdk_msg["data"])
+        expected = MessageRecord.from_sdk_message(sdk_obj, session_id="test-unify").to_dict()
+
+        # message_id/timestamp are freshly minted per call (the only fields
+        # expected to differ between two independent calls to the same underlying
+        # construction path) — reuse the same nondeterministic-key stripping the
+        # fixture-freshness check already established, rather than a second
+        # independent list of the same keys.
+        assert _strip_nondeterministic(via_callback) == _strip_nondeterministic(expected)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "fixture_name", ["hook_messages", "multi_turn", "permission_flow", "single_turn", "tool_use"]
+    )
+    async def test_fixture_round_trips_to_canonical_shape(self, fixture_name, tmp_path):
+        """Replaying each non-raw_log.jsonl fixture through MockClaudeSDK into a
+        fresh storage manager, then reading it back via the real
+        SessionCoordinator.get_session_messages(), must yield only canonical
+        MessageRecord shapes for every `_type`-tagged source record — the gap
+        (production can't generate the legacy shape these fixtures used to produce)
+        that motivated this unification."""
+        from backend.data_storage import DataStorageManager
+        from backend.session_coordinator import SessionCoordinator
+
+        session_id = "test-roundtrip"
+        coordinator = SessionCoordinator(tmp_path)
+        storage_manager = DataStorageManager(tmp_path / "session_data")
+        await storage_manager.initialize()
+        coordinator._storage_managers[session_id] = storage_manager
+
+        mock = MockClaudeSDK(
+            session_id=session_id,
+            working_directory=str(tmp_path),
+            session_dir=str(FIXTURES_DIR / fixture_name),
+            storage_manager=storage_manager,
+            message_callback=lambda msg: None,
+            speed_factor=0.0,
+        )
+        await mock.start()
+        # Drive every remaining segment through send_message so the whole
+        # fixture (not just segment 0, skipped like client_launched is in
+        # production) gets replayed and stored. Each call injects its own
+        # synthetic "continue" user message through the same canonical-record
+        # path (counts toward canonical_records below); a permission-response
+        # action auto-advances a further segment within the SAME call via
+        # _handle_pending_permissions(), so the number of calls actually needed
+        # is tracked by segment_cursor, not precomputed from segment_count.
+        continue_calls = 0
+        while mock._engine._segment_cursor < mock._recording.get_segment_count():
+            await mock.send_message("continue")
+            continue_calls += 1
+
+        # Segment 0 is never replayed (mirrors production skipping
+        # client_launched) — only count `_type`-tagged records in the segments
+        # that actually get driven through send_message above.
+        replayed_segments = mock._recording.segments[1:]
+        type_tagged_count = sum(
+            1 for segment in replayed_segments for rec in segment if rec.get("_type")
+        )
+        # Each non-guidance permission action fires one extra pass-through
+        # record (the recorded permission_response) via
+        # _handle_pending_permissions() — see mock_sdk.py.
+        permission_action_count = sum(
+            1
+            for i in range(mock._recording.get_action_count())
+            for action in [mock._recording.get_expected_action(i)]
+            if action in (
+                ActionType.PERMISSION_ALLOW,
+                ActionType.PERMISSION_ALLOW_WITH_SUGGESTIONS,
+                ActionType.PERMISSION_DENY,
+            )
+        )
+
+        result = await coordinator.get_session_messages(session_id)
+        canonical_records = [
+            m for m in result["messages"] if "_type" not in m and m.get("message_id")
+        ]
+        # Exact count: every `_type`-tagged source record, plus the injected
+        # "continue" message per send_message() call above, plus one pass-through
+        # record per non-guidance permission action, plus the single
+        # replay_complete system marker _emit_replay_complete() fires once all
+        # segments are consumed (only when at least one send_message() call ran)
+        # — an exact equality here (rather than a lower bound) is what actually
+        # proves no replayed record is silently dropped.
+        expected_count = (
+            type_tagged_count
+            + continue_calls
+            + permission_action_count
+            + (1 if continue_calls else 0)
+        )
+        assert len(canonical_records) == expected_count, (
+            f"Expected exactly {expected_count} canonical MessageRecord-shaped "
+            f"records for fixture {fixture_name!r}, got {len(canonical_records)}"
+        )
+        # None of the replayed records should retain the legacy _type/data shape —
+        # that's precisely the shape this unification eliminates.
+        assert not any("_type" in m for m in result["messages"])
 
 
 # ─────────────────────────────────────────────────

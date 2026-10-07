@@ -89,7 +89,11 @@ KNOWN_UNHANDLED_SDK_TYPES: dict[str, str] = {}
 
 
 def _reconstruct_content_block(block: dict[str, Any]) -> Any:
-    keys = set(block.keys())
+    # Issue #2084 stage 3-E: a redundant "type" discriminator key alongside an
+    # otherwise-fully-recognized shape isn't itself an unrecognized shape — tolerate
+    # it specifically. Does NOT loosen strictness for genuinely unknown shapes (see
+    # test_reconstruct_content_block_rejects_unknown_shape, which proves that).
+    keys = set(block.keys()) - {"type"}
     if keys == {"text"}:
         return TextBlock(text=block["text"])
     if keys == {"thinking", "signature"}:
@@ -106,7 +110,7 @@ def _reconstruct_content_block(block: dict[str, Any]) -> Any:
         )
     if keys == {"tool_use_id", "content"}:
         return ServerToolResultBlock(tool_use_id=block["tool_use_id"], content=block["content"])
-    raise ValueError(f"Unrecognized content block shape in raw_log: {sorted(keys)}")
+    raise ValueError(f"Unrecognized content block shape in raw_log: {sorted(block.keys())}")
 
 
 def reconstruct_sdk_message(_type: str, data: dict[str, Any]) -> Any:
