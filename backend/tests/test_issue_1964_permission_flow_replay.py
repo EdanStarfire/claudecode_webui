@@ -28,7 +28,7 @@ from pathlib import Path
 import pytest
 
 from backend.mock_sdk import ActionType, MockClaudeSDK, SessionRecording
-from backend.models.messages import ToolState
+from backend.models.messages import MessageRecord, PermissionInfo, ToolState
 from backend.web_server import BackendApp
 from shared.event_queue import EventQueue
 
@@ -165,13 +165,13 @@ async def test_issue_1964_permission_response_deny_transitions_tool_call_to_deni
 
 
 @pytest.mark.asyncio
-async def test_issue_1964_permission_response_missing_tool_use_id_falls_back_to_unique_awaiting(tmp_path):
-    """A permission_response lacking tool_use_id (e.g. an older/malformed fixture)
-    must still resolve when exactly one tool call in the session is awaiting
-    permission — signature-matching can't help here since PermissionResponseHandler
-    never populates metadata['input_params']."""
+async def test_issue_1964_permission_response_missing_tool_use_id_resolves_by_request_id(tmp_path):
+    """Issue #2109 (AC6): a permission_response lacking tool_use_id (e.g. an
+    older/malformed fixture) resolves via the ToolCall's request_id (set when it
+    transitioned to awaiting_permission) — not the deleted name+status fallback."""
     session_id = "sess-1964-fallback"
     tool_use_id = "toolu_fallback01"
+    request_id = "perm-req-fallback"
 
     webui = BackendApp(data_dir=tmp_path)
     webui.session_queues[session_id] = EventQueue()
@@ -183,10 +183,8 @@ async def test_issue_1964_permission_response_missing_tool_use_id_falls_back_to_
         input_params={"file_path": "/tmp/test.txt"},
         requires_permission=True,
     )
-    from backend.models.messages import PermissionInfo
-
     webui.coordinator.update_tool_call_permission_request(
-        session_id, tool_use_id, PermissionInfo(message="Allow Edit?")
+        session_id, tool_use_id, PermissionInfo(message="Allow Edit?"), request_id=request_id
     )
     assert tool_call.status == ToolState.AWAITING_PERMISSION
 
@@ -199,7 +197,7 @@ async def test_issue_1964_permission_response_missing_tool_use_id_falls_back_to_
         "metadata": {
             "tool_name": "Edit",
             "decision": "allow",
-            "request_id": "perm-req-fallback",
+            "request_id": request_id,
             # tool_use_id deliberately omitted
         },
     }
@@ -209,3 +207,72 @@ async def test_issue_1964_permission_response_missing_tool_use_id_falls_back_to_
     assert tool_call.status == ToolState.RUNNING
     statuses = _tool_call_statuses(webui.session_queues[session_id].events_since(0)[0], tool_use_id)
     assert statuses == ["running"]
+
+
+# ---------------------------------------------------------------------------
+# Issue #2109 (AC9): fixture-mirror envelope byte-equivalence with the live path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_issue_2109_fixture_mirror_envelope_matches_live_path_shape(tmp_path):
+    """The fixture-mirror permission_request/permission_response branches in
+    `BackendApp._emit_tool_call_updates()` must build their envelope the same way the
+    live path (permission_service.py) does — via `MessageRecord.from_tool_call()` —
+    not a raw `to_dict()` plus manual `type`/`request_id` stamping. Compares the
+    mirror's emitted envelope key set directly against a live-path equivalent built
+    for the same ToolCall transition."""
+    session_id = "sess-2109-ac9"
+    live_tool_use_id = "toolu_ac9_live"
+    mirror_tool_use_id = "toolu_ac9_mirror"
+    request_id = "perm-req-ac9"
+
+    webui = BackendApp(data_dir=tmp_path)
+    webui.session_queues[session_id] = EventQueue()
+
+    # Live-path equivalent: exactly what permission_service.py's request phase builds.
+    webui.coordinator.create_tool_call(
+        session_id=session_id,
+        tool_use_id=live_tool_use_id,
+        name="Edit",
+        input_params={"file_path": "/x.py"},
+        requires_permission=True,
+    )
+    updated_live = webui.coordinator.update_tool_call_permission_request(
+        session_id, live_tool_use_id, PermissionInfo(message="Allow Edit?"), request_id=request_id
+    )
+    live_envelope = MessageRecord.from_tool_call(updated_live).to_dict()
+
+    # Mirror path: fixture replay through _emit_tool_call_updates()'s permission_request branch.
+    webui.coordinator.create_tool_call(
+        session_id=session_id,
+        tool_use_id=mirror_tool_use_id,
+        name="Edit",
+        input_params={"file_path": "/x.py"},
+        requires_permission=True,
+    )
+    mirror_message_data = {
+        "type": "permission_request",
+        "metadata": {
+            "tool_use_id": mirror_tool_use_id,
+            "tool_name": "Edit",
+            "request_id": request_id,
+        },
+    }
+    await webui._emit_tool_call_updates(session_id, mirror_message_data)
+    queue, _, _ = webui.session_queues[session_id].events_since(0)
+    mirror_envelope = next(
+        entry["data"] for entry in queue
+        if entry.get("type") == "tool_call" and entry["data"].get("tool_use_id") == mirror_tool_use_id
+    )
+
+    # Same shape: both constructed via MessageRecord.from_tool_call(), not independently.
+    assert set(live_envelope.keys()) == set(mirror_envelope.keys())
+    assert live_envelope["type"] == mirror_envelope["type"] == "tool_call"
+    # request_id comes from ToolCall.request_id via to_dict() on both paths, not a
+    # manual stamp — equal because both transitions used the same request_id.
+    assert live_envelope["request_id"] == mirror_envelope["request_id"] == request_id
+    # message_id is present on both (MessageRecord.from_tool_call always mints one) —
+    # the exact AC9 gap (raw to_dict() + manual stamping) never carried this field.
+    assert live_envelope["message_id"]
+    assert mirror_envelope["message_id"]

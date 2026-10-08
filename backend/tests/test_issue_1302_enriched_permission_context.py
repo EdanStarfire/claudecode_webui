@@ -45,7 +45,6 @@ def _make_coordinator(session_id: str) -> MagicMock:
     event = asyncio.Event()
 
     coord.get_tool_call_by_id.side_effect = lambda sid, tuid: None
-    coord.find_tool_call_by_signature.side_effect = lambda sid, name, params: None
     coord.get_tool_call_event.side_effect = lambda sid: event
     coord.is_uploaded_file.side_effect = lambda sid, path: False
     coord.session_manager = MagicMock()
