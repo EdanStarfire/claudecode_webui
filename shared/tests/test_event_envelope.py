@@ -68,7 +68,6 @@ SAMPLE_EVENTS_BY_TYPE = {
     "tool_call": {"type": "tool_call", "session_id": "s1", "data": {}},
     "resource_removed": {"type": "resource_removed", "resource_id": "r1"},
     "proxy_event": {"type": "proxy_event", "data": {}},
-    "migration_notice": {"type": "migration_notice", "session_id": "s1", "message": "upgraded"},
 }
 
 

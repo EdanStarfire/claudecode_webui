@@ -33,9 +33,7 @@ def _make_webui(tmp_path):
     from backend.web_server import BackendApp
 
     webui = BackendApp(data_dir=tmp_path)
-    processor = MagicMock()
-    processor.prepare_for_websocket.return_value = {"type": "result"}
-    webui._message_processor = processor
+    webui._message_processor = MagicMock()
     webui._emit_tool_call_updates = AsyncMock()
     return webui
 
@@ -115,8 +113,6 @@ async def test_issue_952_no_context_update_on_non_result_message(tmp_path):
         "percentage": 5.0,
     })
 
-    # Override prepare_for_websocket to return non-result type
-    webui._message_processor.prepare_for_websocket.return_value = {"type": "assistant"}
     webui.session_queues[session_id] = EventQueue()
 
     callback = webui._create_message_callback(session_id)
