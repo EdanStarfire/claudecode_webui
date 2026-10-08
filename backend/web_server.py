@@ -846,6 +846,32 @@ class BackendApp:
                             f"(parent_tool_use_id={message_data['parent_tool_use_id']})"
                         )
                         return
+
+                    # Issue #2109 (AC2): create a pending ToolCall as soon as the SDK tells
+                    # us a tool_use block has started, instead of waiting for the full
+                    # assembled assistant message (closing the gap the frontend's own
+                    # early-card synthesis currently papers over).
+                    tool_use_pending = message_data.get("tool_use_pending")
+                    if tool_use_pending and tool_use_pending.get("tool_use_id") and tool_use_pending.get("name"):
+                        tool_call = self.coordinator.create_tool_call(
+                            session_id=session_id,
+                            tool_use_id=tool_use_pending["tool_use_id"],
+                            name=tool_use_pending["name"],
+                            input_params={},
+                            turn_id=message_data.get("turn_id"),
+                        )
+                        if session_id in self.session_queues:
+                            tool_call_data = MessageRecord.from_tool_call(tool_call).to_dict()
+                            emit(
+                                self.session_queues[session_id], QUEUE_SESSION, "tool_call",
+                                {
+                                    "session_id": session_id,
+                                    "data": tool_call_data,
+                                    "timestamp": datetime.now(UTC).isoformat(),
+                                },
+                                scope=session_id,
+                            )
+
                     if session_id in self.session_queues:
                         emit(
                             self.session_queues[session_id], QUEUE_SESSION, "assistant_delta",
@@ -957,15 +983,26 @@ class BackendApp:
                     input_params = tool_use.get('input', {})
 
                     if tool_id and tool_name:
-                        tool_call = self.coordinator.create_tool_call(
-                            session_id=session_id,
-                            tool_use_id=tool_id,
-                            name=tool_name,
-                            input_params=input_params,
-                            requires_permission=False,  # Will be updated if permission is requested
-                            parent_tool_use_id=parent_tool_use_id,
-                            turn_id=turn_id,
-                        )
+                        # Issue #2109 (AC2): a pending record may already exist from
+                        # content_block_start — fill in its input rather than
+                        # double-creating. Fixture replay / non-streaming paths never
+                        # see a pending record, so they fall back to create_tool_call
+                        # exactly as before.
+                        existing = self.coordinator._get_active_tool_call(session_id, tool_id)
+                        if existing is not None:
+                            tool_call = self.coordinator.update_tool_call_input(
+                                session_id, tool_id, input_params
+                            )
+                        else:
+                            tool_call = self.coordinator.create_tool_call(
+                                session_id=session_id,
+                                tool_use_id=tool_id,
+                                name=tool_name,
+                                input_params=input_params,
+                                requires_permission=False,  # Will be updated if permission is requested
+                                parent_tool_use_id=parent_tool_use_id,
+                                turn_id=turn_id,
+                            )
 
                         tool_call_data = MessageRecord.from_tool_call(tool_call).to_dict()
 

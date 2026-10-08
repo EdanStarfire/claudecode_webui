@@ -292,6 +292,11 @@ async def test_emission_order_envelope_before_tool_call_pending(tmp_path):
         call_order.append(("mark_assistant_message_emitted", mid))
 
     coordinator.mark_assistant_message_emitted.side_effect = _mark
+    # Issue #2109 (AC2): no content_block_start pending record exists for this test's
+    # tool_use_id — an unconfigured MagicMock would otherwise be truthy and make
+    # _emit_tool_call_updates take the update_tool_call_input branch instead of
+    # create_tool_call, which is what this test is actually exercising.
+    coordinator._get_active_tool_call.return_value = None
 
     def _create_tool_call(**kwargs):
         call_order.append(("create_tool_call", kwargs["tool_use_id"]))
