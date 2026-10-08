@@ -72,7 +72,6 @@ def _make_coordinator(session_id: str) -> MagicMock:
     emitted_turn_ids: set[str] = set()
 
     coord.get_tool_call_event.side_effect = lambda sid: tool_call_event
-    coord.find_tool_call_by_signature.side_effect = lambda sid, name, params: tool_calls.get(name)
     coord.is_uploaded_file.side_effect = lambda sid, path: False
     coord.get_message_emitted_event.side_effect = lambda sid: message_emitted_event
     coord.is_assistant_message_emitted.side_effect = lambda sid, tid: tid in emitted_turn_ids
@@ -664,15 +663,23 @@ async def test_permission_barrier_skipped_when_turn_id_absent():
     """Zero behavior change: when the ToolCall has no turn_id (every existing
     test helper and call path today), the barrier must not be touched at all."""
     session_id = "sess-1694-noop"
+    tool_use_id = "tu_1694_noop"
     coord = _make_coordinator(session_id)
     tc = _make_tool_call(session_id, "Read", {"file_path": "/foo.txt"})  # turn_id=None
+    tc.tool_use_id = tool_use_id
     coord._tool_calls["Read"] = tc
+    coord.get_tool_call_by_id = MagicMock(side_effect=lambda sid, tuid: tc if tuid == tool_use_id else None)
     coord.update_tool_call_permission_request = MagicMock(return_value=None)
     coord.session_manager = MagicMock()
     coord.session_manager.get_session_info = AsyncMock(
         return_value=MagicMock(current_permission_mode="default")
     )
     coord.session_manager.pause_session = AsyncMock()
+
+    ctx = MagicMock()
+    ctx.tool_use_id = tool_use_id
+    ctx.agent_id = None
+    ctx.suggestions = []
 
     from backend.permission_service import PermissionService
 
@@ -685,7 +692,7 @@ async def test_permission_barrier_skipped_when_turn_id_absent():
         mock_pr.return_value = MagicMock()
 
         cb = svc.create_permission_callback(session_id)
-        task = asyncio.create_task(cb("Read", {"file_path": "/foo.txt"}, None))
+        task = asyncio.create_task(cb("Read", {"file_path": "/foo.txt"}, ctx))
         await asyncio.sleep(0.05)
         task.cancel()
         try:

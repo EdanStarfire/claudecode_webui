@@ -35,7 +35,7 @@ from .analytics.database import AnalyticsDB
 from .analytics_store import AnalyticsStore
 from .application_service import ApplicationService
 from .message_parser import MessageParser, MessageProcessor
-from .models.messages import MessageRecord, PermissionInfo, ToolState
+from .models.messages import MessageRecord, PermissionInfo
 from .permission_service import PermissionService
 from .session_coordinator import SessionCoordinator
 from .skill_manager import SkillManager
@@ -1090,12 +1090,7 @@ class BackendApp:
             elif msg_type == 'permission_request':
                 tool_use_id = message_data.get('tool_use_id') or metadata.get('tool_use_id')
                 tool_name = message_data.get('tool_name') or metadata.get('tool_name', 'unknown')
-                if not tool_use_id:
-                    input_params = message_data.get('input_params') or metadata.get('input_params', {})
-                    tool_call = self.coordinator.find_tool_call_by_signature(
-                        session_id, tool_name, input_params
-                    )
-                    tool_use_id = tool_call.tool_use_id if tool_call else None
+                request_id = message_data.get('request_id') or metadata.get('request_id')
 
                 if tool_use_id:
                     permission_info = PermissionInfo(
@@ -1108,14 +1103,13 @@ class BackendApp:
                         description=message_data.get('description') or metadata.get('description'),
                     )
                     updated_tool_call = self.coordinator.update_tool_call_permission_request(
-                        session_id, tool_use_id, permission_info
+                        session_id, tool_use_id, permission_info, request_id=request_id
                     )
                     if updated_tool_call:
-                        tool_call_data = updated_tool_call.to_dict()
-                        tool_call_data["type"] = "tool_call"
-                        tool_call_data["request_id"] = (
-                            message_data.get('request_id') or metadata.get('request_id')
-                        )
+                        # Issue #2109 (AC9): same constructor every other tool_call envelope
+                        # uses — carries message_id; request_id now comes from
+                        # ToolCall.request_id via to_dict(), not a manual stamp.
+                        tool_call_data = MessageRecord.from_tool_call(updated_tool_call).to_dict()
 
                         if session_id in self.session_queues:
                             emit(
@@ -1134,20 +1128,11 @@ class BackendApp:
 
             elif msg_type == 'permission_response':
                 tool_use_id = message_data.get('tool_use_id') or metadata.get('tool_use_id')
-                tool_name = message_data.get('tool_name') or metadata.get('tool_name', 'unknown')
                 if not tool_use_id:
-                    # PermissionResponseHandler never populates metadata['input_params'] (a
-                    # response doesn't carry the original tool call's params) — matching by
-                    # signature against an always-empty dict would either never match or
-                    # collide with an unrelated tool call, so fall back to whichever tool in
-                    # the session is uniquely awaiting permission instead.
-                    awaiting = [
-                        tc for tc in self.coordinator.get_active_tool_calls(session_id)
-                        if tc.status == ToolState.AWAITING_PERMISSION
-                        and (tool_name == 'unknown' or tc.name == tool_name)
-                    ]
-                    if len(awaiting) == 1:
-                        tool_use_id = awaiting[0].tool_use_id
+                    request_id = message_data.get('request_id') or metadata.get('request_id')
+                    if request_id:
+                        tool_call = self.coordinator.get_tool_call_by_request_id(session_id, request_id)
+                        tool_use_id = tool_call.tool_use_id if tool_call else None
 
                 if tool_use_id:
                     decision = message_data.get('decision') or metadata.get('decision')
@@ -1160,8 +1145,7 @@ class BackendApp:
                         applied_updates=applied_updates or None,
                     )
                     if updated_tool_call:
-                        tool_call_data = updated_tool_call.to_dict()
-                        tool_call_data["type"] = "tool_call"
+                        tool_call_data = MessageRecord.from_tool_call(updated_tool_call).to_dict()
 
                         if session_id in self.session_queues:
                             emit(

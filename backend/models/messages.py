@@ -188,6 +188,11 @@ class ToolCall:
     # frontend anchoring of permission prompts to their owning bubble.
     turn_id: str | None = None
 
+    # Issue #2109 (AC6): set when this ToolCall transitions to awaiting_permission,
+    # so a later permission_response can find it back by request_id alone —
+    # no name+status fallback needed.
+    request_id: str | None = None
+
     # Issue #707: Auto-approval reason (set when suggestion-based auto-approval fires)
     auto_approved_reason: str | None = None
 
@@ -240,6 +245,10 @@ class ToolCall:
         # Issue #1694/#1958: Owning assistant turn id
         if self.turn_id is not None:
             result["turn_id"] = self.turn_id
+
+        # Issue #2109 (AC6): permission request_id for id-only correlation
+        if self.request_id is not None:
+            result["request_id"] = self.request_id
 
         # Issue #707: Auto-approval reason
         if self.auto_approved_reason is not None:
@@ -299,6 +308,7 @@ class ToolCall:
             # the turn id under the old ambiguous "message_id" key. Mirrors the equivalent
             # fallback for assistant messages in message_parser.py's turn_id restoration.
             turn_id=data.get("turn_id") or data.get("message_id"),
+            request_id=data.get("request_id"),
         )
 
     def with_status_update(self, **updates: Any) -> "ToolCall":

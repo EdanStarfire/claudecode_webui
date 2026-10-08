@@ -42,14 +42,26 @@ def _make_tool_call(session_id: str, name: str, input_params: dict) -> ToolCall:
     )
 
 
+def _make_context(name: str) -> MagicMock:
+    """A ToolPermissionContext stand-in carrying the tool_use_id _make_tool_call()
+    assigns for this tool name (Issue #2109: id-only correlation, no name+status
+    fallback)."""
+    ctx = MagicMock()
+    ctx.tool_use_id = f"tu_{name}"
+    ctx.agent_id = None
+    ctx.suggestions = []
+    return ctx
+
+
 def _make_coordinator() -> MagicMock:
     """Minimal mock SessionCoordinator: tool calls resolve immediately (no event.wait())."""
     coord = MagicMock()
     tool_calls: dict[str, ToolCall] = {}
 
-    coord.find_tool_call_by_signature.side_effect = (
-        lambda sid, name, params: tool_calls.get(name)
-    )
+    def _get_tool_call_by_id(sid: str, tuid: str) -> ToolCall | None:
+        return next((tc for tc in tool_calls.values() if tc.tool_use_id == tuid), None)
+
+    coord.get_tool_call_by_id.side_effect = _get_tool_call_by_id
     coord.is_uploaded_file.side_effect = lambda sid, path: False
     coord.update_tool_call_permission_request = MagicMock(return_value=None)
     coord._tool_calls = tool_calls
@@ -99,8 +111,8 @@ async def test_two_concurrent_requests_same_session_only_resumes_after_both_reso
         svc = PermissionService(coordinator=coord, session_queues={})
         cb = svc.create_permission_callback(session_id)
 
-        task1 = asyncio.create_task(cb("Read", {"file_path": "/a.txt"}, None))
-        task2 = asyncio.create_task(cb("Edit", {"file_path": "/b.py"}, None))
+        task1 = asyncio.create_task(cb("Read", {"file_path": "/a.txt"}, _make_context("Read")))
+        task2 = asyncio.create_task(cb("Edit", {"file_path": "/b.py"}, _make_context("Edit")))
 
         # Let both callbacks reach the "await permission_future" point.
         for _ in range(20):
@@ -159,7 +171,7 @@ async def test_single_request_still_resumes_session_on_resolve():
         svc = PermissionService(coordinator=coord, session_queues={})
         cb = svc.create_permission_callback(session_id)
 
-        task = asyncio.create_task(cb("Bash", {"command": "ls"}, None))
+        task = asyncio.create_task(cb("Bash", {"command": "ls"}, _make_context("Bash")))
         for _ in range(20):
             await asyncio.sleep(0.01)
             if svc.open_permission_count(session_id) == 1:
@@ -309,8 +321,8 @@ async def test_two_different_sessions_do_not_interact():
         cb_a = svc.create_permission_callback(session_a)
         cb_b = svc.create_permission_callback(session_b)
 
-        task_a = asyncio.create_task(cb_a("Read", {"file_path": "/a.txt"}, None))
-        task_b = asyncio.create_task(cb_b("Write", {"file_path": "/b.txt"}, None))
+        task_a = asyncio.create_task(cb_a("Read", {"file_path": "/a.txt"}, _make_context("Read")))
+        task_b = asyncio.create_task(cb_b("Write", {"file_path": "/b.txt"}, _make_context("Write")))
 
         for _ in range(20):
             await asyncio.sleep(0.01)
@@ -364,7 +376,7 @@ async def test_cancelled_await_still_releases_pending_by_session():
         svc = PermissionService(coordinator=coord, session_queues={})
         cb = svc.create_permission_callback(session_id)
 
-        task = asyncio.create_task(cb("Read", {"file_path": "/a.txt"}, None))
+        task = asyncio.create_task(cb("Read", {"file_path": "/a.txt"}, _make_context("Read")))
         for _ in range(20):
             await asyncio.sleep(0.01)
             if svc.open_permission_count(session_id) == 1:

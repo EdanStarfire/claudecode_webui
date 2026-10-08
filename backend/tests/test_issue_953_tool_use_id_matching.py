@@ -40,20 +40,13 @@ def _make_tool_call(session_id: str, tool_use_id: str, name: str, input_params: 
 
 
 def _make_coordinator(session_id: str, tool_use_id: str | None = None) -> MagicMock:
-    """Build a minimal mock SessionCoordinator with both lookup methods."""
+    """Build a minimal mock SessionCoordinator with the id-based lookup method."""
     coord = MagicMock()
     event = asyncio.Event()
     tool_calls_by_id: dict[str, ToolCall] = {}
 
     def get_tool_call_by_id(sid: str, tuid: str) -> ToolCall | None:
         return tool_calls_by_id.get(tuid)
-
-    def find_tool_call_by_signature(sid: str, name: str, params: dict) -> ToolCall | None:
-        # Return first match by name (simplified)
-        for tc in tool_calls_by_id.values():
-            if tc.name == name:
-                return tc
-        return None
 
     def get_tool_call_event(sid: str) -> asyncio.Event:
         return event
@@ -62,7 +55,6 @@ def _make_coordinator(session_id: str, tool_use_id: str | None = None) -> MagicM
         return False
 
     coord.get_tool_call_by_id.side_effect = get_tool_call_by_id
-    coord.find_tool_call_by_signature.side_effect = find_tool_call_by_signature
     coord.get_tool_call_event.side_effect = get_tool_call_event
     coord.is_uploaded_file.side_effect = is_uploaded_file
     coord._tool_calls_by_id = tool_calls_by_id
@@ -202,13 +194,12 @@ async def test_permission_callback_uses_direct_lookup_when_tool_use_id_present()
 
         # Direct lookup should have been called
         coord.get_tool_call_by_id.assert_called_with(session_id, tool_use_id)
-        # Signature matching should NOT have been called (direct lookup succeeded)
-        coord.find_tool_call_by_signature.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_permission_callback_falls_back_to_signature_when_no_tool_use_id():
-    """Without tool_use_id in context, signature matching is used as fallback."""
+async def test_permission_callback_auto_denies_when_no_tool_use_id():
+    """Issue #2109 (AC6): without tool_use_id in context, there is no name+status
+    fallback — the request phase auto-denies immediately rather than polling."""
     session_id = "sess-fallback"
     coord = _make_coordinator(session_id)
     tc = _make_tool_call(session_id, "tu_read_001", "Read", {"file_path": "/foo.txt"})
@@ -218,7 +209,7 @@ async def test_permission_callback_falls_back_to_signature_when_no_tool_use_id()
 
     svc = PermissionService(coordinator=coord, session_queues={})
 
-    # Context without tool_use_id (older SDK behavior)
+    # Context without tool_use_id (pre-#953 SDK behavior)
     ctx = _make_context(tool_use_id=None, agent_id=None)
 
     with (
@@ -233,18 +224,12 @@ async def test_permission_callback_falls_back_to_signature_when_no_tool_use_id()
         )
 
         cb = svc.create_permission_callback(session_id)
-        task = asyncio.create_task(cb("Read", {"file_path": "/foo.txt"}, ctx))
-        await asyncio.sleep(0.1)
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
+        result = await cb("Read", {"file_path": "/foo.txt"}, ctx)
 
         # Direct lookup should NOT have been called (no tool_use_id)
         coord.get_tool_call_by_id.assert_not_called()
-        # Signature matching should have been called as fallback
-        coord.find_tool_call_by_signature.assert_called()
+        # No ToolCall resolvable without tool_use_id -> auto-deny, no polling
+        assert result == {"behavior": "deny"}
 
 
 @pytest.mark.asyncio
@@ -338,7 +323,7 @@ async def test_direct_lookup_resolves_without_wait():
 
 @pytest.mark.asyncio
 async def test_permission_callback_with_none_context():
-    """Passing None as context doesn't crash; falls back to signature matching."""
+    """Passing None as context doesn't crash; auto-denies (no tool_use_id to resolve)."""
     session_id = "sess-none-ctx"
     coord = _make_coordinator(session_id)
 

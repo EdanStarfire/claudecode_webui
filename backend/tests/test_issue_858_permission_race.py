@@ -47,14 +47,10 @@ def _make_coordinator(session_id: str) -> MagicMock:
     def get_tool_call_event(sid: str) -> asyncio.Event:
         return event
 
-    def find_tool_call_by_signature(sid: str, name: str, params: dict):
-        return tool_calls.get(name)
-
     def is_uploaded_file(sid: str, path: str) -> bool:
         return False
 
     coord.get_tool_call_event.side_effect = get_tool_call_event
-    coord.find_tool_call_by_signature.side_effect = find_tool_call_by_signature
     coord.is_uploaded_file.side_effect = is_uploaded_file
     coord._tool_calls = tool_calls
     coord._event = event
@@ -67,15 +63,25 @@ def _make_coordinator(session_id: str) -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_issue_858_immediate_find():
-    """Tool call already in _active_tool_calls when permission fires — no event.wait()."""
+    """Tool call already active (by tool_use_id) when permission fires — no event.wait()."""
     session_id = "sess-immediate"
     coord = _make_coordinator(session_id)
+    tool_use_id = "tu_Read"
     tc = _make_tool_call(session_id, "Read", {"file_path": "/foo.txt"})
-    coord._tool_calls["Read"] = tc
+    tc.tool_use_id = tool_use_id
+    coord._tool_calls[tool_use_id] = tc
+    coord.get_tool_call_by_id = MagicMock(side_effect=lambda sid, tuid: coord._tool_calls.get(tuid))
+
+    ctx = MagicMock()
+    ctx.tool_use_id = tool_use_id
+    ctx.agent_id = None
+    ctx.suggestions = []
 
     mock_session_info = MagicMock()
     mock_session_info.current_permission_mode = "default"
     coord.session_manager = MagicMock()
+    coord.session_manager.get_session_info = AsyncMock(return_value=mock_session_info)
+    coord.update_tool_call_permission_request = MagicMock(return_value=None)
 
     with (
         patch("backend.permission_service.PermissionRequestMessage"),
@@ -92,7 +98,7 @@ async def test_issue_858_immediate_find():
         cb = svc.create_permission_callback(session_id)
 
         # Run callback; cancel after it reaches the future-await point
-        task = asyncio.create_task(cb("Read", {"file_path": "/foo.txt"}, None))
+        task = asyncio.create_task(cb("Read", {"file_path": "/foo.txt"}, ctx))
         await asyncio.sleep(0.05)
         task.cancel()
         try:
@@ -100,8 +106,8 @@ async def test_issue_858_immediate_find():
         except (asyncio.CancelledError, Exception):
             pass
 
-        # find_tool_call_by_signature must have been called at least once
-        coord.find_tool_call_by_signature.assert_called()
+        # Direct lookup by tool_use_id must have been called
+        coord.get_tool_call_by_id.assert_called_with(session_id, tool_use_id)
         # get_tool_call_event should NOT have been called (tool was found immediately)
         coord.get_tool_call_event.assert_not_called()
 
@@ -112,26 +118,34 @@ async def test_issue_858_immediate_find():
 
 @pytest.mark.asyncio
 async def test_issue_858_race_condition_resolved():
-    """find() returns None initially; tool call arrives 50ms later via event signal."""
+    """get_tool_call_by_id() returns None initially; tool call (by tool_use_id) arrives
+    50ms later via event signal, resolved by the retry built into the tool_use_id lookup."""
     session_id = "sess-race"
     coord = _make_coordinator(session_id)
+    tool_use_id = "tu_Edit"
 
     call_count = 0
     tc = _make_tool_call(session_id, "Edit", {"file_path": "/bar.py"})
+    tc.tool_use_id = tool_use_id
 
-    def find_side_effect(sid, name, params):
+    def get_tool_call_by_id(sid, tuid):
         nonlocal call_count
         call_count += 1
-        return coord._tool_calls.get(name)
+        return coord._tool_calls.get(tuid)
 
-    coord.find_tool_call_by_signature.side_effect = find_side_effect
+    coord.get_tool_call_by_id = MagicMock(side_effect=get_tool_call_by_id)
 
     async def register_tool_call_after_delay():
         await asyncio.sleep(0.05)
-        coord._tool_calls["Edit"] = tc
+        coord._tool_calls[tool_use_id] = tc
         coord._event.set()
 
     asyncio.create_task(register_tool_call_after_delay())
+
+    ctx = MagicMock()
+    ctx.tool_use_id = tool_use_id
+    ctx.agent_id = None
+    ctx.suggestions = []
 
     from backend.permission_service import PermissionService
 
@@ -152,7 +166,7 @@ async def test_issue_858_race_condition_resolved():
         start = asyncio.get_event_loop().time()
         cb = svc.create_permission_callback(session_id)
 
-        task = asyncio.create_task(cb("Edit", {"file_path": "/bar.py"}, None))
+        task = asyncio.create_task(cb("Edit", {"file_path": "/bar.py"}, ctx))
         await asyncio.sleep(0.3)
         task.cancel()
         try:
@@ -162,7 +176,7 @@ async def test_issue_858_race_condition_resolved():
 
         elapsed = asyncio.get_event_loop().time() - start
 
-        assert call_count >= 2, "Expected at least one retry after event signal"
+        assert call_count >= 2, "Expected a retry after event signal"
         assert elapsed < 1.0, "Should resolve well under 1 second"
 
 
@@ -392,16 +406,16 @@ async def test_issue_953_direct_lookup_skips_signature_matching():
             pass
 
     coord.get_tool_call_by_id.assert_called_with(session_id, tool_use_id)
-    coord.find_tool_call_by_signature.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
-# Test 8 (Issue #953): fallback to signature when tool_use_id is None
+# Test 8 (Issue #2109, AC6): no tool_use_id -> auto-deny, no name+status fallback
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_issue_953_fallback_to_signature_when_no_tool_use_id():
-    """When context.tool_use_id is None, signature matching is used (backward compat)."""
+async def test_issue_953_auto_denies_when_no_tool_use_id():
+    """When context.tool_use_id is None, there is no name+status fallback — the
+    request auto-denies immediately."""
     session_id = "sess-953-fallback"
     coord = _make_coordinator(session_id)
     tc = _make_tool_call(session_id, "Edit", {"file_path": "/y.py"})
@@ -429,13 +443,7 @@ async def test_issue_953_fallback_to_signature_when_no_tool_use_id():
         mock_pr.return_value = MagicMock()
 
         cb = svc.create_permission_callback(session_id)
-        task = asyncio.create_task(cb("Edit", {"file_path": "/y.py"}, ctx))
-        await asyncio.sleep(0.1)
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
+        result = await cb("Edit", {"file_path": "/y.py"}, ctx)
 
-    # With no tool_use_id, signature matching should be used
-    coord.find_tool_call_by_signature.assert_called()
+    coord.get_tool_call_by_id.assert_not_called()
+    assert result == {"behavior": "deny"}

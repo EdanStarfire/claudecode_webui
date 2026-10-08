@@ -4325,6 +4325,7 @@ class SessionCoordinator:
         session_id: str,
         tool_use_id: str,
         permission_info: PermissionInfo,
+        request_id: str | None = None,
         triggering_message: dict[str, Any] | None = None,
     ) -> ToolCall | None:
         """
@@ -4343,6 +4344,7 @@ class SessionCoordinator:
         tool_call.status = ToolState.AWAITING_PERMISSION
         tool_call.requires_permission = True
         tool_call.permission = permission_info
+        tool_call.request_id = request_id
         if tool_call.display:
             tool_call.display.state = ToolState.AWAITING_PERMISSION
             tool_call.display.style = "warning"
@@ -4598,10 +4600,6 @@ class SessionCoordinator:
 
         return interrupted
 
-    def get_active_tool_calls(self, session_id: str) -> list[ToolCall]:
-        """Get all active tool calls for a session."""
-        return list(self._active_tool_calls.get(session_id, {}).values())
-
     def get_tool_call_event(self, session_id: str) -> asyncio.Event:
         """Return (creating if necessary) the per-session tool-call notification event."""
         if session_id not in self._tool_call_events:
@@ -4644,71 +4642,15 @@ class SessionCoordinator:
         if tool_use_id in session_tools:
             del session_tools[tool_use_id]
 
-    def find_tool_call_by_signature(
-        self,
-        session_id: str,
-        tool_name: str,
-        input_params: dict[str, Any],
-    ) -> ToolCall | None:
-        """
-        Find a tool call by matching its signature (Issue #324).
-
-        Used to correlate permission requests with tool_use when tool_use_id
-        is not directly available. Creates a signature from tool name and
-        first significant input parameter.
-        """
-        import hashlib
-        import json
-
-        # Create signature similar to DisplayProjection._create_tool_signature
-        first_value = ""
-        for key, value in input_params.items():
-            if value and key not in ("_simulatedSedEdit",):
-                if isinstance(value, str):
-                    first_value = value[:100]
-                else:
-                    first_value = json.dumps(value)[:100]
-                break
-
-        param_hash = hashlib.md5(first_value.encode()).hexdigest()[:8]
-        target_signature = f"{tool_name}:{param_hash}"
-
-        # Search active tools for matching signature — collect all matches
-        # to handle parallel subagents with identical tool signatures.
-        session_tools = self._active_tool_calls.get(session_id, {})
-        matches = []
-        for tool_call in session_tools.values():
-            # Compute signature for this tool
-            tc_first_value = ""
-            for key, value in tool_call.input.items():
-                if value and key not in ("_simulatedSedEdit",):
-                    if isinstance(value, str):
-                        tc_first_value = value[:100]
-                    else:
-                        tc_first_value = json.dumps(value)[:100]
-                    break
-            tc_hash = hashlib.md5(tc_first_value.encode()).hexdigest()[:8]
-            tc_signature = f"{tool_call.name}:{tc_hash}"
-
-            if tc_signature == target_signature and tool_call.status in (
-                ToolState.PENDING,
-                ToolState.AWAITING_PERMISSION,
-            ):
-                matches.append(tool_call)
-
-        if len(matches) == 1:
-            return matches[0]
-        elif len(matches) > 1:
-            # Multiple signature matches (parallel subagents with same tool).
-            # Return the most recently created one — the permission callback
-            # fires shortly after the tool is created.
-            matches.sort(key=lambda tc: tc.created_at, reverse=True)
-            coord_logger.debug(
-                f"Signature collision: {len(matches)} matches for {target_signature}, "
-                f"selecting most recent (created_at={matches[0].created_at})"
-            )
-            return matches[0]
-
+    def get_tool_call_by_request_id(self, session_id: str, request_id: str) -> ToolCall | None:
+        """Lookup of an active tool call awaiting permission by its request_id
+        (Issue #2109, AC6). Scoped to AWAITING_PERMISSION so a duplicate/replayed
+        permission_response sharing a stale request_id can't re-resolve a tool call
+        that already moved on to running/denied — request_id is never cleared off
+        the ToolCall once set, so an unscoped match would still find it."""
+        for tool_call in self._active_tool_calls.get(session_id, {}).values():
+            if tool_call.request_id == request_id and tool_call.status == ToolState.AWAITING_PERMISSION:
+                return tool_call
         return None
 
     async def _store_processed_message(self, session_id: str, message_data: dict[str, Any]):
