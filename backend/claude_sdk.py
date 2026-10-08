@@ -1795,6 +1795,17 @@ class ClaudeSDK:
                         tool_use_id = state.get("tool_use_id_by_index", {}).get(idx)
                         if tool_use_id:
                             payload["tool_use_id"] = tool_use_id
+
+                # Issue #2109 (AC2): surface enough to let the pending record be
+                # created now — input is filled in later via input_json_delta /
+                # the full assembled message, not here.
+                if event_type == "content_block_start":
+                    content_block = event.get("content_block", {})
+                    if content_block.get("type") == "tool_use":
+                        payload["tool_use_pending"] = {
+                            "tool_use_id": content_block.get("id"),
+                            "name": content_block.get("name"),
+                        }
                 return payload
 
             # Handle dict-like objects (for backward compatibility)

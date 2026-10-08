@@ -3236,6 +3236,12 @@ class SessionCoordinator:
         try:
             coord_logger.info(f"Restarting session {session_id}")
 
+            # Issue #2109 (AC1): mark open tools interrupted on restart, same as
+            # terminate_session/interrupt_session already do — a tool left open
+            # across a restart previously had no stored terminal record.
+            self._mark_tools_orphaned(session_id)
+            self.mark_session_tools_interrupted(session_id)
+
             # Get current SDK if it exists
             sdk = self._active_sdks.get(session_id)
             if sdk:
@@ -3281,11 +3287,20 @@ class SessionCoordinator:
                 coord_logger.info(f"Session {session_id} restarted successfully")
             else:
                 logger.error(f"Failed to restart session {session_id}")
+                # Issue #2109 (AC1) follow-up: a failed restart means start_session's
+                # early-return paths never sent a follow-up message that could
+                # consume the pending orphan delta _mark_tools_orphaned() stashed
+                # above — drop it now rather than let it leak into whatever
+                # unrelated message for this session comes next (mirrors
+                # terminate_session's unconditional pop, which exists for the same
+                # "no follow-up message will ever consume this" reason).
+                self._pending_orphan_deltas.pop(session_id, None)
 
             return success
 
         except Exception:
             logger.exception(f"Failed to restart session {session_id}")
+            self._pending_orphan_deltas.pop(session_id, None)
             return False
 
     async def reset_session(self, session_id: str, permission_callback: Callable | None = None, _from_queue_processor: bool = False) -> bool:
@@ -4490,6 +4505,39 @@ class SessionCoordinator:
         if hasattr(self, '_watchdog') and self._watchdog is not None:
             outcome = "failed" if is_error else "completed"
             self._watchdog.record_tool_outcome(session_id, tool_use_id, outcome)
+
+        return tool_call
+
+    def update_tool_call_input(
+        self,
+        session_id: str,
+        tool_use_id: str,
+        input_params: dict[str, Any],
+    ) -> ToolCall | None:
+        """
+        Fill in the real input on a ToolCall created early, at content_block_start
+        (Issue #2109, AC2). Returns the updated ToolCall, or None if no pending
+        record exists yet for this tool_use_id (the non-streaming/fallback caller
+        should create one fresh instead).
+        """
+        tool_call = self._get_active_tool_call(session_id, tool_use_id)
+        if not tool_call:
+            return None
+
+        tool_call.input = input_params
+
+        # Issue #858: the legacy signature-matching permission fallback hashes
+        # tool_call.input — it just changed from {} to the real input, so any
+        # waiter blocked on this event needs to re-check now, exactly like
+        # create_tool_call() already does for a brand-new ToolCall.
+        if session_id in self._tool_call_events:
+            self._tool_call_events[session_id].set()
+
+        coord_logger.debug(
+            f"Filled in input for ToolCall {tool_use_id} in session {session_id}"
+        )
+
+        self._schedule_tool_call_update_storage(session_id, tool_call)
 
         return tool_call
 

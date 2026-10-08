@@ -267,6 +267,147 @@ class TestSessionCoordinator:
             assert session_id not in coordinator._error_callbacks
 
     @pytest.mark.asyncio
+    async def test_issue_2109_restart_session_marks_open_tools_interrupted(
+        self, temp_coordinator, sample_session_config
+    ):
+        """AC1 (#2109): restart_session must mark open tools interrupted, mirroring
+        terminate_session/interrupt_session — previously a tool left open across a
+        restart was silently dropped with no stored terminal record."""
+        from backend.models.messages import ToolState
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        tool_call = coordinator.create_tool_call(
+            session_id=session_id,
+            tool_use_id="tu-restart-1",
+            name="Bash",
+            input_params={"command": "sleep 100"},
+        )
+        assert tool_call.status == ToolState.PENDING
+
+        broadcast_callback = Mock()
+        coordinator.add_tool_call_broadcast_callback(broadcast_callback)
+
+        with patch.object(coordinator, 'start_session', AsyncMock(return_value=True)):
+            success = await coordinator.restart_session(session_id)
+
+        assert success is True
+        assert tool_call.status == ToolState.INTERRUPTED
+        # Issue #520: broadcast fires, same as terminate_session/interrupt_session.
+        broadcast_callback.assert_called_once()
+        broadcast_session_id, broadcast_data = broadcast_callback.call_args[0]
+        assert broadcast_session_id == session_id
+        assert broadcast_data["tool_use_id"] == "tu-restart-1"
+        # Active tool-call tracking is cleared after being marked interrupted.
+        assert coordinator._get_active_tool_call(session_id, "tu-restart-1") is None
+
+    @pytest.mark.asyncio
+    async def test_issue_2109_restart_session_failure_pops_stale_orphan_delta(
+        self, temp_coordinator, sample_session_config
+    ):
+        """AC1 (#2109) regression: when the post-mark start_session() call fails,
+        restart_session must drop the pending orphan delta _mark_tools_orphaned()
+        stashed at the top of the method — a failed restart sends no follow-up
+        message that could ever consume it, same reasoning as terminate_session's
+        unconditional pop. Left stale, it would get merged into whatever unrelated
+        message for this session comes next."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        # Seed the DisplayProjection's active-tools tracking directly so
+        # _mark_tools_orphaned() has something to orphan and actually stashes a
+        # delta into _pending_orphan_deltas (mirrors what real message flow would
+        # have produced, without needing a full StoredMessage round-trip).
+        projection = coordinator._get_display_projection(session_id)
+        projection._active_tools.add("tu-restart-fail-1")
+
+        with patch.object(coordinator, 'start_session', AsyncMock(return_value=False)):
+            success = await coordinator.restart_session(session_id)
+
+        assert success is False
+        assert session_id not in coordinator._pending_orphan_deltas
+
+    @pytest.mark.asyncio
+    async def test_issue_2109_update_tool_call_input_fills_existing_and_persists(
+        self, temp_coordinator, sample_session_config
+    ):
+        """AC2 (#2109): update_tool_call_input fills in the real input on a ToolCall
+        created early at content_block_start (with empty input), and persists the
+        update, without touching its status."""
+        from backend.models.messages import ToolState
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        tool_call = coordinator.create_tool_call(
+            session_id=session_id,
+            tool_use_id="tu-input-1",
+            name="Bash",
+            input_params={},
+        )
+        assert tool_call.input == {}
+
+        mock_storage = AsyncMock()
+        coordinator._storage_managers[session_id] = mock_storage
+
+        updated = coordinator.update_tool_call_input(
+            session_id, "tu-input-1", {"command": "echo hi"}
+        )
+
+        assert updated is tool_call
+        assert updated.input == {"command": "echo hi"}
+        assert updated.status == ToolState.PENDING
+
+        await asyncio.sleep(0)  # let the fire-and-forget storage write run
+        mock_storage.append_message.assert_awaited_once()
+        stored = mock_storage.append_message.call_args[0][0]
+        assert stored["tool_use_id"] == "tu-input-1"
+        assert stored["input"] == {"command": "echo hi"}
+
+    @pytest.mark.asyncio
+    async def test_issue_2109_update_tool_call_input_wakes_tool_call_event(
+        self, temp_coordinator, sample_session_config
+    ):
+        """AC2 (#2109) regression: update_tool_call_input must fire the Issue #858
+        per-session tool_call_event, same as create_tool_call. permission_service's
+        legacy signature-matching fallback hashes tool_call.input, so a pending
+        stub's real input arriving only via update_tool_call_input (not a fresh
+        create_tool_call) must still wake any waiter — otherwise a permission
+        request with no tool_use_id can stall for the full timeout and auto-deny."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        # Pending stub created with empty input, exactly like the content_block_start
+        # path does, clearing the event the way create_tool_call's own .set() would
+        # have left it (so this test isolates update_tool_call_input's own wake-up).
+        coordinator.create_tool_call(
+            session_id=session_id,
+            tool_use_id="tu-wake-1",
+            name="Bash",
+            input_params={},
+        )
+        event = coordinator.get_tool_call_event(session_id)
+        event.clear()
+        assert not event.is_set()
+
+        coordinator.update_tool_call_input(session_id, "tu-wake-1", {"command": "echo hi"})
+
+        assert event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_issue_2109_update_tool_call_input_returns_none_when_untracked(
+        self, temp_coordinator, sample_session_config
+    ):
+        """AC2 (#2109): update_tool_call_input returns None when no pending record
+        exists yet for the tool_use_id — the caller should create one fresh instead."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        result = coordinator.update_tool_call_input(session_id, "tu-never-created", {"x": 1})
+        assert result is None
+
+    @pytest.mark.asyncio
     async def test_issue_1933_terminate_session_skips_thread_dispatch_when_no_tmp_dir(
         self, temp_coordinator, sample_session_config
     ):

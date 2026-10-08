@@ -900,6 +900,55 @@ class TestClaudeSDK:
         }))
         assert delta_after_stop.get("tool_use_id") is None
 
+    # --- Issue #2109 (AC2): tool_use_pending stamped at content_block_start ---
+
+    def test_issue_2109_content_block_start_stamps_tool_use_pending(self, sdk_instance):
+        """AC2: content_block_start for a tool_use block stamps tool_use_pending with
+        tool_use_id/name, so the server can create a pending ToolCall before the full
+        assistant message is assembled."""
+        from claude_agent_sdk import StreamEvent
+
+        def se(event_dict):
+            return StreamEvent(uuid="u6", session_id=sdk_instance.session_id, event=event_dict)
+
+        sdk_instance._convert_sdk_message(se({"type": "message_start", "message": {"id": "msg_pending"}}))
+        converted = sdk_instance._convert_sdk_message(se({
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_pending1", "name": "Bash"},
+        }))
+        assert converted["tool_use_pending"] == {"tool_use_id": "toolu_pending1", "name": "Bash"}
+
+    def test_issue_2109_content_block_start_non_tool_use_no_pending(self, sdk_instance):
+        """AC2: a content_block_start for a non-tool_use block (e.g. text) must not
+        stamp tool_use_pending."""
+        from claude_agent_sdk import StreamEvent
+
+        event = StreamEvent(
+            uuid="u7",
+            session_id=sdk_instance.session_id,
+            event={"type": "content_block_start", "index": 0, "content_block": {"type": "text"}},
+        )
+        converted = sdk_instance._convert_sdk_message(event)
+        assert "tool_use_pending" not in converted
+
+    def test_issue_2109_non_content_block_start_no_pending(self, sdk_instance):
+        """AC2: tool_use_pending is only stamped on content_block_start — a
+        content_block_delta for the same block must not carry it."""
+        from claude_agent_sdk import StreamEvent
+
+        def se(event_dict):
+            return StreamEvent(uuid="u8", session_id=sdk_instance.session_id, event=event_dict)
+
+        sdk_instance._convert_sdk_message(se({
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_pending2", "name": "Read"},
+        }))
+        delta = sdk_instance._convert_sdk_message(se({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": "{}"},
+        }))
+        assert "tool_use_pending" not in delta
+
     # --- Issue #1503: _check_consumer_alive watchdog tests ---
 
     @pytest.mark.asyncio
