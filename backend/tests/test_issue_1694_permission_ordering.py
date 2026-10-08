@@ -272,9 +272,7 @@ def _make_webui(tmp_path):
     from backend.web_server import BackendApp
 
     webui = BackendApp(data_dir=tmp_path)
-    processor = MagicMock()
-    processor.prepare_for_websocket.return_value = {"type": "assistant", "content": "hi"}
-    webui._message_processor = processor
+    webui._message_processor = MagicMock()
     return webui
 
 

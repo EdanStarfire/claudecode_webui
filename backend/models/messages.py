@@ -1074,7 +1074,7 @@ class DisplayProjection:
 
 
 # ============================================================
-# Canonical MessageRecord (Issue #2084 stage 3-A)
+# Canonical MessageRecord (Issue #2084 stage 3-A; live since stage 3-B)
 # ============================================================
 
 # Consumed by 3-B (new-session stamping) and 3-C (migration target) as the single
@@ -1205,7 +1205,9 @@ def _message_dict_to_record(
 @dataclass
 class MessageRecord:
     """Canonical message shape superseding `StoredMessage`'s 5 legacy writer shapes
-    (Issue #2084). Pure addition in stage 3-A — not wired into any live writer/reader yet.
+    (Issue #2084). Introduced as a pure addition in stage 3-A; the live, fully-wired
+    writer/reader shape for every session since stage 3-B (the legacy conversion path
+    itself was retired in stage 3-D-cutover, #2099).
 
     Reuses every existing field name (no JSON key renames); `sdk_uuid` is the one new field.
     """

@@ -1448,27 +1448,6 @@ class TestIssue1967CombinedTextAndToolUse:
         assert len(parsed.metadata["tool_uses"]) == 1
         assert parsed.metadata["tool_uses"][0]["id"] == "tool-4"
 
-    def test_live_replay_round_trip_preserves_tool_uses_and_turn_id(self):
-        """Issue #1958-style live/replay divergence check: a combined text+tool_use
-        parsed message must survive a prepare_for_storage() -> process_message(...,
-        source="storage") round trip with tool_uses and turn_id intact."""
-        processor = MessageProcessor(MessageParser())
-        message_data = self._combined_sdk_message_data()
-        message_data["message_id"] = "frame-uuid-combined"
-
-        parsed = processor.process_message(message_data, source="websocket")
-        assert parsed.metadata["tool_uses"], "sanity check: live parse captured tool_uses"
-        assert parsed.turn_id == "msg_combined_1"
-
-        stored = processor.prepare_for_storage(parsed)
-        stored["message_id"] = "frame-uuid-combined"
-
-        reparsed = processor.process_message(stored, source="storage")
-
-        assert reparsed.metadata["tool_uses"] == parsed.metadata["tool_uses"]
-        assert reparsed.turn_id == "msg_combined_1"
-
-
 class TestIssue2046SystemMessageInitDataPromotion:
     """Issue #2046 (folded into #2084 stage 3-B, §6): a live SystemMessage(subtype=
     "init")'s real SDK data (cwd, tools, model, permissionMode) must be promoted

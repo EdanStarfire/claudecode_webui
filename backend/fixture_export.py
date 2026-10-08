@@ -160,8 +160,8 @@ def _check_markers(raw_records: list[dict[str, Any]]) -> dict[str, bool]:
             # at event.data.type / event.data.metadata, not directly on event. Confirmed
             # against a real captured raw_log (2026-09-23): event.metadata is never populated
             # at the top level; event.data.metadata.comm is where a real comm delivery shows
-            # up (comm_router.py's `comm_metadata = {"comm": {...}}`, carried through by
-            # MessageProcessor.prepare_for_websocket()).
+            # up (comm_router.py's `comm_metadata = {"comm": {...}}`, passed straight through
+            # to MessageRecord.from_user_input()'s metadata param with no conversion step).
             event_data = (record.get("event") or {}).get("data") or {}
             event_metadata = event_data.get("metadata") or {}
             if "comm" in event_metadata:

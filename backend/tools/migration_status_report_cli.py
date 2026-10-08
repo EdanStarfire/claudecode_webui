@@ -80,8 +80,9 @@ def _bucket(report: PopulationReport, record_id: str, data: dict) -> None:
         report.quarantined_ids.append(record_id)
     else:
         # None (never attempted) or "completed" with a stale schema_version
-        # (shouldn't happen — complete_message_migration() sets both together —
-        # but bucketed as never_attempted rather than silently miscounted as OK).
+        # (shouldn't happen — SessionManager's now-deleted complete_message_migration()
+        # used to set both together — but bucketed as never_attempted rather than
+        # silently miscounted as OK).
         report.never_attempted += 1
 
 

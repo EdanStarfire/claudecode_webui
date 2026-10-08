@@ -668,9 +668,10 @@ manually-run or genuinely remote Backend instead.
 **Handlers**: `SystemMessageHandler`, `AssistantMessageHandler`, `UserMessageHandler`, `ResultMessageHandler`, `PermissionRequestHandler`, `PermissionResponseHandler`
 
 **MessageProcessor Methods**:
-- `process_message()`: Raw SDK message → ParsedMessage
-- `prepare_for_storage()`: ParsedMessage → JSON-serializable dict
-- `prepare_for_websocket()`: Format for the poll response
+- `process_message()`: Raw SDK message → ParsedMessage, consulted for its re-derived
+  `ParsedMessage` by `SessionCoordinator._compute_display_metadata_for_storage()` and
+  `_create_message_callback()` (latest-message tracking, permission-mode detection, the
+  Task registry feed, unread-state, analytics)
 
 #### `backend/data_storage.py` - **Persistent Storage**
 **Main Class**: `DataStorageManager`
@@ -884,15 +885,22 @@ For the complete endpoint reference with request/response details, see [.claude/
 ```
 1. ClaudeSDK (backend/) receives message from claude_agent_sdk
    ↓
-2. ClaudeSDK._conversation_loop() extracts message data
+2. ClaudeSDK builds the one canonical MessageRecord via MessageRecord.from_sdk_message()
+   (issue #2084 stage 3-B) — reused as-is for both the storage write and the live callback,
+   no separate MessageProcessor.process_message()/prepare_for_storage() conversion step
    ↓
-3. Calls message_callback (SessionCoordinator._create_message_callback, backend/web_server.py)
+3. display_hook (SessionCoordinator._compute_display_metadata_for_storage) computes display
+   metadata once and stamps it onto the record before it's persisted or delivered
    ↓
-4. MessageProcessor.process_message() normalizes to ParsedMessage
-   ↓
-5. SessionCoordinator stores via DataStorageManager.append_message()
-   ├─ MessageProcessor.prepare_for_storage() converts to dict
+4. SessionCoordinator stores record.to_dict() via DataStorageManager.append_message()
    └─ Writes to messages.jsonl
+   ↓
+5. ClaudeSDK invokes message_callback with that same record.to_dict() — in production this
+   is SessionCoordinator._create_message_callback (backend/session_coordinator.py:4747), the
+   method actually registered as ClaudeSDK's message_callback. BackendApp._create_message_callback
+   (backend/web_server.py:833) is a separate, differently-behaving method: it's registered as a
+   downstream subscriber callback that SessionCoordinator's own callback forwards to, not the
+   primary SDK callback itself.
    ↓
 6. SessionCoordinator pushes event to session EventQueue (Backend's own, real one)
    └─ EventQueue.put() wakes any waiting poll request — served by
