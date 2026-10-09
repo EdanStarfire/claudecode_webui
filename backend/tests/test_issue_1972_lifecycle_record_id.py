@@ -33,7 +33,7 @@ from __future__ import annotations
 import tempfile
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -176,3 +176,31 @@ async def test_safeguard_still_fires_for_genuinely_identity_less_message(caplog)
         assert any("message_id" in r.message for r in caplog.records), (
             "A genuinely identity-less live message must still produce a logged error"
         )
+
+
+@pytest.mark.asyncio
+async def test_issue_2109_canonicalization_failure_does_not_suppress_live_delivery():
+    """Issue #2109 (AC11): _store_processed_message now raises on a canonicalization
+    failure instead of falling back to raw-dict storage. Each lifecycle sender
+    (_send_client_launched_message here) must catch that raise around the storage
+    call specifically, so it does not also suppress the subsequent live callback —
+    the previous fallback used to let the callback fire unconditionally, and that
+    guarantee must survive the AC11 change."""
+    session_id = "sess-2109-canon-failure"
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        coord, webui, storage_manager = _wire_coordinator_to_webui(tmp_path, session_id)
+
+        with patch(
+            "backend.session_coordinator._message_dict_to_record",
+            side_effect=RuntimeError("boom"),
+        ):
+            await coord._send_client_launched_message(session_id)
+
+        storage_manager.append_message.assert_not_awaited()
+        queue, _, _ = webui.session_queues[session_id].events_since(0)
+        assert len(queue) == 1, (
+            "The live client_launched message must still reach the frontend even "
+            "though canonicalization (and therefore storage) failed"
+        )
+        assert queue[0]["data"].get("subtype") == "client_launched"

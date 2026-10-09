@@ -81,7 +81,7 @@ class TestSessionRecording:
         seg1 = recording.get_segment(1)
         assert len(seg1) == 3
         types = [recording._get_message_type(m) for m in seg1]
-        assert types == ["SystemMessage", "AssistantMessage", "ResultMessage"]
+        assert types == ["system", "assistant", "result"]
 
     def test_multi_turn_segments(self):
         """Multi-turn: 3 segments, 2 user actions."""
@@ -126,20 +126,22 @@ class TestSessionRecording:
         assert recording.get_expected_action(999) is None
 
     def test_legacy_format_detection(self):
-        """Legacy format messages (type: xxx) are detected correctly."""
+        """Legacy/flat format messages (type: xxx) are detected correctly.
+
+        Issue #2109 (AC11): every fixture record is now canonical flat shape
+        (no more `_type`-tagged StoredMessage-era records)."""
         recording = SessionRecording(FIXTURES_DIR / "tool_use")
-        # First message is legacy format
         assert recording._get_message_type(recording.messages[0]) == "system"
-        # Assistant tool_use is now SDK format
-        assert recording._get_message_type(recording.messages[3]) == "AssistantMessage"
+        assert recording._get_message_type(recording.messages[3]) == "assistant"
 
     def test_sdk_format_detection(self):
-        """SDK format messages (_type: XxxMessage) are detected correctly."""
+        """Flat-format messages originally produced from a reconstructed SDK message
+        are detected correctly (issue #2109 AC11: no more `_type: XxxMessage` tagging)."""
         recording = SessionRecording(FIXTURES_DIR / "single_turn")
-        # init message is SDK format
-        assert recording._get_message_type(recording.messages[2]) == "SystemMessage"
-        assert recording._get_message_type(recording.messages[3]) == "AssistantMessage"
-        assert recording._get_message_type(recording.messages[4]) == "ResultMessage"
+        # init message
+        assert recording._get_message_type(recording.messages[2]) == "system"
+        assert recording._get_message_type(recording.messages[3]) == "assistant"
+        assert recording._get_message_type(recording.messages[4]) == "result"
 
 
 # ─────────────────────────────────────────────────
@@ -199,7 +201,7 @@ class TestReplayEngine:
         )
         await engine.replay_segment(1)
         types = [recording._get_message_type(m) for m in received]
-        assert types == ["SystemMessage", "AssistantMessage", "ResultMessage"]
+        assert types == ["system", "assistant", "result"]
 
     @pytest.mark.asyncio
     async def test_replay_async_callback(self):
@@ -517,12 +519,13 @@ class TestConvertingCallbackUnification:
     primitives didn't silently diverge from what it's reusing."""
 
     @pytest.mark.asyncio
-    async def test_unrecognized_sdk_type_degrades_instead_of_dropping(self):
+    async def test_unrecognized_sdk_type_raises(self):
         """A `_type` that reconstruct_sdk_message() doesn't recognize (fixture-vs-
-        installed-SDK drift) must still be stored and broadcast — as an unconverted
-        pass-through — rather than silently vanishing. ReplayEngine/_safe_callback's
-        broad except-and-log around this callback means an uncaught exception here
-        would otherwise drop the message with no trace besides a log line."""
+        installed-SDK drift) now raises loudly instead of degrading to an
+        unconverted pass-through (issue #2109 AC11) — every committed fixture is
+        confirmed canonical-shape clean, so this should never fire in practice.
+        The caller (`_safe_callback`, in the real replay path) logs and drops it
+        rather than crashing the whole replay."""
         received = []
 
         async def on_message(msg):
@@ -544,11 +547,11 @@ class TestConvertingCallbackUnification:
             "session_id": "test-unknown-type",
             "data": {"anything": "goes"},
         }
-        await mock._converting_callback(msg)
+        with pytest.raises(RuntimeError, match="SomeFutureMessageType"):
+            await mock._converting_callback(msg)
 
-        assert len(received) == 1
-        assert received[0]["_type"] == "SomeFutureMessageType"
-        storage_manager.append_message.assert_awaited_once()
+        assert received == []
+        storage_manager.append_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_sdk_tagged_message_matches_direct_construction(self):
@@ -634,15 +637,18 @@ class TestConvertingCallbackUnification:
             await mock.send_message("continue")
             continue_calls += 1
 
-        # Segment 0 is never replayed (mirrors production skipping
-        # client_launched) — only count `_type`-tagged records in the segments
-        # that actually get driven through send_message above.
+        # Segment 0 is never replayed (mirrors production skipping client_launched).
+        # Issue #2109 (AC11): every fixture record is now canonical flat shape (no
+        # more `_type` tagging), and every record in a replayed segment — not just
+        # ones that used to carry `_type` — gets individually converted and stored
+        # by _converting_callback, so count the segments' full record total instead
+        # of filtering on a key that no longer appears anywhere.
         replayed_segments = mock._recording.segments[1:]
-        type_tagged_count = sum(
-            1 for segment in replayed_segments for rec in segment if rec.get("_type")
-        )
-        # Each non-guidance permission action fires one extra pass-through
-        # record (the recorded permission_response) via
+        segment_record_count = sum(len(segment) for segment in replayed_segments)
+        # Each non-guidance permission action fires one extra pass-through record
+        # (permission_flow's reconstructed `running`/`denied` tool_call transition —
+        # the action boundary itself, excluded from segment content, see
+        # SessionRecording._is_permission_response) via
         # _handle_pending_permissions() — see mock_sdk.py.
         permission_action_count = sum(
             1
@@ -659,7 +665,7 @@ class TestConvertingCallbackUnification:
         canonical_records = [
             m for m in result["messages"] if "_type" not in m and m.get("message_id")
         ]
-        # Exact count: every `_type`-tagged source record, plus the injected
+        # Exact count: every replayed-segment source record, plus the injected
         # "continue" message per send_message() call above, plus one pass-through
         # record per non-guidance permission action, plus the single
         # replay_complete system marker _emit_replay_complete() fires once all
@@ -667,7 +673,7 @@ class TestConvertingCallbackUnification:
         # — an exact equality here (rather than a lower bound) is what actually
         # proves no replayed record is silently dropped.
         expected_count = (
-            type_tagged_count
+            segment_record_count
             + continue_calls
             + permission_action_count
             + (1 if continue_calls else 0)

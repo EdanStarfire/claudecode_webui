@@ -548,43 +548,6 @@ class ToolDisplayInfo:
         )
 
 
-@dataclass
-class DisplayMetadata:
-    """
-    Display projection metadata attached to messages.
-
-    This is the core of Issue #310 - backend-computed display state that
-    eliminates frontend business logic for tool lifecycle management.
-    """
-    tool_states: dict[str, ToolDisplayInfo] = field(default_factory=dict)
-    orphaned_tools: list[str] = field(default_factory=list)
-    linked_permissions: dict[str, str] = field(default_factory=dict)  # request_id → tool_use_id
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to dict for WebSocket transmission."""
-        return {
-            'tool_states': {
-                tid: info.to_dict()
-                for tid, info in self.tool_states.items()
-            },
-            'orphaned_tools': self.orphaned_tools,
-            'linked_permissions': self.linked_permissions,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> 'DisplayMetadata':
-        """Create from dict."""
-        tool_states = {
-            tid: ToolDisplayInfo.from_dict(info)
-            for tid, info in data.get('tool_states', {}).items()
-        }
-        return cls(
-            tool_states=tool_states,
-            orphaned_tools=data.get('orphaned_tools', []),
-            linked_permissions=data.get('linked_permissions', {}),
-        )
-
-
 # ============================================================
 # Canonical MessageRecord (Issue #2084 stage 3-A; live since stage 3-B)
 # ============================================================
@@ -592,6 +555,21 @@ class DisplayMetadata:
 # Consumed by 3-B (new-session stamping) and 3-C (migration target) as the single
 # source for "what version am I writing/migrating to."
 CURRENT_MESSAGE_SCHEMA_VERSION = 1
+
+
+class LegacyMessageFormatError(Exception):
+    """Raised when a stored record still carries the pre-canonical `_type`/`data`
+    wrapper (issue #2109, AC10). Production data was confirmed 100% canonical by
+    stage 3's migration gate (re-confirmed clean at stage 4a-C's merge) — this
+    should never fire against real data; it exists to fail loudly rather than
+    silently misread a record if that invariant is ever violated."""
+
+    def __init__(self, session_id: str, stored_type: str):
+        super().__init__(
+            f"Session {session_id} has a legacy _type={stored_type!r} record — "
+            f"expected canonical MessageRecord shape (message_schema_version check)."
+        )
+
 
 # SDK dataclasses whose `.uuid` is their own stable per-frame identity (as opposed to
 # AssistantMessage/UserMessage/ResultMessage, which also carry `.uuid` but not as a
@@ -731,7 +709,7 @@ class MessageRecord:
     sdk_uuid: str | None = None                     # SDK's own per-frame uuid, where present
     subtype: str | None = None                      # only meaningful when type == "system"
     content: str | None = None                      # existing universal text field
-    display: dict[str, Any] | None = None           # DisplayMetadata.to_dict() delta, where applicable
+    display: dict[str, Any] | None = None           # ToolDisplayInfo.to_dict(), for tool_call records only
     metadata: dict[str, Any] = field(default_factory=dict)  # existing catch-all
 
     def to_dict(self) -> dict[str, Any]:

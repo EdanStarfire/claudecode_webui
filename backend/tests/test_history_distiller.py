@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from backend.history_distiller import distill_session_history
+from backend.models.messages import LegacyMessageFormatError
 
 
 @pytest.fixture
@@ -234,159 +235,28 @@ async def test_issue_691_structured_content(temp_dir):
     assert "Hello\nWorld" in content
 
 
-# --- StoredMessage format tests (issue #722) ---
+# --- Legacy `_type`-tagged StoredMessage shape: issue #2109 AC10 guard ---
 
 
 @pytest.mark.asyncio
-async def test_issue_722_stored_assistant_message(temp_dir):
-    """StoredMessage AssistantMessage extracts text blocks, skips thinking."""
+async def test_issue_2109_legacy_type_record_raises(temp_dir):
+    """Any `_type`-tagged StoredMessage-era record raises LegacyMessageFormatError
+    instead of being silently (mis)interpreted — issue #2109 AC10. StoredMessage-shape
+    handling itself was deleted; canonical flat-shape coverage lives in the
+    `test_issue_2084_flat_tool_call_*` and `test_issue_691_*` tests below."""
     messages = [
         {
             "_type": "AssistantMessage",
             "timestamp": 1700000000.0,
-            "data": {
-                "content": [
-                    {"thinking": "Let me think about this..."},
-                    {"text": "Here is my response."},
-                    {"signature": "abc123"},
-                    {"text": "And a follow-up."},
-                ]
-            },
+            "data": {"content": [{"text": "Here is my response."}]},
         },
     ]
     jsonl = temp_dir / "messages.jsonl"
     output = temp_dir / "out.md"
     _write_jsonl(jsonl, messages)
 
-    await distill_session_history(jsonl, output, "s1", "2024-01-01T00:00:00+00:00")
-    content = output.read_text()
-    assert "Agent" in content
-    assert "Here is my response." in content
-    assert "And a follow-up." in content
-    assert "thinking" not in content.split("---")[0]  # No thinking in entries
-    assert "Agent messages: 1" in content
-
-
-@pytest.mark.asyncio
-async def test_issue_722_stored_assistant_empty_skipped(temp_dir):
-    """StoredMessage AssistantMessage with only thinking blocks produces no entry."""
-    messages = [
-        {
-            "_type": "AssistantMessage",
-            "timestamp": 1700000000.0,
-            "data": {
-                "content": [
-                    {"thinking": "Just thinking, no text output."},
-                ]
-            },
-        },
-    ]
-    jsonl = temp_dir / "messages.jsonl"
-    output = temp_dir / "out.md"
-    _write_jsonl(jsonl, messages)
-
-    await distill_session_history(jsonl, output, "s1", "2024-01-01T00:00:00+00:00")
-    content = output.read_text()
-    assert "Total messages: 0" in content
-
-
-@pytest.mark.asyncio
-async def test_issue_722_stored_user_message(temp_dir):
-    """StoredMessage UserMessage extracts text content."""
-    messages = [
-        {
-            "_type": "UserMessage",
-            "timestamp": 1700000000.0,
-            "data": {
-                "content": [
-                    {"text": "Please fix the bug."},
-                ]
-            },
-        },
-    ]
-    jsonl = temp_dir / "messages.jsonl"
-    output = temp_dir / "out.md"
-    _write_jsonl(jsonl, messages)
-
-    await distill_session_history(jsonl, output, "s1", "2024-01-01T00:00:00+00:00")
-    content = output.read_text()
-    assert "User" in content
-    assert "Please fix the bug." in content
-    assert "User messages: 1" in content
-
-
-@pytest.mark.asyncio
-async def test_issue_722_stored_user_tool_result_skipped(temp_dir):
-    """StoredMessage UserMessage with tool_use_id is a tool result, skipped."""
-    messages = [
-        {
-            "_type": "UserMessage",
-            "timestamp": 1700000000.0,
-            "data": {
-                "content": [
-                    {"tool_use_id": "tool-123", "type": "tool_result", "content": "file contents"},
-                ]
-            },
-        },
-    ]
-    jsonl = temp_dir / "messages.jsonl"
-    output = temp_dir / "out.md"
-    _write_jsonl(jsonl, messages)
-
-    await distill_session_history(jsonl, output, "s1", "2024-01-01T00:00:00+00:00")
-    content = output.read_text()
-    assert "Total messages: 0" in content
-
-
-@pytest.mark.asyncio
-async def test_issue_722_stored_tool_call_send_comm(temp_dir):
-    """StoredMessage ToolCallUpdate for send_comm extracts outbound comm."""
-    messages = [
-        {
-            "_type": "ToolCallUpdate",
-            "timestamp": 1700000000.0,
-            "data": {
-                "name": "mcp__legion__send_comm",
-                "input": {
-                    "to_minion_name": "Reviewer",
-                    "summary": "Build complete",
-                    "content": "All tests passing.",
-                },
-            },
-        },
-    ]
-    jsonl = temp_dir / "messages.jsonl"
-    output = temp_dir / "out.md"
-    _write_jsonl(jsonl, messages)
-
-    await distill_session_history(jsonl, output, "s1", "2024-01-01T00:00:00+00:00")
-    content = output.read_text()
-    assert "Comm (Outbound to Reviewer)" in content
-    assert "**Summary:** Build complete" in content
-    assert "All tests passing." in content
-    assert "Outbound: 1" in content
-
-
-@pytest.mark.asyncio
-async def test_issue_722_stored_tool_call_non_comm_skipped(temp_dir):
-    """StoredMessage ToolCallUpdate for non-comm tools is skipped."""
-    messages = [
-        {
-            "_type": "ToolCallUpdate",
-            "timestamp": 1700000000.0,
-            "data": {
-                "name": "Read",
-                "input": {"file_path": "/some/file.py"},
-            },
-        },
-    ]
-    jsonl = temp_dir / "messages.jsonl"
-    output = temp_dir / "out.md"
-    _write_jsonl(jsonl, messages)
-
-    await distill_session_history(jsonl, output, "s1", "2024-01-01T00:00:00+00:00")
-    content = output.read_text()
-    assert "Total messages: 0" in content
+    with pytest.raises(LegacyMessageFormatError, match="sess-legacy"):
+        await distill_session_history(jsonl, output, "sess-legacy", "2024-01-01T00:00:00+00:00")
 
 
 @pytest.mark.asyncio
@@ -445,103 +315,6 @@ async def test_issue_2084_flat_tool_call_non_comm_skipped(temp_dir):
 
 
 @pytest.mark.asyncio
-async def test_issue_722_stored_system_message(temp_dir):
-    """StoredMessage SystemMessage applies exclusion filter."""
-    messages = [
-        {
-            "_type": "SystemMessage",
-            "timestamp": 1700000000.0,
-            "data": {
-                "subtype": "task_started",
-                "content": [{"text": "should be excluded"}],
-            },
-        },
-        {
-            "_type": "SystemMessage",
-            "timestamp": 1700000001.0,
-            "data": {
-                "subtype": "init",
-                "content": [{"text": "Session initialized"}],
-            },
-        },
-    ]
-    jsonl = temp_dir / "messages.jsonl"
-    output = temp_dir / "out.md"
-    _write_jsonl(jsonl, messages)
-
-    await distill_session_history(jsonl, output, "s1", "2024-01-01T00:00:00+00:00")
-    content = output.read_text()
-    assert "System messages: 1" in content
-    assert "Session initialized" in content
-    assert "should be excluded" not in content
-
-
-@pytest.mark.asyncio
-async def test_issue_722_stored_skipped_types(temp_dir):
-    """StoredMessage ResultMessage, TaskStartedMessage, PermissionRequestMessage are skipped."""
-    messages = [
-        {"_type": "ResultMessage", "timestamp": 1700000000.0, "data": {"content": "ok"}},
-        {"_type": "TaskStartedMessage", "timestamp": 1700000001.0, "data": {}},
-        {"_type": "TaskNotificationMessage", "timestamp": 1700000002.0, "data": {}},
-        {"_type": "TaskProgressMessage", "timestamp": 1700000003.0, "data": {}},
-        {"_type": "PermissionRequestMessage", "timestamp": 1700000004.0, "data": {}},
-        {"_type": "PermissionResponseMessage", "timestamp": 1700000005.0, "data": {}},
-        {
-            "_type": "AssistantMessage",
-            "timestamp": 1700000006.0,
-            "data": {"content": [{"text": "real message"}]},
-        },
-    ]
-    jsonl = temp_dir / "messages.jsonl"
-    output = temp_dir / "out.md"
-    _write_jsonl(jsonl, messages)
-
-    await distill_session_history(jsonl, output, "s1", "2024-01-01T00:00:00+00:00")
-    content = output.read_text()
-    assert "Total messages: 1" in content
-    assert "real message" in content
-
-
-@pytest.mark.asyncio
-async def test_issue_1676_hook_event_notification_survives(temp_dir):
-    """HookEventMessage Notification events (agent_needs_input/agent_completed) survive
-    distillation, while other hook lifecycle events on the same _type remain skipped."""
-    messages = [
-        {
-            "_type": "HookEventMessage",
-            "timestamp": 1700000000.0,
-            "data": {
-                "subtype": "hook_response",
-                "hook_event_name": "Notification",
-                "data": {
-                    "hook_event_name": "Notification",
-                    "message": "alpha needs your input",
-                    "notification_type": "agent_needs_input",
-                },
-            },
-        },
-        {
-            "_type": "HookEventMessage",
-            "timestamp": 1700000001.0,
-            "data": {
-                "subtype": "hook_started",
-                "hook_event_name": "PreToolUse",
-                "data": {"hook_name": "pre-tool-guard", "hook_event": "PreToolUse"},
-            },
-        },
-    ]
-    jsonl = temp_dir / "messages.jsonl"
-    output = temp_dir / "out.md"
-    _write_jsonl(jsonl, messages)
-
-    await distill_session_history(jsonl, output, "s1", "2024-01-01T00:00:00+00:00")
-    content = output.read_text()
-    assert "System messages: 1" in content
-    assert "alpha needs your input" in content
-    assert "pre-tool-guard" not in content
-
-
-@pytest.mark.asyncio
 async def test_issue_1628_slice_between_boundaries(temp_dir):
     """Distillation of a second compaction boundary excludes pre-first-boundary messages.
 
@@ -557,11 +330,12 @@ async def test_issue_1628_slice_between_boundaries(temp_dir):
         # This message is AFTER the first boundary — should appear
         {"type": "user", "content": "Post-first-boundary message", "timestamp": ts_mid, "metadata": {}},
         {"type": "assistant", "content": "Mid-session reply", "timestamp": ts_mid + 10, "metadata": {}},
-        # The second boundary marker itself
+        # The second boundary marker itself (canonical flat shape)
         {
-            "_type": "SystemMessage",
+            "type": "system",
+            "content": "",
             "timestamp": ts_second_boundary,
-            "data": {"subtype": "compact_boundary", "content": []},
+            "metadata": {"subtype": "compact_boundary"},
         },
     ]
     # This message is BEFORE the first boundary — would be excluded by the slice helper
@@ -592,9 +366,10 @@ async def test_issue_1628_slice_from_session_start(temp_dir):
         {"type": "user", "content": "First user message", "timestamp": 1700000000.0, "metadata": {}},
         {"type": "assistant", "content": "First reply", "timestamp": 1700000010.0, "metadata": {}},
         {
-            "_type": "SystemMessage",
+            "type": "system",
+            "content": "",
             "timestamp": 1700000100.0,
-            "data": {"subtype": "compact_boundary", "content": []},
+            "metadata": {"subtype": "compact_boundary"},
         },
     ]
     jsonl = temp_dir / "messages.jsonl"
@@ -608,37 +383,3 @@ async def test_issue_1628_slice_from_session_start(temp_dir):
     assert "First reply" in content
     assert "User messages: 1" in content
     assert "Agent messages: 1" in content
-
-
-@pytest.mark.asyncio
-async def test_issue_722_mixed_legacy_and_stored(temp_dir):
-    """Mixed legacy and StoredMessage formats are both handled correctly."""
-    messages = [
-        # Legacy format
-        {"type": "user", "content": "Hello legacy", "timestamp": 1700000000.0, "metadata": {}},
-        {"type": "assistant", "content": "Legacy reply", "timestamp": 1700000001.0, "metadata": {}},
-        # StoredMessage format
-        {
-            "_type": "UserMessage",
-            "timestamp": 1700000002.0,
-            "data": {"content": [{"text": "Hello stored"}]},
-        },
-        {
-            "_type": "AssistantMessage",
-            "timestamp": 1700000003.0,
-            "data": {"content": [{"text": "Stored reply"}]},
-        },
-    ]
-    jsonl = temp_dir / "messages.jsonl"
-    output = temp_dir / "out.md"
-    _write_jsonl(jsonl, messages)
-
-    await distill_session_history(jsonl, output, "s1", "2024-01-01T00:00:00+00:00")
-    content = output.read_text()
-    assert "Hello legacy" in content
-    assert "Legacy reply" in content
-    assert "Hello stored" in content
-    assert "Stored reply" in content
-    assert "User messages: 2" in content
-    assert "Agent messages: 2" in content
-    assert "Total messages: 4" in content

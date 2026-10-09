@@ -4,6 +4,7 @@ import asyncio
 import pytest
 
 from backend.analytics.audit_writer import AuditWriter, _make_tool_summary
+from backend.models.messages import LegacyMessageFormatError
 
 
 class MockDB:
@@ -238,12 +239,39 @@ async def test_lifecycle_extra_includes_is_processing():
 
 
 # ------------------------------------------------------------------
-# Issue #1160: ToolCallUpdate audit event tests
+# Issue #2109 AC10: `_type`-tagged StoredMessage-era records (the old nested
+# "ToolCallUpdate" shape) now raise instead of being processed. `on_message_append`
+# swallows this (AuditWriter errors never propagate to sessions, by design) but
+# still logs it loudly via `logger.exception`; `_process_message` itself is
+# asserted directly below to confirm the guard fires. Flat-shape (`type:
+# "tool_call"`) coverage for every status transition lives in the
+# `test_flat_tool_call_*` tests further down.
 # ------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_tool_call_update_pending_emits_started():
-    """ToolCallUpdate with status=pending emits tool_call/started."""
+async def test_legacy_tool_call_update_type_raises():
+    """A `_type: ToolCallUpdate` record raises LegacyMessageFormatError from
+    `_process_message` directly (issue #2109 AC10)."""
+    db = MockDB()
+    writer = AuditWriter(db)
+    msg = {
+        "_type": "ToolCallUpdate",
+        "timestamp": 10.0,
+        "data": {
+            "tool_use_id": "tu1",
+            "name": "Edit",
+            "status": "pending",
+            "input": {"file_path": "foo.py"},
+        },
+    }
+    with pytest.raises(LegacyMessageFormatError, match="s1"):
+        await writer._process_message("s1", "proj1", msg)
+
+
+@pytest.mark.asyncio
+async def test_legacy_tool_call_update_swallowed_by_on_message_append():
+    """Via the public `on_message_append` hook, the same raise is caught and
+    logged (non-fatal by design) rather than propagating or producing a row."""
     db = MockDB()
     writer = AuditWriter(db)
     writer.start()
@@ -255,104 +283,6 @@ async def test_tool_call_update_pending_emits_started():
             "name": "Edit",
             "status": "pending",
             "input": {"file_path": "foo.py"},
-        },
-    }
-    await writer.on_message_append("s1", "proj1", msg)
-    await asyncio.sleep(0.3)
-    await writer.stop()
-    tool_rows = [r for r in db.rows if r[6] == "tool_call"]
-    assert len(tool_rows) == 1
-    assert tool_rows[0][7] == "Edit"   # tool_name
-    assert tool_rows[0][8] == "started"  # status
-
-
-@pytest.mark.asyncio
-async def test_tool_call_update_completed_emits_ok():
-    """ToolCallUpdate with status=completed emits tool_call/ok."""
-    db = MockDB()
-    writer = AuditWriter(db)
-    writer.start()
-    msg = {
-        "_type": "ToolCallUpdate",
-        "timestamp": 20.0,
-        "data": {
-            "tool_use_id": "tu2",
-            "name": "Bash",
-            "status": "completed",
-            "input": {},
-        },
-    }
-    await writer.on_message_append("s1", "proj1", msg)
-    await asyncio.sleep(0.3)
-    await writer.stop()
-    tool_rows = [r for r in db.rows if r[6] == "tool_call"]
-    assert len(tool_rows) == 1
-    assert tool_rows[0][8] == "ok"
-
-
-@pytest.mark.asyncio
-async def test_tool_call_update_awaiting_permission_emits_permission():
-    """ToolCallUpdate with status=awaiting_permission emits permission/requested."""
-    db = MockDB()
-    writer = AuditWriter(db)
-    writer.start()
-    msg = {
-        "_type": "ToolCallUpdate",
-        "timestamp": 30.0,
-        "data": {
-            "tool_use_id": "tu3",
-            "name": "Write",
-            "status": "awaiting_permission",
-            "input": {},
-        },
-    }
-    await writer.on_message_append("s1", "proj1", msg)
-    await asyncio.sleep(0.3)
-    await writer.stop()
-    perm_rows = [r for r in db.rows if r[6] == "permission"]
-    assert len(perm_rows) == 1
-    assert perm_rows[0][7] == "Write"   # tool_name
-    assert perm_rows[0][8] == "requested"
-
-
-@pytest.mark.asyncio
-async def test_tool_call_update_denied_emits_permission_denied():
-    """ToolCallUpdate with status=denied emits permission/denied."""
-    db = MockDB()
-    writer = AuditWriter(db)
-    writer.start()
-    msg = {
-        "_type": "ToolCallUpdate",
-        "timestamp": 40.0,
-        "data": {
-            "tool_use_id": "tu4",
-            "name": "Write",
-            "status": "denied",
-            "input": {},
-        },
-    }
-    await writer.on_message_append("s1", "proj1", msg)
-    await asyncio.sleep(0.3)
-    await writer.stop()
-    perm_rows = [r for r in db.rows if r[6] == "permission"]
-    assert len(perm_rows) == 1
-    assert perm_rows[0][8] == "denied"
-
-
-@pytest.mark.asyncio
-async def test_tool_call_update_running_emits_no_row():
-    """ToolCallUpdate with status=running is intentionally skipped (noise)."""
-    db = MockDB()
-    writer = AuditWriter(db)
-    writer.start()
-    msg = {
-        "_type": "ToolCallUpdate",
-        "timestamp": 50.0,
-        "data": {
-            "tool_use_id": "tu5",
-            "name": "Read",
-            "status": "running",
-            "input": {},
         },
     }
     await writer.on_message_append("s1", "proj1", msg)
@@ -473,7 +403,7 @@ async def test_issue_1164_lifecycle_event_without_project_id_stores_none():
 
 @pytest.mark.asyncio
 async def test_issue_1172_apply_audit_writer_registers_hook():
-    """on_message_append registered via on_append list receives ToolCallUpdate and emits a row.
+    """on_message_append registered via on_append list receives a flat tool_call and emits a row.
 
     Simulates the _apply_audit_writer mechanism: a fresh storage manager's on_append list
     gets the audit hook, then a message is routed through it end-to-end.
@@ -491,9 +421,12 @@ async def test_issue_1172_apply_audit_writer_registers_hook():
 
     # Fire the registered hook as DataStorageManager would after appending a message
     msg = {
-        "_type": "ToolCallUpdate",
+        "type": "tool_call",
         "timestamp": 99.0,
-        "data": {"tool_use_id": "tu-reg", "name": "Edit", "status": "pending", "input": {"file_path": "x.py"}},
+        "tool_use_id": "tu-reg",
+        "name": "Edit",
+        "status": "pending",
+        "input": {"file_path": "x.py"},
     }
     await on_append[0]("s1", "proj1", msg)
     await asyncio.sleep(0.3)
@@ -525,9 +458,12 @@ async def test_issue_1172_hook_not_duplicated_on_reapply():
     assert on_append.count(writer.on_message_append) == 1
 
     msg = {
-        "_type": "ToolCallUpdate",
+        "type": "tool_call",
         "timestamp": 100.0,
-        "data": {"tool_use_id": "tu-idem", "name": "Bash", "status": "completed", "input": {}},
+        "tool_use_id": "tu-idem",
+        "name": "Bash",
+        "status": "completed",
+        "input": {},
     }
     await on_append[0]("s1", "proj1", msg)
     await asyncio.sleep(0.3)
@@ -599,26 +535,12 @@ async def test_no_flush_no_callback():
 
 
 # ------------------------------------------------------------------
-# Issue #2084 (stage 3-D-prep, §4): canonical `tool_call` flat-shape parity
-# with the stored_type == "ToolCallUpdate" branch above. Every live tool-call
-# write has used this flat shape unconditionally since 3-B's cutover (#2086);
-# before this stage, these records were silently dropped entirely.
+# Issue #2084 (stage 3-D-prep, §4): canonical `tool_call` flat-shape coverage.
+# Every live tool-call write has used this flat shape unconditionally since
+# 3-B's cutover (#2086). The nested `_type: ToolCallUpdate` shape this used to
+# be compared against for parity is now rejected outright by the AC10 guard
+# (issue #2109) — see `test_legacy_tool_call_update_type_raises` above.
 # ------------------------------------------------------------------
-
-async def _run_tool_call_update(status: str, *, tool_use_id="tu-old", name="Edit", ts=1.0):
-    db = MockDB()
-    writer = AuditWriter(db)
-    writer.start()
-    msg = {
-        "_type": "ToolCallUpdate",
-        "timestamp": ts,
-        "data": {"tool_use_id": tool_use_id, "name": name, "status": status, "input": {}},
-    }
-    await writer.on_message_append("s1", "proj1", msg)
-    await asyncio.sleep(0.3)
-    await writer.stop()
-    return db.rows
-
 
 async def _run_flat_tool_call(status: str, *, tool_use_id="tu-new", name="Edit", ts=1.0):
     db = MockDB()
@@ -639,24 +561,27 @@ async def _run_flat_tool_call(status: str, *, tool_use_id="tu-new", name="Edit",
 
 
 @pytest.mark.parametrize(
-    "status",
-    ["pending", "awaiting_permission", "denied", "completed", "failed", "interrupted"],
+    "status,expected_event_type,expected_status",
+    [
+        ("pending", "tool_call", "started"),
+        ("awaiting_permission", "permission", "requested"),
+        ("denied", "permission", "denied"),
+        ("completed", "tool_call", "ok"),
+        ("failed", "tool_call", "error"),
+        ("interrupted", "tool_call", "interrupted"),
+    ],
 )
 @pytest.mark.asyncio
-async def test_flat_tool_call_matches_tool_call_update_for_every_status(status):
-    """A canonical flat `tool_call` message must produce the same audit event
-    (event_type/status/summary) as the equivalent nested ToolCallUpdate shape,
-    for every status transition."""
-    update_rows = await _run_tool_call_update(status)
-    flat_rows = await _run_flat_tool_call(status)
-
-    assert len(update_rows) == len(flat_rows) == 1
-    update_row, flat_row = update_rows[0], flat_rows[0]
-    # event_type, tool_name, status, summary must match; message_id/tool_use_id differ by design.
-    assert update_row[6] == flat_row[6]  # event_type
-    assert update_row[7] == flat_row[7]  # tool_name
-    assert update_row[8] == flat_row[8]  # status
-    assert update_row[9] == flat_row[9]  # summary
+async def test_flat_tool_call_emits_expected_event_for_every_status(
+    status, expected_event_type, expected_status
+):
+    """A canonical flat `tool_call` message produces the correct audit event
+    (event_type/status) for every status transition."""
+    rows = await _run_flat_tool_call(status)
+    assert len(rows) == 1
+    assert rows[0][6] == expected_event_type  # event_type
+    assert rows[0][7] == "Edit"               # tool_name
+    assert rows[0][8] == expected_status       # status
 
 
 @pytest.mark.asyncio

@@ -445,6 +445,68 @@ class TestSessionCoordinator:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_issue_2109_apply_tool_call_snapshot_terminal_status_removed_from_active(
+        self, temp_coordinator, sample_session_config
+    ):
+        """AC11 (#2109): apply_tool_call_snapshot (BackendApp's replay-mirror branch
+        for a regenerated fixture's reconstructed tool_call transitions) must remove a
+        terminal-status snapshot (denied/completed/failed/interrupted) from active
+        tracking, mirroring update_tool_call_permission_response's deny path and
+        update_tool_call_result's completed/failed path — otherwise a later
+        mark_session_tools_interrupted() bulk sweep would silently clobber an
+        already-resolved denied tool call back to interrupted."""
+        from backend.models.messages import ToolCall, ToolState
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        denied_snapshot = ToolCall(
+            tool_use_id="tu-snapshot-denied",
+            session_id=session_id,
+            name="Edit",
+            input={"file_path": "/x.py"},
+            status=ToolState.DENIED,
+            created_at=1.0,
+            completed_at=2.0,
+            permission_granted=False,
+        )
+        coordinator.apply_tool_call_snapshot(session_id, denied_snapshot)
+
+        # Removed from active tracking immediately — not left to linger.
+        assert coordinator._get_active_tool_call(session_id, "tu-snapshot-denied") is None
+
+        # A later bulk sweep (e.g. session restart/interrupt) must not find and
+        # clobber it back to interrupted, since it's no longer tracked.
+        interrupted = coordinator.mark_session_tools_interrupted(session_id)
+        assert interrupted == []
+        assert denied_snapshot.status == ToolState.DENIED
+
+    @pytest.mark.asyncio
+    async def test_issue_2109_apply_tool_call_snapshot_non_terminal_status_stays_active(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Companion to the terminal-status test: a non-terminal snapshot
+        (pending/awaiting_permission/running) stays tracked in _active_tool_calls,
+        same as every other non-terminal ToolCall transition."""
+        from backend.models.messages import ToolCall, ToolState
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        running_snapshot = ToolCall(
+            tool_use_id="tu-snapshot-running",
+            session_id=session_id,
+            name="Edit",
+            input={"file_path": "/x.py"},
+            status=ToolState.RUNNING,
+            created_at=1.0,
+            started_at=2.0,
+        )
+        coordinator.apply_tool_call_snapshot(session_id, running_snapshot)
+
+        assert coordinator._get_active_tool_call(session_id, "tu-snapshot-running") is running_snapshot
+
+    @pytest.mark.asyncio
     async def test_issue_1933_terminate_session_skips_thread_dispatch_when_no_tmp_dir(
         self, temp_coordinator, sample_session_config
     ):
@@ -2693,9 +2755,10 @@ class TestIssue1628CompactBoundaryDistillation:
         rows = [
             {"type": "user", "content": "Hello before compaction", "timestamp": boundary_ts - 100, "metadata": {}},
             {
-                "_type": "SystemMessage",
+                "type": "system",
+                "content": "",
                 "timestamp": boundary_ts,
-                "data": {"subtype": "compact_boundary", "content": []},
+                "metadata": {"subtype": "compact_boundary"},
             },
         ]
         with open(messages_file, "w") as f:
@@ -2718,6 +2781,44 @@ class TestIssue1628CompactBoundaryDistillation:
             assert title_arg is not None and "Compaction Summary" in title_arg
             assert description_arg == f"compaction:{int(boundary_ts)}"
 
+    @pytest.mark.asyncio
+    async def test_issue_2109_distill_compaction_legacy_type_raises(self, temp_coordinator):
+        """A `_type`-tagged StoredMessage-era row in messages.jsonl makes
+        _distill_compaction's boundary scan raise LegacyMessageFormatError
+        instead of silently (mis)reading it (issue #2109 AC10)."""
+        import json as _json
+        import uuid
+
+        from backend.models.messages import LegacyMessageFormatError
+        from backend.session_config import SessionConfig
+        coordinator = temp_coordinator
+
+        project = await coordinator.project_manager.create_project(
+            name="Test Project", working_directory="/tmp"
+        )
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(),
+        )
+
+        session_dir = coordinator.session_manager.sessions_dir / session_id
+        messages_file = session_dir / "messages.jsonl"
+        boundary_ts = 1700010000.0
+        rows = [
+            {
+                "_type": "SystemMessage",
+                "timestamp": boundary_ts,
+                "data": {"subtype": "compact_boundary", "content": []},
+            },
+        ]
+        with open(messages_file, "w") as f:
+            for row in rows:
+                f.write(_json.dumps(row) + "\n")
+
+        with pytest.raises(LegacyMessageFormatError, match=session_id):
+            await coordinator._distill_compaction(session_id, boundary_ts)
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
+from ..models.messages import LegacyMessageFormatError
 from .turn_tracker import TurnTracker
 
 if TYPE_CHECKING:
@@ -147,8 +148,11 @@ class AuditWriter:
         project_id: str | None,
         msg: dict[str, Any],
     ) -> None:
+        stored_type = msg.get("_type")
+        if stored_type:
+            raise LegacyMessageFormatError(session_id, stored_type)
+
         msg_type = msg.get("type", "")
-        stored_type = msg.get("_type", "")
         timestamp = msg.get("timestamp") or time.time()
         source_ts = msg.get("source_ts")
         message_id = msg.get("message_id")
@@ -160,47 +164,6 @@ class AuditWriter:
             self._tracker.on_result(session_id)
 
         turn_id = self._tracker.current_turn_id(session_id)
-
-        # ToolCallUpdate: authoritative source for tool lifecycle events (#1160)
-        if stored_type == "ToolCallUpdate":
-            data = msg.get("data", {})
-            tool_name = data.get("name")
-            tool_use_id = data.get("tool_use_id")
-            tc_status = data.get("status", "pending")
-            tool_input = data.get("input") or {}
-
-            if tc_status == "pending":
-                summary = _make_tool_summary(tool_name, tool_input)
-                extra = {"tool_name": tool_name, "tool_use_id": tool_use_id}
-                self._enqueue_with_ts(
-                    timestamp, source_ts, session_id, project_id, None, turn_id,
-                    "tool_call", tool_name, "started", summary, message_id, extra,
-                )
-            elif tc_status == "awaiting_permission":
-                summary = _truncate(f"Permission requested: {tool_name}")
-                extra = {"tool_name": tool_name, "tool_use_id": tool_use_id}
-                self._enqueue_with_ts(
-                    timestamp, source_ts, session_id, project_id, None, turn_id,
-                    "permission", tool_name, "requested", summary, message_id, extra,
-                )
-            elif tc_status == "denied":
-                summary = _truncate(f"Permission denied: {tool_name}")
-                extra = {"tool_name": tool_name, "tool_use_id": tool_use_id}
-                self._enqueue_with_ts(
-                    timestamp, source_ts, session_id, project_id, None, turn_id,
-                    "permission", tool_name, "denied", summary, message_id, extra,
-                )
-            elif tc_status in ("completed", "failed", "interrupted"):
-                is_error = tc_status != "completed"
-                audit_status = {"completed": "ok", "failed": "error", "interrupted": "interrupted"}[tc_status]
-                summary = _make_tool_result_summary(tool_name, {}, is_error)
-                extra = {"tool_name": tool_name, "tool_use_id": tool_use_id}
-                self._enqueue_with_ts(
-                    timestamp, source_ts, session_id, project_id, None, turn_id,
-                    "tool_call", tool_name, audit_status, summary, message_id, extra,
-                )
-            # running state: skip — covered by started/permission events
-            return
 
         # Map message type to event_type + summary
         if msg_type in ("tool_use",):
