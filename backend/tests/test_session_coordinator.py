@@ -329,6 +329,69 @@ class TestSessionCoordinator:
         assert session_id not in coordinator._pending_orphan_deltas
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error_type",
+        ["startup_failed", "message_processing_loop_error", "immediate_cli_failure", "consumer_task_died"],
+    )
+    async def test_issue_2109_error_callback_marks_open_tools_interrupted(
+        self, temp_coordinator, sample_session_config, error_type
+    ):
+        """Stage 4a-C follow-up (#2109): the critical-error branch of
+        _create_error_callback must mark open tools interrupted, mirroring
+        terminate_session/interrupt_session/restart_session — a tool left open
+        across an error-induced ERROR transition previously had no stored
+        terminal record (and, post-4a-C, no read-time synthesis papering over it
+        either). Applies uniformly to all four critical error_types, since they
+        share one code branch."""
+        from backend.models.messages import ToolState
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        tool_call = coordinator.create_tool_call(
+            session_id=session_id,
+            tool_use_id="tu-error-1",
+            name="Bash",
+            input_params={"command": "sleep 100"},
+        )
+        assert tool_call.status == ToolState.PENDING
+
+        broadcast_callback = Mock()
+        coordinator.add_tool_call_broadcast_callback(broadcast_callback)
+
+        error_cb = coordinator._create_error_callback(session_id)
+        await error_cb(error_type, RuntimeError("boom"))
+
+        assert tool_call.status == ToolState.INTERRUPTED
+        broadcast_callback.assert_called_once()
+        broadcast_session_id, broadcast_data = broadcast_callback.call_args[0]
+        assert broadcast_session_id == session_id
+        assert broadcast_data["tool_use_id"] == "tu-error-1"
+        assert coordinator._get_active_tool_call(session_id, "tu-error-1") is None
+
+    @pytest.mark.asyncio
+    async def test_issue_2109_error_callback_no_open_tools_is_safe_noop(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Companion to test_issue_2109_error_callback_marks_open_tools_interrupted:
+        startup_failed/immediate_cli_failure can fire before any tool was ever
+        created. _mark_tools_orphaned()/mark_session_tools_interrupted() must stay
+        safe no-ops in that case, same as they already are for terminate_session/
+        interrupt_session/restart_session on a session with no active tools."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        broadcast_callback = Mock()
+        coordinator.add_tool_call_broadcast_callback(broadcast_callback)
+
+        error_cb = coordinator._create_error_callback(session_id)
+        await error_cb("startup_failed", RuntimeError("never got a tool"))
+
+        broadcast_callback.assert_not_called()
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.state == SessionState.ERROR
+
+    @pytest.mark.asyncio
     async def test_issue_2109_update_tool_call_input_fills_existing_and_persists(
         self, temp_coordinator, sample_session_config
     ):

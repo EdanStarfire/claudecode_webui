@@ -5053,6 +5053,13 @@ class SessionCoordinator:
                     )
                     user_error_message = self._extract_claude_cli_error(raw_error_str, result_error)
 
+                    # Issue #2109 (stage 4a-C follow-up): mark open tools interrupted on a
+                    # critical SDK error, same as terminate_session/interrupt_session/
+                    # restart_session already do — a tool left open across an error-induced
+                    # ERROR transition previously had no stored terminal record.
+                    self._mark_tools_orphaned(session_id)
+                    self.mark_session_tools_interrupted(session_id)
+
                     # Update session state to ERROR and reset processing state
                     try:
                         await self.session_manager.update_session_state(
