@@ -338,7 +338,6 @@ async def test_issue_858_event_cleaned_up_on_terminate():
                 "update_processing_state",
                 new_callable=AsyncMock,
             ),
-            patch.object(coord, "_mark_tools_orphaned"),
             patch.object(coord, "mark_session_tools_interrupted"),
             patch.object(
                 coord.session_manager,

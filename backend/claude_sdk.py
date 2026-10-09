@@ -192,7 +192,6 @@ class ClaudeSDK:
         storage_manager: DataStorageManager | None = None,
         session_manager: Any | None = None,
         message_callback: Callable[[dict[str, Any]], None] | None = None,
-        display_hook: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
         error_callback: Callable[[str, Exception], None] | None = None,
         permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None,
         rate_limit_callback: Callable[[Any], None] | None = None,
@@ -215,14 +214,6 @@ class ClaudeSDK:
             storage_manager: Data storage manager for persistence
             session_manager: Session manager for state updates
             message_callback: Called when new messages are received
-            display_hook: Issue #2026 (Part B2) — called with the just-converted
-                message dict immediately before it's persisted; returns a
-                DisplayMetadata dict (or None) to attach as that record's top-level
-                `display` key, so a later reload can read it back verbatim instead
-                of replaying session history to reconstruct it. Non-fatal: any
-                exception here is caught and logged, and the message is still
-                stored/delivered with no `display`, exactly like today's (now
-                removed) post-store computation.
             error_callback: Called when errors occur
             permission_callback: Called to check for tool permissions
             resume_session_id: SDK session ID to resume
@@ -246,7 +237,6 @@ class ClaudeSDK:
         self.storage_manager = storage_manager
         self.session_manager = session_manager
         self.message_callback = message_callback
-        self.display_hook = display_hook
         self.error_callback = error_callback
         self.permission_callback = permission_callback
         self.rate_limit_callback = rate_limit_callback
@@ -1534,20 +1524,6 @@ class ClaudeSDK:
                 record = MessageRecord.from_error(
                     content=str(sdk_message), session_id=self.session_id, error=str(e)
                 )
-
-            # Issue #2026 (Part B2): compute display metadata once, before this
-            # message is persisted, so a later reload can read the value back
-            # verbatim instead of replaying session history to reconstruct it — the
-            # structural cause of #2006/#2028's quadratic, event-loop-blocking
-            # reload bug. Non-fatal: any exception here is caught and logged, and the
-            # message is still stored/delivered with no `display`.
-            if self.display_hook is not None:
-                try:
-                    computed_display = self.display_hook(record.to_dict())
-                    if computed_display:
-                        record.display = computed_display
-                except Exception:
-                    sdk_logger.debug("Pre-store display_hook failed", exc_info=True)
 
             record_dict = record.to_dict()
 

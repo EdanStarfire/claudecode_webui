@@ -2,25 +2,22 @@
 Unified message models for Claude WebUI.
 
 This module provides dataclass-based message types that align with the Claude Agent SDK's
-dataclass patterns while adding WebUI-specific types for permissions and display projection.
+dataclass patterns while adding WebUI-specific types for permissions and the unified
+ToolCall lifecycle (Issue #324).
 
 Key design principles:
 1. SDK messages (AssistantMessage, UserMessage, etc.) are serialized via dataclasses.asdict()
-2. WebUI-specific types (permissions, display) use the same dataclass pattern
-3. StoredMessage provides a unified wrapper with _type discriminator for storage/WebSocket
-4. DisplayMetadata (Issue #310) attaches display projection to any message type
+2. WebUI-specific types (permissions, tool display) use the same dataclass pattern
+3. MessageRecord (Issue #2084) is the one canonical wrapper for storage/WebSocket
+4. ToolDisplayInfo (Issue #324) attaches display state to a ToolCall
 
 Usage:
-    from backend.models.messages import StoredMessage, DisplayMetadata
+    from backend.models.messages import MessageRecord
 
-    # Wrap a legacy-shaped stored record
-    stored = StoredMessage(_type='AssistantMessage', timestamp=timestamp, session_id=session_id, data=data)
-
-    # Add display projection
-    stored.display = DisplayMetadata(tool_states={...})
+    record = MessageRecord.from_sdk_message(sdk_message, session_id=session_id)
 
     # Serialize for storage/WebSocket
-    json_data = stored.to_dict()
+    json_data = record.to_dict()
 """
 
 import json
@@ -28,7 +25,7 @@ import time
 import uuid as uuid_lib
 from dataclasses import dataclass, field, fields
 from enum import Enum
-from typing import Any, Literal
+from typing import Any
 
 from claude_agent_sdk import (
     HookEventMessage,
@@ -54,20 +51,14 @@ class ToolState(Enum):
         PENDING → AWAITING_PERMISSION → RUNNING → COMPLETED/FAILED
                                       ↘ DENIED
                         RUNNING → INTERRUPTED (session terminated)
-
-    Note: PERMISSION_REQUIRED, EXECUTING, ORPHANED kept for backward compatibility
-    with DisplayProjection. New code should use the #324 states.
     """
     PENDING = "pending"
-    PERMISSION_REQUIRED = "permission_required"  # Legacy (use AWAITING_PERMISSION)
     AWAITING_PERMISSION = "awaiting_permission"  # Issue #324
-    EXECUTING = "executing"  # Legacy (use RUNNING)
     RUNNING = "running"  # Issue #324
     COMPLETED = "completed"
     FAILED = "failed"
     DENIED = "denied"  # Issue #324: Permission denied
     INTERRUPTED = "interrupted"  # Issue #324: Session terminated before completion
-    ORPHANED = "orphaned"  # Legacy (use INTERRUPTED)
 
 
 # ============================================================
@@ -521,8 +512,8 @@ class ToolDisplayInfo:
     """
     Display metadata for a single tool call.
 
-    Tracks the visual state of a tool in the UI, computed by the backend
-    DisplayProjection layer.
+    Tracks the visual state of a tool in the UI, attached to a ToolCall's
+    `display` field as part of the unified ToolCall lifecycle (Issue #324).
     """
     state: ToolState = ToolState.PENDING
     visible: bool = True
@@ -591,495 +582,6 @@ class DisplayMetadata:
             tool_states=tool_states,
             orphaned_tools=data.get('orphaned_tools', []),
             linked_permissions=data.get('linked_permissions', {}),
-        )
-
-
-# ============================================================
-# Unified Message Wrapper
-# ============================================================
-
-@dataclass
-class StoredMessage:
-    """
-    Unified wrapper for all message types in storage and WebSocket.
-
-    This provides a consistent format for:
-    - SDK messages (AssistantMessage, UserMessage, SystemMessage, ResultMessage)
-    - WebUI messages (PermissionRequestMessage, PermissionResponseMessage)
-
-    The _type field acts as a discriminator for deserialization.
-    """
-    _type: str  # Discriminator: 'AssistantMessage', 'PermissionRequestMessage', etc.
-    timestamp: float
-    session_id: str
-    data: dict[str, Any]  # The actual message content (SDK asdict() or WebUI dataclass)
-    display: DisplayMetadata | None = None  # Issue #310 projection
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize for storage/WebSocket."""
-        result = {
-            '_type': self._type,
-            'timestamp': self.timestamp,
-            'session_id': self.session_id,
-            'data': self.data,
-        }
-        if self.display:
-            result['display'] = self.display.to_dict()
-        return result
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> 'StoredMessage':
-        """Deserialize from storage/WebSocket."""
-        display = None
-        if 'display' in data and data['display']:
-            display = DisplayMetadata.from_dict(data['display'])
-        return cls(
-            _type=data.get('_type', 'Unknown'),
-            timestamp=data.get('timestamp', 0.0),
-            session_id=data.get('session_id', ''),
-            data=data.get('data', {}),
-            display=display,
-        )
-
-    def get_content(self) -> str:
-        """Extract human-readable content from the message."""
-        # For SDK messages with content field
-        if 'content' in self.data:
-            content = self.data['content']
-            if isinstance(content, str):
-                return content
-            elif isinstance(content, list):
-                # Extract text from content blocks
-                texts = []
-                for block in content:
-                    if isinstance(block, dict) and 'text' in block:
-                        texts.append(block['text'])
-                return ' '.join(texts)
-        return ''
-
-    def get_tool_uses(self) -> list[dict[str, Any]]:
-        """Extract tool use blocks from AssistantMessage."""
-        if self._type != 'AssistantMessage':
-            return []
-        tool_uses = []
-        content = self.data.get('content', [])
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and 'id' in block and 'name' in block:
-                    tool_uses.append(block)
-        return tool_uses
-
-    def get_tool_results(self) -> list[dict[str, Any]]:
-        """Extract tool result blocks from UserMessage."""
-        if self._type != 'UserMessage':
-            return []
-        tool_results = []
-        content = self.data.get('content', [])
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and 'tool_use_id' in block:
-                    tool_results.append(block)
-        return tool_results
-
-
-# ============================================================
-# Type aliases for clarity
-# ============================================================
-
-# All message types that can be stored
-WebUIMessage = PermissionRequestMessage | PermissionResponseMessage
-SDKMessageType = Literal['AssistantMessage', 'UserMessage', 'SystemMessage', 'ResultMessage']
-WebUIMessageType = Literal['PermissionRequestMessage', 'PermissionResponseMessage']
-AllMessageTypes = SDKMessageType | WebUIMessageType
-
-
-# ============================================================
-# Conversion Utilities
-# ============================================================
-
-def stored_to_legacy_format(stored: StoredMessage) -> dict[str, Any]:
-    """
-    Convert StoredMessage to legacy format for backward compatibility.
-
-    This allows gradual migration - new code produces StoredMessage,
-    but existing consumers can still receive the legacy dict format.
-
-    The legacy format has:
-    - type: 'assistant', 'user', 'system', 'result', 'permission_request', etc.
-    - content: Human-readable text
-    - metadata: Additional fields
-    - timestamp, session_id
-    """
-    # Map _type to legacy type string
-    type_mapping = {
-        'AssistantMessage': 'assistant',
-        'UserMessage': 'user',
-        'SystemMessage': 'system',
-        'ResultMessage': 'result',
-        'PermissionRequestMessage': 'permission_request',
-        'PermissionResponseMessage': 'permission_response',
-    }
-    legacy_type = type_mapping.get(stored._type, 'unknown')
-
-    # Build legacy format
-    result = {
-        'type': legacy_type,
-        'timestamp': stored.timestamp,
-        'session_id': stored.session_id,
-    }
-
-    # Add content
-    result['content'] = stored.get_content()
-
-    # Copy data fields to top level for backward compatibility
-    result.update(stored.data)
-
-    # Build metadata
-    metadata = {
-        'has_tool_uses': len(stored.get_tool_uses()) > 0,
-        'has_tool_results': len(stored.get_tool_results()) > 0,
-        'tool_uses': stored.get_tool_uses(),
-        'tool_results': stored.get_tool_results(),
-    }
-
-    # Extract thinking blocks if present
-    thinking_blocks = []
-    if stored._type == 'AssistantMessage':
-        content = stored.data.get('content', [])
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and 'thinking' in block:
-                    thinking_blocks.append({
-                        'content': block['thinking'],
-                        'timestamp': stored.timestamp,
-                    })
-    metadata['has_thinking'] = len(thinking_blocks) > 0
-    metadata['thinking_blocks'] = thinking_blocks
-
-    # Add display metadata if present
-    if stored.display:
-        result['display'] = stored.display.to_dict()
-
-    result['metadata'] = metadata
-
-    return result
-
-
-def legacy_to_stored(legacy: dict[str, Any]) -> StoredMessage:
-    """
-    Convert legacy format dict to StoredMessage.
-
-    This enables reading old stored messages into the new format.
-    """
-    # Determine _type from legacy type field
-    type_mapping = {
-        'assistant': 'AssistantMessage',
-        'user': 'UserMessage',
-        'system': 'SystemMessage',
-        'result': 'ResultMessage',
-        'permission_request': 'PermissionRequestMessage',
-        'permission_response': 'PermissionResponseMessage',
-    }
-    legacy_type = legacy.get('type', 'unknown')
-    _type = type_mapping.get(legacy_type, 'Unknown')
-
-    # Extract display if present
-    display = None
-    if 'display' in legacy and legacy['display']:
-        display = DisplayMetadata.from_dict(legacy['display'])
-
-    # Build data dict (exclude metadata and display from top level)
-    data = {k: v for k, v in legacy.items()
-            if k not in ('type', 'timestamp', 'session_id', 'metadata', 'display', '_type')}
-
-    return StoredMessage(
-        _type=_type,
-        timestamp=legacy.get('timestamp', 0.0),
-        session_id=legacy.get('session_id', ''),
-        data=data,
-        display=display,
-    )
-
-
-# ============================================================
-# Display Projection (Issue #310 Core)
-# ============================================================
-
-class DisplayProjection:
-    """
-    Computes display metadata for messages based on tool lifecycle.
-
-    This is the core of Issue #310 - moving tool correlation and lifecycle
-    tracking from the frontend to the backend. The frontend simply reads
-    the computed `display` field instead of maintaining complex state.
-
-    Usage:
-        projection = DisplayProjection()
-
-        # Process messages in order
-        for msg in messages:
-            display = projection.process_message(msg)
-            msg.display = display
-
-        # Or process all at once
-        messages = projection.process_all(messages)
-    """
-
-    def __init__(self) -> None:
-        """Initialize projection state."""
-        # Tool state tracking: tool_use_id → ToolDisplayInfo
-        self._tool_states: dict[str, ToolDisplayInfo] = {}
-
-        # Permission correlation: request_id → tool_use_id
-        self._permission_to_tool: dict[str, str] = {}
-
-        # Tool signature → tool_use_id for permission matching
-        # Signature = f"{tool_name}:{first_param_hash}"
-        self._tool_signatures: dict[str, str] = {}
-
-        # Active tools waiting for results
-        self._active_tools: set[str] = set()
-
-        # Orphaned tools (session reset/interrupt)
-        self._orphaned_tools: list[str] = []
-
-    def reset(self) -> None:
-        """Reset projection state (e.g., on session reset)."""
-        self._tool_states.clear()
-        self._permission_to_tool.clear()
-        self._tool_signatures.clear()
-        self._active_tools.clear()
-        self._orphaned_tools.clear()
-
-    def mark_tools_orphaned(self) -> list[str]:
-        """
-        Mark all active tools as orphaned.
-
-        Call this when session is interrupted/reset to mark pending tools
-        as abandoned. Returns list of orphaned tool IDs.
-        """
-        orphaned = list(self._active_tools)
-        for tool_id in orphaned:
-            if tool_id in self._tool_states:
-                self._tool_states[tool_id].state = ToolState.ORPHANED
-                self._tool_states[tool_id].style = 'orphaned'
-            self._orphaned_tools.append(tool_id)
-        self._active_tools.clear()
-        return orphaned
-
-    def build_orphaned_delta(self, orphaned_ids: list[str]) -> DisplayMetadata:
-        """Build the DisplayMetadata delta for tools just marked orphaned.
-
-        Issue #2026: mark_tools_orphaned() mutates projection state directly
-        (bypassing process_message()/the _process_* methods), so under the
-        delta-only design (Part B1) this change would otherwise never appear in
-        any future DisplayMetadata this projection produces — the old
-        full-snapshot _build_display_metadata() used to surface it as a side
-        effect of every subsequent call, regardless of message type. Callers
-        should attach this to whatever message they emit next for the session,
-        exactly once.
-        """
-        return self._build_display_metadata(tool_ids=set(orphaned_ids), orphaned_tools=orphaned_ids)
-
-    def process_message(self, message: StoredMessage) -> DisplayMetadata:
-        """
-        Process a single message and compute its display metadata.
-
-        Updates internal state and returns the computed DisplayMetadata
-        to attach to the message.
-        """
-        # Handle different message types
-        if message._type == 'AssistantMessage':
-            return self._process_assistant_message(message)
-        elif message._type == 'UserMessage':
-            return self._process_user_message(message)
-        elif message._type == 'PermissionRequestMessage':
-            return self._process_permission_request(message)
-        elif message._type == 'PermissionResponseMessage':
-            return self._process_permission_response(message)
-        else:
-            # No special handling needed
-            return self._build_display_metadata()
-
-    def process_all(self, messages: list[StoredMessage]) -> list[StoredMessage]:
-        """
-        Process all messages and attach display metadata.
-
-        Returns the same list with display fields populated.
-        """
-        for msg in messages:
-            msg.display = self.process_message(msg)
-        return messages
-
-    def _process_assistant_message(self, message: StoredMessage) -> DisplayMetadata:
-        """Process AssistantMessage - extract and track tool uses."""
-        tool_uses = message.get_tool_uses()
-        touched_tool_ids: set[str] = set()
-
-        for tool_use in tool_uses:
-            tool_id = tool_use.get('id')
-            tool_name = tool_use.get('name', '')
-            if not tool_id:
-                continue
-
-            # Create initial tool state
-            self._tool_states[tool_id] = ToolDisplayInfo(
-                state=ToolState.PENDING,
-                visible=True,
-                collapsed=False,
-                style='default',
-            )
-            touched_tool_ids.add(tool_id)
-
-            # Track as active (waiting for result)
-            self._active_tools.add(tool_id)
-
-            # Create signature for permission matching
-            signature = self._create_tool_signature(tool_name, tool_use.get('input', {}))
-            self._tool_signatures[signature] = tool_id
-
-        return self._build_display_metadata(tool_ids=touched_tool_ids)
-
-    def _process_user_message(self, message: StoredMessage) -> DisplayMetadata:
-        """Process UserMessage - extract tool results and update states."""
-        tool_results = message.get_tool_results()
-        touched_tool_ids: set[str] = set()
-
-        for result in tool_results:
-            tool_id = result.get('tool_use_id')
-            if not tool_id:
-                continue
-
-            if tool_id in self._tool_states:
-                # Determine success/failure
-                is_error = result.get('is_error', False)
-                if is_error:
-                    self._tool_states[tool_id].state = ToolState.FAILED
-                    self._tool_states[tool_id].style = 'error'
-                else:
-                    self._tool_states[tool_id].state = ToolState.COMPLETED
-                    self._tool_states[tool_id].style = 'success'
-                touched_tool_ids.add(tool_id)
-
-                # No longer active
-                self._active_tools.discard(tool_id)
-
-        return self._build_display_metadata(tool_ids=touched_tool_ids)
-
-    def _process_permission_request(self, message: StoredMessage) -> DisplayMetadata:
-        """Process PermissionRequestMessage - link to tool and update state."""
-        request_id = message.data.get('request_id', '')
-        tool_name = message.data.get('tool_name', '')
-        input_params = message.data.get('input_params', {})
-
-        # Issue #953: Prefer direct tool_use_id match (SDK v0.1.52+), fall back to signature
-        direct_tool_use_id = message.data.get('tool_use_id')
-        if direct_tool_use_id and direct_tool_use_id in self._tool_states:
-            tool_id = direct_tool_use_id
-        else:
-            # Fallback: find matching tool by signature
-            signature = self._create_tool_signature(tool_name, input_params)
-            tool_id = self._tool_signatures.get(signature)
-
-        touched_tool_ids: set[str] = set()
-        touched_linked_permissions: dict[str, str] = {}
-        if tool_id:
-            # Link permission to tool
-            self._permission_to_tool[request_id] = tool_id
-            touched_linked_permissions[request_id] = tool_id
-
-            # Update tool state
-            if tool_id in self._tool_states:
-                self._tool_states[tool_id].state = ToolState.PERMISSION_REQUIRED
-                self._tool_states[tool_id].style = 'warning'
-                self._tool_states[tool_id].linked_permission_id = request_id
-                touched_tool_ids.add(tool_id)
-
-        return self._build_display_metadata(
-            tool_ids=touched_tool_ids, linked_permissions=touched_linked_permissions
-        )
-
-    def _process_permission_response(self, message: StoredMessage) -> DisplayMetadata:
-        """Process PermissionResponseMessage - update tool state based on decision."""
-        request_id = message.data.get('request_id', '')
-        decision = message.data.get('decision', '')
-
-        # Find linked tool
-        tool_id = self._permission_to_tool.get(request_id)
-        touched_tool_ids: set[str] = set()
-
-        if tool_id and tool_id in self._tool_states:
-            if decision == 'allow':
-                # Permission granted - tool now executing
-                self._tool_states[tool_id].state = ToolState.EXECUTING
-                self._tool_states[tool_id].style = 'default'
-            else:
-                # Permission denied - tool failed
-                self._tool_states[tool_id].state = ToolState.FAILED
-                self._tool_states[tool_id].style = 'error'
-                self._active_tools.discard(tool_id)
-            touched_tool_ids.add(tool_id)
-
-        return self._build_display_metadata(tool_ids=touched_tool_ids)
-
-    def _create_tool_signature(self, tool_name: str, input_params: dict) -> str:
-        """
-        Create a signature for matching tools to permission requests.
-
-        Uses tool name + hash of first significant parameter to create
-        a reasonably unique signature without requiring exact param matching.
-        """
-        import hashlib
-        import json
-
-        # Get first significant param value for hashing
-        first_value = ''
-        for key, value in input_params.items():
-            if value and key not in ('_simulatedSedEdit',):  # Skip internal params
-                if isinstance(value, str):
-                    first_value = value[:100]  # Limit length
-                else:
-                    first_value = json.dumps(value)[:100]
-                break
-
-        # Create hash
-        param_hash = hashlib.md5(first_value.encode()).hexdigest()[:8]
-        return f"{tool_name}:{param_hash}"
-
-    def _build_display_metadata(
-        self,
-        tool_ids: set[str] | None = None,
-        orphaned_tools: list[str] | None = None,
-        linked_permissions: dict[str, str] | None = None,
-    ) -> DisplayMetadata:
-        """Build a DELTA DisplayMetadata containing only what this call touched.
-
-        Issue #2026 (Part B1): this used to return the full cumulative
-        tool_states/orphaned_tools/linked_permissions snapshot (every tool ever
-        seen) on every single message. Persisting or broadcasting that snapshot
-        per-message reproduces the same unbounded-payload growth #2026's incident
-        traced to — the same total bytes, just spread across the session's
-        lifetime instead of one paginated request, which is better but still
-        unbounded. Each `_process_*` caller already knows exactly which
-        tool_id(s)/permission(s) it just touched; passing those here — rather
-        than defaulting to "everything" — is what makes this a delta.
-
-        This is safe because the frontend already treats `display` as a
-        cumulative cache it builds up incrementally, one message at a time
-        (`applyDisplayMetadata`, frontend/src/stores/message.js) — a stream of
-        deltas reconstructs identical end-state to a stream of full snapshots,
-        for a client that sees every message in order (live from the start, or
-        a paginated reload from the start — the only two ways messages are ever
-        consumed).
-        """
-        tool_states = (
-            {tid: self._tool_states[tid] for tid in tool_ids if tid in self._tool_states}
-            if tool_ids else {}
-        )
-        return DisplayMetadata(
-            tool_states=tool_states,
-            orphaned_tools=list(orphaned_tools) if orphaned_tools else [],
-            linked_permissions=dict(linked_permissions) if linked_permissions else {},
         )
 
 

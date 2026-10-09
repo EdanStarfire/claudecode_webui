@@ -303,32 +303,6 @@ class TestSessionCoordinator:
         assert coordinator._get_active_tool_call(session_id, "tu-restart-1") is None
 
     @pytest.mark.asyncio
-    async def test_issue_2109_restart_session_failure_pops_stale_orphan_delta(
-        self, temp_coordinator, sample_session_config
-    ):
-        """AC1 (#2109) regression: when the post-mark start_session() call fails,
-        restart_session must drop the pending orphan delta _mark_tools_orphaned()
-        stashed at the top of the method — a failed restart sends no follow-up
-        message that could ever consume it, same reasoning as terminate_session's
-        unconditional pop. Left stale, it would get merged into whatever unrelated
-        message for this session comes next."""
-        coordinator = temp_coordinator
-        session_id = await coordinator.create_session(**sample_session_config)
-
-        # Seed the DisplayProjection's active-tools tracking directly so
-        # _mark_tools_orphaned() has something to orphan and actually stashes a
-        # delta into _pending_orphan_deltas (mirrors what real message flow would
-        # have produced, without needing a full StoredMessage round-trip).
-        projection = coordinator._get_display_projection(session_id)
-        projection._active_tools.add("tu-restart-fail-1")
-
-        with patch.object(coordinator, 'start_session', AsyncMock(return_value=False)):
-            success = await coordinator.restart_session(session_id)
-
-        assert success is False
-        assert session_id not in coordinator._pending_orphan_deltas
-
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "error_type",
         ["startup_failed", "message_processing_loop_error", "immediate_cli_failure", "consumer_task_died"],
@@ -375,9 +349,9 @@ class TestSessionCoordinator:
     ):
         """Companion to test_issue_2109_error_callback_marks_open_tools_interrupted:
         startup_failed/immediate_cli_failure can fire before any tool was ever
-        created. _mark_tools_orphaned()/mark_session_tools_interrupted() must stay
-        safe no-ops in that case, same as they already are for terminate_session/
-        interrupt_session/restart_session on a session with no active tools."""
+        created. mark_session_tools_interrupted() must stay a safe no-op in that
+        case, same as it already is for terminate_session/interrupt_session/
+        restart_session on a session with no active tools."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
 
@@ -678,10 +652,10 @@ class TestSessionCoordinator:
         self, temp_coordinator, sample_session_config
     ):
         """Issue #2109 (AC3): get_session_messages() no longer runs read-time tool
-        lifecycle synthesis — every transition (restart-orphaned, interrupted, denied,
-        completed) is already stored as its own record (issue #2084 stage 3, #2109's
-        AC1/AC2), so the returned messages must equal the stored records exactly, in
-        order, with no extra tool_call entries inserted.
+        lifecycle synthesis — every transition (awaiting permission, interrupted,
+        denied, completed) is already stored as its own record (issue #2084 stage 3,
+        #2109's AC1/AC2), so the returned messages must equal the stored records
+        exactly, in order, with no extra tool_call entries inserted.
         """
         from backend.models.messages import MessageRecord, ToolCall, ToolState
 
@@ -691,11 +665,11 @@ class TestSessionCoordinator:
         raw_messages = [
             MessageRecord.from_tool_call(
                 ToolCall(
-                    tool_use_id="tu-orphaned",
+                    tool_use_id="tu-awaiting-permission",
                     session_id=session_id,
                     name="Bash",
                     input={"command": "sleep 30"},
-                    status=ToolState.ORPHANED,
+                    status=ToolState.AWAITING_PERMISSION,
                     created_at=1700000000.0,
                 )
             ).to_dict(),
@@ -3543,124 +3517,6 @@ class TestIssue1837StderrCallbackClassification:
         assert len(stderr_messages) == 0
 
 
-class TestIssue2007DisplayProjectionContentBlocks:
-    """Issue #2007 (Gap B): _create_message_callback() fed DisplayProjection a
-    flattened content string (always `str | None`), so StoredMessage.get_tool_uses()/
-    get_tool_results() (which gate on isinstance(content, list)) always returned [],
-    making the projection a structural no-op for ordinary messages. Fixed by feeding
-    the real tool_uses/tool_results content-block list instead.
-
-    Issue #2026 (Part B2): display is now computed once, before storage, by
-    _compute_display_metadata_for_storage() — the real ClaudeSDK streaming path
-    calls this via its `display_hook` and stamps the result onto the message dict
-    ahead of _create_message_callback(). These tests call _create_message_callback()
-    directly (bypassing ClaudeSDK), so they replicate that same pre-store step by
-    hand before invoking the callback, exactly mirroring what the SDK does.
-    """
-
-    @pytest.mark.asyncio
-    async def test_tool_use_then_result_transitions_pending_to_completed(
-        self, temp_coordinator, sample_session_config
-    ):
-        from claude_agent_sdk import AssistantMessage, UserMessage
-        from claude_agent_sdk.types import ToolResultBlock, ToolUseBlock
-
-        coordinator = temp_coordinator
-        session_id = await coordinator.create_session(**sample_session_config)
-        cb_inner = coordinator._create_message_callback(session_id)
-
-        received = []
-
-        async def subscriber(sid, msg):
-            received.append(msg)
-
-        coordinator.add_message_callback(session_id, subscriber)
-
-        tool_use_id = "toolu_2007_test"
-
-        assistant_msg = {
-            "type": "assistant",
-            "sdk_message": AssistantMessage(
-                content=[ToolUseBlock(id=tool_use_id, name="Read", input={"file_path": "/x.py"})],
-                model="claude-3-5-sonnet-20241022",
-            ),
-            "session_id": session_id,
-            "timestamp": 1.0,
-        }
-        assistant_msg["display"] = coordinator._compute_display_metadata_for_storage(
-            session_id, assistant_msg
-        )
-        await cb_inner(assistant_msg)
-
-        assert len(received) == 1
-        tool_states = received[0]["display"]["tool_states"]
-        assert tool_states[tool_use_id]["state"] == "pending"
-
-        user_msg = {
-            "type": "user",
-            "sdk_message": UserMessage(
-                content=[ToolResultBlock(tool_use_id=tool_use_id, content="file contents", is_error=False)],
-            ),
-            "session_id": session_id,
-            "timestamp": 2.0,
-        }
-        user_msg["display"] = coordinator._compute_display_metadata_for_storage(session_id, user_msg)
-        await cb_inner(user_msg)
-
-        assert len(received) == 2
-        tool_states = received[1]["display"]["tool_states"]
-        assert tool_states[tool_use_id]["state"] == "completed"
-
-    @pytest.mark.asyncio
-    async def test_tool_use_then_error_result_transitions_to_failed(
-        self, temp_coordinator, sample_session_config
-    ):
-        from claude_agent_sdk import AssistantMessage, UserMessage
-        from claude_agent_sdk.types import ToolResultBlock, ToolUseBlock
-
-        coordinator = temp_coordinator
-        session_id = await coordinator.create_session(**sample_session_config)
-        cb_inner = coordinator._create_message_callback(session_id)
-
-        received = []
-
-        async def subscriber(sid, msg):
-            received.append(msg)
-
-        coordinator.add_message_callback(session_id, subscriber)
-
-        tool_use_id = "toolu_2007_test_fail"
-
-        assistant_msg = {
-            "type": "assistant",
-            "sdk_message": AssistantMessage(
-                content=[ToolUseBlock(id=tool_use_id, name="Bash", input={"command": "false"})],
-                model="claude-3-5-sonnet-20241022",
-            ),
-            "session_id": session_id,
-            "timestamp": 1.0,
-        }
-        assistant_msg["display"] = coordinator._compute_display_metadata_for_storage(
-            session_id, assistant_msg
-        )
-        await cb_inner(assistant_msg)
-
-        user_msg = {
-            "type": "user",
-            "sdk_message": UserMessage(
-                content=[ToolResultBlock(tool_use_id=tool_use_id, content="command failed", is_error=True)],
-            ),
-            "session_id": session_id,
-            "timestamp": 2.0,
-        }
-        user_msg["display"] = coordinator._compute_display_metadata_for_storage(session_id, user_msg)
-        await cb_inner(user_msg)
-
-        assert len(received) == 2
-        tool_states = received[1]["display"]["tool_states"]
-        assert tool_states[tool_use_id]["state"] == "failed"
-
-
 class TestIssue1902ResultErrorHandling:
     """_create_error_callback branches on isinstance(error, ResultError) (issue #1902):
     structured subtype/terminal_reason/api_error_status/errors are captured into
@@ -4141,3 +3997,60 @@ class TestIssue1982McpDegradedStart:
                 await coordinator.cleanup()
 
         assert len(set(reasons)) == len(reasons), "each failure mode must produce a distinct reason"
+
+
+class TestStage4aDLegacyDisplayLayerRemoved:
+    """Stage 4a-D (#2109, AC4/AC5/AC7): DisplayProjection/StoredMessage and the
+    pre-store display_hook plumbing are deleted outright, not reworked. AC5 falls
+    out of AC4 for free — once DisplayProjection is gone, _create_message_callback()
+    has exactly one process_message() call site left per message."""
+
+    @pytest.mark.asyncio
+    async def test_live_message_calls_process_message_exactly_once(
+        self, temp_coordinator, sample_session_config
+    ):
+        """AC5 (#2105) regression: a live (non-delta) message must call
+        MessageProcessor.process_message() exactly once — there is no longer a
+        second call feeding a display projection ahead of this one."""
+        from claude_agent_sdk import AssistantMessage
+        from claude_agent_sdk.types import TextBlock
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        cb_inner = coordinator._create_message_callback(session_id)
+
+        spy = Mock(wraps=coordinator.message_processor.process_message)
+
+        message = {
+            "type": "assistant",
+            "sdk_message": AssistantMessage(
+                content=[TextBlock(text="hello")],
+                model="claude-3-5-sonnet-20241022",
+            ),
+            "session_id": session_id,
+            "timestamp": 1.0,
+        }
+
+        with patch.object(coordinator.message_processor, "process_message", spy):
+            await cb_inner(message)
+
+        assert spy.call_count == 1
+
+    def test_tool_state_has_only_live_values(self):
+        """AC7 (#2109): the three legacy ToolState values (PERMISSION_REQUIRED,
+        EXECUTING, ORPHANED) were only ever set inside DisplayProjection's own
+        methods and must no longer exist now that DisplayProjection is deleted."""
+        from backend.models.messages import ToolState
+
+        assert {member.value for member in ToolState} == {
+            "pending",
+            "awaiting_permission",
+            "running",
+            "completed",
+            "failed",
+            "denied",
+            "interrupted",
+        }
+        assert not hasattr(ToolState, "PERMISSION_REQUIRED")
+        assert not hasattr(ToolState, "EXECUTING")
+        assert not hasattr(ToolState, "ORPHANED")
