@@ -88,6 +88,25 @@ async function replayLivePath(fixture) {
   return {
     messages: messageStore.messagesBySession.get(fixture.sessionId) || [],
     toolCalls: messageStore.toolCallsBySession.get(fixture.sessionId) || [],
+    taskLegs: messageStore.allTaskLegEntriesForSession(fixture.sessionId),
+    streamingPreview: messageStore.streamingPreviewBySession.get(fixture.sessionId) || null,
+  }
+}
+
+// Issue #2109 (AC8/4a-F): taskLegsByTaskId is deliberately NOT reconstructed by
+// loadMessages()/setArchiveMessages() themselves — per message.js's own comments,
+// production callers are expected to seed it beforehand from the backend's
+// already-reduced snapshot (hydrateBackgroundAgents(), fed by a separate
+// GET /api/sessions/{id}/background_agents call stores/session.js makes before
+// loadMessages()). This harness has no equivalent snapshot endpoint response to mock,
+// so it reconstructs the same state that snapshot would produce by replaying each
+// stored Task lifecycle frame through the exact same per-frame reducer the live path
+// uses (applyTaskLifecycleFrame) — not a second, hand-rolled reduction.
+function applyStoredTaskLifecycleFrames(messageStore, sessionId, rawMessages) {
+  for (const msg of rawMessages) {
+    if (msg.type === 'system') {
+      messageStore.applyTaskLifecycleFrame(sessionId, msg.metadata?.subtype, msg.metadata, msg.timestamp)
+    }
   }
 }
 
@@ -103,12 +122,50 @@ async function replayRestPath(fixture) {
     return Promise.resolve({})
   })
 
+  // Matches production's required ordering (see applyStoredTaskLifecycleFrames'
+  // own comment): the real hydrateBackgroundAgents() call always runs BEFORE
+  // loadMessages(), since loadMessages()'s own subagent-narration routing pass
+  // depends on taskIdByLaunchToolUseId already being populated.
+  applyStoredTaskLifecycleFrames(messageStore, fixture.sessionId, fixture.restHistory.messages ?? [])
   await messageStore.loadMessages(fixture.sessionId)
 
   return {
     messages: messageStore.messagesBySession.get(fixture.sessionId) || [],
     toolCalls: messageStore.toolCallsBySession.get(fixture.sessionId) || [],
+    taskLegs: messageStore.allTaskLegEntriesForSession(fixture.sessionId),
+    streamingPreview: messageStore.streamingPreviewBySession.get(fixture.sessionId) || null,
   }
+}
+
+// Issue #2109 (AC8/4a-F): third source — the archive-view reload path. Not a
+// byte-for-byte drop-in of replayRestPath()'s loadMessages() call:
+// setArchiveMessages() takes a flat message array and doesn't do loadMessages()'s
+// own REST-shape unwrapping, so that unwrapping happens here instead. Otherwise the
+// same "mock one GET, call once, snapshot store state" pattern as the other two paths.
+async function replayArchivePath(fixture) {
+  setActivePinia(createPinia())
+  const { useMessageStore } = await import('@/stores/message')
+  const messageStore = useMessageStore()
+
+  const rawMessages = fixture.restHistory.messages ?? []
+  applyStoredTaskLifecycleFrames(messageStore, fixture.sessionId, rawMessages)
+  messageStore.setArchiveMessages(fixture.sessionId, rawMessages)
+
+  return {
+    messages: messageStore.messagesBySession.get(fixture.sessionId) || [],
+    toolCalls: messageStore.toolCallsBySession.get(fixture.sessionId) || [],
+    taskLegs: messageStore.allTaskLegEntriesForSession(fixture.sessionId),
+    streamingPreview: messageStore.streamingPreviewBySession.get(fixture.sessionId) || null,
+  }
+}
+
+// rafHandle/pendingText/pendingThinking are animation-frame/scratch-flush state, not
+// data — never meaningfully comparable across independently-replayed stores. Keep only
+// the identity-bearing fields before comparing.
+function normalizeStreamingPreview(preview) {
+  if (!preview) return null
+  const { active, content, thinking } = preview
+  return { active, content, thinking }
 }
 
 // Issue #1999 (AC1/AC2) found a genuine, pre-existing divergence between the live
@@ -221,10 +278,25 @@ describe('fixture equivalence — live event path vs. REST reload path (issue #1
 
     const live = await replayLivePath(fixture)
     const rest = await replayRestPath(fixture)
+    const archive = await replayArchivePath(fixture)
 
     expect(live.messages.length).toBeGreaterThan(0)
     expect(normalizeForComparison(live.messages)).toEqual(normalizeForComparison(rest.messages))
     expect(normalizeForComparison(live.toolCalls)).toEqual(normalizeForComparison(rest.toolCalls))
+
+    expect(normalizeForComparison(live.messages)).toEqual(normalizeForComparison(archive.messages))
+    expect(normalizeForComparison(live.toolCalls)).toEqual(normalizeForComparison(archive.toolCalls))
+
+    // Issue #2109 (AC8/4a-F): taskLegs/streamingPreview regression guard — for the
+    // fixture-replay scenarios exercised here (full historical replay, nothing
+    // genuinely in-flight), both are expected to be empty/equivalent across all
+    // three sources by construction; the value is catching a future change that
+    // breaks one path without the others.
+    expect(normalizeForComparison(live.taskLegs)).toEqual(normalizeForComparison(rest.taskLegs))
+    expect(normalizeForComparison(live.taskLegs)).toEqual(normalizeForComparison(archive.taskLegs))
+
+    expect(normalizeStreamingPreview(live.streamingPreview)).toEqual(normalizeStreamingPreview(rest.streamingPreview))
+    expect(normalizeStreamingPreview(live.streamingPreview)).toEqual(normalizeStreamingPreview(archive.streamingPreview))
   }
 
   it.each(expectedToConverge)('fixture "%s": messagesBySession and toolCallsBySession converge', checkConvergence)

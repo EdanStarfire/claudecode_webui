@@ -148,7 +148,8 @@ class BackendApp:
             from .mock_sdk import MockClaudeSDK
             self.coordinator.set_sdk_factory(
                 _mock_factory_for_fixtures(
-                    MockClaudeSDK, fixtures_dir, set(available_fixtures or [])
+                    MockClaudeSDK, fixtures_dir, set(available_fixtures or []),
+                    coordinator=self.coordinator,
                 )
             )
         self.skill_manager = SkillManager()
@@ -1286,8 +1287,16 @@ class BackendApp:
         logger.info("Backend cleanup completed")
 
 
-def _mock_factory_for_fixtures(mock_cls, fixtures_dir: Path, available_fixtures: set[str]):
-    """Create a factory that maps session names to fixture directories (issue #561)."""
+def _mock_factory_for_fixtures(
+    mock_cls, fixtures_dir: Path, available_fixtures: set[str], coordinator=None
+):
+    """Create a factory that maps session names to fixture directories (issue #561).
+
+    Issue #2109 (AC8/4a-F): `coordinator`, when given, is threaded into the mock SDK
+    so raw-layer replay (_start_raw_replay) can call mark_session_tools_interrupted()
+    at recorded restart/interrupt points — same mechanism as the test-only mock
+    factories in backend/tests/integration/conftest.py.
+    """
     def factory(session_id, working_directory, **kwargs):
         session_name = kwargs.pop("session_name", None)
         if session_name:
@@ -1299,6 +1308,8 @@ def _mock_factory_for_fixtures(mock_cls, fixtures_dir: Path, available_fixtures:
                     f"No fixture found for session name '{session_name}'. "
                     f"Available fixtures: {', '.join(sorted(available_fixtures))}"
                 )
+        if coordinator is not None:
+            kwargs.setdefault("coordinator", coordinator)
         return mock_cls(session_id=session_id, working_directory=working_directory, **kwargs)
     return factory
 
