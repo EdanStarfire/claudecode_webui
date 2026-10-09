@@ -237,6 +237,28 @@ async def _fetch_all_messages(client, session_id: str) -> dict:
     return combined
 
 
+def _final_tool_call_states(records: list[dict]) -> dict[str, dict]:
+    """Issue #2109 AC12: reduce a chronological sequence of `tool_call`-typed
+    records down to each `tool_use_id`'s final observed state — last-write-wins.
+    `get_session_messages()` returns stored tool_call records unchanged (AC3: no
+    read-time synthesis), and the live event stream is just those same records as
+    they're appended, so both the live and REST/reload sources should reduce to
+    identical final state for every tool call, independent of how many restarts
+    the underlying recording actually contains."""
+    final: dict[str, dict] = {}
+    for record in records:
+        if record.get("type") != "tool_call":
+            continue
+        tool_use_id = record.get("tool_use_id")
+        if not tool_use_id:
+            continue
+        final[tool_use_id] = {
+            "name": record.get("name"),
+            "status": record.get("status"),
+        }
+    return final
+
+
 @pytest.mark.parametrize("fixture_name", FIXTURE_NAMES)
 async def test_generate_fixture_from_real_pipeline(api_integration_env, fixture_name):
     client = api_integration_env["client"]
@@ -366,3 +388,43 @@ async def test_generate_fixture_from_real_pipeline(api_integration_env, fixture_
     assert reread_rest_history.get("messages"), (
         f"rest_history.json round-trip for fixture '{fixture_name}' came back empty."
     )
+
+    # Issue #2109 (AC11): 2026-09-23-primary is the one committed raw fixture whose
+    # messages.jsonl/rest_history.json are still exactly as non-canonical as stage 3
+    # left them (confirmed via `git log 95b4fc45..041c5280` — no stage since original
+    # canonicalization has touched it). Promote this replay's real, canonically-written
+    # messages.jsonl (and the rest_history.json already captured above) into the
+    # committed fixture directory, overwriting the stale non-canonical content.
+    if fixture_name == "2026-09-23-primary":
+        storage = api_integration_env["coordinator"]._storage_managers[session_id]
+        live_messages_path = storage.messages_file
+        assert live_messages_path.exists(), (
+            f"No live messages.jsonl found for fixture '{fixture_name}' at "
+            f"{live_messages_path} — cannot promote into the committed fixture."
+        )
+        committed_dir = RAW_FIXTURES_ROOT / fixture_name
+        shutil.copyfile(live_messages_path, committed_dir / "messages.jsonl")
+        (committed_dir / "rest_history.json").write_text(
+            json.dumps(rest_history, indent=2, default=str), encoding="utf-8"
+        )
+
+        # Issue #2109 (AC12): live-streamed and REST-reloaded tool_call records must
+        # converge to the same final per-tool_use_id state. The issue text says this
+        # recording contains "two restarts"; counted directly it actually has 3
+        # post-initial client_launched markers (see plan) — asserted generically here
+        # (final-state equality) rather than against a specific restart count, since
+        # that discrepancy is unresolved and not this stage's to guess at.
+        live_tool_call_records = [
+            event["data"] for event in events
+            if event.get("type") == "tool_call" and isinstance(event.get("data"), dict)
+        ]
+        live_states = _final_tool_call_states(live_tool_call_records)
+        reload_states = _final_tool_call_states(rest_history["messages"])
+        assert live_states, (
+            f"Live event stream for fixture '{fixture_name}' produced zero tool_call "
+            f"records — nothing to converge."
+        )
+        assert live_states == reload_states, (
+            f"Live vs reload tool-call state diverged for fixture '{fixture_name}': "
+            f"live={live_states}, reload={reload_states}"
+        )

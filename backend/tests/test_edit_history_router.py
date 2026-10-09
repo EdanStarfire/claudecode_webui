@@ -37,22 +37,6 @@ def _write_messages(path: Path, messages: list[dict]) -> None:
             f.write(json.dumps(msg) + "\n")
 
 
-def _tool_use_block(tool_id: str, name: str, inp: dict) -> dict:
-    return {"type": "tool_use", "id": tool_id, "name": name, "input": inp}
-
-
-def _tool_result_block(tool_id: str, is_error: bool = False) -> dict:
-    return {"type": "tool_result", "tool_use_id": tool_id, "is_error": is_error}
-
-
-def _assistant_msg(blocks: list[dict], ts: float = 1000.0) -> dict:
-    return {"_type": "AssistantMessage", "timestamp": ts, "data": {"content": blocks}}
-
-
-def _user_msg(blocks: list[dict], ts: float = 1001.0) -> dict:
-    return {"_type": "UserMessage", "timestamp": ts, "data": {"content": blocks}}
-
-
 # ---------------------------------------------------------------------------
 # _classify_bash unit tests
 # ---------------------------------------------------------------------------
@@ -146,243 +130,20 @@ class TestGetEditHistory:
         assert data["tool_count"] == 0
 
     @pytest.mark.asyncio
-    async def test_edit_tool_use_extracted(self):
+    async def test_legacy_type_tagged_record_raises_500(self):
+        """A `_type`-tagged StoredMessage-era record triggers the AC10 guard
+        (issue #2109): surfaced as a 500 (logged loudly server-side via
+        `handle_exceptions`), never silently misread as canonical."""
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "messages.jsonl"
-            block = _tool_use_block(
-                "tu1", "Edit",
-                {"file_path": "/src/main.py", "old_string": "foo", "new_string": "bar"}
-            )
-            _write_messages(path, [_assistant_msg([block])])
-            webui = _make_webui(str(path))
-            app = _make_app(webui)
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                r = await client.get("/api/sessions/s1/edit-history")
-        assert r.status_code == 200
-        entries = r.json()["entries"]
-        assert len(entries) == 1
-        e = entries[0]
-        assert e["tool_name"] == "Edit"
-        assert e["file_path"] == "/src/main.py"
-        assert e["input"]["old_string"] == "foo"
-        assert e["input"]["new_string"] == "bar"
-        assert e["tool_use_id"] == "tu1"
-
-    @pytest.mark.asyncio
-    async def test_write_includes_line_count(self):
-        content = "line1\nline2\nline3"
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "messages.jsonl"
-            block = _tool_use_block(
-                "tu2", "Write",
-                {"file_path": "/out.txt", "content": content}
-            )
-            _write_messages(path, [_assistant_msg([block])])
-            webui = _make_webui(str(path))
-            app = _make_app(webui)
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                r = await client.get("/api/sessions/s1/edit-history")
-        entries = r.json()["entries"]
-        assert len(entries) == 1
-        e = entries[0]
-        assert e["tool_name"] == "Write"
-        assert e["line_count"] == 3
-        assert e["file_path"] == "/out.txt"
-
-    @pytest.mark.asyncio
-    async def test_bash_classification(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "messages.jsonl"
-            modifying = _tool_use_block("tu3", "Bash", {"command": "sed -i 's/a/b/' f.txt"})
-            non_mod = _tool_use_block("tu4", "Bash", {"command": "ls -la"})
-            _write_messages(path, [_assistant_msg([modifying, non_mod])])
-            webui = _make_webui(str(path))
-            app = _make_app(webui)
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                r = await client.get("/api/sessions/s1/edit-history")
-        entries = r.json()["entries"]
-        assert len(entries) == 2
-        by_id = {e["tool_use_id"]: e for e in entries}
-        assert by_id["tu3"]["likely_modifying"] is True
-        assert by_id["tu4"]["likely_modifying"] is False
-
-    @pytest.mark.asyncio
-    async def test_tool_result_succeeded_flag(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "messages.jsonl"
-            block = _tool_use_block("tu5", "Edit", {"file_path": "/f.py", "old_string": "a", "new_string": "b"})
-            result_ok = _tool_result_block("tu5", is_error=False)
-            block2 = _tool_use_block("tu6", "Edit", {"file_path": "/g.py", "old_string": "x", "new_string": "y"})
-            result_err = _tool_result_block("tu6", is_error=True)
             _write_messages(path, [
-                _assistant_msg([block, block2], ts=1000.0),
-                _user_msg([result_ok, result_err], ts=1001.0),
+                {"_type": "AssistantMessage", "timestamp": 1000.0, "data": {"content": []}},
             ])
             webui = _make_webui(str(path))
             app = _make_app(webui)
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
                 r = await client.get("/api/sessions/s1/edit-history")
-        entries = r.json()["entries"]
-        by_id = {e["tool_use_id"]: e for e in entries}
-        assert by_id["tu5"]["succeeded"] is True
-        assert by_id["tu6"]["succeeded"] is False
-
-    @pytest.mark.asyncio
-    async def test_chronological_order(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "messages.jsonl"
-            b1 = _tool_use_block("tu7", "Edit", {"file_path": "/a.py", "old_string": "", "new_string": "x"})
-            b2 = _tool_use_block("tu8", "Edit", {"file_path": "/b.py", "old_string": "", "new_string": "y"})
-            b3 = _tool_use_block("tu9", "Write", {"file_path": "/c.py", "content": "z"})
-            _write_messages(path, [
-                _assistant_msg([b1], ts=100.0),
-                _assistant_msg([b2], ts=200.0),
-                _assistant_msg([b3], ts=300.0),
-            ])
-            webui = _make_webui(str(path))
-            app = _make_app(webui)
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                r = await client.get("/api/sessions/s1/edit-history")
-        entries = r.json()["entries"]
-        assert [e["tool_use_id"] for e in entries] == ["tu7", "tu8", "tu9"]
-
-    @pytest.mark.asyncio
-    async def test_issue_1565_dev_null_bash_is_not_modifying(self):
-        """A Bash command that redirects only to /dev/null returns likely_modifying=False."""
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "messages.jsonl"
-            block = _tool_use_block("tu_dnull", "Bash", {"command": "npm test >/dev/null 2>&1"})
-            _write_messages(path, [_assistant_msg([block])])
-            webui = _make_webui(str(path))
-            app = _make_app(webui)
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                r = await client.get("/api/sessions/s1/edit-history")
-        entries = r.json()["entries"]
-        assert len(entries) == 1
-        assert entries[0]["likely_modifying"] is False
-
-    @pytest.mark.asyncio
-    async def test_pending_result_when_no_tool_result(self):
-        """Entry with no matching tool_result has succeeded=None (pending)."""
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "messages.jsonl"
-            block = _tool_use_block("tu10", "Bash", {"command": "make build"})
-            _write_messages(path, [_assistant_msg([block])])
-            webui = _make_webui(str(path))
-            app = _make_app(webui)
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                r = await client.get("/api/sessions/s1/edit-history")
-        entries = r.json()["entries"]
-        assert entries[0]["succeeded"] is None
-
-
-# ---------------------------------------------------------------------------
-# Real-SDK-shape tests (blocks WITHOUT 'type' field — as produced by
-# dataclasses.asdict() from ToolUseBlock / ToolResultBlock)
-# ---------------------------------------------------------------------------
-
-def _real_tool_use_block(tool_id: str, name: str, inp: dict) -> dict:
-    """SDK-shape tool_use block: no 'type' field."""
-    return {"id": tool_id, "name": name, "input": inp}
-
-
-def _real_tool_result_block(tool_id: str, is_error: bool = False) -> dict:
-    """SDK-shape tool_result block: no 'type' field."""
-    return {"tool_use_id": tool_id, "content": "", "is_error": is_error}
-
-
-class TestGetEditHistoryRealSDKShape:
-    @pytest.mark.asyncio
-    async def test_edit_block_without_type_field_extracted(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "messages.jsonl"
-            block = _real_tool_use_block(
-                "sdk1", "Edit",
-                {"file_path": "/src/app.py", "old_string": "x", "new_string": "y"}
-            )
-            _write_messages(path, [_assistant_msg([block])])
-            webui = _make_webui(str(path))
-            app = _make_app(webui)
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                r = await client.get("/api/sessions/s1/edit-history")
-        assert r.status_code == 200
-        entries = r.json()["entries"]
-        assert len(entries) == 1
-        e = entries[0]
-        assert e["tool_name"] == "Edit"
-        assert e["file_path"] == "/src/app.py"
-        assert e["tool_use_id"] == "sdk1"
-
-    @pytest.mark.asyncio
-    async def test_write_block_without_type_field_includes_line_count(self):
-        content = "a\nb\nc\nd"
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "messages.jsonl"
-            block = _real_tool_use_block("sdk2", "Write", {"file_path": "/out.py", "content": content})
-            _write_messages(path, [_assistant_msg([block])])
-            webui = _make_webui(str(path))
-            app = _make_app(webui)
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                r = await client.get("/api/sessions/s1/edit-history")
-        entries = r.json()["entries"]
-        assert len(entries) == 1
-        assert entries[0]["line_count"] == 4
-        assert entries[0]["file_path"] == "/out.py"
-
-    @pytest.mark.asyncio
-    async def test_bash_block_without_type_field_classified(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "messages.jsonl"
-            modifying = _real_tool_use_block("sdk3", "Bash", {"command": "mv a.txt b.txt"})
-            non_mod = _real_tool_use_block("sdk4", "Bash", {"command": "cat README.md"})
-            _write_messages(path, [_assistant_msg([modifying, non_mod])])
-            webui = _make_webui(str(path))
-            app = _make_app(webui)
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                r = await client.get("/api/sessions/s1/edit-history")
-        entries = r.json()["entries"]
-        assert len(entries) == 2
-        by_id = {e["tool_use_id"]: e for e in entries}
-        assert by_id["sdk3"]["likely_modifying"] is True
-        assert by_id["sdk4"]["likely_modifying"] is False
-
-    @pytest.mark.asyncio
-    async def test_tool_result_block_without_type_field_sets_succeeded(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "messages.jsonl"
-            use_ok = _real_tool_use_block("sdk5", "Edit", {"file_path": "/f.py", "old_string": "a", "new_string": "b"})
-            use_err = _real_tool_use_block("sdk6", "Write", {"file_path": "/g.py", "content": "z"})
-            res_ok = _real_tool_result_block("sdk5", is_error=False)
-            res_err = _real_tool_result_block("sdk6", is_error=True)
-            _write_messages(path, [
-                _assistant_msg([use_ok, use_err], ts=1000.0),
-                _user_msg([res_ok, res_err], ts=1001.0),
-            ])
-            webui = _make_webui(str(path))
-            app = _make_app(webui)
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                r = await client.get("/api/sessions/s1/edit-history")
-        entries = r.json()["entries"]
-        by_id = {e["tool_use_id"]: e for e in entries}
-        assert by_id["sdk5"]["succeeded"] is True
-        assert by_id["sdk6"]["succeeded"] is False
-
-    @pytest.mark.asyncio
-    async def test_chronological_order_with_real_shape(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "messages.jsonl"
-            b1 = _real_tool_use_block("sdk7", "Edit", {"file_path": "/a.py", "old_string": "", "new_string": "x"})
-            b2 = _real_tool_use_block("sdk8", "Write", {"file_path": "/b.py", "content": "y"})
-            _write_messages(path, [
-                _assistant_msg([b1], ts=10.0),
-                _assistant_msg([b2], ts=20.0),
-            ])
-            webui = _make_webui(str(path))
-            app = _make_app(webui)
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                r = await client.get("/api/sessions/s1/edit-history")
-        entries = r.json()["entries"]
-        assert [e["tool_use_id"] for e in entries] == ["sdk7", "sdk8"]
+        assert r.status_code == 500
 
 
 # ---------------------------------------------------------------------------
@@ -440,3 +201,67 @@ class TestGetEditHistoryLegacyFormat:
         entries = r.json()["entries"]
         assert len(entries) == 1
         assert entries[0]["succeeded"] is True
+
+    @pytest.mark.asyncio
+    async def test_bash_classification(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "messages.jsonl"
+            modifying = _legacy_tool_use("leg3", "Bash", {"command": "sed -i 's/a/b/' f.txt"})
+            non_mod = _legacy_tool_use("leg4", "Bash", {"command": "ls -la"})
+            _write_messages(path, [_legacy_assistant_msg([modifying, non_mod])])
+            webui = _make_webui(str(path))
+            app = _make_app(webui)
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                r = await client.get("/api/sessions/s1/edit-history")
+        entries = r.json()["entries"]
+        by_id = {e["tool_use_id"]: e for e in entries}
+        assert by_id["leg3"]["likely_modifying"] is True
+        assert by_id["leg4"]["likely_modifying"] is False
+
+    @pytest.mark.asyncio
+    async def test_issue_1565_dev_null_bash_is_not_modifying(self):
+        """A Bash command that redirects only to /dev/null returns likely_modifying=False."""
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "messages.jsonl"
+            tu = _legacy_tool_use("leg_dnull", "Bash", {"command": "npm test >/dev/null 2>&1"})
+            _write_messages(path, [_legacy_assistant_msg([tu])])
+            webui = _make_webui(str(path))
+            app = _make_app(webui)
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                r = await client.get("/api/sessions/s1/edit-history")
+        entries = r.json()["entries"]
+        assert len(entries) == 1
+        assert entries[0]["likely_modifying"] is False
+
+    @pytest.mark.asyncio
+    async def test_chronological_order(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "messages.jsonl"
+            tu1 = _legacy_tool_use("leg5", "Edit", {"file_path": "/a.py", "old_string": "", "new_string": "x"})
+            tu2 = _legacy_tool_use("leg6", "Edit", {"file_path": "/b.py", "old_string": "", "new_string": "y"})
+            tu3 = _legacy_tool_use("leg7", "Write", {"file_path": "/c.py", "content": "z"})
+            _write_messages(path, [
+                _legacy_assistant_msg([tu1], ts=100.0),
+                _legacy_assistant_msg([tu2], ts=200.0),
+                _legacy_assistant_msg([tu3], ts=300.0),
+            ])
+            webui = _make_webui(str(path))
+            app = _make_app(webui)
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                r = await client.get("/api/sessions/s1/edit-history")
+        entries = r.json()["entries"]
+        assert [e["tool_use_id"] for e in entries] == ["leg5", "leg6", "leg7"]
+
+    @pytest.mark.asyncio
+    async def test_pending_result_when_no_tool_result(self):
+        """Entry with no matching tool_result has succeeded=None (pending)."""
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "messages.jsonl"
+            tu = _legacy_tool_use("leg8", "Bash", {"command": "make build"})
+            _write_messages(path, [_legacy_assistant_msg([tu])])
+            webui = _make_webui(str(path))
+            app = _make_app(webui)
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                r = await client.get("/api/sessions/s1/edit-history")
+        entries = r.json()["entries"]
+        assert entries[0]["succeeded"] is None

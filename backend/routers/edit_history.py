@@ -8,6 +8,8 @@ from fastapi import APIRouter, HTTPException
 
 from shared.exception_handlers import handle_exceptions
 
+from ..models.messages import LegacyMessageFormatError
+
 # Heuristic for classifying Bash commands as likely file-modifying.
 # Conservative — false positives (treating non-modifying as modifying)
 # are preferred over false negatives (hiding modifying calls).
@@ -34,26 +36,6 @@ def _classify_bash(command: str) -> bool:
     if not command:
         return False
     return bool(_MODIFYING_BASH_RE.search(command))
-
-
-def _is_tool_use_block(block: dict) -> bool:
-    """A tool_use block has id and name (real SDK shape has no 'type' field)."""
-    if not isinstance(block, dict):
-        return False
-    t = block.get("type")
-    if t and t != "tool_use":
-        return False
-    return "id" in block and "name" in block
-
-
-def _is_tool_result_block(block: dict) -> bool:
-    """A tool_result block has tool_use_id (real SDK shape has no 'type' field)."""
-    if not isinstance(block, dict):
-        return False
-    t = block.get("type")
-    if t and t != "tool_result":
-        return False
-    return "tool_use_id" in block
 
 
 def _build_entry(block: dict, ts: float | None) -> dict:
@@ -110,30 +92,14 @@ def build_router(webui) -> APIRouter:
                 except json.JSONDecodeError:
                     continue
 
-                msg_type = msg.get("_type") or msg.get("type")
+                stored_type = msg.get("_type")
+                if stored_type:
+                    raise LegacyMessageFormatError(session_id, stored_type)
+
+                msg_type = msg.get("type")
                 ts = msg.get("timestamp")
-                content = (msg.get("data") or {}).get("content") or []
-                if not isinstance(content, list):
-                    continue
 
-                if msg_type == "AssistantMessage":
-                    for block in content:
-                        if not _is_tool_use_block(block):
-                            continue
-                        name = block.get("name")
-                        if name not in ("Edit", "Write", "Bash"):
-                            continue
-                        entries.append(_build_entry(block, ts))
-
-                elif msg_type == "UserMessage":
-                    for block in content:
-                        if not _is_tool_result_block(block):
-                            continue
-                        tid = block.get("tool_use_id")
-                        if tid:
-                            results[tid] = not block.get("is_error", False)
-
-                elif msg_type == "assistant":
+                if msg_type == "assistant":
                     # Fallback: legacy prepare_for_storage() shape used by mock SDK
                     metadata = msg.get("metadata") or {}
                     for tu in metadata.get("tool_uses") or []:

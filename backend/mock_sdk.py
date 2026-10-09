@@ -137,10 +137,27 @@ class SessionRecording:
         return metadata.get("has_permission_requests", False)
 
     def _is_permission_response(self, msg: dict) -> bool:
-        """Check if a message is a permission response."""
+        """Check if a message is a permission response — an action boundary that
+        resumes replay after an awaiting_permission pause.
+
+        Issue #2109 (AC11): permission_flow no longer has a standalone
+        `permission_response`-typed record (pre-#324 shape, now reconstructed as
+        real `tool_call` transitions) — only the `running`/`denied` transition
+        following a real permission decision is the actual boundary.
+        `permission_granted is True` (not just `status == "running"`) distinguishes
+        a genuine permission-driven transition from an ordinary auto-approved
+        pending->running transition, which is plain SDK-generated segment content
+        (see `_is_sdk_generated`), not a user-decision point.
+        """
         msg_type = self._get_message_type(msg)
         if msg_type == "permission_response":
             return True
+        if msg_type == "tool_call":
+            if msg.get("status") == "denied":
+                return True
+            if msg.get("status") == "running" and msg.get("permission_granted") is True:
+                return True
+            return False
         metadata = msg.get("metadata", {})
         return metadata.get("has_permission_responses", False)
 
@@ -176,6 +193,16 @@ class SessionRecording:
 
     def _classify_permission_response(self, msg: dict) -> ActionType:
         """Classify a permission response into its specific action type."""
+        if self._get_message_type(msg) == "tool_call":
+            # Issue #2109 (AC11): reconstructed tool_call transition (see
+            # _is_permission_response) — classify directly off its own fields
+            # rather than a "metadata" sub-object this shape doesn't have.
+            if msg.get("status") == "denied":
+                return ActionType.PERMISSION_DENY
+            if msg.get("applied_updates"):
+                return ActionType.PERMISSION_ALLOW_WITH_SUGGESTIONS
+            return ActionType.PERMISSION_ALLOW
+
         metadata = msg.get("metadata", {})
 
         # Check for deny
@@ -210,6 +237,13 @@ class SessionRecording:
 
         # Result messages are always SDK-generated
         if msg_type in ("result", "ResultMessage"):
+            return True
+
+        # Issue #2109 (AC11): a reconstructed tool_call transition that isn't itself
+        # the permission-response action boundary (pending/awaiting_permission, or a
+        # plain auto-approved running/completed/failed/interrupted transition with no
+        # permission step at all) is ordinary SDK-generated segment content.
+        if msg_type == "tool_call" and not self._is_permission_response(msg):
             return True
 
         # Tool results appear as user type but are SDK-generated
@@ -546,25 +580,38 @@ class MockClaudeSDK:
                     sdk_obj, session_id=self.session_id
                 ).to_dict()
             except Exception as e:
-                # A fixture-vs-installed-SDK drift signal (unrecognized _type or
-                # malformed data) degrades to an unconverted pass-through instead of
-                # dropping the message outright — mirrors the old behavior this
-                # unification replaced, for exactly the case it can't reconstruct.
+                # Issue #2109 AC11: a fixture-vs-installed-SDK drift signal (unrecognized
+                # _type or malformed data) now fails loudly instead of degrading to an
+                # unconverted pass-through — every committed fixture is canonical-shape
+                # clean, so this should never fire against a real fixture in practice.
                 logger.error(f"Failed to reconstruct replayed message ({sdk_type}): {e}")
-                record_dict = dict(msg)
-                record_dict.setdefault("session_id", self.session_id)
+                raise RuntimeError(
+                    f"Failed to reconstruct replayed message ({sdk_type}): {e}"
+                ) from e
         elif msg.get("type") == "user":
             record_dict = MessageRecord.from_user_input(
                 msg.get("content", ""), self.session_id, metadata=msg.get("metadata")
             ).to_dict()
         elif msg.get("type") == "system":
             record_dict = _message_dict_to_record(msg, self.session_id).to_dict()
-        else:
-            # permission_request/permission_response and anything else with no
-            # `_type`: pre-#324 shapes with no current canonical equivalent — pass
-            # through unconverted, exactly as today. Not part of this stage's scope.
+        elif msg.get("type") in ("assistant", "result", "tool_call"):
+            # Issue #2109 AC11: already-canonical flat record — e.g. an
+            # `AssistantMessage`/`ResultMessage` regenerated by
+            # `regenerate_fixtures_cli.py` (via `MessageRecord.from_sdk_message`), or
+            # the permission_flow fixture's reconstructed pending/awaiting_permission/
+            # running|denied `tool_call` transitions. Nothing left to convert — pass
+            # through as-is.
             record_dict = dict(msg)
             record_dict.setdefault("session_id", self.session_id)
+        else:
+            # Issue #2109 AC11: permission_request/permission_response (the only other
+            # shapes that used to reach here) no longer exist in any committed fixture —
+            # every record has been either `_type`-tagged or one of the flat shapes above
+            # since #324's tool-lifecycle unification. Fail loudly rather than silently
+            # pass through an unrecognized shape.
+            raise ValueError(
+                f"Unrecognized replayed message shape: no _type, type={msg.get('type')!r}"
+            )
 
         if self.storage_manager:
             try:

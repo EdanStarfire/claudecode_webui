@@ -31,6 +31,7 @@ from .litellm_proxy_manager import make_model_alias
 from .mcp_config_manager import McpServerType
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import (
+    LegacyMessageFormatError,
     MessageRecord,
     PermissionInfo,
     ToolCall,
@@ -4418,6 +4419,33 @@ class SessionCoordinator:
         session_tools = self._active_tool_calls.get(session_id, {})
         return session_tools.get(tool_use_id)
 
+    def apply_tool_call_snapshot(self, session_id: str, tool_call: ToolCall) -> ToolCall:
+        """Issue #2109 (AC11): replay-only — installs an already-complete ToolCall
+        snapshot (e.g. a regenerated fixture's reconstructed pending/awaiting_permission/
+        running|denied record) as the session's tracked state for that tool_use_id
+        verbatim, rather than deriving a transition from partial fields. Used by
+        BackendApp._emit_tool_call_updates()'s flat `tool_call` replay-mirror branch.
+
+        A terminal snapshot (denied/completed/failed/interrupted) is removed from
+        active tracking and recorded on the watchdog — mirroring every other
+        terminal-state transition method (update_tool_call_permission_response's
+        deny path, update_tool_call_result's completed/failed path) — so it can't
+        linger in _active_tool_calls and later get silently clobbered back to
+        INTERRUPTED by a mark_session_tools_interrupted() bulk sweep.
+        """
+        if session_id not in self._active_tool_calls:
+            self._active_tool_calls[session_id] = {}
+        self._active_tool_calls[session_id][tool_call.tool_use_id] = tool_call
+
+        if tool_call.status in (
+            ToolState.DENIED, ToolState.COMPLETED, ToolState.FAILED, ToolState.INTERRUPTED,
+        ):
+            self._remove_active_tool_call(session_id, tool_call.tool_use_id)
+            if tool_call.status != ToolState.INTERRUPTED and hasattr(self, '_watchdog') and self._watchdog is not None:
+                self._watchdog.record_tool_outcome(session_id, tool_call.tool_use_id, tool_call.status.value)
+
+        return tool_call
+
     def _remove_active_tool_call(self, session_id: str, tool_use_id: str) -> None:
         """Remove a tool call from active tracking."""
         session_tools = self._active_tool_calls.get(session_id, {})
@@ -4448,18 +4476,14 @@ class SessionCoordinator:
             record = _message_dict_to_record(message_data, session_id, display=None)
             record_dict = record.to_dict()
         except Exception:
+            # Issue #2109 (AC11): a write-time path (synthetic system/lifecycle
+            # messages) — fail loudly rather than falling back to storing the
+            # original, uncanonicalized dict. A canonicalization failure here is a
+            # genuine bug that should surface immediately, not silently write a
+            # non-canonical record to disk that AC10's read-time guard would later
+            # choke on.
             logger.exception(f"Failed to canonicalize processed message for session {session_id}")
-            # Fallback to direct storage of the original (uncanonicalized) dict —
-            # message_data is intentionally left as-is here (canonicalization itself
-            # failed, so there is no canonical shape to stamp it into).
-            message_data.setdefault("message_id", str(uuid4()))
-            storage = self._storage_managers.get(session_id)
-            if storage:
-                try:
-                    await storage.append_message(message_data)
-                except Exception:
-                    logger.exception(f"Failed to store processed message for session {session_id}")
-            return
+            raise
 
         # Issue #2084 AC2: stamp message_data in place to become the canonical dict
         # BEFORE attempting storage, so every caller's subsequent `callback(message_data)`
@@ -4761,13 +4785,12 @@ class SessionCoordinator:
                 # is_processing reset is relocated onto this subtype instead, since
                 # _send_interrupt_message() fires under the exact same condition
                 # interrupt_success used to (sdk.interrupt_session() returned True).
-                # Known narrow gap: _send_interrupt_message() wraps its store-then-callback
-                # sequence in one try/except, so if the storage write fails AND its own
-                # internal fallback also fails, this branch never runs and is_processing
-                # stays stuck True. This is not a new risk shape — it's the same one every
-                # other _store_processed_message()-then-callback sender in this file already
-                # has (client_launched, mcp_server_degraded, session_failed) — just newly
-                # applicable here since the reset used to be delivered independent of storage.
+                # Issue #2109 (AC11): _send_interrupt_message() (and every other
+                # _store_processed_message()-then-callback sender in this file —
+                # client_launched, mcp_server_degraded, session_failed) now catches a
+                # _store_processed_message() failure separately from the callback call,
+                # so this branch still runs (and is_processing still resets) even if
+                # storage/canonicalization fails for that message.
                 elif parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'interrupt':
                     try:
                         await self.session_manager.update_processing_state(session_id, False)
@@ -4940,7 +4963,15 @@ class SessionCoordinator:
                     "session_id": session_id,
                     "timestamp": get_unix_timestamp()
                 }
-                await self._store_processed_message(session_id, stderr_message)
+                # Issue #2109 (AC11): _store_processed_message now raises on a
+                # canonicalization failure (logged there) instead of silently storing a
+                # non-canonical fallback — but that must not also suppress this live
+                # delivery to the frontend, so it's caught here and the callback still
+                # fires with whatever shape message_data is left in.
+                try:
+                    await self._store_processed_message(session_id, stderr_message)
+                except Exception:
+                    pass
                 await message_callback(stderr_message)
             except Exception:
                 logger.exception(f"Error in stderr callback for session {session_id}")
@@ -4975,7 +5006,12 @@ class SessionCoordinator:
                 "sdk_message_type": "SystemMessage",
             }
 
-            await self._store_processed_message(session_id, message_data)
+            # Issue #2109 (AC11): a canonicalization-failure raise must not also
+            # suppress this live delivery to the frontend (see stderr callback above).
+            try:
+                await self._store_processed_message(session_id, message_data)
+            except Exception:
+                pass
 
             callback = self._create_message_callback(session_id)
             await callback(message_data)
@@ -5004,8 +5040,13 @@ class SessionCoordinator:
 
             # logger.info(f"DEBUG: About to store processed message: {message_data}")
 
-            # Process and store message using unified MessageProcessor
-            await self._store_processed_message(session_id, message_data)
+            # Process and store message using unified MessageProcessor. Issue #2109
+            # (AC11): a canonicalization-failure raise must not also suppress this
+            # live delivery to the frontend (see stderr callback above).
+            try:
+                await self._store_processed_message(session_id, message_data)
+            except Exception:
+                pass
 
             # logger.info(f"DEBUG: Message stored, about to send via callback")
 
@@ -5060,8 +5101,14 @@ class SessionCoordinator:
             if error_list:
                 message_data["errors"] = error_list
 
-            # Process and store message using unified MessageProcessor
-            await self._store_processed_message(session_id, message_data)
+            # Process and store message using unified MessageProcessor. Issue #2109
+            # (AC11): a canonicalization-failure raise must not also suppress this
+            # live delivery to the frontend (see stderr callback above) — this message
+            # in particular is the user's only explanation for why their session failed.
+            try:
+                await self._store_processed_message(session_id, message_data)
+            except Exception:
+                pass
 
             # Send through message callback system for real-time display
             callback = self._create_message_callback(session_id)
@@ -5084,8 +5131,13 @@ class SessionCoordinator:
                 "sdk_message_type": "SystemMessage"
             }
 
-            # Process and store message using unified MessageProcessor
-            await self._store_processed_message(session_id, message_data)
+            # Process and store message using unified MessageProcessor. Issue #2109
+            # (AC11): a canonicalization-failure raise must not also suppress this
+            # live delivery to the frontend (see stderr callback above).
+            try:
+                await self._store_processed_message(session_id, message_data)
+            except Exception:
+                pass
 
             # Send through message callback system for real-time display
             callback = self._create_message_callback(session_id)
@@ -5506,21 +5558,13 @@ class SessionCoordinator:
                         continue
                     stored_type = row.get("_type")
                     if stored_type:
-                        # StoredMessage format
-                        if stored_type == "SystemMessage":
-                            subtype = row.get("data", {}).get("subtype", "")
-                            if subtype == "compact_boundary":
-                                ts = row.get("timestamp")
-                                if ts is not None:
-                                    boundary_timestamps.append(float(ts))
-                    else:
-                        # Legacy format
-                        if row.get("type") == "system":
-                            meta = row.get("metadata") or {}
-                            if meta.get("subtype") == "compact_boundary":
-                                ts = row.get("timestamp")
-                                if ts is not None:
-                                    boundary_timestamps.append(float(ts))
+                        raise LegacyMessageFormatError(session_id, stored_type)
+                    if row.get("type") == "system":
+                        meta = row.get("metadata") or {}
+                        if meta.get("subtype") == "compact_boundary":
+                            ts = row.get("timestamp")
+                            if ts is not None:
+                                boundary_timestamps.append(float(ts))
         except OSError:
             logger.exception(f"Failed to scan messages.jsonl for {session_id}")
             return

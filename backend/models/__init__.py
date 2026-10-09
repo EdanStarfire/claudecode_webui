@@ -28,7 +28,6 @@ from backend.models.memory_models import (
     TaskMilestone,
 )
 from backend.models.messages import (
-    DisplayMetadata,
     PermissionInfo,
     PermissionRequestMessage,
     PermissionResponseMessage,
@@ -51,7 +50,6 @@ __all__ = [
     "PermissionRequestMessage",
     "PermissionResponseMessage",
     "PermissionSuggestion",
-    "DisplayMetadata",
     "ToolDisplayInfo",
     "ToolState",
     # Unified ToolCall (Issue #324)

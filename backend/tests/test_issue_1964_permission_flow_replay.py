@@ -59,7 +59,12 @@ class TestSessionRecordingActionMessages:
 
     def test_action_messages_tracks_permission_response_message(self):
         """The permission_response action boundary must retain its original message
-        dict (with corrected top-level fields), not just its classification."""
+        dict (with corrected top-level fields), not just its classification.
+
+        Issue #2109 (AC11): permission_flow's permission_request/permission_response
+        pair is now reconstructed as real `tool_call` transitions — the action
+        boundary is the `running` transition (`permission_granted: True`), not a
+        standalone `permission_response`-typed record."""
         recording = SessionRecording(FIXTURES_DIR / "permission_flow")
 
         assert recording.get_action_count() == 2
@@ -68,8 +73,9 @@ class TestSessionRecordingActionMessages:
 
         response_msg = recording.get_action_message(1)
         assert response_msg is not None
-        assert response_msg.get("type") == "permission_response"
-        assert response_msg.get("decision") == "allow"
+        assert response_msg.get("type") == "tool_call"
+        assert response_msg.get("status") == "running"
+        assert response_msg.get("permission_granted") is True
         assert response_msg.get("tool_use_id") == "toolu_perm01"
 
     def test_get_action_message_out_of_range_returns_none(self):

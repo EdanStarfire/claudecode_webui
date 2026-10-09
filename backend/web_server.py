@@ -35,7 +35,7 @@ from .analytics.database import AnalyticsDB
 from .analytics_store import AnalyticsStore
 from .application_service import ApplicationService
 from .message_parser import MessageParser, MessageProcessor
-from .models.messages import MessageRecord, PermissionInfo
+from .models.messages import MessageRecord, PermissionInfo, ToolCall
 from .permission_service import PermissionService
 from .session_coordinator import SessionCoordinator
 from .skill_manager import SkillManager
@@ -1070,6 +1070,50 @@ class BackendApp:
                                 f"Emitted tool_call {'failed' if is_error else 'completed'} "
                                 f"for {tool_use_id} in session {session_id}"
                             )
+
+            # Issue #2109 (AC11): permission_flow's regenerated fixture replaces the old
+            # permission_request/permission_response mirror shapes below with real,
+            # already-complete ToolCall snapshots (pending/awaiting_permission/
+            # running|denied), each built via MessageRecord.from_tool_call() like every
+            # other tool_call envelope — mock-SDK fixture replay is still the only
+            # producer of this shape as a top-level replayed *message* (a live session's
+            # tool_call envelopes reach the queue directly via permission_service.py's
+            # own emit() calls, never through this per-message dispatch). Applying each
+            # snapshot directly (not re-deriving a transition from partial fields) keeps
+            # replay byte-faithful to the stored record. The tracked state is always
+            # updated (apply_tool_call_snapshot is a cheap, idempotent overwrite); only
+            # the live *emit* is skipped when the status is unchanged — the "pending"
+            # snapshot is a faithful echo of what create_tool_call() already derived from
+            # the preceding AssistantMessage's tool_use block (not a second distinct
+            # transition), so replay doesn't double-emit "pending" — but a later snapshot
+            # with the same status and different fields (e.g. updated display/permission
+            # info) still gets its state change applied, just silently (no duplicate
+            # notification for an already-announced status).
+            elif msg_type == 'tool_call':
+                tool_use_id = message_data.get('tool_use_id')
+                if tool_use_id:
+                    existing = self.coordinator._get_active_tool_call(session_id, tool_use_id)
+                    status_changed = existing is None or existing.status.value != message_data.get('status')
+                    new_tool_call = ToolCall.from_dict(message_data)
+                    self.coordinator.apply_tool_call_snapshot(session_id, new_tool_call)
+
+                    if status_changed:
+                        tool_call_data = MessageRecord.from_tool_call(new_tool_call).to_dict()
+
+                        if session_id in self.session_queues:
+                            emit(
+                                self.session_queues[session_id], QUEUE_SESSION, "tool_call",
+                                {
+                                    "session_id": session_id,
+                                    "data": tool_call_data,
+                                    "timestamp": datetime.now(UTC).isoformat(),
+                                },
+                                scope=session_id,
+                            )
+                        logger.debug(
+                            f"Mirrored replayed tool_call snapshot ({message_data.get('status')}) "
+                            f"for {tool_use_id} in session {session_id}"
+                        )
 
             # Issue #1964: mock-SDK fixture replay is the only remaining producer of these
             # legacy message types — live sessions broadcast permission lifecycle updates

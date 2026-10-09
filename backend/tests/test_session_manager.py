@@ -571,6 +571,59 @@ class TestSessionManager:
             assert reloaded.message_migration_status["state"] == "quarantined"
 
     @pytest.mark.asyncio
+    async def test_below_current_schema_version_logs_warning_on_startup(
+        self, sample_session_config, caplog
+    ):
+        """Issue #2109 (AC10): a session below CURRENT_MESSAGE_SCHEMA_VERSION logs a
+        warning at boot — a decoupled early-warning signal, not a guard that raises
+        (nothing has had a chance to touch the session yet at this point)."""
+        import logging
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            manager1 = SessionManager(temp_path)
+            await manager1.initialize()
+            session_id = str(uuid.uuid4())
+            await manager1.create_session(session_id, config=sample_session_config)
+            manager1._active_sessions[session_id].message_schema_version = 0
+            await manager1._persist_session_state(session_id)
+
+            manager2 = SessionManager(temp_path)
+            with caplog.at_level(logging.WARNING):
+                await manager2.initialize()
+
+            assert any(
+                session_id in record.message and "message_schema_version" in record.message
+                for record in caplog.records
+            )
+
+    @pytest.mark.asyncio
+    async def test_current_schema_version_no_warning_on_startup(
+        self, sample_session_config, caplog
+    ):
+        """Sanity check: a session already at CURRENT_MESSAGE_SCHEMA_VERSION logs
+        nothing (issue #2109 AC10)."""
+        import logging
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            manager1 = SessionManager(temp_path)
+            await manager1.initialize()
+            session_id = str(uuid.uuid4())
+            await manager1.create_session(session_id, config=sample_session_config)
+
+            manager2 = SessionManager(temp_path)
+            with caplog.at_level(logging.WARNING):
+                await manager2.initialize()
+
+            assert not any(
+                session_id in record.message and "message_schema_version" in record.message
+                for record in caplog.records
+            )
+
+    @pytest.mark.asyncio
     async def test_concurrent_session_operations(self, temp_session_manager, sample_session_config):
         """Test concurrent session operations."""
         manager = temp_session_manager

@@ -442,6 +442,19 @@ class SessionManager:
                             original_processing = session_info.is_processing
                             state_changed = False
 
+                            # Issue #2109 (AC10): decoupled early-warning signal, not a
+                            # chokepoint that protects any reader — logged only, since this
+                            # runs at boot before anything has had a chance to touch the
+                            # session. Production data was confirmed 100% canonical by stage
+                            # 3's migration gate, so this should never fire in practice.
+                            if session_info.message_schema_version < CURRENT_MESSAGE_SCHEMA_VERSION:
+                                session_logger.warning(
+                                    f"Session {session_info.session_id} has "
+                                    f"message_schema_version={session_info.message_schema_version}, "
+                                    f"below current ({CURRENT_MESSAGE_SCHEMA_VERSION}) — "
+                                    f"messages.jsonl may contain legacy-shape records"
+                                )
+
                             # Issue #1513: Self-heal last_completion_at from messages.jsonl
                             # for legacy sessions that lack the field.
                             if session_info.last_completion_at is None:
