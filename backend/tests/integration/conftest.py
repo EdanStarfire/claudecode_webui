@@ -190,6 +190,11 @@ async def api_integration_env(request, tmp_path):
             candidate = fixtures_dir / session_name
             if candidate.is_dir():
                 kwargs["session_dir"] = str(candidate)
+        # Issue #2109 (AC8/4a-F): thread the real coordinator through so raw-layer
+        # replay (_start_raw_replay) can call mark_session_tools_interrupted() at
+        # recorded restart/interrupt points — already in scope here, no new kwarg
+        # needed on SessionCoordinator's own _sdk_factory() call site.
+        kwargs.setdefault("coordinator", webui.coordinator)
         return MockClaudeSDK(
             session_id=session_id,
             working_directory=working_directory,
@@ -309,6 +314,8 @@ def ws_integration_env(tmp_path):
             candidate = fixtures_dir / session_name
             if candidate.is_dir():
                 kwargs["session_dir"] = str(candidate)
+        # Issue #2109 (AC8/4a-F): see api_integration_env's identical factory above.
+        kwargs.setdefault("coordinator", webui.coordinator)
         return MockClaudeSDK(
             session_id=session_id,
             working_directory=working_directory,

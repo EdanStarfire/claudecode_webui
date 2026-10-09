@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import time
+from collections import Counter
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -445,9 +446,31 @@ class RawFixtureReplay:
     is stage 1b's (#1999) equivalence harness concern.
     """
 
+    # Issue #2109 (AC8/4a-F): "lifecycle" kind actions that mean the same thing a bare
+    # "interrupt" kind record does for replay purposes — see interrupt_mark_indices.
+    _LIFECYCLE_INTERRUPT_ACTIONS = ("restart", "terminate")
+
     def __init__(self, session_dir: str | Path):
         self.session_dir = Path(session_dir)
         self.messages: list[Any] = []
+        # Issue #2109 (AC8/4a-F): positions into `self.messages` — "after this many
+        # sdk_messages have been processed" — where the original recording's
+        # restart_session()/interrupt_session()/terminate_session() call happened
+        # (captured as a "lifecycle"/action in ("restart", "terminate") or bare
+        # "interrupt" kind record, never as an sdk_message since those are
+        # WebUI-internal events, not real claude_agent_sdk traffic). One entry per
+        # occurrence, in file order, so a fixture with back-to-back marks without an
+        # intervening sdk_message still gets each one accounted for. Consumed by
+        # _start_raw_replay() to call mark_session_tools_interrupted() at the
+        # matching point in shadow replay — reproducing AC1's fix for historical
+        # captures that predate it, for every lifecycle action that already calls
+        # mark_session_tools_interrupted() in production (session_coordinator.py's
+        # restart_session()/interrupt_session()/terminate_session()). The one
+        # remaining mark_session_tools_interrupted() call site — _create_error_
+        # callback()'s critical-SDK-error path — has no corresponding SessionRecorder
+        # capture point at all (no record_* method exists for it), so there is
+        # nothing in raw_log.jsonl for replay to key off of; out of scope here.
+        self.interrupt_mark_indices: list[int] = []
         self._parse()
 
     def _parse(self) -> None:
@@ -461,7 +484,14 @@ class RawFixtureReplay:
             if not line.strip():
                 continue
             record = json.loads(line)
-            if record.get("kind") != "sdk_message":
+            kind = record.get("kind")
+            is_interrupt_mark = kind == "interrupt" or (
+                kind == "lifecycle" and record.get("action") in self._LIFECYCLE_INTERRUPT_ACTIONS
+            )
+            if is_interrupt_mark:
+                self.interrupt_mark_indices.append(len(self.messages))
+                continue
+            if kind != "sdk_message":
                 continue
             _type = record["_type"]
             if _type in KNOWN_UNHANDLED_SDK_TYPES:
@@ -560,6 +590,12 @@ class MockClaudeSDK:
             self.timestamp_injection_timezone = "UTC"
         self.storage_manager = kwargs.get("storage_manager")
         self.session_manager = kwargs.get("session_manager")
+        # Issue #2109 (AC8/4a-F): optional real SessionCoordinator reference, used only
+        # by raw-layer replay (_start_raw_replay) to call mark_session_tools_interrupted()
+        # at recorded restart/interrupt points. Not part of ClaudeSDK's real constructor
+        # surface — purely a replay-harness convenience threaded in by callers that have
+        # one in scope (e.g. backend/tests/integration/conftest.py's mock SDK factories).
+        self.coordinator = kwargs.get("coordinator")
 
     # ---- Fixture → canonical MessageRecord conversion (issue #2084 stage 3-E) ----
 
@@ -686,6 +722,19 @@ class MockClaudeSDK:
         session_manager is deliberately not forwarded to the shadow instance — it exists
         only to run the real message-processing pipeline against this mock's own
         storage_manager/message_callback, not to mutate live session state a second time.
+
+        Issue #2109 (AC8/4a-F): also replays each recorded restart_session()/
+        interrupt_session()/terminate_session() lifecycle event at its original
+        position by calling coordinator.mark_session_tools_interrupted() against the
+        real, live SessionCoordinator reachable through this replay chain
+        (MockClaudeSDK's _raw_message_callback -> SessionCoordinator._create_message_
+        callback -> (forwards to) BackendApp._create_message_callback ->
+        _emit_tool_call_updates() -> create_tool_call()/update_tool_call_result(),
+        which keeps that coordinator's _active_tool_calls genuinely populated as
+        replay proceeds). Without this, a tool left open across a historical restart
+        (predating AC1's fix) never gets a terminal record — see RawFixtureReplay's
+        interrupt_mark_indices docstring. A no-op when self.coordinator is None (e.g.
+        callers that never had one to thread through).
         """
         raw_replay = RawFixtureReplay(self.session_dir)
         shadow_sdk = ClaudeSDK(
@@ -695,8 +744,14 @@ class MockClaudeSDK:
             message_callback=self._raw_message_callback,
             error_callback=self.error_callback,
         )
-        for sdk_message in raw_replay.messages:
-            await shadow_sdk._process_sdk_message(sdk_message)
+        mark_counts = Counter(raw_replay.interrupt_mark_indices)
+
+        for i in range(len(raw_replay.messages) + 1):
+            if self.coordinator is not None:
+                for _ in range(mark_counts.get(i, 0)):
+                    self.coordinator.mark_session_tools_interrupted(self.session_id)
+            if i < len(raw_replay.messages):
+                await shadow_sdk._process_sdk_message(raw_replay.messages[i])
 
     async def send_message(self, message: str, metadata: dict | None = None) -> bool:
         """

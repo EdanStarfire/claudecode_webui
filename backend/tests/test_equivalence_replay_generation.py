@@ -63,10 +63,12 @@ _SDK_MESSAGE_BACKED_MARKERS = {
 # Reasons (not consumed by code — documentation for why each marker is unprovable today):
 # - "tool call with permission prompt": RawFixtureReplay skips permission_invocation records
 # - "denied permission": RawFixtureReplay skips permission_response records
-# - "interrupt mid-tool": RawFixtureReplay skips interrupt records; the real
-#   ClaudeSDK.interrupt_session() is also a no-op without a live SDK client, so there is no
-#   real downstream effect to replay even if the record kind were handled
-# - "session restart": RawFixtureReplay skips lifecycle records
+# - "interrupt mid-tool": issue #2109 (AC8/4a-F) made RawFixtureReplay read "interrupt" kind
+#   records to reconstruct mark_session_tools_interrupted()'s effect on stored tool_call
+#   state, but that still produces no new sdk_message/live queue_event of its own — nothing
+#   this file's event-stream-based marker check (_check_markers_from_queue_events) can
+#   currently key off of to prove the scenario was exercised
+# - "session restart": same as above for "lifecycle"/action="restart" records
 # - "inter-minion comm": RawFixtureReplay skips queue_event records; the raw log only
 #   captures the EventQueue's processed output, not the input that produced it, so there is
 #   nothing to replay even if the record kind were handled
