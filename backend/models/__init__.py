@@ -29,12 +29,10 @@ from backend.models.memory_models import (
 )
 from backend.models.messages import (
     DisplayMetadata,
-    DisplayProjection,
     PermissionInfo,
     PermissionRequestMessage,
     PermissionResponseMessage,
     PermissionSuggestion,
-    StoredMessage,
     ToolCall,
     ToolDisplayInfo,
     ToolState,
@@ -50,12 +48,10 @@ __all__ = [
     # Permission mode enum (Issue #955)
     "PermissionMode",
     # Message models (Issue #310)
-    "StoredMessage",
     "PermissionRequestMessage",
     "PermissionResponseMessage",
     "PermissionSuggestion",
     "DisplayMetadata",
-    "DisplayProjection",
     "ToolDisplayInfo",
     "ToolState",
     # Unified ToolCall (Issue #324)

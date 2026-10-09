@@ -31,14 +31,12 @@ from .litellm_proxy_manager import make_model_alias
 from .mcp_config_manager import McpServerType
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import (
-    DisplayProjection,
     MessageRecord,
     PermissionInfo,
     ToolCall,
     ToolDisplayInfo,
     ToolState,
     _message_dict_to_record,
-    legacy_to_stored,
 )
 from .models.permission_mode import PermissionMode
 from .oauth_refresh_manager import OAuthRefreshManager
@@ -288,29 +286,6 @@ def _accumulate_subagent_usage(
     return accum
 
 
-def _merge_display_deltas(pending: dict[str, Any], own: dict[str, Any] | None) -> dict[str, Any]:
-    """Merge a pending orphaned-tool delta (see `_pending_orphan_deltas`) into a
-    message's own computed display delta (Issue #2026).
-
-    Both are already bounded, single-purpose deltas — a plain per-key union is
-    correct here (never a full-snapshot merge) since `pending` only ever
-    contains the tools `mark_tools_orphaned()` just touched, and `own` only
-    ever contains the tools this specific message's process_message() call
-    just touched — the two are disjoint by construction (a tool is either
-    still active when orphaned, or already terminal from a prior message).
-    """
-    own = own or {}
-    return {
-        "tool_states": {**pending.get("tool_states", {}), **own.get("tool_states", {})},
-        "orphaned_tools": list(dict.fromkeys(
-            [*pending.get("orphaned_tools", []), *own.get("orphaned_tools", [])]
-        )),
-        "linked_permissions": {
-            **pending.get("linked_permissions", {}), **own.get("linked_permissions", {})
-        },
-    }
-
-
 def _tail_read_lines(path: "Path", limit: int) -> list[str]:
     """Read the last `limit` lines from a file efficiently using a deque."""
     from collections import deque
@@ -556,17 +531,6 @@ class SessionCoordinator:
         self._permission_updates: dict[str, list[dict]] = {}  # session_id -> list of applied updates
 
         self.litellm_proxy_manager = litellm_proxy_manager
-
-        # Display projections per session (Issue #310)
-        # Tracks tool lifecycle state and computes display metadata for frontend
-        self._display_projections: dict[str, DisplayProjection] = {}
-
-        # Issue #2026 (Part B1 follow-up): orphaned-tool deltas computed by
-        # _mark_tools_orphaned() (a side-channel projection mutation, not routed
-        # through process_message()) waiting to be attached to the next message's
-        # computed display for that session. Popped (consumed exactly once) by
-        # _compute_display_metadata_for_storage().
-        self._pending_orphan_deltas: dict[str, dict[str, Any]] = {}
 
         # Audit writer (set after construction via set_audit_writer; optional)
         self._audit_writer = None
@@ -2179,7 +2143,6 @@ class SessionCoordinator:
                 storage_manager=storage_manager,
                 session_manager=self.session_manager,
                 message_callback=self._create_message_callback(session_id),
-                display_hook=lambda msg, _sid=session_id: self._compute_display_metadata_for_storage(_sid, msg),
                 error_callback=self._create_error_callback(session_id),
                 permission_callback=permission_callback,
                 rate_limit_callback=self._on_rate_limits,
@@ -2395,9 +2358,6 @@ class SessionCoordinator:
             # Reset processing state before termination
             await self.session_manager.update_processing_state(session_id, False)
 
-            # Issue #310: Mark active tools as orphaned before termination
-            self._mark_tools_orphaned(session_id)
-
             # Issue #520: Mark active ToolCalls as interrupted and store ToolCallUpdate entries
             self.mark_session_tools_interrupted(session_id)
 
@@ -2456,13 +2416,6 @@ class SessionCoordinator:
                 del self._message_callbacks[session_id]
             if session_id in self._error_callbacks:
                 del self._error_callbacks[session_id]
-            # Issue #310: Cleanup display projection
-            if session_id in self._display_projections:
-                del self._display_projections[session_id]
-            # Issue #2026: drop any never-consumed pending orphan delta (e.g. this
-            # is the termination path itself, which — unlike interrupt — has no
-            # follow-up message that could ever pick one up).
-            self._pending_orphan_deltas.pop(session_id, None)
             # Issue #858: Cleanup per-session tool-call event
             self._tool_call_events.pop(session_id, None)
             # Issue #1694: Cleanup per-session message-emitted barrier state
@@ -2568,8 +2521,8 @@ class SessionCoordinator:
 
         Used by the scheduler after an ephemeral schedule run completes.
         Archives with the current timestamp (completion time), clears messages,
-        resets display projection, and terminates the session — leaving it in
-        TERMINATED state ready for the next scheduled fire.
+        and terminates the session — leaving it in TERMINATED state ready for
+        the next scheduled fire.
 
         Unlike reset_session(), this does NOT restart the session after clearing.
 
@@ -2597,8 +2550,6 @@ class SessionCoordinator:
                 await storage.clear_messages()
                 coord_logger.info(f"Cleared message history for session {session_id}")
 
-            # Reset display projection state
-            self._reset_display_projection(session_id)
             # Issue #1746: Drop cached task leg registry — it would otherwise
             # keep serving stale legs from before the message history wipe.
             self._task_leg_registries.pop(session_id, None)
@@ -3025,9 +2976,6 @@ class SessionCoordinator:
             if result:
                 coord_logger.info(f"Session {session_id} interrupted")
 
-                # Issue #310: Mark active tools as orphaned on interrupt
-                self._mark_tools_orphaned(session_id)
-
                 # Issue #520: Mark active ToolCalls as interrupted and store ToolCallUpdate entries
                 self.mark_session_tools_interrupted(session_id)
 
@@ -3255,7 +3203,6 @@ class SessionCoordinator:
             # Issue #2109 (AC1): mark open tools interrupted on restart, same as
             # terminate_session/interrupt_session already do — a tool left open
             # across a restart previously had no stored terminal record.
-            self._mark_tools_orphaned(session_id)
             self.mark_session_tools_interrupted(session_id)
 
             # Get current SDK if it exists
@@ -3303,20 +3250,11 @@ class SessionCoordinator:
                 coord_logger.info(f"Session {session_id} restarted successfully")
             else:
                 logger.error(f"Failed to restart session {session_id}")
-                # Issue #2109 (AC1) follow-up: a failed restart means start_session's
-                # early-return paths never sent a follow-up message that could
-                # consume the pending orphan delta _mark_tools_orphaned() stashed
-                # above — drop it now rather than let it leak into whatever
-                # unrelated message for this session comes next (mirrors
-                # terminate_session's unconditional pop, which exists for the same
-                # "no follow-up message will ever consume this" reason).
-                self._pending_orphan_deltas.pop(session_id, None)
 
             return success
 
         except Exception:
             logger.exception(f"Failed to restart session {session_id}")
-            self._pending_orphan_deltas.pop(session_id, None)
             return False
 
     async def reset_session(self, session_id: str, permission_callback: Callable | None = None, _from_queue_processor: bool = False) -> bool:
@@ -3417,8 +3355,6 @@ class SessionCoordinator:
             except Exception:
                 logger.exception(f"Failed to clear unread timestamps for session {session_id}")
 
-            # Issue #310: Reset DisplayProjection state (clears tool tracking)
-            self._reset_display_projection(session_id)
             # Issue #858: Clear event so stale set() signals don't skip the next wait.
             if session_id in self._tool_call_events:
                 self._tool_call_events[session_id].clear()
@@ -4023,113 +3959,6 @@ class SessionCoordinator:
             except Exception:
                 logger.exception("Error in session deleted callback")
 
-    def _get_display_projection(self, session_id: str) -> DisplayProjection:
-        """
-        Get or create DisplayProjection for a session (Issue #310).
-
-        Each session has its own projection instance to track tool lifecycle
-        state independently.
-        """
-        if session_id not in self._display_projections:
-            self._display_projections[session_id] = DisplayProjection()
-            coord_logger.debug(f"Created DisplayProjection for session {session_id}")
-        return self._display_projections[session_id]
-
-    def _reset_display_projection(self, session_id: str) -> None:
-        """Reset DisplayProjection for a session (e.g., on session reset)."""
-        if session_id in self._display_projections:
-            self._display_projections[session_id].reset()
-            coord_logger.debug(f"Reset DisplayProjection for session {session_id}")
-        # Issue #2026: a pending orphan delta from before the reset would
-        # reference tool_ids the fresh projection no longer knows about.
-        self._pending_orphan_deltas.pop(session_id, None)
-
-    def _mark_tools_orphaned(self, session_id: str) -> list[str]:
-        """
-        Mark all active tools as orphaned for a session (Issue #310).
-
-        Called when a session is interrupted or terminated to mark pending
-        tools as abandoned. Returns list of orphaned tool IDs.
-        """
-        projection = self._display_projections.get(session_id)
-        if projection:
-            orphaned = projection.mark_tools_orphaned()
-            if orphaned:
-                coord_logger.info(f"Marked {len(orphaned)} tools as orphaned for session {session_id}")
-                # Issue #2026: this mutation bypasses process_message(), so under
-                # the delta-only design it would otherwise never reach any future
-                # DisplayMetadata for this session. Stash it for
-                # _compute_display_metadata_for_storage() to attach to whatever
-                # message comes next (e.g. the interrupt system message
-                # _send_interrupt_message() stores immediately after this call).
-                self._pending_orphan_deltas[session_id] = projection.build_orphaned_delta(orphaned).to_dict()
-            return orphaned
-        return []
-
-    def _compute_display_metadata_for_storage(
-        self, session_id: str, message_data: dict[str, Any]
-    ) -> dict[str, Any] | None:
-        """Pre-store hook (Issue #2026, Part B2): compute this message's
-        DisplayMetadata once, before it's persisted, so a later reload can read the
-        value back verbatim (O(1) dict lookup) instead of replaying session history
-        to reconstruct it — the structural cause of #2006/#2028's quadratic,
-        event-loop-blocking reload bug.
-
-        Called from two places, both BEFORE the record reaches storage:
-        - ClaudeSDK's `display_hook` (wired at SDK construction), for the live SDK
-          streaming path (`claude_sdk.py`'s `_store_sdk_message`).
-        - `_store_processed_message()`, for synthetic system messages (client_launched,
-          interrupt, session_failed, mcp_server_degraded, stderr).
-
-        Non-fatal by design, exactly like the display computation this replaces used
-        to be: any failure here is logged and swallowed, and the caller stores the
-        message with no `display` key rather than failing the whole write. Mirrors
-        the same StoredMessage-construction logic _create_message_callback() used to
-        run itself, after storage — moved here, before storage, so it runs exactly
-        once per message instead of twice (this method's caller stamps the result
-        back onto message_data/converted_message, and _create_message_callback()
-        reads that already-computed value rather than recomputing it).
-        """
-        try:
-            parsed_message = self.message_processor.process_message(message_data, source="sdk")
-            projection = self._get_display_projection(session_id)
-            # Issue #2007: parsed_message.content is always a flattened string, so
-            # StoredMessage.get_tool_uses()/get_tool_results() (which gate on
-            # isinstance(content, list)) always returned [], making this projection
-            # a no-op. Feed the real content-block list instead.
-            projection_content = parsed_message.content
-            if parsed_message.metadata:
-                if parsed_message.type.value == 'assistant':
-                    tool_uses = parsed_message.metadata.get('tool_uses')
-                    if tool_uses:
-                        projection_content = tool_uses
-                elif parsed_message.type.value == 'user':
-                    tool_results = parsed_message.metadata.get('tool_results')
-                    if tool_results:
-                        projection_content = tool_results
-            legacy_dict = {
-                'type': parsed_message.type.value,
-                'timestamp': parsed_message.timestamp,
-                'session_id': session_id,
-                'content': projection_content,
-            }
-            if parsed_message.metadata:
-                legacy_dict.update(parsed_message.metadata)
-            stored_msg = legacy_to_stored(legacy_dict)
-            display_metadata = projection.process_message(stored_msg)
-            result = display_metadata.to_dict() if display_metadata else None
-        except Exception as proj_error:
-            coord_logger.debug(f"Pre-store DisplayProjection computation failed: {proj_error}")
-            result = None
-
-        # Issue #2026: attach any pending orphaned-tool delta from
-        # _mark_tools_orphaned() — consumed exactly once, by whichever message
-        # for this session gets its display computed next.
-        pending = self._pending_orphan_deltas.pop(session_id, None)
-        if pending:
-            result = _merge_display_deltas(pending, result)
-        return result
-
     # ============================================================
     # Issue #494: ToolCallUpdate Storage
     # ============================================================
@@ -4143,7 +3972,7 @@ class SessionCoordinator:
         """
         Snapshot and schedule storage of a ToolCallUpdate entry (Issue #494).
 
-        The StoredMessage is built eagerly (synchronously) to capture the
+        The MessageRecord is built eagerly (synchronously) to capture the
         current tool_call state before the object is mutated by subsequent
         lifecycle transitions.  The actual I/O is deferred via ensure_future.
         """
@@ -4617,13 +4446,6 @@ class SessionCoordinator:
         """
         try:
             record = _message_dict_to_record(message_data, session_id, display=None)
-
-            # Issue #2026 (Part B2): compute display once, before this message is
-            # persisted (see _compute_display_metadata_for_storage()'s docstring).
-            display = self._compute_display_metadata_for_storage(session_id, message_data)
-            if display:
-                record.display = display
-
             record_dict = record.to_dict()
         except Exception:
             logger.exception(f"Failed to canonicalize processed message for session {session_id}")
@@ -4705,17 +4527,6 @@ class SessionCoordinator:
 
                 # Process message using unified MessageProcessor
                 parsed_message = self.message_processor.process_message(message_data, source="sdk")
-
-                # Issue #2026 (Part B2): display is now computed once, before this
-                # message reaches storage, by _compute_display_metadata_for_storage()
-                # — wired as ClaudeSDK's `display_hook` for the live SDK streaming
-                # path, and called directly by _store_processed_message() for
-                # synthetic system messages. Both stamp the result back onto this
-                # same message_data dict before invoking this callback. Issue #2084
-                # AC2: message_data (forwarded to subscriber callbacks below, not
-                # parsed_message) already carries this `display` value at its own
-                # top level — MessageRecord.to_dict()'s shape — so there's nothing
-                # left to mirror here the way the pre-canonical-record code needed to.
 
                 # Track latest meaningful message (issue #291, issue #1497)
                 # Only track user and assistant messages — system messages are SDK runtime
@@ -5057,7 +4868,6 @@ class SessionCoordinator:
                     # critical SDK error, same as terminate_session/interrupt_session/
                     # restart_session already do — a tool left open across an error-induced
                     # ERROR transition previously had no stored terminal record.
-                    self._mark_tools_orphaned(session_id)
                     self.mark_session_tools_interrupted(session_id)
 
                     # Update session state to ERROR and reset processing state

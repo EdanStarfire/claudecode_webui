@@ -246,7 +246,6 @@ async def test_message_emitted_barrier_cleaned_up_on_terminate(tmp_path):
             "update_processing_state",
             new_callable=AsyncMock,
         ),
-        patch.object(coord, "_mark_tools_orphaned"),
         patch.object(coord, "mark_session_tools_interrupted"),
         patch.object(
             coord.session_manager,
