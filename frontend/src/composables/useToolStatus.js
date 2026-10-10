@@ -40,21 +40,11 @@ export function useToolStatus(toolRef) {
       return map[tool.backendStatus] || tool.backendStatus
     }
 
-    // Check backend state from message store
-    const backendState = messageStore.getBackendToolState(sessionId, tool.id)
-    if (backendState) {
-      const map = {
-        'pending': 'pending',
-        'permission_required': 'permission_required',
-        'executing': 'executing',
-        'completed': 'completed',
-        'failed': 'error',
-        'orphaned': 'orphaned'
-      }
-      return map[backendState.state] || backendState.state
-    }
-
     // Check orphaned via message store
+    // Issue #2110 (stage 4b-A): this precedence chain is transitional — a second branch
+    // reading backend display metadata sat between the two checks above until it was
+    // removed as dead code in this stage. Collapsing the whole chain to a single-field
+    // read is 4b-B's job, not this stage's.
     if (messageStore.isToolUseOrphaned(sessionId, tool.id)) {
       return 'orphaned'
     }

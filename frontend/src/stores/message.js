@@ -9,11 +9,6 @@ import { pushDebugEvent, flushDebugBuffer } from '../composables/useDebugBuffer'
 
 /**
  * Message Store - Manages messages and tool calls per session
- *
- * Issue #310: Backend-driven display metadata
- * When messages contain display metadata from the backend (DisplayProjection),
- * the store uses that instead of computing tool states locally. This reduces
- * frontend complexity and ensures consistent state across reconnections.
  */
 export const useMessageStore = defineStore('message', () => {
   // ========== STATE ==========
@@ -24,10 +19,6 @@ export const useMessageStore = defineStore('message', () => {
   // Tool calls per session (sessionId -> ToolCall[])
   const toolCallsBySession = ref(new Map())
 
-  // Tool call manager state (tracking tool lifecycle)
-  // Per-session signature map: Map<sessionId, Map<signature, toolUseId>>
-  // Issue #953: Deprecated — direct tool_use_id from backend preferred (SDK v0.1.52+)
-  const toolSignatureToId = ref(new Map())
   const permissionToToolMap = ref(new Map())
 
   // Issue #1000: Event cursors returned by REST /messages endpoint.
@@ -44,10 +35,6 @@ export const useMessageStore = defineStore('message', () => {
   // Launch timestamp tracking (sessionId -> Unix timestamp in seconds)
   // Populated from client_launched system messages for uptime calculation
   const launchTimestampBySession = ref(new Map())
-
-  // Issue #310: Backend display metadata cache (sessionId -> Map<tool_use_id -> ToolDisplayInfo>)
-  // When backend provides display metadata, we store it here for quick lookup
-  const backendToolStates = ref(new Map())
 
   // Issue #662: Track last stop_reason per session for truncation banner
   const lastStopReasonBySession = ref(new Map())
@@ -201,9 +188,8 @@ export const useMessageStore = defineStore('message', () => {
 
       messages.forEach(message => {
         // Route tool_call messages through unified handler (same path as real-time)
-        // Pass silent: true to suppress notifications for historical data
         if (message.type === 'tool_call') {
-          handleToolCall(sessionId, message, { silent: true })
+          handleToolCall(sessionId, message)
           return // Don't add tool_call to message display list
         }
 
@@ -808,8 +794,6 @@ export const useMessageStore = defineStore('message', () => {
    * else is ever pushed into it, and nothing already in it is ever spliced, merged, or
    * replaced-in-place for streaming purposes (the live-typing preview lives entirely in
    * `streamingPreviewBySession` instead — see that state's own comment).
-   *
-   * Issue #310: Also applies backend display metadata if present.
    */
   function addMessage(sessionId, message) {
     if (!messagesBySession.value.has(sessionId)) {
@@ -905,30 +889,11 @@ export const useMessageStore = defineStore('message', () => {
       _routeSubagentNarration(message)
     }
 
-    // Issue #310: Apply backend display metadata if present
-    // This updates tool states from the backend projection, reducing frontend computation
-    applyDisplayMetadata(sessionId, message)
-
-    // Track tool use lifecycle for orphaned detection (fallback if no backend metadata)
+    // Track tool use lifecycle for orphaned detection
     handleRealtimeToolTracking(sessionId, message)
 
     // Trigger reactivity
     messagesBySession.value = new Map(messagesBySession.value)
-  }
-
-  /**
-   * Add a tool call to a session
-   */
-  function addToolCall(sessionId, toolCall) {
-    if (!toolCallsBySession.value.has(sessionId)) {
-      toolCallsBySession.value.set(sessionId, [])
-    }
-
-    const toolCalls = toolCallsBySession.value.get(sessionId)
-    toolCalls.push(toolCall)
-
-    // Trigger reactivity
-    toolCallsBySession.value = new Map(toolCallsBySession.value)
   }
 
   /**
@@ -944,47 +909,6 @@ export const useMessageStore = defineStore('message', () => {
         // Trigger reactivity
         toolCallsBySession.value = new Map(toolCallsBySession.value)
       }
-    }
-  }
-
-  /**
-   * Handle permission request for a tool
-   */
-  function handlePermissionRequest(sessionId, permissionRequest) {
-    console.log('handlePermissionRequest received:', permissionRequest)
-
-    // Extract fields from metadata or top level
-    const toolName = permissionRequest.metadata?.tool_name || permissionRequest.tool_name
-    const inputParams = permissionRequest.metadata?.input_params || permissionRequest.input_params
-    const requestId = permissionRequest.metadata?.request_id || permissionRequest.request_id
-    const suggestions = permissionRequest.metadata?.suggestions || permissionRequest.suggestions || []
-
-    console.log('Extracted data:', { toolName, inputParams, requestId, suggestions })
-
-    // Issue #953: Prefer direct tool_use_id from backend (SDK v0.1.52+), fall back to signature
-    let toolUseId = permissionRequest.metadata?.tool_use_id || permissionRequest.tool_use_id
-    if (!toolUseId) {
-      // Fallback: signature-based lookup (deprecated, kept for backward compatibility)
-      const signature = createToolSignature(toolName, inputParams)
-      toolUseId = toolSignatureToId.value.get(sessionId)?.get(signature)
-    }
-
-    if (toolUseId) {
-      permissionToToolMap.value.set(requestId, toolUseId)
-
-      updateToolCall(sessionId, toolUseId, {
-        status: 'permission_required',
-        permissionRequestId: requestId,
-        suggestions: suggestions
-      })
-
-      console.log(`Permission required for tool ${toolUseId}`, { suggestions })
-    } else {
-      console.warn('No tool use ID found for permission request', {
-        toolName,
-        inputParams,
-        tool_use_id: permissionRequest.metadata?.tool_use_id
-      })
     }
   }
 
@@ -1044,7 +968,7 @@ export const useMessageStore = defineStore('message', () => {
    * - error: Error message (when failed)
    * - display: Backend-computed display hints
    */
-  function handleToolCall(sessionId, toolCall, options = {}) {
+  function handleToolCall(sessionId, toolCall) {
     console.log('handleToolCall received:', toolCall)
 
     const toolUseId = toolCall.tool_use_id
@@ -1102,7 +1026,6 @@ export const useMessageStore = defineStore('message', () => {
       // events are still streaming); a subsequent event carries the fully-assembled input.
       if (toolCall.input !== undefined && toolCall.input !== null) {
         existing.input = toolCall.input
-        existing.signature = createToolSignature(existing.name, existing.input)
       }
       // Gated on turn_id like existing.messageId just below: a genuine live ToolCallUpdate
       // always carries turn_id, but the REST reload path can synthesize extra bookend
@@ -1189,17 +1112,10 @@ export const useMessageStore = defineStore('message', () => {
       console.log(`Updated tool call ${toolUseId} to status: ${frontendStatus} (backend: ${toolCall.status})`)
     } else {
       // Create new tool call entry
-      const signature = createToolSignature(toolCall.name, toolCall.input)
-      if (!toolSignatureToId.value.has(sessionId)) {
-        toolSignatureToId.value.set(sessionId, new Map())
-      }
-      toolSignatureToId.value.get(sessionId).set(signature, toolUseId)
-
       const newToolCall = {
         id: toolUseId,
         name: toolCall.name,
         input: toolCall.input,
-        signature: signature,
         status: frontendStatus,
         backendStatus: toolCall.status,
         permissionRequestId: toolCall.request_id,
@@ -1282,140 +1198,6 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   /**
-   * Create tool signature for matching (tool name + params hash)
-   * @deprecated Issue #953: Use tool_use_id from backend (SDK v0.1.52+) instead.
-   * Retained as fallback for older SDK versions.
-   */
-  function createToolSignature(toolName, inputParams) {
-    if (!toolName) return 'unknown:{}'
-    if (!inputParams || typeof inputParams !== 'object') return `${toolName}:{}`
-
-    const paramsHash = JSON.stringify(inputParams, Object.keys(inputParams).sort())
-    return `${toolName}:${paramsHash}`
-  }
-
-  /**
-   * Issue #310: Extract and apply display metadata from message
-   *
-   * When the backend provides display metadata, we cache it and use it
-   * to update tool call states, replacing local state computation.
-   */
-  function applyDisplayMetadata(sessionId, message) {
-    const display = message.metadata?.display || message.display
-    if (!display) return
-
-    // Get or create backend tool states cache for this session
-    if (!backendToolStates.value.has(sessionId)) {
-      backendToolStates.value.set(sessionId, new Map())
-    }
-    const toolStatesCache = backendToolStates.value.get(sessionId)
-
-    // Update cached tool states from backend
-    if (display.tool_states) {
-      for (const [toolId, info] of Object.entries(display.tool_states)) {
-        toolStatesCache.set(toolId, info)
-
-        // Also update the tool call if it exists
-        const toolCalls = toolCallsBySession.value.get(sessionId)
-        if (toolCalls) {
-          const toolCall = toolCalls.find(tc => tc.id === toolId)
-          if (toolCall) {
-            // Map backend state to frontend status
-            const stateToStatus = {
-              'pending': 'pending',
-              'permission_required': 'permission_required',
-              'executing': 'executing',
-              'completed': 'completed',
-              'failed': 'error',
-              'orphaned': 'completed'  // Orphaned shows as completed with special styling
-            }
-            const newStatus = stateToStatus[info.state] || info.state
-
-            // Issue #2007: DisplayProjection's per-session snapshot is cumulative
-            // (every tool ever seen, not a delta) and only ever tracks
-            // pending -> completed/failed on the live path — it never models the
-            // live awaiting_permission/running states the dedicated ToolCallUpdate
-            // pipeline (#324, see handleToolCall() above) already reports. Without
-            // this guard, any later message in the session re-attaches a stale
-            // 'pending' entry for a still-in-progress tool here, silently
-            // reverting its status — the same class of regression
-            // handleToolCall()'s own terminal-status guard exists to prevent,
-            // extended to a full ordering (handleToolCall()'s binary
-            // terminal/non-terminal check doesn't cover executing/
-            // permission_required regressing back to pending, which this path
-            // can produce since DisplayProjection never reports those states).
-            const statusRank = {
-              pending: 0,
-              permission_required: 1,
-              executing: 1,
-              error: 2,
-              completed: 3,
-            }
-            const existingRank = statusRank[toolCall.status] ?? 0
-            const newRank = statusRank[newStatus] ?? 0
-            // Once a tool reaches a terminal rank (error/completed), only a strictly-higher-rank
-            // update may touch it — a same-rank DisplayProjection replay (e.g. a stale/duplicate
-            // "failed" landing after the authoritative pipeline already marked it "completed") must
-            // not silently overwrite state a more specific mechanism already resolved. Below the
-            // terminal threshold, same-rank ties are still allowed (e.g. executing <-> permission_required).
-            if (newRank > existingRank || (newRank === existingRank && existingRank < 2)) {
-              toolCall.status = newStatus
-              toolCall.backendState = info  // Store full backend state for reference
-            }
-          }
-        }
-      }
-    }
-
-    // Update orphaned tools from backend
-    if (display.orphaned_tools && display.orphaned_tools.length > 0) {
-      const orphaned = orphanedToolUses.value.get(sessionId) || new Map()
-      for (const toolId of display.orphaned_tools) {
-        if (!orphaned.has(toolId)) {
-          orphaned.set(toolId, {
-            reason: 'denied',
-            message: 'Session was interrupted'  // Default message
-          })
-        }
-      }
-      orphanedToolUses.value.set(sessionId, orphaned)
-    }
-
-    // Update permission-to-tool mapping from backend
-    if (display.linked_permissions) {
-      for (const [requestId, toolId] of Object.entries(display.linked_permissions)) {
-        permissionToToolMap.value.set(requestId, toolId)
-      }
-    }
-
-    // Trigger reactivity if we updated tool calls
-    if (display.tool_states && Object.keys(display.tool_states).length > 0) {
-      toolCallsBySession.value = new Map(toolCallsBySession.value)
-    }
-
-    console.log(`Applied backend display metadata for session ${sessionId}:`, {
-      toolStates: Object.keys(display.tool_states || {}).length,
-      orphanedTools: (display.orphaned_tools || []).length,
-      linkedPermissions: Object.keys(display.linked_permissions || {}).length
-    })
-  }
-
-  /**
-   * Issue #310: Get backend-provided tool state if available
-   */
-  function getBackendToolState(sessionId, toolUseId) {
-    return backendToolStates.value.get(sessionId)?.get(toolUseId)
-  }
-
-  /**
-   * Issue #310: Check if we have backend display metadata for a session
-   */
-  function hasBackendDisplayMetadata(sessionId) {
-    const cache = backendToolStates.value.get(sessionId)
-    return cache && cache.size > 0
-  }
-
-  /**
    * Mark a tool use as orphaned (denied due to session restart/interrupt/termination)
    */
   function markToolUseOrphaned(sessionId, toolUseId, message) {
@@ -1452,37 +1234,15 @@ export const useMessageStore = defineStore('message', () => {
 
   /**
    * Check if a tool use is orphaned
-   *
-   * Issue #310: First checks backend-provided state, then falls back to local tracking
    */
   function isToolUseOrphaned(sessionId, toolUseId) {
-    // Check backend state first (Issue #310)
-    const backendState = getBackendToolState(sessionId, toolUseId)
-    if (backendState && backendState.state === 'orphaned') {
-      return true
-    }
-
-    // Fall back to local tracking
     return orphanedToolUses.value.get(sessionId)?.has(toolUseId) || false
   }
 
   /**
    * Get orphaned tool information
-   *
-   * Issue #310: Returns backend-provided info if available
    */
   function getOrphanedInfo(sessionId, toolUseId) {
-    // Check backend state first (Issue #310)
-    const backendState = getBackendToolState(sessionId, toolUseId)
-    if (backendState && backendState.state === 'orphaned') {
-      return {
-        reason: 'denied',
-        message: 'Session was interrupted',
-        backendState: backendState
-      }
-    }
-
-    // Fall back to local tracking
     return orphanedToolUses.value.get(sessionId)?.get(toolUseId)
   }
 
@@ -1508,7 +1268,6 @@ export const useMessageStore = defineStore('message', () => {
     pruneExpandedCommsForSession(sessionId)
     messagesBySession.value.delete(sessionId)
     toolCallsBySession.value.delete(sessionId)
-    toolSignatureToId.value.delete(sessionId)
     lastReceivedTimestamp.value.delete(sessionId)
 
     // Issue #1746 (stage: subagents): clear only this session's task_id-scoped state
@@ -1532,193 +1291,6 @@ export const useMessageStore = defineStore('message', () => {
     // Trigger reactivity
     messagesBySession.value = new Map(messagesBySession.value)
     toolCallsBySession.value = new Map(toolCallsBySession.value)
-  }
-
-  /**
-   * Get last received message timestamp for a session
-   */
-  function getLastReceivedTimestamp(sessionId) {
-    return lastReceivedTimestamp.value.get(sessionId)
-  }
-
-  /**
-   * Sync missed messages since last received (for reconnection recovery)
-   * Returns: {syncedCount, hasMore, error}
-   */
-  async function syncMessages(sessionId) {
-    const lastTimestamp = lastReceivedTimestamp.value.get(sessionId)
-
-    // No sync needed if no previous messages
-    if (!lastTimestamp) {
-      console.log(`No sync needed for session ${sessionId} (no previous messages)`)
-      return { syncedCount: 0, hasMore: false }
-    }
-
-    try {
-      console.log(`Syncing messages for session ${sessionId} since ${lastTimestamp}`)
-
-      // Fetch all messages and filter client-side by timestamp
-      // Backend doesn't have 'since' parameter yet, so we load messages and filter.
-      // Issue #1747: page until has_more is false so a stall-recovery resync can't
-      // silently miss a real gap in a large session either.
-      const { messages: allMessages, hasMore } = await fetchAllMessagePages(sessionId, 1000, 0)
-
-      // Filter messages newer than last received timestamp
-      // Handle both Unix timestamp (float seconds) and ISO 8601 string formats
-      const normalizeTimestamp = (ts) => {
-        if (!ts) return 0
-        if (typeof ts === 'number') {
-          // Unix timestamp in seconds - convert to milliseconds
-          return ts * 1000
-        }
-        // ISO 8601 string
-        return new Date(ts).getTime()
-      }
-
-      const lastTimestampMs = normalizeTimestamp(lastTimestamp)
-      const newMessages = allMessages.filter(m => {
-        if (!m.timestamp) return false
-        const msgTimestampMs = normalizeTimestamp(m.timestamp)
-        return msgTimestampMs > lastTimestampMs
-      })
-
-      if (newMessages.length === 0) {
-        console.log(`No missed messages for session ${sessionId}`)
-        return { syncedCount: 0, hasMore: false }
-      }
-
-      console.log(`Synced ${newMessages.length} missed messages for session ${sessionId}`)
-
-      // Get existing messages
-      const existingMessages = messagesBySession.value.get(sessionId) || []
-
-      // Deduplicate by message ID (in case of overlap)
-      const existingIds = new Set(existingMessages.map(m => m.message_id || m.id).filter(Boolean))
-      const uniqueNewMessages = newMessages.filter(m => {
-        const key = m.message_id || m.id
-        return !key || !existingIds.has(key)
-      })
-
-      console.log(`After deduplication: ${uniqueNewMessages.length} unique new messages`)
-
-      // Issue #491: Separate tool_call messages from regular messages.
-      // Route tool_call through handleToolCall(), merge regular messages into history.
-      const newToolCallMessages = []
-      const newRegularMessages = []
-
-      uniqueNewMessages.forEach(message => {
-        if (message.type === 'tool_call') {
-          newToolCallMessages.push(message)
-          return
-        }
-
-        // Issue #1575: drop internal SDK status/requesting messages — match real-time suppression
-        if (message.type === 'system') {
-          const subtype = message.subtype || message.metadata?.subtype
-          const status = message.metadata?.init_data?.status
-          if (subtype === 'status' && status === 'requesting') {
-            return
-          }
-        }
-
-        newRegularMessages.push(message)
-      })
-
-      // Route tool_call messages through unified handler (silent: skip notifications for synced history)
-      newToolCallMessages.forEach(message => {
-        handleToolCall(sessionId, message, { silent: true })
-      })
-
-      // Only merge and sort regular messages if there are any
-      if (newRegularMessages.length > 0) {
-        // Sort only the new messages by timestamp (using normalized timestamps)
-        const sortedNewMessages = newRegularMessages.sort((a, b) => {
-          const timeA = normalizeTimestamp(a.timestamp)
-          const timeB = normalizeTimestamp(b.timestamp)
-          return timeA - timeB
-        })
-
-        // CRITICAL: Get the ACTUAL last message from existingMessages (which may have been
-        // updated by real-time WebSocket messages during disconnect), not the cached timestamp
-        const currentMessages = messagesBySession.value.get(sessionId) || []
-        const lastExistingTimestamp = currentMessages.length > 0
-          ? normalizeTimestamp(currentMessages[currentMessages.length - 1].timestamp)
-          : 0
-        const firstNewTimestamp = normalizeTimestamp(sortedNewMessages[0].timestamp)
-
-        if (firstNewTimestamp > lastExistingTimestamp) {
-          // Simple append - new messages are all newer than existing ones
-          const mergedMessages = [...currentMessages, ...sortedNewMessages]
-          messagesBySession.value.set(sessionId, mergedMessages)
-        } else {
-          // Need to merge and sort - some new messages are older than existing ones
-          const mergedMessages = [...currentMessages, ...sortedNewMessages].sort((a, b) => {
-            const timeA = normalizeTimestamp(a.timestamp)
-            const timeB = normalizeTimestamp(b.timestamp)
-            return timeA - timeB
-          })
-          messagesBySession.value.set(sessionId, mergedMessages)
-        }
-      }
-
-      // Process new regular messages for non-tool concerns
-      newRegularMessages.forEach(message => {
-        // Track tool use lifecycle for real-time orphan detection
-        handleRealtimeToolTracking(sessionId, message)
-
-        // Capture init data
-        if (message.type === 'system' &&
-            (message.subtype === 'init' || message.metadata?.subtype === 'init') &&
-            message.metadata?.init_data) {
-          const sessionStore = useSessionStore()
-          sessionStore.storeInitData(sessionId, message.metadata.init_data)
-        }
-
-        // Issue #1746 (stage: subagents) review fix: a reconnect-resync must apply Task
-        // lifecycle frames and route subagent narration the same way addMessage() does —
-        // otherwise any subagent that started/progressed/completed entirely during the
-        // disconnect window is missing from taskLegsByTaskId/narrationByTaskIdAndLeg even
-        // though its raw messages are now present in the message list.
-        if (message.type === 'system') {
-          const subtype = message.metadata?.subtype
-          if (TASK_LIFECYCLE_SUBTYPES.has(subtype)) {
-            applyTaskLifecycleFrame(sessionId, subtype, message.metadata, message.timestamp)
-          }
-        }
-        if (message.type === 'assistant' && message.metadata?.parent_tool_use_id) {
-          _routeSubagentNarration(message)
-        }
-
-        // Issue #1955: syncMessages() merges directly into messagesBySession instead of
-        // routing through addMessage(), so a top-level assistant terminal recovered here
-        // (e.g. a stall-heal resync while the live poll missed its message_stop/terminal
-        // delivery) must still clear the live preview the same way addMessage() would —
-        // otherwise the frozen preview text lingers indefinitely alongside the now-merged
-        // canonical message.
-        if (message.type === 'assistant' && !message.metadata?.parent_tool_use_id) {
-          const canonicalToolIds = (message.metadata?.tool_uses || []).map(t => t.id)
-          _clearStreamingPreviewContent(sessionId, canonicalToolIds)
-        }
-      })
-
-      // Update last received timestamp from the updated message list
-      const updatedMessages = messagesBySession.value.get(sessionId)
-      if (updatedMessages && updatedMessages.length > 0) {
-        const lastMessage = updatedMessages[updatedMessages.length - 1]
-        if (lastMessage.timestamp) {
-          lastReceivedTimestamp.value.set(sessionId, lastMessage.timestamp)
-        }
-      }
-
-      // Trigger reactivity
-      messagesBySession.value = new Map(messagesBySession.value)
-
-      return { syncedCount: uniqueNewMessages.length, hasMore }
-    } catch (error) {
-      console.error(`Failed to sync messages for session ${sessionId}:`, error)
-      // Don't throw - reconnection should succeed even if sync fails
-      return { syncedCount: 0, hasMore: false, error: error.message }
-    }
   }
 
   // ========== STREAMING PREVIEW (Issue #1955) ==========
@@ -1811,7 +1383,7 @@ export const useMessageStore = defineStore('message', () => {
   /**
    * Issue #1955 (review fix, found via live testing: single-frame turns could leave a
    * permanent duplicate preview): resets the preview's displayed content whenever a canonical
-   * assistant message appends (called from addMessage()/syncMessages()) — leaves `active`
+   * assistant message appends (called from addMessage()) — leaves `active`
    * untouched so a still-open stream keeps its caret. This is the mechanism resolving
    * "multi-canonical-message-per-turn": any canonical append clears whatever the preview was
    * showing, with no identity matching involved.
@@ -2004,9 +1576,9 @@ export const useMessageStore = defineStore('message', () => {
     const displayMessages = []
 
     rawMessages.forEach(msg => {
-      // Route tool_call messages through unified handler (silent: archive data)
+      // Route tool_call messages through unified handler
       if (msg.type === 'tool_call') {
-        handleToolCall(sessionId, msg, { silent: true })
+        handleToolCall(sessionId, msg)
         return // Don't add to display list
       }
 
@@ -2180,10 +1752,8 @@ export const useMessageStore = defineStore('message', () => {
     // Actions
     loadMessages,
     addMessage,
-    addToolCall,
     updateToolCall,
     handleToolCall,  // Issue #324/#491: unified tool call handler (single path for real-time and history)
-    handlePermissionRequest,
     handlePermissionResponse,
     toggleToolExpansion,
     clearMessages,
@@ -2197,15 +1767,6 @@ export const useMessageStore = defineStore('message', () => {
     isToolUseOrphaned,
     getOrphanedInfo,
     clearOrphanedToolUses,
-
-    // Reconnection sync
-    getLastReceivedTimestamp,
-    syncMessages,
-
-    // Issue #310: Backend display metadata
-    getBackendToolState,
-    hasBackendDisplayMetadata,
-    backendToolStates: readonly(backendToolStates),
 
     // Launch timestamp tracking (Issue #473)
     launchTimestampBySession: readonly(launchTimestampBySession),
