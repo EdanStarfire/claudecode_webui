@@ -319,52 +319,6 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
-   * Lightweight state sync — polls /api/sessions and merges into existing Map.
-   * Used by periodic polling to detect and correct state drift from missed polling messages.
-   */
-  async function syncSessionStates() {
-    try {
-      const data = await api.get('/api/sessions')
-      let corrections = 0
-
-      const returnedIds = new Set()
-      data.sessions.forEach(session => {
-        returnedIds.add(session.session_id)
-        const existing = sessions.value.get(session.session_id)
-        if (existing) {
-          // Detect state corrections for debugging
-          if (existing.state !== session.state || existing.is_processing !== session.is_processing) {
-            console.log(`[syncSessionStates] Correcting session ${session.session_id}: state ${existing.state}→${session.state}, processing ${existing.is_processing}→${session.is_processing}`)
-            corrections++
-          }
-          Object.assign(existing, session)
-        } else {
-          sessions.value.set(session.session_id, session)
-          corrections++
-        }
-      })
-
-      // Remove sessions no longer in backend
-      for (const id of sessions.value.keys()) {
-        if (!returnedIds.has(id)) {
-          sessions.value.delete(id)
-          corrections++
-        }
-      }
-
-      if (corrections > 0) {
-        // Trigger reactivity only when corrections were made
-        sessions.value = new Map(sessions.value)
-      }
-
-      return corrections
-    } catch (error) {
-      console.error('Failed to sync session states:', error)
-      return 0
-    }
-  }
-
-  /**
    * Create a new session
    */
   async function createSession(projectId, formData) {
@@ -1080,7 +1034,6 @@ export const useSessionStore = defineStore('session', () => {
     // Actions
     fetchSessions,
     fetchSessionDetails,
-    syncSessionStates,
     createSession,
     selectSession,
     updateSession,
