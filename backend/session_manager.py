@@ -386,6 +386,16 @@ class SessionManager:
         self._active_sessions: dict[str, SessionInfo] = {}
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._state_change_callbacks: list[Callable] = []
+        # Issue #2111: session IDs that could plausibly have a dangling non-terminal
+        # tool call left by a crash — sessions this boot's _load_existing_sessions()
+        # reset from RUNNABLE_STATES/PAUSED (the post-reset state alone can't
+        # distinguish "just reset this boot" from "already was CREATED/TERMINATED
+        # before boot"), plus any session already sitting in ERROR (reachable only
+        # while the process was live, and whose mark_session_tools_interrupted()
+        # cleanup write is fire-and-forget — it may not have landed before a
+        # subsequent crash). Exposed so SessionCoordinator can scan exactly these for
+        # crash-orphaned tool calls.
+        self._sessions_needing_tool_repair_scan: list[str] = []
 
     @staticmethod
     def _windows_rmtree_fallback(path: Path) -> subprocess.CompletedProcess:
@@ -415,11 +425,19 @@ class SessionManager:
             logger.error(f"Failed to initialize SessionManager: {e}")
             raise
 
+    def get_sessions_needing_tool_repair_scan(self) -> list[str]:
+        """Issue #2111: session IDs that could plausibly have a dangling non-terminal
+        tool call left by a crash — i.e. sessions that were live when whatever
+        stopped the process happened. Used by SessionCoordinator to bound its
+        crash-orphaned-tool-call repair scan to exactly these sessions."""
+        return list(self._sessions_needing_tool_repair_scan)
+
     async def _load_existing_sessions(self):
         """Load existing session state from filesystem"""
         try:
             from .storage_utils import backup_legacy_sessions_once, write_alphabetized_json
             backup_legacy_sessions_once(self.sessions_dir)
+            self._sessions_needing_tool_repair_scan = []
 
             for session_dir in self.sessions_dir.iterdir():
                 if session_dir.is_dir():
@@ -473,6 +491,7 @@ class SessionManager:
                                 session_info.state = SessionState.CREATED
                                 session_info.updated_at = datetime.now(UTC)
                                 state_changed = True
+                                self._sessions_needing_tool_repair_scan.append(session_info.session_id)
                                 session_logger.info(f"Reset session {session_info.session_id} from {original_state.value} to {session_info.state.value} on startup")
 
                             # Reset PAUSED sessions to TERMINATED (orphaned permission requests)
@@ -481,7 +500,17 @@ class SessionManager:
                                 session_info.state = SessionState.TERMINATED
                                 session_info.updated_at = datetime.now(UTC)
                                 state_changed = True
+                                self._sessions_needing_tool_repair_scan.append(session_info.session_id)
                                 session_logger.info(f"Reset session {session_info.session_id} from PAUSED to TERMINATED on startup (orphaned permission request)")
+
+                            # Issue #2111: ERROR is reachable only while the process was live
+                            # (the critical-error callback path), and its own
+                            # mark_session_tools_interrupted() cleanup write is fire-and-forget —
+                            # it may not have landed before a subsequent crash. Unlike the two
+                            # resets above, ERROR sessions aren't mutated here (they stay ERROR),
+                            # just flagged for the same repair scan.
+                            if original_state == SessionState.ERROR:
+                                self._sessions_needing_tool_repair_scan.append(session_info.session_id)
 
                             # Reset processing state since no SDKs are running on startup
                             if session_info.is_processing:
