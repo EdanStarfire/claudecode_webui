@@ -38,6 +38,34 @@ def _classify_bash(command: str) -> bool:
     return bool(_MODIFYING_BASH_RE.search(command))
 
 
+_TERMINAL_SUCCESS = {"completed"}
+_TERMINAL_FAILURE = {"failed", "denied", "interrupted"}
+
+
+def _resolve_status(
+    tid: str | None, tool_call_statuses: dict[str, str], results: dict[str, bool]
+) -> tuple[str, bool | None]:
+    """Resolve (status, succeeded) for a tool_use_id.
+
+    Prefers the canonical `tool_call` status; falls back to legacy
+    `tool_result`-presence inference when no `tool_call` record exists.
+    """
+    status = tool_call_statuses.get(tid)
+    if status is not None:
+        if status in _TERMINAL_SUCCESS:
+            succeeded: bool | None = True
+        elif status in _TERMINAL_FAILURE:
+            succeeded = False
+        else:
+            succeeded = None
+        return status, succeeded
+
+    succeeded = results.get(tid)
+    if succeeded is None:
+        return "pending", None
+    return ("completed" if succeeded else "failed"), succeeded
+
+
 def _build_entry(block: dict, ts: float | None) -> dict:
     """Build an edit-history entry from a tool_use block."""
     name = block.get("name")
@@ -82,6 +110,8 @@ def build_router(webui) -> APIRouter:
         entries = []
         # Map tool_use_id -> succeeded flag from tool_result blocks
         results: dict[str, bool] = {}
+        # Map tool_use_id -> canonical ToolState status from tool_call records
+        tool_call_statuses: dict[str, str] = {}
 
         with open(messages_path, encoding="utf-8") as f:
             for line in f:
@@ -118,10 +148,18 @@ def build_router(webui) -> APIRouter:
                         if tid:
                             results[tid] = not tr.get("is_error", False)
 
-        # Stitch result success flags
+                elif msg_type == "tool_call":
+                    tid = msg.get("tool_use_id")
+                    status = msg.get("status")
+                    if tid and status:
+                        tool_call_statuses[tid] = status
+
+        # Resolve terminal status + success flag per entry
         for entry in entries:
             tid = entry.get("tool_use_id")
-            entry["succeeded"] = results.get(tid)  # None = pending
+            entry["status"], entry["succeeded"] = _resolve_status(
+                tid, tool_call_statuses, results
+            )
 
         return {
             "entries": entries,

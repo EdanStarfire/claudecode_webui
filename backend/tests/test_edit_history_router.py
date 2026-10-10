@@ -265,3 +265,130 @@ class TestGetEditHistoryLegacyFormat:
                 r = await client.get("/api/sessions/s1/edit-history")
         entries = r.json()["entries"]
         assert entries[0]["succeeded"] is None
+        assert entries[0]["status"] == "pending"
+
+
+# ---------------------------------------------------------------------------
+# Canonical tool_call status (issue #2117)
+# ---------------------------------------------------------------------------
+
+def _tool_call_msg(tid: str, name: str, status: str, ts: float = 1001.0) -> dict:
+    return {
+        "type": "tool_call",
+        "tool_use_id": tid,
+        "name": name,
+        "status": status,
+        "timestamp": ts,
+    }
+
+
+class TestGetEditHistoryToolCallStatus:
+    @pytest.mark.asyncio
+    async def test_completed_tool_call_no_legacy_result(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "messages.jsonl"
+            tu = _legacy_tool_use("tc1", "Bash", {"command": "make build"})
+            _write_messages(path, [
+                _legacy_assistant_msg([tu], ts=100.0),
+                _tool_call_msg("tc1", "Bash", "completed", ts=101.0),
+            ])
+            webui = _make_webui(str(path))
+            app = _make_app(webui)
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                r = await client.get("/api/sessions/s1/edit-history")
+        entries = r.json()["entries"]
+        assert entries[0]["succeeded"] is True
+        assert entries[0]["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_failed_tool_call(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "messages.jsonl"
+            tu = _legacy_tool_use("tc2", "Bash", {"command": "make build"})
+            _write_messages(path, [
+                _legacy_assistant_msg([tu], ts=100.0),
+                _tool_call_msg("tc2", "Bash", "failed", ts=101.0),
+            ])
+            webui = _make_webui(str(path))
+            app = _make_app(webui)
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                r = await client.get("/api/sessions/s1/edit-history")
+        entries = r.json()["entries"]
+        assert entries[0]["succeeded"] is False
+        assert entries[0]["status"] == "failed"
+
+    @pytest.mark.asyncio
+    async def test_denied_tool_call_no_tool_result(self):
+        """The exact bug in #2117: a denied tool call never produces a
+        tool_result, so it must resolve to succeeded=False/status=denied,
+        not succeeded=None/status=pending."""
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "messages.jsonl"
+            tu = _legacy_tool_use("tc3", "Edit", {"file_path": "/x.py", "old_string": "a", "new_string": "b"})
+            _write_messages(path, [
+                _legacy_assistant_msg([tu], ts=100.0),
+                _tool_call_msg("tc3", "Edit", "denied", ts=101.0),
+            ])
+            webui = _make_webui(str(path))
+            app = _make_app(webui)
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                r = await client.get("/api/sessions/s1/edit-history")
+        entries = r.json()["entries"]
+        assert entries[0]["succeeded"] is False
+        assert entries[0]["status"] == "denied"
+
+    @pytest.mark.asyncio
+    async def test_interrupted_tool_call_no_tool_result(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "messages.jsonl"
+            tu = _legacy_tool_use("tc4", "Bash", {"command": "make build"})
+            _write_messages(path, [
+                _legacy_assistant_msg([tu], ts=100.0),
+                _tool_call_msg("tc4", "Bash", "interrupted", ts=101.0),
+            ])
+            webui = _make_webui(str(path))
+            app = _make_app(webui)
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                r = await client.get("/api/sessions/s1/edit-history")
+        entries = r.json()["entries"]
+        assert entries[0]["succeeded"] is False
+        assert entries[0]["status"] == "interrupted"
+
+    @pytest.mark.asyncio
+    async def test_non_terminal_tool_call_statuses_are_pending_equivalent(self):
+        for status in ("pending", "awaiting_permission", "running"):
+            with tempfile.TemporaryDirectory() as d:
+                path = Path(d) / "messages.jsonl"
+                tu = _legacy_tool_use("tc5", "Bash", {"command": "make build"})
+                _write_messages(path, [
+                    _legacy_assistant_msg([tu], ts=100.0),
+                    _tool_call_msg("tc5", "Bash", status, ts=101.0),
+                ])
+                webui = _make_webui(str(path))
+                app = _make_app(webui)
+                async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                    r = await client.get("/api/sessions/s1/edit-history")
+            entries = r.json()["entries"]
+            assert entries[0]["succeeded"] is None
+            assert entries[0]["status"] == status
+
+    @pytest.mark.asyncio
+    async def test_canonical_tool_call_status_overrides_conflicting_legacy_result(self):
+        """A legacy tool_result (succeeded=True) and a conflicting canonical
+        tool_call status (denied) for the same tool_use_id: canonical wins."""
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "messages.jsonl"
+            tu = _legacy_tool_use("tc6", "Edit", {"file_path": "/x.py", "old_string": "a", "new_string": "b"})
+            tr_ok = _legacy_tool_result("tc6", is_error=False)
+            _write_messages(path, [
+                _legacy_assistant_msg([tu], ts=100.0),
+                _legacy_user_msg([tr_ok], ts=101.0),
+                _tool_call_msg("tc6", "Edit", "denied", ts=102.0),
+            ])
+            webui = _make_webui(str(path))
+            app = _make_app(webui)
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                r = await client.get("/api/sessions/s1/edit-history")
+        entries = r.json()["entries"]
+        assert entries[0]["succeeded"] is False
+        assert entries[0]["status"] == "denied"

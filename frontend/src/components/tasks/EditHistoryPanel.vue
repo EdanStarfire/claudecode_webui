@@ -54,8 +54,8 @@
             {{ relativeTs(entry.timestamp) }}
           </span>
 
-          <span class="entry-status" :title="statusTitle(entry.succeeded)">
-            {{ statusIcon(entry.succeeded) }}
+          <span class="entry-status" :title="statusTitle(entry)">
+            {{ statusIcon(entry) }}
           </span>
 
           <span v-if="entry.tool_name === 'Edit'" class="expand-arrow" title="Open full-screen diff">⤢</span>
@@ -174,16 +174,24 @@ function fullTs(ts) {
   return formatFullTimestamp(ts)
 }
 
-function statusIcon(succeeded) {
-  if (succeeded === true) return '✓'
-  if (succeeded === false) return '✗'
-  return '…'
+function statusIcon(entry) {
+  switch (entry.status) {
+    case 'completed': return '✓'
+    case 'failed': return '✗'
+    case 'denied': return '✗'
+    case 'interrupted': return '⚠'
+    default: return '…' // pending / awaiting_permission / running
+  }
 }
 
-function statusTitle(succeeded) {
-  if (succeeded === true) return 'Succeeded'
-  if (succeeded === false) return 'Failed'
-  return 'Pending'
+function statusTitle(entry) {
+  switch (entry.status) {
+    case 'completed': return 'Succeeded'
+    case 'failed': return 'Failed'
+    case 'denied': return 'Denied by user'
+    case 'interrupted': return 'Interrupted'
+    default: return 'Pending'
+  }
 }
 
 function writePreview(entry) {
