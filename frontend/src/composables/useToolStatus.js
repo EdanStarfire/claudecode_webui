@@ -1,77 +1,35 @@
 import { computed } from 'vue'
-import { useMessageStore } from '@/stores/message'
-import { useSessionStore } from '@/stores/session'
 
 /**
  * Shared composable for tool status computation.
  * Consolidates effectiveStatus mapping duplicated in
  * TimelineDetail, ActivityTimeline, and TimelineNode.
  *
+ * Issue #2110 (stage 4b-B): `tool.status` is now the single, backend-normalized frontend-
+ * display field (pending/permission_required/executing/completed/error — denied and
+ * interrupted both read as 'completed', matching every direct `.status` consumer). Orphaned-
+ * ness is carried separately via the `_isOrphaned`/`_orphanedInfo` stamp applyRecord's
+ * tool_call branch sets directly on the object — no backendStatus field, no session-scoped
+ * orphan Map/store lookup needed here anymore.
+ *
  * @param {import('vue').Ref<Object>} toolRef - reactive ref or toRef to the tool/toolCall prop
  * @returns {{ effectiveStatus: import('vue').ComputedRef<string>, isOrphaned: import('vue').ComputedRef<boolean>, orphanedInfo: import('vue').ComputedRef<Object|null>, statusColor: import('vue').ComputedRef<string>, hasError: import('vue').ComputedRef<boolean> }}
  */
 export function useToolStatus(toolRef) {
-  const messageStore = useMessageStore()
-  const sessionStore = useSessionStore()
-
   const hasError = computed(() => {
     const tool = toolRef.value
     return tool?.result?.error || tool?.status === 'error' || tool?.permissionDecision === 'deny'
   })
 
-  const effectiveStatus = computed(() => {
-    const tool = toolRef.value
-    if (!tool) return 'pending'
+  // Near-passthrough of tool.status — the one exception is the orphaned stamp, which
+  // overrides the 'completed' value denied/interrupted both normalize to, since several
+  // display sites (TimelineNode's tooltip, SubagentTimeline) distinguish "orphaned" from a
+  // normal completion.
+  const effectiveStatus = computed(() => getEffectiveStatusForTool(toolRef.value))
 
-    const sessionId = sessionStore.currentSessionId
-    if (!sessionId) return tool.status
+  const isOrphaned = computed(() => !!toolRef.value?._isOrphaned)
 
-    // Check backend status first (from ToolCallUpdate messages)
-    if (tool.backendStatus) {
-      const map = {
-        'pending': 'pending',
-        'awaiting_permission': 'permission_required',
-        'running': 'executing',
-        'completed': 'completed',
-        'failed': 'error',
-        'denied': 'completed',
-        'interrupted': 'orphaned'
-      }
-      return map[tool.backendStatus] || tool.backendStatus
-    }
-
-    // Check orphaned via message store
-    // Issue #2110 (stage 4b-A): this precedence chain is transitional — a second branch
-    // reading backend display metadata sat between the two checks above until it was
-    // removed as dead code in this stage. Collapsing the whole chain to a single-field
-    // read is 4b-B's job, not this stage's.
-    if (messageStore.isToolUseOrphaned(sessionId, tool.id)) {
-      return 'orphaned'
-    }
-
-    return tool.status
-  })
-
-  const isOrphaned = computed(() => {
-    const tool = toolRef.value
-    if (!tool) return false
-    // Check stamped property first (set by markToolUseOrphaned for reliable reactivity)
-    if (tool._isOrphaned) return true
-    if (tool.backendStatus === 'interrupted') return true
-    const sessionId = sessionStore.currentSessionId
-    if (!sessionId) return false
-    return messageStore.isToolUseOrphaned(sessionId, tool.id)
-  })
-
-  const orphanedInfo = computed(() => {
-    const tool = toolRef.value
-    if (!tool) return null
-    // Check stamped property first
-    if (tool._orphanedInfo) return tool._orphanedInfo
-    const sessionId = sessionStore.currentSessionId
-    if (!sessionId) return null
-    return messageStore.getOrphanedInfo(sessionId, tool.id)
-  })
+  const orphanedInfo = computed(() => toolRef.value?._orphanedInfo || null)
 
   const statusColor = computed(() => {
     const status = effectiveStatus.value
@@ -96,29 +54,14 @@ export function useToolStatus(toolRef) {
 }
 
 /**
- * Backend status mapping (non-reactive utility).
- * Used by ActivityTimeline watcher where a plain function is needed.
- */
-const backendStatusMap = {
-  'pending': 'pending',
-  'awaiting_permission': 'permission_required',
-  'running': 'executing',
-  'completed': 'completed',
-  'failed': 'error',
-  'denied': 'completed',
-  'interrupted': 'orphaned'
-}
-
-/**
  * Get effective status for a plain tool object (non-reactive).
- * For use in watchers and plain function calls.
+ * For use in watchers and plain function calls. Issue #2110 (stage 4b-B): near-passthrough of
+ * `tool.status` (the single backend-normalized field) — the one exception is the `_isOrphaned`
+ * stamp, which overrides to 'orphaned' (see useToolStatus()'s own comment for why this diverges
+ * from plain 'completed' at a handful of display sites).
  */
 export function getEffectiveStatusForTool(tool) {
   if (!tool) return 'pending'
-
-  if (tool.backendStatus) {
-    return backendStatusMap[tool.backendStatus] || tool.backendStatus
-  }
-
-  return tool.status
+  if (tool._isOrphaned) return 'orphaned'
+  return tool.status ?? 'pending'
 }

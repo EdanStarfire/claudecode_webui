@@ -1962,7 +1962,7 @@ describe('polling store - stall-heal cursor-atomicity fix (#1988)', () => {
     // currentSessionId (independent of polling.js's) matches — mirrors how the real app
     // keeps them in sync via selectSession().
     sessionStore.currentSessionId = sid
-    const addMessageSpy = vi.spyOn(messageStore, 'addMessage')
+    const applyRecordSpy = vi.spyOn(messageStore, 'applyRecord')
 
     sequencedFetchMock([
       { events: [], next_cursor: 5 }, // initial connect's poll — establishes cursor 5
@@ -1996,7 +1996,7 @@ describe('polling store - stall-heal cursor-atomicity fix (#1988)', () => {
     await tickStallCadence(pollingStore, 8) // past STALL_TIMEOUT_MS (40s)
     await flush()
 
-    expect(addMessageSpy).toHaveBeenCalledWith(sid, expect.objectContaining({ id: 'during-heal-1' }))
+    expect(applyRecordSpy).toHaveBeenCalledWith(sid, expect.objectContaining({ id: 'during-heal-1' }), 'live')
     // Zero REST calls to the message-history endpoint — the old two-step
     // (syncMessages + cursor GET) is gone from the common path entirely.
     const messagesRequests = apiMock.get.mock.calls.filter(([url]) => String(url).includes('/messages'))
@@ -2053,7 +2053,7 @@ describe('polling store - stall-heal cursor-atomicity fix (#1988)', () => {
   it('evicted fallback: does not apply the evicted response\'s own (incomplete) events — only the fresh reload\'s state', async () => {
     const { pollingStore, sessionStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-1988-evicted-b', is_processing: false })
     sessionStore.currentSessionId = sid // so a false negative can't hide behind dispatchEvent()'s own currentSessionId guard
-    const addMessageSpy = vi.spyOn(messageStore, 'addMessage')
+    const applyRecordSpy = vi.spyOn(messageStore, 'applyRecord')
     vi.spyOn(messageStore, 'loadMessages').mockImplementation(async (sessionId) => {
       messageStore.loadedEventCursors.set(sessionId, 42)
       return { messages: [], totalCount: 0, hasMore: false }
@@ -2075,7 +2075,7 @@ describe('polling store - stall-heal cursor-atomicity fix (#1988)', () => {
     await flush()
     await flush()
 
-    expect(addMessageSpy).not.toHaveBeenCalledWith(sid, expect.objectContaining({ id: 'unreliable-evicted-event' }))
+    expect(applyRecordSpy).not.toHaveBeenCalledWith(sid, expect.objectContaining({ id: 'unreliable-evicted-event' }), 'live')
   })
 
   // Note: #1917's synchronous-abort guarantee and #1956/#1954's overlapping-heal mutex

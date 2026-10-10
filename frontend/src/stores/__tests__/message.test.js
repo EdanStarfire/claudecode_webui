@@ -21,7 +21,7 @@ describe('message store', () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
 
-    store.addMessage('sess-1', makeMessage({ content: 'hi' }))
+    store.applyRecord('sess-1', makeMessage({ content: 'hi' }), 'live')
 
     expect(store.messagesBySession.get('sess-1').length).toBe(1)
     expect(store.messagesBySession.get('sess-1')[0].content).toBe('hi')
@@ -35,12 +35,12 @@ describe('message store', () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
 
-    store.addMessage('sess-1', makeMessage({
+    store.applyRecord('sess-1', makeMessage({
       type: 'user', content: 'Please help me', message_id: 'msg-user-dup'
-    }))
-    store.addMessage('sess-1', makeMessage({
+    }), 'live')
+    store.applyRecord('sess-1', makeMessage({
       type: 'user', content: 'Please help me', message_id: 'msg-user-dup'
-    }))
+    }), 'live')
 
     expect(store.messagesBySession.get('sess-1').length).toBe(1)
   })
@@ -127,24 +127,24 @@ describe('message store', () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
 
-    store.handleToolCall('sess-1', {
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'use-1',
       name: 'Bash',
       input: { command: 'ls' },
       status: 'running'
-    })
+    }, 'live')
 
     let calls = store.toolCallsBySession.get('sess-1')
     expect(calls.length).toBe(1)
     expect(calls[0].status).toBe('executing')
 
-    store.handleToolCall('sess-1', {
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'use-1',
       name: 'Bash',
       input: { command: 'ls' },
       status: 'completed',
       result: 'file.txt'
-    })
+    }, 'live')
 
     calls = store.toolCallsBySession.get('sess-1')
     expect(calls.length).toBe(1)
@@ -159,13 +159,13 @@ describe('message store', () => {
     const sessionStore = useSessionStore()
     sessionStore.currentSessionId = 'sess-1'
 
-    store.handleToolCall('sess-1', {
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'use-1',
       name: 'Edit',
       input: { path: '/tmp/f' },
       status: 'awaiting_permission',
       request_id: 'req-1'
-    })
+    }, 'live')
 
     expect(store.toolCallsBySession.get('sess-1')[0].status).toBe('permission_required')
 
@@ -183,38 +183,38 @@ describe('message store', () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
 
-    store.handleToolCall('sess-1', {
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'use-1',
       name: 'Bash',
       input: { command: 'ls' },
       status: 'running',
       turn_id: 'msg-abc'
-    })
+    }, 'live')
 
     let calls = store.toolCallsBySession.get('sess-1')
     expect(calls[0].messageId).toBe('msg-abc')
 
-    store.handleToolCall('sess-1', {
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'use-2',
       name: 'Edit',
       input: {},
       status: 'awaiting_permission',
       request_id: 'req-2'
       // no turn_id — legacy payload
-    })
+    }, 'live')
 
     calls = store.toolCallsBySession.get('sess-1')
     expect(calls[1].messageId).toBeNull()
 
     // Update branch: a later event for use-2 carries turn_id
-    store.handleToolCall('sess-1', {
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'use-2',
       name: 'Edit',
       input: {},
       status: 'awaiting_permission',
       request_id: 'req-2',
       turn_id: 'msg-def'
-    })
+    }, 'live')
 
     calls = store.toolCallsBySession.get('sess-1')
     expect(calls[1].messageId).toBe('msg-def')
@@ -225,19 +225,19 @@ describe('message store', () => {
     const store = useMessageStore()
 
     // 1. Initial awaiting_permission event, no answers yet
-    store.handleToolCall('sess-1', {
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'use-1',
       name: 'AskUserQuestion',
       input: { questions: [{ question: 'Q1', options: [{ label: 'Option A' }] }] },
       status: 'awaiting_permission',
       request_id: 'req-1'
-    })
+    }, 'live')
 
     let tc = store.toolCallsBySession.get('sess-1')[0]
     expect(tc.answers).toBeNull()
 
     // 2. Permission-response transition event carries updated_input sibling field
-    store.handleToolCall('sess-1', {
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'use-1',
       name: 'AskUserQuestion',
       input: { questions: [{ question: 'Q1', options: [{ label: 'Option A' }] }] },
@@ -246,60 +246,91 @@ describe('message store', () => {
         answers: { Q1: 'Option A' }
       },
       status: 'running'
-    })
+    }, 'live')
 
     tc = store.toolCallsBySession.get('sess-1')[0]
     expect(tc.answers).toEqual({ Q1: 'Option A' })
 
     // 3. Terminal completed event carries only the original input, no updated_input —
     // this previously clobbered .input and left answers unrecoverable.
-    store.handleToolCall('sess-1', {
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'use-1',
       name: 'AskUserQuestion',
       input: { questions: [{ question: 'Q1', options: [{ label: 'Option A' }] }] },
       status: 'completed',
       result: 'ok'
-    })
+    }, 'live')
 
     tc = store.toolCallsBySession.get('sess-1')[0]
     expect(tc.status).toBe('completed')
     expect(tc.answers).toEqual({ Q1: 'Option A' })
   })
 
-  it('markToolUseOrphaned marks tool as orphaned', async () => {
+  it('a backend tool_call record with status "interrupted" stamps the tool as orphaned (#2110 stage 4b-B)', async () => {
+    // Issue #2110 (stage 4b-B): the browser-side orphan-sweep subsystem (markToolUseOrphaned/
+    // activeToolUses/orphanedToolUses) is deleted — the backend's own tool_call record for an
+    // interrupted tool now carries that terminal status directly, and applyRecord's tool_call
+    // branch stamps _isOrphaned/_orphanedInfo straight onto the object.
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
 
-    store.handleToolCall('sess-1', {
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'use-1',
       name: 'Bash',
       input: { command: 'ls' },
       status: 'running'
-    })
+    }, 'live')
 
-    store.markToolUseOrphaned('sess-1', 'use-1', 'Session was restarted')
+    store.applyRecord('sess-1', { type: 'tool_call',
+      tool_use_id: 'use-1',
+      name: 'Bash',
+      input: { command: 'ls' },
+      status: 'interrupted'
+    }, 'live')
 
     const tc = store.toolCallsBySession.get('sess-1')[0]
     expect(tc._isOrphaned).toBe(true)
-    expect(tc.backendStatus).toBe('interrupted')
-    expect(store.isToolUseOrphaned('sess-1', 'use-1')).toBe(true)
+    expect(tc.status).toBe('completed')
+    expect(tc._orphanedInfo).toMatchObject({ message: 'Session was interrupted' })
   })
 
-  it('markToolUseOrphaned resolves effectiveStatus to orphaned, not permission_required (#1959)', async () => {
+  it('an interrupted tool_call resolves effectiveStatus to orphaned, not permission_required (#1959)', async () => {
     const { useMessageStore } = await import('@/stores/message')
     const { getEffectiveStatusForTool } = await import('@/composables/useToolStatus')
     const store = useMessageStore()
 
-    store.handleToolCall('sess-1', {
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'use-1',
       name: 'AskUserQuestion',
       input: { questions: [] },
       status: 'awaiting_permission'
-    })
+    }, 'live')
 
-    store.markToolUseOrphaned('sess-1', 'use-1', 'Session was interrupted')
+    store.applyRecord('sess-1', { type: 'tool_call',
+      tool_use_id: 'use-1',
+      name: 'AskUserQuestion',
+      input: { questions: [] },
+      status: 'interrupted'
+    }, 'live')
 
     const tc = store.toolCallsBySession.get('sess-1')[0]
+    expect(getEffectiveStatusForTool(tc)).toBe('orphaned')
+  })
+
+  it('a tool_call whose FIRST-EVER record is already interrupted is still stamped orphaned (open item: unified create/update terminal resolution)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const { getEffectiveStatusForTool } = await import('@/composables/useToolStatus')
+    const store = useMessageStore()
+
+    store.applyRecord('sess-1', { type: 'tool_call',
+      tool_use_id: 'use-1',
+      name: 'Bash',
+      input: { command: 'ls' },
+      status: 'interrupted'
+    }, 'live')
+
+    const tc = store.toolCallsBySession.get('sess-1')[0]
+    expect(tc._isOrphaned).toBe(true)
     expect(getEffectiveStatusForTool(tc)).toBe('orphaned')
   })
 
@@ -341,12 +372,12 @@ describe('content_block_start (tool_use) early tool card (Issue #1573)', () => {
       content_block: { type: 'tool_use', id: 'toolu_2', name: 'Bash' }
     }))
 
-    store.handleToolCall(SID, {
+    store.applyRecord(SID, { type: 'tool_call',
       tool_use_id: 'toolu_2',
       name: 'Bash',
       input: { command: 'ls -la' },
       status: 'running'
-    })
+    }, 'live')
 
     const toolCalls = store.toolCallsBySession.get(SID)
     expect(toolCalls.length).toBe(1)
@@ -354,7 +385,12 @@ describe('content_block_start (tool_use) early tool card (Issue #1573)', () => {
     expect(toolCalls[0].input).toEqual({ command: 'ls -la' })
   })
 
-  it('early card is orphaned (not stuck pending) on interrupt (#1959 precedent)', async () => {
+  it('early card becomes orphaned once the backend delivers its own interrupted tool_call record (#2110 stage 4b-B / AC2)', async () => {
+    // Issue #2110 (stage 4b-B, AC2): the browser-side orphan sweep (inferring "the open tool
+    // must be orphaned" from a bare interrupt/client_launched system message) is deleted — the
+    // backend is now the sole authority, and always sends its own tool_call record with
+    // status: 'interrupted' for any tool left open across a restart/interrupt. A system
+    // message alone no longer orphans anything on its own (see the companion test below).
     const { useMessageStore } = await import('@/stores/message')
     const { getEffectiveStatusForTool } = await import('@/composables/useToolStatus')
     const store = useMessageStore()
@@ -365,26 +401,16 @@ describe('content_block_start (tool_use) early tool card (Issue #1573)', () => {
       content_block: { type: 'tool_use', id: 'toolu_3', name: 'Write' }
     }))
 
-    store.addMessage(SID, makeMessage({ type: 'system', content: '', metadata: { subtype: 'interrupt' } }))
+    // A bare interrupt system message, with no accompanying backend tool_call record, leaves
+    // the early card exactly as it was — no sweep infers orphaning from it anymore.
+    store.applyRecord(SID, makeMessage({ type: 'system', content: '', metadata: { subtype: 'interrupt' } }), 'live')
+    let tc = store.toolCallsBySession.get(SID).find(t => t.id === 'toolu_3')
+    expect(getEffectiveStatusForTool(tc)).toBe('pending')
 
-    const tc = store.toolCallsBySession.get(SID).find(t => t.id === 'toolu_3')
-    expect(getEffectiveStatusForTool(tc)).toBe('orphaned')
-  })
-
-  it('early card is orphaned on restart (client_launched)', async () => {
-    const { useMessageStore } = await import('@/stores/message')
-    const { getEffectiveStatusForTool } = await import('@/composables/useToolStatus')
-    const store = useMessageStore()
-    const SID = 'sess-early-card-restart'
-
-    store.handleAssistantDelta(SID, delta('content_block_start', SID, {
-      index: 1,
-      content_block: { type: 'tool_use', id: 'toolu_4', name: 'Read' }
-    }))
-
-    store.addMessage(SID, makeMessage({ type: 'system', content: '', metadata: { subtype: 'client_launched' } }))
-
-    const tc = store.toolCallsBySession.get(SID).find(t => t.id === 'toolu_4')
+    // The backend's own authoritative tool_call record for this tool_use_id is what actually
+    // resolves it as orphaned.
+    store.applyRecord(SID, { type: 'tool_call', tool_use_id: 'toolu_3', name: 'Write', input: {}, status: 'interrupted' }, 'live')
+    tc = store.toolCallsBySession.get(SID).find(t => t.id === 'toolu_3')
     expect(getEffectiveStatusForTool(tc)).toBe('orphaned')
   })
 
@@ -393,13 +419,13 @@ describe('content_block_start (tool_use) early tool card (Issue #1573)', () => {
     const store = useMessageStore()
     const SID = 'sess-early-card-no-regress'
 
-    store.handleToolCall(SID, {
+    store.applyRecord(SID, { type: 'tool_call',
       tool_use_id: 'toolu_5',
       name: 'Bash',
       input: { command: 'echo done' },
       status: 'completed',
       result: 'done'
-    })
+    }, 'live')
 
     store.handleAssistantDelta(SID, delta('content_block_start', SID, {
       index: 1,
@@ -410,29 +436,29 @@ describe('content_block_start (tool_use) early tool card (Issue #1573)', () => {
     expect(tc.status).toBe('completed')
   })
 
-  it('a stray content_block_start for an already-completed tool does not re-open it for the orphan sweep (review fix)', async () => {
-    // handleToolCall's status-regression guard silently no-ops when a content_block_start
-    // arrives late for a tool that already completed — but the activeToolUses registration
-    // must not run independently of that guard, or a subsequent interrupt/restart would
-    // orphan a card that already finished successfully.
+  it('a stray content_block_start for an already-completed tool is not affected by a later interrupt (review fix)', async () => {
+    // _applyToolCallRecord's status-regression guard silently no-ops when a content_block_start
+    // arrives late for a tool that already completed. Issue #2110 (stage 4b-B): there is no
+    // browser-side orphan sweep anymore at all, so a subsequent interrupt system message can no
+    // longer touch this card's state regardless.
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
     const SID = 'sess-early-card-no-reopen'
 
-    store.handleToolCall(SID, {
+    store.applyRecord(SID, { type: 'tool_call',
       tool_use_id: 'toolu_6',
       name: 'Bash',
       input: { command: 'echo done' },
       status: 'completed',
       result: 'done'
-    })
+    }, 'live')
 
     store.handleAssistantDelta(SID, delta('content_block_start', SID, {
       index: 1,
       content_block: { type: 'tool_use', id: 'toolu_6', name: 'Bash' }
     }))
 
-    store.addMessage(SID, makeMessage({ type: 'system', content: '', metadata: { subtype: 'interrupt' } }))
+    store.applyRecord(SID, makeMessage({ type: 'system', content: '', metadata: { subtype: 'interrupt' } }), 'live')
 
     const tc = store.toolCallsBySession.get(SID).find(t => t.id === 'toolu_6')
     expect(tc.status).toBe('completed')
@@ -453,12 +479,12 @@ describe('content_block_start (tool_use) early tool card (Issue #1573)', () => {
       content_block: { type: 'tool_use', id: 'toolu_b', name: 'Bash' }
     }))
 
-    store.handleToolCall(SID, {
+    store.applyRecord(SID, { type: 'tool_call',
       tool_use_id: 'toolu_a', name: 'Read', input: { file_path: '/tmp/a' }, status: 'completed', result: 'ok'
-    })
-    store.handleToolCall(SID, {
+    }, 'live')
+    store.applyRecord(SID, { type: 'tool_call',
       tool_use_id: 'toolu_b', name: 'Bash', input: { command: 'ls' }, status: 'completed', result: 'ok'
-    })
+    }, 'live')
 
     const toolCalls = store.toolCallsBySession.get(SID)
     expect(toolCalls.length).toBe(2)
@@ -485,7 +511,7 @@ describe('addMessage single-rule dedup (Issue #1955)', () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
 
-    store.addMessage('sess-1', makeMessage({ type: 'assistant', content: 'hi', message_id: 'am-1' }))
+    store.applyRecord('sess-1', makeMessage({ type: 'assistant', content: 'hi', message_id: 'am-1' }), 'live')
 
     expect(store.messagesBySession.get('sess-1').length).toBe(1)
   })
@@ -494,8 +520,8 @@ describe('addMessage single-rule dedup (Issue #1955)', () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
 
-    store.addMessage('sess-1', makeMessage({ type: 'assistant', content: 'hi', message_id: 'am-1' }))
-    store.addMessage('sess-1', makeMessage({ type: 'assistant', content: 'hi again', message_id: 'am-1' }))
+    store.applyRecord('sess-1', makeMessage({ type: 'assistant', content: 'hi', message_id: 'am-1' }), 'live')
+    store.applyRecord('sess-1', makeMessage({ type: 'assistant', content: 'hi again', message_id: 'am-1' }), 'live')
 
     const msgs = store.messagesBySession.get('sess-1')
     expect(msgs.length).toBe(1)
@@ -506,8 +532,8 @@ describe('addMessage single-rule dedup (Issue #1955)', () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
 
-    store.addMessage('sess-1', makeMessage({ type: 'assistant', content: 'part 1', message_id: 'am-1' }))
-    store.addMessage('sess-1', makeMessage({ type: 'assistant', content: 'part 2', message_id: 'am-2' }))
+    store.applyRecord('sess-1', makeMessage({ type: 'assistant', content: 'part 1', message_id: 'am-1' }), 'live')
+    store.applyRecord('sess-1', makeMessage({ type: 'assistant', content: 'part 2', message_id: 'am-2' }), 'live')
 
     const msgs = store.messagesBySession.get('sess-1')
     expect(msgs.length).toBe(2)
@@ -521,10 +547,10 @@ describe('addMessage single-rule dedup (Issue #1955)', () => {
     // Simulates several turns' canonical messages landing faster than a naive implementation
     // might settle each one — the single dedup-by-id rule needs no turn-stacking-aware logic.
     for (let i = 1; i <= 5; i++) {
-      store.addMessage('sess-1', makeMessage({ type: 'assistant', content: `turn ${i}`, message_id: `am-${i}` }))
+      store.applyRecord('sess-1', makeMessage({ type: 'assistant', content: `turn ${i}`, message_id: `am-${i}` }), 'live')
     }
     // A redelivery of an earlier turn (e.g. a reconnect replay) must not duplicate it.
-    store.addMessage('sess-1', makeMessage({ type: 'assistant', content: 'turn 3', message_id: 'am-3' }))
+    store.applyRecord('sess-1', makeMessage({ type: 'assistant', content: 'turn 3', message_id: 'am-3' }), 'live')
 
     const msgs = store.messagesBySession.get('sess-1')
     expect(msgs.map(m => m.content)).toEqual(['turn 1', 'turn 2', 'turn 3', 'turn 4', 'turn 5'])
@@ -584,7 +610,7 @@ describe('streamingPreviewBySession lifecycle (Issue #1955)', () => {
 
     expect(store.streamingPreviewBySession.get(SID).content).toBe('first turn')
 
-    store.addMessage(SID, makeMessage({ type: 'assistant', content: 'first turn', message_id: 'am-1' }))
+    store.applyRecord(SID, makeMessage({ type: 'assistant', content: 'first turn', message_id: 'am-1' }), 'live')
     expect(store.streamingPreviewBySession.get(SID).content).toBe('')
 
     // A second, genuinely new turn's message_start resets cosmetic state regardless of
@@ -607,14 +633,14 @@ describe('streamingPreviewBySession lifecycle (Issue #1955)', () => {
     // yet in between.
     store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: 'msg_1' } }))
     store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'thinking_delta', thinking: 'spawning agents' } }))
-    store.addMessage(SID, makeMessage({ type: 'assistant', content: '', message_id: 'am-1', metadata: { thinking_content: 'spawning agents' } }))
+    store.applyRecord(SID, makeMessage({ type: 'assistant', content: '', message_id: 'am-1', metadata: { thinking_content: 'spawning agents' } }), 'live')
 
     let preview = store.streamingPreviewBySession.get(SID)
     expect(preview.active).toBe(true) // still mid-stream — no message_stop yet
     expect(preview.thinking).toBe('') // cleared by the first canonical append
 
     store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 1, delta: { type: 'text_delta', text: 'second frame text' } }))
-    store.addMessage(SID, makeMessage({ type: 'assistant', content: 'second frame text', message_id: 'am-2' }))
+    store.applyRecord(SID, makeMessage({ type: 'assistant', content: 'second frame text', message_id: 'am-2' }), 'live')
 
     preview = store.streamingPreviewBySession.get(SID)
     expect(preview.content).toBe('') // cleared again by the second append, unaffected by the first
@@ -634,7 +660,7 @@ describe('streamingPreviewBySession lifecycle (Issue #1955)', () => {
 
     store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: 'msg_1' } }))
     // Canonical frame lands FIRST, while the preview is still empty.
-    store.addMessage(SID, makeMessage({ type: 'assistant', content: 'Yes', message_id: 'am-1' }))
+    store.applyRecord(SID, makeMessage({ type: 'assistant', content: 'Yes', message_id: 'am-1' }), 'live')
     expect(store.streamingPreviewBySession.get(SID).content).toBe('') // clear no-op'd (already empty)
 
     // Deltas arrive AFTER the canonical — this is the ordering that used to leak. (rAF is
@@ -670,7 +696,7 @@ describe('streamingPreviewBySession lifecycle (Issue #1955)', () => {
     expect(preview.content).toBe('Yes')
     expect(preview.active).toBe(false)
 
-    store.addMessage(SID, makeMessage({ type: 'assistant', content: 'Yes', message_id: 'am-1' }))
+    store.applyRecord(SID, makeMessage({ type: 'assistant', content: 'Yes', message_id: 'am-1' }), 'live')
 
     preview = store.streamingPreviewBySession.get(SID)
     expect(preview.content).toBe('')
@@ -684,7 +710,7 @@ describe('streamingPreviewBySession lifecycle (Issue #1955)', () => {
     store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: 'msg_1' } }))
     expect(store.streamingPreviewBySession.get(SID)).toBeTruthy()
 
-    store.addMessage(SID, makeMessage({ type: 'system', content: '', metadata: { subtype: 'interrupt' } }))
+    store.applyRecord(SID, makeMessage({ type: 'system', content: '', metadata: { subtype: 'interrupt' } }), 'live')
 
     expect(store.streamingPreviewBySession.get(SID)).toBeUndefined()
   })
@@ -697,7 +723,7 @@ describe('streamingPreviewBySession lifecycle (Issue #1955)', () => {
     store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: 'msg_1' } }))
     expect(store.streamingPreviewBySession.get(SID)).toBeTruthy()
 
-    store.addMessage(SID, makeMessage({ type: 'system', content: '', metadata: { subtype: 'client_launched' } }))
+    store.applyRecord(SID, makeMessage({ type: 'system', content: '', metadata: { subtype: 'client_launched' } }), 'live')
 
     expect(store.streamingPreviewBySession.get(SID)).toBeUndefined()
   })
@@ -730,15 +756,15 @@ describe('streamingPreviewBySession lifecycle (Issue #1955)', () => {
 
     // Subagent narration lands on the SAME session while the main turn's preview is still
     // frozen (awaiting its own canonical append) — must not clear it.
-    store.addMessage(SID, makeMessage({
+    store.applyRecord(SID, makeMessage({
       type: 'assistant', content: 'Subagent narration text', message_id: 'subagent-narration-1',
       metadata: { parent_tool_use_id: 'toolu_task1' },
-    }))
+    }), 'live')
 
     expect(store.streamingPreviewBySession.get(SID).content).toBe('Main turn still typing')
 
     // The main turn's own canonical append still clears it as normal.
-    store.addMessage(SID, makeMessage({ type: 'assistant', content: 'Main turn still typing', message_id: 'main-turn-1-canonical' }))
+    store.applyRecord(SID, makeMessage({ type: 'assistant', content: 'Main turn still typing', message_id: 'main-turn-1-canonical' }), 'live')
     expect(store.streamingPreviewBySession.get(SID).content).toBe('')
   })
 })
@@ -768,7 +794,7 @@ describe('assistant_delta turn_id field (Issue #1987)', () => {
 
     expect(store.streamingPreviewBySession.get(SID).content).toBe('hello')
 
-    store.addMessage(SID, makeMessage({ type: 'assistant', content: 'hello', message_id: 'am-final-1987' }))
+    store.applyRecord(SID, makeMessage({ type: 'assistant', content: 'hello', message_id: 'am-final-1987' }), 'live')
 
     const msgs = store.messagesBySession.get(SID)
     expect(msgs.length).toBe(1)
@@ -1018,8 +1044,8 @@ describe('leg grouping by timestamp window — resume via SendMessage (#1746 fol
 
     // All child tool calls share the SAME parent_tool_use_id (the root/leg-0 launch id) —
     // confirmed real behavior — but happen at different times relative to each leg's window.
-    store.handleToolCall(SID, { tool_use_id: 'toolu_leg0_tool', name: 'ToolSearch', input: {}, status: 'completed', parent_tool_use_id: ROOT_TOOL_USE_ID, created_at: 120 }) // during leg 0's window [100,200)
-    store.handleToolCall(SID, { tool_use_id: 'toolu_leg1_tool', name: 'SendMessage', input: { to: 'main' }, status: 'completed', parent_tool_use_id: ROOT_TOOL_USE_ID, created_at: 250 }) // during leg 1's window [200, inf)
+    store.applyRecord(SID, { type: 'tool_call', tool_use_id: 'toolu_leg0_tool', name: 'ToolSearch', input: {}, status: 'completed', parent_tool_use_id: ROOT_TOOL_USE_ID, created_at: 120 }, 'live') // during leg 0's window [100,200)
+    store.applyRecord(SID, { type: 'tool_call', tool_use_id: 'toolu_leg1_tool', name: 'SendMessage', input: { to: 'main' }, status: 'completed', parent_tool_use_id: ROOT_TOOL_USE_ID, created_at: 250 }, 'live') // during leg 1's window [200, inf)
 
     const leg0Tools = store.childToolCallsForLeg(SID, TASK_ID, 0)
     const leg1Tools = store.childToolCallsForLeg(SID, TASK_ID, 1)
@@ -1034,19 +1060,19 @@ describe('leg grouping by timestamp window — resume via SendMessage (#1746 fol
     setupTwoLegs(store)
 
     // Narration during leg 0's window.
-    store.addMessage(SID, {
+    store.applyRecord(SID, {
       type: 'assistant',
       content: 'Working on the first haiku.',
       timestamp: 130,
       metadata: { parent_tool_use_id: ROOT_TOOL_USE_ID },
-    })
+    }, 'live')
     // Narration during leg 1's window (after the resume) — same parent_tool_use_id as above.
-    store.addMessage(SID, {
+    store.applyRecord(SID, {
       type: 'assistant',
       content: 'Working on the follow-up haiku.',
       timestamp: 260,
       metadata: { parent_tool_use_id: ROOT_TOOL_USE_ID },
-    })
+    }, 'live')
 
     const leg0Narration = store.narrationForLeg(TASK_ID, 0)
     const leg1Narration = store.narrationForLeg(TASK_ID, 1)
@@ -1062,13 +1088,13 @@ describe('openPermissionsForSession (#1746 stage: permissions)', () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
 
-    store.handleToolCall('sess-1', {
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'use-main',
       name: 'Edit',
       input: { path: '/tmp/f' },
       status: 'awaiting_permission',
       request_id: 'req-main',
-    })
+    }, 'live')
 
     const perms = store.openPermissionsForSession('sess-1')
     expect(perms).toHaveLength(1)
@@ -1088,14 +1114,14 @@ describe('openPermissionsForSession (#1746 stage: permissions)', () => {
     store.applyTaskLifecycleFrame('sess-1', 'task_started', {
       task_id: 'task-1', tool_use_id: 'launch-1', description: 'Fix the failing test',
     }, 100)
-    store.handleToolCall('sess-1', {
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'child-1',
       name: 'Bash',
       input: { command: 'pytest' },
       status: 'awaiting_permission',
       request_id: 'req-sub',
       parent_tool_use_id: 'launch-1',
-    })
+    }, 'live')
 
     const perms = store.openPermissionsForSession('sess-1')
     expect(perms).toHaveLength(1)
@@ -1112,24 +1138,24 @@ describe('openPermissionsForSession (#1746 stage: permissions)', () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
 
-    store.handleToolCall('sess-1', {
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'use-main',
       name: 'Write',
       input: {},
       status: 'awaiting_permission',
       request_id: 'req-main',
-    })
+    }, 'live')
     store.applyTaskLifecycleFrame('sess-1', 'task_started', {
       task_id: 'task-1', tool_use_id: 'launch-1', description: 'Refactor the parser',
     }, 100)
-    store.handleToolCall('sess-1', {
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'child-1',
       name: 'Edit',
       input: {},
       status: 'awaiting_permission',
       request_id: 'req-sub',
       parent_tool_use_id: 'launch-1',
-    })
+    }, 'live')
 
     const perms = store.openPermissionsForSession('sess-1')
     expect(perms).toHaveLength(2)
@@ -1145,14 +1171,14 @@ describe('openPermissionsForSession (#1746 stage: permissions)', () => {
 
     store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-1', tool_use_id: 'launch-1' }, 100)
     store.applyTaskLifecycleFrame('sess-1', 'task_started', { task_id: 'task-2', tool_use_id: 'launch-2' }, 100)
-    store.handleToolCall('sess-1', {
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'child-1', name: 'Bash', input: {}, status: 'awaiting_permission',
       request_id: 'req-1', parent_tool_use_id: 'launch-1',
-    })
-    store.handleToolCall('sess-1', {
+    }, 'live')
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'child-2', name: 'Edit', input: {}, status: 'awaiting_permission',
       request_id: 'req-2', parent_tool_use_id: 'launch-2',
-    })
+    }, 'live')
 
     expect(store.openPermissionsForSession('sess-1')).toHaveLength(2)
 
@@ -1174,10 +1200,10 @@ describe('openPermissionsForSession (#1746 stage: permissions)', () => {
     store.applyTaskLifecycleFrame('sess-1', 'task_started', {
       task_id: 'task-1', tool_use_id: 'launch-1', description: 'Stale leg',
     }, 100)
-    store.handleToolCall('sess-1', {
+    store.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'child-1', name: 'Bash', input: {}, status: 'awaiting_permission',
       request_id: 'req-1', parent_tool_use_id: 'launch-1',
-    })
+    }, 'live')
     store.applyTaskLifecycleFrame('sess-1', 'task_notification', { task_id: 'task-1', status: 'completed' }, 150)
 
     const perms = store.openPermissionsForSession('sess-1')
@@ -1282,5 +1308,125 @@ describe('openPermissionsForSession (#1746 stage: permissions)', () => {
       expect(store.isThinkingBlockExpanded('msg-1')).toBe(false)
       expect(store.isThinkingBlockExpanded('msg-2')).toBe(true)
     })
+  })
+})
+
+describe('T2: preview lifecycle survives a redelivered batch (#2110 stage 4b-B)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('requestAnimationFrame', () => 1)
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('stream -> redeliver the same message via loadMessages -> finalize: exactly one message, empty preview', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-t2-preview-redeliver'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, { message: { id: 'msg_1' } }))
+    store.handleAssistantDelta(SID, delta('content_block_delta', SID, { index: 0, delta: { type: 'text_delta', text: 'hello' } }))
+
+    expect(store.streamingPreviewBySession.get(SID).content).toBe('')
+    expect(store.streamingPreviewBySession.get(SID).pendingText).toBe('hello')
+
+    apiMock.get.mockResolvedValueOnce({
+      messages: [makeMessage({ type: 'assistant', content: 'hello', message_id: 'am-1' })],
+      total_count: 1,
+      has_more: false,
+    })
+    await store.loadMessages(SID)
+
+    let msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].content).toBe('hello')
+    expect(store.streamingPreviewBySession.get(SID)).toBeUndefined()
+
+    // A redelivery of the SAME batch (e.g. a second reconnect/reload) must not duplicate the
+    // message, and there is no preview left to leak back in.
+    apiMock.get.mockResolvedValueOnce({
+      messages: [makeMessage({ type: 'assistant', content: 'hello', message_id: 'am-1' })],
+      total_count: 1,
+      has_more: false,
+    })
+    await store.loadMessages(SID)
+
+    msgs = store.messagesBySession.get(SID)
+    expect(msgs.length).toBe(1)
+    expect(store.streamingPreviewBySession.get(SID)).toBeUndefined()
+  })
+})
+
+describe('T3: permission optimistic update survives server reconciliation (#2110 stage 4b-B, AC4)', () => {
+  it('allow: optimistic update is not regressed by the backend tool_call reconciling the same decision', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const { useSessionStore } = await import('@/stores/session')
+    const store = useMessageStore()
+    const sessionStore = useSessionStore()
+    sessionStore.currentSessionId = 'sess-1'
+
+    store.applyRecord('sess-1', {
+      type: 'tool_call', tool_use_id: 'use-1', name: 'Edit', input: {},
+      status: 'awaiting_permission', request_id: 'req-1',
+    }, 'live')
+    store.handlePermissionResponse('sess-1', { request_id: 'req-1', decision: 'allow' })
+
+    let tc = store.toolCallsBySession.get('sess-1')[0]
+    expect(tc.status).toBe('executing')
+    expect(tc.permissionDecision).toBe('allow')
+
+    // The backend's own reconciling tool_call record for the same decision must not regress it.
+    store.applyRecord('sess-1', {
+      type: 'tool_call', tool_use_id: 'use-1', name: 'Edit', input: {},
+      status: 'running', request_id: 'req-1', permission_granted: true,
+    }, 'live')
+
+    tc = store.toolCallsBySession.get('sess-1')[0]
+    expect(tc.status).toBe('executing')
+    expect(tc.permissionDecision).toBe('allow')
+
+    store.applyRecord('sess-1', {
+      type: 'tool_call', tool_use_id: 'use-1', name: 'Edit', input: {}, status: 'completed', result: 'ok',
+    }, 'live')
+    tc = store.toolCallsBySession.get('sess-1')[0]
+    expect(tc.status).toBe('completed')
+  })
+
+  it('deny: optimistic denial is not regressed by a later conflicting tool_call update', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const { useSessionStore } = await import('@/stores/session')
+    const store = useMessageStore()
+    const sessionStore = useSessionStore()
+    sessionStore.currentSessionId = 'sess-1'
+
+    store.applyRecord('sess-1', {
+      type: 'tool_call', tool_use_id: 'use-1', name: 'Bash', input: {},
+      status: 'awaiting_permission', request_id: 'req-1',
+    }, 'live')
+    store.handlePermissionResponse('sess-1', { request_id: 'req-1', decision: 'deny', reasoning: 'nope' })
+
+    let tc = store.toolCallsBySession.get('sess-1')[0]
+    expect(tc.status).toBe('completed')
+    expect(tc.permissionDecision).toBe('deny')
+    expect(tc.result.message).toBe('nope')
+
+    // The backend's own reconciling "denied" tool_call arrives — idempotent, no regression.
+    store.applyRecord('sess-1', {
+      type: 'tool_call', tool_use_id: 'use-1', name: 'Bash', input: {}, status: 'denied',
+    }, 'live')
+    tc = store.toolCallsBySession.get('sess-1')[0]
+    expect(tc.status).toBe('completed')
+    expect(tc.result.message).toBe('Permission denied')
+
+    // A stale/conflicting later update (e.g. a duplicate "failed" event) must not override the
+    // specific denied resolution already recorded.
+    store.applyRecord('sess-1', {
+      type: 'tool_call', tool_use_id: 'use-1', name: 'Bash', input: {}, status: 'failed', error: 'boom',
+    }, 'live')
+    tc = store.toolCallsBySession.get('sess-1')[0]
+    expect(tc.status).toBe('completed')
+    expect(tc.permissionDecision).toBe('deny')
   })
 })

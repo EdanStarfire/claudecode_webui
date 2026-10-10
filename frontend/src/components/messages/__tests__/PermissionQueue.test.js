@@ -26,24 +26,24 @@ async function seedTwoOpenPermissions(pinia) {
   const sessionStore = useSessionStore(pinia)
   sessionStore.currentSessionId = SESSION_ID
 
-  messageStore.handleToolCall(SESSION_ID, {
+  messageStore.applyRecord(SESSION_ID, { type: 'tool_call',
     tool_use_id: 'use-main',
     name: 'Write',
     input: {},
     status: 'awaiting_permission',
     request_id: 'req-main',
-  })
+  }, 'live')
   messageStore.applyTaskLifecycleFrame(SESSION_ID, 'task_started', {
     task_id: 'task-1', tool_use_id: 'launch-1', description: 'Fix the failing test',
   }, 100)
-  messageStore.handleToolCall(SESSION_ID, {
+  messageStore.applyRecord(SESSION_ID, { type: 'tool_call',
     tool_use_id: 'child-1',
     name: 'Bash',
     input: {},
     status: 'awaiting_permission',
     request_id: 'req-sub',
     parent_tool_use_id: 'launch-1',
-  })
+  }, 'live')
 
   return { messageStore, sessionStore }
 }
@@ -55,20 +55,20 @@ async function seedAskUserQuestionAlongsideNormal(pinia) {
   const sessionStore = useSessionStore(pinia)
   sessionStore.currentSessionId = SESSION_ID
 
-  messageStore.handleToolCall(SESSION_ID, {
+  messageStore.applyRecord(SESSION_ID, { type: 'tool_call',
     tool_use_id: 'use-main',
     name: 'Write',
     input: {},
     status: 'awaiting_permission',
     request_id: 'req-main',
-  })
-  messageStore.handleToolCall(SESSION_ID, {
+  }, 'live')
+  messageStore.applyRecord(SESSION_ID, { type: 'tool_call',
     tool_use_id: 'use-question',
     name: 'AskUserQuestion',
     input: { questions: [{ question: 'Which approach?', options: ['A', 'B'] }] },
     status: 'awaiting_permission',
     request_id: 'req-question',
-  })
+  }, 'live')
 
   return { messageStore, sessionStore }
 }
@@ -158,13 +158,13 @@ describe('PermissionQueue', () => {
     expect(screen.getByText('2')).toBeTruthy()
 
     // A new permission arriving while minimized must not force it back open.
-    messageStore.handleToolCall(SESSION_ID, {
+    messageStore.applyRecord(SESSION_ID, { type: 'tool_call',
       tool_use_id: 'use-third',
       name: 'Read',
       input: {},
       status: 'awaiting_permission',
       request_id: 'req-third',
-    })
+    }, 'live')
     await nextTick()
 
     expect(screen.queryAllByText(/wants to use/i)).toHaveLength(0)

@@ -1073,11 +1073,11 @@ export const usePollingStore = defineStore('polling', () => {
           message.metadata?.permission_mode) {
         sessionStore.updateSession(sessionId, { current_permission_mode: message.metadata.permission_mode })
       }
-      messageStore.addMessage(sessionId, message)
+      messageStore.applyRecord(sessionId, message, 'live')
     },
 
     tool_call: (payload, sessionId) => {
-      useMessageStore().handleToolCall(sessionId, payload.data || payload)
+      useMessageStore().applyRecord(sessionId, payload.data || payload, 'live')
     },
 
     resource_registered: (payload, sessionId) => {

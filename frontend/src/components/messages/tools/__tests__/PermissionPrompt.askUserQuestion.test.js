@@ -46,13 +46,13 @@ describe('PermissionPrompt — AskUserQuestion submit (#1774 live-session gap)',
     const messageStore = useMessageStore(pinia)
     // Populates permissionToToolMap as a side effect, matching how a real awaiting_permission
     // tool_call event would arrive.
-    messageStore.handleToolCall('sess-1', {
+    messageStore.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'use-askq-1',
       name: 'AskUserQuestion',
       input: { questions: QUESTIONS },
       status: 'awaiting_permission',
       request_id: 'req-1'
-    })
+    }, 'live')
 
     await new Promise(r => setTimeout(r, 0))
 
@@ -68,24 +68,24 @@ describe('PermissionPrompt — AskUserQuestion submit (#1774 live-session gap)',
 
     // The live backend broadcast for this transition never carries `updated_input`
     // (only the historical/reload replay path does) — simulate that real event shape.
-    messageStore.handleToolCall('sess-1', {
+    messageStore.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'use-askq-1',
       name: 'AskUserQuestion',
       input: { questions: QUESTIONS },
       status: 'running'
-    })
+    }, 'live')
 
     tc = messageStore.toolCallsBySession.get('sess-1')[0]
     expect(tc.answers).toEqual({ 'Which colors?': 'Red' })
 
     // Terminal completed event, also without updated_input.
-    messageStore.handleToolCall('sess-1', {
+    messageStore.applyRecord('sess-1', { type: 'tool_call',
       tool_use_id: 'use-askq-1',
       name: 'AskUserQuestion',
       input: { questions: QUESTIONS },
       status: 'completed',
       result: 'ok'
-    })
+    }, 'live')
 
     tc = messageStore.toolCallsBySession.get('sess-1')[0]
     expect(tc.status).toBe('completed')
