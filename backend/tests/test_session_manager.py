@@ -624,6 +624,100 @@ class TestSessionManager:
             )
 
     @pytest.mark.asyncio
+    async def test_sessions_reset_from_runnable_states_surfaced_for_tool_repair_scan(
+        self, sample_session_config
+    ):
+        """Issue #2111: a session reset from ACTIVE/STARTING (RUNNABLE_STATES) on
+        startup — i.e. one that was live when whatever stopped the process
+        happened — must be surfaced via get_sessions_needing_tool_repair_scan()
+        so SessionCoordinator knows to scan it for crash-orphaned tool calls."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            manager1 = SessionManager(temp_path)
+            await manager1.initialize()
+            session_id = str(uuid.uuid4())
+            await manager1.create_session(session_id, config=sample_session_config)
+            manager1._active_sessions[session_id].state = SessionState.ACTIVE
+            await manager1._persist_session_state(session_id)
+
+            manager2 = SessionManager(temp_path)
+            await manager2.initialize()
+
+            assert manager2.get_sessions_needing_tool_repair_scan() == [session_id]
+            assert manager2._active_sessions[session_id].state == SessionState.CREATED
+
+    @pytest.mark.asyncio
+    async def test_sessions_reset_from_paused_surfaced_for_tool_repair_scan(
+        self, sample_session_config
+    ):
+        """Issue #2111: a session reset from PAUSED (awaiting a permission
+        response) on startup must also be surfaced — it was live when the process
+        stopped too."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            manager1 = SessionManager(temp_path)
+            await manager1.initialize()
+            session_id = str(uuid.uuid4())
+            await manager1.create_session(session_id, config=sample_session_config)
+            manager1._active_sessions[session_id].state = SessionState.PAUSED
+            await manager1._persist_session_state(session_id)
+
+            manager2 = SessionManager(temp_path)
+            await manager2.initialize()
+
+            assert manager2.get_sessions_needing_tool_repair_scan() == [session_id]
+            assert manager2._active_sessions[session_id].state == SessionState.TERMINATED
+
+    @pytest.mark.asyncio
+    async def test_untouched_session_excluded_from_tool_repair_scan(
+        self, sample_session_config
+    ):
+        """Sanity check: a session already CREATED (never reset this boot) must not
+        be surfaced — bounds the #2111 repair scan to sessions that could plausibly
+        have an open tool call."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            manager1 = SessionManager(temp_path)
+            await manager1.initialize()
+            session_id = str(uuid.uuid4())
+            await manager1.create_session(session_id, config=sample_session_config)
+            assert manager1._active_sessions[session_id].state == SessionState.CREATED
+
+            manager2 = SessionManager(temp_path)
+            await manager2.initialize()
+
+            assert manager2.get_sessions_needing_tool_repair_scan() == []
+
+    @pytest.mark.asyncio
+    async def test_session_already_in_error_surfaced_for_tool_repair_scan(
+        self, sample_session_config
+    ):
+        """Issue #2111: ERROR is reachable only via the critical-error callback path
+        while the process was live, and that path's mark_session_tools_interrupted()
+        cleanup write is fire-and-forget — it may not have landed before a
+        subsequent crash. Unlike RUNNABLE_STATES/PAUSED, _load_existing_sessions()
+        never resets ERROR (it stays ERROR), so it must be surfaced by a dedicated
+        check, not the state_changed reset branches."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            manager1 = SessionManager(temp_path)
+            await manager1.initialize()
+            session_id = str(uuid.uuid4())
+            await manager1.create_session(session_id, config=sample_session_config)
+            manager1._active_sessions[session_id].state = SessionState.ERROR
+            await manager1._persist_session_state(session_id)
+
+            manager2 = SessionManager(temp_path)
+            await manager2.initialize()
+
+            assert manager2.get_sessions_needing_tool_repair_scan() == [session_id]
+            assert manager2._active_sessions[session_id].state == SessionState.ERROR
+
+    @pytest.mark.asyncio
     async def test_concurrent_session_operations(self, temp_session_manager, sample_session_config):
         """Test concurrent session operations."""
         manager = temp_session_manager

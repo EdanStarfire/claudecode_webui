@@ -4155,3 +4155,313 @@ class TestStage4aDLegacyDisplayLayerRemoved:
         assert not hasattr(ToolState, "PERMISSION_REQUIRED")
         assert not hasattr(ToolState, "EXECUTING")
         assert not hasattr(ToolState, "ORPHANED")
+
+
+class TestIssue2111CrashOrphanedToolCallRepair:
+    """#2111: mark_session_tools_interrupted() only ever runs from a live Backend
+    process (terminate_session()/interrupt_session()/restart_session()/the
+    critical-error callback) and operates purely on the in-memory
+    _active_tool_calls dict. If the process crashes outright, none of those paths
+    run and the open tool's last on-disk record stays non-terminal forever.
+    SessionCoordinator.initialize() must scan+repair this on the next boot."""
+
+    @staticmethod
+    async def _create_project_and_session(coordinator: SessionCoordinator) -> str:
+        import uuid
+
+        project = await coordinator.project_manager.create_project(
+            name="Issue 2111 Project", working_directory="/test/project"
+        )
+        session_id = str(uuid.uuid4())
+        config = SessionConfig(
+            permission_mode="acceptEdits",
+            system_prompt="Test system prompt",
+            allowed_tools=["bash", "edit", "read"],
+            model="claude-3-sonnet-20241022",
+        )
+        await coordinator.create_session(
+            session_id=session_id, project_id=project.project_id, config=config
+        )
+        return session_id
+
+    @staticmethod
+    async def _write_tool_call_record(
+        coordinator: SessionCoordinator, session_id: str, tool_use_id: str, status
+    ) -> None:
+        import time
+
+        from backend.models.messages import MessageRecord, ToolCall, ToolDisplayInfo
+
+        storage = await coordinator.get_or_create_storage_manager(session_id)
+        tool_call = ToolCall(
+            tool_use_id=tool_use_id,
+            session_id=session_id,
+            name="Bash",
+            input={"command": "sleep 100"},
+            status=status,
+            created_at=time.time(),
+            started_at=time.time(),
+            display=ToolDisplayInfo(state=status, visible=True, collapsed=False, style="default"),
+        )
+        await storage.append_message(MessageRecord.from_tool_call(tool_call).to_dict())
+
+    @staticmethod
+    async def _crash_and_reboot(temp_path: Path) -> SessionCoordinator:
+        """No cleanup() call on the way out — a real crash never runs graceful
+        shutdown — then a fresh coordinator boots against the same on-disk data."""
+        coordinator = SessionCoordinator(temp_path)
+        await coordinator.initialize()
+        return coordinator
+
+    async def _tool_call_records(
+        self, coordinator: SessionCoordinator, session_id: str, tool_use_id: str
+    ) -> list[dict]:
+        storage = await coordinator.get_or_create_storage_manager(session_id)
+        return [
+            m
+            for m in await storage.read_messages()
+            if m.get("type") == "tool_call" and m.get("tool_use_id") == tool_use_id
+        ]
+
+    @pytest.mark.asyncio
+    async def test_open_tool_call_repaired_after_crash(self):
+        """An ACTIVE session with a running tool and no later terminal record
+        gets a new interrupted record appended on the next boot."""
+        from backend.models.messages import ToolState
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            coordinator1 = SessionCoordinator(temp_path)
+            await coordinator1.initialize()
+            session_id = await self._create_project_and_session(coordinator1)
+            await self._write_tool_call_record(
+                coordinator1, session_id, "tu-crash-1", ToolState.RUNNING
+            )
+            coordinator1.session_manager._active_sessions[session_id].state = SessionState.ACTIVE
+            await coordinator1.session_manager._persist_session_state(session_id)
+
+            coordinator2 = await self._crash_and_reboot(temp_path)
+            try:
+                records = await self._tool_call_records(coordinator2, session_id, "tu-crash-1")
+                assert len(records) == 2
+                assert records[-1]["status"] == "interrupted"
+                assert records[-1]["display"]["state"] == "interrupted"
+                assert records[-1]["display"]["style"] == "orphaned"
+                assert records[-1]["completed_at"] is not None
+            finally:
+                await coordinator2.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_terminal_tool_call_gets_no_extra_record(self):
+        """A tool already terminal (completed) before the crash must not get a
+        spurious extra record appended."""
+        from backend.models.messages import ToolState
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            coordinator1 = SessionCoordinator(temp_path)
+            await coordinator1.initialize()
+            session_id = await self._create_project_and_session(coordinator1)
+            await self._write_tool_call_record(
+                coordinator1, session_id, "tu-done-1", ToolState.COMPLETED
+            )
+            coordinator1.session_manager._active_sessions[session_id].state = SessionState.ACTIVE
+            await coordinator1.session_manager._persist_session_state(session_id)
+
+            coordinator2 = await self._crash_and_reboot(temp_path)
+            try:
+                records = await self._tool_call_records(coordinator2, session_id, "tu-done-1")
+                assert len(records) == 1
+                assert records[-1]["status"] == "completed"
+            finally:
+                await coordinator2.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_mixed_session_repairs_only_the_open_tool(self):
+        """A session with one open and one already-terminal tool_use_id must only
+        get the open one repaired."""
+        from backend.models.messages import ToolState
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            coordinator1 = SessionCoordinator(temp_path)
+            await coordinator1.initialize()
+            session_id = await self._create_project_and_session(coordinator1)
+            await self._write_tool_call_record(
+                coordinator1, session_id, "tu-open-1", ToolState.AWAITING_PERMISSION
+            )
+            await self._write_tool_call_record(
+                coordinator1, session_id, "tu-done-1", ToolState.COMPLETED
+            )
+            coordinator1.session_manager._active_sessions[session_id].state = SessionState.ACTIVE
+            await coordinator1.session_manager._persist_session_state(session_id)
+
+            coordinator2 = await self._crash_and_reboot(temp_path)
+            try:
+                open_records = await self._tool_call_records(coordinator2, session_id, "tu-open-1")
+                done_records = await self._tool_call_records(coordinator2, session_id, "tu-done-1")
+                assert len(open_records) == 2
+                assert open_records[-1]["status"] == "interrupted"
+                assert len(done_records) == 1
+                assert done_records[-1]["status"] == "completed"
+            finally:
+                await coordinator2.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_session_not_reset_this_boot_is_skipped_even_with_dangling_record(self):
+        """Gating correctness: a session whose original_state was already
+        TERMINATED/CREATED before boot must be skipped entirely, even if
+        (pathologically) its messages.jsonl has a dangling open record."""
+        from backend.models.messages import ToolState
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            coordinator1 = SessionCoordinator(temp_path)
+            await coordinator1.initialize()
+            session_id = await self._create_project_and_session(coordinator1)
+            await self._write_tool_call_record(
+                coordinator1, session_id, "tu-dangling-1", ToolState.RUNNING
+            )
+            # Session state left at its post-create_session default (CREATED) —
+            # never reset this boot, so the gate must skip it.
+            assert (
+                coordinator1.session_manager._active_sessions[session_id].state
+                == SessionState.CREATED
+            )
+
+            coordinator2 = await self._crash_and_reboot(temp_path)
+            try:
+                records = await self._tool_call_records(coordinator2, session_id, "tu-dangling-1")
+                assert len(records) == 1
+                assert records[-1]["status"] == "running"
+            finally:
+                await coordinator2.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_repair_is_idempotent_across_successive_boots(self):
+        """Re-running initialize() a second time against the already-repaired
+        on-disk session must not append a duplicate interrupted record — the
+        latest record per tool_use_id is already terminal, so step 4's filter
+        naturally skips it."""
+        from backend.models.messages import ToolState
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            coordinator1 = SessionCoordinator(temp_path)
+            await coordinator1.initialize()
+            session_id = await self._create_project_and_session(coordinator1)
+            await self._write_tool_call_record(
+                coordinator1, session_id, "tu-crash-2", ToolState.RUNNING
+            )
+            coordinator1.session_manager._active_sessions[session_id].state = SessionState.ACTIVE
+            await coordinator1.session_manager._persist_session_state(session_id)
+
+            coordinator2 = await self._crash_and_reboot(temp_path)
+            try:
+                records_after_first_boot = await self._tool_call_records(
+                    coordinator2, session_id, "tu-crash-2"
+                )
+                assert len(records_after_first_boot) == 2
+            finally:
+                await coordinator2.cleanup()
+
+            coordinator3 = SessionCoordinator(temp_path)
+            await coordinator3.initialize()
+            try:
+                records_after_second_boot = await self._tool_call_records(
+                    coordinator3, session_id, "tu-crash-2"
+                )
+                assert len(records_after_second_boot) == 2
+                assert records_after_second_boot[-1]["status"] == "interrupted"
+            finally:
+                await coordinator3.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_session_already_in_error_at_boot_is_also_repaired(self):
+        """Issue #2111: ERROR is reachable only via the critical-error callback path
+        while the process was live, and that path's mark_session_tools_interrupted()
+        write is fire-and-forget — it may not have landed before a subsequent crash.
+        A session already sitting in ERROR at boot must still be scanned, not just
+        sessions reset from RUNNABLE_STATES/PAUSED."""
+        from backend.models.messages import ToolState
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            coordinator1 = SessionCoordinator(temp_path)
+            await coordinator1.initialize()
+            session_id = await self._create_project_and_session(coordinator1)
+            await self._write_tool_call_record(
+                coordinator1, session_id, "tu-error-1", ToolState.RUNNING
+            )
+            coordinator1.session_manager._active_sessions[session_id].state = SessionState.ERROR
+            await coordinator1.session_manager._persist_session_state(session_id)
+
+            coordinator2 = await self._crash_and_reboot(temp_path)
+            try:
+                records = await self._tool_call_records(coordinator2, session_id, "tu-error-1")
+                assert len(records) == 2
+                assert records[-1]["status"] == "interrupted"
+            finally:
+                await coordinator2.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_one_session_repair_failure_does_not_block_others_or_abort_boot(self):
+        """Issue #2111: a per-session failure during the repair scan (e.g. a storage
+        error) must not abort the rest of the scan or Backend startup — only that
+        one session's repair is skipped, mirroring _initialize_existing_session_
+        storage()'s own 'don't block coordinator initialization' precedent."""
+        from backend.models.messages import ToolState
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            coordinator1 = SessionCoordinator(temp_path)
+            await coordinator1.initialize()
+            broken_session_id = await self._create_project_and_session(coordinator1)
+            await self._write_tool_call_record(
+                coordinator1, broken_session_id, "tu-broken-1", ToolState.RUNNING
+            )
+            coordinator1.session_manager._active_sessions[broken_session_id].state = (
+                SessionState.ACTIVE
+            )
+            await coordinator1.session_manager._persist_session_state(broken_session_id)
+
+            healthy_session_id = await self._create_project_and_session(coordinator1)
+            await self._write_tool_call_record(
+                coordinator1, healthy_session_id, "tu-healthy-1", ToolState.RUNNING
+            )
+            coordinator1.session_manager._active_sessions[healthy_session_id].state = (
+                SessionState.ACTIVE
+            )
+            await coordinator1.session_manager._persist_session_state(healthy_session_id)
+
+            coordinator2 = SessionCoordinator(temp_path)
+            real_get_or_create = coordinator2.get_or_create_storage_manager
+
+            async def _flaky_get_or_create_storage_manager(session_id):
+                if session_id == broken_session_id:
+                    raise OSError("simulated disk failure")
+                return await real_get_or_create(session_id)
+
+            try:
+                with patch.object(
+                    coordinator2,
+                    "get_or_create_storage_manager",
+                    AsyncMock(side_effect=_flaky_get_or_create_storage_manager),
+                ):
+                    # Must not raise despite the broken session's simulated failure —
+                    # a single session's repair error can't abort Backend boot.
+                    await coordinator2.initialize()
+
+                healthy_records = await self._tool_call_records(
+                    coordinator2, healthy_session_id, "tu-healthy-1"
+                )
+                assert healthy_records[-1]["status"] == "interrupted"
+            finally:
+                await coordinator2.cleanup()

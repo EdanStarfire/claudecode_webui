@@ -861,6 +861,7 @@ class SessionCoordinator:
         """Initialize the session coordinator"""
         try:
             await self.session_manager.initialize()
+            await self._repair_crash_orphaned_tool_calls()
             await self.project_manager.initialize()
 
             # Load templates from disk
@@ -914,6 +915,83 @@ class SessionCoordinator:
         except Exception:
             logger.exception("Failed to initialize session coordinator")
             raise
+
+    async def _repair_crash_orphaned_tool_calls(self) -> None:
+        """Issue #2111: repair tool calls left non-terminal across a genuine Backend
+        process crash.
+
+        mark_session_tools_interrupted() is the only code that ever writes a terminal
+        INTERRUPTED tool_call record, and it operates purely on the in-memory
+        _active_tool_calls dict — populated only while a live Backend process is
+        running. If the process crashes outright (not a graceful terminate_session()/
+        interrupt_session()/restart_session()/critical-error callback), none of those
+        call sites ever runs, and the open tool's last on-disk record stays
+        pending/awaiting_permission/running forever.
+
+        Scoped to exactly the sessions self.session_manager flags as needing a repair
+        scan this boot (the only ones that could plausibly have had an open tool call)
+        so this is a no-op once a session has settled into TERMINATED/CREATED on a
+        prior boot. Mirrors mark_session_tools_interrupted()'s mutation exactly, but
+        writes directly via get_or_create_storage_manager() + append_message() since
+        _active_tool_calls is empty at boot and there's no broadcast subscriber yet to
+        notify.
+
+        Known limitation: this repair write lands before BackendApp wires its
+        AuditWriter (set_audit_writer() runs after coordinator.initialize() returns),
+        so the synthetic repaired record itself isn't captured by the audit trail —
+        unlike every live mark_session_tools_interrupted() write. Each session is
+        repaired independently and failures are isolated (see except below) so a
+        single bad session can't block the others or abort Backend startup, but
+        nothing currently retries a session whose repair itself fails this boot;
+        both are accepted scope boundaries for this issue, not addressed here.
+        """
+        import time
+
+        non_terminal_statuses = {
+            ToolState.PENDING.value,
+            ToolState.AWAITING_PERMISSION.value,
+            ToolState.RUNNING.value,
+        }
+
+        for session_id in self.session_manager.get_sessions_needing_tool_repair_scan():
+            try:
+                storage = await self.get_or_create_storage_manager(session_id)
+                if storage is None:
+                    continue
+
+                # Cumulative snapshots: keep only the last-occurring record per
+                # tool_use_id (append order, not timestamp value).
+                latest_by_tool_use_id: dict[str, dict[str, Any]] = {}
+                for record in await storage.read_messages():
+                    if record.get("type") != "tool_call":
+                        continue
+                    tool_use_id = record.get("tool_use_id")
+                    if tool_use_id:
+                        latest_by_tool_use_id[tool_use_id] = record
+
+                for latest_record in latest_by_tool_use_id.values():
+                    if latest_record.get("status") not in non_terminal_statuses:
+                        continue
+
+                    tool_call = ToolCall.from_dict(latest_record)
+                    tool_call.status = ToolState.INTERRUPTED
+                    tool_call.completed_at = time.time()
+                    if tool_call.display:
+                        tool_call.display.state = ToolState.INTERRUPTED
+                        tool_call.display.style = "orphaned"
+
+                    await storage.append_message(MessageRecord.from_tool_call(tool_call).to_dict())
+                    coord_logger.info(
+                        f"Issue #2111: repaired crash-orphaned tool call "
+                        f"{tool_call.tool_use_id} for session {session_id} on boot"
+                    )
+            except Exception:
+                # Don't raise - one session's repair failure shouldn't block
+                # coordinator initialization or the repair of other sessions.
+                coord_logger.exception(
+                    f"Issue #2111: failed to repair crash-orphaned tool calls for "
+                    f"session {session_id}"
+                )
 
     async def _initialize_existing_session_storage(self):
         """Initialize storage managers for all existing sessions"""
