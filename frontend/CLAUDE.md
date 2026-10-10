@@ -79,9 +79,9 @@ Hash-based routing (`createWebHashHistory`):
 - **Helpers**: `formatPath()`, `getStatusBarSegments()`
 
 #### `message.js` — Messages & tool lifecycle
-- **State**: `messagesBySession` (Map), `toolCallsBySession` (Map), `toolSignatureToId` (Map), `permissionToToolMap` (Map), `activeToolUses` (Map), `orphanedToolUses` (Map), `backendToolStates` (Map)
-- **Key actions**: `loadMessages()`, `addMessage()`, `handleToolCall()` (unified handler), `handlePermissionRequest()`, `handlePermissionResponse()`, `toggleToolExpansion()`, `syncMessages()`
-- **Features**: Orphaned tool detection on restart/interrupt/termination, backend display metadata cache, deduplication on reconnect
+- **State**: `messagesBySession` (Map), `toolCallsBySession` (Map), `permissionToToolMap` (Map)
+- **Key actions**: `loadMessages()`, `applyRecord(sessionId, record, source)` (issue #2110 stage 4b-B: the one entry point for every message/tool_call record, `source` ∈ `'live'`/`'load'`/`'archive'`), `handlePermissionResponse()`, `toggleToolExpansion()`, `setArchiveMessages()`
+- **Features**: Orphaned-tool status (`_isOrphaned`/`_orphanedInfo`) sourced directly from the backend's own `interrupted` tool_call record — no browser-side restart/interrupt sweep, deduplication on reconnect
 
 #### `polling.js` — HTTP long-polling
 - **State**: `uiConnected`, `uiRetryCount`, `sessionConnected`, `sessionRetryCount`, `sessionCursors` (Map)

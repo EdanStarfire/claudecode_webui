@@ -25,13 +25,6 @@ export const useMessageStore = defineStore('message', () => {
   // Used by websocket.connectSession() to start polling from the correct position.
   const loadedEventCursors = new Map()
 
-  // Orphaned tool tracking (sessionId -> Set<tool_use_id>)
-  const activeToolUses = ref(new Map())
-  const orphanedToolUses = ref(new Map()) // sessionId -> Map<tool_use_id -> {reason, message}>
-
-  // Message sequence tracking for reconnection sync (sessionId -> ISO timestamp)
-  const lastReceivedTimestamp = ref(new Map())
-
   // Launch timestamp tracking (sessionId -> Unix timestamp in seconds)
   // Populated from client_launched system messages for uptime calculation
   const launchTimestampBySession = ref(new Map())
@@ -181,38 +174,20 @@ export const useMessageStore = defineStore('message', () => {
 
       console.log(`Loaded ${messages.length} of ${totalCount} messages for session ${sessionId}`)
 
-      // Issue #491: Process messages through unified tool_call path.
-      // Backend now generates interleaved tool_call messages in history,
-      // so we route them through handleToolCall() — same as real-time WebSocket.
-      const regularMessages = []
+      // Issue #1955: any live streaming preview for this session is purely cosmetic and was
+      // never part of the canonical message array — discard it outright instead of merging.
+      // The freshly-fetched history is authoritative; there is nothing to reconcile it against.
+      _discardStreamingPreview(sessionId, 'reload')
+
+      // Issue #2110 (stage 4b-B): thin fetch-then-apply-per-record wrapper — the one place
+      // this session's display list is reset to a fresh empty array before applyRecord()
+      // incrementally rebuilds it (replacing the old bulk-array-replace semantics).
+      messagesBySession.value.set(sessionId, [])
 
       messages.forEach(message => {
-        // Route tool_call messages through unified handler (same path as real-time)
-        if (message.type === 'tool_call') {
-          handleToolCall(sessionId, message)
-          return // Don't add tool_call to message display list
-        }
-
-        // Issue #1575: drop internal SDK status/requesting messages — match real-time suppression
-        if (message.type === 'system') {
-          const subtype = message.subtype || message.metadata?.subtype
-          const status = message.metadata?.init_data?.status
-          if (subtype === 'status' && status === 'requesting') {
-            return
-          }
-        }
-
-        // Track launch timestamp for uptime calculation
-        if (message.type === 'system' && message.metadata?.subtype === 'client_launched') {
-          if (message.timestamp) {
-            const ts = typeof message.timestamp === 'number'
-              ? message.timestamp
-              : new Date(message.timestamp).getTime() / 1000
-            launchTimestampBySession.value.set(sessionId, ts)
-          }
-        }
-
-        // Capture init data for session info modal
+        // Capture init data for session info modal — not a per-record store side effect, so it
+        // stays here rather than in applyRecord (same split as polling.js's own init-data
+        // capture ahead of its applyRecord() call for the live path).
         if (message.type === 'system' &&
             (message.subtype === 'init' || message.metadata?.subtype === 'init') &&
             message.metadata?.init_data) {
@@ -220,48 +195,17 @@ export const useMessageStore = defineStore('message', () => {
           sessionStore.storeInitData(sessionId, message.metadata.init_data)
         }
 
-        // Issue #894: Collapse api_retry sequences — keep only the latest for each retry_message_id
-        if (message.metadata?.subtype === 'api_retry' && message.metadata?.retry_message_id) {
-          const retryId = message.metadata.retry_message_id
-          const existingIdx = regularMessages.findIndex(m => m.metadata?.retry_message_id === retryId)
-          if (existingIdx !== -1) {
-            regularMessages[existingIdx] = message // Replace with later (higher attempt) data
-            return
-          }
-        }
-
-        regularMessages.push(message)
+        // notify:false — see applyRecord()'s own comment: avoid O(N) reactive broadcasts while
+        // replaying a whole session's history, one final reassignment below covers all of them
+        // (including when `messages` is empty, so this session's reset to [] is still observed).
+        applyRecord(sessionId, message, 'load', { notify: false })
       })
-
-      // Issue #1955: any live streaming preview for this session is purely cosmetic and was
-      // never part of the canonical message array — discard it outright instead of merging.
-      // The freshly-fetched history is authoritative; there is nothing to reconcile it against.
-      _discardStreamingPreview(sessionId, 'reload')
-
-      // Store only regular messages (tool_call messages are handled separately)
-      messagesBySession.value.set(sessionId, regularMessages)
-
-      // Track last received timestamp from loaded messages (use last regular message)
-      if (regularMessages.length > 0) {
-        const lastMessage = regularMessages[regularMessages.length - 1]
-        if (lastMessage.timestamp) {
-          lastReceivedTimestamp.value.set(sessionId, lastMessage.timestamp)
-        }
-      }
-
-      // Trigger reactivity
       messagesBySession.value = new Map(messagesBySession.value)
+      toolCallsBySession.value = new Map(toolCallsBySession.value)
+      lastStopReasonBySession.value = new Map(lastStopReasonBySession.value)
+      deferredToolUseBySession.value = new Map(deferredToolUseBySession.value)
 
-      // Issue #1746 (stage: subagents): route subagent narration (thinking/text) into
-      // narrationByTaskIdAndLeg. Lifecycle leg state itself comes from hydrateBackgroundAgents()
-      // (the backend's already-reduced snapshot), which callers are expected to invoke before
-      // loadMessages() — see stores/session.js — so taskIdByLaunchToolUseId is already populated
-      // for every known leg by the time this walk runs.
-      regularMessages.forEach(msg => {
-        if (msg.type === 'assistant' && msg.metadata?.parent_tool_use_id) {
-          _routeSubagentNarration(msg)
-        }
-      })
+      const regularMessages = messagesBySession.value.get(sessionId) || []
 
       // Reconstruct task state from message history
       try {
@@ -659,12 +603,8 @@ export const useMessageStore = defineStore('message', () => {
     const rootToolUseId = entry?.legs?.[0]?.tool_use_id
     if (!rootToolUseId) return false
     const toolCalls = toolCallsBySession.value.get(sessionId) || []
-    // Inlined status check (not importing useToolStatus.js's getEffectiveStatusForTool here —
-    // that module imports useMessageStore itself, and message.js has never been part of that
-    // import cycle; not worth introducing it for one field comparison).
     return toolCalls.some(tc =>
-      tc.parent_tool_use_id === rootToolUseId &&
-      (tc.status === 'permission_required' || tc.backendStatus === 'awaiting_permission')
+      tc.parent_tool_use_id === rootToolUseId && tc.status === 'permission_required'
     )
   }
 
@@ -681,10 +621,7 @@ export const useMessageStore = defineStore('message', () => {
     if (!sessionId) return []
     const toolCalls = toolCallsBySession.value.get(sessionId) || []
     return toolCalls
-      // backendStatus check mirrors hasOpenPermissionForTask's own OR — defensive belt-and-
-      // suspenders so the two never disagree about what counts as "open" (see that function's
-      // comment for why this can't rely on a single inlined status check).
-      .filter(tc => tc.status === 'permission_required' || tc.backendStatus === 'awaiting_permission')
+      .filter(tc => tc.status === 'permission_required')
       .map(tc => {
         const taskId = tc.parent_tool_use_id ? getTaskIdForLaunchToolUse(tc.parent_tool_use_id) : null
 
@@ -726,81 +663,41 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   /**
-   * Handle real-time tool use tracking for orphaned detection
+   * Issue #2110 (stage 4b-B): the one entry point for every message/tool_call record,
+   * regardless of where it came from (`source` ∈ 'live' | 'load' | 'archive'). `source`
+   * gates ONLY notification/preview behavior (AC1) — every other side effect below runs
+   * uniformly, closing the load/archive gaps the pre-refactor side-effect matrix documented
+   * (truncation/deferral banners, subagent narration routing).
+   *
+   * `notify` (review fix): whether to trigger Vue reactivity immediately after applying this
+   * one record — defaults to true for every normal caller (live dispatch, the content_block_
+   * start pending-card synthesis, tests). `loadMessages()`/`setArchiveMessages()` pass `false`
+   * while replaying a whole session's history in a tight loop and do ONE reassignment after the
+   * loop instead: without this, each of N replayed records would individually reassign
+   * messagesBySession.value (and friends), turning a full session load into O(N) reactive
+   * broadcasts over an array of growing size — O(N²) render/diff work for the component
+   * currently watching that session, where the old bulk-array-replace code was O(N). The DATA
+   * mutation itself (push/set) always happens regardless of `notify` — only the "tell Vue"
+   * step is deferred.
    */
-  function handleRealtimeToolTracking(sessionId, message) {
-    const openTools = activeToolUses.value.get(sessionId) || new Set()
-
-    // Track new tool uses
-    if (message.type === 'assistant' && message.metadata?.tool_uses) {
-      message.metadata.tool_uses.forEach(toolUse => {
-        openTools.add(toolUse.id)
-      })
+  function applyRecord(sessionId, record, source, { notify = true } = {}) {
+    if (!record || !record.type) return
+    if (record.type === 'tool_call') {
+      _applyToolCallRecord(sessionId, record, notify)
+      return
     }
-
-    // Close tool uses on results
-    if (message.type === 'user' && message.metadata?.tool_results) {
-      message.metadata.tool_results.forEach(result => {
-        openTools.delete(result.tool_use_id)
-        // Clear from orphaned if previously marked
-        const orphaned = orphanedToolUses.value.get(sessionId)
-        if (orphaned) {
-          orphaned.delete(result.tool_use_id)
-        }
-      })
-    }
-
-    // Detect restart during real-time
-    if (message.type === 'system' && message.metadata?.subtype === 'client_launched') {
-      pushDebugEvent('message', 'tool-tracking-reset', {
-        sessionId, reason: 'restart', openToolCount: openTools.size
-      })
-      openTools.forEach(id => {
-        markToolUseOrphaned(sessionId, id, 'Session was interrupted')
-      })
-      openTools.clear()
-      // Track launch timestamp for uptime calculation
-      if (message.timestamp) {
-        const ts = typeof message.timestamp === 'number'
-          ? message.timestamp
-          : new Date(message.timestamp).getTime() / 1000
-        launchTimestampBySession.value.set(sessionId, ts)
-      }
-      // Issue #1955: a preview never holds authoritative data — restart just discards it
-      _discardStreamingPreview(sessionId, 'restart')
-    }
-
-    // Detect interrupt during real-time
-    if (message.type === 'system' && message.metadata?.subtype === 'interrupt') {
-      pushDebugEvent('message', 'tool-tracking-reset', {
-        sessionId, reason: 'interrupt', openToolCount: openTools.size
-      })
-      openTools.forEach(id => {
-        markToolUseOrphaned(sessionId, id, 'Session was interrupted')
-      })
-      openTools.clear()
-      // Issue #1955: same as restart — discard the cosmetic preview outright
-      _discardStreamingPreview(sessionId, 'interrupt')
-    }
-
-    activeToolUses.value.set(sessionId, openTools)
+    _applyMessageRecord(sessionId, record, source, notify)
   }
 
   /**
-   * Add a message to a session (from WebSocket)
-   *
-   * Issue #1955: the one rule — is there already an entry with this backend id? No -> push.
-   * Yes -> skip. `messagesBySession` is a pure mirror of the canonical/backend channel; nothing
-   * else is ever pushed into it, and nothing already in it is ever spliced, merged, or
-   * replaced-in-place for streaming purposes (the live-typing preview lives entirely in
-   * `streamingPreviewBySession` instead — see that state's own comment).
+   * Issue #1955: the one dedup rule — is there already an entry with this backend id? No ->
+   * push. Yes -> skip. `messagesBySession` is a pure mirror of the canonical/backend channel;
+   * nothing else is ever spliced, merged, or replaced-in-place for streaming purposes (the
+   * live-typing preview lives entirely in `streamingPreviewBySession` instead).
    */
-  function addMessage(sessionId, message) {
-    if (!messagesBySession.value.has(sessionId)) {
-      messagesBySession.value.set(sessionId, [])
-    }
-
-    // Issue #1486: drop internal SDK status/requesting messages — they are not displayable
+  function _applyMessageRecord(sessionId, message, source, notify = true) {
+    // Issue #1486/#1575: drop internal SDK status/requesting messages — not displayable,
+    // regardless of source.
     if (message.type === 'system') {
       const subtype = message.subtype || message.metadata?.subtype
       const status = message.metadata?.init_data?.status
@@ -809,6 +706,9 @@ export const useMessageStore = defineStore('message', () => {
       }
     }
 
+    if (!messagesBySession.value.has(sessionId)) {
+      messagesBySession.value.set(sessionId, [])
+    }
     const messages = messagesBySession.value.get(sessionId)
 
     // The one rule for identity/dedup: everything else below this point (api_retry collapse,
@@ -820,13 +720,21 @@ export const useMessageStore = defineStore('message', () => {
       return
     }
 
-    // Issue #894: api_retry in-place update — find existing message with same retry_message_id
-    if (message.metadata?.subtype === 'api_retry' && message.metadata?.retry_message_id) {
+    // Issue #894: api_retry in-place update — find existing message with same retry_message_id.
+    // Open item (4b-B investigation): retry_message_id is injected into the live message_data
+    // dict in SessionCoordinator._create_message_callback AFTER storage.append_message() has
+    // already persisted the record (backend/claude_sdk.py::_process_sdk_message stores, then
+    // invokes the callback with the same dict) — so a stored/archived api_retry record never
+    // carries retry_message_id at all, by construction, not just by current absence. Unlike
+    // subagent narration routing below (a gap that can close if archive task-leg hydration is
+    // ever added), this one structurally can never fire for 'load'/'archive' — gated to 'live'
+    // explicitly instead of left "uniform" for an invariant that will never hold otherwise.
+    if (source === 'live' && message.metadata?.subtype === 'api_retry' && message.metadata?.retry_message_id) {
       const retryId = message.metadata.retry_message_id
       const existingIdx = messages.findIndex(m => m.metadata?.retry_message_id === retryId)
       if (existingIdx !== -1) {
         messages[existingIdx] = { ...messages[existingIdx], ...message }
-        messagesBySession.value = new Map(messagesBySession.value)
+        if (notify) messagesBySession.value = new Map(messagesBySession.value)
         return
       }
       // No existing message: fall through to normal push (first in sequence)
@@ -834,66 +742,90 @@ export const useMessageStore = defineStore('message', () => {
 
     messages.push(message)
 
-    // Issue #1955: any canonical TOP-LEVEL assistant append clears whatever the live preview
-    // was showing — resolves a multi-canonical-message turn without matching anything by
-    // identity. Excludes subagent narration (metadata.parent_tool_use_id set): those messages
-    // share this session's id but belong to a background Task/Agent leg, not the top-level
-    // stream the preview mirrors — clearing on their arrival would visibly truncate the main
-    // turn's still-accumulating live text purely because an unrelated subagent leg progressed.
-    if (message.type === 'assistant' && !message.metadata?.parent_tool_use_id) {
+    // Issue #1955 (AC1: source gates preview only): any canonical TOP-LEVEL assistant append
+    // clears whatever the live preview was showing. Excludes subagent narration
+    // (metadata.parent_tool_use_id set): those messages share this session's id but belong to a
+    // background Task/Agent leg, not the top-level stream the preview mirrors. Scoped to 'live'
+    // — 'load'/'archive' have no in-flight cosmetic preview to reconcile against.
+    if (source === 'live' && message.type === 'assistant' && !message.metadata?.parent_tool_use_id) {
       const canonicalToolIds = (message.metadata?.tool_uses || []).map(t => t.id)
       _clearStreamingPreviewContent(sessionId, canonicalToolIds)
     }
 
-    // Track last received timestamp for reconnection sync
-    if (message.timestamp) {
-      lastReceivedTimestamp.value.set(sessionId, message.timestamp)
-    }
-
-    // Issue #662: Track stop_reason from result messages for truncation banner
+    // Issue #662/#1300 (open item 2): truncation/deferral banners are independent of the
+    // deleted orphan-tracking subsystem — applied uniformly now (closes a real load/archive
+    // gap: reloading or archive-viewing a session truncated by max_tokens, or one with an open
+    // deferred tool, previously never showed the corresponding banner).
     if (message.type === 'result') {
       const stopReason = message.metadata?.stop_reason || message.stop_reason || null
       lastStopReasonBySession.value.set(sessionId, stopReason)
-      lastStopReasonBySession.value = new Map(lastStopReasonBySession.value)
-
-      // Issue #1300: Track deferred_tool_use for deferral banner
       const dtu = message.metadata?.deferred_tool_use || null
       deferredToolUseBySession.value.set(sessionId, dtu)
-      deferredToolUseBySession.value = new Map(deferredToolUseBySession.value)
+      if (notify) {
+        lastStopReasonBySession.value = new Map(lastStopReasonBySession.value)
+        deferredToolUseBySession.value = new Map(deferredToolUseBySession.value)
+      }
     }
-
-    // Issue #1300: Clear deferred tool use when user sends a new message
     if (message.type === 'user' && !message.metadata?.has_tool_results) {
       deferredToolUseBySession.value.set(sessionId, null)
-      deferredToolUseBySession.value = new Map(deferredToolUseBySession.value)
-    }
-
-    // Issue #662: Clear stop_reason when user sends a new message
-    if (message.type === 'user' && !message.metadata?.has_tool_results) {
       lastStopReasonBySession.value.set(sessionId, null)
-      lastStopReasonBySession.value = new Map(lastStopReasonBySession.value)
+      if (notify) {
+        deferredToolUseBySession.value = new Map(deferredToolUseBySession.value)
+        lastStopReasonBySession.value = new Map(lastStopReasonBySession.value)
+      }
     }
 
     // Issue #1746 (stage: subagents) / #1765: apply live Task lifecycle frames to the
-    // task_id-first store (includes task_updated, previously silently excluded here).
-    if (message.type === 'system') {
+    // task_id-first store. Scoped to 'live' — 'load' relies on the caller's own
+    // hydrateBackgroundAgents() backend snapshot instead (see that function's own comment).
+    // 'archive' has NO equivalent hydration call anywhere today (SessionView.vue's
+    // loadArchiveMessages() calls neither hydrateBackgroundAgents() nor this frame application) —
+    // archived sessions' subagent-timeline legs are a pre-existing, out-of-scope gap this stage
+    // does not close, not something this uniform-vs-live split is actually covering for archive.
+    // Left gated to 'live' (rather than made unconditional like subagent narration below) because
+    // applying it uniformly here alone, without also adding the missing hydration/replay path for
+    // archive, would not actually close that gap — it would just be unreachable code for 'archive'
+    // the same way it is today, so there's no benefit to changing the gate without the real fix.
+    if (source === 'live' && message.type === 'system') {
       const subtype = message.metadata?.subtype
       if (TASK_LIFECYCLE_SUBTYPES.has(subtype)) {
         applyTaskLifecycleFrame(sessionId, subtype, message.metadata, message.timestamp)
       }
     }
 
-    // Issue #1746 (stage: subagents): capture subagent narration (thinking/text) that would
-    // otherwise be silently dropped by MessageList's display filter (issue #1671).
+    // Issue #1746 (stage: subagents) / open item: subagent narration routing, now applied
+    // uniformly (closes the archive gap in the pre-refactor side-effect matrix). For archive
+    // specifically this remains a no-op today — taskIdByLaunchToolUseId is never pre-seeded for
+    // archive views (a separate, pre-existing gap outside this stage's scope) — but it costs
+    // nothing to apply uniformly and stops being a no-op automatically if that gap is ever closed.
     if (message.type === 'assistant' && message.metadata?.parent_tool_use_id) {
       _routeSubagentNarration(message)
     }
 
-    // Track tool use lifecycle for orphaned detection
-    handleRealtimeToolTracking(sessionId, message)
+    // Issue #1955 (AC1: source gates preview only) / AC2: restart/interrupt no longer sweep the
+    // (deleted) browser-side orphan set — the backend's own tool_call record for an interrupted
+    // tool already carries that terminal status directly. What's left here is purely the
+    // cosmetic preview discard, scoped to 'live'.
+    if (source === 'live' && message.type === 'system') {
+      const subtype = message.metadata?.subtype
+      if (subtype === 'client_launched') {
+        _discardStreamingPreview(sessionId, 'restart')
+      } else if (subtype === 'interrupt') {
+        _discardStreamingPreview(sessionId, 'interrupt')
+      }
+    }
+
+    // Launch timestamp tracking (issue #473) — uniform across sources (live and load already
+    // did this identically before this stage).
+    if (message.type === 'system' && message.metadata?.subtype === 'client_launched' && message.timestamp) {
+      const ts = typeof message.timestamp === 'number'
+        ? message.timestamp
+        : new Date(message.timestamp).getTime() / 1000
+      launchTimestampBySession.value.set(sessionId, ts)
+    }
 
     // Trigger reactivity
-    messagesBySession.value = new Map(messagesBySession.value)
+    if (notify) messagesBySession.value = new Map(messagesBySession.value)
   }
 
   /**
@@ -926,12 +858,8 @@ export const useMessageStore = defineStore('message', () => {
 
       if (permissionResponse.decision === 'allow') {
         updates.status = 'executing'
-        // Issue #412: Also update backendStatus so effectiveStatus reflects the change immediately
-        updates.backendStatus = 'running'
       } else {
         updates.status = 'completed'
-        // Issue #412: Also update backendStatus so effectiveStatus reflects the change immediately
-        updates.backendStatus = 'denied'
         updates.result = {
           error: true,
           message: permissionResponse.reasoning || 'Permission denied'
@@ -945,39 +873,58 @@ export const useMessageStore = defineStore('message', () => {
       }
 
       updateToolCall(sessionId, toolUseId, updates)
-      console.log(`Permission ${permissionResponse.decision} for tool ${toolUseId}`)
     }
   }
 
   /**
-   * Issue #324: Handle unified tool_call message from backend
-   *
-   * The backend now sends a single 'tool_call' message type that contains
-   * the complete tool lifecycle state. This replaces the need to correlate
-   * separate tool_use, permission_request, permission_response, and tool_result
-   * messages.
-   *
-   * The toolCall object contains:
-   * - tool_use_id: Unique identifier for this tool execution
-   * - name: Tool name (Edit, Bash, Read, etc.)
-   * - input: Tool input parameters
-   * - status: Current lifecycle state (pending, awaiting_permission, running, completed, failed, denied, interrupted)
-   * - permission: Embedded permission info (if applicable)
-   * - permission_granted: Whether permission was granted
-   * - result: Tool execution result (when completed/failed)
-   * - error: Error message (when failed)
-   * - display: Backend-computed display hints
+   * Issue #2110 (stage 4b-B): denied/interrupted terminal-resolution side effects, shared by
+   * both the create and update branches of _applyToolCallRecord so a tool whose very FIRST
+   * observed record is already denied/interrupted (common on 'load'/'archive', which can
+   * replay a tool's only-ever event) gets the same result message / orphaned stamp as one that
+   * transitions into that state live.
    */
-  function handleToolCall(sessionId, toolCall) {
-    console.log('handleToolCall received:', toolCall)
+  function _applyTerminalResolution(toolCallObj, toolCall) {
+    if (toolCall.status === 'denied') {
+      toolCallObj.result = { error: true, message: 'Permission denied' }
+      toolCallObj.isExpanded = false
+    }
+    if (toolCall.status === 'interrupted') {
+      toolCallObj._isOrphaned = true
+      toolCallObj._orphanedInfo = { reason: 'denied', message: 'Session was interrupted' }
+      toolCallObj.isExpanded = false
+      toolCallObj.backendState = {
+        state: 'interrupted',
+        visible: true,
+        collapsed: false,
+        style: 'orphaned',
+        linked_permission_id: toolCallObj.backendState?.linked_permission_id ?? null,
+      }
+    }
+  }
 
+  /**
+   * Issue #324/#2110 (stage 4b-B): apply a unified tool_call record from the backend — the
+   * complete tool lifecycle state in one payload, superseding separate tool_use/permission_
+   * request/permission_response/tool_result correlation.
+   *
+   * `toolCall` fields: tool_use_id, name, input, status (pending/awaiting_permission/running/
+   * completed/failed/denied/interrupted — the backend's own 7-value vocabulary), permission,
+   * permission_granted, result, error, display.
+   *
+   * The backend status is normalized to the single frontend-display `status` field (5 values:
+   * pending/permission_required/executing/completed/error — denied and interrupted both read as
+   * 'completed', matching every direct `.status` consumer's expectation). Orphaned-ness (from
+   * interrupted) is carried separately via the `_isOrphaned`/`_orphanedInfo` stamp, which
+   * `useToolStatus.js`'s effectiveStatus/isOrphaned read directly — no backendStatus field, no
+   * session-scoped orphan Map.
+   */
+  function _applyToolCallRecord(sessionId, toolCall, notify = true) {
     const toolUseId = toolCall.tool_use_id
     if (!toolUseId) {
       console.warn('Received tool_call without tool_use_id:', toolCall)
       return
     }
 
-    // Get or create tool calls array for this session
     if (!toolCallsBySession.value.has(sessionId)) {
       toolCallsBySession.value.set(sessionId, [])
     }
@@ -985,7 +932,6 @@ export const useMessageStore = defineStore('message', () => {
     const toolCalls = toolCallsBySession.value.get(sessionId)
     const existingIndex = toolCalls.findIndex(tc => tc.id === toolUseId)
 
-    // Map backend status to frontend status
     const statusMap = {
       'pending': 'pending',
       'awaiting_permission': 'permission_required',
@@ -1008,18 +954,19 @@ export const useMessageStore = defineStore('message', () => {
         console.warn(`Ignoring status regression for tool ${toolUseId}: ${existing.status} → ${frontendStatus}`)
         return
       }
-      // A tool already resolved via denial or interruption is terminal in a stronger sense
-      // than plain 'completed'/'error' — a later conflicting tool_call update (e.g. a
-      // duplicate/stale "failed" event) must not override the specific resolution already
-      // recorded.
-      const lockedBackendStatuses = ['denied', 'interrupted']
-      if (lockedBackendStatuses.includes(existing.backendStatus) && toolCall.status !== existing.backendStatus) {
-        console.warn(`Ignoring conflicting update for locked tool ${toolUseId}: ${existing.backendStatus} → ${toolCall.status}`)
+      // A tool already resolved via denial or interruption is terminal in a stronger sense than
+      // plain 'completed'/'error' — a later conflicting tool_call update (e.g. a duplicate/stale
+      // "failed" event) must not override the specific resolution already recorded. Locked via
+      // the fields that already carry that specific resolution (permissionDecision/_isOrphaned)
+      // rather than a separate backendStatus field.
+      const lockedResolution = existing.permissionDecision === 'deny' ? 'denied'
+        : existing._isOrphaned ? 'interrupted' : null
+      if (lockedResolution && toolCall.status !== lockedResolution) {
+        console.warn(`Ignoring conflicting update for ${lockedResolution} tool ${toolUseId}: → ${toolCall.status}`)
         return
       }
 
       existing.status = frontendStatus
-      existing.backendStatus = toolCall.status
 
       // Issue #1486: always accept the incoming input — the first event for a tool may arrive
       // with input:{} (from an intermediate AssistantMessage emitted while input_json_delta
@@ -1079,19 +1026,7 @@ export const useMessageStore = defineStore('message', () => {
         }
       }
 
-      // Handle special statuses
-      if (toolCall.status === 'denied') {
-        existing.result = {
-          error: true,
-          message: 'Permission denied'
-        }
-        existing.isExpanded = false
-      }
-      if (toolCall.status === 'interrupted') {
-        // Mark as orphaned
-        markToolUseOrphaned(sessionId, toolUseId, 'Session was interrupted')
-        existing.isExpanded = false
-      }
+      _applyTerminalResolution(existing, toolCall)
       if (toolCall.status === 'completed' || toolCall.status === 'failed') {
         existing.isExpanded = false  // Auto-collapse on completion
       }
@@ -1108,8 +1043,6 @@ export const useMessageStore = defineStore('message', () => {
       if (toolCall.sender_attachments != null) {
         existing.senderAttachments = toolCall.sender_attachments
       }
-
-      console.log(`Updated tool call ${toolUseId} to status: ${frontendStatus} (backend: ${toolCall.status})`)
     } else {
       // Create new tool call entry
       const newToolCall = {
@@ -1117,7 +1050,6 @@ export const useMessageStore = defineStore('message', () => {
         name: toolCall.name,
         input: toolCall.input,
         status: frontendStatus,
-        backendStatus: toolCall.status,
         permissionRequestId: toolCall.request_id,
         permissionDecision: toolCall.permission_granted != null
           ? (toolCall.permission_granted ? 'allow' : 'deny')
@@ -1153,6 +1085,7 @@ export const useMessageStore = defineStore('message', () => {
         }
       }
 
+      _applyTerminalResolution(newToolCall, toolCall)
       toolCalls.push(newToolCall)
       // Populate permissionToToolMap for handlePermissionResponse correlation
       if (toolCall.request_id && toolCall.status === 'awaiting_permission') {
@@ -1160,11 +1093,10 @@ export const useMessageStore = defineStore('message', () => {
         // Issue #699: Permission prompt notifications now driven by UI WebSocket
         // state_change → paused (see polling.js handleUIMessage)
       }
-      console.log(`Created new tool call ${toolUseId} for ${toolCall.name} with status: ${frontendStatus}`)
     }
 
     // Trigger reactivity
-    toolCallsBySession.value = new Map(toolCallsBySession.value)
+    if (notify) toolCallsBySession.value = new Map(toolCallsBySession.value)
 
     // Handle task tool results
     if (['completed', 'failed'].includes(toolCall.status) &&
@@ -1198,66 +1130,6 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   /**
-   * Mark a tool use as orphaned (denied due to session restart/interrupt/termination)
-   */
-  function markToolUseOrphaned(sessionId, toolUseId, message) {
-    const info = { reason: 'denied', message: message }
-
-    const orphaned = orphanedToolUses.value.get(sessionId) || new Map()
-    orphaned.set(toolUseId, info)
-    orphanedToolUses.value.set(sessionId, orphaned)
-
-    // Stamp directly on tool call object for reliable reactivity
-    const toolCalls = toolCallsBySession.value.get(sessionId)
-    if (toolCalls) {
-      const toolCall = toolCalls.find(tc => tc.id === toolUseId)
-      if (toolCall) {
-        toolCall._isOrphaned = true
-        toolCall._orphanedInfo = info
-        toolCall.isExpanded = false
-        toolCall.backendStatus = 'interrupted'
-        toolCall.status = 'completed'
-        toolCall.backendState = {
-          state: 'interrupted',
-          visible: true,
-          collapsed: false,
-          style: 'orphaned',
-          linked_permission_id: toolCall.backendState?.linked_permission_id ?? null,
-        }
-      }
-    }
-    // Trigger reactivity
-    toolCallsBySession.value = new Map(toolCallsBySession.value)
-
-    console.log(`Marked tool use ${toolUseId} as orphaned: ${message}`)
-  }
-
-  /**
-   * Check if a tool use is orphaned
-   */
-  function isToolUseOrphaned(sessionId, toolUseId) {
-    return orphanedToolUses.value.get(sessionId)?.has(toolUseId) || false
-  }
-
-  /**
-   * Get orphaned tool information
-   */
-  function getOrphanedInfo(sessionId, toolUseId) {
-    return orphanedToolUses.value.get(sessionId)?.get(toolUseId)
-  }
-
-  /**
-   * Clear orphaned tool uses for a session (mark all open tools as orphaned)
-   */
-  function clearOrphanedToolUses(sessionId, message) {
-    const openTools = activeToolUses.value.get(sessionId)
-    if (openTools && openTools.size > 0) {
-      openTools.forEach(id => markToolUseOrphaned(sessionId, id, message))
-      openTools.clear()
-    }
-  }
-
-  /**
    * Clear messages for a session (for reset)
    */
   function clearMessages(sessionId) {
@@ -1268,7 +1140,6 @@ export const useMessageStore = defineStore('message', () => {
     pruneExpandedCommsForSession(sessionId)
     messagesBySession.value.delete(sessionId)
     toolCallsBySession.value.delete(sessionId)
-    lastReceivedTimestamp.value.delete(sessionId)
 
     // Issue #1746 (stage: subagents): clear only this session's task_id-scoped state
     // (ephemeral, reconstructs via hydrateBackgroundAgents + live frames on reload/reconnect).
@@ -1322,7 +1193,7 @@ export const useMessageStore = defineStore('message', () => {
       pendingTools: [],
       // Issue #1573 (review fix): tool_use ids already claimed by a canonical assistant message
       // for this still-open turn — see _clearStreamingPreviewContent(). Deliberately NOT the
-      // same thing as `canonicalSeen`: addMessage()'s own #1955 comment documents that a single
+      // same thing as `canonicalSeen`: _applyMessageRecord()'s own #1955 comment documents that a single
       // still-open turn can carry MULTIPLE canonical assistant messages ("multi-canonical-
       // message turn"), so `canonicalSeen` flips true after the FIRST one and then stays true
       // for the rest of the turn — gating registration on it would silently drop the indicator
@@ -1383,7 +1254,7 @@ export const useMessageStore = defineStore('message', () => {
   /**
    * Issue #1955 (review fix, found via live testing: single-frame turns could leave a
    * permanent duplicate preview): resets the preview's displayed content whenever a canonical
-   * assistant message appends (called from addMessage()) — leaves `active`
+   * assistant message appends (called from _applyMessageRecord(), live source only) — leaves `active`
    * untouched so a still-open stream keeps its caret. This is the mechanism resolving
    * "multi-canonical-message-per-turn": any canonical append clears whatever the preview was
    * showing, with no identity matching involved.
@@ -1482,25 +1353,19 @@ export const useMessageStore = defineStore('message', () => {
         // call, instead of waiting for the full turn to arrive.
         const block = data.event.content_block
         if (block?.type === 'tool_use' && block.id) {
-          handleToolCall(sessionId, {
+          applyRecord(sessionId, {
+            type: 'tool_call',
             tool_use_id: block.id,
             name: block.name,
             input: {},
             status: 'pending'
-          })
-          // Skip the two side effects below when the card is already terminal: handleToolCall's
-          // status-regression guard silently no-ops on a stray/late content_block_start for an
-          // already-completed tool, and both re-opening it for the orphan sweep and showing a
-          // "starting..." indicator for it would be wrong.
+          }, 'live')
+          // Skip the preview indicator below when the card is already terminal:
+          // _applyToolCallRecord's status-regression guard silently no-ops on a stray/late
+          // content_block_start for an already-completed tool, and showing a "starting..."
+          // indicator for it would be wrong.
           const currentCard = toolCallsBySession.value.get(sessionId)?.find(tc => tc.id === block.id)
           if (currentCard && !['completed', 'error'].includes(currentCard.status)) {
-            // Register into activeToolUses at creation time so the interrupt/restart/
-            // termination sweep in handleRealtimeToolTracking covers this card too —
-            // it's otherwise only populated from completed assistant messages.
-            const openTools = activeToolUses.value.get(sessionId) || new Set()
-            openTools.add(block.id)
-            activeToolUses.value.set(sessionId, openTools)
-
             // The card itself has no rendering surface yet — AssistantMessage.vue only shows
             // tool cards that belong to a message "segment", and none exists until the
             // canonical assistant message for this turn lands. Mirror it into the streaming
@@ -1554,8 +1419,9 @@ export const useMessageStore = defineStore('message', () => {
         const isInactive = !['active', 'paused', 'starting'].includes(newState.state)
 
         if (wasActive && isInactive) {
-          clearOrphanedToolUses(newState.id, 'Session was terminated')
-          // Issue #1955: discard any in-flight cosmetic preview so the caret doesn't linger
+          // Issue #1955: discard any in-flight cosmetic preview so the caret doesn't linger.
+          // AC2: no browser-side orphan sweep needed anymore — the backend's own tool_call
+          // record for an interrupted tool already carries that terminal status directly.
           _discardStreamingPreview(newState.id, 'session-terminated')
         }
       })
@@ -1573,16 +1439,20 @@ export const useMessageStore = defineStore('message', () => {
    * status and no blank message bubbles appear.
    */
   function setArchiveMessages(sessionId, rawMessages) {
-    const displayMessages = []
+    // Issue #2110 (stage 4b-B): thin apply-per-record wrapper — reset the display list, then
+    // let applyRecord() do the uniform work (identity dedup, api_retry collapse, truncation/
+    // deferral banners, subagent narration routing, tool_call upsert).
+    messagesBySession.value.set(sessionId, [])
 
     rawMessages.forEach(msg => {
-      // Route tool_call messages through unified handler
-      if (msg.type === 'tool_call') {
-        handleToolCall(sessionId, msg)
-        return // Don't add to display list
-      }
+      // Note: tool_call records need no special-case here — applyRecord() itself routes them
+      // to the tool_call branch internally and never pushes them to the display list, so they
+      // fall through the user/system filters below (neither matches type 'tool_call') straight
+      // to the uniform applyRecord() call at the end of this callback.
 
-      // Filter UserMessage entries that are purely tool results (no displayable text)
+      // Filter UserMessage entries that are purely tool results (no displayable text) —
+      // archive-specific; live/load show these (they correlate the result against its tool
+      // card inline instead of hiding it).
       if (msg.type === 'user' && Array.isArray(msg.content)) {
         const hasDisplayableContent = msg.content.some(
           block => block.type !== 'tool_result'
@@ -1592,7 +1462,9 @@ export const useMessageStore = defineStore('message', () => {
         }
       }
 
-      // Filter SystemMessage entries with no displayable content
+      // Filter SystemMessage entries with no displayable content — archive-specific.
+      // (The 'status'/'requesting' suppression applyRecord/addMessage/loadMessages already
+      // apply uniformly covers that case for every source, including this one.)
       if (msg.type === 'system') {
         const subtype = msg.subtype || msg.metadata?.subtype
         if (subtype === 'init') {
@@ -1605,18 +1477,17 @@ export const useMessageStore = defineStore('message', () => {
             return
           }
         }
-        // Issue #1486: internal SDK state transitions are not displayable
-        if (subtype === 'status' && msg.metadata?.init_data?.status === 'requesting') {
-          return
-        }
       }
 
-      displayMessages.push(msg)
+      // notify:false — see applyRecord()'s own comment: avoid O(N) reactive broadcasts while
+      // replaying a whole archived session in one shot; one final reassignment below covers it.
+      applyRecord(sessionId, msg, 'archive', { notify: false })
     })
-
-    messagesBySession.value.set(sessionId, displayMessages)
-    // Trigger reactivity
+    // Ensure reactivity even when `rawMessages` was empty or fully filtered out.
     messagesBySession.value = new Map(messagesBySession.value)
+    toolCallsBySession.value = new Map(toolCallsBySession.value)
+    lastStopReasonBySession.value = new Map(lastStopReasonBySession.value)
+    deferredToolUseBySession.value = new Map(deferredToolUseBySession.value)
   }
 
   /**
@@ -1628,6 +1499,16 @@ export const useMessageStore = defineStore('message', () => {
     pruneExpandedCommsForSession(sessionId)
     messagesBySession.value.delete(sessionId)
     toolCallsBySession.value.delete(sessionId)
+    // Issue #2110 (stage 4b-B review fix): applyRecord's uniform side effects now also write
+    // lastStopReasonBySession/deferredToolUseBySession/launchTimestampBySession for the
+    // 'archive' source — these are keyed only by sessionId, which an archive view shares with
+    // its live counterpart (SessionView.vue reuses props.sessionId for both routes). Without
+    // clearing them here too, an archived snapshot's stale truncation/deferral-banner or launch-
+    // timestamp state would leak into the live session view when it next reactivates, exactly
+    // like messagesBySession/toolCallsBySession above already guard against.
+    lastStopReasonBySession.value.delete(sessionId)
+    deferredToolUseBySession.value.delete(sessionId)
+    launchTimestampBySession.value.delete(sessionId)
     sessionStore.clearArchiveInitData(sessionId)
   }
 
@@ -1742,8 +1623,6 @@ export const useMessageStore = defineStore('message', () => {
     // State
     messagesBySession,
     toolCallsBySession,
-    activeToolUses: readonly(activeToolUses),
-    orphanedToolUses: readonly(orphanedToolUses),
 
     // Computed
     currentMessages,
@@ -1751,9 +1630,10 @@ export const useMessageStore = defineStore('message', () => {
 
     // Actions
     loadMessages,
-    addMessage,
+    // Issue #2110 (stage 4b-B): the one entry point for every message/tool_call record,
+    // regardless of source ('live' | 'load' | 'archive') — supersedes addMessage/handleToolCall.
+    applyRecord,
     updateToolCall,
-    handleToolCall,  // Issue #324/#491: unified tool call handler (single path for real-time and history)
     handlePermissionResponse,
     toggleToolExpansion,
     clearMessages,
@@ -1761,12 +1641,6 @@ export const useMessageStore = defineStore('message', () => {
     handleAssistantDelta,
     // Issue #1955: cosmetic-only live-typing preview, read reactively by StreamingPreview.vue
     streamingPreviewBySession: readonly(streamingPreviewBySession),
-
-    // Orphaned tool tracking
-    markToolUseOrphaned,
-    isToolUseOrphaned,
-    getOrphanedInfo,
-    clearOrphanedToolUses,
 
     // Launch timestamp tracking (Issue #473)
     launchTimestampBySession: readonly(launchTimestampBySession),

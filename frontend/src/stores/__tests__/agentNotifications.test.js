@@ -39,7 +39,7 @@ describe('agentNotificationsForSession (#1676)', () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
 
-    store.addMessage('sess-1', makeNotification())
+    store.applyRecord('sess-1', makeNotification(), 'live')
 
     const results = store.agentNotificationsForSession('sess-1')
     expect(results.length).toBe(1)
@@ -55,11 +55,11 @@ describe('agentNotificationsForSession (#1676)', () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
 
-    store.addMessage('sess-1', makeMessage({
+    store.applyRecord('sess-1', makeMessage({
       type: 'system',
       id: 'msg-2',
       metadata: { subtype: 'hook_started' }
-    }))
+    }), 'live')
 
     expect(store.agentNotificationsForSession('sess-1')).toEqual([])
   })
@@ -68,8 +68,8 @@ describe('agentNotificationsForSession (#1676)', () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
 
-    store.addMessage('sess-1', makeNotification({ id: 'msg-1', metadata: { label: 'alpha' } }))
-    store.addMessage('sess-1', makeNotification({
+    store.applyRecord('sess-1', makeNotification({ id: 'msg-1', metadata: { label: 'alpha' } }), 'live')
+    store.applyRecord('sess-1', makeNotification({
       id: 'msg-2',
       content: 'beta finished',
       metadata: {
@@ -77,7 +77,7 @@ describe('agentNotificationsForSession (#1676)', () => {
         message: 'beta finished',
         label: 'beta'
       }
-    }))
+    }), 'live')
 
     const results = store.agentNotificationsForSession('sess-1')
     expect(results.length).toBe(2)
@@ -88,11 +88,11 @@ describe('agentNotificationsForSession (#1676)', () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
 
-    store.addMessage('sess-1', makeNotification({ id: 'msg-1' }))
-    store.addMessage('sess-1', makeNotification({
+    store.applyRecord('sess-1', makeNotification({ id: 'msg-1' }), 'live')
+    store.applyRecord('sess-1', makeNotification({
       id: 'msg-2',
       metadata: { label: 'beta', message: 'beta finished', notification_type: 'agent_completed' }
-    }))
+    }), 'live')
 
     store.dismissAgentNotification('sess-1', 'msg-1')
 
@@ -105,8 +105,8 @@ describe('agentNotificationsForSession (#1676)', () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
 
-    store.addMessage('sess-1', makeNotification({ id: 'msg-1' }))
-    store.addMessage('sess-2', makeNotification({ id: 'msg-1' }))
+    store.applyRecord('sess-1', makeNotification({ id: 'msg-1' }), 'live')
+    store.applyRecord('sess-2', makeNotification({ id: 'msg-1' }), 'live')
 
     store.dismissAgentNotification('sess-1', 'msg-1')
 
@@ -127,7 +127,7 @@ describe('agentNotificationsForSession (#1676)', () => {
 
     const msg = makeNotification({ metadata: { uuid: 'hook-uuid-1' } })
     delete msg.id
-    store.addMessage('sess-1', msg)
+    store.applyRecord('sess-1', msg, 'live')
 
     const results = store.agentNotificationsForSession('sess-1')
     expect(results[0].id).toBe('hook-uuid-1')
@@ -144,8 +144,8 @@ describe('agentNotificationsForSession (#1676)', () => {
     const responded = makeNotification({ metadata: { uuid: 'uuid-response' } })
     delete started.id
     delete responded.id
-    store.addMessage('sess-1', started)
-    store.addMessage('sess-1', responded)
+    store.applyRecord('sess-1', started, 'live')
+    store.applyRecord('sess-1', responded, 'live')
 
     const results = store.agentNotificationsForSession('sess-1')
     expect(results.length).toBe(1)
