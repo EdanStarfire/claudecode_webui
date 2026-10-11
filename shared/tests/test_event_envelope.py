@@ -58,6 +58,7 @@ SAMPLE_EVENTS_BY_TYPE = {
     "queue_update": {"type": "queue_update", "action": "added", "item": {}},
     "usage_updated": {"type": "usage_updated", "session_id": "s1", "usage": {}},
     "assistant_delta": {"type": "assistant_delta", "session_id": "s1", "data": {}},
+    "thinking_tokens_update": {"type": "thinking_tokens_update", "session_id": "s1", "data": {}},
     "message": {"type": "message", "session_id": "s1", "data": {"type": "assistant"}},
     "context_update": {
         "type": "context_update",

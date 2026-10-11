@@ -1124,6 +1124,12 @@ export const usePollingStore = defineStore('polling', () => {
       useMessageStore().handleAssistantDelta(sessionId, payload.data)
     },
 
+    // Issue #2132: thinking_tokens progress deltas are live-only, never persisted/rendered.
+    // No UI surface exists for this yet (same registered-but-unconsumed acknowledgment
+    // pattern as proxy_event below) — just stops it from vanishing into the "unknown type"
+    // warning instead of building a progress indicator nothing asked for.
+    thinking_tokens_update: () => {},
+
     secret_refresh_failed: (payload) => {
       // backend/routers/secrets.py's proxy-sidecar event route — same fact as the UI-stream
       // secret_refresh_failed handler above, just nested under `data` instead of flat, and

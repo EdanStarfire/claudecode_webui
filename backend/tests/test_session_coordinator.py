@@ -2567,6 +2567,35 @@ class TestIssue1486StreamingDelta:
         assert received_by_subscriber[0]["type"] == "assistant_delta"
 
     @pytest.mark.asyncio
+    async def test_issue_2132_thinking_tokens_delta_bypasses_process_message(self, temp_coordinator, sample_session_config):
+        """Issue #2132: thinking_tokens_delta forwarded to subscribers; process_message NOT
+        called — same bypass as assistant_delta, at the same call site (this is the primary
+        message_callback ClaudeSDK invokes, not web_server.py's downstream subscriber)."""
+        coordinator = temp_coordinator
+
+        session_id = await coordinator.create_session(**sample_session_config)
+        cb_inner = coordinator._create_message_callback(session_id)
+
+        received_by_subscriber = []
+
+        async def subscriber(sid, msg):
+            received_by_subscriber.append(msg)
+
+        coordinator.add_message_callback(session_id, subscriber)
+
+        delta = {
+            "type": "thinking_tokens_delta",
+            "session_id": session_id,
+            "data": {"estimated_tokens_delta": 5},
+        }
+
+        with patch.object(coordinator.message_processor, "process_message", side_effect=AssertionError("process_message must not be called for thinking_tokens_delta")):
+            await cb_inner(delta)
+
+        assert len(received_by_subscriber) == 1
+        assert received_by_subscriber[0]["type"] == "thinking_tokens_delta"
+
+    @pytest.mark.asyncio
     async def test_issue_1486_web_server_drops_subagent_delta(self):
         """Issue #1486: web_server callback drops assistant_delta with parent_tool_use_id set."""
         from datetime import UTC, datetime
