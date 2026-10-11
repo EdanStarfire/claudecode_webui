@@ -770,7 +770,7 @@ describe('ProjectOverview - Filter bar (issue #2050, Stage A)', () => {
     expect(screen.getByText('2 selected')).toBeTruthy()
   })
 
-  it('hides the filter bar entirely in Hierarchy view', async () => {
+  it('keeps the filter bar visible in Hierarchy view (issue #2050, Stage B)', async () => {
     const project = makeProject({ project_id: 'p1', session_ids: ['s1'] })
     const sessions = [makeSession({ session_id: 's1', project_id: 'p1', name: 'Alice Smith', state: 'active' })]
 
@@ -780,7 +780,7 @@ describe('ProjectOverview - Filter bar (issue #2050, Stage A)', () => {
     uiStore.setProjectViewMode('hierarchy')
     await flush()
 
-    expect(container.querySelector('.filter-bar')).toBeFalsy()
+    expect(container.querySelector('.filter-bar')).toBeTruthy()
   })
 
   it('distinguishes a custom group that is genuinely empty from one whose members are merely filtered out', async () => {
@@ -841,5 +841,186 @@ describe('ProjectOverview - Filter bar (issue #2050, Stage A)', () => {
     // silently hides every session with no visible cause.
     expect(list.getByText('Alice Smith')).toBeTruthy()
     expect(list.getByText('Bob Carter')).toBeTruthy()
+  })
+})
+
+describe('ProjectOverview - Hierarchy view filtering (issue #2050, Stage B)', () => {
+  async function mountHierarchy(project, sessions, hierarchyChildren) {
+    apiMock.get.mockResolvedValue({ id: 'root', name: 'User', children: hierarchyChildren })
+    const rendered = await mountForResume(project, sessions, { stoppedIds: [] })
+    rendered.uiStore.setProjectViewMode('hierarchy')
+    await flush()
+    return rendered
+  }
+
+  function hierarchyTreeOf(container) {
+    return within(container.querySelector('.hierarchy-tree'))
+  }
+
+  function cardFor(container, name) {
+    return [...container.querySelectorAll('.minion-card')].find(c => c.textContent.includes(name))
+  }
+
+  it('dims the ancestor chain down to a matching deep descendant, prunes unrelated roots', async () => {
+    const project = makeProject({ project_id: 'p1', session_ids: ['parent', 'child', 'other'] })
+    const sessions = [
+      makeSession({ session_id: 'parent', project_id: 'p1', name: 'Parent One', state: 'active' }),
+      makeSession({ session_id: 'child', project_id: 'p1', name: 'Alice Smith', state: 'active' }),
+      makeSession({ session_id: 'other', project_id: 'p1', name: 'Other Root', state: 'active' }),
+    ]
+    const hierarchy = [
+      {
+        id: 'parent', name: 'Parent One', type: 'minion',
+        children: [{ id: 'child', name: 'Alice Smith', type: 'minion', children: [] }],
+      },
+      { id: 'other', name: 'Other Root', type: 'minion', children: [] },
+    ]
+
+    const { container } = await mountHierarchy(project, sessions, hierarchy)
+    const bar = filterBarOf(container)
+
+    await fireEvent.update(bar.getByLabelText('Search sessions by name or role'), 'alice')
+    await flush()
+
+    const tree = hierarchyTreeOf(container)
+    expect(tree.getByText('Parent One')).toBeTruthy()
+    expect(tree.getByText('Alice Smith')).toBeTruthy()
+    expect(tree.queryByText('Other Root')).toBeFalsy()
+
+    expect(cardFor(container, 'Parent One').classList.contains('filter-dimmed')).toBe(true)
+    expect(cardFor(container, 'Alice Smith').classList.contains('filter-dimmed')).toBe(false)
+  })
+
+  it('keeps a directly-matching root-level minion undimmed and prunes the unrelated root', async () => {
+    const project = makeProject({ project_id: 'p1', session_ids: ['r1', 'r2'] })
+    const sessions = [
+      makeSession({ session_id: 'r1', project_id: 'p1', name: 'Alice Smith', state: 'active' }),
+      makeSession({ session_id: 'r2', project_id: 'p1', name: 'Bob Carter', state: 'active' }),
+    ]
+    const hierarchy = [
+      { id: 'r1', name: 'Alice Smith', type: 'minion', children: [] },
+      { id: 'r2', name: 'Bob Carter', type: 'minion', children: [] },
+    ]
+
+    const { container } = await mountHierarchy(project, sessions, hierarchy)
+    const bar = filterBarOf(container)
+
+    await fireEvent.update(bar.getByLabelText('Search sessions by name or role'), 'alice')
+    await flush()
+
+    const tree = hierarchyTreeOf(container)
+    expect(tree.getByText('Alice Smith')).toBeTruthy()
+    expect(tree.queryByText('Bob Carter')).toBeFalsy()
+    expect(cardFor(container, 'Alice Smith').classList.contains('filter-dimmed')).toBe(false)
+  })
+
+  it('shows the Hierarchy empty state when the filter matches nothing', async () => {
+    const project = makeProject({ project_id: 'p1', session_ids: ['r1'] })
+    const sessions = [makeSession({ session_id: 'r1', project_id: 'p1', name: 'Alice Smith', state: 'active' })]
+    const hierarchy = [{ id: 'r1', name: 'Alice Smith', type: 'minion', children: [] }]
+
+    const { container } = await mountHierarchy(project, sessions, hierarchy)
+    const bar = filterBarOf(container)
+
+    await fireEvent.update(bar.getByLabelText('Search sessions by name or role'), 'nonexistent')
+    await flush()
+
+    expect(screen.getByText('No sessions match the active filters.')).toBeTruthy()
+    expect(container.querySelector('.hierarchy-tree')).toBeFalsy()
+  })
+
+  it('Clear filters restores the exact unfiltered tree, including dimmed ancestors', async () => {
+    const project = makeProject({ project_id: 'p1', session_ids: ['parent', 'child'] })
+    const sessions = [
+      makeSession({ session_id: 'parent', project_id: 'p1', name: 'Parent One', state: 'active' }),
+      makeSession({ session_id: 'child', project_id: 'p1', name: 'Alice Smith', state: 'active' }),
+    ]
+    const hierarchy = [
+      {
+        id: 'parent', name: 'Parent One', type: 'minion',
+        children: [{ id: 'child', name: 'Alice Smith', type: 'minion', children: [] }],
+      },
+    ]
+
+    const { container } = await mountHierarchy(project, sessions, hierarchy)
+    const bar = filterBarOf(container)
+
+    await fireEvent.update(bar.getByLabelText('Search sessions by name or role'), 'alice')
+    await flush()
+    expect(cardFor(container, 'Parent One').classList.contains('filter-dimmed')).toBe(true)
+
+    await fireEvent.click(bar.getByText('Clear filters'))
+    await flush()
+
+    expect(cardFor(container, 'Parent One').classList.contains('filter-dimmed')).toBe(false)
+    expect(container.querySelectorAll('.minion-tree-node')).toHaveLength(2)
+  })
+
+  it('renders Hierarchy view unchanged when no filter is active — no node receives filter-dimmed', async () => {
+    const project = makeProject({ project_id: 'p1', session_ids: ['parent', 'child'] })
+    const sessions = [
+      makeSession({ session_id: 'parent', project_id: 'p1', name: 'Parent One', state: 'active' }),
+      makeSession({ session_id: 'child', project_id: 'p1', name: 'Alice Smith', state: 'active' }),
+    ]
+    const hierarchy = [
+      {
+        id: 'parent', name: 'Parent One', type: 'minion',
+        children: [{ id: 'child', name: 'Alice Smith', type: 'minion', children: [] }],
+      },
+    ]
+
+    const { container } = await mountHierarchy(project, sessions, hierarchy)
+
+    expect(container.querySelectorAll('.filter-dimmed')).toHaveLength(0)
+    expect(container.querySelectorAll('.minion-tree-node')).toHaveLength(2)
+  })
+
+  it('hides the Flat-specific "X of Y sessions shown" counter in Hierarchy view', async () => {
+    const project = makeProject({ project_id: 'p1', session_ids: ['parent', 'child'] })
+    const sessions = [
+      makeSession({ session_id: 'parent', project_id: 'p1', name: 'Parent One', state: 'active' }),
+      makeSession({ session_id: 'child', project_id: 'p1', name: 'Alice Smith', state: 'active' }),
+    ]
+    const hierarchy = [
+      {
+        id: 'parent', name: 'Parent One', type: 'minion',
+        children: [{ id: 'child', name: 'Alice Smith', type: 'minion', children: [] }],
+      },
+    ]
+
+    const { container } = await mountHierarchy(project, sessions, hierarchy)
+    const bar = filterBarOf(container)
+
+    await fireEvent.update(bar.getByLabelText('Search sessions by name or role'), 'alice')
+    await flush()
+
+    // Hierarchy-view "shown" count isn't the same quantity as the flat match count
+    // (dimmed ancestors are shown without being matches) — the counter stays Flat-only.
+    expect(container.textContent).not.toMatch(/sessions shown/)
+  })
+
+  it('auto-expands a user-collapsed branch to reveal a filtered match inside it', async () => {
+    const project = makeProject({ project_id: 'p1', session_ids: ['parent', 'child'] })
+    const sessions = [
+      makeSession({ session_id: 'parent', project_id: 'p1', name: 'Parent One', state: 'active' }),
+      makeSession({ session_id: 'child', project_id: 'p1', name: 'Alice Smith', state: 'active' }),
+    ]
+    const hierarchy = [
+      {
+        id: 'parent', name: 'Parent One', type: 'minion',
+        children: [{ id: 'child', name: 'Alice Smith', type: 'minion', children: [] }],
+      },
+    ]
+
+    const { container, uiStore } = await mountHierarchy(project, sessions, hierarchy)
+    uiStore.toggleMinionCollapse('parent')
+    await flush()
+    expect(hierarchyTreeOf(container).queryByText('Alice Smith')).toBeFalsy()
+
+    const bar = filterBarOf(container)
+    await fireEvent.update(bar.getByLabelText('Search sessions by name or role'), 'alice')
+    await flush()
+
+    expect(hierarchyTreeOf(container).getByText('Alice Smith')).toBeTruthy()
   })
 })
