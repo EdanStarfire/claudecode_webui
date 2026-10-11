@@ -1508,6 +1508,26 @@ class ClaudeSDK:
                     await self._safe_callback(self.message_callback, converted_message)
                 return
 
+            # Issue #2132: thinking_tokens status frames are live-only progress updates
+            # (~10/minute of agent activity) — never rendered, never read back. Bypass
+            # MessageRecord/storage entirely, same pattern as StreamEvent above.
+            if (
+                SystemMessage is not None
+                and isinstance(sdk_message, SystemMessage)
+                and sdk_message.subtype == "thinking_tokens"
+            ):
+                self.info.last_activity = time.time()
+                if self.message_callback:
+                    await self._safe_callback(
+                        self.message_callback,
+                        {
+                            "type": "thinking_tokens_delta",
+                            "session_id": self.session_id,
+                            "data": sdk_message.data,
+                        },
+                    )
+                return
+
             # Debug log raw SDK response structure
             sdk_logger.debug(f"Raw SDK response: {sdk_message=}")
 

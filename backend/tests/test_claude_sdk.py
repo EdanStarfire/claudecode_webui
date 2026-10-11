@@ -780,6 +780,29 @@ class TestClaudeSDK:
         # storage_manager is None on a bare ClaudeSDK instance — confirms no storage was attempted
         assert sdk_instance.storage_manager is None
 
+    @pytest.mark.asyncio
+    async def test_issue_2132_process_sdk_message_thinking_tokens_bypasses_storage(self, sdk_instance):
+        """Issue #2132: SystemMessage(subtype="thinking_tokens") is forwarded as a
+        thinking_tokens_delta envelope and NOT converted to a MessageRecord/stored."""
+        from claude_agent_sdk import SystemMessage
+
+        received = []
+
+        async def mock_callback(msg):
+            received.append(msg)
+
+        sdk_instance.message_callback = mock_callback
+        thinking_msg = SystemMessage(
+            subtype="thinking_tokens", data={"estimated_tokens_delta": 5}
+        )
+        await sdk_instance._process_sdk_message(thinking_msg)
+
+        assert len(received) == 1
+        assert received[0]["type"] == "thinking_tokens_delta"
+        assert received[0]["data"] == {"estimated_tokens_delta": 5}
+        # storage_manager is None on a bare ClaudeSDK instance — confirms no storage was attempted
+        assert sdk_instance.storage_manager is None
+
     # --- Issue #1987: turn_id / tool_use_id stamping on delta events ---
 
     def test_issue_1987_turn_id_stamped_on_deltas(self, sdk_instance):

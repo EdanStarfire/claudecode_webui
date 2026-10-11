@@ -890,6 +890,21 @@ class BackendApp:
                         )
                     return
 
+                # Issue #2132: thinking_tokens — live-only progress updates, never
+                # persisted, dedicated event type (same pattern as assistant_delta above).
+                if isinstance(message_data, dict) and message_data.get("type") == "thinking_tokens_delta":
+                    if session_id in self.session_queues:
+                        emit(
+                            self.session_queues[session_id], QUEUE_SESSION, "thinking_tokens_update",
+                            {
+                                "session_id": session_id,
+                                "data": message_data["data"],
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            },
+                            scope=session_id,
+                        )
+                    return
+
                 # Issue #2084 (stage 3-B, §4, AC2): message_data is already the canonical
                 # MessageRecord.to_dict() built once upstream (claude_sdk.py /
                 # session_coordinator.py) — no second derivation via process_message()/

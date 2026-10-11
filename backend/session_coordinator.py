@@ -4616,12 +4616,20 @@ class SessionCoordinator:
         async def callback(message_data: dict[str, Any]):
             try:
                 # Issue #1486: assistant_delta bypasses parser, projection, and activity tracking
-                if isinstance(message_data, dict) and message_data.get("type") == "assistant_delta":
+                # Issue #2132: thinking_tokens_delta is the same shape of live-only progress
+                # frame — bypasses the parser for the same reason (no MessageRecord was ever
+                # built for it, so MessageProcessor.process_message() would just misclassify
+                # it as an unknown type and log a warning on every ~10/minute occurrence).
+                if isinstance(message_data, dict) and message_data.get("type") in (
+                    "assistant_delta", "thinking_tokens_delta",
+                ):
                     for cb in self._message_callbacks.get(session_id, []):
                         try:
                             await cb(session_id, message_data)
                         except Exception:
-                            coord_logger.exception("Error forwarding assistant_delta to subscriber")
+                            coord_logger.exception(
+                                f"Error forwarding {message_data.get('type')} to subscriber"
+                            )
                     return
 
                 # Issue #1130: Track activity for idle watchdog

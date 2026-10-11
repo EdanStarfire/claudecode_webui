@@ -325,6 +325,16 @@
       ],
       "required_keys_by_queue": {}
     },
+    "thinking_tokens_update": {
+      "queues": [
+        "session"
+      ],
+      "required_keys": [
+        "data",
+        "session_id"
+      ],
+      "required_keys_by_queue": {}
+    },
     "tool_call": {
       "queues": [
         "session"

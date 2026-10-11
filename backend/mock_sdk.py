@@ -608,6 +608,22 @@ class MockClaudeSDK:
         """
         sdk_type = msg.get("_type")
         if sdk_type:
+            # Issue #2132: thinking_tokens status frames are live-only — mirror
+            # claude_sdk.py's bypass so replayed fixtures don't keep writing them
+            # into messages.jsonl after the live path stops. Checked against the raw
+            # fixture dict (not the reconstructed object) and ahead of the try block
+            # below, which is scoped to reconstruction/conversion failures only.
+            if sdk_type == "SystemMessage" and msg.get("data", {}).get("subtype") == "thinking_tokens":
+                if self._raw_message_callback:
+                    await self._safe_callback(
+                        self._raw_message_callback,
+                        {
+                            "type": "thinking_tokens_delta",
+                            "session_id": self.session_id,
+                            "data": msg.get("data", {}).get("data", {}),
+                        },
+                    )
+                return
             try:
                 # Real captured SDK message — reconstruct the real object and build
                 # the exact same canonical record the live path would.

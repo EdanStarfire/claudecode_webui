@@ -75,6 +75,9 @@ TOP_LEVEL_EVENT_TYPES: dict[str, EventTypeSpec] = {
     "assistant_delta": EventTypeSpec(
         frozenset({QUEUE_SESSION}), frozenset({"session_id", "data"})
     ),
+    "thinking_tokens_update": EventTypeSpec(
+        frozenset({QUEUE_SESSION}), frozenset({"session_id", "data"})
+    ),
     "message": EventTypeSpec(frozenset({QUEUE_SESSION}), frozenset({"session_id", "data"})),
     "context_update": EventTypeSpec(
         frozenset({QUEUE_SESSION}), frozenset({"input_tokens", "context_window", "context_pct"})
