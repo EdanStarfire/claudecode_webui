@@ -596,6 +596,64 @@ class TestConvertingCallbackUnification:
         assert _strip_nondeterministic(via_callback) == _strip_nondeterministic(expected)
 
     @pytest.mark.asyncio
+    async def test_issue_2133_converting_callback_status_requesting_bypasses_storage(self):
+        """Issue #2133: mirrors claude_sdk.py's bypass — a fixture-dict `status`/
+        `requesting` SystemMessage frame is dropped during _converting_callback with
+        no callback invocation and no storage."""
+        received = []
+
+        async def on_message(msg):
+            received.append(msg)
+
+        storage_manager = AsyncMock()
+        mock = MockClaudeSDK(
+            session_id="test-status-requesting",
+            working_directory="/tmp/test",
+            session_dir=str(FIXTURES_DIR / "single_turn"),
+            storage_manager=storage_manager,
+            message_callback=on_message,
+            speed_factor=0.0,
+        )
+
+        msg = {
+            "_type": "SystemMessage",
+            "timestamp": 1000000.0,
+            "session_id": "test-status-requesting",
+            "data": {"subtype": "status", "data": {"status": "requesting"}},
+        }
+        await mock._converting_callback(msg)
+
+        assert received == []
+        storage_manager.append_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_issue_2133_converting_callback_status_compacting_not_bypassed(self):
+        """Issue #2133: a fixture-dict `status`/`compacting` SystemMessage frame must
+        still be converted and delivered — the bypass must not swallow it."""
+        received = []
+
+        async def on_message(msg):
+            received.append(msg)
+
+        mock = MockClaudeSDK(
+            session_id="test-status-compacting",
+            working_directory="/tmp/test",
+            session_dir=str(FIXTURES_DIR / "single_turn"),
+            message_callback=on_message,
+            speed_factor=0.0,
+        )
+
+        msg = {
+            "_type": "SystemMessage",
+            "timestamp": 1000000.0,
+            "session_id": "test-status-compacting",
+            "data": {"subtype": "status", "data": {"status": "compacting"}},
+        }
+        await mock._converting_callback(msg)
+
+        assert len(received) == 1
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "fixture_name", ["hook_messages", "multi_turn", "permission_flow", "single_turn", "tool_use"]
     )

@@ -624,6 +624,16 @@ class MockClaudeSDK:
                         },
                     )
                 return
+            # Issue #2133: status="requesting" frames are pure heartbeat noise — mirror
+            # claude_sdk.py's bypass so replayed fixtures don't keep writing them into
+            # messages.jsonl. No callback invocation here either — dropped silently.
+            if (
+                sdk_type == "SystemMessage"
+                and msg.get("data", {}).get("subtype") == "status"
+                and msg.get("data", {}).get("data", {}).get("status") == "requesting"
+                and not msg.get("data", {}).get("data", {}).get("permissionMode")
+            ):
+                return
             try:
                 # Real captured SDK message — reconstruct the real object and build
                 # the exact same canonical record the live path would.

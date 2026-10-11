@@ -803,6 +803,87 @@ class TestClaudeSDK:
         # storage_manager is None on a bare ClaudeSDK instance — confirms no storage was attempted
         assert sdk_instance.storage_manager is None
 
+    @pytest.mark.asyncio
+    async def test_issue_2133_process_sdk_message_status_requesting_bypasses_storage(self, sdk_instance):
+        """Issue #2133: SystemMessage(subtype="status", data={"status": "requesting"}) is
+        dropped silently — no message_callback invocation at all, unlike thinking_tokens."""
+        from claude_agent_sdk import SystemMessage
+
+        received = []
+
+        async def mock_callback(msg):
+            received.append(msg)
+
+        sdk_instance.message_callback = mock_callback
+        requesting_msg = SystemMessage(subtype="status", data={"status": "requesting"})
+        await sdk_instance._process_sdk_message(requesting_msg)
+
+        assert received == []
+        # storage_manager is None on a bare ClaudeSDK instance — confirms no storage was attempted
+        assert sdk_instance.storage_manager is None
+
+    @pytest.mark.asyncio
+    async def test_issue_2133_process_sdk_message_status_compacting_not_bypassed(self, sdk_instance):
+        """Issue #2133: SystemMessage(subtype="status", data={"status": "compacting"}) must
+        proceed through the normal canonicalization path, not be silently dropped."""
+        from claude_agent_sdk import SystemMessage
+
+        received = []
+
+        async def mock_callback(msg):
+            received.append(msg)
+
+        sdk_instance.message_callback = mock_callback
+        compacting_msg = SystemMessage(subtype="status", data={"status": "compacting"})
+        await sdk_instance._process_sdk_message(compacting_msg)
+
+        assert len(received) == 1
+        assert received[0]["type"] != "thinking_tokens_delta"
+
+    @pytest.mark.asyncio
+    async def test_issue_2133_process_sdk_message_status_permission_mode_not_bypassed(self, sdk_instance):
+        """Issue #2133: SystemMessage(subtype="status", data={"status": None,
+        "permissionMode": "plan"}) must not be bypassed — the defensive permissionMode guard
+        must not accidentally swallow a real permission-mode-change frame."""
+        from claude_agent_sdk import SystemMessage
+
+        received = []
+
+        async def mock_callback(msg):
+            received.append(msg)
+
+        sdk_instance.message_callback = mock_callback
+        permission_msg = SystemMessage(
+            subtype="status", data={"status": None, "permissionMode": "plan"}
+        )
+        await sdk_instance._process_sdk_message(permission_msg)
+
+        assert len(received) == 1
+
+    @pytest.mark.asyncio
+    async def test_issue_2133_process_sdk_message_status_requesting_with_permission_mode_not_bypassed(
+        self, sdk_instance
+    ):
+        """Issue #2133: the defensive `not permissionMode` guard itself — a frame with
+        status=="requesting" AND a truthy permissionMode must NOT be bypassed. The other
+        two tests above don't exercise this clause at all: status=="compacting" and
+        status=None both already fail the `status == "requesting"` check on their own,
+        so this is the only case that actually depends on the guard being present."""
+        from claude_agent_sdk import SystemMessage
+
+        received = []
+
+        async def mock_callback(msg):
+            received.append(msg)
+
+        sdk_instance.message_callback = mock_callback
+        msg = SystemMessage(
+            subtype="status", data={"status": "requesting", "permissionMode": "plan"}
+        )
+        await sdk_instance._process_sdk_message(msg)
+
+        assert len(received) == 1
+
     # --- Issue #1987: turn_id / tool_use_id stamping on delta events ---
 
     def test_issue_1987_turn_id_stamped_on_deltas(self, sdk_instance):

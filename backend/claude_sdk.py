@@ -1528,6 +1528,20 @@ class ClaudeSDK:
                     )
                 return
 
+            # Issue #2133: status="requesting" frames are pure heartbeat noise — unlike
+            # thinking_tokens, nothing reads these back, live or stored (frontend already drops
+            # them from display unconditionally, issue #1486/#1575). Bypass MessageRecord/storage
+            # entirely and drop silently — no live event needed, nothing consumes one.
+            if (
+                SystemMessage is not None
+                and isinstance(sdk_message, SystemMessage)
+                and sdk_message.subtype == "status"
+                and sdk_message.data.get("status") == "requesting"
+                and not sdk_message.data.get("permissionMode")
+            ):
+                self.info.last_activity = time.time()
+                return
+
             # Debug log raw SDK response structure
             sdk_logger.debug(f"Raw SDK response: {sdk_message=}")
 
