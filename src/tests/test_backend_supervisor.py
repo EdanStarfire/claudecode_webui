@@ -7,6 +7,7 @@ these tests cover the trickier logic (restart cap -> degraded, port
 allocation) that's impractical to exercise live repeatedly.
 """
 
+import argparse
 import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -61,13 +62,29 @@ def test_build_command_includes_required_flags(tmp_path):
     assert "-m" in cmd and "backend.main" in cmd
     assert "--host" in cmd and "127.0.0.1" in cmd
     assert "--port" in cmd and str(sup.port) in cmd
-    assert "--token" in cmd and sup.token in cmd
+    assert f"--token={sup.token}" in cmd
     assert "--data-dir" in cmd and str(tmp_path) in cmd
     # Tells backend/main.py it's auto-started, not a manual/remote invocation
     # (issue #1850) — enables the loopback+Docker-bridge embedded bind set.
     assert "--embedded" in cmd
     # Never spawned via "uv run" — see class docstring for why (SIGTERM propagation).
     assert cmd[0] != "uv"
+
+
+def test_build_command_survives_leading_dash_token(tmp_path):
+    """Regression test for issue #2124: a token_urlsafe() token starting with
+    '-' used to be misparsed by argparse as a new flag when passed as two
+    separate argv elements ("--token", token). The combined "--token=<value>"
+    form is immune regardless of the token's first character."""
+    with patch("secrets.token_urlsafe", return_value="-abc123XYZ_regression"):
+        sup = BackendSupervisor(data_dir=tmp_path)
+    cmd = sup._build_command()
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--token", type=str)
+    parsed, _ = parser.parse_known_args(cmd)
+
+    assert parsed.token == "-abc123XYZ_regression"
 
 
 def test_build_command_passes_through_mock_sdk_and_fixtures(tmp_path):

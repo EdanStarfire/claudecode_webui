@@ -88,7 +88,7 @@ class BackendSupervisor:
             sys.executable, "-m", "backend.main",
             "--host", self.host,
             "--port", str(self.port),
-            "--token", self.token,
+            f"--token={self.token}",
             "--data-dir", str(self.data_dir),
             # Tells backend/main.py it was auto-started by this supervisor, not run
             # manually/remotely — see backend/main.py's --embedded help text (#1850).
