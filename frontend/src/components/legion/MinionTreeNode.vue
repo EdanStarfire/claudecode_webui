@@ -745,6 +745,14 @@ function handleClick() {
   border-color: var(--color-unread);
 }
 
+.minion-card.unread .status-dot-green.is-selected {
+  background-color: var(--bs-success);
+}
+
+.minion-card.unread .status-dot-grey.is-selected {
+  background-color: var(--bs-secondary);
+}
+
 /* Issue #1697: persistent read/unread fill on the mark-read/mark-unread action button,
    distinguishable from the card's own unread tint above via a distinct treatment. */
 .btn.unread {
