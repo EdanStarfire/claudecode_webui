@@ -584,3 +584,24 @@ describe('ProjectOverview - Selection-based batch Stop/Start (issue #1934)', () 
     expect(uiStore.selectedSessionIds.size).toBe(0)
   })
 })
+
+describe('ProjectOverview - Hierarchy view User root row removal (issue #2060)', () => {
+  it('renders top-level minions at indent 0 with no User root row', async () => {
+    const project = makeProject({ project_id: 'p1', session_ids: ['s1'] })
+    const session = makeSession({ session_id: 's1', project_id: 'p1', name: 'Minion One' })
+
+    apiMock.get.mockResolvedValue({
+      id: 'root',
+      name: 'User',
+      children: [{ id: 's1', name: 'Minion One', type: 'minion', children: [] }],
+    })
+
+    const { container } = await mountForResume(project, [session], { stoppedIds: [] })
+
+    expect(container.querySelector('.user-root-node')).toBeFalsy()
+
+    const topLevelNode = container.querySelector('.minion-tree-node')
+    expect(topLevelNode).toBeTruthy()
+    expect(topLevelNode.style.marginLeft).toBe('0px')
+  })
+})

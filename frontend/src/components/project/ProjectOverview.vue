@@ -408,51 +408,15 @@
                 No sessions yet. Click "Add Session" to create one.
               </div>
 
-              <!-- Hierarchy tree with User root node -->
+              <!-- Hierarchy tree -->
               <div v-else class="hierarchy-tree">
-                <!-- User Root Node -->
-                <div class="user-root-node mb-3 border rounded">
-                  <div class="node-row">
-                    <!-- Left Column: Status + Name (30%) -->
-                    <div class="node-left">
-                      <span class="me-2" style="font-size: 1.2rem;">👤</span>
-                      <div class="node-text">
-                        <div class="node-name-row">
-                          <strong class="node-name">{{ minionHierarchy.name }}</strong>
-                          <span class="badge bg-primary ms-2">
-                            {{ minionHierarchy.children.length }} {{ minionHierarchy.children.length === 1 ? 'minion' : 'minions' }}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <!-- Right Column: Last Comm (70%) -->
-                    <div class="node-right">
-                      <div v-if="minionHierarchy.last_comm" class="last-comm-preview">
-                        <span class="comm-direction">
-                          → <strong>{{ getCommRecipient(minionHierarchy.last_comm) }}</strong>:
-                        </span>
-                        <span
-                          class="comm-content"
-                          :title="minionHierarchy.last_comm.content || ''"
-                        >
-                          {{ getCommSummary(minionHierarchy.last_comm) }}
-                        </span>
-                      </div>
-                      <div v-else class="text-muted fst-italic">
-                        No communications yet
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
                 <!-- Root Minions (user-spawned) -->
-                <div class="root-minions ms-4">
+                <div class="root-minions">
                   <MinionTreeNode
                     v-for="minion in sortedRootMinions"
                     :key="minion.id"
                     :minion-data="minion"
-                    :level="1"
+                    :level="0"
                     @minion-click="navigateToSession"
                   />
                 </div>
@@ -1317,25 +1281,6 @@ async function commitAddGroup() {
   }
 }
 
-// Helper: Get comm recipient name
-function getCommRecipient(comm) {
-  if (comm.to_user) {
-    return 'User'
-  } else if (comm.to_minion_name) {
-    return comm.to_minion_name
-  }
-  return 'unknown'
-}
-
-// Helper: Get comm summary (prioritize summary, fallback to content, truncate at 150 chars)
-function getCommSummary(comm) {
-  const text = comm.summary || comm.content || ''
-  if (text.length > 150) {
-    return text.substring(0, 150) + '...'
-  }
-  return text
-}
-
 // Navigation
 function navigateToSession(sessionId) {
   router.push(`/session/${sessionId}`)
@@ -1490,96 +1435,6 @@ onUnmounted(() => {
   background-color: var(--bs-secondary-bg);
   padding: 0.5rem;
   border-radius: 0.25rem;
-}
-
-.user-root-node {
-  background-color: var(--bs-body-bg);
-  border-color: var(--bs-link-color) !important;
-  border-width: 2px !important;
-  padding: 0;
-  margin-bottom: 0.5rem;
-}
-
-.user-root-node .node-row {
-  padding: 0.4rem 0.75rem;
-  min-height: 44px;
-  align-items: center;
-}
-
-.user-root-node .last-comm-preview,
-.user-root-node .comm-content {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  word-wrap: normal;
-}
-
-/* Two-column layout: 30% left, 70% right */
-.node-row {
-  display: flex;
-  gap: 1rem;
-  align-items: center;
-}
-
-.node-left {
-  flex: 0 0 30%;
-  display: flex;
-  align-items: center;
-  flex-wrap: nowrap;
-  gap: 0.25rem;
-  min-width: 0;
-}
-
-.node-text {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  min-width: 0;
-  flex: 1;
-  line-height: 1.15;
-}
-
-.node-name-row {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.node-name {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-
-.node-right {
-  flex: 1;
-  min-width: 0;
-  padding-left: 1rem;
-  border-left: 1px solid var(--bs-border-color);
-}
-
-.last-comm-preview {
-  font-size: 0.85rem;
-  line-height: 1.3;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: block;
-}
-
-.comm-direction {
-  color: var(--bs-secondary-color);
-  font-size: 0.85rem;
-}
-
-.comm-content {
-  color: var(--bs-body-color);
-  word-wrap: normal;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: help;
 }
 
 .flat-list {
