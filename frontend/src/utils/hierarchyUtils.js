@@ -38,3 +38,23 @@ export function findInHierarchy(root, predicate) {
   }
   return null
 }
+
+/**
+ * Returns a new tree where nodes failing `predicate` are pruned UNLESS they have at
+ * least one descendant that passes — those are kept (for ancestor context) but
+ * annotated `_filterDimmed: true`. Nodes passing `predicate` are kept with
+ * `_filterDimmed: false`. Returns null if nothing in the tree (including root) passes.
+ * Does not mutate the input tree.
+ */
+export function filterHierarchy(root, predicate) {
+  if (!root) return null
+
+  const filteredChildren = (root.children || [])
+    .map(child => filterHierarchy(child, predicate))
+    .filter(Boolean)
+
+  const selfMatches = predicate(root)
+  if (!selfMatches && filteredChildren.length === 0) return null
+
+  return { ...root, children: filteredChildren, _filterDimmed: !selfMatches }
+}

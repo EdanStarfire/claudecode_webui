@@ -76,3 +76,101 @@ describe('MinionTreeNode - status dot batch selection (issue #1934)', () => {
     expect(uiStore.isSessionSelected('sess-1')).toBe(false)
   })
 })
+
+describe('MinionTreeNode - filter dimming (issue #2050, Stage B)', () => {
+  it('applies filter-dimmed when _filterDimmed is true', async () => {
+    const minionData = { id: 'sess-1', name: 'Minion One', children: [], _filterDimmed: true }
+    const { pinia, wrapper } = mountNode(minionData)
+    const { useSessionStore } = await import('@/stores/session')
+    useSessionStore(pinia).sessions.set('sess-1', makeSession({ session_id: 'sess-1', name: 'Minion One' }))
+
+    expect(wrapper.find('.minion-card').classes()).toContain('filter-dimmed')
+  })
+
+  it('omits filter-dimmed when _filterDimmed is false or undefined', async () => {
+    const { useSessionStore } = await import('@/stores/session')
+
+    const notMatched = mountNode({ id: 'sess-1', name: 'Minion One', children: [], _filterDimmed: false })
+    useSessionStore(notMatched.pinia).sessions.set('sess-1', makeSession({ session_id: 'sess-1', name: 'Minion One' }))
+    expect(notMatched.wrapper.find('.minion-card').classes()).not.toContain('filter-dimmed')
+
+    const unfiltered = mountNode({ id: 'sess-2', name: 'Minion Two', children: [] })
+    useSessionStore(unfiltered.pinia).sessions.set('sess-2', makeSession({ session_id: 'sess-2', name: 'Minion Two' }))
+    expect(unfiltered.wrapper.find('.minion-card').classes()).not.toContain('filter-dimmed')
+  })
+
+  it('stays clickable and emits minion-click regardless of dimmed state', async () => {
+    const minionData = { id: 'sess-1', name: 'Minion One', children: [], _filterDimmed: true }
+    const { pinia, wrapper } = mountNode(minionData)
+    const { useSessionStore } = await import('@/stores/session')
+    useSessionStore(pinia).sessions.set('sess-1', makeSession({ session_id: 'sess-1', name: 'Minion One' }))
+
+    await fireEvent.click(wrapper.find('.minion-card').element)
+    expect(wrapper.emitted('minion-click')).toBeTruthy()
+    expect(wrapper.emitted('minion-click')[0]).toEqual(['sess-1'])
+  })
+
+  it('renders children of a user-collapsed node when filtering is active, even without an active descendant', async () => {
+    const minionData = {
+      id: 'parent',
+      name: 'Parent',
+      _filterDimmed: true,
+      children: [{ id: 'child', name: 'Child', children: [], _filterDimmed: false }],
+    }
+    const { pinia, wrapper } = mountNode(minionData)
+    const { useSessionStore } = await import('@/stores/session')
+    const { useUIStore } = await import('@/stores/ui')
+    const sessionStore = useSessionStore(pinia)
+    sessionStore.sessions.set('parent', makeSession({ session_id: 'parent', name: 'Parent' }))
+    sessionStore.sessions.set('child', makeSession({ session_id: 'child', name: 'Child' }))
+
+    useUIStore(pinia).toggleMinionCollapse('parent')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findAll('.minion-tree-node')).toHaveLength(2)
+    expect(wrapper.text()).toContain('Child')
+  })
+
+  it('keeps the collapse chevron in sync when filtering forces a collapsed branch open', async () => {
+    const minionData = {
+      id: 'parent',
+      name: 'Parent',
+      _filterDimmed: true,
+      children: [{ id: 'child', name: 'Child', children: [], _filterDimmed: false }],
+    }
+    const { pinia, wrapper } = mountNode(minionData)
+    const { useSessionStore } = await import('@/stores/session')
+    const { useUIStore } = await import('@/stores/ui')
+    const sessionStore = useSessionStore(pinia)
+    sessionStore.sessions.set('parent', makeSession({ session_id: 'parent', name: 'Parent' }))
+    sessionStore.sessions.set('child', makeSession({ session_id: 'child', name: 'Child' }))
+
+    useUIStore(pinia).toggleMinionCollapse('parent')
+    await wrapper.vm.$nextTick()
+
+    const toggle = wrapper.find('.collapse-toggle')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    expect(toggle.attributes('aria-label')).toBe('Collapse branch')
+    expect(wrapper.find('.tree-chevron').classes()).toContain('tree-chevron-open')
+  })
+
+  it('respects collapse when no filter is active', async () => {
+    const minionData = {
+      id: 'parent',
+      name: 'Parent',
+      children: [{ id: 'child', name: 'Child', children: [] }],
+    }
+    const { pinia, wrapper } = mountNode(minionData)
+    const { useSessionStore } = await import('@/stores/session')
+    const { useUIStore } = await import('@/stores/ui')
+    const sessionStore = useSessionStore(pinia)
+    sessionStore.sessions.set('parent', makeSession({ session_id: 'parent', name: 'Parent' }))
+    sessionStore.sessions.set('child', makeSession({ session_id: 'child', name: 'Child' }))
+
+    useUIStore(pinia).toggleMinionCollapse('parent')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findAll('.minion-tree-node')).toHaveLength(1)
+    expect(wrapper.text()).not.toContain('Child')
+  })
+})

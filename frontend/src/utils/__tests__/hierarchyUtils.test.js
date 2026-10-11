@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { walkHierarchy, flattenHierarchy, findInHierarchy } from '@/utils/hierarchyUtils'
+import { walkHierarchy, flattenHierarchy, findInHierarchy, filterHierarchy } from '@/utils/hierarchyUtils'
 
 const SINGLE = { id: 'a', name: 'A', children: [] }
 
@@ -125,5 +125,58 @@ describe('findInHierarchy', () => {
   it('does not throw for node without children field', () => {
     const node = { id: 'x', name: 'X' }
     expect(() => findInHierarchy(node, () => false)).not.toThrow()
+  })
+})
+
+describe('filterHierarchy', () => {
+  it('returns null for null root', () => {
+    expect(filterHierarchy(null, () => true)).toBeNull()
+  })
+
+  it('keeps the root undimmed when the root itself matches', () => {
+    const result = filterHierarchy(TREE, n => n.id === 'root')
+    expect(result._filterDimmed).toBe(false)
+    // Descendants none of which match are pruned entirely — only root survives.
+    expect(result.children).toEqual([])
+  })
+
+  it('keeps a dimmed ancestor chain down to a matching deep descendant, prunes unrelated siblings', () => {
+    const result = filterHierarchy(TREE, n => n.id === 'd')
+
+    expect(result.id).toBe('root')
+    expect(result._filterDimmed).toBe(true)
+    expect(result.children).toHaveLength(1)
+
+    const b = result.children[0]
+    expect(b.id).toBe('b')
+    expect(b._filterDimmed).toBe(true)
+    expect(b.children).toHaveLength(1)
+
+    const d = b.children[0]
+    expect(d.id).toBe('d')
+    expect(d._filterDimmed).toBe(false)
+    expect(d.children).toEqual([])
+
+    // 'e' (sibling of 'd') and 'c' (sibling of 'b', with descendant 'f') have no
+    // match anywhere in their subtree — pruned entirely.
+  })
+
+  it('returns null when nothing in the tree matches', () => {
+    expect(filterHierarchy(TREE, () => false)).toBeNull()
+  })
+
+  it('keeps every node undimmed when everything matches', () => {
+    const result = filterHierarchy(TREE, () => true)
+    const ids = []
+    walkHierarchy(result, (node) => { ids.push(node.id); expect(node._filterDimmed).toBe(false) })
+    expect(ids).toEqual(['root', 'b', 'd', 'e', 'g', 'c', 'f'])
+  })
+
+  it('does not mutate the input tree', () => {
+    const snapshot = JSON.parse(JSON.stringify(TREE))
+    filterHierarchy(TREE, n => n.id === 'd')
+    expect(TREE).toEqual(snapshot)
+    expect(TREE._filterDimmed).toBeUndefined()
+    expect(TREE.children[0]._filterDimmed).toBeUndefined()
   })
 })

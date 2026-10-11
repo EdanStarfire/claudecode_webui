@@ -393,8 +393,8 @@
               </div>
             </div>
 
-            <!-- Filter bar (Flat view only — Stage B adds Hierarchy support, issue #2050) -->
-            <div v-if="uiStore.projectViewMode === 'flat'" class="filter-bar d-flex flex-wrap align-items-center gap-2 mb-2">
+            <!-- Filter bar (issue #2050: applies to both Hierarchy and Flat view) -->
+            <div class="filter-bar d-flex flex-wrap align-items-center gap-2 mb-2">
               <input
                 type="search"
                 class="form-control form-control-sm"
@@ -432,7 +432,10 @@
                 Clear filters
               </button>
 
-              <small v-if="hasActiveFilters" class="text-muted">
+              <!-- Flat-specific: filteredFlatNodes/sortedFlatNodes count exact matches, which
+                   isn't the same quantity as "nodes shown" in Hierarchy view (dimmed ancestors
+                   are shown too, without being matches) -->
+              <small v-if="hasActiveFilters && uiStore.projectViewMode === 'flat'" class="text-muted">
                 {{ filteredFlatNodes.length }} of {{ sortedFlatNodes.length }} sessions shown
               </small>
             </div>
@@ -450,6 +453,11 @@
               <!-- Empty state -->
               <div v-else-if="!minionHierarchy || !minionHierarchy.children || minionHierarchy.children.length === 0" class="text-center text-muted py-4">
                 No sessions yet. Click "Add Session" to create one.
+              </div>
+
+              <!-- Filtered-to-zero state (issue #2050, Stage B) -->
+              <div v-else-if="hasActiveFilters && filteredHierarchyChildren.length === 0" class="text-center text-muted py-4">
+                No sessions match the active filters.
               </div>
 
               <!-- Hierarchy tree -->
@@ -655,7 +663,7 @@ import { useQueueStore } from '@/stores/queue'
 import { compareAgents, normalizeLastActive } from '@/utils/agentSort'
 import { getDisplayState } from '@/composables/useSessionState'
 import { api } from '@/utils/api'
-import { findInHierarchy } from '@/utils/hierarchyUtils'
+import { findInHierarchy, filterHierarchy } from '@/utils/hierarchyUtils'
 import { getStoppedSet, setStoppedSet, addToStoppedSet, clearStoppedSet, pruneStoppedSet, removeFromStoppedSet, getProcessingSet, setProcessingSet } from '@/utils/stoppedSet'
 import MinionTreeNode from '../legion/MinionTreeNode.vue'
 
@@ -1140,7 +1148,7 @@ async function loadMinionHierarchy() {
 }
 
 const sortedRootMinions = computed(() => {
-  const children = minionHierarchy.value?.children || []
+  const children = filteredHierarchyChildren.value
   const mode = uiStore.agentSort
   return [...children].sort((a, b) => compareAgents(mode, a, b, {
     nameOf: n => n.name,
@@ -1196,10 +1204,10 @@ function classifyNode(node) {
   return 'idle'
 }
 
-// Filter state (issue #2050, Stage A): component-local, not persisted to uiStore —
+// Filter state (issue #2050): component-local, not persisted to uiStore —
 // uiStore's other view-mode/sort state is global across all projects, which would be
-// wrong for a project-scoped kanban-group-ID filter. Flat view only; Hierarchy view
-// support is Stage B.
+// wrong for a project-scoped kanban-group-ID filter. Applies to both Flat and
+// Hierarchy view.
 const filterSearchQuery = ref('')
 const filterStatuses = ref(new Set())
 const filterGroupIds = ref(new Set())
@@ -1266,6 +1274,15 @@ const filteredFlatNodes = computed(() =>
 // Named once so the "all results filtered out" check can't drift between its
 // two template usages (the Custom-group wall-suppression and the empty-state message).
 const allSessionsFilteredOut = computed(() => hasActiveFilters.value && filteredFlatNodes.value.length === 0)
+
+// Hierarchy-view counterpart to filteredFlatNodes (issue #2050, Stage B): prunes
+// branches with no match anywhere in their subtree, dims non-matching ancestors kept
+// for context. Identity passthrough when inactive, same guarantee as filteredFlatNodes.
+const filteredHierarchyChildren = computed(() => {
+  const children = minionHierarchy.value?.children || []
+  if (!hasActiveFilters.value) return children
+  return children.map(c => filterHierarchy(c, n => sessionMatchesFilter(n.id))).filter(Boolean)
+})
 
 const groupedFlatNodes = computed(() => {
   const sorted = filteredFlatNodes.value

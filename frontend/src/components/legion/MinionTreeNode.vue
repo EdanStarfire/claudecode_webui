@@ -1,7 +1,7 @@
 <template>
   <div v-if="minionData" class="minion-tree-node" :style="{ marginLeft: `${indent}px` }">
     <!-- Two-Column Layout (for HierarchyView) -->
-    <div class="minion-card minion-card-clickable border-start border-2 mb-2" :class="[statusTintClass, { active: isSelected, unread: isUnreviewed }]" @click="handleClick">
+    <div class="minion-card minion-card-clickable border-start border-2 mb-2" :class="[statusTintClass, { active: isSelected, unread: isUnreviewed, 'filter-dimmed': minionData._filterDimmed }]" @click="handleClick">
       <div class="node-row">
         <!-- Left Column: Status + Name (30%) -->
         <div class="node-left">
@@ -27,13 +27,13 @@
               <button
                 v-if="hasChildren"
                 class="btn btn-sm btn-link p-0 ms-2 collapse-toggle"
-                :aria-expanded="String(!isCollapsed)"
-                :aria-label="isCollapsed ? 'Expand branch' : 'Collapse branch'"
+                :aria-expanded="String(shouldShowChildren)"
+                :aria-label="shouldShowChildren ? 'Collapse branch' : 'Expand branch'"
                 @click.stop="uiStore.toggleMinionCollapse(minionData.id)"
               >
                 <svg
                   class="tree-chevron"
-                  :class="{ 'tree-chevron-open': !isCollapsed }"
+                  :class="{ 'tree-chevron-open': shouldShowChildren }"
                   width="10"
                   height="10"
                   viewBox="0 0 12 12"
@@ -264,7 +264,18 @@ const hasActiveDescendant = computed(() => {
   )
 })
 
-const shouldShowChildren = computed(() => !isCollapsed.value || hasActiveDescendant.value)
+// Issue #2050, Stage B: filterHierarchy() already pruned every non-qualifying branch
+// before this component ever sees the tree, so any filtered-in node with children has
+// a filter match somewhere inside — force expansion rather than hiding it behind a
+// user's prior collapse. `_filterDimmed` is only ever set (true or false) by
+// filterHierarchy(); it's undefined when no filter is active, preserving prior behavior.
+const isFilterActive = computed(() => props.minionData?._filterDimmed !== undefined)
+
+const shouldShowChildren = computed(() =>
+  !isCollapsed.value ||
+  hasActiveDescendant.value ||
+  (isFilterActive.value && hasChildren.value)
+)
 
 const sortedChildren = computed(() => {
   const children = props.minionData?.children || []
@@ -751,6 +762,12 @@ function handleClick() {
 
 .minion-card.unread .status-dot-grey.is-selected {
   background-color: var(--bs-secondary);
+}
+
+/* Issue #2050, Stage B: dims non-matching ancestors kept for context in a filtered
+   Hierarchy view. Dimmed nodes stay fully interactive (click, select, actions). */
+.minion-card.filter-dimmed {
+  opacity: 0.45;
 }
 
 /* Issue #1697: persistent read/unread fill on the mark-read/mark-unread action button,
