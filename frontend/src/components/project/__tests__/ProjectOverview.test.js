@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { screen, fireEvent } from '@testing-library/vue'
+import { screen, fireEvent, within } from '@testing-library/vue'
+import userEvent from '@testing-library/user-event'
 import { renderWithStores } from '@/test-utils/render'
 import ProjectOverview from '@/components/project/ProjectOverview.vue'
 import { makeProject, makeSession } from '@/test-utils/factories'
@@ -375,15 +376,18 @@ describe('ProjectOverview - Custom kanban grouping (issue #1722)', () => {
     })
     const session = makeSession({ session_id: 's1', project_id: 'p1', name: 'Session One' })
 
-    await mountInCustomFlatMode(project, [session])
+    const { container } = await mountInCustomFlatMode(project, [session])
+    // Scoped to .flat-list: the issue #2050 filter bar's group <select> also renders
+    // an "Unassigned" option, which would otherwise collide with the heading text.
+    const flatList = within(container.querySelector('.flat-list'))
 
     // Regression: editingGroupId/confirmingDeleteGroupId used to default to `null`,
     // which collided with Unassigned's groupId (also null), rendering the Unassigned
     // heading as an open rename input plus a stray delete-confirmation banner on
     // first load, with no click ever happening.
-    expect(screen.getByText('Unassigned')).toBeTruthy()
-    expect(screen.queryByRole('textbox')).toBeFalsy()
-    expect(screen.queryByText(/Delete "Unassigned"/)).toBeFalsy()
+    expect(flatList.getByText('Unassigned')).toBeTruthy()
+    expect(flatList.queryByRole('textbox')).toBeFalsy()
+    expect(flatList.queryByText(/Delete "Unassigned"/)).toBeFalsy()
   })
 
   it('empty custom groups still render with an empty-state hint (unlike status buckets)', async () => {
@@ -398,10 +402,11 @@ describe('ProjectOverview - Custom kanban grouping (issue #1722)', () => {
     })
     const session = makeSession({ session_id: 's1', project_id: 'p1', name: 'Session One' })
 
-    await mountInCustomFlatMode(project, [session])
+    const { container } = await mountInCustomFlatMode(project, [session])
+    const flatList = within(container.querySelector('.flat-list'))
 
-    expect(screen.getByText('Urgent')).toBeTruthy()
-    expect(screen.getByText('No sessions in this group')).toBeTruthy()
+    expect(flatList.getByText('Urgent')).toBeTruthy()
+    expect(flatList.getByText('No sessions in this group')).toBeTruthy()
   })
 
   it('switching away from and back to Custom preserves group state (groups live on the project object)', async () => {
@@ -412,16 +417,20 @@ describe('ProjectOverview - Custom kanban grouping (issue #1722)', () => {
       kanban_group_assignments: {}
     })
 
-    const { uiStore } = await mountInCustomFlatMode(project, [])
-    expect(screen.getByText('Urgent')).toBeTruthy()
+    const { uiStore, container } = await mountInCustomFlatMode(project, [])
+    // Scoped to .flat-list: the issue #2050 filter bar's group <select> renders an
+    // "Urgent" option regardless of flatGroupMode, since the filter applies across
+    // all grouping modes — only the heading inside .flat-list is mode-specific.
+    const flatList = within(container.querySelector('.flat-list'))
+    expect(flatList.getByText('Urgent')).toBeTruthy()
 
     uiStore.setFlatGroupMode('status')
     await new Promise(r => setTimeout(r, 0))
-    expect(screen.queryByText('Urgent')).toBeFalsy()
+    expect(flatList.queryByText('Urgent')).toBeFalsy()
 
     uiStore.setFlatGroupMode('custom')
     await new Promise(r => setTimeout(r, 0))
-    expect(screen.getByText('Urgent')).toBeTruthy()
+    expect(flatList.getByText('Urgent')).toBeTruthy()
   })
 
   it('clicking a group name enters rename mode without disturbing Unassigned', async () => {
@@ -432,13 +441,14 @@ describe('ProjectOverview - Custom kanban grouping (issue #1722)', () => {
       kanban_group_assignments: {}
     })
 
-    await mountInCustomFlatMode(project, [])
+    const { container } = await mountInCustomFlatMode(project, [])
+    const flatList = within(container.querySelector('.flat-list'))
 
-    await fireEvent.click(screen.getByText('Urgent'))
+    await fireEvent.click(flatList.getByText('Urgent'))
 
-    const textbox = screen.getByRole('textbox')
+    const textbox = flatList.getByRole('textbox')
     expect(textbox.value).toBe('Urgent')
-    expect(screen.queryByText(/Delete "Unassigned"/)).toBeFalsy()
+    expect(flatList.queryByText(/Delete "Unassigned"/)).toBeFalsy()
   })
 })
 
@@ -603,5 +613,233 @@ describe('ProjectOverview - Hierarchy view User root row removal (issue #2060)',
     const topLevelNode = container.querySelector('.minion-tree-node')
     expect(topLevelNode).toBeTruthy()
     expect(topLevelNode.style.marginLeft).toBe('0px')
+  })
+})
+
+async function mountForFilter(project, sessions, { flatGroupMode = 'none' } = {}) {
+  const rendered = await mountForResume(project, sessions, { stoppedIds: [] })
+  rendered.uiStore.setProjectViewMode('flat')
+  rendered.uiStore.setFlatGroupMode(flatGroupMode)
+  await flush()
+  return rendered
+}
+
+function filterBarOf(container) {
+  return within(container.querySelector('.filter-bar'))
+}
+
+function flatListOf(container) {
+  return within(container.querySelector('.flat-list'))
+}
+
+describe('ProjectOverview - Filter bar (issue #2050, Stage A)', () => {
+  it('AND-combines search, status, and group filters', async () => {
+    const project = makeProject({
+      project_id: 'p1',
+      session_ids: ['s1', 's2', 's3'],
+      kanban_groups: [{ group_id: 'g1', name: 'Urgent' }],
+      kanban_group_assignments: { s1: 'g1', s2: 'g1', s3: 'g1' },
+    })
+    const sessions = [
+      makeSession({ session_id: 's1', project_id: 'p1', name: 'Alice Smith', role: 'Backend Dev', state: 'active' }),
+      makeSession({ session_id: 's2', project_id: 'p1', name: 'Alice Jones', role: 'Backend Dev', state: 'terminated' }),
+      makeSession({ session_id: 's3', project_id: 'p1', name: 'Bob Carter', role: 'Backend Dev', state: 'active' }),
+    ]
+
+    const { container } = await mountForFilter(project, sessions)
+    const bar = filterBarOf(container)
+    const list = flatListOf(container)
+
+    await fireEvent.update(bar.getByLabelText('Search sessions by name or role'), 'alice')
+    await fireEvent.click(bar.getByText('Active'))
+    await userEvent.selectOptions(bar.getByLabelText('Filter by custom group'), ['g1'])
+    await flush()
+
+    expect(list.getByText('Alice Smith')).toBeTruthy()
+    expect(list.queryByText('Alice Jones')).toBeFalsy() // excluded by status
+    expect(list.queryByText('Bob Carter')).toBeFalsy() // excluded by search
+  })
+
+  it('matches search case-insensitively against both name and role', async () => {
+    const project = makeProject({ project_id: 'p1', session_ids: ['s1', 's2'] })
+    const sessions = [
+      makeSession({ session_id: 's1', project_id: 'p1', name: 'Alice Smith', role: 'Backend Dev', state: 'active' }),
+      makeSession({ session_id: 's2', project_id: 'p1', name: 'Bob Carter', role: 'Ops', state: 'active' }),
+    ]
+
+    const { container } = await mountForFilter(project, sessions)
+    const bar = filterBarOf(container)
+    const list = flatListOf(container)
+
+    await fireEvent.update(bar.getByLabelText('Search sessions by name or role'), 'ALICE')
+    await flush()
+    expect(list.getByText('Alice Smith')).toBeTruthy()
+    expect(list.queryByText('Bob Carter')).toBeFalsy()
+
+    await fireEvent.update(bar.getByLabelText('Search sessions by name or role'), 'backend')
+    await flush()
+    expect(list.getByText('Alice Smith')).toBeTruthy()
+    expect(list.queryByText('Bob Carter')).toBeFalsy()
+  })
+
+  it('filters to the implicit Unassigned bucket for sessions with no group assignment', async () => {
+    const project = makeProject({
+      project_id: 'p1',
+      session_ids: ['s1', 's2'],
+      kanban_groups: [{ group_id: 'g1', name: 'Urgent' }],
+      kanban_group_assignments: { s2: 'g1' },
+    })
+    const sessions = [
+      makeSession({ session_id: 's1', project_id: 'p1', name: 'Alice Smith', state: 'active' }),
+      makeSession({ session_id: 's2', project_id: 'p1', name: 'Bob Carter', state: 'active' }),
+    ]
+
+    const { container } = await mountForFilter(project, sessions)
+    const bar = filterBarOf(container)
+    const list = flatListOf(container)
+
+    await userEvent.selectOptions(bar.getByLabelText('Filter by custom group'), ['unassigned'])
+    await flush()
+
+    expect(list.getByText('Alice Smith')).toBeTruthy()
+    expect(list.queryByText('Bob Carter')).toBeFalsy()
+  })
+
+  it('Clear filters resets all three dimensions and restores the unfiltered list', async () => {
+    const project = makeProject({ project_id: 'p1', session_ids: ['s1', 's2'] })
+    const sessions = [
+      makeSession({ session_id: 's1', project_id: 'p1', name: 'Alice Smith', state: 'active' }),
+      makeSession({ session_id: 's2', project_id: 'p1', name: 'Bob Carter', state: 'terminated' }),
+    ]
+
+    const { container } = await mountForFilter(project, sessions)
+    const bar = filterBarOf(container)
+    const list = flatListOf(container)
+
+    await fireEvent.update(bar.getByLabelText('Search sessions by name or role'), 'alice')
+    await flush()
+    expect(list.queryByText('Bob Carter')).toBeFalsy()
+    expect(bar.getByText('Clear filters')).toBeTruthy()
+
+    await fireEvent.click(bar.getByText('Clear filters'))
+    await flush()
+
+    expect(list.getByText('Alice Smith')).toBeTruthy()
+    expect(list.getByText('Bob Carter')).toBeTruthy()
+    expect(bar.queryByText('Clear filters')).toBeFalsy()
+  })
+
+  it('distinguishes the zero-sessions empty state from the zero-matches-filtered empty state', async () => {
+    const emptyProject = makeProject({ project_id: 'p1', session_ids: [] })
+    const { container: emptyContainer } = await mountForFilter(emptyProject, [])
+    expect(flatListOf(emptyContainer).getByText('No sessions yet. Click "Add Session" to create one.')).toBeTruthy()
+
+    const project = makeProject({ project_id: 'p2', session_ids: ['s1'] })
+    const sessions = [makeSession({ session_id: 's1', project_id: 'p2', name: 'Alice Smith', state: 'active' })]
+    const { container } = await mountForFilter(project, sessions)
+    const bar = filterBarOf(container)
+    const list = flatListOf(container)
+
+    await fireEvent.update(bar.getByLabelText('Search sessions by name or role'), 'nonexistent')
+    await flush()
+
+    expect(list.getByText('No sessions match the active filters.')).toBeTruthy()
+    expect(list.queryByText('No sessions yet. Click "Add Session" to create one.')).toBeFalsy()
+  })
+
+  it('keeps a filtered-out session selected — selection always derives from unfiltered projectSessions', async () => {
+    const project = makeProject({ project_id: 'p1', session_ids: ['s1', 's2'] })
+    const sessions = [
+      makeSession({ session_id: 's1', project_id: 'p1', name: 'Alice Smith', state: 'active' }),
+      makeSession({ session_id: 's2', project_id: 'p1', name: 'Bob Carter', state: 'active' }),
+    ]
+
+    const { container, uiStore } = await mountForFilter(project, sessions)
+    const bar = filterBarOf(container)
+
+    uiStore.toggleSessionSelection('s1')
+    uiStore.toggleSessionSelection('s2')
+    await flush()
+    expect(screen.getByText('2 selected')).toBeTruthy()
+
+    // Filter out s2 — selection state must be untouched by this
+    await fireEvent.update(bar.getByLabelText('Search sessions by name or role'), 'alice')
+    await flush()
+
+    expect(uiStore.selectedSessionIds.has('s2')).toBe(true)
+    expect(screen.getByText('2 selected')).toBeTruthy()
+  })
+
+  it('hides the filter bar entirely in Hierarchy view', async () => {
+    const project = makeProject({ project_id: 'p1', session_ids: ['s1'] })
+    const sessions = [makeSession({ session_id: 's1', project_id: 'p1', name: 'Alice Smith', state: 'active' })]
+
+    const { container, uiStore } = await mountForFilter(project, sessions)
+    expect(container.querySelector('.filter-bar')).toBeTruthy()
+
+    uiStore.setProjectViewMode('hierarchy')
+    await flush()
+
+    expect(container.querySelector('.filter-bar')).toBeFalsy()
+  })
+
+  it('distinguishes a custom group that is genuinely empty from one whose members are merely filtered out', async () => {
+    const project = makeProject({
+      project_id: 'p1',
+      session_ids: ['s1', 's2'],
+      kanban_groups: [{ group_id: 'g1', name: 'Urgent' }, { group_id: 'g2', name: 'Empty Group' }],
+      kanban_group_assignments: { s1: 'g1' },
+    })
+    // s2 stays unassigned and keeps matching the search, so the overall list is
+    // never fully empty — this isolates the per-bucket (not the all-filtered-out) path.
+    const sessions = [
+      makeSession({ session_id: 's1', project_id: 'p1', name: 'Alice Smith', state: 'active' }),
+      makeSession({ session_id: 's2', project_id: 'p1', name: 'Bob Carter', state: 'active' }),
+    ]
+
+    const { container } = await mountForFilter(project, sessions, { flatGroupMode: 'custom' })
+    const bar = filterBarOf(container)
+    const list = flatListOf(container)
+
+    await fireEvent.update(bar.getByLabelText('Search sessions by name or role'), 'carter')
+    await flush()
+
+    // "Urgent" has a real member (Alice) hidden by the filter — distinct message from
+    // "Empty Group", which has zero members regardless of filtering.
+    expect(list.getByText('No sessions in this group match the active filters')).toBeTruthy()
+    expect(list.getByText('No sessions in this group')).toBeTruthy()
+    expect(list.getByText('Bob Carter')).toBeTruthy()
+  })
+
+  it('prunes a selected group filter when its group is deleted, restoring the full list', async () => {
+    const project = makeProject({
+      project_id: 'p1',
+      session_ids: ['s1', 's2'],
+      kanban_groups: [{ group_id: 'g1', name: 'Urgent' }],
+      kanban_group_assignments: { s1: 'g1' },
+    })
+    const sessions = [
+      makeSession({ session_id: 's1', project_id: 'p1', name: 'Alice Smith', state: 'active' }),
+      makeSession({ session_id: 's2', project_id: 'p1', name: 'Bob Carter', state: 'active' }),
+    ]
+
+    const { container, projectStore } = await mountForFilter(project, sessions)
+    const bar = filterBarOf(container)
+    const list = flatListOf(container)
+
+    await userEvent.selectOptions(bar.getByLabelText('Filter by custom group'), ['g1'])
+    await flush()
+    expect(list.getByText('Alice Smith')).toBeTruthy()
+    expect(list.queryByText('Bob Carter')).toBeFalsy()
+
+    // Group gets deleted out from under the active filter — simulate the store mutation
+    // directly (same effect as projectStore.deleteKanbanGroup's success path).
+    projectStore.projects.set('p1', { ...project, kanban_groups: [], kanban_group_assignments: {} })
+    await flush()
+
+    // The stale 'g1' selection must be pruned — otherwise it matches nothing and
+    // silently hides every session with no visible cause.
+    expect(list.getByText('Alice Smith')).toBeTruthy()
+    expect(list.getByText('Bob Carter')).toBeTruthy()
   })
 })

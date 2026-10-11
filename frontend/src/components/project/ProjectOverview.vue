@@ -393,6 +393,50 @@
               </div>
             </div>
 
+            <!-- Filter bar (Flat view only — Stage B adds Hierarchy support, issue #2050) -->
+            <div v-if="uiStore.projectViewMode === 'flat'" class="filter-bar d-flex flex-wrap align-items-center gap-2 mb-2">
+              <input
+                type="search"
+                class="form-control form-control-sm"
+                style="max-width: 220px;"
+                placeholder="Search by name or role..."
+                v-model="filterSearchQuery"
+                aria-label="Search sessions by name or role"
+              >
+
+              <div class="d-flex flex-wrap gap-1" role="group" aria-label="Filter by status">
+                <button
+                  v-for="g in STATE_GROUPS"
+                  :key="g.key"
+                  type="button"
+                  class="btn btn-sm"
+                  :class="filterStatuses.has(g.key) ? 'btn-primary' : 'btn-outline-secondary'"
+                  @click="toggleFilterStatus(g.key)"
+                >{{ g.label }}</button>
+              </div>
+
+              <select
+                multiple
+                class="form-select form-select-sm"
+                style="max-width: 200px; height: 2rem;"
+                aria-label="Filter by custom group"
+                v-model="filterGroupIdsArray"
+              >
+                <option value="unassigned">Unassigned</option>
+                <option v-for="group in project.kanban_groups || []" :key="group.group_id" :value="group.group_id">
+                  {{ group.name }}
+                </option>
+              </select>
+
+              <button v-if="hasActiveFilters" type="button" class="btn btn-sm btn-outline-secondary" @click="resetFilters">
+                Clear filters
+              </button>
+
+              <small v-if="hasActiveFilters" class="text-muted">
+                {{ filteredFlatNodes.length }} of {{ sortedFlatNodes.length }} sessions shown
+              </small>
+            </div>
+
             <!-- Hierarchy view -->
             <template v-if="uiStore.projectViewMode === 'hierarchy'">
               <!-- Loading hierarchy -->
@@ -428,7 +472,7 @@
               <!-- Ungrouped -->
               <div v-if="uiStore.flatGroupMode === 'none'" class="flat-list-nodes">
                 <MinionTreeNode
-                  v-for="node in sortedFlatNodes"
+                  v-for="node in filteredFlatNodes"
                   :key="node.id"
                   :minion-data="node"
                   :level="0"
@@ -455,6 +499,9 @@
 
               <!-- Custom (user-managed priority groups, issue #1722) -->
               <div v-else>
+                <!-- Suppress the per-bucket "No sessions in this group" wall when filters
+                     zero out every bucket — the single message below covers it instead. -->
+                <template v-if="!allSessionsFilteredOut">
                 <div v-for="group in customGroupedFlatNodes" :key="group.key" class="flat-group mb-3">
                   <h6 class="flat-group-heading text-muted d-flex align-items-center justify-content-between">
                     <span class="d-flex align-items-center gap-2 flex-grow-1 min-w-0">
@@ -531,9 +578,10 @@
                   />
                   <!-- Custom groups (unlike status buckets) still render empty, since they're user-managed -->
                   <div v-if="group.nodes.length === 0" class="text-muted small fst-italic px-2 py-1">
-                    No sessions in this group
+                    {{ group.totalCount === 0 ? 'No sessions in this group' : 'No sessions in this group match the active filters' }}
                   </div>
                 </div>
+                </template>
 
                 <!-- Add group -->
                 <div class="mt-2">
@@ -553,8 +601,11 @@
               </div>
 
               <!-- Empty state -->
-              <div v-if="sortedFlatNodes.length === 0" class="text-center text-muted py-4">
+              <div v-if="projectSessions.length === 0" class="text-center text-muted py-4">
                 No sessions yet. Click "Add Session" to create one.
+              </div>
+              <div v-else-if="allSessionsFilteredOut" class="text-center text-muted py-4">
+                No sessions match the active filters.
               </div>
             </div>
           </div>
@@ -1145,8 +1196,79 @@ function classifyNode(node) {
   return 'idle'
 }
 
+// Filter state (issue #2050, Stage A): component-local, not persisted to uiStore —
+// uiStore's other view-mode/sort state is global across all projects, which would be
+// wrong for a project-scoped kanban-group-ID filter. Flat view only; Hierarchy view
+// support is Stage B.
+const filterSearchQuery = ref('')
+const filterStatuses = ref(new Set())
+const filterGroupIds = ref(new Set())
+
+function resetFilters() {
+  filterSearchQuery.value = ''
+  filterStatuses.value = new Set()
+  filterGroupIds.value = new Set()
+}
+
+function toggleFilterStatus(key) {
+  const next = new Set(filterStatuses.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  filterStatuses.value = next
+}
+
+// Bridges the native multi-select's array v-model to the Set used by the predicate.
+const filterGroupIdsArray = computed({
+  get: () => [...filterGroupIds.value],
+  set: (arr) => { filterGroupIds.value = new Set(arr) },
+})
+
+// Drop any selected group filter whose group was deleted out from under it — otherwise
+// a stale, now-unselectable group_id stays in filterGroupIds and silently zeroes out
+// every result (the <select> can't show it as selected since its <option> is gone).
+watch(() => project.value?.kanban_groups, (groups) => {
+  if (filterGroupIds.value.size === 0) return
+  const validIds = new Set(['unassigned', ...(groups || []).map(g => g.group_id)])
+  const next = new Set([...filterGroupIds.value].filter(id => validIds.has(id)))
+  if (next.size !== filterGroupIds.value.size) filterGroupIds.value = next
+})
+
+// Single source of truth for the filter predicate — exported (named function, not
+// inlined into a template expression) so Stage B's hierarchy pruning can reuse it
+// unchanged.
+function sessionMatchesFilter(id) {
+  if (filterSearchQuery.value.trim()) {
+    const live = sessionStore.getSession(id)
+    const q = filterSearchQuery.value.trim().toLowerCase()
+    const hay = `${live?.name || ''} ${live?.role || ''}`.toLowerCase()
+    if (!hay.includes(q)) return false
+  }
+  if (filterStatuses.value.size > 0 && !filterStatuses.value.has(classifyNode({ id }))) {
+    return false
+  }
+  if (filterGroupIds.value.size > 0) {
+    const groupId = project.value?.kanban_group_assignments?.[id] || 'unassigned'
+    if (!filterGroupIds.value.has(groupId)) return false
+  }
+  return true
+}
+
+const hasActiveFilters = computed(() =>
+  !!filterSearchQuery.value.trim() || filterStatuses.value.size > 0 || filterGroupIds.value.size > 0
+)
+
+// Identity passthrough when inactive — guarantees "no behavior change when no
+// filter is active" by construction rather than by parallel-maintained logic.
+const filteredFlatNodes = computed(() =>
+  hasActiveFilters.value ? sortedFlatNodes.value.filter(n => sessionMatchesFilter(n.id)) : sortedFlatNodes.value
+)
+
+// Named once so the "all results filtered out" check can't drift between its
+// two template usages (the Custom-group wall-suppression and the empty-state message).
+const allSessionsFilteredOut = computed(() => hasActiveFilters.value && filteredFlatNodes.value.length === 0)
+
 const groupedFlatNodes = computed(() => {
-  const sorted = sortedFlatNodes.value
+  const sorted = filteredFlatNodes.value
   const buckets = STATE_GROUPS.map(g => ({ ...g, nodes: [] }))
   const byKey = Object.fromEntries(buckets.map(b => [b.key, b]))
   for (const node of sorted) {
@@ -1155,18 +1277,24 @@ const groupedFlatNodes = computed(() => {
   return buckets.filter(b => b.nodes.length > 0)
 })
 
-// Custom priority groups (issue #1722): buckets sortedFlatNodes by the project's
+// Custom priority groups (issue #1722): buckets filteredFlatNodes by the project's
 // kanban_group_assignments map, falling back to the implicit Unassigned bucket.
 // Unlike groupedFlatNodes above, buckets are never filtered out when empty — custom
 // groups are user-managed, so the user needs to see/manage them even at zero members.
+// totalCount (unfiltered) rides alongside nodes (filtered) so the template can tell
+// a genuinely empty group apart from one whose members are merely filtered out —
+// otherwise both render the same misleading "No sessions in this group" text.
 const customGroupedFlatNodes = computed(() => {
-  const sorted = sortedFlatNodes.value
-  const buckets = [{ key: 'unassigned', groupId: null, label: 'Unassigned', nodes: [] }]
+  const buckets = [{ key: 'unassigned', groupId: null, label: 'Unassigned', nodes: [], totalCount: 0 }]
   for (const group of project.value?.kanban_groups || []) {
-    buckets.push({ key: group.group_id, groupId: group.group_id, label: group.name, nodes: [] })
+    buckets.push({ key: group.group_id, groupId: group.group_id, label: group.name, nodes: [], totalCount: 0 })
   }
   const byKey = Object.fromEntries(buckets.map(b => [b.key, b]))
-  for (const node of sorted) {
+  for (const node of sortedFlatNodes.value) {
+    const groupId = project.value?.kanban_group_assignments?.[node.id] || 'unassigned'
+    ;(byKey[groupId] || byKey.unassigned).totalCount++
+  }
+  for (const node of filteredFlatNodes.value) {
     const groupId = project.value?.kanban_group_assignments?.[node.id] || 'unassigned'
     ;(byKey[groupId] || byKey.unassigned).nodes.push(node)
   }
@@ -1308,6 +1436,7 @@ onMounted(() => {
   // props.projectId — the watch() below never fires for that case. Clearing here
   // too is what actually makes "not preserved across a project switch" true.
   uiStore.clearSessionSelection()
+  resetFilters()
 
   // Restore stopped set from sessionStorage — read raw count without pruning,
   // since sessions may not be loaded yet when onMounted fires.
@@ -1379,6 +1508,7 @@ watch(() => props.projectId, (newId) => {
   stopSelectedState.value = 'default'
   startSelectedState.value = 'default'
   uiStore.clearSessionSelection()
+  resetFilters()
   fleetToast.value = null
   clearTimeout(fleetToastTimer)
   const restored = getStoppedSet(newId)
