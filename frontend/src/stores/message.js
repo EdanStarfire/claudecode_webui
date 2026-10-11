@@ -25,6 +25,17 @@ export const useMessageStore = defineStore('message', () => {
   // Used by websocket.connectSession() to start polling from the correct position.
   const loadedEventCursors = new Map()
 
+  // Issue #2131: per-session identity indices mirroring messagesBySession/toolCallsBySession
+  // 1:1, so identity/retry/tool lookups in applyRecord are O(1) instead of O(n) array scans.
+  // Non-reactive (same pattern as loadedEventCursors above) — nothing renders off these
+  // directly, and walking/writing them should never pay Vue proxy overhead.
+  // Map<sessionId, Map<dedupKey, arrayIndex>>
+  const messageIndexBySession = new Map()
+  // Map<sessionId, Map<toolUseId, arrayIndex>>
+  const toolIndexBySession = new Map()
+  // Map<sessionId, Map<retryMessageId, arrayIndex>>
+  const retryIndexBySession = new Map()
+
   // Launch timestamp tracking (sessionId -> Unix timestamp in seconds)
   // Populated from client_launched system messages for uptime calculation
   const launchTimestampBySession = ref(new Map())
@@ -179,10 +190,11 @@ export const useMessageStore = defineStore('message', () => {
       // The freshly-fetched history is authoritative; there is nothing to reconcile it against.
       _discardStreamingPreview(sessionId, 'reload')
 
-      // Issue #2110 (stage 4b-B): thin fetch-then-apply-per-record wrapper — the one place
-      // this session's display list is reset to a fresh empty array before applyRecord()
-      // incrementally rebuilds it (replacing the old bulk-array-replace semantics).
-      messagesBySession.value.set(sessionId, [])
+      // Issue #2110 (stage 4b-B) / #2131: thin fetch-then-apply-per-record wrapper — this
+      // session's display list and tool list are rebuilt from scratch into a local plain
+      // accumulator (outside the reactive Map/array proxies — see applyRecord()'s own comment),
+      // then installed as this session's real state in one shot after the loop.
+      const target = _createRecordTarget()
 
       messages.forEach(message => {
         // Capture init data for session info modal — not a per-record store side effect, so it
@@ -198,8 +210,9 @@ export const useMessageStore = defineStore('message', () => {
         // notify:false — see applyRecord()'s own comment: avoid O(N) reactive broadcasts while
         // replaying a whole session's history, one final reassignment below covers all of them
         // (including when `messages` is empty, so this session's reset to [] is still observed).
-        applyRecord(sessionId, message, 'load', { notify: false })
+        applyRecord(sessionId, message, 'load', { notify: false, target })
       })
+      _installRecordTarget(sessionId, target)
       messagesBySession.value = new Map(messagesBySession.value)
       toolCallsBySession.value = new Map(toolCallsBySession.value)
       lastStopReasonBySession.value = new Map(lastStopReasonBySession.value)
@@ -663,6 +676,87 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   /**
+   * Issue #2131: resolves the { messages, messageIndex, retryIndex } triple _applyMessageRecord
+   * operates on. When `target` is supplied (loadMessages()/setArchiveMessages() building a
+   * local plain accumulator outside the reactive proxy), it's used as-is — identical shape,
+   * just not yet installed into the real per-session state. Otherwise resolves (lazily
+   * creating) the real reactive-backed array plus its non-reactive index Maps, exactly
+   * matching pre-#2131 behavior for every live/test call site.
+   */
+  function _resolveMessageTarget(sessionId, target) {
+    if (target) return target
+    if (!messagesBySession.value.has(sessionId)) {
+      messagesBySession.value.set(sessionId, [])
+    }
+    if (!messageIndexBySession.has(sessionId)) {
+      messageIndexBySession.set(sessionId, new Map())
+    }
+    if (!retryIndexBySession.has(sessionId)) {
+      retryIndexBySession.set(sessionId, new Map())
+    }
+    return {
+      messages: messagesBySession.value.get(sessionId),
+      messageIndex: messageIndexBySession.get(sessionId),
+      retryIndex: retryIndexBySession.get(sessionId),
+    }
+  }
+
+  /** Issue #2131: same role as _resolveMessageTarget(), for the { toolCalls, toolIndex } pair. */
+  function _resolveToolTarget(sessionId, target) {
+    if (target) return target
+    if (!toolCallsBySession.value.has(sessionId)) {
+      toolCallsBySession.value.set(sessionId, [])
+    }
+    if (!toolIndexBySession.has(sessionId)) {
+      toolIndexBySession.set(sessionId, new Map())
+    }
+    return {
+      toolCalls: toolCallsBySession.value.get(sessionId),
+      toolIndex: toolIndexBySession.get(sessionId),
+    }
+  }
+
+  /**
+   * Issue #2131: fresh plain accumulator for loadMessages()/setArchiveMessages() to replay a
+   * whole session's history into via applyRecord()'s `target` param, entirely outside the
+   * reactive Map/array proxies — see applyRecord()'s own comment for why.
+   */
+  function _createRecordTarget() {
+    return {
+      messages: [],
+      messageIndex: new Map(),
+      toolCalls: [],
+      toolIndex: new Map(),
+      retryIndex: new Map(),
+    }
+  }
+
+  /**
+   * Issue #2131: installs a finished _createRecordTarget() accumulator as this session's real
+   * state — one assignment per Map, after the whole replay loop has already run against the
+   * plain object. Callers still do their own `.value = new Map(...)` reactivity bump afterward.
+   */
+  function _installRecordTarget(sessionId, target) {
+    messagesBySession.value.set(sessionId, target.messages)
+    messageIndexBySession.set(sessionId, target.messageIndex)
+    toolCallsBySession.value.set(sessionId, target.toolCalls)
+    toolIndexBySession.set(sessionId, target.toolIndex)
+    retryIndexBySession.set(sessionId, target.retryIndex)
+  }
+
+  /**
+   * Issue #2131: the teardown counterpart to _installRecordTarget() — deletes the three
+   * index Maps' entries for this session. Callers still separately delete
+   * messagesBySession/toolCallsBySession themselves (clearMessages()/clearArchiveMessages()
+   * delete those at a different point relative to their own pruning calls).
+   */
+  function _deleteRecordTargets(sessionId) {
+    messageIndexBySession.delete(sessionId)
+    toolIndexBySession.delete(sessionId)
+    retryIndexBySession.delete(sessionId)
+  }
+
+  /**
    * Issue #2110 (stage 4b-B): the one entry point for every message/tool_call record,
    * regardless of where it came from (`source` ∈ 'live' | 'load' | 'archive'). `source`
    * gates ONLY notification/preview behavior (AC1) — every other side effect below runs
@@ -679,14 +773,21 @@ export const useMessageStore = defineStore('message', () => {
    * currently watching that session, where the old bulk-array-replace code was O(N). The DATA
    * mutation itself (push/set) always happens regardless of `notify` — only the "tell Vue"
    * step is deferred.
+   *
+   * `target` (issue #2131): optional { messages, messageIndex, toolCalls, toolIndex,
+   * retryIndex } accumulator. Omitted by every existing call site (live dispatch, tests) —
+   * applyRecord then resolves the real per-session reactive state as before, so the live path
+   * is byte-for-byte unchanged. loadMessages()/setArchiveMessages() pass a local plain object
+   * built fresh for the whole replay loop, so none of the O(n) cold-load work touches the
+   * reactive Map/array proxies until the single assignment after the loop.
    */
-  function applyRecord(sessionId, record, source, { notify = true } = {}) {
+  function applyRecord(sessionId, record, source, { notify = true, target = null } = {}) {
     if (!record || !record.type) return
     if (record.type === 'tool_call') {
-      _applyToolCallRecord(sessionId, record, notify)
+      _applyToolCallRecord(sessionId, record, notify, target)
       return
     }
-    _applyMessageRecord(sessionId, record, source, notify)
+    _applyMessageRecord(sessionId, record, source, notify, target)
   }
 
   /**
@@ -694,8 +795,14 @@ export const useMessageStore = defineStore('message', () => {
    * push. Yes -> skip. `messagesBySession` is a pure mirror of the canonical/backend channel;
    * nothing else is ever spliced, merged, or replaced-in-place for streaming purposes (the
    * live-typing preview lives entirely in `streamingPreviewBySession` instead).
+   *
+   * Issue #2131: identity/retry lookups are O(1) via messageIndex/retryIndex (see
+   * _resolveMessageTarget()) instead of O(n) `.some`/`.findIndex` scans — the `|| message.id`
+   * dedup fallback is also dropped here: `message_id` is a required field minted once per
+   * record by the backend's `_mint_message_id()`, and the `id` field that does appear in
+   * fixtures belongs to nested tool_use content blocks, never a top-level message record.
    */
-  function _applyMessageRecord(sessionId, message, source, notify = true) {
+  function _applyMessageRecord(sessionId, message, source, notify = true, target = null) {
     // Issue #1486/#1575: drop internal SDK status/requesting messages — not displayable,
     // regardless of source.
     if (message.type === 'system') {
@@ -706,16 +813,13 @@ export const useMessageStore = defineStore('message', () => {
       }
     }
 
-    if (!messagesBySession.value.has(sessionId)) {
-      messagesBySession.value.set(sessionId, [])
-    }
-    const messages = messagesBySession.value.get(sessionId)
+    const { messages, messageIndex, retryIndex } = _resolveMessageTarget(sessionId, target)
 
     // The one rule for identity/dedup: everything else below this point (api_retry collapse,
     // the push itself, and its side effects) is unconditional bookkeeping, not a second
     // identity check — this is the only place a message can be skipped as a duplicate.
-    const dedupKey = message.message_id || message.id
-    if (dedupKey && messages.some(m => (m.message_id || m.id) === dedupKey)) {
+    const dedupKey = message.message_id
+    if (dedupKey && messageIndex.has(dedupKey)) {
       pushDebugEvent('message', 'dedup-skip', { sessionId, dedupKey })
       return
     }
@@ -731,16 +835,34 @@ export const useMessageStore = defineStore('message', () => {
     // explicitly instead of left "uniform" for an invariant that will never hold otherwise.
     if (source === 'live' && message.metadata?.subtype === 'api_retry' && message.metadata?.retry_message_id) {
       const retryId = message.metadata.retry_message_id
-      const existingIdx = messages.findIndex(m => m.metadata?.retry_message_id === retryId)
-      if (existingIdx !== -1) {
+      const existingIdx = retryIndex.get(retryId)
+      if (existingIdx !== undefined) {
         messages[existingIdx] = { ...messages[existingIdx], ...message }
+        // Issue #2131 review fix: the merge above just overwrote this slot's message_id to
+        // THIS attempt's own id — messageIndex must track it too (still pointing at
+        // existingIdx, unchanged), or a later redelivery of this exact attempt would no
+        // longer be recognized as a duplicate by the dedup check above (pre-#2131, the dedup
+        // scan read message_id straight off the live array content, so this self-healed;
+        // the cached index needs the same update explicitly). The superseded attempt's own
+        // id is left in place too — harmless, since matching it still correctly points at
+        // the (now-superseded) slot and a redelivery of IT should also be treated as a dup.
+        if (dedupKey) messageIndex.set(dedupKey, existingIdx)
         if (notify) messagesBySession.value = new Map(messagesBySession.value)
         return
       }
       // No existing message: fall through to normal push (first in sequence)
     }
 
+    const newIndex = messages.length
     messages.push(message)
+    if (dedupKey) messageIndex.set(dedupKey, newIndex)
+    // Issue #2131 (AC1): gated the same as the collapse LOOKUP above (source === 'live') —
+    // a stored/archived record structurally never carries retry_message_id (see the comment
+    // above), so gating the two identically is simpler than an unconditional write and relies
+    // on the same invariant the lookup already depends on, rather than a second one.
+    if (source === 'live' && message.metadata?.retry_message_id) {
+      retryIndex.set(message.metadata.retry_message_id, newIndex)
+    }
 
     // Issue #1955 (AC1: source gates preview only): any canonical TOP-LEVEL assistant append
     // clears whatever the live preview was showing. Excludes subagent narration
@@ -830,11 +952,16 @@ export const useMessageStore = defineStore('message', () => {
 
   /**
    * Update a tool call (from WebSocket updates)
+   *
+   * Issue #2131: O(1) lookup via toolIndexBySession instead of an O(n) `.find` scan — a
+   * long-running live session's tool list is itself unbounded.
    */
   function updateToolCall(sessionId, toolUseId, updates) {
     const toolCalls = toolCallsBySession.value.get(sessionId)
-    if (toolCalls) {
-      const toolCall = toolCalls.find(tc => tc.id === toolUseId)
+    const toolIndex = toolIndexBySession.get(sessionId)
+    if (toolCalls && toolIndex) {
+      const idx = toolIndex.get(toolUseId)
+      const toolCall = idx !== undefined ? toolCalls[idx] : undefined
       if (toolCall) {
         Object.assign(toolCall, updates)
 
@@ -918,19 +1045,16 @@ export const useMessageStore = defineStore('message', () => {
    * `useToolStatus.js`'s effectiveStatus/isOrphaned read directly — no backendStatus field, no
    * session-scoped orphan Map.
    */
-  function _applyToolCallRecord(sessionId, toolCall, notify = true) {
+  function _applyToolCallRecord(sessionId, toolCall, notify = true, target = null) {
     const toolUseId = toolCall.tool_use_id
     if (!toolUseId) {
       console.warn('Received tool_call without tool_use_id:', toolCall)
       return
     }
 
-    if (!toolCallsBySession.value.has(sessionId)) {
-      toolCallsBySession.value.set(sessionId, [])
-    }
-
-    const toolCalls = toolCallsBySession.value.get(sessionId)
-    const existingIndex = toolCalls.findIndex(tc => tc.id === toolUseId)
+    const { toolCalls, toolIndex } = _resolveToolTarget(sessionId, target)
+    // Issue #2131: O(1) identity lookup via toolIndex instead of an O(n) `.findIndex` scan.
+    const existingIndex = toolIndex.has(toolUseId) ? toolIndex.get(toolUseId) : -1
 
     const statusMap = {
       'pending': 'pending',
@@ -1086,6 +1210,7 @@ export const useMessageStore = defineStore('message', () => {
       }
 
       _applyTerminalResolution(newToolCall, toolCall)
+      toolIndex.set(toolUseId, toolCalls.length)
       toolCalls.push(newToolCall)
       // Populate permissionToToolMap for handlePermissionResponse correlation
       if (toolCall.request_id && toolCall.status === 'awaiting_permission') {
@@ -1115,11 +1240,15 @@ export const useMessageStore = defineStore('message', () => {
 
   /**
    * Toggle tool call expansion
+   *
+   * Issue #2131: O(1) lookup via toolIndexBySession instead of an O(n) `.find` scan.
    */
   function toggleToolExpansion(sessionId, toolUseId) {
     const toolCalls = toolCallsBySession.value.get(sessionId)
-    if (toolCalls) {
-      const toolCall = toolCalls.find(tc => tc.id === toolUseId)
+    const toolIndex = toolIndexBySession.get(sessionId)
+    if (toolCalls && toolIndex) {
+      const idx = toolIndex.get(toolUseId)
+      const toolCall = idx !== undefined ? toolCalls[idx] : undefined
       if (toolCall) {
         toolCall.isExpanded = !toolCall.isExpanded
 
@@ -1140,6 +1269,9 @@ export const useMessageStore = defineStore('message', () => {
     pruneExpandedCommsForSession(sessionId)
     messagesBySession.value.delete(sessionId)
     toolCallsBySession.value.delete(sessionId)
+    // Issue #2131: the identity index Maps mirror messagesBySession/toolCallsBySession 1:1 —
+    // same session-keyed-state cleanup pattern as taskLegsByTaskId/etc. just below.
+    _deleteRecordTargets(sessionId)
 
     // Issue #1746 (stage: subagents): clear only this session's task_id-scoped state
     // (ephemeral, reconstructs via hydrateBackgroundAgents + live frames on reload/reconnect).
@@ -1439,10 +1571,11 @@ export const useMessageStore = defineStore('message', () => {
    * status and no blank message bubbles appear.
    */
   function setArchiveMessages(sessionId, rawMessages) {
-    // Issue #2110 (stage 4b-B): thin apply-per-record wrapper — reset the display list, then
-    // let applyRecord() do the uniform work (identity dedup, api_retry collapse, truncation/
-    // deferral banners, subagent narration routing, tool_call upsert).
-    messagesBySession.value.set(sessionId, [])
+    // Issue #2110 (stage 4b-B) / #2131: thin apply-per-record wrapper — reset the display/tool
+    // lists into a local plain accumulator, let applyRecord() do the uniform work (identity
+    // dedup, api_retry collapse, truncation/deferral banners, subagent narration routing,
+    // tool_call upsert) entirely outside the reactive proxies, then install it in one shot.
+    const target = _createRecordTarget()
 
     rawMessages.forEach(msg => {
       // Note: tool_call records need no special-case here — applyRecord() itself routes them
@@ -1481,8 +1614,9 @@ export const useMessageStore = defineStore('message', () => {
 
       // notify:false — see applyRecord()'s own comment: avoid O(N) reactive broadcasts while
       // replaying a whole archived session in one shot; one final reassignment below covers it.
-      applyRecord(sessionId, msg, 'archive', { notify: false })
+      applyRecord(sessionId, msg, 'archive', { notify: false, target })
     })
+    _installRecordTarget(sessionId, target)
     // Ensure reactivity even when `rawMessages` was empty or fully filtered out.
     messagesBySession.value = new Map(messagesBySession.value)
     toolCallsBySession.value = new Map(toolCallsBySession.value)
@@ -1499,6 +1633,9 @@ export const useMessageStore = defineStore('message', () => {
     pruneExpandedCommsForSession(sessionId)
     messagesBySession.value.delete(sessionId)
     toolCallsBySession.value.delete(sessionId)
+    // Issue #2131: the identity index Maps mirror messagesBySession/toolCallsBySession 1:1 —
+    // same session-keyed-state cleanup pattern as lastStopReasonBySession/etc. just below.
+    _deleteRecordTargets(sessionId)
     // Issue #2110 (stage 4b-B review fix): applyRecord's uniform side effects now also write
     // lastStopReasonBySession/deferredToolUseBySession/launchTimestampBySession for the
     // 'archive' source — these are keyed only by sessionId, which an archive view shares with
@@ -1678,6 +1815,12 @@ export const useMessageStore = defineStore('message', () => {
 
     // Issue #1000: Event cursors from REST /messages, consumed by connectSession()
     loadedEventCursors,
+
+    // Issue #2131: per-session identity indices mirroring messagesBySession/toolCallsBySession
+    // 1:1 — exposed read-only for test verification, same as loadedEventCursors above.
+    messageIndexBySession,
+    toolIndexBySession,
+    retryIndexBySession,
 
     // Issue #1350: Hook correlation helpers
     hooksForToolCall,

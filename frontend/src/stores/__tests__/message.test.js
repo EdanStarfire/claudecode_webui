@@ -557,6 +557,200 @@ describe('addMessage single-rule dedup (Issue #1955)', () => {
   })
 })
 
+describe('identity index maps stay correct across push/retry-collapse/tool-update sequences (Issue #2131)', () => {
+  it('messageIndexBySession mirrors messagesBySession by message_id -> array index', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyRecord('sess-1', makeMessage({ type: 'assistant', content: 'one', message_id: 'am-1' }), 'live')
+    store.applyRecord('sess-1', makeMessage({ type: 'assistant', content: 'two', message_id: 'am-2' }), 'live')
+    // A redelivered duplicate must not shift the index.
+    store.applyRecord('sess-1', makeMessage({ type: 'assistant', content: 'one again', message_id: 'am-1' }), 'live')
+
+    const msgs = store.messagesBySession.get('sess-1')
+    const index = store.messageIndexBySession.get('sess-1')
+    expect(index.get('am-1')).toBe(0)
+    expect(index.get('am-2')).toBe(1)
+    expect(msgs[index.get('am-1')].content).toBe('one')
+    expect(msgs[index.get('am-2')].content).toBe('two')
+    expect(index.size).toBe(2)
+  })
+
+  it('retryIndexBySession tracks retry_message_id -> array index, collapsing a live api_retry in place', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyRecord('sess-1', makeMessage({
+      type: 'assistant', content: 'attempt 1', message_id: 'am-1',
+      metadata: { subtype: 'api_retry', retry_message_id: 'retry-1' }
+    }), 'live')
+    expect(store.retryIndexBySession.get('sess-1').get('retry-1')).toBe(0)
+
+    store.applyRecord('sess-1', makeMessage({
+      type: 'assistant', content: 'attempt 2', message_id: 'am-2',
+      metadata: { subtype: 'api_retry', retry_message_id: 'retry-1' }
+    }), 'live')
+
+    const msgs = store.messagesBySession.get('sess-1')
+    // Collapsed in place — still one entry, at the same index, now carrying attempt 2's data.
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].content).toBe('attempt 2')
+    expect(store.retryIndexBySession.get('sess-1').get('retry-1')).toBe(0)
+    // Issue #2131 review fix: the collapse above overwrote this slot's message_id to attempt
+    // 2's own id — messageIndex must track THAT id too, not just attempt 1's original one.
+    expect(store.messageIndexBySession.get('sess-1').get('am-2')).toBe(0)
+  })
+
+  it('a redelivered middle attempt after a later collapse is recognized as a duplicate, not re-collapsed over the latest attempt (#2131 review fix)', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    const attempt2 = makeMessage({
+      type: 'assistant', content: 'attempt 2', message_id: 'am-2',
+      metadata: { subtype: 'api_retry', retry_message_id: 'retry-1' }
+    })
+
+    store.applyRecord('sess-1', makeMessage({
+      type: 'assistant', content: 'attempt 1', message_id: 'am-1',
+      metadata: { subtype: 'api_retry', retry_message_id: 'retry-1' }
+    }), 'live')
+    store.applyRecord('sess-1', attempt2, 'live')
+    store.applyRecord('sess-1', makeMessage({
+      type: 'assistant', content: 'attempt 3 (final)', message_id: 'am-3',
+      metadata: { subtype: 'api_retry', retry_message_id: 'retry-1' }
+    }), 'live')
+
+    // A redelivery of the now-superseded attempt 2 (e.g. a duplicate poll/relay delivery)
+    // must be recognized as a duplicate via messageIndex — not re-collapsed into the slot,
+    // which would clobber attempt 3's already-displayed content with stale data.
+    store.applyRecord('sess-1', attempt2, 'live')
+
+    const msgs = store.messagesBySession.get('sess-1')
+    expect(msgs.length).toBe(1)
+    expect(msgs[0].content).toBe('attempt 3 (final)')
+  })
+
+  it('toolIndexBySession mirrors toolCallsBySession by tool_use_id -> array index across create and update', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyRecord('sess-1', { type: 'tool_call', tool_use_id: 'toolu_1', name: 'Bash', input: {}, status: 'pending' }, 'live')
+    store.applyRecord('sess-1', { type: 'tool_call', tool_use_id: 'toolu_2', name: 'Read', input: {}, status: 'pending' }, 'live')
+    // An update to an existing tool must not create a second index entry.
+    store.applyRecord('sess-1', { type: 'tool_call', tool_use_id: 'toolu_1', name: 'Bash', input: {}, status: 'running' }, 'live')
+
+    const toolCalls = store.toolCallsBySession.get('sess-1')
+    const index = store.toolIndexBySession.get('sess-1')
+    expect(index.size).toBe(2)
+    expect(toolCalls[index.get('toolu_1')].status).toBe('executing')
+    expect(toolCalls[index.get('toolu_2')].status).toBe('pending')
+
+    store.toggleToolExpansion('sess-1', 'toolu_2')
+    expect(toolCalls[index.get('toolu_2')].isExpanded).toBe(false)
+
+    store.updateToolCall('sess-1', 'toolu_1', { answers: ['yes'] })
+    expect(toolCalls[index.get('toolu_1')].answers).toEqual(['yes'])
+  })
+
+  it('clearMessages() deletes the session index-map entries alongside the arrays they mirror', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.applyRecord('sess-1', makeMessage({ type: 'assistant', content: 'hi', message_id: 'am-1' }), 'live')
+    store.applyRecord('sess-1', { type: 'tool_call', tool_use_id: 'toolu_1', name: 'Bash', input: {}, status: 'pending' }, 'live')
+
+    store.clearMessages('sess-1')
+
+    expect(store.messageIndexBySession.has('sess-1')).toBe(false)
+    expect(store.toolIndexBySession.has('sess-1')).toBe(false)
+    expect(store.retryIndexBySession.has('sess-1')).toBe(false)
+  })
+
+  it('clearArchiveMessages() deletes the session index-map entries alongside the arrays they mirror', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+
+    store.setArchiveMessages('sess-1', [
+      makeMessage({ type: 'assistant', content: 'hi', message_id: 'am-1' }),
+      { type: 'tool_call', tool_use_id: 'toolu_1', name: 'Bash', input: {}, status: 'pending' },
+    ])
+    expect(store.messageIndexBySession.get('sess-1').size).toBe(1)
+    expect(store.toolIndexBySession.get('sess-1').size).toBe(1)
+
+    store.clearArchiveMessages('sess-1')
+
+    expect(store.messageIndexBySession.has('sess-1')).toBe(false)
+    expect(store.toolIndexBySession.has('sess-1')).toBe(false)
+    expect(store.retryIndexBySession.has('sess-1')).toBe(false)
+  })
+})
+
+describe('AC1 (Issue #2131): identity lookups are O(1), not Array.prototype.some/findIndex scans', () => {
+  it('a multi-hundred-record live applyRecord sequence makes zero .some/.findIndex calls on the message/tool arrays', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-ac1'
+
+    // Seed one record of each kind first so the backing arrays exist, then spy on THOSE
+    // specific array instances — the arrays are mutated in place for the rest of this
+    // sequence (never replaced), so the spies stay attached throughout.
+    store.applyRecord(SID, makeMessage({ type: 'assistant', content: 'seed', message_id: 'seed-msg' }), 'live')
+    store.applyRecord(SID, { type: 'tool_call', tool_use_id: 'seed-tool', name: 'Bash', input: {}, status: 'pending' }, 'live')
+
+    const messagesArr = store.messagesBySession.get(SID)
+    const toolCallsArr = store.toolCallsBySession.get(SID)
+    const messagesSome = vi.spyOn(messagesArr, 'some')
+    const messagesFindIndex = vi.spyOn(messagesArr, 'findIndex')
+    const toolCallsFindIndex = vi.spyOn(toolCallsArr, 'findIndex')
+
+    for (let i = 0; i < 300; i++) {
+      store.applyRecord(SID, makeMessage({ type: 'assistant', content: `m${i}`, message_id: `am-${i}` }), 'live')
+      store.applyRecord(SID, { type: 'tool_call', tool_use_id: `toolu-${i}`, name: 'Read', input: {}, status: 'pending' }, 'live')
+      // Status update on an already-created tool — exercises updateToolCall()'s lookup too.
+      store.updateToolCall(SID, `toolu-${i}`, { autoApprovedReason: 'test' })
+    }
+    // Redeliveries of earlier records must dedup/upsert via the index, not a scan.
+    store.applyRecord(SID, makeMessage({ type: 'assistant', content: 'redelivered', message_id: 'am-150' }), 'live')
+    store.applyRecord(SID, { type: 'tool_call', tool_use_id: 'toolu-150', name: 'Read', input: {}, status: 'completed' }, 'live')
+
+    expect(messagesSome).not.toHaveBeenCalled()
+    expect(messagesFindIndex).not.toHaveBeenCalled()
+    expect(toolCallsFindIndex).not.toHaveBeenCalled()
+  })
+})
+
+describe('AC2 (Issue #2131): loadMessages() installs messagesBySession/toolCallsBySession exactly once', () => {
+  it('reassigns the reactive Maps exactly once for a multi-record load, not once per record', async () => {
+    apiMock.get.mockResolvedValueOnce({
+      messages: Array.from({ length: 50 }, (_, i) =>
+        makeMessage({ type: 'assistant', content: `m${i}`, message_id: `am-${i}` })
+      ),
+      total_count: 50,
+      has_more: false,
+      event_cursor: 10,
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const { watch } = await import('vue')
+    const store = useMessageStore()
+
+    let messagesChangeCount = 0
+    let toolCallsChangeCount = 0
+    const stopMessages = watch(() => store.messagesBySession, () => { messagesChangeCount++ }, { flush: 'sync' })
+    const stopToolCalls = watch(() => store.toolCallsBySession, () => { toolCallsChangeCount++ }, { flush: 'sync' })
+
+    // Explicit limit: today's single-shot-fetch branch, matching total_count/has_more above.
+    await store.loadMessages('sess-load-once', 50)
+
+    stopMessages()
+    stopToolCalls()
+
+    expect(messagesChangeCount).toBe(1)
+    expect(toolCallsChangeCount).toBe(1)
+    expect(store.messagesBySession.get('sess-load-once').length).toBe(50)
+  })
+})
+
 describe('streamingPreviewBySession lifecycle (Issue #1955)', () => {
   beforeEach(() => {
     // message_stop/interrupt/restart flush or discard synchronously — suppressing rAF just
