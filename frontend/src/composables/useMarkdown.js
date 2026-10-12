@@ -4,6 +4,7 @@ import mermaid from 'comark/plugins/mermaid'
 import { resourceTokenPlugin } from './comarkPlugins/resourceToken'
 import { externalLinksPlugin } from './comarkPlugins/externalLinks'
 import { agentMentionPlugin } from './comarkPlugins/agentMention'
+import { taskListCheckboxPlugin } from './comarkPlugins/taskListCheckbox'
 import { getAuthToken } from '@/utils/api'
 import { useResourceStore } from '@/stores/resource'
 import { useSessionStore } from '@/stores/session'
@@ -18,6 +19,7 @@ const SECURITY_CONFIG = {
 
 const STATIC_PLUGINS = [
   breaks(),
+  taskListCheckboxPlugin(),
   security(SECURITY_CONFIG),
   mermaid(),
   resourceTokenPlugin({
