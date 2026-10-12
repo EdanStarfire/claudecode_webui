@@ -7,6 +7,20 @@ import { correlateHooks } from '../utils/hookCorrelation'
 import { getAgentColor, getAssistantRowColor, slugifyAgentName } from '../composables/useAgentColor'
 import { pushDebugEvent, flushDebugBuffer } from '../composables/useDebugBuffer'
 
+// Backend's 7-value tool status vocabulary -> the 5-value frontend-display vocabulary.
+// Module scope so every site that needs to translate a backend status (ToolCallRecord
+// updates, and handlePermissionResponse's own allow/deny-driven status) shares the exact
+// same table instead of maintaining a second, independently-drifting mapping.
+const TOOL_STATUS_MAP = {
+  'pending': 'pending',
+  'awaiting_permission': 'permission_required',
+  'running': 'executing',
+  'completed': 'completed',
+  'failed': 'error',
+  'denied': 'completed',  // Denied shows as completed with special styling
+  'interrupted': 'completed'  // Interrupted shows as completed with orphaned styling
+}
+
 /**
  * Message Store - Manages messages and tool calls per session
  */
@@ -984,9 +998,9 @@ export const useMessageStore = defineStore('message', () => {
       }
 
       if (permissionResponse.decision === 'allow') {
-        updates.status = 'executing'
+        updates.status = TOOL_STATUS_MAP.running
       } else {
-        updates.status = 'completed'
+        updates.status = TOOL_STATUS_MAP.denied
         updates.result = {
           error: true,
           message: permissionResponse.reasoning || 'Permission denied'
@@ -1019,13 +1033,6 @@ export const useMessageStore = defineStore('message', () => {
       toolCallObj._isOrphaned = true
       toolCallObj._orphanedInfo = { reason: 'denied', message: 'Session was interrupted' }
       toolCallObj.isExpanded = false
-      toolCallObj.backendState = {
-        state: 'interrupted',
-        visible: true,
-        collapsed: false,
-        style: 'orphaned',
-        linked_permission_id: toolCallObj.backendState?.linked_permission_id ?? null,
-      }
     }
   }
 
@@ -1056,16 +1063,7 @@ export const useMessageStore = defineStore('message', () => {
     // Issue #2131: O(1) identity lookup via toolIndex instead of an O(n) `.findIndex` scan.
     const existingIndex = toolIndex.has(toolUseId) ? toolIndex.get(toolUseId) : -1
 
-    const statusMap = {
-      'pending': 'pending',
-      'awaiting_permission': 'permission_required',
-      'running': 'executing',
-      'completed': 'completed',
-      'failed': 'error',
-      'denied': 'completed',  // Denied shows as completed with special styling
-      'interrupted': 'completed'  // Interrupted shows as completed with orphaned styling
-    }
-    const frontendStatus = statusMap[toolCall.status] || toolCall.status
+    const frontendStatus = TOOL_STATUS_MAP[toolCall.status] || toolCall.status
 
     if (existingIndex !== -1) {
       // Update existing tool call
@@ -1155,10 +1153,6 @@ export const useMessageStore = defineStore('message', () => {
         existing.isExpanded = false  // Auto-collapse on completion
       }
 
-      // Store backend display hints if provided
-      if (toolCall.display) {
-        existing.backendState = toolCall.display
-      }
       // Issue #707: Auto-approval indicator
       if (toolCall.auto_approved_reason) {
         existing.autoApprovedReason = toolCall.auto_approved_reason
@@ -1187,7 +1181,6 @@ export const useMessageStore = defineStore('message', () => {
         explanation: null,
         timestamp: toolCall.created_at || new Date().toISOString(),
         isExpanded: !['completed', 'failed', 'denied', 'interrupted'].includes(toolCall.status),
-        backendState: toolCall.display,
         // Issue #195: Track parent Task tool for subagent grouping
         parent_tool_use_id: toolCall.parent_tool_use_id || null,
         // Issue #707: Auto-approval indicator
@@ -1481,18 +1474,15 @@ export const useMessageStore = defineStore('message', () => {
         break
 
       case 'content_block_start': {
-        // Issue #1573: render a pending tool card as soon as the model commits to a tool
-        // call, instead of waiting for the full turn to arrive.
+        // Issue #1573/#2109: the server-authored `tool_call` record for this same
+        // content_block_start already landed via the normal tool_call event handler —
+        // backend/web_server.py::_create_message_callback emits it into the same
+        // per-session EventQueue before the paired assistant_delta, so no client-side
+        // synthesis is needed here. This branch only drives the transient streaming-preview
+        // indicator off the card the server already created.
         const block = data.event.content_block
         if (block?.type === 'tool_use' && block.id) {
-          applyRecord(sessionId, {
-            type: 'tool_call',
-            tool_use_id: block.id,
-            name: block.name,
-            input: {},
-            status: 'pending'
-          }, 'live')
-          // Skip the preview indicator below when the card is already terminal:
+          // Skip the preview indicator when the card is already terminal:
           // _applyToolCallRecord's status-regression guard silently no-ops on a stray/late
           // content_block_start for an already-completed tool, and showing a "starting..."
           // indicator for it would be wrong.
