@@ -171,6 +171,7 @@ class FeaturesConfig:
     enable_experimental_nav_header: bool = False  # Issue #1723 — opt-in compact breadcrumb nav header
     block_cross_session_messaging: bool = True  # Issue #1901/#1899 — force crossSessionInbound="refuse" and deny outbound SendMessage/ListAgents to non-local targets
     auto_mode_server_classifier: bool = True  # Issue #2009 — server-side Auto Mode classifier (free when eligible, silent fallback to local otherwise; default on per owner decision, may revisit after real-world observation)
+    compact_minion_tree_rows: bool = True  # Issue #2061 — opt-out compact single-line minion tree rows (default: on)
 
 
 @dataclass
@@ -284,6 +285,9 @@ class AppConfig:
             auto_mode_server_classifier=features_data.get(
                 "auto_mode_server_classifier", True
             ),
+            compact_minion_tree_rows=features_data.get(
+                "compact_minion_tree_rows", True
+            ),
         )
         proxy_data = data.get("proxy", {})
         proxy = ProxyConfig(
@@ -378,6 +382,7 @@ class AppConfig:
                 "enable_experimental_nav_header": self.features.enable_experimental_nav_header,
                 "block_cross_session_messaging": self.features.block_cross_session_messaging,
                 "auto_mode_server_classifier": self.features.auto_mode_server_classifier,
+                "compact_minion_tree_rows": self.features.compact_minion_tree_rows,
             },
             "proxy": {
                 "proxy_image": self.proxy.proxy_image,

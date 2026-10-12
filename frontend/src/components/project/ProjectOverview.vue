@@ -302,6 +302,24 @@
                 >☰ Flat</button>
               </div>
 
+              <!-- Row density toggle (issue #2061) -->
+              <div class="btn-group btn-group-sm" role="group" aria-label="Row density">
+                <button
+                  type="button"
+                  class="btn"
+                  :class="!uiStore.compactMinionTreeRows ? 'btn-primary' : 'btn-outline-secondary'"
+                  @click="uiStore.setCompactMinionTreeRows(false)"
+                  title="Normal row height"
+                >▦ Normal</button>
+                <button
+                  type="button"
+                  class="btn"
+                  :class="uiStore.compactMinionTreeRows ? 'btn-primary' : 'btn-outline-secondary'"
+                  @click="uiStore.setCompactMinionTreeRows(true)"
+                  title="Compact single-line rows"
+                >☰ Compact</button>
+              </div>
+
               <!-- Hierarchy sort toggle (visible only in hierarchy mode) -->
               <div
                 v-if="uiStore.projectViewMode === 'hierarchy'"

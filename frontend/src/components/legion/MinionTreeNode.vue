@@ -1,8 +1,8 @@
 <template>
   <div v-if="minionData" class="minion-tree-node" :style="{ marginLeft: `${indent}px` }">
     <!-- Two-Column Layout (for HierarchyView) -->
-    <div class="minion-card minion-card-clickable border-start border-2 mb-2" :class="[statusTintClass, { active: isSelected, unread: isUnreviewed, 'filter-dimmed': minionData._filterDimmed }]" @click="handleClick">
-      <div class="node-row">
+    <div class="minion-card minion-card-clickable border-start border-2 mb-2" :class="[statusTintClass, { active: isSelected, unread: isUnreviewed, 'filter-dimmed': minionData._filterDimmed, compact: isCompact }]" @click="handleClick">
+      <div class="node-row" :class="{ compact: isCompact }">
         <!-- Left Column: Status + Name (30%) -->
         <div class="node-left">
           <!-- Status Dot (issue #1934: doubles as batch-selection toggle) -->
@@ -43,7 +43,7 @@
                 </svg>
               </button>
             </div>
-            <div v-if="roleSubtitle" class="node-role text-muted" :title="roleSubtitle">
+            <div v-if="roleSubtitle && !isCompact" class="node-role text-muted" :title="roleSubtitle">
               {{ roleSubtitle }}
             </div>
           </div>
@@ -127,6 +127,8 @@ const liveSession = computed(() => {
 })
 
 const roleSubtitle = computed(() => liveSession.value?.role || '')
+
+const isCompact = computed(() => uiStore.compactMinionTreeRows)
 
 // Get latest message from message store (only for active session)
 // Filters are synchronized with MessageList.vue shouldDisplayMessage() for consistency
@@ -468,6 +470,16 @@ function handleClick() {
   align-items: center;
   padding: 0.35rem 0.75rem;
   min-height: 44px;
+}
+
+.node-row.compact {
+  padding: 0.15rem 0.75rem;
+  min-height: 28px;
+  gap: 0.75rem;
+}
+
+.minion-card.compact {
+  margin-bottom: 0.125rem;
 }
 
 .node-left {
