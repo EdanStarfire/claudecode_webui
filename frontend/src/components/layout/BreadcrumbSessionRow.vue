@@ -2,27 +2,27 @@
   <div>
     <div
       class="bc-session-card"
-      :class="{ current: isCurrent, child: depth > 0 }"
+      :class="{ current: isCurrent, child: depth > 0, compact }"
       role="button"
       :aria-label="`Select agent ${displayName}${isUnreviewed ? ' (new since last viewed)' : ''}`"
       :title="chipTooltip"
       @click="handleClick"
     >
-      <span class="chip-expand"></span>
+      <span v-if="!compact" class="chip-expand"></span>
 
       <span class="status-sq" :class="[statusClass, { unread: isUnreviewed }]"></span>
 
-      <span class="chip-text">
+      <span class="chip-text" :class="{ compact }">
         <span class="chip-name">{{ displayName }}</span>
-        <span v-if="sdkTitle" class="chip-sub">{{ sdkTitle }}</span>
-        <span v-else-if="roleDescription" class="chip-sub">{{ roleDescription }}</span>
+        <span v-if="compact && secondaryText" class="chip-secondary">— {{ secondaryText }}</span>
+        <span v-else-if="!compact && secondaryText" class="chip-sub">{{ secondaryText }}</span>
       </span>
 
       <span v-if="alertType" class="chip-alert" :class="alertType">{{ alertType === 'error' ? '!' : '?' }}</span>
-      <span v-if="hasSchedules" class="chip-schedule" title="Has active schedules">
+      <span v-if="!compact && hasSchedules" class="chip-schedule" title="Has active schedules">
         <svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 14.5A6.5 6.5 0 1 1 8 1.5a6.5 6.5 0 0 1 0 13zM8.5 4H7v5l4.25 2.55.75-1.23L8.5 8.25V4z"/></svg>
       </span>
-      <span v-if="effectiveDockerEnabled" class="chip-docker" title="Running with Docker isolation">
+      <span v-if="!compact && effectiveDockerEnabled" class="chip-docker" title="Running with Docker isolation">
         <svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor">
           <rect x="1" y="4" width="5" height="4" rx="0.5" stroke="currentColor" stroke-width="0.8" fill="none"/>
           <rect x="1" y="8" width="14" height="5" rx="1" stroke="currentColor" stroke-width="0.8" fill="none"/>
@@ -66,9 +66,11 @@ const { isError, isPaused } = useSessionState(computed(() => props.session))
 
 const isCurrent = computed(() => props.session.session_id === sessionStore.currentSessionId)
 
+const compact = computed(() => uiStore.compactBreadcrumbRows)
+
 const displayName = computed(() => props.session.name || props.session.role || 'Agent')
-const sdkTitle = computed(() => props.session.sdk_generated_name || null)
-const roleDescription = computed(() => {
+const secondaryText = computed(() => {
+  if (props.session.sdk_generated_name) return props.session.sdk_generated_name
   const role = props.session.role
   if (!role || role === displayName.value) return null
   return role
@@ -176,6 +178,11 @@ function handleClick() {
   background: var(--bs-secondary-bg);
 }
 
+.bc-session-card.compact {
+  padding: 3px 10px;
+  margin-bottom: 2px;
+}
+
 .chip-expand {
   width: 14px;
   height: 14px;
@@ -228,6 +235,30 @@ function handleClick() {
   white-space: nowrap;
 }
 
+.chip-text.compact {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.chip-text.compact .chip-name {
+  font-size: 11px;
+  line-height: 1.15;
+  flex-shrink: 0;
+  max-width: 60%;
+}
+
+.chip-secondary {
+  font-size: 10.5px;
+  line-height: 1.15;
+  color: var(--bs-secondary-color);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chip-alert {
   flex-shrink: 0;
   width: 15px;
@@ -239,6 +270,12 @@ function handleClick() {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.bc-session-card.compact .chip-alert {
+  width: 13px;
+  height: 13px;
+  font-size: 8px;
 }
 
 .chip-alert.error { background: #ef4444; }

@@ -52,6 +52,7 @@ async function load() {
     uiStore.setResumeBatchDelaySeconds(config.value.features?.resume_batch_delay_seconds ?? 5)
     uiStore.setExperimentalNavHeader(config.value.features?.enable_experimental_nav_header ?? false)
     uiStore.setCompactMinionTreeRows(config.value.features?.compact_minion_tree_rows ?? true)
+    uiStore.setCompactBreadcrumbRows(config.value.features?.compact_breadcrumb_rows ?? true)
   } catch (e) {
     error.value = e.message || 'Failed to load configuration'
   } finally {
@@ -79,6 +80,7 @@ async function save() {
     uiStore.setResumeBatchDelaySeconds(config.value.features?.resume_batch_delay_seconds ?? 5)
     uiStore.setExperimentalNavHeader(config.value.features?.enable_experimental_nav_header ?? false)
     uiStore.setCompactMinionTreeRows(config.value.features?.compact_minion_tree_rows ?? true)
+    uiStore.setCompactBreadcrumbRows(config.value.features?.compact_breadcrumb_rows ?? true)
   } catch (e) {
     error.value = e.message || 'Failed to save'
   } finally {
