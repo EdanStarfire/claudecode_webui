@@ -172,6 +172,15 @@
               <span class="version-number">v{{ version.version_number }}</span>
               <span class="version-time">{{ formatVersionTime(version.timestamp) }}</span>
               <div class="version-actions">
+                <button
+                  class="btn btn-sm btn-outline-secondary action-btn"
+                  @click.stop="openVersionPreview(version.resource_id)"
+                  title="Preview this version"
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 3C4.5 3 1.73 5.11 0 8c1.73 2.89 4.5 5 8 5s6.27-2.11 8-5c-1.73-2.89-4.5-5-8-5zm0 8.5A3.5 3.5 0 1 1 8 4.5a3.5 3.5 0 0 1 0 7zm0-1.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/>
+                  </svg>
+                </button>
                 <a
                   :href="getDownloadUrl(version.resource_id)"
                   class="btn btn-sm btn-outline-secondary action-btn"
@@ -271,6 +280,15 @@
               <span class="version-number">v{{ version.version_number }}</span>
               <span class="version-time">{{ formatVersionTime(version.timestamp) }}</span>
               <div class="version-actions">
+                <button
+                  class="btn btn-sm btn-outline-secondary action-btn"
+                  @click.stop="openVersionPreview(version.resource_id)"
+                  title="Preview this version"
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 3C4.5 3 1.73 5.11 0 8c1.73 2.89 4.5 5 8 5s6.27-2.11 8-5c-1.73-2.89-4.5-5-8-5zm0 8.5A3.5 3.5 0 1 1 8 4.5a3.5 3.5 0 0 1 0 7zm0-1.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/>
+                  </svg>
+                </button>
                 <a
                   :href="getDownloadUrl(version.resource_id)"
                   class="btn btn-sm btn-outline-secondary action-btn"
@@ -441,6 +459,10 @@ function handleImageError(event) {
 
 function removeResource(resourceId) {
   resourceStore.removeResource(sessionStore.currentSessionId, resourceId)
+}
+
+function openVersionPreview(resourceId) {
+  resourceStore.openFullViewById(resourceId, sessionStore.currentSessionId)
 }
 
 // Issue #1680: version group expand/collapse
