@@ -209,6 +209,16 @@ export const useUIStore = defineStore('ui', () => {
     writeStorage('flatGroupMode', mode)
   }
 
+  // Issue #2061: Compact single-line minion tree rows in Project Overview — synced from
+  // /api/config via settings page (default: on), can also be toggled directly from Project
+  // Overview's view controls; persisted like projectViewMode/flatGroupMode.
+  const compactMinionTreeRows = ref(readStorage('compactMinionTreeRows', true))
+
+  function setCompactMinionTreeRows(value) {
+    compactMinionTreeRows.value = !!value
+    writeStorage('compactMinionTreeRows', compactMinionTreeRows.value)
+  }
+
   // Issue #1587: Max peek cards in collapsed chip stack — synced from /api/config via settings page
   const maxPeekCards = ref(readStorage('maxPeekCards', 100))
 
@@ -572,6 +582,7 @@ export const useUIStore = defineStore('ui', () => {
     projectViewMode,
     flatSort,
     flatGroupMode,
+    compactMinionTreeRows,
     maxPeekCards,
     resumeBatchSize,
     resumeBatchDelaySeconds,
@@ -621,6 +632,7 @@ export const useUIStore = defineStore('ui', () => {
     setProjectViewMode,
     setFlatSort,
     setFlatGroupMode,
+    setCompactMinionTreeRows,
     setMaxPeekCards,
     setResumeBatchSize,
     setResumeBatchDelaySeconds,

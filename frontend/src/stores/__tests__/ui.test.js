@@ -157,4 +157,28 @@ describe('ui store', () => {
       expect(store.deepLinkFailure).toBeNull()
     })
   })
+
+  describe('compactMinionTreeRows (issue #2061)', () => {
+    it('defaults to true when no localStorage key is set', async () => {
+      vi.resetModules()
+      const { useUIStore } = await import('@/stores/ui')
+      const store = useUIStore()
+
+      expect(store.compactMinionTreeRows).toBe(true)
+    })
+
+    it('setCompactMinionTreeRows persists to webui-sidebar-compactMinionTreeRows and coerces to boolean', async () => {
+      vi.resetModules()
+      const { useUIStore } = await import('@/stores/ui')
+      const store = useUIStore()
+
+      store.setCompactMinionTreeRows(false)
+      expect(store.compactMinionTreeRows).toBe(false)
+      expect(localStorage.getItem('webui-sidebar-compactMinionTreeRows')).toBe(JSON.stringify(false))
+
+      store.setCompactMinionTreeRows('truthy-string')
+      expect(store.compactMinionTreeRows).toBe(true)
+      expect(localStorage.getItem('webui-sidebar-compactMinionTreeRows')).toBe(JSON.stringify(true))
+    })
+  })
 })

@@ -1,8 +1,8 @@
 <template>
   <div v-if="minionData" class="minion-tree-node" :style="{ marginLeft: `${indent}px` }">
     <!-- Two-Column Layout (for HierarchyView) -->
-    <div class="minion-card minion-card-clickable border-start border-2 mb-2" :class="[statusTintClass, { active: isSelected, unread: isUnreviewed, 'filter-dimmed': minionData._filterDimmed }]" @click="handleClick">
-      <div class="node-row">
+    <div class="minion-card minion-card-clickable border-start border-2 mb-2" :class="[statusTintClass, { active: isSelected, unread: isUnreviewed, 'filter-dimmed': minionData._filterDimmed, compact: isCompact }]" @click="handleClick">
+      <div class="node-row" :class="{ compact: isCompact }">
         <!-- Left Column: Status + Name (30%) -->
         <div class="node-left">
           <!-- Status Dot (issue #1934: doubles as batch-selection toggle) -->
@@ -17,8 +17,9 @@
           <span v-if="isOverseerWithChildren" class="me-2">👑</span>
 
           <div class="node-text">
-            <div class="node-name-row">
+            <div class="node-name-row" :class="{ compact: isCompact }">
               <strong class="node-name">{{ minionWithLiveData?.name || minionData.name }}</strong>
+              <span v-if="isCompact && roleSubtitle" class="node-role-inline text-muted" :title="roleSubtitle">— {{ roleSubtitle }}</span>
               <span v-if="isOverseerWithChildren" class="badge bg-secondary ms-2">
                 {{ minionData.children.length }} {{ minionData.children.length === 1 ? 'child' : 'children' }}
               </span>
@@ -43,7 +44,7 @@
                 </svg>
               </button>
             </div>
-            <div v-if="roleSubtitle" class="node-role text-muted" :title="roleSubtitle">
+            <div v-if="roleSubtitle && !isCompact" class="node-role text-muted" :title="roleSubtitle">
               {{ roleSubtitle }}
             </div>
           </div>
@@ -126,7 +127,9 @@ const liveSession = computed(() => {
   return sessionStore.getSession(props.minionData.id)
 })
 
-const roleSubtitle = computed(() => liveSession.value?.role || '')
+const roleSubtitle = computed(() => (liveSession.value?.role || '').trim())
+
+const isCompact = computed(() => uiStore.compactMinionTreeRows)
 
 // Get latest message from message store (only for active session)
 // Filters are synchronized with MessageList.vue shouldDisplayMessage() for consistency
@@ -470,6 +473,16 @@ function handleClick() {
   min-height: 44px;
 }
 
+.node-row.compact {
+  padding: 0.15rem 0.75rem;
+  min-height: 28px;
+  gap: 0.75rem;
+}
+
+.minion-card.compact {
+  margin-bottom: 0.125rem;
+}
+
 .node-left {
   flex: 0 0 30%;
   display: flex;
@@ -499,6 +512,31 @@ function handleClick() {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+}
+
+.node-name-row.compact {
+  gap: 0.35rem;
+}
+
+.node-name-row.compact .node-name {
+  flex-shrink: 0;
+  max-width: 50%;
+}
+
+.node-name-row.compact .badge,
+.node-name-row.compact .collapse-toggle {
+  flex-shrink: 0;
+  margin-left: 0 !important;
+}
+
+.node-role-inline {
+  font-size: 0.75rem;
+  line-height: 1.2;
+  flex: 1 1 auto;
+  min-width: 2em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .node-role {

@@ -99,6 +99,11 @@ def build_router(webui) -> APIRouter:
                 if not isinstance(val, bool):
                     raise ValueError("auto_mode_server_classifier must be a boolean")
                 config.features.auto_mode_server_classifier = val
+            if "compact_minion_tree_rows" in features:
+                val = features["compact_minion_tree_rows"]
+                if not isinstance(val, bool):
+                    raise ValueError("compact_minion_tree_rows must be a boolean")
+                config.features.compact_minion_tree_rows = val
 
         # Merge proxy section (issue #1050)
         if "proxy" in body:

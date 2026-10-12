@@ -1024,3 +1024,41 @@ describe('ProjectOverview - Hierarchy view filtering (issue #2050, Stage B)', ()
     expect(hierarchyTreeOf(container).getByText('Alice Smith')).toBeTruthy()
   })
 })
+
+describe('ProjectOverview - Row density toggle (issue #2061)', () => {
+  it('toggle button switches uiStore.compactMinionTreeRows and updates active button state', async () => {
+    const project = makeProject({ project_id: 'proj-1' })
+    const sessions = [makeSession({ session_id: 'sess-1', project_id: 'proj-1', name: 'Minion One' })]
+    const { container, uiStore } = await mountForResume(project, sessions, { stoppedIds: [] })
+
+    uiStore.setCompactMinionTreeRows(true)
+    await flush()
+
+    const normalBtn = within(container).getByTitle('Normal row height')
+    const compactBtn = within(container).getByTitle('Compact single-line rows')
+    expect(compactBtn.className).toContain('btn-primary')
+    expect(normalBtn.className).toContain('btn-outline-secondary')
+
+    await fireEvent.click(normalBtn)
+    expect(uiStore.compactMinionTreeRows).toBe(false)
+    expect(normalBtn.className).toContain('btn-primary')
+    expect(compactBtn.className).toContain('btn-outline-secondary')
+
+    await fireEvent.click(compactBtn)
+    expect(uiStore.compactMinionTreeRows).toBe(true)
+  })
+
+  it('is visible in both Hierarchy and Flat view modes', async () => {
+    const project = makeProject({ project_id: 'proj-1' })
+    const sessions = [makeSession({ session_id: 'sess-1', project_id: 'proj-1', name: 'Minion One' })]
+    const { container, uiStore } = await mountForResume(project, sessions, { stoppedIds: [] })
+
+    uiStore.setProjectViewMode('hierarchy')
+    await flush()
+    expect(within(container).getByTitle('Compact single-line rows')).toBeTruthy()
+
+    uiStore.setProjectViewMode('flat')
+    await flush()
+    expect(within(container).getByTitle('Compact single-line rows')).toBeTruthy()
+  })
+})

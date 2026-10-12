@@ -174,3 +174,84 @@ describe('MinionTreeNode - filter dimming (issue #2050, Stage B)', () => {
     expect(wrapper.text()).not.toContain('Child')
   })
 })
+
+describe('MinionTreeNode - compact row layout (issue #2061)', () => {
+  it('shows name + role on one line (em-dash separated) in compact mode, hiding the stacked role subtitle', async () => {
+    const minionData = { id: 'sess-1', name: 'Minion One', children: [] }
+    const { pinia, wrapper } = mountNode(minionData)
+    const { useSessionStore } = await import('@/stores/session')
+    const { useUIStore } = await import('@/stores/ui')
+    useSessionStore(pinia).sessions.set('sess-1', makeSession({ session_id: 'sess-1', name: 'Minion One', role: 'Researcher' }))
+    useUIStore(pinia).setCompactMinionTreeRows(true)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.node-row').classes()).toContain('compact')
+    expect(wrapper.find('.minion-card').classes()).toContain('compact')
+    expect(wrapper.find('.node-role').exists()).toBe(false)
+    expect(wrapper.find('.node-role-inline').exists()).toBe(true)
+    expect(wrapper.find('.node-role-inline').text()).toBe('— Researcher')
+  })
+
+  it('omits the inline role separator entirely when no role is present (no dangling em dash)', async () => {
+    const minionData = { id: 'sess-1', name: 'Minion One', children: [] }
+    const { pinia, wrapper } = mountNode(minionData)
+    const { useSessionStore } = await import('@/stores/session')
+    const { useUIStore } = await import('@/stores/ui')
+    useSessionStore(pinia).sessions.set('sess-1', makeSession({ session_id: 'sess-1', name: 'Minion One' }))
+    useUIStore(pinia).setCompactMinionTreeRows(true)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.node-role-inline').exists()).toBe(false)
+  })
+
+  it('omits the inline role separator for a whitespace-only role (no dangling em dash)', async () => {
+    const minionData = { id: 'sess-1', name: 'Minion One', children: [] }
+    const { pinia, wrapper } = mountNode(minionData)
+    const { useSessionStore } = await import('@/stores/session')
+    const { useUIStore } = await import('@/stores/ui')
+    useSessionStore(pinia).sessions.set('sess-1', makeSession({ session_id: 'sess-1', name: 'Minion One', role: '   ' }))
+    useUIStore(pinia).setCompactMinionTreeRows(true)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.node-role-inline').exists()).toBe(false)
+  })
+
+  it('still renders the role subtitle in normal mode (regression guard)', async () => {
+    const minionData = { id: 'sess-1', name: 'Minion One', children: [] }
+    const { pinia, wrapper } = mountNode(minionData)
+    const { useSessionStore } = await import('@/stores/session')
+    const { useUIStore } = await import('@/stores/ui')
+    useSessionStore(pinia).sessions.set('sess-1', makeSession({ session_id: 'sess-1', name: 'Minion One', role: 'Researcher' }))
+    useUIStore(pinia).setCompactMinionTreeRows(false)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.node-row').classes()).not.toContain('compact')
+    expect(wrapper.find('.node-role').exists()).toBe(true)
+    expect(wrapper.find('.node-role').text()).toBe('Researcher')
+  })
+
+  it('status-dot batch-select and collapse-chevron handlers still fire in compact mode', async () => {
+    const minionData = {
+      id: 'parent',
+      name: 'Parent',
+      children: [{ id: 'child', name: 'Child', children: [] }],
+    }
+    const { pinia, wrapper } = mountNode(minionData)
+    const { useSessionStore } = await import('@/stores/session')
+    const { useUIStore } = await import('@/stores/ui')
+    const sessionStore = useSessionStore(pinia)
+    const uiStore = useUIStore(pinia)
+    sessionStore.sessions.set('parent', makeSession({ session_id: 'parent', name: 'Parent' }))
+    sessionStore.sessions.set('child', makeSession({ session_id: 'child', name: 'Child' }))
+    uiStore.setCompactMinionTreeRows(true)
+    await wrapper.vm.$nextTick()
+
+    const dot = wrapper.find('.status-dot')
+    await fireEvent.click(dot.element)
+    expect(uiStore.isSessionSelected('parent')).toBe(true)
+
+    const toggle = wrapper.find('.collapse-toggle')
+    await fireEvent.click(toggle.element)
+    expect(uiStore.isMinionCollapsed('parent')).toBe(true)
+  })
+})

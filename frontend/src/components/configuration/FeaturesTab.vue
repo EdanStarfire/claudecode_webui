@@ -211,6 +211,24 @@
       <input
         class="form-check-input"
         type="checkbox"
+        id="compactMinionTreeRows"
+        :checked="config?.compact_minion_tree_rows"
+        @change="toggleCompactMinionTreeRows"
+      >
+      <label class="form-check-label" for="compactMinionTreeRows">
+        Compact minion tree rows
+      </label>
+      <small class="form-text text-muted d-block">
+        Shows Project Overview minion rows (Hierarchy and Flat view) in a denser, single-line
+        layout — drops the role subtitle line and tightens row spacing to fit more rows on
+        screen. Can also be toggled directly from Project Overview's view controls. Default: on.
+      </small>
+    </div>
+
+    <div class="form-check form-switch mb-3">
+      <input
+        class="form-check-input"
+        type="checkbox"
         id="compactBreadcrumbRows"
         :checked="config?.compact_breadcrumb_rows"
         @change="toggleCompactBreadcrumbRows"
@@ -379,6 +397,13 @@ function toggleExperimentalNavHeader(event) {
   emit('update:config', {
     ...props.config,
     enable_experimental_nav_header: event.target.checked
+  })
+}
+
+function toggleCompactMinionTreeRows(event) {
+  emit('update:config', {
+    ...props.config,
+    compact_minion_tree_rows: event.target.checked
   })
 }
 
