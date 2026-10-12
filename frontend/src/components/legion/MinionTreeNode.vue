@@ -283,12 +283,13 @@ const shouldShowChildren = computed(() =>
 const sortedChildren = computed(() => {
   const children = props.minionData?.children || []
   const mode = uiStore.agentSort
+  const direction = uiStore.agentSortDirection === 'desc' ? -1 : 1
   return [...children].sort((a, b) => compareAgents(mode, a, b, {
     nameOf: n => n.name,
     orderOf: n => sessionStore.getSession(n.id)?.order,
     idOf: n => n.id,
     lastActiveOf: n => normalizeLastActive(sessionStore.getSession(n.id)?.last_completion_at)
-  }))
+  }, direction))
 })
 
 // Check if minion is an overseer with children
@@ -553,6 +554,32 @@ function handleClick() {
   min-width: 0; /* Allow text truncation */
   padding-left: 1rem;
   border-left: 1px solid var(--bs-border-color);
+}
+
+/* Issue #2149: compact rows don't have room for both columns on mobile — the
+   right-column preview overlaps the left-column name/role/badge. Drop the
+   preview column below this width so the full row width goes to status
+   dot/name/role. Component-scoped threshold (960px), intentionally wider than
+   the project's global 767px mobile convention in styles.css — that value
+   only covers phones in PORTRAIT. The original 767px cut here left common
+   phones broken in LANDSCAPE (e.g. 844px, confirmed overlapping in testing),
+   since rotated phone widths commonly exceed 767px: iPhone 12/13/14 landscape
+   844px, Pixel 7/7 Pro landscape 892-915px, iPhone 14/15 Plus/Pro Max
+   landscape 926-932px. 960px covers all of those with margin while staying
+   well under the smallest common tablet landscape widths (iPad mini
+   6th-gen 1133px, iPad 10.9" 1180px, ~1280px for most Android tablets), so
+   tablets in landscape keep the two-column layout. Trade-off: a handful of
+   large tablets in PORTRAIT (e.g. ~810-900px wide) will also collapse to the
+   single-column layout even though they'd have room for both columns — that's
+   over-conservative but not a correctness bug, unlike the overlap it replaces. */
+@media (max-width: 960px) {
+  .node-row.compact .node-right {
+    display: none;
+  }
+
+  .node-row.compact .node-left {
+    flex: 1 1 100%;
+  }
 }
 
 .node-actions {
