@@ -10,6 +10,11 @@ catch-all is registered LAST so those routers' specific routes always take
 priority; every other /api/* path falls through to the relay and is forwarded
 to Backend. system.py only intercepts POST /api/system/restart — Backend's
 GET /api/system/git-status etc. are still accurate to relay through unchanged.
+
+Epic #1990 stage 5a (AC3): sessions.py adds one more Frontend-side route, GET
+/api/sessions/{id}/messages — substitutes the Frontend-local event_cursor for
+Backend's own, since session queues no longer share Backend's cursor
+numbering. Every other /api/sessions/* path still falls through to relay.py.
 """
 
 from fastapi import FastAPI
@@ -19,6 +24,7 @@ from . import (
     core,
     poll,
     relay,
+    sessions,
     system,
 )
 
@@ -29,4 +35,5 @@ def register_all(app: FastAPI, webui) -> None:
     app.include_router(config.build_router(webui))
     app.include_router(core.build_router(webui))
     app.include_router(system.build_router(webui))
+    app.include_router(sessions.build_router(webui))
     app.include_router(relay.build_router(webui))

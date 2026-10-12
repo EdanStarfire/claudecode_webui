@@ -34,6 +34,7 @@ PRODUCER_MODULES = [
     "backend/routers/secrets.py",
     "backend/routers/files.py",
     "src/routers/system.py",
+    "src/poll_relay.py",
 ]
 
 # Modules that set `metadata["subtype"]` / `"subtype": "..."` on real `system`-typed messages.

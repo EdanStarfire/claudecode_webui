@@ -325,6 +325,17 @@
       ],
       "required_keys_by_queue": {}
     },
+    "stream_reset": {
+      "queues": [
+        "session",
+        "ui"
+      ],
+      "required_keys": [
+        "new_epoch",
+        "old_epoch"
+      ],
+      "required_keys_by_queue": {}
+    },
     "thinking_tokens_update": {
       "queues": [
         "session"

@@ -19,7 +19,6 @@ from dataclasses import asdict
 import httpx
 from fastapi import APIRouter, HTTPException
 
-from shared.event_queue import reset_occurred
 from shared.exception_handlers import handle_exceptions
 from shared.logging_config import get_logger
 from shared.poll_protocol import FrontendPollResponse
@@ -27,6 +26,16 @@ from shared.poll_protocol import FrontendPollResponse
 from ..backend_reachability import is_backend_degraded, to_http_exception
 
 _polling_logger = get_logger('polling', category='POLL')
+
+
+def _contains_stream_reset(events: list[dict]) -> bool:
+    """Epic #1990 stage 5a: `reset` is now a convenience derived value — whether
+    this batch contains a `stream_reset` marker — rather than a cursor-magnitude
+    inference. Local queues are pure auto-increment now and never regress on their
+    own, so a cursor-based check would never fire for the case this exists to
+    catch (a Backend restart, made visible via src/poll_relay.py's epoch-change
+    detection instead)."""
+    return any(e.get("type") == "stream_reset" for e in events)
 
 
 def _backend_status(webui) -> str:
@@ -53,8 +62,9 @@ def build_router(webui) -> APIRouter:
         webui.poll_relay.start_ui_relay()
         effective_timeout = min(float(timeout), 30.0)
         await webui.ui_queue.wait_for_events(since, timeout=effective_timeout)
-        events, next_cursor, evicted = webui.ui_queue.events_since(since)
-        reset = reset_occurred(next_cursor, since)
+        events, next_cursor, local_evicted = webui.ui_queue.events_since(since)
+        evicted = local_evicted or webui.poll_relay.consume_pending_evicted("ui")
+        reset = _contains_stream_reset(events)
         if events:
             _polling_logger.info(
                 "poll ui returned %d event(s) since=%d next_cursor=%d",
@@ -65,6 +75,7 @@ def build_router(webui) -> APIRouter:
             next_cursor=next_cursor,
             reset=reset,
             evicted=evicted,
+            epoch=webui.poll_relay.last_epoch("ui") or "",
             backend_status=_backend_status(webui),
         ))
 
@@ -108,8 +119,9 @@ def build_router(webui) -> APIRouter:
 
         effective_timeout = min(float(timeout), 30.0)
         await queue.wait_for_events(since, timeout=effective_timeout)
-        events, next_cursor, evicted = queue.events_since(since)
-        reset = reset_occurred(next_cursor, since)
+        events, next_cursor, local_evicted = queue.events_since(since)
+        evicted = local_evicted or webui.poll_relay.consume_pending_evicted(session_id)
+        reset = _contains_stream_reset(events)
 
         if events:
             _polling_logger.info(
@@ -121,6 +133,7 @@ def build_router(webui) -> APIRouter:
             next_cursor=next_cursor,
             reset=reset,
             evicted=evicted,
+            epoch=webui.poll_relay.last_epoch(session_id) or "",
             backend_status=_backend_status(webui),
         ))
 

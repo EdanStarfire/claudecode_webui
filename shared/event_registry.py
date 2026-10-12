@@ -84,6 +84,14 @@ TOP_LEVEL_EVENT_TYPES: dict[str, EventTypeSpec] = {
     ),
     "tool_call": EventTypeSpec(frozenset({QUEUE_SESSION}), frozenset({"session_id", "data"})),
     "resource_removed": EventTypeSpec(frozenset({QUEUE_SESSION}), frozenset({"resource_id"})),
+    # Epic #1990 stage 5a: emitted by src/poll_relay.py into a LOCAL queue (never by a
+    # Backend-side producer) when it observes the polled Backend epoch change from what
+    # it last saw for that stream — a Backend restart made explicit, not inferred from
+    # cursor magnitude. Valid on both queue families: the UI relay and every session relay
+    # can each independently observe an epoch change.
+    "stream_reset": EventTypeSpec(
+        frozenset({QUEUE_UI, QUEUE_SESSION}), frozenset({"old_epoch", "new_epoch"})
+    ),
     "proxy_event": EventTypeSpec(
         frozenset({QUEUE_SESSION}), frozenset({"data"})
     ),  # the arbitrary-type default; AC4 pins/validates this at the HTTP boundary in 2a-B

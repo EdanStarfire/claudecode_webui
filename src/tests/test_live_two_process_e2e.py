@@ -345,12 +345,15 @@ def test_live_session_survives_backend_restart_mid_poll(tmp_path: Path):
                 "post-restart data was silently lost"
             )
             assert len(result["events"]) > 0
-            # The restarted Backend's session queue is a fresh, low-cursor instance,
-            # so this is deterministically a reset relative to the pre-restart
-            # stale_cursor — assert both halves of AC2 unconditionally rather than
-            # only checking `reset` under a condition that's already guaranteed true.
-            assert result["next_cursor"] < stale_cursor
+            # Epic #1990 stage 5a: the Frontend-local queue is pure auto-increment
+            # now and never adopts Backend's own (now-reset) cursor numbering, so
+            # next_cursor monotonically keeps climbing across the restart boundary
+            # instead of jumping backward — the restart is instead surfaced
+            # explicitly via a `stream_reset` event (epoch-based detection), which
+            # is what `reset` is now derived from (src/routers/poll.py).
+            assert result["next_cursor"] > stale_cursor
             assert result["reset"] is True
+            assert any(e.get("type") == "stream_reset" for e in result["events"])
 
         assert frontend_proc.poll() is None
 
@@ -522,13 +525,21 @@ def test_live_session_restart_mid_poll_genuinely_in_flight(tmp_path: Path):
                 assert in_flight_result["status_code"] == 200
                 body = in_flight_result["body"]
                 assert body["reset"] is True
-                assert body["next_cursor"] < pre_restart_cursor
+                assert any(e.get("type") == "stream_reset" for e in body["events"])
+                # Epic #1990 stage 5a: the Frontend-local queue never adopts
+                # Backend's own cursor numbering anymore, so next_cursor keeps
+                # climbing monotonically across the restart instead of jumping
+                # backward — `reset` (derived from the `stream_reset` marker
+                # above) is the restart signal now, not cursor regression.
+                assert body["next_cursor"] > pre_restart_cursor
 
-            # --- The next poll after respawn must show exactly the pre-restart
-            # events plus whatever resumed after — no duplicates, no loss. Since
-            # `reset` was true, the client must do a full resync from cursor 0
-            # against the NEW (post-restart) cursor space, exactly like a real
-            # browser's message.js loadMessages() fallback would. ---
+            # --- The next poll after respawn must show no duplicates. Epic #1990
+            # stage 5a: since=0 against the Frontend-local queue now returns BOTH
+            # the preserved pre-restart history AND whatever resumed after (the
+            # local queue is never wiped on a Backend restart — only an explicit
+            # `stream_reset` marker is inserted) — strictly more events than the
+            # pre-stage-5a "only what's currently buffered post-reset" behavior,
+            # but the no-duplicate-message_id guarantee below holds either way. ---
             def _post_restart_events():
                 resp = client.get(f"/api/poll/session/{session_id}?since=0&timeout=5")
                 data = resp.json()

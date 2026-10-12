@@ -15,6 +15,7 @@ class PollBatch:
     next_cursor: int
     reset: bool
     evicted: bool
+    epoch: str
 
 
 def parse_poll_response(body: dict) -> PollBatch:
@@ -23,6 +24,7 @@ def parse_poll_response(body: dict) -> PollBatch:
         next_cursor=body["next_cursor"],
         reset=body["reset"],
         evicted=body["evicted"],
+        epoch=body["epoch"],
     )
 
 
@@ -32,6 +34,7 @@ class PollResponse:
     next_cursor: int
     reset: bool
     evicted: bool
+    epoch: str
 
 
 @dataclass

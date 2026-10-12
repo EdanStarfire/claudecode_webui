@@ -40,41 +40,17 @@ class EventQueue:
         self._waiters: list[asyncio.Event] = []
         self._on_append = on_append
 
-    def append(self, event: dict, cursor: int | None = None) -> int:
-        """Append an event, either auto-incrementing the local cursor (cursor=None)
-        or adopting an externally-authoritative cursor value.
+    def append(self, event: dict) -> int:
+        """Append an event, auto-incrementing the local cursor.
 
-        A given queue instance must pick exactly one discipline and stick to it:
-        the `cursor` param's contiguity/reset logic below assumes every write to
-        this instance comes from the same authoritative numbering scheme. Mixing
-        an auto-incrementing writer with a cursor-adopting writer on the same
-        instance breaks that assumption — an auto-increment bump can collide with
-        or desync the adopted cursor space, causing a dropped event (dedup branch)
-        or a full local-history wipe (reset branch) on the next adopted write
-        (issue #1890).
+        Epic #1990 stage 5a: every writer on every queue instance uses this same
+        auto-increment discipline uniformly now — Frontend's local queues no longer
+        adopt Backend's own cursor numbering (that coupling is exactly what let a
+        Backend restart desync or collide with local numbering, issue #1890/#1886).
+        A Backend restart is now surfaced as an explicit `stream_reset` event
+        (src/poll_relay.py), not inferred from cursor arithmetic.
         """
-        if cursor is not None:
-            if self._events and cursor == self._cursor:
-                return self._cursor  # exact redelivery of the last-known event — idempotent skip
-            if not self._events or cursor != self._cursor + 1:
-                # Source's numbering doesn't extend contiguously from what we have
-                # (source was reset — e.g. Backend process restart, which can
-                # produce a *lower* cursor than what we last saw — or evicted past
-                # our last known position, a forward gap — or this is the very
-                # first event this queue has ever seen). Trust the new value and
-                # drop now-orphaned local history rather than mis-slicing against a
-                # broken oldest_cursor invariant; any `since` that lands in the
-                # dropped range legitimately falls into the existing "too old,
-                # here's everything we have" branch of events_since() below.
-                # Checking contiguity here (not just `cursor <= self._cursor`)
-                # matters: a restart's lower cursor must still hit this reset
-                # branch instead of being mistaken for an already-seen duplicate
-                # and silently dropped.
-                self._events = []
-                self._oldest_cursor = cursor
-            self._cursor = cursor
-        else:
-            self._cursor += 1
+        self._cursor += 1
         self._events.append(event)
         if len(self._events) > self.MAX_SIZE:
             self._events.pop(0)

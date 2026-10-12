@@ -10,6 +10,7 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, HTTPException
 
+from shared.event_envelope import PROCESS_EPOCH
 from shared.event_queue import EventQueue, reset_occurred
 from shared.exception_handlers import handle_exceptions
 from shared.logging_config import get_logger
@@ -28,13 +29,22 @@ def build_router(webui) -> APIRouter:
         effective_timeout = min(float(timeout), 30.0)
         await webui.ui_queue.wait_for_events(since, timeout=effective_timeout)
         events, next_cursor, evicted = webui.ui_queue.events_since(since)
+        # Epic #1990 stage 5a intentionally left this as-is: it's Backend's own
+        # API contract for detecting THIS process's EventQueue instance being
+        # replaced beneath a stale caller (issues #1984/#1988) — a narrower,
+        # same-process signal that cross-process epoch comparison can't catch by
+        # construction. Stage 5a's cursor-regression removal was about the
+        # cross-tier coupling (src/poll_relay.py no longer adopts or trusts this
+        # field) — not about this endpoint's own internal contract, which stays.
         reset = reset_occurred(next_cursor, since)
         if events:
             _polling_logger.info(
                 "poll ui returned %d event(s) since=%d next_cursor=%d",
                 len(events), since, next_cursor
             )
-        return asdict(PollResponse(events=events, next_cursor=next_cursor, reset=reset, evicted=evicted))
+        return asdict(PollResponse(
+            events=events, next_cursor=next_cursor, reset=reset, evicted=evicted, epoch=PROCESS_EPOCH
+        ))
 
     @router.get("/api/poll/cursor")
     @handle_exceptions("poll cursor")
@@ -74,6 +84,7 @@ def build_router(webui) -> APIRouter:
         effective_timeout = min(float(timeout), 30.0)
         await queue.wait_for_events(since, timeout=effective_timeout)
         events, next_cursor, evicted = queue.events_since(since)
+        # See poll_ui()'s comment above — unchanged post-stage-5a for the same reason.
         reset = reset_occurred(next_cursor, since)
 
         if events:
@@ -81,6 +92,8 @@ def build_router(webui) -> APIRouter:
                 "poll session %s returned %d event(s) since=%d next_cursor=%d",
                 session_id, len(events), since, next_cursor
             )
-        return asdict(PollResponse(events=events, next_cursor=next_cursor, reset=reset, evicted=evicted))
+        return asdict(PollResponse(
+            events=events, next_cursor=next_cursor, reset=reset, evicted=evicted, epoch=PROCESS_EPOCH
+        ))
 
     return router
