@@ -176,6 +176,79 @@ describe('project store', () => {
     }
   })
 
+  describe('compareAgents direction param (issue #2088)', () => {
+    it('direction = -1 reverses alpha ordering (Z->A) without affecting the id tiebreaker', async () => {
+      const { compareAgents } = await import('@/utils/agentSort')
+
+      const sessions = [
+        makeSession({ session_id: 's1', name: 'Zebra', order: 0 }),
+        makeSession({ session_id: 's2', name: 'Apple', order: 1 }),
+        makeSession({ session_id: 's3', name: 'Mango', order: 2 }),
+      ]
+      const accessors = { nameOf: s => s.name, orderOf: s => s.order, idOf: s => s.session_id }
+
+      const asc = [...sessions].sort((a, b) => compareAgents('alpha', a, b, accessors, 1)).map(s => s.name)
+      const desc = [...sessions].sort((a, b) => compareAgents('alpha', a, b, accessors, -1)).map(s => s.name)
+      expect(asc).toEqual(['Apple', 'Mango', 'Zebra'])
+      expect(desc).toEqual(['Zebra', 'Mango', 'Apple'])
+
+      // tiebreaker (equal name) stays id-ascending regardless of direction
+      const tieA = makeSession({ session_id: 'aaa', name: 'X', order: 0 })
+      const tieB = makeSession({ session_id: 'bbb', name: 'X', order: 0 })
+      expect(compareAgents('alpha', tieA, tieB, accessors, 1)).toBeLessThan(0)
+      expect(compareAgents('alpha', tieA, tieB, accessors, -1)).toBeLessThan(0)
+    })
+
+    it('direction = -1 reverses creation ordering (newest-first) without affecting the id tiebreaker', async () => {
+      const { compareAgents } = await import('@/utils/agentSort')
+
+      const sessions = [
+        makeSession({ session_id: 's1', name: 'Zebra', order: 0 }),
+        makeSession({ session_id: 's2', name: 'Apple', order: 1 }),
+        makeSession({ session_id: 's3', name: 'Mango', order: 2 }),
+      ]
+      const accessors = { nameOf: s => s.name, orderOf: s => s.order, idOf: s => s.session_id }
+
+      const asc = [...sessions].sort((a, b) => compareAgents('creation', a, b, accessors, 1)).map(s => s.name)
+      const desc = [...sessions].sort((a, b) => compareAgents('creation', a, b, accessors, -1)).map(s => s.name)
+      expect(asc).toEqual(['Zebra', 'Apple', 'Mango'])
+      expect(desc).toEqual(['Mango', 'Apple', 'Zebra'])
+
+      const tieA = makeSession({ session_id: 'aaa', name: 'X', order: 5 })
+      const tieB = makeSession({ session_id: 'bbb', name: 'X', order: 5 })
+      expect(compareAgents('creation', tieA, tieB, accessors, 1)).toBeLessThan(0)
+      expect(compareAgents('creation', tieA, tieB, accessors, -1)).toBeLessThan(0)
+    })
+
+    it('direction = -1 reverses last_active ordering (least-recent-first) without affecting the id tiebreaker', async () => {
+      const { compareAgents } = await import('@/utils/agentSort')
+
+      const sessions = [
+        { session_id: 's1', name: 'Zebra', lastActive: 100 },
+        { session_id: 's2', name: 'Apple', lastActive: 300 },
+        { session_id: 's3', name: 'Mango', lastActive: 200 },
+      ]
+      const accessors = {
+        nameOf: s => s.name,
+        orderOf: s => s.order,
+        idOf: s => s.session_id,
+        lastActiveOf: s => s.lastActive,
+      }
+
+      const asc = [...sessions].sort((a, b) => compareAgents('last_active', a, b, accessors, 1)).map(s => s.name)
+      const desc = [...sessions].sort((a, b) => compareAgents('last_active', a, b, accessors, -1)).map(s => s.name)
+      // direction=1 reproduces today's hardcoded most-recent-first
+      expect(asc).toEqual(['Apple', 'Mango', 'Zebra'])
+      // direction=-1 reverses to least-recently-active-first
+      expect(desc).toEqual(['Zebra', 'Mango', 'Apple'])
+
+      const tieA = { session_id: 'aaa', name: 'X', lastActive: 500 }
+      const tieB = { session_id: 'bbb', name: 'X', lastActive: 500 }
+      expect(compareAgents('last_active', tieA, tieB, accessors, 1)).toBeLessThan(0)
+      expect(compareAgents('last_active', tieA, tieB, accessors, -1)).toBeLessThan(0)
+    })
+  })
+
   describe('kanban groups (issue #1722)', () => {
     it('createKanbanGroup patches local project from the response (server-generated group_id)', async () => {
       const { useProjectStore } = await import('@/stores/project')

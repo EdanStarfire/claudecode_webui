@@ -117,6 +117,44 @@ describe('ui store', () => {
     })
   })
 
+  describe('setAgentSortDirection / setFlatSortDirection (issue #2088)', () => {
+    it('defaults agentSortDirection and flatSortDirection to asc', async () => {
+      const { useUIStore } = await import('@/stores/ui')
+      const store = useUIStore()
+
+      expect(store.agentSortDirection).toBe('asc')
+      expect(store.flatSortDirection).toBe('asc')
+    })
+
+    it('setAgentSortDirection accepts asc/desc and rejects unknown values', async () => {
+      const { useUIStore } = await import('@/stores/ui')
+      const store = useUIStore()
+
+      store.setAgentSortDirection('desc')
+      expect(store.agentSortDirection).toBe('desc')
+
+      store.setAgentSortDirection('bogus')
+      expect(store.agentSortDirection).toBe('desc')
+
+      store.setAgentSortDirection('asc')
+      expect(store.agentSortDirection).toBe('asc')
+    })
+
+    it('setFlatSortDirection accepts asc/desc and rejects unknown values', async () => {
+      const { useUIStore } = await import('@/stores/ui')
+      const store = useUIStore()
+
+      store.setFlatSortDirection('desc')
+      expect(store.flatSortDirection).toBe('desc')
+
+      store.setFlatSortDirection('bogus')
+      expect(store.flatSortDirection).toBe('desc')
+
+      store.setFlatSortDirection('asc')
+      expect(store.flatSortDirection).toBe('asc')
+    })
+  })
+
   describe('appDataStatus / deepLinkFailure (issue #1977)', () => {
     it('defaults appDataStatus to loading and deepLinkFailure to null', async () => {
       const { useUIStore } = await import('@/stores/ui')

@@ -321,64 +321,78 @@
               </div>
 
               <!-- Hierarchy sort toggle (visible only in hierarchy mode) -->
-              <div
-                v-if="uiStore.projectViewMode === 'hierarchy'"
-                class="btn-group btn-group-sm"
-                role="group"
-                aria-label="Hierarchy sort order"
-              >
+              <template v-if="uiStore.projectViewMode === 'hierarchy'">
+                <div
+                  class="btn-group btn-group-sm"
+                  role="group"
+                  aria-label="Hierarchy sort order"
+                >
+                  <button
+                    type="button"
+                    class="btn"
+                    :class="uiStore.agentSort === 'alpha' ? 'btn-primary' : 'btn-outline-secondary'"
+                    @click="uiStore.setAgentSort('alpha')"
+                    title="Sort alphabetically"
+                  >A–Z</button>
+                  <button
+                    type="button"
+                    class="btn"
+                    :class="uiStore.agentSort === 'creation' ? 'btn-primary' : 'btn-outline-secondary'"
+                    @click="uiStore.setAgentSort('creation')"
+                    title="Sort by creation order"
+                  >Created</button>
+                  <button
+                    type="button"
+                    class="btn"
+                    :class="uiStore.agentSort === 'last_active' ? 'btn-primary' : 'btn-outline-secondary'"
+                    @click="uiStore.setAgentSort('last_active')"
+                    title="Sort by most recent completion"
+                  >Last Active</button>
+                </div>
                 <button
                   type="button"
-                  class="btn"
-                  :class="uiStore.agentSort === 'alpha' ? 'btn-primary' : 'btn-outline-secondary'"
-                  @click="uiStore.setAgentSort('alpha')"
-                  title="Sort alphabetically"
-                >A–Z</button>
-                <button
-                  type="button"
-                  class="btn"
-                  :class="uiStore.agentSort === 'creation' ? 'btn-primary' : 'btn-outline-secondary'"
-                  @click="uiStore.setAgentSort('creation')"
-                  title="Sort by creation order"
-                >Created</button>
-                <button
-                  type="button"
-                  class="btn"
-                  :class="uiStore.agentSort === 'last_active' ? 'btn-primary' : 'btn-outline-secondary'"
-                  @click="uiStore.setAgentSort('last_active')"
-                  title="Sort by most recent completion"
-                >Last Active</button>
-              </div>
+                  class="btn btn-sm btn-outline-secondary"
+                  @click="uiStore.setAgentSortDirection(uiStore.agentSortDirection === 'asc' ? 'desc' : 'asc')"
+                  :title="uiStore.agentSortDirection === 'asc' ? 'Ascending — click to reverse' : 'Descending — click to reverse'"
+                >{{ uiStore.agentSortDirection === 'asc' ? '↑' : '↓' }}</button>
+              </template>
 
               <!-- Flat sort toggle (visible only in flat mode) -->
-              <div
-                v-else
-                class="btn-group btn-group-sm"
-                role="group"
-                aria-label="Flat list sort order"
-              >
+              <template v-else>
+                <div
+                  class="btn-group btn-group-sm"
+                  role="group"
+                  aria-label="Flat list sort order"
+                >
+                  <button
+                    type="button"
+                    class="btn"
+                    :class="uiStore.flatSort === 'alpha' ? 'btn-primary' : 'btn-outline-secondary'"
+                    @click="uiStore.setFlatSort('alpha')"
+                    title="Sort alphabetically"
+                  >A–Z</button>
+                  <button
+                    type="button"
+                    class="btn"
+                    :class="uiStore.flatSort === 'creation' ? 'btn-primary' : 'btn-outline-secondary'"
+                    @click="uiStore.setFlatSort('creation')"
+                    title="Sort by creation order"
+                  >Created</button>
+                  <button
+                    type="button"
+                    class="btn"
+                    :class="uiStore.flatSort === 'last_active' ? 'btn-primary' : 'btn-outline-secondary'"
+                    @click="uiStore.setFlatSort('last_active')"
+                    title="Sort by most recent completion"
+                  >Last Active</button>
+                </div>
                 <button
                   type="button"
-                  class="btn"
-                  :class="uiStore.flatSort === 'alpha' ? 'btn-primary' : 'btn-outline-secondary'"
-                  @click="uiStore.setFlatSort('alpha')"
-                  title="Sort alphabetically"
-                >A–Z</button>
-                <button
-                  type="button"
-                  class="btn"
-                  :class="uiStore.flatSort === 'creation' ? 'btn-primary' : 'btn-outline-secondary'"
-                  @click="uiStore.setFlatSort('creation')"
-                  title="Sort by creation order"
-                >Created</button>
-                <button
-                  type="button"
-                  class="btn"
-                  :class="uiStore.flatSort === 'last_active' ? 'btn-primary' : 'btn-outline-secondary'"
-                  @click="uiStore.setFlatSort('last_active')"
-                  title="Sort by most recent completion"
-                >Last Active</button>
-              </div>
+                  class="btn btn-sm btn-outline-secondary"
+                  @click="uiStore.setFlatSortDirection(uiStore.flatSortDirection === 'asc' ? 'desc' : 'asc')"
+                  :title="uiStore.flatSortDirection === 'asc' ? 'Ascending — click to reverse' : 'Descending — click to reverse'"
+                >{{ uiStore.flatSortDirection === 'asc' ? '↑' : '↓' }}</button>
+              </template>
 
               <!-- Grouping mode (flat mode only) -->
               <div
@@ -1168,12 +1182,13 @@ async function loadMinionHierarchy() {
 const sortedRootMinions = computed(() => {
   const children = filteredHierarchyChildren.value
   const mode = uiStore.agentSort
+  const direction = uiStore.agentSortDirection === 'desc' ? -1 : 1
   return [...children].sort((a, b) => compareAgents(mode, a, b, {
     nameOf: n => n.name,
     orderOf: n => sessionStore.getSession(n.id)?.order,
     idOf: n => n.id,
     lastActiveOf: n => normalizeLastActive(sessionStore.getSession(n.id)?.last_completion_at)
-  }))
+  }, direction))
 })
 
 const flatNodes = computed(() =>
@@ -1193,12 +1208,13 @@ const flatNodes = computed(() =>
 const sortedFlatNodes = computed(() => {
   const nodes = flatNodes.value
   const mode = uiStore.flatSort
+  const direction = uiStore.flatSortDirection === 'desc' ? -1 : 1
   return [...nodes].sort((a, b) => compareAgents(mode, a, b, {
     nameOf: n => n.name,
     orderOf: n => sessionStore.getSession(n.id)?.order,
     idOf: n => n.id,
     lastActiveOf: n => normalizeLastActive(sessionStore.getSession(n.id)?.last_completion_at),
-  }))
+  }, direction))
 })
 
 const STATE_GROUPS = [
