@@ -283,12 +283,13 @@ const shouldShowChildren = computed(() =>
 const sortedChildren = computed(() => {
   const children = props.minionData?.children || []
   const mode = uiStore.agentSort
+  const direction = uiStore.agentSortDirection === 'desc' ? -1 : 1
   return [...children].sort((a, b) => compareAgents(mode, a, b, {
     nameOf: n => n.name,
     orderOf: n => sessionStore.getSession(n.id)?.order,
     idOf: n => n.id,
     lastActiveOf: n => normalizeLastActive(sessionStore.getSession(n.id)?.last_completion_at)
-  }))
+  }, direction))
 })
 
 // Check if minion is an overseer with children
