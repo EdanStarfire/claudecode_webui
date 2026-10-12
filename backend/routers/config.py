@@ -84,6 +84,11 @@ def build_router(webui) -> APIRouter:
                 if not isinstance(val, bool):
                     raise ValueError("enable_experimental_nav_header must be a boolean")
                 config.features.enable_experimental_nav_header = val
+            if "compact_breadcrumb_rows" in features:
+                val = features["compact_breadcrumb_rows"]
+                if not isinstance(val, bool):
+                    raise ValueError("compact_breadcrumb_rows must be a boolean")
+                config.features.compact_breadcrumb_rows = val
             if "block_cross_session_messaging" in features:
                 val = features["block_cross_session_messaging"]
                 if not isinstance(val, bool):

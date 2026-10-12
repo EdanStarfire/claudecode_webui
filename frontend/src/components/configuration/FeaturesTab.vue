@@ -211,6 +211,25 @@
       <input
         class="form-check-input"
         type="checkbox"
+        id="compactBreadcrumbRows"
+        :checked="config?.compact_breadcrumb_rows"
+        @change="toggleCompactBreadcrumbRows"
+      >
+      <label class="form-check-label" for="compactBreadcrumbRows">
+        Compact breadcrumb dropdown rows
+      </label>
+      <small class="form-text text-muted d-block">
+        Shows each session in the breadcrumb nav header's dropdown as a single line (name — role)
+        instead of two stacked lines, and drops the Docker/schedule badges. Only visible when the
+        experimental breadcrumb nav header above is also enabled. Applies immediately, no reload
+        needed.
+      </small>
+    </div>
+
+    <div class="form-check form-switch mb-3">
+      <input
+        class="form-check-input"
+        type="checkbox"
         id="blockCrossSessionMessaging"
         :checked="config?.block_cross_session_messaging"
         @change="toggleBlockCrossSessionMessaging"
@@ -360,6 +379,13 @@ function toggleExperimentalNavHeader(event) {
   emit('update:config', {
     ...props.config,
     enable_experimental_nav_header: event.target.checked
+  })
+}
+
+function toggleCompactBreadcrumbRows(event) {
+  emit('update:config', {
+    ...props.config,
+    compact_breadcrumb_rows: event.target.checked
   })
 }
 
