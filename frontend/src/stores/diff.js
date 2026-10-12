@@ -195,6 +195,23 @@ export const useDiffStore = defineStore('diff', () => {
   }
 
   /**
+   * Open full-screen diff view for a resource-version diff, seeding the cache
+   * directly from client-computed diff text instead of fetching from the API.
+   * Uses a `resource-diff:` refKey namespace so it can't collide with
+   * Edit-tool diff cache entries (`edit:${toolUseId}`) for the same session.
+   */
+  function openFullViewForResourceDiff(sessionId, label, diffText, meta = {}) {
+    const refKey = `resource-diff:${meta.oldResourceId}:${meta.newResourceId}`
+    fullViewSessionId.value = sessionId
+    currentFilePath.value = label
+    fullViewRef.value = refKey
+    fullViewOpen.value = true
+    const key = `${sessionId}:${refKey}:${label}`
+    fileDiffCache.value.set(key, { content: diffText, loading: false, error: null, meta })
+    fileDiffCache.value = new Map(fileDiffCache.value)
+  }
+
+  /**
    * Close full-screen diff view
    */
   function closeFullView() {
@@ -281,6 +298,7 @@ export const useDiffStore = defineStore('diff', () => {
     loadFileDiff,
     openFullView,
     openFullViewForEdit,
+    openFullViewForResourceDiff,
     closeFullView,
     nextFile,
     prevFile,
