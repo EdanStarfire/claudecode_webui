@@ -3948,6 +3948,11 @@ class SessionCoordinator:
                 "offset": offset,
                 "has_more": has_more,
             }
+        except LegacyMessageFormatError:
+            # Issue #2125 (AC6): fail loudly rather than silently returning an
+            # empty history — propagates to the route's @handle_exceptions, same
+            # as every other LegacyMessageFormatError call site in this codebase.
+            raise
         except Exception:
             logger.exception(f"Failed to get messages for session {session_id}")
             return {

@@ -26,7 +26,13 @@ _REGENERATE_HINT = (
 # TIMING_ONLY_KEYS approach rather than a blanket diff-suppression. Confirmed
 # empirically (2026-09-30): stripping exactly these three keys is sufficient to make
 # two independent generate() runs compare byte-identical.
-_NONDETERMINISTIC_KEYS = {"timestamp", "processed_at", "message_id"}
+#
+# Epic #1990 stage 5a: `epoch` (`shared/event_envelope.py`'s `PROCESS_EPOCH`) is
+# regenerated once per Python process at import time — any two independent
+# `generate()` runs (committed fixture's original run vs. this test's fresh run)
+# have different, equally-valid epoch values by design, same nondeterminism class
+# as the three keys above.
+_NONDETERMINISTIC_KEYS = {"timestamp", "processed_at", "message_id", "epoch"}
 
 # Issue #2052: get_session_messages() (the real REST endpoint's own reconstruction
 # path — distinct from this fixture's own _reconstruct_rest_history_messages()) has a

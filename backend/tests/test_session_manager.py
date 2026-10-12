@@ -523,7 +523,6 @@ class TestSessionManager:
             await manager1.initialize()
             session_id = str(uuid.uuid4())
             await manager1.create_session(session_id, config=sample_session_config)
-            manager1._active_sessions[session_id].message_schema_version = 0
             manager1._active_sessions[session_id].message_migration_status = {
                 "state": "in_progress",
                 "started_at": datetime.now(UTC).isoformat(),
@@ -539,7 +538,6 @@ class TestSessionManager:
 
             reloaded = manager2._active_sessions[session_id]
             assert reloaded.message_migration_status is None
-            assert reloaded.message_schema_version == 0  # untouched by the self-heal
 
     @pytest.mark.asyncio
     async def test_non_in_progress_migration_status_untouched_on_startup(
@@ -554,7 +552,6 @@ class TestSessionManager:
             await manager1.initialize()
             session_id = str(uuid.uuid4())
             await manager1.create_session(session_id, config=sample_session_config)
-            manager1._active_sessions[session_id].message_schema_version = 0
             manager1._active_sessions[session_id].message_migration_status = {
                 "state": "quarantined",
                 "started_at": datetime.now(UTC).isoformat(),
@@ -571,12 +568,14 @@ class TestSessionManager:
             assert reloaded.message_migration_status["state"] == "quarantined"
 
     @pytest.mark.asyncio
-    async def test_below_current_schema_version_logs_warning_on_startup(
+    async def test_below_current_schema_version_fails_to_load_on_startup(
         self, sample_session_config, caplog
     ):
-        """Issue #2109 (AC10): a session below CURRENT_MESSAGE_SCHEMA_VERSION logs a
-        warning at boot — a decoupled early-warning signal, not a guard that raises
-        (nothing has had a chance to touch the session yet at this point)."""
+        """Issue #2125 (AC6): promoted from a warn-only early signal (issue #2109
+        AC10) to enforced — a session below CURRENT_MESSAGE_SCHEMA_VERSION fails to
+        load (raises LegacyMessageFormatError, caught by this loop's own per-session
+        except) rather than loading normally with only a logged warning. Only this
+        one session is skipped — the startup scan itself must not crash."""
         import logging
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -590,9 +589,10 @@ class TestSessionManager:
             await manager1._persist_session_state(session_id)
 
             manager2 = SessionManager(temp_path)
-            with caplog.at_level(logging.WARNING):
+            with caplog.at_level(logging.ERROR):
                 await manager2.initialize()
 
+            assert session_id not in manager2._active_sessions
             assert any(
                 session_id in record.message and "message_schema_version" in record.message
                 for record in caplog.records

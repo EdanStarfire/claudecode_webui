@@ -6,6 +6,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 
+from shared.event_envelope import PROCESS_EPOCH
 from shared.event_queue import EventQueue
 from shared.exception_handlers import handle_exceptions
 
@@ -495,6 +496,10 @@ def build_router(webui) -> APIRouter:
         queue = webui.session_queues.get(session_id)
         if queue:
             result["event_cursor"] = queue.current_cursor
+        # Epic #1990 stage 5a: which Backend-process generation produced event_cursor —
+        # needed by the Frontend-issued history cursor mechanism (src/routers/sessions.py)
+        # to detect a restart racing this very read.
+        result["epoch"] = PROCESS_EPOCH
         return result
 
     @router.get("/api/sessions/{session_id}/background_agents")

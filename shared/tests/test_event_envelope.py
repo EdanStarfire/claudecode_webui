@@ -68,6 +68,7 @@ SAMPLE_EVENTS_BY_TYPE = {
     },
     "tool_call": {"type": "tool_call", "session_id": "s1", "data": {}},
     "resource_removed": {"type": "resource_removed", "resource_id": "r1"},
+    "stream_reset": {"type": "stream_reset", "old_epoch": "abc123", "new_epoch": "def456"},
     "proxy_event": {"type": "proxy_event", "data": {}},
 }
 

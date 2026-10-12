@@ -4,7 +4,15 @@ Both tiers construct/read these — Backend's real queues and the Frontend tier'
 relayed copies — so the shape can't drift between them the way the current ad-hoc dicts have.
 """
 
+import secrets
 from dataclasses import asdict, dataclass
+
+# Epic #1990 stage 5a: regenerated once per Python process at first import — Backend
+# runs as its own OS process, so this is automatically a new value on every real
+# Backend restart with no explicit "on startup, generate and store an epoch" code
+# anywhere. Not persisted: every restart is a new epoch by design (AC1 only requires
+# random-unique, not "recognize the same Backend restarting into the same epoch").
+PROCESS_EPOCH: str = secrets.token_hex(8)
 
 DEFAULT_BACKEND_ID = "local"  # UC4: single implicit value until #1818 multi-backend.
 # Frontend-local writes (e.g. src/routers/system.py's server_restarting) land on the same
@@ -22,7 +30,7 @@ QUEUE_AUDIT = "audit"
 # event types put their payload directly at the top level (sibling to "type"), not nested
 # under a "data" key, so treating `data` as "the one key named data" would silently drop it.
 _ENVELOPE_FIELDS = frozenset(
-    {"type", "queue", "sequence", "timestamp", "data", "backend_id", "scope", "event_id"}
+    {"type", "queue", "sequence", "timestamp", "data", "backend_id", "scope", "event_id", "epoch"}
 )
 
 
@@ -51,6 +59,7 @@ class EventEnvelope:
     data: dict
     backend_id: str = DEFAULT_BACKEND_ID
     scope: str | None = None  # session_id or project_id, when applicable
+    epoch: str = PROCESS_EPOCH  # which Backend-process generation produced this event
 
     @property
     def event_id(self) -> str:
@@ -77,4 +86,5 @@ class EventEnvelope:
             data=fold_payload(d),
             backend_id=d.get("backend_id", DEFAULT_BACKEND_ID),
             scope=d.get("scope"),
+            epoch=d.get("epoch", PROCESS_EPOCH),
         )

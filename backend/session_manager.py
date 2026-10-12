@@ -22,7 +22,7 @@ from typing import Any
 
 from shared.logging_config import get_logger
 
-from .models.messages import CURRENT_MESSAGE_SCHEMA_VERSION
+from .models.messages import CURRENT_MESSAGE_SCHEMA_VERSION, LegacyMessageFormatError
 from .models.permission_mode import PermissionMode
 from .session_config import CONFIG_FIELDS, DEFAULTS, SessionConfig
 from .slug_utils import slugify_name
@@ -460,17 +460,20 @@ class SessionManager:
                             original_processing = session_info.is_processing
                             state_changed = False
 
-                            # Issue #2109 (AC10): decoupled early-warning signal, not a
-                            # chokepoint that protects any reader — logged only, since this
-                            # runs at boot before anything has had a chance to touch the
-                            # session. Production data was confirmed 100% canonical by stage
-                            # 3's migration gate, so this should never fire in practice.
+                            # Issue #2125 (AC6): promoted from a decoupled warn-only
+                            # signal (issue #2109 AC10) to enforced — raising here is
+                            # caught by this loop's own per-session except below, so
+                            # only THIS session fails to load (skipped, not added to
+                            # _active_sessions) rather than crashing the whole startup
+                            # scan. Production data was confirmed 100% canonical by
+                            # stage 3's migration gate, so this should never fire in
+                            # practice; if it does, a session with legacy-shape
+                            # messages.jsonl records needs explicit migration before
+                            # it's safe to use, not silent best-effort reads.
                             if session_info.message_schema_version < CURRENT_MESSAGE_SCHEMA_VERSION:
-                                session_logger.warning(
-                                    f"Session {session_info.session_id} has "
-                                    f"message_schema_version={session_info.message_schema_version}, "
-                                    f"below current ({CURRENT_MESSAGE_SCHEMA_VERSION}) — "
-                                    f"messages.jsonl may contain legacy-shape records"
+                                raise LegacyMessageFormatError(
+                                    session_info.session_id,
+                                    f"message_schema_version={session_info.message_schema_version}",
                                 )
 
                             # Issue #1513: Self-heal last_completion_at from messages.jsonl

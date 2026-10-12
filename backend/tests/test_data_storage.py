@@ -125,6 +125,21 @@ class TestDataStorageManager:
         assert messages[0]["content"] == "First response"
 
     @pytest.mark.asyncio
+    async def test_read_messages_raises_on_legacy_type_record(self, temp_storage_manager, sample_message):
+        """Issue #2125 (AC6): the primary history read had no legacy-shape guard,
+        unlike history_distiller.py/edit_history.py's equivalent scans — a stored
+        record still carrying the pre-canonical `_type` wrapper must fail loudly,
+        not be silently misread as a normal message."""
+        from backend.models.messages import LegacyMessageFormatError
+
+        manager = temp_storage_manager
+        await manager.append_message(sample_message)
+        await manager.append_message({"_type": "AssistantMessage", "content": "legacy"})
+
+        with pytest.raises(LegacyMessageFormatError, match="test-session"):
+            await manager.read_messages()
+
+    @pytest.mark.asyncio
     async def test_get_message_count(self, temp_storage_manager, sample_messages):
         """Test getting message count."""
         manager = temp_storage_manager

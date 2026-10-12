@@ -18,6 +18,17 @@ either signal it adopts the fresh cursor and continues — a full REST resync
 is a frontend-JS-store concern (covered by AC1/AC2's equivalence harness and
 `polling.test.js`), out of scope for this transport-layer harness.
 
+Epic #1990 stage 5a: `FakeBackend`'s own `reset` signal (computed the same way
+`backend/routers/poll.py` still does, via `reset_occurred()` against ITS OWN
+`EventQueue` instance being replaced on `restart()`) is independent of, and no
+longer consumed by, `PollRelay` — the relay now detects a Backend restart via
+`epoch` comparison (see `src/poll_relay.py`), and `FakeFrontend`'s own `reset`
+field is derived the same new way real `src/routers/poll.py` is: "does this
+batch contain a `stream_reset` marker". Local (Frontend-side) queues are pure
+auto-increment now (no more `EventQueue.append(cursor=...)` cursor adoption,
+issue #1886/#1889/#1890) — a session queue no longer mirrors Backend's own
+cursor numbering 1:1.
+
 No fake clock: this reuses the codebase's established determinism pattern
 (monkeypatched tiny module-level time constants — see `src/poll_relay.py`'s
 `_ERROR_BACKOFF_SECONDS`/`_SESSION_IDLE_TIMEOUT_SECONDS` and
@@ -40,9 +51,23 @@ from src.poll_relay import PollRelay
 
 UI_PATH = "/api/poll/ui"
 
+# run_fault_scenario() stamps this onto every event it appends, as a stable,
+# cursor-independent delivery identity (epic #1990 stage 5a — see its docstring
+# for why cursor arithmetic alone stopped being safe). Namespaced well past
+# anything a recorded fixture's own content would plausibly use.
+_FAULT_HARNESS_SEQ_KEY = "__fault_harness_seq__"
+
 
 def session_path(session_id: str) -> str:
     return f"/api/poll/session/{session_id}"
+
+
+def _contains_stream_reset(events: list[dict]) -> bool:
+    """Mirrors src/routers/poll.py's own derivation (epic #1990 stage 5a): `reset`
+    is "does this batch contain a stream_reset marker", not a cursor-magnitude
+    inference — local queues are pure auto-increment now and never regress on
+    their own."""
+    return any(e.get("type") == "stream_reset" for e in events)
 
 
 async def wait_until(predicate, timeout: float = 5.0, interval: float = 0.02) -> bool:
@@ -99,9 +124,11 @@ class FakeBackend:
 
     def restart(self) -> None:
         """AC3 primitive: Backend process restart — every stream gets a fresh
-        `EventQueue` (cursor space discontinuity), reproducing the cursor-reset
-        scenario `EventQueue.append(cursor=...)` already detects (#1889).
-        Implicitly comes back up (a restarted process is, by definition, up).
+        `EventQueue` (cursor space discontinuity, detected locally via
+        `reset_occurred()` exactly as `backend/routers/poll.py` does) AND a bumped
+        `epoch` (epic #1990 stage 5a) — the signal `PollRelay` actually watches for
+        now, independent of whether a given poll happens to also observe a lower
+        cursor. Implicitly comes back up (a restarted process is, by definition, up).
         """
         for session_id in list(self._session_queues):
             self._session_queues[session_id] = EventQueue()
@@ -142,7 +169,10 @@ class FakeBackend:
         await queue.wait_for_events(since, timeout=effective_timeout)
         events, next_cursor, evicted = queue.events_since(since)
         reset = reset_occurred(next_cursor, since)
-        return {"events": events, "next_cursor": next_cursor, "reset": reset, "evicted": evicted}
+        return {
+            "events": events, "next_cursor": next_cursor, "reset": reset, "evicted": evicted,
+            "epoch": str(self._epoch),
+        }
 
 
 class FakeFrontend:
@@ -181,18 +211,26 @@ class FakeFrontend:
         self.poll_relay.start_ui_relay()
         effective_timeout = min(float(timeout), 30.0)
         await self.ui_queue.wait_for_events(since, timeout=effective_timeout)
-        events, next_cursor, evicted = self.ui_queue.events_since(since)
-        reset = reset_occurred(next_cursor, since)
-        return {"events": events, "next_cursor": next_cursor, "reset": reset, "evicted": evicted}
+        events, next_cursor, local_evicted = self.ui_queue.events_since(since)
+        evicted = local_evicted or self.poll_relay.consume_pending_evicted("ui")
+        reset = _contains_stream_reset(events)
+        return {
+            "events": events, "next_cursor": next_cursor, "reset": reset, "evicted": evicted,
+            "epoch": self.poll_relay.last_epoch("ui") or "",
+        }
 
     async def poll_session(self, session_id: str, since: int, timeout: float = 1.0) -> dict[str, Any]:
         self.poll_relay.ensure_session_relay(session_id)
         queue = self.session_queues[session_id]
         effective_timeout = min(float(timeout), 30.0)
         await queue.wait_for_events(since, timeout=effective_timeout)
-        events, next_cursor, evicted = queue.events_since(since)
-        reset = reset_occurred(next_cursor, since)
-        return {"events": events, "next_cursor": next_cursor, "reset": reset, "evicted": evicted}
+        events, next_cursor, local_evicted = queue.events_since(since)
+        evicted = local_evicted or self.poll_relay.consume_pending_evicted(session_id)
+        reset = _contains_stream_reset(events)
+        return {
+            "events": events, "next_cursor": next_cursor, "reset": reset, "evicted": evicted,
+            "epoch": self.poll_relay.last_epoch(session_id) or "",
+        }
 
 
 class BrowserClient:
@@ -201,21 +239,23 @@ class BrowserClient:
     Pausable (simulates a frozen tab, AC4's fourth fault type).
 
     `received` is the delivery log used for the exactly-once assertion: a list
-    of (identity, event) pairs, one per event actually handed to this client,
-    where `identity = (epoch, cursor)` — deduped by identity before comparison,
-    since a retried poll after a transient error can legitimately re-observe
-    the same still-buffered range without that counting as a duplicate
-    delivery. `epoch` (bumped whenever a `reset` response is observed) makes
-    cursor values from different post-restart generations distinguishable —
-    see `resolve_delivered_seqs()` below for why cursor alone isn't safe.
+    of (identity, event) pairs, one per event actually handed to this client.
+    Epic #1990 stage 5a: `identity` is the event's own `_FAULT_HARNESS_SEQ_KEY`
+    content tag (see `run_fault_scenario`), not cursor arithmetic — a
+    `stream_reset` marker occupies its own slot in the LOCAL queue's cursor
+    space with no Backend-side counterpart, so local cursor and Backend cursor
+    are no longer the same numbering (unlike pre-stage-5a, when session queues
+    adopted Backend's cursor 1:1). `received_deduped()`'s dedup-by-identity
+    still matters: a retried poll after a transient error can legitimately
+    re-observe the same still-buffered range without that counting as a
+    duplicate delivery.
     """
 
     def __init__(self, frontend: FakeFrontend, session_id: str | None = None) -> None:
         self._frontend = frontend
         self._session_id = session_id
         self.cursor = 0
-        self.epoch = 0
-        self.received: list[tuple[tuple[int, int], EventEnvelope]] = []
+        self.received: list[tuple[int, EventEnvelope]] = []
         self.reset_count = 0
         self.evicted_count = 0
         self.error_count = 0
@@ -233,22 +273,47 @@ class BrowserClient:
         if batch.reset or batch.evicted:
             if batch.reset:
                 self.reset_count += 1
-                self.epoch += 1
             if batch.evicted:
                 self.evicted_count += 1
             # A real browser resyncs via a full REST reload here (message.js's
             # loadMessages(), see polling.js) — out of scope for this
             # transport-layer harness (AC1/AC2's equivalence harness and
-            # polling.test.js already cover that reload path). Adopting the
-            # fresh cursor and continuing is enough to verify the transport
-            # itself delivers everything AFTER the resync exactly once.
+            # polling.test.js already cover that reload path).
+            #
+            # Epic #1990 stage 5a: a `stream_reset` marker can arrive mid-batch,
+            # with other already-new-epoch events appended after it in the SAME
+            # poll response (src/poll_relay.py emits the marker, then appends that
+            # poll's own events, into one local queue before this client's next
+            # poll). Those post-marker events are genuinely new and already in
+            # hand — recording them is the harness-level equivalent of a real
+            # browser's resync-via-reload recovering them through a different
+            # path; without this, this dumb client would otherwise report them
+            # as never delivered despite the transport having them available
+            # right here. Events at-or-before the marker are superseded by the
+            # (real-browser-only) resync and intentionally not recorded here.
+            last_marker_idx = max(
+                (i for i, e in enumerate(batch.events) if e.type == "stream_reset"),
+                default=-1,
+            )
+            for i, event in enumerate(batch.events):
+                if i > last_marker_idx:
+                    self._record(event)
             self.cursor = batch.next_cursor
             return
 
-        start_cursor = batch.next_cursor - len(batch.events) + 1
-        for i, event in enumerate(batch.events):
-            self.received.append(((self.epoch, start_cursor + i), event))
+        for event in batch.events:
+            self._record(event)
         self.cursor = batch.next_cursor
+
+    def _record(self, event: EventEnvelope) -> None:
+        # Falls back to the delivered object's own identity for callers that don't
+        # go through run_fault_scenario()'s tagging (e.g. backend/tests/
+        # test_fault_harness_real_backend_client.py, which appends raw untagged
+        # dicts directly) — never falsely dedupes two distinct deliveries, since
+        # each is a freshly-constructed EventEnvelope object even when content is
+        # identical. Content-tagged identity remains preferred when present.
+        identity = event.data.get(_FAULT_HARNESS_SEQ_KEY, id(event))
+        self.received.append((identity, event))
 
     async def run_until(self, stop_event: asyncio.Event, poll_timeout: float = 0.05) -> None:
         """Poll in a loop until `stop_event` is set — tolerates transient
@@ -270,18 +335,14 @@ class BrowserClient:
                 self.error_count += 1
                 await asyncio.sleep(0.01)
 
-    def received_deduped(self) -> list[tuple[tuple[int, int], EventEnvelope]]:
-        """Dedupes by `(epoch, cursor)` identity — a retried poll after a
-        transient error can legitimately re-observe the same still-buffered
-        range without that counting as a duplicate delivery. Cursor alone is
-        NOT a safe dedup key across a `backend_restart` fault: Backend's
-        cursor numbering restarts from 1 after a restart, so a pre-restart
-        and a post-restart event can legitimately share the same cursor value
-        while being two entirely different events — collapsing them by cursor
-        alone would produce a false "delivered twice" positive (or mask a
-        genuine duplicate). `epoch` makes the two generations distinguishable.
+    def received_deduped(self) -> list[tuple[int, EventEnvelope]]:
+        """Dedupes by the event's own `_FAULT_HARNESS_SEQ_KEY` content identity —
+        a retried poll after a transient error can legitimately re-observe the
+        same still-buffered range without that counting as a duplicate
+        delivery. Content-based (not cursor-based): see the class docstring for
+        why cursor arithmetic alone is no longer a safe identity post-stage-5a.
         """
-        seen: set[tuple[int, int]] = set()
+        seen: set[int] = set()
         deduped = []
         for identity, event in self.received:
             if identity in seen:
@@ -343,11 +404,14 @@ def _restart_settle_seconds() -> float:
     return _relay_timeout_module._POLL_TIMEOUT_SECONDS * 1.5
 
 def resolve_delivered_seqs(
-    received: list[tuple[tuple[int, int], EventEnvelope]],
-    seq_identity: dict[int, tuple[int, int]],
+    received: list[tuple[int, EventEnvelope]],
+    seq_identity: dict[int, int],
 ) -> set[int]:
-    """Reverse-maps received_deduped()'s (epoch, cursor) identities back to the
-    caller's own per-event `i` index, via run_fault_scenario()'s `seq_identity` map."""
+    """Reverse-maps received_deduped()'s content-tag identities back to the
+    caller's own per-event `i` index, via run_fault_scenario()'s `seq_identity`
+    map (trivial — `seq_identity[i] == i` — but kept as its own parameter so
+    this function's signature didn't need to change when identity stopped
+    being cursor-derived, epic #1990 stage 5a)."""
     delivered_identities = {identity for identity, _ in received}
     return {i for i, identity in seq_identity.items() if identity in delivered_identities}
 
@@ -413,25 +477,31 @@ async def run_fault_scenario(
     queue and relay code with recorded events as payload"), injecting `fault`
     partway through, then drives a `BrowserClient` until it catches up.
 
-    Each event is appended as a shallow copy (the caller's `events` list is
-    never mutated — the same shared fixture list is reused across every
-    parametrized scenario). Identity for the exactly-once assertions is an
-    out-of-band `(epoch, cursor)` pair recorded in `seq_identity[i]`, not the
-    raw cursor alone: `backend_restart` resets Backend's cursor numbering back
-    to 1, so a pre-restart and a post-restart event can legitimately share a
-    cursor value while being two different events — `epoch` (bumped on every
-    `FakeBackend.restart()`) disambiguates them. See `resolve_delivered_seqs()`.
+    Each event is appended as a shallow copy stamped with its own
+    `_FAULT_HARNESS_SEQ_KEY` tag (the caller's `events` list is never mutated —
+    the same shared fixture list is reused across every parametrized scenario).
+    Identity for the exactly-once assertions is that tag's value directly, not
+    cursor arithmetic (epic #1990 stage 5a): a `stream_reset` marker now occupies
+    its own slot in the LOCAL queue's cursor space with no Backend-side
+    counterpart, so local cursor and Backend cursor are no longer the same
+    numbering — reconstructing identity from "local cursor at receive time"
+    would systematically misalign against "Backend cursor at append time" by
+    however many markers have been inserted so far. Stamping the event's own
+    content sidesteps that entirely (and mirrors real production dedup, which
+    is also content-derived — `EventEnvelope.event_id` — not raw cursor
+    arithmetic imposed externally). `seq_identity[i]` is simply `i` itself now;
+    kept as its own dict (rather than inlining `range(len(events))`) so
+    `resolve_delivered_seqs()`'s signature didn't need to change.
 
     Returns a dict with the harness objects plus `expected_seqs` (every seq
     ever appended), `tail_seqs` (the last ~10% of seqs, appended once the
-    stream is well past the fault), and `seq_identity` (the per-seq `(epoch,
-    cursor)` map `resolve_delivered_seqs()` needs) so callers can apply the
-    right strength of exactly-once assertion per `_DESTRUCTIVE_FAULTS`: a
-    destructive fault may legitimately drop events genuinely in flight at the
-    moment it fires, but must not keep dropping things indefinitely —
-    `tail_seqs` is the "the transport has recovered" check; `expected_seqs` is
-    the stronger "nothing was lost at all" check, valid only for
-    non-destructive faults.
+    stream is well past the fault), and `seq_identity` (the per-seq identity
+    map `resolve_delivered_seqs()` needs) so callers can apply the right
+    strength of exactly-once assertion per `_DESTRUCTIVE_FAULTS`: a destructive
+    fault may legitimately drop events genuinely in flight at the moment it
+    fires, but must not keep dropping things indefinitely — `tail_seqs` is the
+    "the transport has recovered" check; `expected_seqs` is the stronger
+    "nothing was lost at all" check, valid only for non-destructive faults.
     """
     if fault not in FAULT_TYPES:
         raise ValueError(f"Unknown fault type: {fault!r} — expected one of {FAULT_TYPES}")
@@ -462,7 +532,7 @@ async def run_fault_scenario(
     # moment it fires, but must not keep dropping things indefinitely.
     tail_start = len(events) - max(1, len(events) // 10)
     tail_seqs: list[int] = []
-    seq_identity: dict[int, tuple[int, int]] = {}
+    seq_identity: dict[int, int] = {}
 
     for i, event in enumerate(events):
         if i == fault_index:
@@ -474,8 +544,8 @@ async def run_fault_scenario(
         # (a fresh instance, not a mutation of the existing one) — a cached
         # reference from before the fault would keep writing into the orphaned
         # pre-restart queue that PollRelay no longer polls.
-        cursor = backend.queue_for(session_id).append(dict(event))
-        seq_identity[i] = (backend.epoch, cursor)
+        backend.queue_for(session_id).append({**event, _FAULT_HARNESS_SEQ_KEY: i})
+        seq_identity[i] = i
         expected_seqs.append(i)
         if i >= tail_start:
             tail_seqs.append(i)

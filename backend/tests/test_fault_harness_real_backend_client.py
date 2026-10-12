@@ -141,13 +141,17 @@ async def test_real_backend_client_delivers_exactly_once_through_real_gzip():
 
     assert len(client.received) == len(sample_events)
     assert len(client.received) == len(client.received_deduped())
-    delivered = [event for _, event in sorted(client.received, key=lambda pair: pair[0])]
+    # client.received is already in delivery order (BrowserClient._record() appends
+    # as each poll response is processed) — no re-sort needed. Epic #1990 stage 5a:
+    # identity is no longer cursor-derived (see BrowserClient docstring), so it's
+    # no longer a meaningful sort key either.
+    delivered = [event for _, event in client.received]
     delivered_dicts = [{"type": e.type, **e.data} for e in delivered]
     assert delivered_dicts == sample_events
 
 
 @pytest.mark.asyncio
-async def test_real_backend_client_observes_restart_cursor_reset():
+async def test_real_backend_client_observes_restart_cursor_reset(monkeypatch):
     """AC6: replacing the stand-in webui's session EventQueue mid-run (the
     real-router equivalent of FakeBackend.restart()) must still surface as an
     explicit reset signal to the client when going through real HTTP/gzip,
@@ -174,7 +178,16 @@ async def test_real_backend_client_observes_restart_cursor_reset():
 
         # Real-router equivalent of FakeBackend.restart(): a fresh EventQueue,
         # same cursor-space discontinuity, pre-registered under the same key
-        # so poll_session's "not in session_queues" branch is never hit.
+        # so poll_session's "not in session_queues" branch is never hit. Epic
+        # #1990 stage 5a: the relay's restart signal is epoch-based now, not
+        # cursor-magnitude-based — a real Backend restart gets a fresh
+        # PROCESS_EPOCH for free (new OS process), which a mere same-process
+        # queue-instance swap can't reproduce on its own, so it's patched
+        # explicitly here (the module-level name as bound inside
+        # backend.routers.poll, matching that module's own `from ... import
+        # PROCESS_EPOCH` binding — patching shared.event_envelope.PROCESS_EPOCH
+        # itself would not be visible there).
+        monkeypatch.setattr("backend.routers.poll.PROCESS_EPOCH", "simulated-restart-epoch")
         webui.session_queues[session_id] = EventQueue()
         post_restart_events = [{"type": "post", "seq": i} for i in range(5)]
         for event in post_restart_events:

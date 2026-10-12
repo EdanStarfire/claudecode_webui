@@ -299,31 +299,28 @@ async def test_frontend_restart_reseeds_from_backends_real_cursor_space():
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason="epic #1990 stage 5: EventQueue has no epoch/generation concept, so a same-valued cursor across a Backend-restart boundary reads as 'already caught up' instead of signaling a new epoch, silently dropping the colliding event(s) with no reset signal — fix is EventQueue epoch/generation tracking, out of scope until stage 5",
-)
 async def test_cursor_collision_silently_drops_colliding_post_restart_events():
-    """AC6 item 4: deliberately engineers the exact "round event counts"
-    cursor collision that `_inject_fault()`'s `backend_restart` branch's sleep
-    workaround exists to avoid — bypassing `run_fault_scenario()`'s general
-    helper (and that sleep) entirely, constructing the harness directly.
+    """AC5/AC6 item 4 (epic #1990 stage 5a — capstone): deliberately engineers the
+    exact "round event counts" cursor collision that `_inject_fault()`'s
+    `backend_restart` branch's sleep workaround exists to avoid — bypassing
+    `run_fault_scenario()`'s general helper (and that sleep) entirely,
+    constructing the harness directly.
 
-    With NO settle delay after `backend.restart()`, a post-restart burst
-    sized to exactly match the client's already-observed pre-restart cursor
-    recreates the collision: the relay's stale `since` equals the fresh
-    queue's current cursor once the burst completes, so `events_since()`
-    reads "already caught up" rather than "these are N entirely different
-    events from a new epoch" — silently dropping every colliding event with
-    no reset/evicted signal.
+    With NO settle delay after `backend.restart()`, a post-restart burst sized
+    to exactly match the client's already-observed pre-restart cursor used to
+    recreate a collision under the OLD cursor-magnitude-based design: the
+    relay's stale `since` equaled the fresh queue's current cursor once the
+    burst completed, so `events_since()` read "already caught up" rather than
+    "these are N entirely different events from a new epoch," silently
+    dropping every colliding event with no reset/evicted signal.
 
-    This asserts the CORRECT behavior (every post-restart event eventually
-    delivered, or at minimum an explicit reset/evicted signal raised for the
-    gap) — which fails today because of the hazard above, giving the
-    intended "xfail" result. `strict=True` means the day `EventQueue` gains
-    epoch/generation tracking (stage 5) and this assertion starts passing,
-    the test flips to an unexpected xpass and fails the suite, forcing this
-    marker's removal instead of letting it go stale.
+    Stage 5a's epoch-based `stream_reset` detection (`src/poll_relay.py`)
+    eliminates this hazard by construction: the relay no longer needs cursor
+    magnitude to detect a restart at all, so a collision in Backend's cursor
+    space is irrelevant to it. This test previously carried an `xfail(strict=
+    True)` marker tracking exactly this fix; it now passes UNMODIFIED (the
+    assertions below are unchanged from before stage 5a), confirming the fix
+    is real and not a test change.
     """
     session_id = "cursor-collision-session"
     backend = FakeBackend()

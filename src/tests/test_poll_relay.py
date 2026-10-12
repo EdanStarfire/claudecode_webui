@@ -14,6 +14,7 @@ Includes regression tests for two bugs found during builder-review:
 
 import asyncio
 import logging
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -24,6 +25,7 @@ from src.poll_relay import (
     _POLL_CLIENT_TIMEOUT_SECONDS,
     _POLL_TIMEOUT_SECONDS,
     PollRelay,
+    _Checkpoint,
 )
 
 
@@ -234,22 +236,23 @@ async def test_issue_1844_http_status_error_logs_full_traceback_and_retries(capl
     assert "Backend returned an error response" in caplog.text
 
 
-# --- issue #1886: Backend-cursor passthrough (local queue adopts Backend's numbering) ---
+# --- epic #1990 stage 5a: relay-owned Backend-cursor tracking (replaces #1886's adoption) ---
 
 
 @pytest.mark.asyncio
-async def test_relay_restart_seeds_from_local_queue_cursor_not_zero():
-    """A relay task restarting after an idle-stop must resume from the local
-    queue's own cursor (now Backend's real numbering) instead of re-fetching
-    Backend's entire backlog from since=0 and re-numbering it independently."""
+async def test_relay_restart_resumes_backend_polling_from_last_known_backend_cursor():
+    """A relay task restarting after an idle-stop must resume polling BACKEND from
+    where this relay last left off in Backend's OWN cursor space — tracked
+    independently in `PollRelay._backend_cursor`, not read back off the local
+    queue's own (now purely auto-incrementing, Backend-independent) cursor."""
     first_batch_done = asyncio.Event()
 
     async def first_side_effect(*args, **kwargs):
         if not first_batch_done.is_set():
             first_batch_done.set()
-            return {"events": [{"n": 1}, {"n": 2}], "next_cursor": 2}
+            return {"events": [{"n": 1}, {"n": 2}], "next_cursor": 2, "epoch": "e1"}
         await asyncio.sleep(0.005)  # yield control — avoid starving the event loop
-        return {"events": [], "next_cursor": 2}
+        return {"events": [], "next_cursor": 2, "epoch": "e1"}
 
     relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=first_side_effect)
 
@@ -265,7 +268,8 @@ async def test_relay_restart_seeds_from_local_queue_cursor_not_zero():
 
         queue = session_queues["sess-restart"]
         assert task.done()
-        assert queue.current_cursor == 2  # matches Backend's next_cursor exactly
+        assert queue.current_cursor == 2  # local auto-increment: 2 events relayed so far
+        assert relay._backend_cursor["sess-restart"] == 2
 
         seen_since_values = []
         reconnect_done = asyncio.Event()
@@ -274,9 +278,9 @@ async def test_relay_restart_seeds_from_local_queue_cursor_not_zero():
             seen_since_values.append(kwargs["params"]["since"])
             if not reconnect_done.is_set():
                 reconnect_done.set()
-                return {"events": [{"n": 3}], "next_cursor": 3}
+                return {"events": [{"n": 3}], "next_cursor": 3, "epoch": "e1"}
             await asyncio.sleep(0.005)  # yield control — avoid starving the event loop
-            return {"events": [], "next_cursor": 3}
+            return {"events": [], "next_cursor": 3, "epoch": "e1"}
 
         backend_client.get_json.side_effect = second_side_effect
 
@@ -292,84 +296,54 @@ async def test_relay_restart_seeds_from_local_queue_cursor_not_zero():
         events, next_cursor, _ = queue.events_since(0)
         assert [e["n"] for e in events] == [1, 2, 3]  # no gap, no redelivery
         assert next_cursor == 3
-        assert seen_since_values[0] == 2  # seeded from the local queue, not 0
+        # Seeded from the persisted Backend-cursor tracker (2), not from 0.
+        assert seen_since_values[0] == 2
 
         await relay.stop()
 
 
 @pytest.mark.asyncio
-async def test_end_to_end_backend_cursor_resolves_correctly_against_local_queue():
-    """A Backend-space event_cursor value (as GET /api/sessions/{id}/messages
-    would return) must resolve correctly against the local relay-fed queue via
-    events_since() — the whole point of adopting Backend's real numbering."""
-    first_batch_done = asyncio.Event()
-
-    async def side_effect(*args, **kwargs):
-        if not first_batch_done.is_set():
-            first_batch_done.set()
-            return {"events": [{"n": 1}, {"n": 2}, {"n": 3}], "next_cursor": 3}
-        await asyncio.sleep(100)
-
-    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
-    relay.ensure_session_relay("sess-e2e")
-
-    for _ in range(300):
-        if session_queues["sess-e2e"].current_cursor == 3:
-            break
-        await asyncio.sleep(0.01)
-
-    queue = session_queues["sess-e2e"]
-    assert queue.current_cursor == 3  # what GET /messages' event_cursor would report
-
-    # A browser that just bootstrapped via GET /messages resumes from that
-    # exact Backend-space cursor — no gap, no redelivery.
-    events, next_cursor, _ = queue.events_since(3)
-    assert events == []
-    assert next_cursor == 3
-
-    events, next_cursor, _ = queue.events_since(1)
-    assert [e["n"] for e in events] == [2, 3]
-    assert next_cursor == 3
-
-    await relay.stop()
-
-
-@pytest.mark.asyncio
-async def test_backend_restart_regression_delivers_next_event_exactly_once():
-    """Simulates a Backend process restart mid-poll: backend/web_server.py
-    recreates a fresh EventQueue() (cursor 0) for the session, so the relay
-    starts seeing low Backend cursor numbers again while the local queue still
-    holds the old, higher range. Must not raise, and the first genuinely new
-    event past the restart must be delivered exactly once — not dropped as a
-    false-duplicate, not delivered twice."""
+async def test_backend_restart_emits_stream_reset_and_preserves_pre_restart_history():
+    """Epic #1990 stage 5a: a Backend restart is now surfaced as an explicit
+    `stream_reset` event appended to the (otherwise untouched) local queue — pre-
+    restart history is no longer dropped (that was the old cursor-adoption
+    behavior this stage removes), and the first genuinely new post-restart event
+    is still delivered exactly once, right after the marker."""
     call_count = 0
 
     async def side_effect(*args, **kwargs):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return {"events": [{"n": "pre-1"}, {"n": "pre-2"}], "next_cursor": 100}
+            return {
+                "events": [{"n": "pre-1"}, {"n": "pre-2"}], "next_cursor": 100, "epoch": "e1",
+            }
         if call_count == 2:
-            # Backend restarted: fresh queue, no events yet, low current cursor.
-            return {"events": [], "next_cursor": 0}
+            # Backend restarted: fresh queue, no events yet, low current cursor,
+            # but a DIFFERENT epoch — the signal the relay now actually watches.
+            return {"events": [], "next_cursor": 0, "epoch": "e2"}
         if call_count == 3:
             # First genuinely new event generated after the restart.
-            return {"events": [{"n": "post-1"}], "next_cursor": 1}
+            return {"events": [{"n": "post-1"}], "next_cursor": 1, "epoch": "e2"}
         await asyncio.sleep(0.005)  # yield control — avoid starving the event loop
-        return {"events": [], "next_cursor": 1}
+        return {"events": [], "next_cursor": 1, "epoch": "e2"}
 
     relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
     relay.ensure_session_relay("sess-regress")
 
     for _ in range(300):
-        if session_queues["sess-regress"].current_cursor == 1:
+        if session_queues["sess-regress"].current_cursor >= 4:
             break
         await asyncio.sleep(0.01)
 
     queue = session_queues["sess-regress"]
     events, next_cursor, _ = queue.events_since(0)
-    assert [e["n"] for e in events] == ["post-1"]  # stale pre-restart history dropped
-    assert next_cursor == 1
+    assert len(events) == 4
+    assert [events[0]["n"], events[1]["n"]] == ["pre-1", "pre-2"]  # preserved, not dropped
+    assert events[2]["type"] == "stream_reset"
+    assert events[2]["data"] == {"old_epoch": "e1", "new_epoch": "e2"}
+    assert events[3]["n"] == "post-1"
+    assert next_cursor == 4  # local auto-increment cursor: 2 pre + 1 marker + 1 post
 
     await relay.stop()
 
@@ -443,5 +417,326 @@ async def test_ui_queue_local_write_and_relay_write_do_not_collide():
     events, next_cursor, _ = ui_queue.events_since(0)
     assert [e["n"] for e in events] == ["restart-notice", "relay-1"]  # no drop, no reset
     assert next_cursor == 2
+
+    await relay.stop()
+
+
+# --- epic #1990 stage 5a, phase 5a-4: checkpoint interpolation / wait_until_relayed ---
+
+
+@pytest.mark.asyncio
+async def test_wait_until_relayed_resolves_immediately_when_already_caught_up():
+    first_batch_done = asyncio.Event()
+
+    async def side_effect(*args, **kwargs):
+        if not first_batch_done.is_set():
+            first_batch_done.set()
+            return {"events": [{"n": 1}, {"n": 2}, {"n": 3}], "next_cursor": 3, "epoch": "e1"}
+        await asyncio.sleep(100)
+
+    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
+    relay.ensure_session_relay("sess-wait")
+
+    for _ in range(300):
+        if session_queues["sess-wait"].current_cursor == 3:
+            break
+        await asyncio.sleep(0.01)
+
+    # K falls strictly inside the batch, not just on a boundary.
+    result = await relay.wait_until_relayed("sess-wait", backend_cursor=2, epoch="e1", timeout=1.0)
+    assert result.outcome == "resolved"
+    assert result.local_cursor == 2  # 2nd of 3 events, 1:1 correspondence within one epoch
+
+    result_start = await relay.wait_until_relayed("sess-wait", backend_cursor=0, epoch="e1", timeout=1.0)
+    assert result_start.outcome == "resolved"
+    assert result_start.local_cursor == 0
+
+    result_end = await relay.wait_until_relayed("sess-wait", backend_cursor=3, epoch="e1", timeout=1.0)
+    assert result_end.outcome == "resolved"
+    assert result_end.local_cursor == 3
+
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_wait_until_relayed_bootstrap_brand_new_session_resolves_to_zero():
+    """K=0 (a session whose history was just read for the very first time, nothing
+    has happened yet) must resolve immediately — must not wait out the full
+    catch-up timeout just because no checkpoint has ever been recorded."""
+
+    async def side_effect(*args, **kwargs):
+        await asyncio.sleep(100)
+
+    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
+    relay.ensure_session_relay("sess-brandnew")
+
+    start = time.monotonic()
+    result = await relay.wait_until_relayed("sess-brandnew", backend_cursor=0, epoch="e1", timeout=5.0)
+    elapsed = time.monotonic() - start
+
+    assert result.outcome == "resolved"
+    assert result.local_cursor == 0
+    assert elapsed < 1.0  # did not wait out the timeout
+
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_wait_until_relayed_quiet_gap_resolves_via_frontier():
+    """A requested backend_cursor the relay has already reached/passed via empty
+    polls (nothing happened in between, so no checkpoint was recorded for that
+    span) must still resolve — via the relay's current frontier, not a
+    checkpoint interpolation."""
+    call_count = 0
+
+    async def side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return {"events": [{"n": 1}], "next_cursor": 1, "epoch": "e1"}
+        if call_count == 2:
+            return {"events": [], "next_cursor": 5, "epoch": "e1"}  # Backend advanced, nothing new
+        await asyncio.sleep(100)
+
+    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
+    relay.ensure_session_relay("sess-quiet")
+
+    for _ in range(300):
+        if call_count >= 2:
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.02)  # let the 2nd iteration's frontier update land
+
+    result = await relay.wait_until_relayed("sess-quiet", backend_cursor=5, epoch="e1", timeout=1.0)
+    assert result.outcome == "resolved"
+    assert result.local_cursor == 1  # unchanged since the one real event was relayed
+
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_wait_until_relayed_waits_for_relay_to_catch_up():
+    """K requested ahead of what the relay has seen so far must actually wait,
+    then resolve once the relay catches up — not resolve prematurely."""
+    release = asyncio.Event()
+    first_batch_done = asyncio.Event()
+
+    async def side_effect(*args, **kwargs):
+        if not release.is_set():
+            await release.wait()
+        if not first_batch_done.is_set():
+            first_batch_done.set()
+            return {"events": [{"n": 1}, {"n": 2}], "next_cursor": 2, "epoch": "e1"}
+        await asyncio.sleep(100)  # yield control — avoid starving the event loop
+
+    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
+    relay.ensure_session_relay("sess-catchup")
+
+    wait_task = asyncio.create_task(
+        relay.wait_until_relayed("sess-catchup", backend_cursor=2, epoch="e1", timeout=2.0)
+    )
+    await asyncio.sleep(0.05)
+    assert not wait_task.done()  # relay hasn't produced anything yet
+
+    release.set()
+    result = await wait_task
+    assert result.outcome == "resolved"
+    assert result.local_cursor == 2
+
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_wait_until_relayed_aborts_on_confirmed_stale_epoch():
+    """If the stream's epoch moved past the requested one BEFORE the wait even
+    started, confirm that after the short grace window (not the full timeout) —
+    that generation will never be seen again. The grace window itself exists for
+    the OTHER direction (relay merely hasn't observed the requested epoch YET);
+    see test_wait_until_relayed_grace_window_lets_relay_catch_up_without_falsely_
+    aborting below."""
+    call_count = 0
+
+    async def side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return {"events": [{"n": 1}], "next_cursor": 1, "epoch": "e1"}
+        if call_count == 2:
+            # Backend restarted before the relay ever reached backend_cursor=50.
+            return {"events": [], "next_cursor": 0, "epoch": "e2"}
+        await asyncio.sleep(100)
+
+    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
+    relay.ensure_session_relay("sess-staleepoch")
+
+    for _ in range(300):
+        if call_count >= 2:
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.02)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("src.poll_relay._STALE_EPOCH_GRACE_SECONDS", 0.05)
+        start = time.monotonic()
+        result = await relay.wait_until_relayed("sess-staleepoch", backend_cursor=50, epoch="e1", timeout=5.0)
+        elapsed = time.monotonic() - start
+
+    assert result.outcome == "stale_epoch"
+    assert result.local_cursor is None
+    assert elapsed < 1.0  # confirmed quickly via the (shrunk) grace window, not the full 5.0s timeout
+
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_wait_until_relayed_grace_window_lets_relay_catch_up_without_falsely_aborting():
+    """The OTHER direction finding 2 (epic #1990 stage 5a review) fixes: a fresh
+    direct-to-Backend read can beat this relay's own next poll cycle, so a
+    mismatch against last-seen epoch at the very START of the wait must not
+    immediately abort — give the relay a short, bounded chance to observe the
+    requested epoch itself before concluding genuine staleness."""
+    call_count = 0
+    release_second_poll = asyncio.Event()
+
+    async def side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return {"events": [{"n": 1}], "next_cursor": 1, "epoch": "e1"}
+        if call_count == 2:
+            # The relay's own poll observing the SAME epoch the caller already
+            # knows about — simulates it catching up shortly after a fresh
+            # Backend read already landed on e2.
+            await release_second_poll.wait()
+            return {"events": [{"n": 2}], "next_cursor": 2, "epoch": "e2"}
+        await asyncio.sleep(100)
+
+    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
+    relay.ensure_session_relay("sess-gracecatchup")
+
+    for _ in range(300):
+        if call_count >= 2:
+            break
+        await asyncio.sleep(0.01)
+    # At this point last_epoch is still "e1" (the relay is parked awaiting
+    # release_second_poll) while the caller already knows Backend is on "e2".
+
+    wait_task = asyncio.create_task(
+        relay.wait_until_relayed("sess-gracecatchup", backend_cursor=1, epoch="e2", timeout=5.0)
+    )
+    await asyncio.sleep(0.05)
+    assert not wait_task.done()  # must not have falsely aborted as stale yet
+
+    release_second_poll.set()
+    result = await wait_task
+
+    assert result.outcome == "resolved"
+    assert result.local_cursor == 2
+
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_wait_until_relayed_falls_back_to_current_cursor_on_timeout():
+    async def side_effect(*args, **kwargs):
+        await asyncio.sleep(100)  # relay never makes progress
+
+    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
+    relay.ensure_session_relay("sess-timeout")
+    for n in range(1, 8):
+        session_queues["sess-timeout"].append({"n": n})  # relay is sitting at local cursor 7
+
+    result = await relay.wait_until_relayed("sess-timeout", backend_cursor=999, epoch="e1", timeout=0.1)
+
+    assert result.outcome == "timeout"
+    assert result.local_cursor == 7
+
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_checkpoints_pruned_when_idle_but_retained_for_pending_waiter():
+    """Old checkpoints are dropped once idle (past the grace window), except the
+    single latest, and except one still needed to straddle a pending waiter's
+    requested backend_cursor even if it's past the grace window."""
+    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=lambda *a, **k: None)
+    relay._session_queues["sess-prune"] = EventQueue()
+    queue = relay._session_queues["sess-prune"]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("src.poll_relay._CHECKPOINT_GRACE_SECONDS", 0.05)
+
+        for n in range(1, 4):
+            queue.append({"n": n})
+            relay._record_checkpoint(
+                "sess-prune",
+                _Checkpoint(
+                    epoch="e1", backend_cursor_before=n - 1, backend_cursor_after=n,
+                    local_cursor_before=n - 1, local_cursor_after=n, recorded_at=time.monotonic(),
+                ),
+            )
+
+        # Register a pending waiter interested in the OLDEST checkpoint's range
+        # before it ages out, so pruning must keep it alive past the grace window.
+        relay._pending_waiter_cursors["sess-prune"] = [0]
+
+        await asyncio.sleep(0.1)  # let all 3 checkpoints age past the grace window
+        relay._prune_checkpoints("sess-prune")
+
+        kept = relay._checkpoints["sess-prune"]
+        assert any(cp.backend_cursor_before == 0 for cp in kept)  # retained for the waiter
+        assert kept[-1].backend_cursor_after == 3  # latest always retained
+
+        relay._pending_waiter_cursors["sess-prune"] = []
+        relay._prune_checkpoints("sess-prune")
+        kept_after = relay._checkpoints["sess-prune"]
+        assert len(kept_after) == 1
+        assert kept_after[0].backend_cursor_after == 3  # only the latest survives once idle
+
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_checkpoints_retained_for_every_pending_waiter_not_just_the_minimum():
+    """Regression test (epic #1990 stage 5a review finding): pruning must protect
+    EVERY pending waiter's requested cursor, not just the smallest one — multiple
+    concurrent GET /messages calls for the same session can register waiters at
+    very different backend_cursor values. Before this fix, only the checkpoint
+    covering min(pending) (plus the single latest) survived, silently dropping a
+    non-minimum, non-latest waiter's checkpoint and corrupting its eventual
+    interpolation (it would fall through to the frontier's "current position"
+    instead, skipping everything in between)."""
+    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=lambda *a, **k: None)
+    relay._session_queues["sess-prune-multi"] = EventQueue()
+    queue = relay._session_queues["sess-prune-multi"]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("src.poll_relay._CHECKPOINT_GRACE_SECONDS", 0.05)
+
+        for n in range(1, 5):
+            queue.append({"n": n})
+            relay._record_checkpoint(
+                "sess-prune-multi",
+                _Checkpoint(
+                    epoch="e1", backend_cursor_before=n - 1, backend_cursor_after=n,
+                    local_cursor_before=n - 1, local_cursor_after=n, recorded_at=time.monotonic(),
+                ),
+            )
+
+        # Two concurrent waiters: one at the minimum (0), one at a MIDDLE cursor (2)
+        # that is neither the minimum nor covered by the single latest checkpoint.
+        relay._pending_waiter_cursors["sess-prune-multi"] = [0, 2]
+
+        await asyncio.sleep(0.1)  # let all 4 checkpoints age past the grace window
+        relay._prune_checkpoints("sess-prune-multi")
+
+        kept = relay._checkpoints["sess-prune-multi"]
+        assert any(cp.backend_cursor_before <= 0 <= cp.backend_cursor_after for cp in kept), (
+            "checkpoint for the minimum pending waiter (0) was pruned"
+        )
+        assert any(cp.backend_cursor_before <= 2 <= cp.backend_cursor_after for cp in kept), (
+            "checkpoint for the non-minimum pending waiter (2) was pruned"
+        )
+        assert relay._resolve_checkpoint("sess-prune-multi", "e1", 2) == 2
 
     await relay.stop()

@@ -35,7 +35,7 @@ Complete REST and WebSocket API reference for Claude WebUI. For backend architec
 | `PUT` | `/api/sessions/{id}/name` | Update session name |
 | `PUT` | `/api/sessions/{id}/permission-mode` | Set permission mode |
 | `POST` | `/api/sessions/{id}/messages` | Send message to session |
-| `GET` | `/api/sessions/{id}/messages` | Get messages (paginated: `limit`, `offset`) |
+| `GET` | `/api/sessions/{id}/messages` | Get messages (paginated: `limit`, `offset`) — epic #1990 stage 5a: a dedicated Frontend-side route (`src/routers/sessions.py`), not blind-relayed; substitutes the Frontend-local `event_cursor` for Backend's own via `PollRelay.wait_until_relayed()` |
 
 ### File Upload Endpoints
 
@@ -161,15 +161,30 @@ writes to; the Frontend API's read from a local `EventQueue` kept in sync by
   "events": [ /* array of event dicts — see Event Shape below */ ],
   "next_cursor": 1234,
   "reset": false,
-  "evicted": false
+  "evicted": false,
+  "epoch": "a1b2c3d4e5f6a7b8"
 }
 ```
 
 - `next_cursor`: pass as `since` on the next poll.
-- `reset`: the cursor space restarted beneath the caller (e.g. a Backend restart) — treat as
-  "local view may be stale," not just "nothing new."
+- `reset`: on Backend's own response (`backend/routers/poll.py`), still the original
+  cursor-magnitude signal (`shared/event_queue.py`'s `reset_occurred()`) — Backend's OWN
+  `EventQueue` instance was replaced beneath the caller (e.g. Backend's own restart). On the
+  Frontend API's response (`src/routers/poll.py`), epic #1990 stage 5a redefined it: "does
+  this batch contain a `stream_reset` event" — the LOCAL queue is pure auto-increment and
+  never regresses on its own, so the old cursor-magnitude check would never fire there for
+  the case it exists to catch. Either way: treat `reset: true` as "local view may be stale,"
+  not just "nothing new."
 - `evicted`: `since` predated the buffer's oldest retained event (genuinely-lost history,
-  distinct from a reset).
+  distinct from a reset). On the Frontend API's response this also surfaces a Backend-
+  reported eviction the relay itself observed (`PollRelay.consume_pending_evicted()`) even
+  though nothing about the LOCAL queue's own retained window changed.
+- `epoch`: which Backend-process generation produced this response (`secrets.token_hex(8)`,
+  regenerated once per Backend process at first import of `shared/event_envelope.py` —
+  `PROCESS_EPOCH`). Epic #1990 stage 5a. Not persisted — every Backend restart is a new
+  epoch by design. The Frontend API's own response surfaces the last epoch its poll-relay
+  observed for that stream (`PollRelay.last_epoch()`), not necessarily Backend's CURRENT
+  epoch if the relay hasn't polled since a restart yet.
 - The Frontend API's own response additionally carries `backend_status` (issue #1997).
 
 Typed on both tiers via `shared/poll_protocol.py`'s `PollBatch`/`parse_poll_response()`
@@ -193,7 +208,8 @@ Every element of `events` is a literal `EventEnvelope.to_dict()` (`shared/event_
   },
   "backend_id": "local",
   "scope": "20620d8a-05a9-4a04-a75b-63e0a637134a",
-  "event_id": "local:ui:20620d8a-05a9-4a04-a75b-63e0a637134a:42"
+  "event_id": "local:ui:20620d8a-05a9-4a04-a75b-63e0a637134a:42",
+  "epoch": "a1b2c3d4e5f6a7b8"
 }
 ```
 
@@ -202,9 +218,10 @@ Every element of `events` is a literal `EventEnvelope.to_dict()` (`shared/event_
 - `backend_id`: `"local"` (`shared.event_envelope.DEFAULT_BACKEND_ID`) for every
   Backend-originated event in today's single-backend-per-user deployment (issue #1818 will
   introduce other values). `"frontend-local"`
-  (`shared.event_envelope.FRONTEND_LOCAL_BACKEND_ID`) for the one Frontend-tier-direct write
-  (`src/routers/system.py`'s `server_restarting`, issued on the Frontend's own local
-  `ui_queue` rather than relayed from Backend) — kept distinct so its independently-numbered
+  (`shared.event_envelope.FRONTEND_LOCAL_BACKEND_ID`) for Frontend-tier-direct writes issued
+  on a local queue rather than relayed from Backend: `src/routers/system.py`'s
+  `server_restarting` (`ui_queue`), and epic #1990 stage 5a's `stream_reset`
+  (`src/poll_relay.py`, either queue) — kept distinct so their independently-numbered
   `sequence` can never collide with a relayed Backend event's `event_id` on the same queue.
 - `scope`: the session or project id this event is about, when one applies — omitted
   entirely (not `null`) when there isn't one (see `EventEnvelope.to_dict()`).
@@ -283,7 +300,18 @@ into the delivered envelope.
 | `context_update` | session | `input_tokens`, `context_window`, `context_pct` |
 | `tool_call` | session | `session_id`, `data` |
 | `resource_removed` | session | `resource_id` |
+| `stream_reset` | ui, session | `old_epoch`, `new_epoch` |
 | `proxy_event` | session | `data` |
+
+Epic #1990 stage 5a added `stream_reset` (valid on both `ui` and `session`): emitted by
+`src/poll_relay.py` into a LOCAL queue only — never by a Backend-side producer — when the
+relay observes the polled Backend `epoch` differ from what it last saw for that stream (a
+Backend restart made explicit, replacing the old cursor-magnitude inference). The browser's
+per-event dispatch treats it as a mid-batch resync trigger (see `frontend/src/stores/
+polling.js`): events before the marker in the same batch are legitimate pre-reset history and
+need no unwinding; the marker itself (and anything after it in that same batch) triggers the
+same full resync `reset: true` already does, rather than being treated as a normal incremental
+update.
 
 Stage 2b-B (#2065 AC7) wired up both previously-orphaned UI types: `server_restarting`
 is a cross-tab imminent-restart notice (every connected tab's `UI_EVENT_HANDLERS` calls
