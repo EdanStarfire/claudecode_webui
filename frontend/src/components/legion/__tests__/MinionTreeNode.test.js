@@ -176,7 +176,7 @@ describe('MinionTreeNode - filter dimming (issue #2050, Stage B)', () => {
 })
 
 describe('MinionTreeNode - compact row layout (issue #2061)', () => {
-  it('hides the role subtitle in compact mode even when roleSubtitle is present', async () => {
+  it('shows name + role on one line (em-dash separated) in compact mode, hiding the stacked role subtitle', async () => {
     const minionData = { id: 'sess-1', name: 'Minion One', children: [] }
     const { pinia, wrapper } = mountNode(minionData)
     const { useSessionStore } = await import('@/stores/session')
@@ -188,6 +188,32 @@ describe('MinionTreeNode - compact row layout (issue #2061)', () => {
     expect(wrapper.find('.node-row').classes()).toContain('compact')
     expect(wrapper.find('.minion-card').classes()).toContain('compact')
     expect(wrapper.find('.node-role').exists()).toBe(false)
+    expect(wrapper.find('.node-role-inline').exists()).toBe(true)
+    expect(wrapper.find('.node-role-inline').text()).toBe('— Researcher')
+  })
+
+  it('omits the inline role separator entirely when no role is present (no dangling em dash)', async () => {
+    const minionData = { id: 'sess-1', name: 'Minion One', children: [] }
+    const { pinia, wrapper } = mountNode(minionData)
+    const { useSessionStore } = await import('@/stores/session')
+    const { useUIStore } = await import('@/stores/ui')
+    useSessionStore(pinia).sessions.set('sess-1', makeSession({ session_id: 'sess-1', name: 'Minion One' }))
+    useUIStore(pinia).setCompactMinionTreeRows(true)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.node-role-inline').exists()).toBe(false)
+  })
+
+  it('omits the inline role separator for a whitespace-only role (no dangling em dash)', async () => {
+    const minionData = { id: 'sess-1', name: 'Minion One', children: [] }
+    const { pinia, wrapper } = mountNode(minionData)
+    const { useSessionStore } = await import('@/stores/session')
+    const { useUIStore } = await import('@/stores/ui')
+    useSessionStore(pinia).sessions.set('sess-1', makeSession({ session_id: 'sess-1', name: 'Minion One', role: '   ' }))
+    useUIStore(pinia).setCompactMinionTreeRows(true)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.node-role-inline').exists()).toBe(false)
   })
 
   it('still renders the role subtitle in normal mode (regression guard)', async () => {

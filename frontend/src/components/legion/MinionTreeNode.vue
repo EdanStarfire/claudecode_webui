@@ -17,8 +17,9 @@
           <span v-if="isOverseerWithChildren" class="me-2">👑</span>
 
           <div class="node-text">
-            <div class="node-name-row">
+            <div class="node-name-row" :class="{ compact: isCompact }">
               <strong class="node-name">{{ minionWithLiveData?.name || minionData.name }}</strong>
+              <span v-if="isCompact && roleSubtitle" class="node-role-inline text-muted" :title="roleSubtitle">— {{ roleSubtitle }}</span>
               <span v-if="isOverseerWithChildren" class="badge bg-secondary ms-2">
                 {{ minionData.children.length }} {{ minionData.children.length === 1 ? 'child' : 'children' }}
               </span>
@@ -126,7 +127,7 @@ const liveSession = computed(() => {
   return sessionStore.getSession(props.minionData.id)
 })
 
-const roleSubtitle = computed(() => liveSession.value?.role || '')
+const roleSubtitle = computed(() => (liveSession.value?.role || '').trim())
 
 const isCompact = computed(() => uiStore.compactMinionTreeRows)
 
@@ -511,6 +512,31 @@ function handleClick() {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+}
+
+.node-name-row.compact {
+  gap: 0.35rem;
+}
+
+.node-name-row.compact .node-name {
+  flex-shrink: 0;
+  max-width: 50%;
+}
+
+.node-name-row.compact .badge,
+.node-name-row.compact .collapse-toggle {
+  flex-shrink: 0;
+  margin-left: 0 !important;
+}
+
+.node-role-inline {
+  font-size: 0.75rem;
+  line-height: 1.2;
+  flex: 1 1 auto;
+  min-width: 2em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .node-role {
