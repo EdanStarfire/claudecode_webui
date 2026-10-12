@@ -166,6 +166,15 @@ export const useUIStore = defineStore('ui', () => {
     writeStorage('agentSort', mode)
   }
 
+  // Hierarchy sort direction ('asc' | 'desc') — persisted, independent of mode
+  const agentSortDirection = ref(readStorage('agentSortDirection', 'asc'))
+
+  function setAgentSortDirection(dir) {
+    if (dir !== 'asc' && dir !== 'desc') return
+    agentSortDirection.value = dir
+    writeStorage('agentSortDirection', dir)
+  }
+
   // Project overview view mode ('hierarchy' | 'flat') — persisted
   const projectViewMode = ref(readStorage('projectViewMode', 'hierarchy'))
 
@@ -182,6 +191,15 @@ export const useUIStore = defineStore('ui', () => {
     if (mode !== 'alpha' && mode !== 'creation' && mode !== 'last_active') return
     flatSort.value = mode
     writeStorage('flatSort', mode)
+  }
+
+  // Flat sort direction ('asc' | 'desc') — persisted, independent of mode
+  const flatSortDirection = ref(readStorage('flatSortDirection', 'asc'))
+
+  function setFlatSortDirection(dir) {
+    if (dir !== 'asc' && dir !== 'desc') return
+    flatSortDirection.value = dir
+    writeStorage('flatSortDirection', dir)
   }
 
   // Flat-list grouping mode ('none' | 'status' | 'custom') — persisted.
@@ -579,8 +597,10 @@ export const useUIStore = defineStore('ui', () => {
     appDataStatus,
     deepLinkFailure,
     agentSort,
+    agentSortDirection,
     projectViewMode,
     flatSort,
+    flatSortDirection,
     flatGroupMode,
     compactMinionTreeRows,
     maxPeekCards,
@@ -629,8 +649,10 @@ export const useUIStore = defineStore('ui', () => {
     setDeepLinkFailure,
     clearDeepLinkFailure,
     setAgentSort,
+    setAgentSortDirection,
     setProjectViewMode,
     setFlatSort,
+    setFlatSortDirection,
     setFlatGroupMode,
     setCompactMinionTreeRows,
     setMaxPeekCards,

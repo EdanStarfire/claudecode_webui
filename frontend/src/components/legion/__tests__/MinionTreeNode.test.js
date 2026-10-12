@@ -175,6 +175,41 @@ describe('MinionTreeNode - filter dimming (issue #2050, Stage B)', () => {
   })
 })
 
+describe('MinionTreeNode - nested children honor agentSortDirection (issue #2088)', () => {
+  it('reverses rendered child order when uiStore.agentSortDirection is desc', async () => {
+    const minionData = {
+      id: 'parent',
+      name: 'Parent',
+      children: [
+        { id: 'child-zebra', name: 'Zebra', children: [] },
+        { id: 'child-apple', name: 'Apple', children: [] },
+        { id: 'child-mango', name: 'Mango', children: [] },
+      ],
+    }
+    const { pinia, wrapper } = mountNode(minionData)
+    const { useSessionStore } = await import('@/stores/session')
+    const { useUIStore } = await import('@/stores/ui')
+    const sessionStore = useSessionStore(pinia)
+    sessionStore.sessions.set('parent', makeSession({ session_id: 'parent', name: 'Parent' }))
+    sessionStore.sessions.set('child-zebra', makeSession({ session_id: 'child-zebra', name: 'Zebra' }))
+    sessionStore.sessions.set('child-apple', makeSession({ session_id: 'child-apple', name: 'Apple' }))
+    sessionStore.sessions.set('child-mango', makeSession({ session_id: 'child-mango', name: 'Mango' }))
+
+    const uiStore = useUIStore(pinia)
+    uiStore.setAgentSort('alpha')
+    await wrapper.vm.$nextTick()
+
+    const ascNames = wrapper.findAll('.minion-children .node-name').map(n => n.text())
+    expect(ascNames).toEqual(['Apple', 'Mango', 'Zebra'])
+
+    uiStore.setAgentSortDirection('desc')
+    await wrapper.vm.$nextTick()
+
+    const descNames = wrapper.findAll('.minion-children .node-name').map(n => n.text())
+    expect(descNames).toEqual(['Zebra', 'Mango', 'Apple'])
+  })
+})
+
 describe('MinionTreeNode - compact row layout (issue #2061)', () => {
   it('shows name + role on one line (em-dash separated) in compact mode, hiding the stacked role subtitle', async () => {
     const minionData = { id: 'sess-1', name: 'Minion One', children: [] }

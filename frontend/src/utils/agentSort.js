@@ -11,21 +11,20 @@ export function normalizeLastActive(value) {
   return Number.isNaN(ms) ? null : ms
 }
 
-export function compareAgents(mode, a, b, { nameOf, orderOf, idOf, lastActiveOf }) {
+export function compareAgents(mode, a, b, { nameOf, orderOf, idOf, lastActiveOf }, direction = 1) {
+  let primary
   if (mode === SORT_ALPHA) {
-    const cmp = (nameOf(a) || '').localeCompare(nameOf(b) || '', undefined, { numeric: true, sensitivity: 'base' })
-    if (cmp !== 0) return cmp
-    return (idOf(a) || '').localeCompare(idOf(b) || '')
-  }
-  if (mode === SORT_LAST_ACTIVE) {
+    primary = (nameOf(a) || '').localeCompare(nameOf(b) || '', undefined, { numeric: true, sensitivity: 'base' })
+  } else if (mode === SORT_LAST_ACTIVE) {
     const la = lastActiveOf?.(a) ?? -Infinity
     const lb = lastActiveOf?.(b) ?? -Infinity
-    if (la !== lb) return lb - la   // DESC: most recent completion first; -Infinity sorts last
-    return (idOf(a) || '').localeCompare(idOf(b) || '')
+    primary = lb - la   // DESC: most recent completion first; -Infinity sorts last
+  } else {
+    // SORT_CREATION
+    const oa = orderOf(a) ?? Number.MAX_SAFE_INTEGER
+    const ob = orderOf(b) ?? Number.MAX_SAFE_INTEGER
+    primary = oa - ob
   }
-  // SORT_CREATION
-  const oa = orderOf(a) ?? Number.MAX_SAFE_INTEGER
-  const ob = orderOf(b) ?? Number.MAX_SAFE_INTEGER
-  if (oa !== ob) return oa - ob
+  if (primary !== 0) return direction * primary
   return (idOf(a) || '').localeCompare(idOf(b) || '')
 }

@@ -1176,6 +1176,10 @@ describe('virtualizer offset model (#1748 stage: offset-model)', () => {
     // Dispatching a real 'scroll' event (not just writing scrollTop) matters: the fix relies on
     // this component's own onScroll handler — a synchronous listener for that same event — having
     // already corrected `stickyToBottom` to false by the time the deferred callback checks it.
+    // Issue #2100: a bare 'scroll' event is no longer trusted as user-caused on its own — a
+    // preceding 'wheel' event simulates the genuine user-scroll gesture this test means to
+    // exercise.
+    el.dispatchEvent(new Event('wheel', { bubbles: true }))
     el.scrollTop = 1000
     el.dispatchEvent(new Event('scroll'))
 
@@ -1231,6 +1235,187 @@ describe('virtualizer offset model (#1748 stage: offset-model)', () => {
     await new Promise(r => setTimeout(r, 50))
 
     expect(scrollToSpy).toHaveBeenCalled()
+  })
+})
+
+// Issue #2100: autoscroll must only disable on a genuine user scroll gesture (wheel, touch,
+// keyboard, or scrollbar drag) — not on a bare native 'scroll' event with no user input, which
+// browser scroll anchoring can fire on its own when the virtualizer corrects a row's estimated
+// height to its real rendered size.
+describe('gesture-gated autoscroll (#2100)', () => {
+  async function setupGestureTest() {
+    const { pinia, container } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true }
+    })
+    const { useMessageStore } = await import('@/stores/message')
+    const { useUIStore } = await import('@/stores/ui')
+    const messageStore = useMessageStore(pinia)
+    const uiStore = useUIStore(pinia)
+    uiStore.autoScrollEnabled = true
+
+    messageStore.messagesBySession.set(SESSION_ID, [makeMessage({ type: 'assistant', content: 'First' })])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+    await new Promise(r => setTimeout(r, 50))
+
+    const el = container.querySelector('.messages-area')
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => 5000 })
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 600 })
+
+    return { pinia, container, el, uiStore, messageStore }
+  }
+
+  const FAR_SCROLL_TOP = 1000        // distance = 5000-1000-600 = 3400, past STICKY_THRESHOLD_PX
+  const NEAR_BOTTOM_SCROLL_TOP = 4980 // distance = 5000-4980-600 = -580, under STICKY_THRESHOLD_PX
+
+  it('a bare scroll event with no preceding gesture does not disable stickyToBottom (scroll-anchoring regression)', async () => {
+    const { el, uiStore } = await setupGestureTest()
+
+    // Establish a known sticky=true baseline via a real gesture first — a plain mount in this
+    // test harness doesn't itself populate uiStore's per-session map (that only happens via a
+    // gated scroll recompute, or a few other explicit call sites not exercised here).
+    el.dispatchEvent(new Event('wheel', { bubbles: true }))
+    el.scrollTop = NEAR_BOTTOM_SCROLL_TOP
+    el.dispatchEvent(new Event('scroll'))
+    expect(uiStore.stickyToBottomBySession.get(SESSION_ID)).toBe(true)
+
+    // Let that gesture's window fully expire — a scroll within it is legitimately still trusted
+    // by design (the window is time-based, not per-event-causal), so the "bare" scroll under
+    // test must land after it closes to actually exercise the no-gesture path.
+    await new Promise(r => setTimeout(r, 300))
+
+    el.scrollTop = FAR_SCROLL_TOP
+    el.dispatchEvent(new Event('scroll'))
+
+    expect(uiStore.stickyToBottomBySession.get(SESSION_ID)).toBe(true)
+  })
+
+  it('wheel followed by scroll disables stickyToBottom', async () => {
+    const { el, uiStore } = await setupGestureTest()
+
+    el.dispatchEvent(new Event('wheel', { bubbles: true }))
+    el.scrollTop = FAR_SCROLL_TOP
+    el.dispatchEvent(new Event('scroll'))
+
+    expect(uiStore.stickyToBottomBySession.get(SESSION_ID)).toBe(false)
+  })
+
+  it('touchstart followed by touchmove then scroll disables stickyToBottom', async () => {
+    const { el, uiStore } = await setupGestureTest()
+
+    el.dispatchEvent(new Event('touchstart', { bubbles: true }))
+    el.dispatchEvent(new Event('touchmove', { bubbles: true }))
+    el.scrollTop = FAR_SCROLL_TOP
+    el.dispatchEvent(new Event('scroll'))
+
+    expect(uiStore.stickyToBottomBySession.get(SESSION_ID)).toBe(false)
+  })
+
+  it('a plain tap (touchstart+touchend with no touchmove) does not open a momentum window for a later unrelated scroll', async () => {
+    const { el, uiStore } = await setupGestureTest()
+
+    // Establish a known sticky=true baseline via a real gesture first (see the "bare scroll"
+    // test above for why this is needed in this harness).
+    el.dispatchEvent(new Event('wheel', { bubbles: true }))
+    el.scrollTop = NEAR_BOTTOM_SCROLL_TOP
+    el.dispatchEvent(new Event('scroll'))
+    expect(uiStore.stickyToBottomBySession.get(SESSION_ID)).toBe(true)
+    await new Promise(r => setTimeout(r, 300))
+
+    el.dispatchEvent(new Event('touchstart', { bubbles: true }))
+    el.dispatchEvent(new Event('touchend', { bubbles: true }))
+
+    // Past GESTURE_WINDOW_MS but still well under TOUCH_MOMENTUM_CAP_MS — if the tap had
+    // incorrectly opened a momentum window (no movement ever happened, so there's no momentum
+    // to track), this later bare scroll would still be wrongly trusted.
+    await new Promise(r => setTimeout(r, 300))
+
+    el.scrollTop = FAR_SCROLL_TOP
+    el.dispatchEvent(new Event('scroll'))
+
+    expect(uiStore.stickyToBottomBySession.get(SESSION_ID)).toBe(true)
+  })
+
+  it('touch momentum scroll arriving after touchend, within the hard cap, still disables stickyToBottom', async () => {
+    const { el, uiStore } = await setupGestureTest()
+
+    el.dispatchEvent(new Event('touchstart', { bubbles: true }))
+    el.dispatchEvent(new Event('touchmove', { bubbles: true }))
+    el.dispatchEvent(new Event('touchend', { bubbles: true }))
+
+    // Past GESTURE_WINDOW_MS (250ms) but well under TOUCH_MOMENTUM_CAP_MS (2000ms) — simulates
+    // native momentum still decelerating after the finger has lifted.
+    await new Promise(r => setTimeout(r, 300))
+
+    el.scrollTop = FAR_SCROLL_TOP
+    el.dispatchEvent(new Event('scroll'))
+
+    expect(uiStore.stickyToBottomBySession.get(SESSION_ID)).toBe(false)
+  })
+
+  it('ArrowUp keydown on window then scroll disables stickyToBottom; the same keydown while focus is in a textarea does not', async () => {
+    const { el, uiStore } = await setupGestureTest()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp' }))
+    el.scrollTop = FAR_SCROLL_TOP
+    el.dispatchEvent(new Event('scroll'))
+    expect(uiStore.stickyToBottomBySession.get(SESSION_ID)).toBe(false)
+
+    // Re-enable via a genuine gesture before testing the InputArea exclusion in isolation.
+    el.dispatchEvent(new Event('wheel', { bubbles: true }))
+    el.scrollTop = NEAR_BOTTOM_SCROLL_TOP
+    el.dispatchEvent(new Event('scroll'))
+    expect(uiStore.stickyToBottomBySession.get(SESSION_ID)).toBe(true)
+
+    // Let that gesture's window fully expire so it can't bleed into the exclusion check below.
+    await new Promise(r => setTimeout(r, 300))
+
+    // InputArea.vue is a sibling component sharing the page — typing ArrowUp in its textarea
+    // must not open a gesture window.
+    const textarea = document.createElement('textarea')
+    document.body.appendChild(textarea)
+    textarea.focus()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp' }))
+    el.scrollTop = FAR_SCROLL_TOP
+    el.dispatchEvent(new Event('scroll'))
+    expect(uiStore.stickyToBottomBySession.get(SESSION_ID)).toBe(true)
+    document.body.removeChild(textarea)
+  })
+
+  it('mousedown then scroll disables stickyToBottom (scrollbar drag); the window closes shortly after mouseup', async () => {
+    const { el, uiStore } = await setupGestureTest()
+
+    el.dispatchEvent(new Event('mousedown', { bubbles: true }))
+    el.scrollTop = FAR_SCROLL_TOP
+    el.dispatchEvent(new Event('scroll'))
+    expect(uiStore.stickyToBottomBySession.get(SESSION_ID)).toBe(false)
+
+    // Still held — scrolling back near the bottom via the same drag re-enables stickiness.
+    el.scrollTop = NEAR_BOTTOM_SCROLL_TOP
+    el.dispatchEvent(new Event('scroll'))
+    expect(uiStore.stickyToBottomBySession.get(SESSION_ID)).toBe(true)
+
+    el.dispatchEvent(new Event('mouseup', { bubbles: true }))
+    await new Promise(r => setTimeout(r, 300)) // past GESTURE_WINDOW_MS
+
+    // Window has closed — a later bare scroll away from the bottom must not disable stickiness.
+    el.scrollTop = FAR_SCROLL_TOP
+    el.dispatchEvent(new Event('scroll'))
+    expect(uiStore.stickyToBottomBySession.get(SESSION_ID)).toBe(true)
+  })
+
+  it('scrolling back down near the bottom after a real gesture still re-enables stickyToBottom', async () => {
+    const { el, uiStore } = await setupGestureTest()
+
+    el.dispatchEvent(new Event('wheel', { bubbles: true }))
+    el.scrollTop = FAR_SCROLL_TOP
+    el.dispatchEvent(new Event('scroll'))
+    expect(uiStore.stickyToBottomBySession.get(SESSION_ID)).toBe(false)
+
+    el.dispatchEvent(new Event('wheel', { bubbles: true }))
+    el.scrollTop = NEAR_BOTTOM_SCROLL_TOP
+    el.dispatchEvent(new Event('scroll'))
+    expect(uiStore.stickyToBottomBySession.get(SESSION_ID)).toBe(true)
   })
 })
 

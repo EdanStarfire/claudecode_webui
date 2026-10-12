@@ -125,7 +125,7 @@
 </template>
 
 <script setup>
-import { computed, inject, onActivated, onDeactivated, provide, ref, watch, nextTick } from 'vue'
+import { computed, inject, onActivated, onDeactivated, onMounted, onUnmounted, provide, ref, watch, nextTick } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
@@ -164,6 +164,27 @@ const isProgrammaticScroll = ref(false)
 const isInitialLoad = ref(false)
 const stickyToBottom = ref(true)
 const STICKY_THRESHOLD_PX = 24
+
+// Issue #2100: a 'scroll' event alone doesn't tell us whether the user actually caused it —
+// browser scroll anchoring fires a genuine native 'scroll' event when the virtualizer corrects
+// a row's estimated height to its real rendered size, with zero user input. userGestureActive
+// gates onScroll()'s sticky-state recompute on "was there a real user input gesture recently."
+// GESTURE_WINDOW_MS: discrete gestures (wheel/keydown/mousedown-mouseup) either cause the
+// resulting scroll in the same/next frame or keep re-firing for as long as the gesture
+// continues, so a short fixed window renewed on every event is enough — generous relative to a
+// frame budget, tight enough to expire once the gesture truly stops.
+// TOUCH_MOMENTUM_CAP_MS: touch is different — after touchend, native momentum scrolling keeps
+// producing 'scroll' events with no further JS gesture events, for a duration that varies by
+// flick strength. The window is kept open and renewed by GESTURE_WINDOW_MS on every subsequent
+// scroll event (tracking actual momentum instead of guessing its duration), bounded by this hard
+// cap so a scroll long after momentum has settled doesn't get misattributed.
+const GESTURE_WINDOW_MS = 250
+const TOUCH_MOMENTUM_CAP_MS = 2000
+const userGestureActive = ref(false)
+let gestureExpiryTimer = null
+let touchDown = false
+let touchMoved = false // whether a touchmove occurred since the current touchstart
+let touchMomentumDeadline = null // timestamp (ms); set at touchend, cleared at touchstart/expiry
 
 // Per-instance message and tool-call sources derived from the injected session id.
 const sessionMessages = computed(() => messageStore.messagesBySession.get(viewSessionId.value) || [])
@@ -463,17 +484,30 @@ const laneOffsets = computed(() => {
 // long unmounted span would visibly animate past mostly-empty spacer space. The final
 // `scrollIntoView` correction below stays smooth — by the time it runs the target is confirmed
 // mounted, so it's a small, real-content distance where smooth easing reads as intentional.
+// Issue #2100: a jump-navigation scroll (gutter chip click, turn jump button, deep-link) is a
+// deliberate user-triggered action even though it fires no wheel/touch/keydown/mousedown event
+// of its own — without this, the resulting 'scroll' event would be gated out as untrusted, so
+// stickyToBottom would never update away from `true`, and the virtualizer's own onChange (which
+// drives scheduleStickyScroll) would then auto-scroll straight back to the bottom, fighting the
+// jump. Not wrapped in guardProgrammaticScroll instead: that path intentionally SKIPS the sticky
+// recompute entirely (trusted as "this component's own bookkeeping write"), whereas a jump needs
+// the opposite — a real recompute against wherever it actually landed.
+function scrollToItemIndexTrusted(index, opts) {
+  renewGestureWindow()
+  return virtualNav.scrollToItemIndex(index, opts)
+}
+
 async function onGutterChipClick(lane) {
   const index = resolveSubagentPrimaryIndex(lane.taskId, lane.legIndex)
   if (index == null) return
-  const mounted = await virtualNav.scrollToItemIndex(index, { align: 'auto', behavior: 'auto' })
+  const mounted = await scrollToItemIndexTrusted(index, { align: 'auto', behavior: 'auto' })
   if (!mounted) return
   document.getElementById(`subagent-anchor-primary-${lane.taskId}-${lane.legIndex}`)
     ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
 }
 
 defineExpose({
-  scrollToItemIndex: virtualNav.scrollToItemIndex,
+  scrollToItemIndex: scrollToItemIndexTrusted,
   resolveToolAnchorIndex,
   resolveSubagentPrimaryIndex,
   findPrevTurnIndex,
@@ -1059,9 +1093,78 @@ function scheduleStickyScroll() {
 }
 
 
+// Issue #2100: opens/renews the userGestureActive window. Shared by every discrete gesture
+// (wheel, scroll-relevant keydown, mousedown/mouseup, touchmove) and by touch-momentum renewal
+// in onScroll below — all of them just need "stay active, decaying after GESTURE_WINDOW_MS of
+// silence." The expiry check defers to `touchDown` so the window never closes while a finger is
+// physically still on the screen, even if GESTURE_WINDOW_MS elapses without a touchmove.
+function renewGestureWindow() {
+  userGestureActive.value = true
+  clearTimeout(gestureExpiryTimer)
+  gestureExpiryTimer = setTimeout(() => {
+    if (touchDown) return
+    userGestureActive.value = false
+    // touchMomentumDeadline is NOT cleared here — it has its own independent, longer-lived
+    // (up to TOUCH_MOMENTUM_CAP_MS) lifecycle, consumed only by onScroll's own momentum check
+    // below. Clearing it on this 250ms discrete decay would kill momentum tracking almost
+    // immediately after every touchend, defeating its entire purpose.
+  }, GESTURE_WINDOW_MS)
+}
+
+function isTextEntryTarget(el) {
+  if (!el) return false
+  if (el.isContentEditable) return true
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT'
+}
+
+const SCROLL_RELEVANT_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '])
+
+// InputArea.vue is a sibling component on the same page — without this exclusion, typing
+// Home/End/Arrow/Space in its textarea (all common text-editing keys) would spuriously open a
+// gesture window with no actual scroll happening.
+function onGestureKeydown(e) {
+  if (!SCROLL_RELEVANT_KEYS.has(e.key)) return
+  if (isTextEntryTarget(document.activeElement)) return
+  renewGestureWindow()
+}
+
+function onGestureTouchStart() {
+  touchDown = true
+  touchMoved = false
+  touchMomentumDeadline = null
+  renewGestureWindow()
+}
+
+function onGestureTouchMove() {
+  touchMoved = true
+  renewGestureWindow()
+}
+
+// Only a flick (touchstart -> at least one touchmove -> touchend) gets the momentum-cap grace
+// period — a plain tap (e.g. tapping a button inside the message list) never moved, so native
+// momentum scrolling can't follow it. Without this check, any tap would open a 2-second window
+// in which an unrelated later scroll (e.g. a scroll-anchoring correction) gets misattributed —
+// a much wider false-positive surface than this component's other gestures.
+function onGestureTouchEnd() {
+  touchDown = false
+  touchMomentumDeadline = touchMoved ? Date.now() + TOUCH_MOMENTUM_CAP_MS : null
+  renewGestureWindow()
+}
+
 // Scroll event handler: track user-initiated scroll position and guard programmatic scrolls
 function onScroll() {
   if (isProgrammaticScroll.value) return
+  // Issue #2100: during the post-touchend momentum phase, there are no further JS gesture
+  // events — only the 'scroll' events momentum itself produces. Renew the window from here,
+  // bounded by the hard cap, so momentum tracks its own actual duration instead of a guess.
+  if (touchMomentumDeadline != null) {
+    if (Date.now() < touchMomentumDeadline) {
+      renewGestureWindow()
+    } else {
+      touchMomentumDeadline = null
+    }
+  }
+  if (!userGestureActive.value) return
   const el = messagesArea.value
   if (!el) return
   recomputeStickyFromScroll(el)
@@ -1099,6 +1202,45 @@ watch(() => sessionMessages.value.length, (newLen) => {
     }
   }
   lastSeenMessageCount.value = newLen
+})
+
+// Issue #2100: gesture listeners are scoped to this component's own scroll container (not
+// window), so a gesture over an unrelated page region (e.g. scrolling the sidebar) doesn't
+// falsely open a window here. keydown is the one exception — keyboard scroll can fire while
+// focus is on document.body, not necessarily on .messages-area itself — so it's attached to
+// window and relies on onGestureKeydown's own activeElement/key filtering. Attached once per
+// real mount (onMounted/onUnmounted, not onActivated/onDeactivated) since KeepAlive preserves
+// this component instance across activate/deactivate cycles — matching how the virtualizer's
+// own measurement cache already persists across those cycles (see onDeactivated's comment).
+onMounted(() => {
+  const el = messagesArea.value
+  if (el) {
+    // wheel/mousedown/mouseup need no logic beyond "renew the window" — registered directly.
+    // mousedown/mouseup cover scrollbar-thumb drag and scrollbar-track clicks, which fire
+    // 'scroll' events but no wheel/touchmove events — needed so "manually scrolling via any
+    // input method" (issue acceptance criteria) also covers dragging the native scrollbar.
+    el.addEventListener('wheel', renewGestureWindow, { passive: true })
+    el.addEventListener('touchstart', onGestureTouchStart, { passive: true })
+    el.addEventListener('touchmove', onGestureTouchMove, { passive: true })
+    el.addEventListener('touchend', onGestureTouchEnd, { passive: true })
+    el.addEventListener('mousedown', renewGestureWindow, { passive: true })
+    el.addEventListener('mouseup', renewGestureWindow, { passive: true })
+  }
+  window.addEventListener('keydown', onGestureKeydown)
+})
+
+onUnmounted(() => {
+  const el = messagesArea.value
+  if (el) {
+    el.removeEventListener('wheel', renewGestureWindow)
+    el.removeEventListener('touchstart', onGestureTouchStart)
+    el.removeEventListener('touchmove', onGestureTouchMove)
+    el.removeEventListener('touchend', onGestureTouchEnd)
+    el.removeEventListener('mousedown', renewGestureWindow)
+    el.removeEventListener('mouseup', renewGestureWindow)
+  }
+  window.removeEventListener('keydown', onGestureKeydown)
+  clearTimeout(gestureExpiryTimer)
 })
 
 onActivated(async () => {
