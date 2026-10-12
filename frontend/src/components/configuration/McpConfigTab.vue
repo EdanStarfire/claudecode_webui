@@ -366,6 +366,16 @@
         </label>
       </div>
 
+      <div v-if="pendingDiscardWarning" class="alert alert-warning py-2 small mb-2">
+        You have an unsaved {{ form.type === 'stdio' ? 'environment variable' : 'header' }}
+        "<strong>{{ pendingStagingKey() }}</strong>" that hasn't been added with the
+        <code>+</code> button. Saving now will discard it.
+        <div class="d-flex gap-2 mt-2">
+          <button class="btn btn-warning btn-sm" @click="confirmSaveAnyway">Save Anyway</button>
+          <button class="btn btn-outline-secondary btn-sm" @click="cancelDiscardWarning">Go Back</button>
+        </div>
+      </div>
+
       <div v-if="formError" class="alert alert-danger py-1 small mb-2">{{ formError }}</div>
 
       <div class="d-flex gap-2">
@@ -489,7 +499,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useMcpConfigStore, OAUTH_STATUS } from '@/stores/mcpConfig'
 import { useSecretsStore } from '@/stores/secrets'
 import McpToolList from '@/components/session/McpToolList.vue'
@@ -502,6 +512,10 @@ const editingId = ref(null)
 const saving = ref(false)
 const formError = ref(null)
 const deletingConfig = ref(null)
+// Tracks only "did the user try to save while something was pending" — actual
+// visibility is derived below so it self-clears if the pending key is resolved
+// any other way (clicking "+", switching the STDIO/SSE/HTTP type) while open.
+const saveBlockedByPending = ref(false)
 
 const form = reactive({
   name: '',
@@ -798,6 +812,7 @@ function resetForm() {
   newEnvVal.value = ''
   newHeaderKey.value = ''
   newHeaderVal.value = ''
+  saveBlockedByPending.value = false
 }
 
 function startCreate() {
@@ -857,7 +872,30 @@ function removeHeader(key) {
   delete form.headers[key]
 }
 
-async function saveForm() {
+function pendingStagingKey() {
+  return form.type === 'stdio' ? newEnvKey.value.trim() : newHeaderKey.value.trim()
+}
+
+const pendingDiscardWarning = computed(() => saveBlockedByPending.value && !!pendingStagingKey())
+
+function saveForm() {
+  if (pendingStagingKey()) {
+    saveBlockedByPending.value = true
+    return
+  }
+  performSave()
+}
+
+function confirmSaveAnyway() {
+  saveBlockedByPending.value = false
+  performSave()
+}
+
+function cancelDiscardWarning() {
+  saveBlockedByPending.value = false
+}
+
+async function performSave() {
   saving.value = true
   formError.value = null
   try {
