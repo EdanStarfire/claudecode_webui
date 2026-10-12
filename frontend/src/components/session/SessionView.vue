@@ -64,6 +64,7 @@ import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
 import { useResourceStore } from '@/stores/resource'
 import { useUIStore } from '@/stores/ui'
+import { usePollingStore } from '@/stores/polling'
 import { apiGet } from '@/utils/api'
 import SessionStateStatusLine from './SessionStateStatusLine.vue'
 import SessionStatusBar from '../statusbar/SessionStatusBar.vue'
@@ -104,6 +105,7 @@ const sessionStore = useSessionStore()
 const messageStore = useMessageStore()
 const resourceStore = useResourceStore()
 const uiStore = useUIStore()
+const pollingStore = usePollingStore()
 
 // Per-instance session lookup — safe under KeepAlive (reads this instance's own session).
 const currentSession = computed(() => sessionStore.sessions.get(props.sessionId))
@@ -187,6 +189,12 @@ onActivated(async () => {
     // Set currentSessionId so AgentOverview can display for deleted agents
     sessionStore.currentSessionId = props.sessionId
     sessionStore.lastViewedArchive.set(props.sessionId, effectiveArchiveId.value)
+    // Epic #1990 stage 5b (AC3/UC3): an archived session view never starts a poll
+    // loop at all — mark the session connection explicitly archived instead of
+    // leaving wsStore.currentSessionId/sessionConn.state untouched (an implicit,
+    // uninspectable absence the header could misread as either a stale "connected"
+    // from a previously-viewed live session, or a spurious "disconnected").
+    pollingStore.markSessionArchived(props.sessionId)
     // Guard: skip reload if archive messages are already in the store from the first visit.
     if (!messageStore.messagesBySession.has(props.sessionId)) {
       await loadArchiveMessages()
@@ -208,6 +216,14 @@ onDeactivated(() => {
     messageStore.clearArchiveMessages(props.sessionId)
     resourceStore.clearResources(props.sessionId)
     resourceStore.clearArchiveContext(props.sessionId)
+    // Builder-review finding: deliberately NOT calling pollingStore.disconnectSession()
+    // here. The same sessionId can have a separate, concurrently KeepAlive-cached LIVE
+    // instance (the user flips between "live" and "archive X" tabs for the same agent) —
+    // disconnecting here would kill that live instance's still-running poll loop with
+    // nothing to ever restart it (sessionStore.currentSessionId never changes across this
+    // navigation, so the live instance's own onActivated early-returns and never
+    // re-selects). markSessionArchived() already disconnects-before-marking on its own
+    // next call, which is the correct place for this teardown to live.
   }
   teardownBottomStackObserver()
 })
@@ -228,6 +244,7 @@ onUnmounted(() => {
     messageStore.clearArchiveMessages(props.sessionId)
     resourceStore.clearResources(props.sessionId)
     resourceStore.clearArchiveContext(props.sessionId)
+    // See onDeactivated's identical note above — same reasoning applies to LRU eviction.
   }
   teardownBottomStackObserver()
 })

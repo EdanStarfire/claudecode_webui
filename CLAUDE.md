@@ -363,10 +363,12 @@ For detailed store documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE.md#
 ### 4. Polling Store (`stores/polling.js`)
 **Responsibility**: HTTP long-polling event streams (UI + per-session), outbound message dispatch
 
-**State**:
-- `uiConnected`, `uiRetryCount`: Global UI poll status
-- `sessionConnected`, `sessionRetryCount`: Session poll status
-- `sessionCursors` (Map): Cursor position per session for incremental polling
+**State** (Epic #1990 stage 5b: one `StreamConnection` state machine per stream — states
+`idle | connecting | connected | resyncing | backoff | unreachable | archived`, liveness
+derived only from poll responses/fetch outcomes, no wall-clock staleness timers):
+- `uiState`, `uiRetryCount`, `uiBackendStatus`: UI stream's own connection state/backend health
+- `sessionState`, `sessionRetryCount`, `sessionBackendStatus`, `sessionHasEverConnected`: session stream's own connection state/backend health
+- `sessionCursors` (Map): cross-session cursor cache so switching back to a previously-viewed session resumes incrementally, separate from each StreamConnection's own live cursor
 
 **Key Actions**:
 - `startUIPolling()`: Long-poll loop against `/api/poll/ui`

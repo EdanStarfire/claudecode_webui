@@ -341,8 +341,13 @@ function delta(type, sessionId, event) {
   return { uuid: 'env-' + Math.random(), event: { type, ...event } }
 }
 
-describe('content_block_start (tool_use) early tool card (Issue #1573)', () => {
-  it('creates a single pending card with correct id/name/status/input', async () => {
+describe('content_block_start (tool_use) streaming-preview handoff (Issue #1573, AC4 stage 5b)', () => {
+  it('does not synthesize a tool card on its own — the server\'s own tool_call record is authoritative', async () => {
+    // Issue #2129 stage 5b (AC4): backend/web_server.py::_create_message_callback emits the
+    // real tool_call record into the same per-session EventQueue BEFORE the paired
+    // assistant_delta for this same content_block_start, so no client-side synthesis is
+    // needed — a content_block_start arriving with no prior tool_call record must not create
+    // a card out of thin air.
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
     const SID = 'sess-early-card'
@@ -352,31 +357,31 @@ describe('content_block_start (tool_use) early tool card (Issue #1573)', () => {
       content_block: { type: 'tool_use', id: 'toolu_1', name: 'Bash' }
     }))
 
-    const toolCalls = store.toolCallsBySession.get(SID)
-    expect(toolCalls.length).toBe(1)
-    expect(toolCalls[0]).toMatchObject({
-      id: 'toolu_1',
-      name: 'Bash',
-      status: 'pending',
-      input: {}
-    })
+    expect(store.toolCallsBySession.get(SID)).toBeUndefined()
   })
 
-  it('a subsequent full tool_call for the same id updates the card in place (no duplicate)', async () => {
+  it('registers the streaming-preview "Starting..." indicator once the server-ordered tool_call record already exists', async () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
-    const SID = 'sess-early-card-update'
+    const SID = 'sess-early-card-preview'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, {}))
+    // Server-authored record arrives first, per the guaranteed EventQueue ordering.
+    store.applyRecord(SID, { type: 'tool_call',
+      tool_use_id: 'toolu_2', name: 'Bash', input: {}, status: 'pending'
+    }, 'live')
 
     store.handleAssistantDelta(SID, delta('content_block_start', SID, {
       index: 1,
       content_block: { type: 'tool_use', id: 'toolu_2', name: 'Bash' }
     }))
 
+    const preview = store.streamingPreviewBySession.get(SID)
+    expect(preview.pendingTools).toEqual([{ id: 'toolu_2', name: 'Bash' }])
+
+    // A subsequent full tool_call update for the same id updates the one existing card in place.
     store.applyRecord(SID, { type: 'tool_call',
-      tool_use_id: 'toolu_2',
-      name: 'Bash',
-      input: { command: 'ls -la' },
-      status: 'running'
+      tool_use_id: 'toolu_2', name: 'Bash', input: { command: 'ls -la' }, status: 'running'
     }, 'live')
 
     const toolCalls = store.toolCallsBySession.get(SID)
@@ -385,7 +390,26 @@ describe('content_block_start (tool_use) early tool card (Issue #1573)', () => {
     expect(toolCalls[0].input).toEqual({ command: 'ls -la' })
   })
 
-  it('early card becomes orphaned once the backend delivers its own interrupted tool_call record (#2110 stage 4b-B / AC2)', async () => {
+  it('a content_block_start for an already-terminal card does not register the preview indicator', async () => {
+    const { useMessageStore } = await import('@/stores/message')
+    const store = useMessageStore()
+    const SID = 'sess-early-card-no-preview'
+
+    store.handleAssistantDelta(SID, delta('message_start', SID, {}))
+    store.applyRecord(SID, { type: 'tool_call',
+      tool_use_id: 'toolu_3', name: 'Write', input: {}, status: 'completed', result: 'ok'
+    }, 'live')
+
+    store.handleAssistantDelta(SID, delta('content_block_start', SID, {
+      index: 1,
+      content_block: { type: 'tool_use', id: 'toolu_3', name: 'Write' }
+    }))
+
+    const preview = store.streamingPreviewBySession.get(SID)
+    expect(preview.pendingTools).toEqual([])
+  })
+
+  it('card becomes orphaned once the backend delivers its own interrupted tool_call record (#2110 stage 4b-B / AC2)', async () => {
     // Issue #2110 (stage 4b-B, AC2): the browser-side orphan sweep (inferring "the open tool
     // must be orphaned" from a bare interrupt/client_launched system message) is deleted — the
     // backend is now the sole authority, and always sends its own tool_call record with
@@ -396,21 +420,18 @@ describe('content_block_start (tool_use) early tool card (Issue #1573)', () => {
     const store = useMessageStore()
     const SID = 'sess-early-card-interrupt'
 
-    store.handleAssistantDelta(SID, delta('content_block_start', SID, {
-      index: 1,
-      content_block: { type: 'tool_use', id: 'toolu_3', name: 'Write' }
-    }))
+    store.applyRecord(SID, { type: 'tool_call', tool_use_id: 'toolu_3b', name: 'Write', input: {}, status: 'pending' }, 'live')
 
     // A bare interrupt system message, with no accompanying backend tool_call record, leaves
-    // the early card exactly as it was — no sweep infers orphaning from it anymore.
+    // the card exactly as it was — no sweep infers orphaning from it anymore.
     store.applyRecord(SID, makeMessage({ type: 'system', content: '', metadata: { subtype: 'interrupt' } }), 'live')
-    let tc = store.toolCallsBySession.get(SID).find(t => t.id === 'toolu_3')
+    let tc = store.toolCallsBySession.get(SID).find(t => t.id === 'toolu_3b')
     expect(getEffectiveStatusForTool(tc)).toBe('pending')
 
     // The backend's own authoritative tool_call record for this tool_use_id is what actually
     // resolves it as orphaned.
-    store.applyRecord(SID, { type: 'tool_call', tool_use_id: 'toolu_3', name: 'Write', input: {}, status: 'interrupted' }, 'live')
-    tc = store.toolCallsBySession.get(SID).find(t => t.id === 'toolu_3')
+    store.applyRecord(SID, { type: 'tool_call', tool_use_id: 'toolu_3b', name: 'Write', input: {}, status: 'interrupted' }, 'live')
+    tc = store.toolCallsBySession.get(SID).find(t => t.id === 'toolu_3b')
     expect(getEffectiveStatusForTool(tc)).toBe('orphaned')
   })
 
@@ -469,6 +490,9 @@ describe('content_block_start (tool_use) early tool card (Issue #1573)', () => {
     const { useMessageStore } = await import('@/stores/message')
     const store = useMessageStore()
     const SID = 'sess-early-card-multi'
+
+    store.applyRecord(SID, { type: 'tool_call', tool_use_id: 'toolu_a', name: 'Read', input: {}, status: 'pending' }, 'live')
+    store.applyRecord(SID, { type: 'tool_call', tool_use_id: 'toolu_b', name: 'Bash', input: {}, status: 'pending' }, 'live')
 
     store.handleAssistantDelta(SID, delta('content_block_start', SID, {
       index: 1,

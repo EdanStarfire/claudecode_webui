@@ -93,56 +93,63 @@ const sessionStore = useSessionStore()
 const route = useRoute()
 const router = useRouter()
 
-// Issue #1960: this single dot is the app's only live connection indicator — it must
-// reflect both the global UI-poll channel and (when a session poll loop is actually
-// running) the session-poll channel, since a silently-stalled session-poll connection
-// is exactly the bug this closes. Retry-backoff takes priority over "stalled" so a
-// session mid-recovery doesn't flip between the two on every watchdog tick; the UI
-// channel has no stall/heartbeat subsystem, so it can only ever be
-// connected/reconnecting/disconnected.
-function channelState({ connected, retryCount, stalled }) {
-  if (retryCount > 0 && !connected) return 'reconnecting'
-  if (connected && stalled) return 'stalled'
-  if (connected) return 'connected'
-  return 'disconnected'
+// Epic #1990 stage 5b: this single dot is the app's only live connection indicator — it
+// derives directly from each StreamConnection's own `state`, never from wall-clock
+// inference. `idle`/`connecting` both read as "disconnected" (a session that has never
+// yet connected looks the same as the brief in-flight-fetch state); `archived` is handled
+// as a separate override below rather than through this severity table, since it's a
+// calm/informational state that should only win when nothing else needs attention.
+function labelForState(state) {
+  if (state === 'idle' || state === 'connecting') return 'disconnected'
+  if (state === 'unreachable') return 'backend-unreachable'
+  if (state === 'backoff') return 'reconnecting'
+  if (state === 'resyncing') return 'resyncing'
+  if (state === 'connected') return 'connected'
+  return null
 }
 
 // Worst-to-best: an outright browser<->Frontend disconnect is the most alarming (Backend's
 // status can't even be observed), followed by a genuine Backend outage (issue #1989 —
 // "degraded" ranked worse than plain "unreachable" since it needs a manual restart rather
-// than self-healing), then active retry, then a silent stall (still "connected" from the
-// transport's point of view), then healthy.
+// than self-healing), then active retry, then an in-progress resync (the slot "stalled"
+// used to occupy), then healthy.
 const STATE_SEVERITY = {
   disconnected: 0,
   'backend-degraded': 1,
   'backend-unreachable': 2,
   reconnecting: 3,
-  stalled: 4,
+  resyncing: 4,
+  partial: 4.5,
   connected: 5,
 }
 
-// Issue #1977 (AC4): a failed initial data load reuses the existing "stalled" visual
-// treatment (transport connected, but something's wrong) so this dot never reads
-// "Connected" while the app is actually showing nothing.
-const uiChannelState = computed(() => channelState({
-  connected: wsStore.uiConnected, retryCount: wsStore.uiRetryCount, stalled: uiStore.appDataStatus === 'failed'
-}))
-// Gated on wsStore's OWN currentSessionId (the session its poll loop is actually
-// targeting), not sessionStore.currentSessionId (which archive/deleted-agent views set
-// directly without ever starting a poll loop — gating on that instead falsely showed
-// "disconnected" for the whole time an archive was open).
-const sessionChannelState = computed(() => wsStore.currentSessionId
-  ? channelState({
-    connected: wsStore.sessionConnected, retryCount: wsStore.sessionRetryCount, stalled: wsStore.sessionStalled
-  })
-  : null)
+// Issue #1977 (AC4): a failed initial data load (transport connected, but projects/sessions
+// never loaded) reuses the severity slot just below "connected" the old 'stalled' label used
+// to occupy — distinct from the new `resyncing` state, which means something different (an
+// active evicted/stream_reset recovery in progress), not "data load failed".
+const uiChannelState = computed(() => {
+  if (uiStore.appDataStatus === 'failed' && wsStore.uiState === 'connected') return 'partial'
+  return labelForState(wsStore.uiState) || 'disconnected'
+})
+// Gated on wsStore's OWN currentSessionId (the session its connection is actually
+// targeting), not sessionStore.currentSessionId — archive views set this explicitly via
+// markSessionArchived() now (AC3/AC4), so there is no more stale/leftover id from a
+// different, already-torn-down session to leak into this computation.
+const sessionChannelState = computed(() => {
+  if (!wsStore.currentSessionId) return null
+  return labelForState(wsStore.sessionState)
+})
+const isSessionArchived = computed(() => !!wsStore.currentSessionId && wsStore.sessionState === 'archived')
 
-// Issue #1989: Backend-health signal, independent of the transport channels above —
-// stays 'connected' from the transport's point of view throughout a pure Backend-side
-// outage, so this is the only thing that can surface it on the indicator.
+// Issue #1989: Backend-health signal, independent of the transport states above — stays
+// 'connected' from either transport's point of view throughout a pure Backend-side
+// outage, so this is the only thing that can surface it on the indicator. Checked across
+// both streams' own backendStatus field (decision 1: kept separate per StreamConnection
+// instance, not collapsed into `state`) since whichever one last polled successfully may
+// differ by a beat.
 const backendChannelState = computed(() => {
-  if (wsStore.backendStatus === 'degraded') return 'backend-degraded'
-  if (wsStore.backendStatus === 'unreachable') return 'backend-unreachable'
+  if (wsStore.uiBackendStatus === 'degraded' || wsStore.sessionBackendStatus === 'degraded') return 'backend-degraded'
+  if (wsStore.uiBackendStatus === 'unreachable' || wsStore.sessionBackendStatus === 'unreachable') return 'backend-unreachable'
   return null
 })
 
@@ -150,16 +157,23 @@ const combinedConnectionState = computed(() => {
   const states = [uiChannelState.value]
   if (sessionChannelState.value) states.push(sessionChannelState.value)
   if (backendChannelState.value) states.push(backendChannelState.value)
-  return states.reduce((worst, s) => (STATE_SEVERITY[s] < STATE_SEVERITY[worst] ? s : worst))
+  const worst = states.reduce((w, s) => (STATE_SEVERITY[s] < STATE_SEVERITY[w] ? s : w))
+  // AC3/AC4: an archived/no-live-stream session view reads as its own distinct state
+  // instead of either a stale "connected" or a spurious "disconnected" — but only when
+  // nothing else actually needs attention (a genuine UI/backend problem still wins).
+  if (worst === 'connected' && isSessionArchived.value) return 'archived'
+  return worst
 })
 
 const CONNECTION_LABELS = {
   connected: 'Connected',
   reconnecting: 'Reconnecting',
-  stalled: 'Stalled',
+  resyncing: 'Resyncing',
+  partial: 'Partially loaded',
   disconnected: 'Disconnected',
   'backend-unreachable': 'Backend unreachable',
   'backend-degraded': 'Backend degraded',
+  archived: 'Archived',
 }
 const connectionAriaLabel = computed(() => `Connection status: ${CONNECTION_LABELS[combinedConnectionState.value]}`)
 
@@ -288,10 +302,18 @@ function toggleAudit() {
   color: #f59e0b;
 }
 
-/* Issue #1960: session-poll transport believes itself connected but the heartbeat is
-   dead — distinct amber hue from reconnecting's yellow, same "attention needed" pulse. */
-.header-indicator.stalled {
+/* Epic #1990 stage 5b: an active evicted/stream_reset resync — occupies the slot the old
+   per-session "stalled" heartbeat-watchdog state used to, same amber-orange hue and
+   "attention needed" pulse, but now driven by the StreamConnection's own `resyncing`
+   state rather than a wall-clock staleness inference. */
+.header-indicator.resyncing {
   color: #fd7e14;
+}
+
+/* Issue #1977 (AC4): transport connected, but the initial projects/sessions load failed —
+   a calmer amber than reconnecting/resyncing since the transport itself is fine. */
+.header-indicator.partial {
+  color: #f59e0b;
 }
 
 /* Issue #1989: Backend-side outage, violet family — distinct from the transport-level
@@ -306,6 +328,13 @@ function toggleAudit() {
 
 .header-indicator.backend-degraded {
   color: #7e22ce;
+}
+
+/* Epic #1990 stage 5b (AC3/AC4): archived/no-live-stream session view — a calm, neutral
+   informational state, deliberately NOT part of the alarm-color family above (nothing is
+   wrong; there's simply no live stream to show) and no pulse animation. */
+.header-indicator.archived {
+  color: var(--bs-secondary-color);
 }
 
 .indicator-dot {
@@ -329,8 +358,13 @@ function toggleAudit() {
   animation: pulse-error 1.5s infinite;
 }
 
-.header-indicator.stalled .indicator-dot {
+.header-indicator.resyncing .indicator-dot {
   background: #fd7e14;
+  animation: pulse-error 1.5s infinite;
+}
+
+.header-indicator.partial .indicator-dot {
+  background: #f59e0b;
   animation: pulse-error 1.5s infinite;
 }
 
@@ -342,6 +376,10 @@ function toggleAudit() {
 .header-indicator.backend-degraded .indicator-dot {
   background: #7e22ce;
   animation: pulse-error 1.5s infinite;
+}
+
+.header-indicator.archived .indicator-dot {
+  background: var(--bs-secondary-color);
 }
 
 .theme-btn-light      { color: #94a3b8; }

@@ -27,6 +27,10 @@ describe('StreamingPreview pending-tool indicator (Issue #1573)', () => {
     const messageStore = useMessageStore(pinia)
 
     messageStore.handleAssistantDelta(SESSION_ID, delta('message_start', { message: { id: 'msg_1' } }))
+    // Epic #1990 stage 5b (AC4): the server's own tool_call record is authoritative and
+    // arrives before the paired assistant_delta — content_block_start no longer synthesizes
+    // a card on its own, so tests must apply it first to simulate that guaranteed ordering.
+    messageStore.applyRecord(SESSION_ID, { type: 'tool_call', tool_use_id: 'toolu_1', name: 'Bash', input: {}, status: 'pending' }, 'live')
     messageStore.handleAssistantDelta(SESSION_ID, delta('content_block_start', {
       index: 1,
       content_block: { type: 'tool_use', id: 'toolu_1', name: 'Bash' }
@@ -43,6 +47,7 @@ describe('StreamingPreview pending-tool indicator (Issue #1573)', () => {
     const messageStore = useMessageStore(pinia)
 
     messageStore.handleAssistantDelta(SESSION_ID, delta('message_start', { message: { id: 'msg_1' } }))
+    messageStore.applyRecord(SESSION_ID, { type: 'tool_call', tool_use_id: 'toolu_1', name: 'Bash', input: {}, status: 'pending' }, 'live')
     messageStore.handleAssistantDelta(SESSION_ID, delta('content_block_start', {
       index: 1,
       content_block: { type: 'tool_use', id: 'toolu_1', name: 'Bash' }
@@ -110,6 +115,7 @@ describe('StreamingPreview pending-tool indicator (Issue #1573)', () => {
     const messageStore = useMessageStore(pinia)
 
     messageStore.handleAssistantDelta(SESSION_ID, delta('message_start', { message: { id: 'msg_1' } }))
+    messageStore.applyRecord(SESSION_ID, { type: 'tool_call', tool_use_id: 'toolu_1', name: 'Bash', input: {}, status: 'pending' }, 'live')
     messageStore.handleAssistantDelta(SESSION_ID, delta('content_block_start', {
       index: 1,
       content_block: { type: 'tool_use', id: 'toolu_1', name: 'Bash' }
@@ -130,6 +136,7 @@ describe('StreamingPreview pending-tool indicator (Issue #1573)', () => {
     const messageStore = useMessageStore(pinia)
 
     messageStore.handleAssistantDelta(SESSION_ID, delta('message_start', { message: { id: 'msg_1' } }))
+    messageStore.applyRecord(SESSION_ID, { type: 'tool_call', tool_use_id: 'toolu_1', name: 'Bash', input: {}, status: 'pending' }, 'live')
     messageStore.handleAssistantDelta(SESSION_ID, delta('content_block_start', {
       index: 1,
       content_block: { type: 'tool_use', id: 'toolu_1', name: 'Bash' }
@@ -154,6 +161,7 @@ describe('StreamingPreview pending-tool indicator (Issue #1573)', () => {
     const messageStore = useMessageStore(pinia)
 
     messageStore.handleAssistantDelta(SESSION_ID, delta('message_start', { message: { id: 'msg_1' } }))
+    messageStore.applyRecord(SESSION_ID, { type: 'tool_call', tool_use_id: 'toolu_1', name: 'Bash', input: {}, status: 'pending' }, 'live')
     messageStore.handleAssistantDelta(SESSION_ID, delta('content_block_start', {
       index: 0,
       content_block: { type: 'tool_use', id: 'toolu_1', name: 'Bash' }
@@ -184,6 +192,7 @@ describe('StreamingPreview pending-tool indicator (Issue #1573)', () => {
     const messageStore = useMessageStore(pinia)
 
     messageStore.handleAssistantDelta(SESSION_ID, delta('message_start', { message: { id: 'msg_1' } }))
+    messageStore.applyRecord(SESSION_ID, { type: 'tool_call', tool_use_id: 'toolu_a', name: 'Read', input: {}, status: 'pending' }, 'live')
     messageStore.handleAssistantDelta(SESSION_ID, delta('content_block_start', {
       index: 0,
       content_block: { type: 'tool_use', id: 'toolu_a', name: 'Read' }
@@ -199,6 +208,7 @@ describe('StreamingPreview pending-tool indicator (Issue #1573)', () => {
 
     // A second tool_use starts streaming later in the SAME still-open turn, after that first
     // canonical message already landed.
+    messageStore.applyRecord(SESSION_ID, { type: 'tool_call', tool_use_id: 'toolu_b', name: 'Bash', input: {}, status: 'pending' }, 'live')
     messageStore.handleAssistantDelta(SESSION_ID, delta('content_block_start', {
       index: 1,
       content_block: { type: 'tool_use', id: 'toolu_b', name: 'Bash' }
@@ -223,10 +233,12 @@ describe('StreamingPreview pending-tool indicator (Issue #1573)', () => {
     const messageStore = useMessageStore(pinia)
 
     messageStore.handleAssistantDelta(SESSION_ID, delta('message_start', { message: { id: 'msg_1' } }))
+    messageStore.applyRecord(SESSION_ID, { type: 'tool_call', tool_use_id: 'toolu_a', name: 'Read', input: {}, status: 'pending' }, 'live')
     messageStore.handleAssistantDelta(SESSION_ID, delta('content_block_start', {
       index: 1,
       content_block: { type: 'tool_use', id: 'toolu_a', name: 'Read' }
     }))
+    messageStore.applyRecord(SESSION_ID, { type: 'tool_call', tool_use_id: 'toolu_b', name: 'Bash', input: {}, status: 'pending' }, 'live')
     messageStore.handleAssistantDelta(SESSION_ID, delta('content_block_start', {
       index: 2,
       content_block: { type: 'tool_use', id: 'toolu_b', name: 'Bash' }

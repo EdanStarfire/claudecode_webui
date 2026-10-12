@@ -20,7 +20,7 @@ describe('HeaderRow1', () => {
     const { usePollingStore } = await import('@/stores/polling')
     const pollingStore = usePollingStore(pinia)
 
-    pollingStore.uiConnected = true
+    pollingStore.uiState = 'connected'
     await new Promise(r => setTimeout(r, 0))
 
     const indicator = screen.getByTestId('connection-indicator')
@@ -29,7 +29,7 @@ describe('HeaderRow1', () => {
     expect(indicator.getAttribute('aria-label')).toBe('Connection status: Connected')
     expect(indicator.classList.contains('connected')).toBe(true)
 
-    pollingStore.uiConnected = false
+    pollingStore.uiState = 'idle'
     await new Promise(r => setTimeout(r, 0))
 
     expect(indicator.textContent.trim()).toBe('')
@@ -49,17 +49,16 @@ describe('HeaderRow1', () => {
     }))
   })
 
-  // Issue #1960: the single header dot must also reflect the session-poll channel
-  // (previously it only ever looked at uiConnected, so a silently-stalled session
-  // connection was invisible even though the store already detected it).
-  describe('session-poll channel merge (#1960)', () => {
+  // Epic #1990 stage 5b: the single header dot derives directly from each
+  // StreamConnection's own `state` — no more wall-clock stall inference.
+  describe('session-poll channel merge (#1960, stage 5b)', () => {
     async function setup() {
       const { pinia } = renderWithStores(HeaderRow1)
       const { usePollingStore } = await import('@/stores/polling')
       const { useSessionStore } = await import('@/stores/session')
       const pollingStore = usePollingStore(pinia)
       const sessionStore = useSessionStore(pinia)
-      pollingStore.uiConnected = true
+      pollingStore.uiState = 'connected'
       pollingStore.uiRetryCount = 0
       await new Promise(r => setTimeout(r, 0))
       return { pollingStore, sessionStore, indicator: screen.getByTestId('connection-indicator') }
@@ -68,68 +67,72 @@ describe('HeaderRow1', () => {
     it('ignores session state entirely when no session poll loop is running (regression guard)', async () => {
       const { pollingStore, indicator } = await setup()
       pollingStore.currentSessionId = null
-      pollingStore.sessionConnected = false
-      pollingStore.sessionRetryCount = 0
-      pollingStore.sessionStalled = true
+      pollingStore.sessionState = 'backoff'
+      pollingStore.sessionRetryCount = 5
       await new Promise(r => setTimeout(r, 0))
 
       expect(indicator.classList.contains('connected')).toBe(true)
       expect(indicator.getAttribute('aria-label')).toBe('Connection status: Connected')
     })
 
-    // Issue #1960 (found in review): archive/deleted-agent views set
-    // sessionStore.currentSessionId directly (SessionView.vue's onActivated, archive
-    // branch) WITHOUT ever calling wsStore.connectSession() — there is no real poll
-    // loop for an archive. Gating on sessionStore.currentSessionId previously showed a
-    // false "disconnected" dot for the entire time an archive was open even though the
-    // UI-poll channel was perfectly healthy. The gate must be wsStore's own
-    // currentSessionId (which archive mode never touches), not sessionStore's.
-    it('shows connected (not disconnected) while viewing an archive that set sessionStore.currentSessionId without starting a poll loop', async () => {
+    // Epic #1990 stage 5b (AC3/AC4, decision 5): an archive/no-live-stream view now
+    // explicitly calls markSessionArchived() — this sets BOTH wsStore.currentSessionId
+    // and sessionConn.state === 'archived', so the header can render a distinct,
+    // correct "Archived" state instead of either a stale "Connected" or a spurious
+    // "Disconnected" (the bug this closes).
+    it('shows archived (not connected, not disconnected) when the session connection is explicitly marked archived', async () => {
       const { pollingStore, sessionStore, indicator } = await setup()
       sessionStore.currentSessionId = 'archived-sess-1'
-      pollingStore.currentSessionId = null
-      pollingStore.sessionConnected = false
-      pollingStore.sessionRetryCount = 0
-      pollingStore.sessionStalled = false
+      pollingStore.currentSessionId = 'archived-sess-1'
+      pollingStore.sessionState = 'archived'
       await new Promise(r => setTimeout(r, 0))
 
-      expect(indicator.classList.contains('connected')).toBe(true)
+      expect(indicator.classList.contains('archived')).toBe(true)
+      expect(indicator.classList.contains('connected')).toBe(false)
       expect(indicator.classList.contains('disconnected')).toBe(false)
-      expect(indicator.getAttribute('aria-label')).toBe('Connection status: Connected')
+      expect(indicator.getAttribute('aria-label')).toBe('Connection status: Archived')
     })
 
-    it('shows stalled when a session poll loop is running, connected, and its heartbeat is dead', async () => {
-      const { pollingStore, indicator } = await setup()
-      pollingStore.currentSessionId = 'sess-1'
-      pollingStore.sessionConnected = true
-      pollingStore.sessionRetryCount = 0
-      pollingStore.sessionStalled = true
+    it('a broken UI channel wins over "archived" — a real problem is never hidden behind the calm archived state', async () => {
+      const { pollingStore, sessionStore, indicator } = await setup()
+      sessionStore.currentSessionId = 'archived-sess-1'
+      pollingStore.currentSessionId = 'archived-sess-1'
+      pollingStore.sessionState = 'archived'
+      pollingStore.uiState = 'idle'
       await new Promise(r => setTimeout(r, 0))
 
-      expect(indicator.classList.contains('stalled')).toBe(true)
-      expect(indicator.getAttribute('aria-label')).toBe('Connection status: Stalled')
+      expect(indicator.classList.contains('disconnected')).toBe(true)
+      expect(indicator.classList.contains('archived')).toBe(false)
+      expect(indicator.getAttribute('aria-label')).toBe('Connection status: Disconnected')
     })
 
-    it('shows reconnecting (not stalled) when the session channel is retrying — precedence check', async () => {
+    it('shows resyncing when a session poll loop is running an evicted/stream_reset recovery', async () => {
       const { pollingStore, indicator } = await setup()
       pollingStore.currentSessionId = 'sess-1'
-      pollingStore.sessionConnected = false
+      pollingStore.sessionState = 'resyncing'
+      await new Promise(r => setTimeout(r, 0))
+
+      expect(indicator.classList.contains('resyncing')).toBe(true)
+      expect(indicator.getAttribute('aria-label')).toBe('Connection status: Resyncing')
+    })
+
+    it('shows reconnecting (not resyncing) when the session channel is in backoff — precedence check', async () => {
+      const { pollingStore, indicator } = await setup()
+      pollingStore.currentSessionId = 'sess-1'
+      pollingStore.sessionState = 'backoff'
       pollingStore.sessionRetryCount = 2
-      pollingStore.sessionStalled = true
       await new Promise(r => setTimeout(r, 0))
 
       expect(indicator.classList.contains('reconnecting')).toBe(true)
-      expect(indicator.classList.contains('stalled')).toBe(false)
+      expect(indicator.classList.contains('resyncing')).toBe(false)
       expect(indicator.getAttribute('aria-label')).toBe('Connection status: Reconnecting')
     })
 
     it('a healthy session channel does not override a broken UI channel — UI disconnect still wins', async () => {
       const { pollingStore, indicator } = await setup()
       pollingStore.currentSessionId = 'sess-1'
-      pollingStore.sessionConnected = true
-      pollingStore.sessionRetryCount = 0
-      pollingStore.sessionStalled = false
-      pollingStore.uiConnected = false
+      pollingStore.sessionState = 'connected'
+      pollingStore.uiState = 'backoff'
       pollingStore.uiRetryCount = 3
       await new Promise(r => setTimeout(r, 0))
 
@@ -137,13 +140,11 @@ describe('HeaderRow1', () => {
       expect(indicator.getAttribute('aria-label')).toBe('Connection status: Reconnecting')
     })
 
-    it('a stalled session channel does not override an outright-disconnected UI channel — UI disconnect still wins', async () => {
+    it('a resyncing session channel does not override an outright-disconnected UI channel — UI disconnect still wins', async () => {
       const { pollingStore, indicator } = await setup()
       pollingStore.currentSessionId = 'sess-1'
-      pollingStore.sessionConnected = true
-      pollingStore.sessionRetryCount = 0
-      pollingStore.sessionStalled = true
-      pollingStore.uiConnected = false
+      pollingStore.sessionState = 'resyncing'
+      pollingStore.uiState = 'idle'
       pollingStore.uiRetryCount = 0
       await new Promise(r => setTimeout(r, 0))
 
@@ -154,9 +155,7 @@ describe('HeaderRow1', () => {
     it('shows connected when both channels are healthy (regression guard)', async () => {
       const { pollingStore, indicator } = await setup()
       pollingStore.currentSessionId = 'sess-1'
-      pollingStore.sessionConnected = true
-      pollingStore.sessionRetryCount = 0
-      pollingStore.sessionStalled = false
+      pollingStore.sessionState = 'connected'
       await new Promise(r => setTimeout(r, 0))
 
       expect(indicator.classList.contains('connected')).toBe(true)
@@ -164,34 +163,36 @@ describe('HeaderRow1', () => {
     })
   })
 
-  // Issue #1989: backendStatus is a Backend-health signal independent of the transport
-  // channels above — it must surface even while uiConnected/sessionConnected stay true
+  // Issue #1989: backendStatus is a Backend-health signal independent of either
+  // transport state — it must surface even while both connections stay 'connected'
   // throughout a pure Backend-side outage (Frontend keeps answering polls normally).
-  describe('backend_status indicator (#1989)', () => {
+  // Epic #1990 stage 5b (decision 1): kept as its own field per StreamConnection
+  // instance, checked across both streams since whichever last polled may differ.
+  describe('backend_status indicator (#1989, stage 5b)', () => {
     async function setup() {
       const { pinia } = renderWithStores(HeaderRow1)
       const { usePollingStore } = await import('@/stores/polling')
       const pollingStore = usePollingStore(pinia)
-      pollingStore.uiConnected = true
+      pollingStore.uiState = 'connected'
       pollingStore.uiRetryCount = 0
       await new Promise(r => setTimeout(r, 0))
       return { pollingStore, indicator: screen.getByTestId('connection-indicator') }
     }
 
-    it('shows backend-unreachable, distinct from disconnected/stalled, when backendStatus is unreachable', async () => {
+    it('shows backend-unreachable, distinct from disconnected/resyncing, when backendStatus is unreachable', async () => {
       const { pollingStore, indicator } = await setup()
-      pollingStore.backendStatus = 'unreachable'
+      pollingStore.uiBackendStatus = 'unreachable'
       await new Promise(r => setTimeout(r, 0))
 
       expect(indicator.classList.contains('backend-unreachable')).toBe(true)
       expect(indicator.classList.contains('disconnected')).toBe(false)
-      expect(indicator.classList.contains('stalled')).toBe(false)
+      expect(indicator.classList.contains('resyncing')).toBe(false)
       expect(indicator.getAttribute('aria-label')).toBe('Connection status: Backend unreachable')
     })
 
     it('shows backend-degraded, distinct from backend-unreachable, when backendStatus is degraded', async () => {
       const { pollingStore, indicator } = await setup()
-      pollingStore.backendStatus = 'degraded'
+      pollingStore.uiBackendStatus = 'degraded'
       await new Promise(r => setTimeout(r, 0))
 
       expect(indicator.classList.contains('backend-degraded')).toBe(true)
@@ -199,13 +200,23 @@ describe('HeaderRow1', () => {
       expect(indicator.getAttribute('aria-label')).toBe('Connection status: Backend degraded')
     })
 
+    it('surfaces via the SESSION stream\'s own backendStatus field too (decision 1: tracked per-connection, not shared)', async () => {
+      const { pollingStore, indicator } = await setup()
+      pollingStore.currentSessionId = 'sess-1'
+      pollingStore.sessionState = 'connected'
+      pollingStore.sessionBackendStatus = 'unreachable'
+      await new Promise(r => setTimeout(r, 0))
+
+      expect(indicator.classList.contains('backend-unreachable')).toBe(true)
+    })
+
     it('clears back to connected once backendStatus returns to ok (AC4)', async () => {
       const { pollingStore, indicator } = await setup()
-      pollingStore.backendStatus = 'unreachable'
+      pollingStore.uiBackendStatus = 'unreachable'
       await new Promise(r => setTimeout(r, 0))
       expect(indicator.classList.contains('backend-unreachable')).toBe(true)
 
-      pollingStore.backendStatus = 'ok'
+      pollingStore.uiBackendStatus = 'ok'
       await new Promise(r => setTimeout(r, 0))
 
       expect(indicator.classList.contains('connected')).toBe(true)
@@ -214,8 +225,8 @@ describe('HeaderRow1', () => {
 
     it('an outright transport disconnect still wins over a Backend outage (severity ranking)', async () => {
       const { pollingStore, indicator } = await setup()
-      pollingStore.backendStatus = 'degraded'
-      pollingStore.uiConnected = false
+      pollingStore.uiBackendStatus = 'degraded'
+      pollingStore.uiState = 'idle'
       pollingStore.uiRetryCount = 0
       await new Promise(r => setTimeout(r, 0))
 

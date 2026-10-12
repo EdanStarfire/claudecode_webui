@@ -129,8 +129,14 @@ export const useSessionStore = defineStore('session', () => {
    * branch) so stage-tracking/timeout/retry logic exists in exactly one place.
    * `includeUsage: false` preserves the ephemeral branch's one real existing behavioral
    * difference — it never calls loadUsage() today.
+   * Epic #1990 stage 5b (AC3/UC3): `skipPolling: true` is the ephemeral-no-archives
+   * branch's other real difference — a created/terminated ephemeral session with no
+   * archive to show has no live stream to poll at all, so it marks the session
+   * connection explicitly archived instead of starting a connection that will sit idle
+   * forever (an implicit, uninspectable "nothing will ever arrive" turned into an
+   * explicit state).
    */
-  async function runDataHydrationChain(sessionId, abortController, { includeUsage = true } = {}) {
+  async function runDataHydrationChain(sessionId, abortController, { includeUsage = true, skipPolling = false } = {}) {
     const messageStore = await import('./message')
     const msgStore = messageStore.useMessageStore()
 
@@ -170,7 +176,11 @@ export const useSessionStore = defineStore('session', () => {
 
     setHydrationStage(sessionId, abortController, 'connecting_poll')
     const wsStore = await import('./polling')
-    await wsStore.usePollingStore().connectSession(sessionId)
+    if (skipPolling) {
+      wsStore.usePollingStore().markSessionArchived(sessionId)
+    } else {
+      await wsStore.usePollingStore().connectSession(sessionId)
+    }
 
     if (abortController.signal.aborted) { clearHydrationStageIfOwned(sessionId, abortController); return false }
     setHydrationStage(sessionId, abortController, 'ready')
@@ -485,7 +495,7 @@ export const useSessionStore = defineStore('session', () => {
 
         // No archives (or no project_id / fetch failed): show informational view
         // Set currentSessionId but skip auto-start entirely
-        const ephemeralHydrated = await runDataHydrationChain(sessionId, abortController, { includeUsage: false })
+        const ephemeralHydrated = await runDataHydrationChain(sessionId, abortController, { includeUsage: false, skipPolling: true })
 
         if (ephemeralHydrated) {
           console.log(`Selected ephemeral session ${sessionId} (no auto-start)`)

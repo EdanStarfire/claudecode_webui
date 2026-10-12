@@ -111,7 +111,7 @@
         class="btn btn-outline-secondary btn-sm file-picker-btn"
         title="Attach files"
         aria-label="Attach files"
-        :disabled="isStarting || !isConnected || isBackendUnavailable"
+        :disabled="isStarting || !isConnected || isBackendBlocking"
         @click="openFilePicker"
       >
         📎
@@ -123,7 +123,7 @@
         v-model="inputText"
         class="form-control"
         :placeholder="inputPlaceholder"
-        :disabled="isStarting || !isConnected || isBackendUnavailable"
+        :disabled="isStarting || !isConnected || isBackendBlocking"
         rows="1"
         :aria-expanded="showSlashDropdown || undefined"
         :aria-activedescendant="showSlashDropdown ? `slash-cmd-${selectedSlashIndex}` : undefined"
@@ -147,7 +147,7 @@
       <button
         v-else-if="isProcessing && hasContent"
         class="btn btn-info"
-        :disabled="!isConnected || isStarting || isUploading || isBackendUnavailable"
+        :disabled="!isConnected || isStarting || isUploading || isBackendBlocking"
         title="Send while processing (doesn't interrupt)"
         @click="sendMessage"
       >
@@ -158,7 +158,7 @@
       <button
         v-else
         class="btn btn-primary"
-        :disabled="!hasContent || !isConnected || isStarting || isUploading || isBackendUnavailable"
+        :disabled="!hasContent || !isConnected || isStarting || isUploading || isBackendBlocking"
         @click="sendMessage"
         data-testid="send-button"
       >
@@ -273,11 +273,28 @@ const inputText = computed({
 // Per-instance session state — reads this instance's session, not the global current.
 const currentSession = computed(() => sessionStore.sessions.get(viewSessionId.value))
 const isProcessing = computed(() => currentSession.value?.is_processing || false)
-const isConnected = computed(() => wsStore.sessionConnected)
+// Epic #1990 stage 5b (decision 4): gating boundary preserved exactly as deliberated — NOT
+// disabled during resyncing/backoff (matching the old permissive behavior where
+// sessionConnected stayed true through the whole stall/heal cycle); only disabled when no
+// connection has ever succeeded, or the backend itself is unreachable (self-healing outage,
+// vs. "degraded" which still shows the banner below but no longer blocks sending — degraded
+// means "needs a manual restart", not "requests will fail"). This is a refactor of the
+// state source, not a UX tightening.
+// Builder-review finding: an ephemeral session with no archives (session.js's
+// runDataHydrationChain's skipPolling path) never starts a poll loop at all — it calls
+// markSessionArchived() instead of connectSession(), so this view's route-level isArchived
+// prop is false (it's a plain /session/:id route, not /session/:id/archive/:id) but there is
+// still no live connection and never will be. Without this check, a stale hasEverConnected
+// left over from a previously-viewed different session could show the input as usable for a
+// session that will never actually respond.
+const isConnected = computed(() => wsStore.sessionHasEverConnected && wsStore.sessionState !== 'archived')
 // Issue #1989: independent of isConnected — stays true throughout a pure Backend-side
-// outage, since the browser<->Frontend transport keeps answering polls normally.
-const isBackendUnavailable = computed(() => wsStore.backendStatus !== 'ok')
-const backendBannerMessage = computed(() => wsStore.backendStatus === 'degraded'
+// outage, since the browser<->Frontend transport keeps answering polls normally. Drives
+// the warning banner for BOTH degraded/unreachable (unchanged from pre-5b); only
+// `isBackendBlocking` below actually disables the controls.
+const isBackendUnavailable = computed(() => wsStore.sessionBackendStatus !== 'ok')
+const isBackendBlocking = computed(() => wsStore.sessionBackendStatus === 'unreachable')
+const backendBannerMessage = computed(() => wsStore.sessionBackendStatus === 'degraded'
   ? 'Backend unavailable — restart required'
   : 'Backend unreachable — messages cannot be processed until it recovers')
 const { isStarting } = useSessionState(currentSession)
