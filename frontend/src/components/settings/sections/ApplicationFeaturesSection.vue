@@ -51,6 +51,7 @@ async function load() {
     uiStore.setResumeBatchSize(config.value.features?.resume_batch_size ?? 10)
     uiStore.setResumeBatchDelaySeconds(config.value.features?.resume_batch_delay_seconds ?? 5)
     uiStore.setExperimentalNavHeader(config.value.features?.enable_experimental_nav_header ?? false)
+    uiStore.setCompactBreadcrumbRows(config.value.features?.compact_breadcrumb_rows ?? true)
   } catch (e) {
     error.value = e.message || 'Failed to load configuration'
   } finally {
@@ -77,6 +78,7 @@ async function save() {
     uiStore.setResumeBatchSize(config.value.features?.resume_batch_size ?? 10)
     uiStore.setResumeBatchDelaySeconds(config.value.features?.resume_batch_delay_seconds ?? 5)
     uiStore.setExperimentalNavHeader(config.value.features?.enable_experimental_nav_header ?? false)
+    uiStore.setCompactBreadcrumbRows(config.value.features?.compact_breadcrumb_rows ?? true)
   } catch (e) {
     error.value = e.message || 'Failed to save'
   } finally {

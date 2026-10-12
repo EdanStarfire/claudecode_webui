@@ -169,6 +169,7 @@ class FeaturesConfig:
     resume_batch_size: int = 10  # Issue #1733 — default batch size for throttled "Resume Sessions"
     resume_batch_delay_seconds: int = 5  # Issue #1791 — default pause between resume batches
     enable_experimental_nav_header: bool = False  # Issue #1723 — opt-in compact breadcrumb nav header
+    compact_breadcrumb_rows: bool = True  # Issue #2087 — single-line breadcrumb session dropdown rows
     block_cross_session_messaging: bool = True  # Issue #1901/#1899 — force crossSessionInbound="refuse" and deny outbound SendMessage/ListAgents to non-local targets
     auto_mode_server_classifier: bool = True  # Issue #2009 — server-side Auto Mode classifier (free when eligible, silent fallback to local otherwise; default on per owner decision, may revisit after real-world observation)
 
@@ -278,6 +279,7 @@ class AppConfig:
             enable_experimental_nav_header=features_data.get(
                 "enable_experimental_nav_header", False
             ),
+            compact_breadcrumb_rows=features_data.get("compact_breadcrumb_rows", True),
             block_cross_session_messaging=features_data.get(
                 "block_cross_session_messaging", True
             ),
@@ -376,6 +378,7 @@ class AppConfig:
                 "resume_batch_size": self.features.resume_batch_size,
                 "resume_batch_delay_seconds": self.features.resume_batch_delay_seconds,
                 "enable_experimental_nav_header": self.features.enable_experimental_nav_header,
+                "compact_breadcrumb_rows": self.features.compact_breadcrumb_rows,
                 "block_cross_session_messaging": self.features.block_cross_session_messaging,
                 "auto_mode_server_classifier": self.features.auto_mode_server_classifier,
             },

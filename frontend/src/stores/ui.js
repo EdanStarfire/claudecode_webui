@@ -246,6 +246,15 @@ export const useUIStore = defineStore('ui', () => {
     writeStorage('experimentalNavHeader', experimentalNavHeader.value)
   }
 
+  // Issue #2087: compact single-line breadcrumb session dropdown rows — synced from
+  // /api/config via settings page, must apply live (same reasoning as experimentalNavHeader)
+  const compactBreadcrumbRows = ref(readStorage('compactBreadcrumbRows', true))
+
+  function setCompactBreadcrumbRows(value) {
+    compactBreadcrumbRows.value = !!value
+    writeStorage('compactBreadcrumbRows', compactBreadcrumbRows.value)
+  }
+
   // Issue #1998: whether this Backend instance was started with --enable-session-recording.
   // Not persisted — it's a process-level capability, not a user preference, and is fetched
   // fresh once at app boot (App.vue's onMounted) before a user could open the manage modal.
@@ -567,6 +576,7 @@ export const useUIStore = defineStore('ui', () => {
     resumeBatchSize,
     resumeBatchDelaySeconds,
     experimentalNavHeader,
+    compactBreadcrumbRows,
     sessionRecordingAvailable,
     lastContentRoute,
 
@@ -615,6 +625,7 @@ export const useUIStore = defineStore('ui', () => {
     setResumeBatchSize,
     setResumeBatchDelaySeconds,
     setExperimentalNavHeader,
+    setCompactBreadcrumbRows,
     fetchCapabilities,
     setLastContentRoute,
     schedulesGroupBy,
