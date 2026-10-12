@@ -84,9 +84,12 @@ Hash-based routing (`createWebHashHistory`):
 - **Features**: Orphaned-tool status (`_isOrphaned`/`_orphanedInfo`) sourced directly from the backend's own `interrupted` tool_call record — no browser-side restart/interrupt sweep, deduplication on reconnect
 
 #### `polling.js` — HTTP long-polling
-- **State**: `uiConnected`, `uiRetryCount`, `sessionConnected`, `sessionRetryCount`, `sessionCursors` (Map)
-- **Key actions**: `startUIPolling()`, `startSessionPolling(sessionId)`, `sendMessage()`, `sendPermissionResponse()`, `sendPermissionResponseWithInput()`, `interruptSession()`
-- **Features**: Cursor-based incremental polling (`/api/poll/ui`, `/api/poll/session/{id}`), exponential backoff (up to 30s), page-visibility pause/resume
+- **State** (Epic #1990 stage 5b: one `StreamConnection` state machine per stream — states
+  `idle | connecting | connected | resyncing | backoff | unreachable | archived`): `uiState`,
+  `uiRetryCount`, `uiBackendStatus`, `sessionState`, `sessionRetryCount`, `sessionBackendStatus`,
+  `sessionHasEverConnected`, `sessionCursors` (Map, cross-session cursor cache)
+- **Key actions**: `startUIPolling()`, `connectSession(sessionId)`, `markSessionArchived(sessionId)`, `sendMessage()`, `sendPermissionResponse()`, `sendPermissionResponseWithInput()`, `interruptSession()`
+- **Features**: Cursor-based incremental polling (`/api/poll/ui`, `/api/poll/session/{id}`), exponential backoff (up to 30s), liveness derived only from poll responses/fetch outcomes (no wall-clock staleness timers)
 
 #### `legion.js` — Multi-agent data
 - **State**: `commsByLegion` (Map), `minionsByLegion` (Map), `currentLegionId`
