@@ -102,6 +102,11 @@
               </table>
             </div>
 
+            <!-- No changes (meta-seeded diff, e.g. identical resource versions) -->
+            <div v-else-if="fileDiffEntry?.meta" class="diff-empty">
+              No changes to show.
+            </div>
+
             <!-- No diff -->
             <div v-else class="diff-empty">
               No diff available for this file.
@@ -156,6 +161,12 @@ const currentFileInfo = computed(() => {
   // status/counts win over the file's unrelated aggregate session-diff entry.
   const meta = fileDiffEntry.value?.meta
   if (meta) {
+    // No real diff and not a failure (e.g. diffing two identical resource versions) — return
+    // null so no badge/counts render, instead of a "MODIFIED +0/-0" badge that would
+    // contradict the "No changes to show." empty-state message below it.
+    if (meta.succeeded !== false && (meta.added ?? 0) === 0 && (meta.removed ?? 0) === 0) {
+      return null
+    }
     return {
       status: meta.succeeded === false ? 'failed' : 'modified',
       insertions: meta.added ?? 0,

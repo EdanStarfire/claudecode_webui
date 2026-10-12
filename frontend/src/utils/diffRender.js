@@ -49,3 +49,37 @@ export function buildEditDiff(filePath, oldString, newString, contextLines = 3) 
 export function buildUnifiedDiffText(filePath, oldString, newString, contextLines = 3) {
   return stripPatchHeader(filePath, oldString, newString, contextLines).join('\n')
 }
+
+/**
+ * Resolve which sibling version to diff a resource version against, and in
+ * which order. `old`/`new` are always ordered by ascending version_number
+ * regardless of which button (vs-previous or vs-latest) triggered the call,
+ * so the label and diff always read chronologically forward.
+ * Returns null when there is no valid sibling to diff against.
+ */
+export function resolveVersionDiffPair(resource, version, direction) {
+  if (!resource || !version) return null
+
+  let sibling = null
+  if (direction === 'previous') {
+    if (version.version_number <= 1) return null
+    sibling = resource.versions?.find(v => v.version_number === version.version_number - 1)
+  } else if (direction === 'latest') {
+    if (version.version_number >= resource.version_count) return null
+    sibling = resource.versions?.find(v => v.version_number === resource.version_count)
+  }
+  if (!sibling) return null
+
+  const [older, newer] = version.version_number < sibling.version_number
+    ? [version, sibling]
+    : [sibling, version]
+
+  const name = resource.original_filename || resource.title || 'resource'
+  return {
+    oldResourceId: older.resource_id,
+    newResourceId: newer.resource_id,
+    oldVersionNumber: older.version_number,
+    newVersionNumber: newer.version_number,
+    label: `${name} — v${older.version_number} → v${newer.version_number}`
+  }
+}
