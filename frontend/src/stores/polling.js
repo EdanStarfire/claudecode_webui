@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { useSessionStore } from './session'
 import { useProjectStore } from './project'
 import { useMessageStore } from './message'
@@ -18,19 +18,145 @@ import { notify } from '@/composables/useNotifications'
 import { getAuthToken, api, triggerReauth } from '@/utils/api'
 import { pushDebugEvent } from '@/composables/useDebugBuffer'
 
+// ========== STREAM CONNECTION STATE MACHINE (Epic #1990 stage 5b) ==========
+// Single state machine per long-poll stream (ui, session). Liveness is derived ONLY from
+// poll responses and fetch outcomes — a successful response (including an empty one after
+// the server's long-poll hold) proves the connection is alive, a thrown fetch error proves
+// it isn't. No wall-clock staleness timer exists anywhere in this design.
+//
+// States: idle | connecting | connected | resyncing | backoff | unreachable | archived
+// `transition()` is the single function that ever assigns `.state` — every poll-loop branch
+// calls it, nothing else writes state directly. This is both the one-reducer requirement and
+// the single instrumentation point (every transition emits a 'state-transition' debug event).
+function createStreamConnection(kind) {
+  const state = ref('idle')
+  // 'ok' | 'degraded' | 'unreachable' — kept as its OWN field, not collapsed into `state`, so
+  // the header can still distinguish "degraded" (needs manual restart) from "unreachable"
+  // (self-heals) exactly as the pre-5b STATE_SEVERITY ladder did.
+  const backendStatus = ref('ok')
+  const retryCount = ref(0)
+  // True once this connection has reached 'connected' at least once since its last connect()/
+  // disconnect() cycle — InputArea's gating boundary (decision 4) keys off this rather than
+  // the live transport state, so a backoff/resync cycle after a prior success doesn't disable
+  // input the way a genuine never-yet-connected session does.
+  const hasEverConnected = ref(false)
+
+  let cursor = 0
+  let abortController = null
+  let generation = 0
+  let backoffTimerHandle = null
+  let backoffResolve = null
+
+  function transition(next, sessionId) {
+    const from = state.value
+    state.value = next
+    if (next === 'connected') hasEverConnected.value = true
+    pushDebugEvent('polling', 'state-transition', { kind, sessionId: sessionId ?? null, from, to: next })
+  }
+
+  function bumpGeneration() {
+    generation += 1
+    return generation
+  }
+
+  function isCurrentGeneration(gen) {
+    return generation === gen
+  }
+
+  // Resolves any in-flight backoff sleep immediately (used by disconnect() so a sleeping
+  // loop wakes up and observes the new generation/idle state instead of hanging until its
+  // full delay elapses).
+  function clearBackoffTimer() {
+    if (backoffTimerHandle) {
+      clearTimeout(backoffTimerHandle)
+      backoffTimerHandle = null
+    }
+    if (backoffResolve) {
+      const resolve = backoffResolve
+      backoffResolve = null
+      resolve()
+    }
+  }
+
+  function scheduleBackoff(delayMs) {
+    return new Promise(resolve => {
+      backoffResolve = resolve
+      backoffTimerHandle = setTimeout(() => {
+        backoffTimerHandle = null
+        backoffResolve = null
+        resolve()
+      }, delayMs)
+    })
+  }
+
+  function connect(initialCursor, sessionId) {
+    cursor = initialCursor
+    retryCount.value = 0
+    hasEverConnected.value = false
+    const gen = bumpGeneration()
+    transition('connecting', sessionId)
+    return gen
+  }
+
+  function markArchived(sessionId) {
+    transition('archived', sessionId)
+  }
+
+  // Synchronous teardown: abort any in-flight fetch, clear any pending backoff sleep, bump
+  // the generation, and go idle. No awaited exit-budget needed — a since-superseded loop's
+  // own in-flight `await fetch(...)`/`await resync()` simply finds its generation stale on
+  // resume and returns without mutating anything (the loop's own generation check already
+  // guarantees exit).
+  function disconnect(sessionId) {
+    clearBackoffTimer()
+    abortController?.abort()
+    abortController = null
+    bumpGeneration()
+    retryCount.value = 0
+    hasEverConnected.value = false
+    // Builder-review finding: with backendStatus now tracked per-StreamConnection (decision
+    // 1) rather than shared, a value left over from the connection this is tearing down
+    // would otherwise freeze and leak into whatever uses this connection next (a different
+    // session, or an archived/no-poll view) with nothing left to ever refresh it.
+    backendStatus.value = 'ok'
+    transition('idle', sessionId)
+  }
+
+  function newAbortController() {
+    abortController = new AbortController()
+    return abortController
+  }
+
+  function abortInFlight() {
+    abortController?.abort()
+  }
+
+  return {
+    state,
+    backendStatus,
+    retryCount,
+    hasEverConnected,
+    getCursor: () => cursor,
+    setCursor: (c) => { cursor = c },
+    newAbortController,
+    abortInFlight,
+    transition,
+    connect,
+    markArchived,
+    disconnect,
+    bumpGeneration,
+    isCurrentGeneration,
+    scheduleBackoff,
+  }
+}
+
 export const usePollingStore = defineStore('polling', () => {
   // ========== STATE ==========
-  const uiConnected = ref(false)
-  const uiRetryCount = ref(0)
-  // Issue #1989: Backend-health signal carried on every successful poll response
-  // ("ok" / "unreachable" / "degraded") — independent of uiConnected/sessionConnected,
-  // which only reflect the browser<->Frontend transport and stay true throughout a
-  // pure Backend-side outage (Frontend keeps answering polls normally). Defaults to
-  // 'ok' when the field is absent, for resilience against a stale/older remote Backend.
-  const backendStatus = ref('ok')
-  const sessionConnected = ref(false)
-  const sessionRetryCount = ref(0)
-  const sessionStalled = ref(false)
+  const uiConn = createStreamConnection('ui')
+  const sessionConn = createStreamConnection('session')
+
+  // The session the session connection is currently targeting (mirrors the pre-5b field of
+  // the same name) — null when no session has ever been selected/archived-viewed in this tab.
   const currentSessionId = ref(null)
   const currentLegionId = ref(null)  // stub - always null
   const legionConnected = ref(false)  // stub - always false
@@ -38,110 +164,19 @@ export const usePollingStore = defineStore('polling', () => {
 
   // Poll cursors
   let uiCursor = 0
-  const sessionCursors = {}  // Per-session cursor cache to avoid replaying history on switch
-  const sessionPollHeartbeatAt = {}  // Per-session last-successful-poll timestamp (Issue #1795)
-  const sessionHealInFlight = {}  // Per-session stall-heal mutex (Issue #1954) — distinct from the HEAL_COOLDOWN_MS rate limiter below
-  // Issue #1974: per-session snapshot of totalFrozenMs taken at the last heartbeat write,
-  // so checkSessionStall() can forgive only the frozen time that occurred *after* that
-  // heartbeat (see totalFrozenMs below) rather than the session's entire frozen history.
-  const frozenMsAtHeartbeat = {}
-
-  // AbortControllers for long-poll requests
-  let uiAbortController = null
-  let sessionAbortController = null
-
-  // Loop control flags
-  let uiPollGeneration = 0
-  let sessionPollGeneration = 0
-
-  // Session loop exit promise — used by disconnectSession() to await clean teardown
-  let sessionLoopExitPromise = null
-
-  // Stall detector state
-  let stallDetectorInterval = null
-  let lastHealedAt = 0
-  // Issue #1795: coupling note — the heartbeat measures poll round-trip freshness
-  // (not message content), so this must stay above the server's long-poll hold time
-  // (src/routers/poll.py: effective_timeout = min(timeout, 30.0)) regardless of
-  // is_processing, or a healthy-but-quiet connection will false-positive on every
-  // poll cycle. Applies uniformly to active and idle sessions alike.
-  const STALL_TIMEOUT_MS = 40000
-  const HEAL_COOLDOWN_MS = 10000
-  const STALL_CHECK_INTERVAL_MS = 5000
-  // Issue #1974: tick-lateness watchdog. A backgrounded tab or sleeping machine can
-  // freeze the JS timer loop itself, so the stall-check interval firing late is the
-  // signal that wall-clock time passed without this page being able to observe it —
-  // any cause (background throttling, machine sleep, long GC/debugger pauses) shows up
-  // the same way. Excess over this buffer (on top of the expected STALL_CHECK_INTERVAL_MS
-  // gap) is treated as frozen time and forgiven from the staleness computation below.
-  const TICK_LATE_BUFFER_MS = 2000
-  // Issue #1974 follow-up: bounds how much of any *single* tick's lateness can be
-  // forgiven. Without this, an unusually large single gap (a stuck debugger, an
-  // extreme power-saving suspend, or any other pathological freeze) would be forgiven
-  // in full no matter its size, permanently masking a connection that died during it.
-  //
-  // What this cap does NOT fix: sustained background-tab throttling (Chrome clamps
-  // recurring ticks to roughly once per minute once hidden) still produces many
-  // separate ~60s gaps, each individually far under this 30-minute cap — so each is
-  // still forgiven in full, unchanged from before this cap existed. A connection that
-  // dies while the tab stays backgrounded is therefore still detected only ~6x slower
-  // than STALL_TIMEOUT_MS while hidden (roughly minutes, not the normal 40s) — this cap
-  // only bounds a single outsized gap, not that cumulative, repeated-small-gap case.
-  //
-  // What this cap deliberately trades off: a single legitimate freeze *longer* than 30
-  // minutes (an extended meeting, a long commute, an overnight sleep) will read as
-  // stalled and attempt a heal the moment it's next observed, even if the connection
-  // was actually fine the whole time — reproducing, at a much higher and rarer
-  // threshold, a milder form of the exact false-positive this feature exists to
-  // prevent. 30 minutes is chosen to comfortably clear ordinary short breaks/naps (so
-  // the common case stays fully protected) while still bounding the absolute worst
-  // case to a finite, provable delay instead of indefinite, unlimited forgiveness.
-  const MAX_FORGIVE_PER_TICK_MS = 30 * 60 * 1000
-  let lastTickAt = 0
-  let totalFrozenMs = 0
+  // Issue #1974/#2129 stage 5b: cross-session cursor CACHE — not heuristic bookkeeping, this
+  // is load-bearing stream-position state. Switching A -> B -> back to A, with A's history
+  // already cached in message.js (so loadMessages() is skipped on switch-back), must resume
+  // A's poll from exactly where it left off rather than bootstrapping "cursor right now" and
+  // silently skipping whatever arrived for A while the user was viewing B. Kept as a small
+  // standalone Map, separate from sessionConn's own private live-cursor field (which only ever
+  // tracks ONE session at a time — the one currently being actively polled).
+  const sessionCursors = {}
 
   // Page Visibility cleanup
   let visibilityUnsubscribe = null
 
-  // ========== COMPUTED ==========
-  const overallStatus = computed(() => {
-    const uiStore = useUIStore()
-    // Issue #1977 (AC4): a connected transport with a failed initial data load must
-    // never read as fully 'connected' — reuses 'partial' (already means "not fully
-    // healthy") rather than adding a new value only this one case would use.
-    if (uiConnected.value && uiStore.appDataStatus === 'failed') {
-      return 'partial'
-    }
-    if (uiConnected.value && (sessionConnected.value || !currentSessionId.value)) {
-      return 'connected'
-    }
-    if (uiConnected.value) {
-      return 'partial'
-    }
-    return 'disconnected'
-  })
-
   // ========== HELPERS ==========
-  // Issue #1974: single write path for a successful-poll heartbeat, so
-  // sessionPollHeartbeatAt and its paired frozenMsAtHeartbeat snapshot can never drift
-  // out of sync at a call site that forgets one of the two.
-  function seedHeartbeat(sessionId) {
-    sessionPollHeartbeatAt[sessionId] = Date.now()
-    frozenMsAtHeartbeat[sessionId] = totalFrozenMs
-  }
-
-  // Issue #1974: single deletion path for all four per-session polling maps, shared by
-  // resetSessionCursor(), cleanupSessionPollingState(), and the session_reset event
-  // handler below — so a future 5th per-session map only needs to be added here once,
-  // instead of at every call site independently (one of those call sites had already
-  // drifted out of sync with the others before this helper existed).
-  function clearSessionPollingKeys(sessionId) {
-    delete sessionCursors[sessionId]
-    delete sessionPollHeartbeatAt[sessionId]
-    delete sessionHealInFlight[sessionId]
-    delete frozenMsAtHeartbeat[sessionId]
-  }
-
   function getPollUrl(path, cursor, timeout = 30) {
     const token = getAuthToken()
     const base = `${path}?since=${cursor}&timeout=${timeout}`
@@ -229,14 +264,26 @@ export const usePollingStore = defineStore('polling', () => {
     }
   }
 
+  // Shared by both poll loops: compute the "poll succeeded, not mid-resync" target state
+  // from the response's own backend_status. Per the transition table: backend_status ===
+  // 'unreachable' always wins (AC2 — "backend_status decides the unreachable state"
+  // literally), otherwise plain connected. `degraded` deliberately does NOT divert from
+  // this — it's an independent, non-overriding annotation carried on backendStatus alone
+  // (decision 1). The resyncing->connected transition (once a resync itself resolves) also
+  // goes through this same function, since it's the identical backend_status check — the
+  // caller is just never mid-batch-processing at that point, so there's no separate
+  // "sawResetOrEvicted" case to express here (that transition is made directly via
+  // `transition('resyncing', ...)` at the point the marker is observed).
+  function connectedFamilyTarget(conn) {
+    return conn.backendStatus.value === 'unreachable' ? 'unreachable' : 'connected'
+  }
+
   // ========== UI POLL LOOP ==========
   async function startUIPolling(initialCursor = 0) {
-    if (uiConnected.value) return
+    if (uiConn.state.value !== 'idle') return
     uiCursor = initialCursor
-    uiConnected.value = true
-    uiRetryCount.value = 0
     startAppDataRetryWatcher()
-    const myGeneration = ++uiPollGeneration
+    const myGeneration = uiConn.connect(uiCursor)
     // Issue #1977: tracks "we backed off after an error and are waiting to confirm
     // we're actually back" — retryStaleAppData() fires once, on the next CONFIRMED
     // successful response, not merely once the backoff delay elapses. Firing on backoff
@@ -245,19 +292,23 @@ export const usePollingStore = defineStore('polling', () => {
     // server that's already known unreachable.
     let recoveringFromError = false
 
-    while (uiConnected.value) {
+    while (uiConn.state.value !== 'idle') {
       try {
-        uiAbortController = new AbortController()
+        const controller = uiConn.newAbortController()
         const url = getPollUrl('/api/poll/ui', uiCursor)
-        uiConnected.value = true
-        const response = await fetch(url, { signal: uiAbortController.signal })
+        const response = await fetch(url, { signal: controller.signal })
 
         if (response.status === 401) {
           triggerReauth(401)
-          // stopUIPolling() (not a bare flag flip) so stopAppDataRetryWatcher() actually
-          // runs — otherwise appDataRetryInterval keeps firing every 15s with nothing
-          // left to stop it until a full page reload.
-          stopUIPolling()
+          // Builder-review finding: a since-superseded generation's in-flight response
+          // (e.g. this loop was stopped and a new one started while this fetch was still
+          // pending) must not tear down the NEWER, actually-current generation's
+          // connection. stopUIPolling() (not a bare flag flip) so stopAppDataRetryWatcher()
+          // actually runs — otherwise appDataRetryInterval keeps firing every 15s with
+          // nothing left to stop it until a full page reload.
+          if (uiConn.isCurrentGeneration(myGeneration)) {
+            stopUIPolling()
+          }
           return
         }
 
@@ -266,8 +317,7 @@ export const usePollingStore = defineStore('polling', () => {
         }
 
         const data = await response.json()
-        uiRetryCount.value = 0
-        backendStatus.value = data.backend_status || 'ok'
+        uiConn.backendStatus.value = data.backend_status || 'ok'
         if (recoveringFromError) {
           recoveringFromError = false
           // Issue #1977 (AC3, AC7): a confirmed successful poll after an outage means
@@ -287,6 +337,7 @@ export const usePollingStore = defineStore('polling', () => {
             stream: 'ui', staleCursor: uiCursor, next_cursor: data.next_cursor,
             eventCount: data.events?.length ?? 0, generation: myGeneration
           })
+          uiConn.transition('resyncing')
           // Review finding: this resync replaces the dropped events entirely, including any
           // session_deleted this cycle would otherwise have carried — loadAppData()'s own
           // fetchSessions() only removes a vanished id from the `sessions` Map (it has no
@@ -306,6 +357,9 @@ export const usePollingStore = defineStore('polling', () => {
             }
           }
           uiCursor = data.next_cursor
+          uiConn.setCursor(uiCursor)
+          uiConn.retryCount.value = 0
+          uiConn.transition(connectedFamilyTarget(uiConn))
           continue
         }
 
@@ -340,6 +394,7 @@ export const usePollingStore = defineStore('polling', () => {
                   })
                 }
               }
+              uiConn.transition('resyncing')
               const sessionStore = useSessionStore()
               const idsBeforeResync = new Set(sessionStore.sessions.keys())
               await dispatchEvent(event, 'ui')
@@ -357,6 +412,9 @@ export const usePollingStore = defineStore('polling', () => {
           }
           if (sawStreamReset) {
             uiCursor = data.next_cursor
+            uiConn.setCursor(uiCursor)
+            uiConn.retryCount.value = 0
+            uiConn.transition(connectedFamilyTarget(uiConn))
             continue
           }
         }
@@ -364,22 +422,26 @@ export const usePollingStore = defineStore('polling', () => {
           stream: 'ui', cursorBefore: uiCursor, cursorAfter: data.next_cursor, generation: myGeneration
         })
         uiCursor = data.next_cursor
+        uiConn.setCursor(uiCursor)
+        uiConn.retryCount.value = 0
+        uiConn.transition(connectedFamilyTarget(uiConn))
 
       } catch (err) {
         if (err.name === 'AbortError') {
-          // Visibility resume or stop — re-enter immediately if still polling
+          // Visibility resume or stop — re-enter immediately if still polling, no state
+          // change (nothing actually failed).
           continue
         }
-        console.warn(`[UI poll] Connection error (retry ${uiRetryCount.value + 1}):`, err.message || err)
+        console.warn(`[UI poll] Connection error (retry ${uiConn.retryCount.value + 1}):`, err.message || err)
         pushDebugEvent('polling', 'poll-error', {
-          stream: 'ui', message: err.message || String(err), retryCount: uiRetryCount.value + 1, generation: myGeneration
+          stream: 'ui', message: err.message || String(err), retryCount: uiConn.retryCount.value + 1, generation: myGeneration
         })
-        uiConnected.value = false
-        uiRetryCount.value++
-        const delay = Math.min(2000 * uiRetryCount.value, 30000)
-        await new Promise(resolve => setTimeout(resolve, delay))
-        if (uiPollGeneration === myGeneration) {
-          uiConnected.value = true
+        uiConn.retryCount.value++
+        uiConn.transition('backoff')
+        const delay = Math.min(2000 * uiConn.retryCount.value, 30000)
+        await uiConn.scheduleBackoff(delay)
+        if (uiConn.isCurrentGeneration(myGeneration)) {
+          uiConn.transition('connecting')
           recoveringFromError = true
         }
       }
@@ -387,10 +449,7 @@ export const usePollingStore = defineStore('polling', () => {
   }
 
   function stopUIPolling() {
-    uiPollGeneration++
-    uiConnected.value = false
-    uiAbortController?.abort()
-    uiAbortController = null
+    uiConn.disconnect()
     stopAppDataRetryWatcher()
   }
 
@@ -400,26 +459,32 @@ export const usePollingStore = defineStore('polling', () => {
 
   // ========== SESSION POLL LOOP ==========
   async function _runSessionPollLoop(sessionId, myGeneration) {
-    while (sessionPollGeneration === myGeneration
-           && sessionConnected.value
+    while (sessionConn.isCurrentGeneration(myGeneration)
+           && sessionConn.state.value !== 'idle'
            && currentSessionId.value === sessionId) {
       try {
-        sessionAbortController = new AbortController()
-        // Fix 4: normalize cursor to avoid ?since=undefined producing a 422
-        const rawCursor = sessionCursors[sessionId]
-        const cursor = (typeof rawCursor === 'number') ? rawCursor : 0
+        const controller = sessionConn.newAbortController()
+        const cursor = sessionConn.getCursor()
         const url = getPollUrl(`/api/poll/session/${sessionId}`, cursor)
-        const response = await fetch(url, { signal: sessionAbortController.signal })
+        const response = await fetch(url, { signal: controller.signal })
 
         if (response.status === 401) {
           triggerReauth(401)
-          sessionConnected.value = false
+          // Builder-review finding: a since-superseded generation's response must not write
+          // the shared sessionConn singleton's state — the same guard every other write path
+          // in this loop already applies. `break` runs regardless since exiting a stale
+          // loop is always correct; only the state write itself needs the guard.
+          if (sessionConn.isCurrentGeneration(myGeneration) && currentSessionId.value === sessionId) {
+            sessionConn.transition('idle', sessionId)
+          }
           break
         }
 
         if (response.status === 404) {
           // Session not found - stop polling
-          sessionConnected.value = false
+          if (sessionConn.isCurrentGeneration(myGeneration) && currentSessionId.value === sessionId) {
+            sessionConn.transition('idle', sessionId)
+          }
           break
         }
 
@@ -428,29 +493,16 @@ export const usePollingStore = defineStore('polling', () => {
         }
 
         const data = await response.json()
-        sessionRetryCount.value = 0
-        // Issue #1795/#1974: any successful response — even one carrying zero events
-        // after the server's long-poll hold — proves this connection is alive. But
-        // only for the CURRENT generation/session: an in-flight response can still
-        // land after sessionPollGeneration was bumped and the fetch aborted (e.g. a
-        // stall-heal reconnecting to this same session while this response was already
-        // past the fetch, mid `await response.json()`, so the abort had no effect). An
-        // in-flight response from a since-superseded generation must not write the
-        // heartbeat, its paired frozen-time snapshot (Issue #1974), or clear
-        // sessionStalled — doing so would silently reset the staleness/forgiveness
-        // baseline for a session that may still actually be stalled, right after a
-        // heal that hasn't itself delivered anything yet.
-        const isCurrentGeneration = sessionPollGeneration === myGeneration && currentSessionId.value === sessionId
+        // Issue #1795: any successful response — even one carrying zero events after the
+        // server's long-poll hold — proves this connection is alive. But only for the
+        // CURRENT generation/session: an in-flight response can still land after the
+        // generation was bumped (e.g. a session switch racing this same response, still
+        // mid `await response.json()` when the abort fired too late to matter). A response
+        // from a since-superseded generation must not write backendStatus or advance the
+        // cursor cache — doing so would clobber state a newer generation already owns.
+        const isCurrentGeneration = sessionConn.isCurrentGeneration(myGeneration) && currentSessionId.value === sessionId
         if (isCurrentGeneration) {
-          seedHeartbeat(sessionId)
-          sessionStalled.value = false
-          // Issue #1989 (review finding): gated on the same isCurrentGeneration check —
-          // a stale response from a since-superseded generation carries an older
-          // backend_status snapshot than one a newer generation's poll may have already
-          // delivered, and writing it here would clobber the fresher value back to stale
-          // data. startUIPolling()'s own loop (single-generation, no staleness concern)
-          // still keeps this signal fresh on its own cadence regardless.
-          backendStatus.value = data.backend_status || 'ok'
+          sessionConn.backendStatus.value = data.backend_status || 'ok'
         }
 
         if (data.evicted) {
@@ -465,6 +517,7 @@ export const usePollingStore = defineStore('polling', () => {
             evicted: data.evicted, generation: myGeneration
           })
           if (isCurrentGeneration) {
+            sessionConn.transition('resyncing', sessionId)
             const messageStore = useMessageStore()
             // Deliberately not wrapped in a local try/catch: a failure here is a
             // connection-level problem exactly like any other poll failure, so it
@@ -474,19 +527,23 @@ export const usePollingStore = defineStore('polling', () => {
             // hammer the history endpoint every poll cycle with no backoff, which is
             // the same "wasted round trips" pattern this issue exists to eliminate.
             await messageStore.loadMessages(sessionId)
-            // Re-check the guard AFTER the await: a concurrent heal/reconnect for
-            // this same session can supersede this loop's generation while the
-            // reload is in flight. Adopting this reload's cursor onto a
-            // since-superseded generation would clobber the freshly-reconnected
-            // generation's own correct cursor with a stale one.
-            if (sessionPollGeneration === myGeneration && currentSessionId.value === sessionId) {
+            // Re-check the guard AFTER the await: a concurrent session switch can
+            // supersede this loop's generation while the reload is in flight. Adopting
+            // this reload's cursor onto a since-superseded generation would clobber the
+            // freshly-reconnected generation's own correct cursor with a stale one.
+            if (sessionConn.isCurrentGeneration(myGeneration) && currentSessionId.value === sessionId) {
               const restCursor = messageStore.loadedEventCursors.get(sessionId)
+              let newCursor
               if (restCursor !== undefined) {
                 messageStore.loadedEventCursors.delete(sessionId)
-                sessionCursors[sessionId] = restCursor
+                newCursor = restCursor
               } else {
-                sessionCursors[sessionId] = data.next_cursor
+                newCursor = data.next_cursor
               }
+              sessionConn.setCursor(newCursor)
+              sessionCursors[sessionId] = newCursor
+              sessionConn.retryCount.value = 0
+              sessionConn.transition(connectedFamilyTarget(sessionConn), sessionId)
             }
           } else {
             sessionCursors[sessionId] = data.next_cursor
@@ -523,24 +580,30 @@ export const usePollingStore = defineStore('polling', () => {
                 }
               }
               if (isCurrentGeneration) {
+                sessionConn.transition('resyncing', sessionId)
                 const messageStore = useMessageStore()
                 // Calls loadMessages() directly rather than through dispatchEvent():
                 // dispatchEvent()'s own currentSessionId guard reads the session
                 // store's value, while isCurrentGeneration above is the polling
                 // store's own tracked value — the two can legitimately diverge
-                // (e.g. mid-heal), and isCurrentGeneration is already the
+                // (e.g. mid-switch), and isCurrentGeneration is already the
                 // authoritative guard for this resync; routing through a second,
                 // differently-sourced guard risked silently skipping the reload.
                 // Same not-locally-caught rationale as the evicted branch above.
                 await messageStore.loadMessages(sessionId)
-                if (sessionPollGeneration === myGeneration && currentSessionId.value === sessionId) {
+                if (sessionConn.isCurrentGeneration(myGeneration) && currentSessionId.value === sessionId) {
                   const restCursor = messageStore.loadedEventCursors.get(sessionId)
+                  let newCursor
                   if (restCursor !== undefined) {
                     messageStore.loadedEventCursors.delete(sessionId)
-                    sessionCursors[sessionId] = restCursor
+                    newCursor = restCursor
                   } else {
-                    sessionCursors[sessionId] = data.next_cursor
+                    newCursor = data.next_cursor
                   }
+                  sessionConn.setCursor(newCursor)
+                  sessionCursors[sessionId] = newCursor
+                  sessionConn.retryCount.value = 0
+                  sessionConn.transition(connectedFamilyTarget(sessionConn), sessionId)
                 }
               } else {
                 sessionCursors[sessionId] = data.next_cursor
@@ -557,275 +620,115 @@ export const usePollingStore = defineStore('polling', () => {
         pushDebugEvent('polling', 'poll-cycle', {
           stream: 'session', sessionId, cursorBefore: cursor, cursorAfter: data.next_cursor, generation: myGeneration
         })
-        sessionCursors[sessionId] = data.next_cursor
+        if (isCurrentGeneration) {
+          sessionConn.setCursor(data.next_cursor)
+          sessionCursors[sessionId] = data.next_cursor
+          sessionConn.retryCount.value = 0
+          sessionConn.transition(connectedFamilyTarget(sessionConn), sessionId)
+        } else {
+          sessionCursors[sessionId] = data.next_cursor
+        }
 
       } catch (err) {
         if (err.name === 'AbortError') {
           continue
         }
-        console.warn(`[Session poll] Connection error for session ${sessionId} (retry ${sessionRetryCount.value + 1}):`, err.message || err)
+        console.warn(`[Session poll] Connection error for session ${sessionId} (retry ${sessionConn.retryCount.value + 1}):`, err.message || err)
         pushDebugEvent('polling', 'poll-error', {
-          stream: 'session', sessionId, message: err.message || String(err), retryCount: sessionRetryCount.value + 1, generation: myGeneration
+          stream: 'session', sessionId, message: err.message || String(err), retryCount: sessionConn.retryCount.value + 1, generation: myGeneration
         })
-        sessionConnected.value = false
-        sessionRetryCount.value++
-        const delay = Math.min(2000 * sessionRetryCount.value, 30000)
-        // Fix 2: coupling note — this sleep is 2s; disconnectSession timeout must stay >2s
-        await new Promise(resolve => setTimeout(resolve, delay))
-        // Fix 1: guard generation before re-enabling connected — superseded loop must not re-arm
-        if (sessionPollGeneration === myGeneration && currentSessionId.value === sessionId) {
-          sessionConnected.value = true
+        if (!sessionConn.isCurrentGeneration(myGeneration) || currentSessionId.value !== sessionId) {
+          // Superseded by a session switch/disconnect while this fetch was in flight —
+          // let the while-loop's own guard end the loop, no state to touch here.
+          continue
+        }
+        sessionConn.retryCount.value++
+        sessionConn.transition('backoff', sessionId)
+        const delay = Math.min(2000 * sessionConn.retryCount.value, 30000)
+        await sessionConn.scheduleBackoff(delay)
+        if (sessionConn.isCurrentGeneration(myGeneration) && currentSessionId.value === sessionId) {
+          sessionConn.transition('connecting', sessionId)
         }
       }
     }
   }
 
-  async function connectSession(sessionId, { isRecoveryReconnect = false } = {}) {
-    // Stop any existing session poll (Fix 2: truly awaits loop exit)
+  async function connectSession(sessionId) {
+    // Tear down any existing session connection first — always synchronous now, no 3-second
+    // exit budget needed (see disconnect()'s own comment).
     await disconnectSession()
 
-    const myGeneration = ++sessionPollGeneration  // Fix 1: generation guard
     currentSessionId.value = sessionId
-    sessionConnected.value = true
-    sessionRetryCount.value = 0
-    // Issue #1960: prevent a previously-viewed session's stalled flag from leaking
-    // onto the newly-selected session.
-    // Issue #1973: skip this for a stall-heal recovery reconnect — reconnecting is not
-    // itself evidence of recovery, so a still-stalled session must stay visibly stalled
-    // until a real poll response clears the flag (below, in _runSessionPollLoop).
-    if (!isRecoveryReconnect) {
-      sessionStalled.value = false
-    }
 
-    // Issue #1000: Prefer cursor from loadMessages() REST response (aligned with
-    // loaded history). Fall back to API bootstrap for first-time connections.
+    // Issue #1000: Prefer cursor from loadMessages() REST response (aligned with loaded
+    // history). Falls back to the cross-session cache (resuming a previously-viewed
+    // session exactly where it left off), then to a fresh API bootstrap for a genuinely
+    // first-time connection.
     const messageStore = useMessageStore()
     const restCursor = messageStore.loadedEventCursors.get(sessionId)
+    let initialCursor
     if (restCursor !== undefined) {
-      sessionCursors[sessionId] = restCursor
+      initialCursor = restCursor
       messageStore.loadedEventCursors.delete(sessionId)
-    } else if (sessionCursors[sessionId] === undefined) {
+    } else if (sessionCursors[sessionId] !== undefined) {
+      initialCursor = sessionCursors[sessionId]
+    } else {
       try {
         const result = await api.get(`/api/poll/session/${sessionId}/cursor`)
-        sessionCursors[sessionId] = result?.cursor ?? 0
+        initialCursor = result?.cursor ?? 0
       } catch {
-        sessionCursors[sessionId] = 0
+        initialCursor = 0
       }
     }
+    sessionCursors[sessionId] = initialCursor
 
-    // Issue #1795: seed the heartbeat before the loop starts so staleness is measurable
-    // from t=0 — closes a latent gap where a hung first fetch left no baseline to compare.
-    // Issue #1973: skip this on a recovery reconnect — the existing baseline is legitimately
-    // stale, and reseeding it here would forge liveness before any response has actually
-    // arrived. Only a real poll response (below) should advance it in that case.
-    if (!isRecoveryReconnect) {
-      seedHeartbeat(sessionId)
-    }
+    // A session switch may have raced this cursor-resolution await — if a newer connect()
+    // already landed for a different session, don't start a loop for a stale one.
+    if (currentSessionId.value !== sessionId) return
 
-    // Capture the loop promise so disconnectSession() can await clean exit (Fix 2)
-    sessionLoopExitPromise = _runSessionPollLoop(sessionId, myGeneration)
-
-    // Start stall detector (Fix 5: idempotent, early-returns when sid is null)
-    startStallDetector()
+    const myGeneration = sessionConn.connect(initialCursor, sessionId)
+    _runSessionPollLoop(sessionId, myGeneration)
   }
 
   async function disconnectSession() {
-    // Fix 1: bump generation first so any in-setTimeout loop exits on timer fire
-    sessionPollGeneration++
-    sessionConnected.value = false
+    const sessionId = currentSessionId.value
+    sessionConn.disconnect(sessionId)
     currentSessionId.value = null
-    sessionAbortController?.abort()
-    sessionAbortController = null
-    stopStallDetector()
-    // Fix 2: await loop exit with 3s budget (must exceed 2s catch-block sleep)
-    if (sessionLoopExitPromise) {
-      try {
-        const TIMED_OUT = Symbol('timed-out')
-        const result = await Promise.race([
-          sessionLoopExitPromise.then(() => 'exited'),
-          new Promise(resolve => setTimeout(() => resolve(TIMED_OUT), 3000))
-        ])
-        // Issue #1917 (Fix B2): a slow-to-exit old loop silently proceeding was previously
-        // invisible — surface it so this timing edge case can be diagnosed from logs.
-        if (result === TIMED_OUT) {
-          console.warn('[disconnectSession] old poll loop did not exit within 3s budget — proceeding anyway')
-        }
-      } catch { /* ignore */ }
-      sessionLoopExitPromise = null
-    }
   }
 
+  // Issue #1974/#2129 stage 5b: clears the cross-session cursor cache entry for one session,
+  // forcing its NEXT connect() to start fresh from cursor 0 instead of resuming an old
+  // position — used right after disconnecting a session whose server-side history/epoch was
+  // just reset/restarted, so the stale pre-reset cursor is never resumed from.
   function resetSessionCursor(sessionId) {
-    clearSessionPollingKeys(sessionId)
-    // Issue #1960: prevent a reset session's stalled flag from leaking onto whatever
-    // session is current afterward.
-    sessionStalled.value = false
+    delete sessionCursors[sessionId]
   }
 
-  // Issue #1974: full teardown of a permanently-deleted session's per-session polling
-  // state, called from session.js's deleteSession(). Unlike resetSessionCursor() above
-  // (always the single current session being reset/restarted by the user), deleteSession()
-  // can cascade-delete many sessions at once, most of which are NOT the current session —
-  // so this must only clear sessionStalled when the deleted session actually is the one
-  // currently displayed, or it would wrongly clear a genuinely-stalled current session's
-  // flag whenever an unrelated sibling session gets deleted.
+  // Full teardown of a permanently-deleted session's cached cursor, called from
+  // session.js's deleteSession()/removeSessionsFromStores(). Unlike resetSessionCursor()
+  // above (always the single current session being reset/restarted by the user), this can
+  // be called for many sessions at once, most of which are NOT the current session.
   function cleanupSessionPollingState(sessionId) {
-    clearSessionPollingKeys(sessionId)
-    if (currentSessionId.value === sessionId) {
-      sessionStalled.value = false
-    }
+    delete sessionCursors[sessionId]
   }
 
-  // ========== STALL DETECTOR (Fix 5) ==========
-  function startStallDetector() {
-    if (stallDetectorInterval) return
-    // Issue #1974: (re)seed the tick-lateness baseline whenever the detector (re)starts,
-    // so a gap that occurred before this connectSession() call (e.g. while disconnected)
-    // isn't misread as a freeze on the very first tick.
-    lastTickAt = Date.now()
-    stallDetectorInterval = setInterval(checkSessionStall, STALL_CHECK_INTERVAL_MS)
-  }
-
-  // Issue #1960: closes a leak where stallDetectorInterval was created once and never
-  // cleared — startStallDetector()'s `if (stallDetectorInterval) return` guard already
-  // makes re-starting idempotent, so this only stops the leak without changing runtime
-  // behavior for the normal case.
-  function stopStallDetector() {
-    if (stallDetectorInterval) {
-      clearInterval(stallDetectorInterval)
-      stallDetectorInterval = null
-    }
-  }
-
-  async function checkSessionStall() {
-    // Issue #1974: tick-lateness measurement — page-level, independent of which session
-    // is current (a freeze affects the whole tab's ability to run JS, not just polling
-    // for the active session), so this runs before the sid early-return below. Any
-    // excess over the expected STALL_CHECK_INTERVAL_MS gap (past a small jitter buffer)
-    // means that much wall-clock time was not actually observable by the page.
-    const now = Date.now()
-    const observedGap = now - lastTickAt
-    const uncappedFrozenMs = Math.max(0, observedGap - STALL_CHECK_INTERVAL_MS - TICK_LATE_BUFFER_MS)
-    const frozenMs = Math.min(uncappedFrozenMs, MAX_FORGIVE_PER_TICK_MS)
-    if (frozenMs > 0) {
-      totalFrozenMs += frozenMs
-      pushDebugEvent('polling', 'freeze-detected', {
-        frozenMs, totalFrozenMs, observedGap, capped: uncappedFrozenMs > MAX_FORGIVE_PER_TICK_MS
-      })
-    }
-    lastTickAt = now
-
-    const sessionStore = useSessionStore()
-    const sid = currentSessionId.value
-    // Issue #1960: default to false so every early-return below (inapplicable or
-    // not-yet-measurable session) leaves the flag correctly cleared — the single
-    // `stallMs >= STALL_TIMEOUT_MS` assignment further down is the only place it's
-    // ever set true, so a future added early-return can't forget to reset it.
-    sessionStalled.value = false
-    if (!sid) return
-
-    const session = sessionStore.sessions.get(sid)
-    if (!session) return
-    if (session.state === 'paused') return
-
-    // Issue #1795: liveness is derived from the session-poll connection's own heartbeat,
-    // not from is_processing (which is written exclusively by the separate UI-poll channel
-    // and can flip false while this connection is silently dead). The single threshold
-    // applies regardless of is_processing — the heartbeat measures poll round-trip
-    // freshness, which behaves identically whether the session is idle or processing.
-    const heartbeatMs = sessionPollHeartbeatAt[sid]
-    if (!heartbeatMs) {
-      // Issue #1960: same class of "detection state with no visible signal" as the core
-      // bug — make the no-heartbeat path explicit and observable rather than a silent
-      // no-op indistinguishable from "not stalled".
-      pushDebugEvent('polling', 'stall-check-no-heartbeat', { sessionId: sid })
-      return
-    }
-
-    // Issue #1974: forgive only the frozen time that occurred *after* the last successful
-    // heartbeat — a stall that was already accumulating before a freeze started is
-    // untouched and still crosses the threshold on schedule.
-    const frozenSinceHeartbeat = totalFrozenMs - (frozenMsAtHeartbeat[sid] ?? 0)
-    const stallMs = Math.max(0, (now - heartbeatMs) - frozenSinceHeartbeat)
-    sessionStalled.value = stallMs >= STALL_TIMEOUT_MS
-    pushDebugEvent('polling', 'stall-check', {
-      sessionId: sid, stallMs, thresholdMs: STALL_TIMEOUT_MS, passed: stallMs < STALL_TIMEOUT_MS, frozenSinceHeartbeat
-    })
-    if (stallMs < STALL_TIMEOUT_MS) return
-
-    // Issue #1795: skip healing while a detected fetch error is already being retried by
-    // the exponential-backoff loop — that failure mode self-heals; letting the watchdog
-    // also intervene risks a redundant/racy reconnect. Liveness reporting above runs
-    // unconditionally; only the heal action below is gated on sessionConnected.
-    if (!sessionConnected.value) return
-
-    // Issue #1974: a backgrounded tab must not itself trigger recovery — gate only the
-    // heal step, not the staleness computation/reporting above, so sessionStalled stays
-    // accurate the instant the user returns (established by an actual poll response, not
-    // assumed on visibility-restore). Deliberately does not gate on the sleeping-machine
-    // case (document.hidden can still read false there) — that's covered by the
-    // tick-lateness forgiveness above alone, independent of visibility.
-    if (document.hidden) {
-      pushDebugEvent('polling', 'stall-heal-skipped-hidden', { sessionId: sid, stallMs })
-      return
-    }
-
-    // Cooldown: prevent heal storms
-    if (now - lastHealedAt < HEAL_COOLDOWN_MS) return
-
-    // Issue #1954: mutex guard — a heal already in flight for this session must not be
-    // overlapped by a second one. This is checked (and set) in addition to, not instead of,
-    // the cooldown above: the cooldown still spaces out fast-completing heals as before, while
-    // this guard is what actually eliminates the overlap race regardless of heal duration.
-    if (sessionHealInFlight[sid]) {
-      pushDebugEvent('polling', 'stall-heal-skipped-inflight', { sessionId: sid })
-      return
-    }
-
-    lastHealedAt = Date.now()
-    sessionHealInFlight[sid] = true
-
-    // Issue #1917 (Fix B1): bump the generation and abort the in-flight fetch synchronously,
-    // before either await below. disconnectSession() does this too, but only after the two
-    // awaited REST calls that follow — leaving a window where a visibilitychange-resumed
-    // old-generation loop can still resolve and redeliver an already-processed event batch
-    // while this heal sequence is still in flight.
-    sessionPollGeneration++
-    sessionAbortController?.abort()
-
-    try {
-      console.warn(`[stall-heal] Session ${sid} stalled ${Math.round(stallMs / 1000)}s (is_processing=${session.is_processing}); reconnecting from existing cursor`)
-      pushDebugEvent('polling', 'stall-heal-start', { sessionId: sid, stallMs, isProcessing: session.is_processing })
-
-      // Issue #1988: the heal no longer re-derives a cursor via REST (a
-      // syncMessages() history walk followed by a separate /cursor GET) —
-      // that two-step, independently-timed pair is what let an event
-      // appended between the two calls fall into the gap and never get
-      // delivered. EventQueue.events_since() (shared/event_queue.py) is a
-      // synchronous, atomic "everything after cursor X, right now" query, so
-      // reconnecting straight from the existing, untouched sessionCursors[sid]
-      // and letting the resumed poll's first request hit that same atomic
-      // read is both simpler and strictly more correct: it delivers every
-      // event appended since the last acknowledged cursor exactly once,
-      // including anything appended during the heal cycle itself. A cursor
-      // old enough to have been evicted from the server's ring buffer is
-      // handled separately, by the evicted-fallback branch in
-      // _runSessionPollLoop() below, once the resumed poll reports it.
-
-      // Guard: abort if the user switched sessions before reconnecting.
-      if (currentSessionId.value !== sid) {
-        console.warn(`[stall-heal] Session ${sid} heal aborted — session changed`)
-        pushDebugEvent('polling', 'stall-heal-done', { sessionId: sid, aborted: true })
-        return
-      }
-      await disconnectSession()
-      await connectSession(sid, { isRecoveryReconnect: true })
-
-      console.warn(`[stall-heal] Session ${sid} reconnected at cursor ${sessionCursors[sid]}`)
-      pushDebugEvent('polling', 'stall-heal-done', { sessionId: sid, aborted: false, cursor: sessionCursors[sid] })
-    } finally {
-      delete sessionHealInFlight[sid]
-    }
+  // Epic #1990 stage 5b (AC3/UC3, decision 5): an archived/ephemeral-with-no-archives
+  // session view never starts a poll loop at all — this makes that an explicit, inspectable
+  // state instead of an implicit absence (wsStore.currentSessionId/sessionConn.state simply
+  // never being touched). Called from SessionView.vue's archive-mode activation.
+  function markSessionArchived(sessionId) {
+    // Builder-review finding: without tearing down first, marking the CURRENTLY-live
+    // session's own connection archived (same sessionId, e.g. opening /archive/X for the
+    // session already being actively viewed) left its still-running poll loop's generation
+    // and currentSessionId both unchanged — its very next successful poll would overwrite
+    // 'archived' straight back to 'connected' underneath the archive view. Routing through
+    // the same disconnect() every other state transition uses bumps the generation (so the
+    // stale loop's next cycle sees itself superseded and stops self-correcting) and resets
+    // backendStatus/hasEverConnected, consistent with every other path that changes which
+    // session this connection targets.
+    sessionConn.disconnect(currentSessionId.value)
+    currentSessionId.value = sessionId
+    sessionConn.markArchived(sessionId)
   }
 
   // ========== PAGE VISIBILITY ==========
@@ -835,8 +738,8 @@ export const usePollingStore = defineStore('polling', () => {
     const handler = () => {
       if (document.visibilityState === 'visible') {
         pushDebugEvent('polling', 'visibility-reconnect', { sessionId: currentSessionId.value })
-        uiAbortController?.abort()
-        sessionAbortController?.abort()
+        uiConn.abortInFlight()
+        sessionConn.abortInFlight()
       }
     }
     document.addEventListener('visibilitychange', handler)
@@ -986,27 +889,14 @@ export const usePollingStore = defineStore('polling', () => {
         uiStore.setRateLimits(null)
         const sessionStore = useSessionStore()
         sessionStore.recordSessionReset(resetSessionId)
-        // Deliberately not routed through clearSessionPollingKeys()/sessionHealInFlight:
-        // unlike resetSessionCursor()'s and cleanupSessionPollingState()'s callers (which
-        // always disconnect the poll loop first, aborting any in-flight heal via its own
-        // currentSessionId check), this handler reacts to an async server event that can
-        // arrive at any time, including genuinely mid-heal for this exact session —
-        // clearing the #1954 mutex here could let a second heal start concurrently with
-        // one still finishing.
+        // Epic #1990 stage 5b: only clears the cross-session cursor CACHE entry — this is
+        // independent of sessionConn's own live cursor (private to whichever session is
+        // actively being polled), so this is safe to run even if a resync is concurrently
+        // in flight for this exact session (the "reset arriving during a history load" race
+        // the stage 5b plan calls out): the in-flight resync's own generation-guarded cursor
+        // adoption (in _runSessionPollLoop above) still runs to completion independently and
+        // writes its own authoritative value into this same cache afterward.
         delete sessionCursors[resetSessionId]
-        // Issue #1979: if a stall-heal reconnect is actively in flight for this exact
-        // session, its heartbeat is deliberately left stale (not yet reseeded) so
-        // checkSessionStall() keeps reporting the genuine stall until a real poll
-        // response lands. Deleting it here would erase that signal and make the
-        // indicator transiently read healthy mid-heal. Skip this piece only — every
-        // other part of session_reset's handling above/below still runs unconditionally.
-        if (!sessionHealInFlight[resetSessionId]) {
-          delete sessionPollHeartbeatAt[resetSessionId]
-          delete frozenMsAtHeartbeat[resetSessionId]
-          // Issue #1960: prevent a reset session's stalled flag from leaking onto whatever
-          // session is current afterward — mirrors resetSessionCursor()'s same guard.
-          sessionStalled.value = false
-        }
       }
     },
 
@@ -1265,7 +1155,7 @@ export const usePollingStore = defineStore('polling', () => {
     // dispatchEvent() — it intercepts stream_reset itself and calls
     // messageStore.loadMessages() directly, gated on its own isCurrentGeneration
     // check rather than dispatchEvent()'s separate (sessionStore-sourced)
-    // currentSessionId guard, which can diverge from it mid-heal. Kept as a
+    // currentSessionId guard, which can diverge from it mid-resync. Kept as a
     // correct, self-consistent fallback in case anything else ever dispatches
     // this type through the normal path.
     stream_reset: async (payload, sessionId) => {
@@ -1301,17 +1191,23 @@ export const usePollingStore = defineStore('polling', () => {
 
   // ========== RETURN ==========
   return {
-    uiConnected,
-    uiRetryCount,
-    backendStatus,
-    sessionConnected,
-    sessionRetryCount,
-    sessionStalled,
+    uiState: uiConn.state,
+    uiRetryCount: uiConn.retryCount,
+    // Issue #1989: Backend-health signal carried on every successful poll response ("ok" /
+    // "unreachable" / "degraded") — independent of either transport state, which stays
+    // 'connected' throughout a pure Backend-side outage (Frontend keeps answering polls
+    // normally). Session's own backendStatus tracks the same signal from the session-poll
+    // channel's responses; the two are expected to agree in practice (both reflect the same
+    // Backend), exposed separately per-stream per decision 1.
+    uiBackendStatus: uiConn.backendStatus,
+    sessionState: sessionConn.state,
+    sessionRetryCount: sessionConn.retryCount,
+    sessionBackendStatus: sessionConn.backendStatus,
+    sessionHasEverConnected: sessionConn.hasEverConnected,
     currentSessionId,
     legionConnected,
     legionRetryCount,
     currentLegionId,
-    overallStatus,
     registeredEventTypes: {
       ui: Object.keys(UI_EVENT_HANDLERS),
       session: Object.keys(SESSION_EVENT_HANDLERS),
@@ -1327,7 +1223,7 @@ export const usePollingStore = defineStore('polling', () => {
     disconnectSession,
     resetSessionCursor,
     cleanupSessionPollingState,
-    checkSessionStall,
+    markSessionArchived,
     sendMessage,
     sendPermissionResponse,
     sendPermissionResponseWithInput,
