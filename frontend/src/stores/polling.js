@@ -276,15 +276,14 @@ export const usePollingStore = defineStore('polling', () => {
           retryStaleAppData()
         }
 
-        if (data.evicted || data.reset) {
-          // Issue #2065 AC7: mirrors the session stream's resync-on-evicted/reset — neither an
-          // evicted cursor nor a reset queue can be trusted to deliver a gapless slice, so
+        if (data.evicted) {
+          // Issue #2065 AC7: an evicted cursor can't be trusted to deliver a gapless slice, so
           // re-fetch the UI stream's own ground truth (projects + sessions) instead of risking a
           // permanent gap by applying this response's events as a complete slice. No
           // isCurrentGeneration-style guard needed here, unlike the session loop's version — the
           // UI loop has exactly one poll generation at a time, with no stall-heal-reconnect flow
           // creating an overlapping second one.
-          pushDebugEvent('polling', data.evicted ? 'poll-evicted' : 'poll-reset', {
+          pushDebugEvent('polling', 'poll-evicted', {
             stream: 'ui', staleCursor: uiCursor, next_cursor: data.next_cursor,
             eventCount: data.events?.length ?? 0, generation: myGeneration
           })
@@ -292,7 +291,7 @@ export const usePollingStore = defineStore('polling', () => {
           // session_deleted this cycle would otherwise have carried — loadAppData()'s own
           // fetchSessions() only removes a vanished id from the `sessions` Map (it has no
           // reason to know about the other per-session stores), so without this, a deletion
-          // that happens to land in the same evicted/reset cycle would leak exactly the state
+          // that happens to land in the same evicted cycle would leak exactly the state
           // AC6 added removeSessionsFromStores() to clean up. Diff the session id set
           // before/after the resync and run the same cleanup any other session_deleted goes
           // through for whatever vanished.
@@ -311,8 +310,54 @@ export const usePollingStore = defineStore('polling', () => {
         }
 
         if (data.events && data.events.length > 0) {
+          let sawStreamReset = false
           for (const event of data.events) {
-            dispatchEvent(event, 'ui')
+            if (event.type === 'stream_reset') {
+              // Epic #1990 stage 5a (AC7): a Backend restart made explicit. Stop
+              // treating the remainder of this batch as normal incremental
+              // updates — they're already-new-epoch events that the resync
+              // below (triggered via dispatchEvent -> UI_EVENT_HANDLERS.
+              // stream_reset) will pick up fresh; events already dispatched
+              // above (before this marker, in this same batch) are legitimate
+              // pre-reset history and need no unwinding.
+              pushDebugEvent('polling', 'poll-reset', {
+                stream: 'ui', staleCursor: uiCursor, next_cursor: data.next_cursor,
+                eventCount: data.events?.length ?? 0, generation: myGeneration,
+                epoch: event.data
+              })
+              // A rare but reachable burst (e.g. a backgrounded tab across two
+              // Backend restarts before its next poll) can land more than one
+              // marker in this same batch — log each so the debug trace doesn't
+              // undercount how many restarts actually happened, even though one
+              // resync below already covers all of them (it pulls live ground
+              // truth, a superset regardless of restart count).
+              for (const laterEvent of data.events.slice(data.events.indexOf(event) + 1)) {
+                if (laterEvent.type === 'stream_reset') {
+                  pushDebugEvent('polling', 'poll-reset', {
+                    stream: 'ui', staleCursor: uiCursor, next_cursor: data.next_cursor,
+                    eventCount: data.events?.length ?? 0, generation: myGeneration,
+                    epoch: laterEvent.data, coalesced: true
+                  })
+                }
+              }
+              const sessionStore = useSessionStore()
+              const idsBeforeResync = new Set(sessionStore.sessions.keys())
+              await dispatchEvent(event, 'ui')
+              const vanishedIds = [...idsBeforeResync].filter(id => !sessionStore.sessions.has(id))
+              if (vanishedIds.length > 0) {
+                const wasCurrentSessionRemoved = await sessionStore.removeSessionsFromStores(vanishedIds)
+                if (wasCurrentSessionRemoved) {
+                  router.push('/')
+                }
+              }
+              sawStreamReset = true
+              break
+            }
+            await dispatchEvent(event, 'ui')
+          }
+          if (sawStreamReset) {
+            uiCursor = data.next_cursor
+            continue
           }
         }
         pushDebugEvent('polling', 'poll-cycle', {
@@ -408,19 +453,16 @@ export const usePollingStore = defineStore('polling', () => {
           backendStatus.value = data.backend_status || 'ok'
         }
 
-        if (data.evicted || data.reset) {
-          // Issue #1988: neither an evicted cursor (predates the server's retained
-          // ring-buffer window) nor a reset queue (e.g. a Backend restart recreated
-          // it from scratch) can be trusted to deliver a gapless slice — `evicted`
-          // and `reset` are independent signals (shared/event_queue.py), and a
-          // restart-during-stall produces reset=true with evicted deliberately
-          // false, so both must fall back the same way: a full resync via the same
-          // proven event_cursor-capturing pattern the initial session load already
-          // uses (loadMessages()), instead of risking a permanent gap by applying
-          // this response's events as if they were a complete slice.
-          pushDebugEvent('polling', data.evicted ? 'poll-evicted' : 'poll-reset', {
+        if (data.evicted) {
+          // Issue #1988: an evicted cursor (predates the server's retained ring-buffer
+          // window) can't be trusted to deliver a gapless slice — fall back to a full
+          // resync via the same proven event_cursor-capturing pattern the initial
+          // session load already uses (loadMessages()), instead of risking a
+          // permanent gap by applying this response's events as if they were a
+          // complete slice.
+          pushDebugEvent('polling', 'poll-evicted', {
             stream: 'session', sessionId, staleCursor: cursor, next_cursor: data.next_cursor,
-            evicted: data.evicted, reset: data.reset, generation: myGeneration
+            evicted: data.evicted, generation: myGeneration
           })
           if (isCurrentGeneration) {
             const messageStore = useMessageStore()
@@ -453,8 +495,63 @@ export const usePollingStore = defineStore('polling', () => {
         }
 
         if (data.events && data.events.length > 0) {
+          let sawStreamReset = false
           for (const event of data.events) {
-            dispatchEvent(event, 'session', sessionId)
+            if (event.type === 'stream_reset') {
+              // Epic #1990 stage 5a (AC7): a Backend restart made explicit — the
+              // restart-during-stall case issue #1988's evicted/reset split used to
+              // cover (reset=true, evicted deliberately false) now arrives this way
+              // instead of as a top-level flag. Stop treating the remainder of this
+              // batch as normal incremental updates — they're already-new-epoch
+              // events the resync below will pick up fresh; events already
+              // dispatched above (before this marker, in this same batch) are
+              // legitimate pre-reset history and need no unwinding.
+              pushDebugEvent('polling', 'poll-reset', {
+                stream: 'session', sessionId, staleCursor: cursor, next_cursor: data.next_cursor,
+                generation: myGeneration, epoch: event.data
+              })
+              // See the UI loop's identical comment above: a rare but reachable
+              // burst can land more than one marker in this same batch — log
+              // each so the debug trace doesn't undercount restarts, even though
+              // one resync below already covers all of them.
+              for (const laterEvent of data.events.slice(data.events.indexOf(event) + 1)) {
+                if (laterEvent.type === 'stream_reset') {
+                  pushDebugEvent('polling', 'poll-reset', {
+                    stream: 'session', sessionId, staleCursor: cursor, next_cursor: data.next_cursor,
+                    generation: myGeneration, epoch: laterEvent.data, coalesced: true
+                  })
+                }
+              }
+              if (isCurrentGeneration) {
+                const messageStore = useMessageStore()
+                // Calls loadMessages() directly rather than through dispatchEvent():
+                // dispatchEvent()'s own currentSessionId guard reads the session
+                // store's value, while isCurrentGeneration above is the polling
+                // store's own tracked value — the two can legitimately diverge
+                // (e.g. mid-heal), and isCurrentGeneration is already the
+                // authoritative guard for this resync; routing through a second,
+                // differently-sourced guard risked silently skipping the reload.
+                // Same not-locally-caught rationale as the evicted branch above.
+                await messageStore.loadMessages(sessionId)
+                if (sessionPollGeneration === myGeneration && currentSessionId.value === sessionId) {
+                  const restCursor = messageStore.loadedEventCursors.get(sessionId)
+                  if (restCursor !== undefined) {
+                    messageStore.loadedEventCursors.delete(sessionId)
+                    sessionCursors[sessionId] = restCursor
+                  } else {
+                    sessionCursors[sessionId] = data.next_cursor
+                  }
+                }
+              } else {
+                sessionCursors[sessionId] = data.next_cursor
+              }
+              sawStreamReset = true
+              break
+            }
+            await dispatchEvent(event, 'session', sessionId)
+          }
+          if (sawStreamReset) {
+            continue
           }
         }
         pushDebugEvent('polling', 'poll-cycle', {
@@ -1051,6 +1148,15 @@ export const usePollingStore = defineStore('polling', () => {
       uiStore.pushAlert(payload.data || {})
       notify('session_error', { sessionName: payload.data?.session_name || 'Session', sessionId: payload.data?.session_id })
     },
+
+    // Epic #1990 stage 5a (AC7): a Backend restart, made explicit. The caller
+    // (the UI poll loop below) is responsible for the surrounding bookkeeping
+    // (vanished-session cleanup, cursor adoption, stopping further per-event
+    // processing of that batch) — this handler is only the data-level resync
+    // itself, same as the pre-stage-5a data.reset branch did.
+    stream_reset: async () => {
+      await loadAppData()
+    },
   }
 
   const SESSION_EVENT_HANDLERS = {
@@ -1152,6 +1258,19 @@ export const usePollingStore = defineStore('polling', () => {
       // a future real producer surfaces in the console instead of vanishing outright.
       console.log('[proxy_event]', payload.data)
     },
+
+    // Epic #1990 stage 5a (AC7): a Backend restart, made explicit. Registered
+    // here so registeredEventTypes.session covers it (completeness test), but
+    // the session poll loop below never actually reaches this entry via
+    // dispatchEvent() — it intercepts stream_reset itself and calls
+    // messageStore.loadMessages() directly, gated on its own isCurrentGeneration
+    // check rather than dispatchEvent()'s separate (sessionStore-sourced)
+    // currentSessionId guard, which can diverge from it mid-heal. Kept as a
+    // correct, self-consistent fallback in case anything else ever dispatches
+    // this type through the normal path.
+    stream_reset: async (payload, sessionId) => {
+      await useMessageStore().loadMessages(sessionId)
+    },
   }
 
   function dispatchEvent(payload, stream, sessionId) {
@@ -1173,7 +1292,11 @@ export const usePollingStore = defineStore('polling', () => {
       console.warn(`Unknown ${stream} poll message type:`, payload.type)
       return
     }
-    handler(payload, sessionId)
+    // Returned (not just invoked) so a caller that needs to wait for an async
+    // handler — currently only stream_reset's resync — can await it (issue
+    // #1990 stage 5a, AC7). Every other handler is synchronous, so awaiting
+    // this return value elsewhere is a no-op for them.
+    return handler(payload, sessionId)
   }
 
   // ========== RETURN ==========

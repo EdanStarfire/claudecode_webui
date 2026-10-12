@@ -1071,7 +1071,13 @@ describe('polling store - UI-stream evicted/reset consistency (issue #2065 AC7)'
     mockAppDataEndpoints()
 
     sequencedFetchMock([
-      { events: [], next_cursor: 5, reset: true },
+      {
+        // Epic #1990 stage 5a: reset is now derived from "batch contains a
+        // stream_reset event" — a real backend never sends reset=true without one.
+        events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }],
+        next_cursor: 5,
+        reset: true,
+      },
     ])
 
     pollingStore.startUIPolling()
@@ -1101,9 +1107,13 @@ describe('polling store - UI-stream evicted/reset consistency (issue #2065 AC7)'
 
     sequencedFetchMock([
       {
-        // A carried event in the same response as reset=true — must be dropped in favor
-        // of the fallback resync, not dispatched as if it were a trustworthy slice.
-        events: [{ type: 'rate_limits_update', data: { requests_remaining: 999 } }],
+        // Epic #1990 stage 5a: a carried event AFTER the stream_reset marker in the
+        // same batch — must be dropped in favor of the fallback resync, not
+        // dispatched as if it were a trustworthy incremental update.
+        events: [
+          { type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } },
+          { type: 'rate_limits_update', data: { requests_remaining: 999 } },
+        ],
         next_cursor: 5,
         reset: true,
       },
@@ -1116,6 +1126,40 @@ describe('polling store - UI-stream evicted/reset consistency (issue #2065 AC7)'
     expect(apiMock.get).toHaveBeenCalledWith('/api/projects')
     expect(apiMock.get).toHaveBeenCalledWith('/api/sessions')
     expect(setRateLimitsSpy).not.toHaveBeenCalledWith({ requests_remaining: 999 })
+  })
+
+  it('mid-batch stream_reset: events before the marker are dispatched normally, the marker and anything after trigger the resync (epic #1990 stage 5a)', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useUIStore } = await import('@/stores/ui')
+    const pollingStore = usePollingStore()
+    const uiStore = useUIStore()
+
+    mockAppDataEndpoints()
+    const setRateLimitsSpy = vi.spyOn(uiStore, 'setRateLimits')
+
+    sequencedFetchMock([
+      {
+        // A pre-marker event is legitimate pre-reset history and needs no
+        // unwinding; a post-marker event in the SAME batch is superseded by
+        // the resync and must not be applied as a trustworthy incremental update.
+        events: [
+          { type: 'rate_limits_update', data: { requests_remaining: 111 } },
+          { type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } },
+          { type: 'rate_limits_update', data: { requests_remaining: 999 } },
+        ],
+        next_cursor: 5,
+        reset: true,
+      },
+    ])
+
+    pollingStore.startUIPolling()
+    await flush()
+    pollingStore.stopUIPolling()
+
+    expect(setRateLimitsSpy).toHaveBeenCalledWith({ requests_remaining: 111 })
+    expect(setRateLimitsSpy).not.toHaveBeenCalledWith({ requests_remaining: 999 })
+    expect(apiMock.get).toHaveBeenCalledWith('/api/projects')
+    expect(apiMock.get).toHaveBeenCalledWith('/api/sessions')
   })
 
   it('evicted=true triggers loadAppData() and does not dispatch the carried events', async () => {
@@ -2091,11 +2135,16 @@ describe('polling store - stall-heal cursor-atomicity fix (#1988)', () => {
 
     const fetchMock = sequencedFetchMock([
       { events: [], next_cursor: 5 }, // initial connect poll establishes cursor 5
-      // A Backend restart recreated the session's EventQueue from scratch: reset=true,
-      // but evicted is deliberately false — reset and eviction are independent signals
-      // (shared/event_queue.py) — so this must NOT be silently treated as "here's
+      // A Backend restart made explicit via a stream_reset marker (epic #1990 stage
+      // 5a): reset=true, but evicted is deliberately false — reset and eviction are
+      // independent signals — so this must NOT be silently treated as "here's
       // everything" the way an ordinary reset (outside a heal) would be.
-      { events: [], next_cursor: 0, reset: true, evicted: false },
+      {
+        events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }],
+        next_cursor: 6,
+        reset: true,
+        evicted: false,
+      },
     ])
 
     await pollingStore.connectSession(sid)
@@ -2105,6 +2154,42 @@ describe('polling store - stall-heal cursor-atomicity fix (#1988)', () => {
     expect(loadSpy).toHaveBeenCalledWith(sid)
     const lastCall = fetchMock.mock.calls[fetchMock.mock.calls.length - 1]
     expect(lastCall[0]).toContain('since=7')
+  })
+
+  it('mid-batch stream_reset on the session stream: events before the marker are dispatched normally, the marker and anything after trigger the resync (epic #1990 stage 5a)', async () => {
+    const { pollingStore, sessionStore, messageStore, sid } = await setupStallSession({ session_id: 'sess-5a-midbatch', is_processing: false })
+    // dispatchEvent()'s own currentSessionId guard reads the session store's value
+    // (distinct from polling.js's own currentSessionId ref that connectSession()
+    // sets) — a real caller keeps both in sync via sessionStore.selectSession()
+    // before connecting; set it explicitly here so normal per-event dispatch for
+    // this session isn't silently gated out.
+    sessionStore.currentSessionId = sid
+    const loadSpy = vi.spyOn(messageStore, 'loadMessages').mockImplementation(async () => (
+      { messages: [], totalCount: 0, hasMore: false }
+    ))
+    const applyRecordSpy = vi.spyOn(messageStore, 'applyRecord')
+
+    sequencedFetchMock([
+      { events: [], next_cursor: 5 }, // initial connect poll establishes cursor 5
+      {
+        events: [
+          { type: 'message', data: { type: 'assistant', id: 'before-marker' } },
+          { type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } },
+          { type: 'message', data: { type: 'assistant', id: 'after-marker' } },
+        ],
+        next_cursor: 8,
+        reset: true,
+        evicted: false,
+      },
+    ])
+
+    await pollingStore.connectSession(sid)
+    await flush()
+    await flush()
+
+    expect(applyRecordSpy).toHaveBeenCalledWith(sid, expect.objectContaining({ id: 'before-marker' }), 'live')
+    expect(applyRecordSpy).not.toHaveBeenCalledWith(sid, expect.objectContaining({ id: 'after-marker' }), 'live')
+    expect(loadSpy).toHaveBeenCalledWith(sid)
   })
 
   it('regression: a concurrent reconnect during the evicted/reset reload does not have its cursor clobbered by the stale reload once it resolves', async () => {
