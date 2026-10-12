@@ -55,7 +55,7 @@ describe('InputArea', () => {
     const sessionStore = useSessionStore(pinia)
     const pollingStore = usePollingStore(pinia)
     sessionStore.currentSessionId = SESSION_ID
-    pollingStore.sessionConnected = true
+    pollingStore.sessionHasEverConnected = true
     await nextTick()
 
     const textarea = screen.getByRole('textbox')
@@ -80,7 +80,7 @@ describe('InputArea', () => {
     const pollingStore = usePollingStore(pinia)
     sessionStore.currentSessionId = SESSION_ID
     sessionStore.setInput(SESSION_ID, '')
-    pollingStore.sessionConnected = true
+    pollingStore.sessionHasEverConnected = true
 
     const btn = screen.getByRole('button', { name: /send/i })
     expect(btn).toBeDisabled()
@@ -100,7 +100,7 @@ describe('InputArea', () => {
     const sessionStore = useSessionStore(pinia)
     const pollingStore = usePollingStore(pinia)
     sessionStore.currentSessionId = SESSION_ID
-    pollingStore.sessionConnected = true
+    pollingStore.sessionHasEverConnected = true
     sessionStore.initData.set(SESSION_ID, { slash_commands: ['memory', 'clear'] })
     sessionStore.setInput(SESSION_ID, '/me')
     await nextTick()
@@ -123,7 +123,7 @@ describe('InputArea', () => {
     const sessionStore = useSessionStore(pinia)
     const pollingStore = usePollingStore(pinia)
     sessionStore.currentSessionId = SESSION_ID
-    pollingStore.sessionConnected = true
+    pollingStore.sessionHasEverConnected = true
     await nextTick()
 
     apiMock.post.mockRejectedValue(
@@ -157,7 +157,7 @@ describe('InputArea', () => {
     const sessionStore = useSessionStore(pinia)
     const pollingStore = usePollingStore(pinia)
     sessionStore.currentSessionId = SESSION_ID
-    pollingStore.sessionConnected = true
+    pollingStore.sessionHasEverConnected = true
     await nextTick()
 
     apiMock.post.mockResolvedValue({})
@@ -192,8 +192,8 @@ describe('InputArea', () => {
       const pollingStore = usePollingStore(pinia)
       sessionStore.currentSessionId = SESSION_ID
       sessionStore.setInput(SESSION_ID, 'draft message')
-      pollingStore.sessionConnected = true
-      pollingStore.backendStatus = backendStatus
+      pollingStore.sessionHasEverConnected = true
+      pollingStore.sessionBackendStatus = backendStatus
       await nextTick()
       return { pollingStore }
     }
@@ -213,11 +213,14 @@ describe('InputArea', () => {
       expect(screen.queryByText('Disconnected')).toBeFalsy()
     })
 
-    it('shows the "degraded" banner text when backendStatus is degraded', async () => {
+    it('shows the "degraded" banner but does NOT disable sending (decision 4, stage 5b): only "unreachable" blocks', async () => {
+      // Epic #1990 stage 5b: gating boundary preserved exactly as deliberated — degraded
+      // needs a manual restart but doesn't mean requests will fail, so it keeps showing
+      // the warning banner without blocking the send button the way unreachable does.
       await setup('degraded')
 
       expect(screen.getByText(/Backend unavailable — restart required/i)).toBeTruthy()
-      expect(screen.getByRole('button', { name: /^send$/i })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /^send$/i })).not.toBeDisabled()
     })
 
     it('send button is enabled when backendStatus is ok and other conditions are met', async () => {
@@ -253,7 +256,7 @@ describe('InputArea', () => {
       const sessionStore = useSessionStore(pinia)
       const pollingStore = usePollingStore(pinia)
       sessionStore.currentSessionId = SESSION_ID
-      pollingStore.sessionConnected = true
+      pollingStore.sessionHasEverConnected = true
       await nextTick()
 
       const clones = document.body.querySelectorAll('textarea[aria-hidden="true"]')
@@ -288,7 +291,7 @@ describe('InputArea', () => {
       const sessionStore = useSessionStore(pinia)
       const pollingStore = usePollingStore(pinia)
       sessionStore.currentSessionId = SESSION_ID
-      pollingStore.sessionConnected = true
+      pollingStore.sessionHasEverConnected = true
       await nextTick()
 
       const textarea = screen.getByRole('textbox')
@@ -315,7 +318,7 @@ describe('InputArea', () => {
       const sessionStore = useSessionStore(pinia)
       const pollingStore = usePollingStore(pinia)
       sessionStore.currentSessionId = SESSION_ID
-      pollingStore.sessionConnected = true
+      pollingStore.sessionHasEverConnected = true
       await nextTick()
 
       // The measurement clone still gets created regardless of ResizeObserver support.
@@ -333,7 +336,7 @@ describe('InputArea', () => {
   // real browser capture during manual testing: before this ordering, the generic
   // "Disconnected" banner silently won and the diagnostic banner never appeared.
   describe('hydration stage visibility (#2035)', () => {
-    async function setup({ stage, error, sessionConnected = false }) {
+    async function setup({ stage, error, sessionHasEverConnected = false }) {
       const { pinia } = renderWithStores(InputArea, {
         provide: { viewSessionId: viewSessionIdRef },
         stubs: { AttachmentList: true, SlashCommandDropdown: true }
@@ -343,7 +346,7 @@ describe('InputArea', () => {
       const sessionStore = useSessionStore(pinia)
       const pollingStore = usePollingStore(pinia)
       sessionStore.currentSessionId = SESSION_ID
-      pollingStore.sessionConnected = sessionConnected
+      pollingStore.sessionHasEverConnected = sessionHasEverConnected
       sessionStore.hydrationStageBySession.set(SESSION_ID, {
         stage,
         error: error || null,
@@ -355,7 +358,7 @@ describe('InputArea', () => {
 
     for (const [stage, label] of Object.entries(HYDRATION_STAGE_LABELS)) {
       it(`placeholder shows the ${stage} label while disconnected and mid-hydration`, async () => {
-        await setup({ stage, sessionConnected: false })
+        await setup({ stage, sessionHasEverConnected: false })
         expect(screen.getByPlaceholderText(label)).toBeTruthy()
       })
     }
@@ -364,7 +367,7 @@ describe('InputArea', () => {
       const { sessionStore } = await setup({
         stage: 'error',
         error: { stage: 'loading_history', message: 'boom', kind: 'thrown' },
-        sessionConnected: true,
+        sessionHasEverConnected: true,
       })
       vi.spyOn(sessionStore, 'retryHydration').mockResolvedValue(undefined)
 
@@ -380,7 +383,7 @@ describe('InputArea', () => {
       await setup({
         stage: 'error',
         error: { stage: 'loading_history', message: 'boom', kind: 'thrown' },
-        sessionConnected: false,
+        sessionHasEverConnected: false,
       })
 
       expect(screen.getByText(/Failed to load session data \(loading_history\) — boom/)).toBeTruthy()
@@ -391,7 +394,7 @@ describe('InputArea', () => {
       await setup({
         stage: 'error',
         error: { stage: 'loading_resources', message: 'Timed out after 20s during loading_resources', kind: 'timeout' },
-        sessionConnected: true,
+        sessionHasEverConnected: true,
       })
       expect(screen.getByText(/Timed out loading session data \(loading_resources\)/)).toBeTruthy()
     })
@@ -400,7 +403,7 @@ describe('InputArea', () => {
       await setup({
         stage: 'error',
         error: { stage: 'loading_history', message: 'boom', kind: 'thrown' },
-        sessionConnected: false,
+        sessionHasEverConnected: false,
       })
       expect(screen.getByPlaceholderText('Failed to load session data — see banner above')).toBeTruthy()
     })
@@ -409,12 +412,12 @@ describe('InputArea', () => {
       const { pollingStore } = await setup({
         stage: 'error',
         error: { stage: 'loading_history', message: 'boom', kind: 'thrown' },
-        sessionConnected: true,
+        sessionHasEverConnected: true,
       })
       // Connected + not starting + backend ok: NOT disabled, even with a live hydration error.
       expect(screen.getByRole('textbox')).not.toBeDisabled()
 
-      pollingStore.sessionConnected = false
+      pollingStore.sessionHasEverConnected = false
       await nextTick()
       // Disconnected: disabled again, exactly as pre-#2035 — hydration state alone didn't change this gate.
       expect(screen.getByRole('textbox')).toBeDisabled()

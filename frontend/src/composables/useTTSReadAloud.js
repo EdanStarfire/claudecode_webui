@@ -324,9 +324,13 @@ export function useTTSReadAloud() {
     }
   })
 
-  // Stop on WebSocket disconnect
-  watch(() => wsStore.sessionConnected, (connected) => {
-    if (isPlaying.value && !connected) stop()
+  // Stop on WebSocket disconnect. Epic #1990 stage 5b: 'idle' (explicit disconnect/401/404)
+  // and 'backoff' (actively retrying after a fetch error) are the two states equivalent to
+  // the old sessionConnected === false — 'connecting'/'connected'/'resyncing'/'unreachable'
+  // all correspond to the old sessionConnected === true (transport fine, or recovering
+  // without ever having dropped), matching pre-5b behavior exactly.
+  watch(() => wsStore.sessionState, (state) => {
+    if (isPlaying.value && (state === 'idle' || state === 'backoff')) stop()
   })
 
   // Cleanup on unmount
