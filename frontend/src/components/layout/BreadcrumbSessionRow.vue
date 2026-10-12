@@ -2,7 +2,7 @@
   <div>
     <div
       class="bc-session-card"
-      :class="{ current: isCurrent, child: depth > 0 }"
+      :class="{ current: isCurrent, child: depth > 0, compact }"
       role="button"
       :aria-label="`Select agent ${displayName}${isUnreviewed ? ' (new since last viewed)' : ''}`"
       :title="chipTooltip"
@@ -178,6 +178,11 @@ function handleClick() {
   background: var(--bs-secondary-bg);
 }
 
+.bc-session-card.compact {
+  padding: 3px 10px;
+  margin-bottom: 2px;
+}
+
 .chip-expand {
   width: 14px;
   height: 14px;
@@ -238,12 +243,14 @@ function handleClick() {
 
 .chip-text.compact .chip-name {
   font-size: 11px;
+  line-height: 1.15;
   flex-shrink: 0;
   max-width: 60%;
 }
 
 .chip-secondary {
   font-size: 10.5px;
+  line-height: 1.15;
   color: var(--bs-secondary-color);
   flex: 1 1 auto;
   min-width: 0;
@@ -263,6 +270,12 @@ function handleClick() {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.bc-session-card.compact .chip-alert {
+  width: 13px;
+  height: 13px;
+  font-size: 8px;
 }
 
 .chip-alert.error { background: #ef4444; }
