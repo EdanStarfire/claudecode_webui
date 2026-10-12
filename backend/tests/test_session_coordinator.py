@@ -2849,6 +2849,37 @@ class TestIssue1628CompactBoundaryDistillation:
         with pytest.raises(LegacyMessageFormatError, match=session_id):
             await coordinator._distill_compaction(session_id, boundary_ts)
 
+    @pytest.mark.asyncio
+    async def test_issue_2125_get_session_messages_legacy_type_raises(self, temp_coordinator):
+        """Issue #2125 (AC6): get_session_messages() — the primary history read,
+        reached by GET /api/sessions/{id}/messages — must also fail loudly on a
+        legacy `_type`-tagged row rather than silently returning an empty/partial
+        history (the gap _distill_compaction's own guard above doesn't cover)."""
+        import json as _json
+        import uuid
+
+        from backend.models.messages import LegacyMessageFormatError
+        from backend.session_config import SessionConfig
+        coordinator = temp_coordinator
+
+        project = await coordinator.project_manager.create_project(
+            name="Test Project", working_directory="/tmp"
+        )
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(),
+        )
+
+        session_dir = coordinator.session_manager.sessions_dir / session_id
+        messages_file = session_dir / "messages.jsonl"
+        with open(messages_file, "w") as f:
+            f.write(_json.dumps({"_type": "AssistantMessage", "content": "legacy"}) + "\n")
+
+        with pytest.raises(LegacyMessageFormatError, match=session_id):
+            await coordinator.get_session_messages(session_id)
+
 
 # ---------------------------------------------------------------------------
 # Issue #1660 — MCP snapshot pruning

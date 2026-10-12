@@ -14,6 +14,7 @@ from typing import Any
 
 from shared.logging_config import get_logger
 
+from .models.messages import LegacyMessageFormatError
 from .timestamp_utils import get_unix_timestamp
 
 # Get specialized logger for storage debugging
@@ -131,11 +132,22 @@ class DataStorageManager:
                 if line:
                     try:
                         message = json.loads(line)
-                        messages.append(message)
                     except json.JSONDecodeError as e:
                         logger.warning(f"Failed to parse message line: {line[:100]}... Error: {e}")
+                        continue
+                    # Issue #2125 (AC6): the primary history read had no legacy-shape
+                    # guard, unlike history_distiller.py/edit_history.py's equivalent
+                    # scans — fail loudly rather than silently misread a pre-canonical
+                    # _type/data-wrapper record (see LegacyMessageFormatError's own
+                    # docstring; production data was already confirmed 100% canonical).
+                    stored_type = message.get("_type")
+                    if stored_type:
+                        raise LegacyMessageFormatError(self.session_dir.name, stored_type)
+                    messages.append(message)
 
             return messages
+        except LegacyMessageFormatError:
+            raise
         except Exception:
             logger.exception("Failed to read messages")
             return []
