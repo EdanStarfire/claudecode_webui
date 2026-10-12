@@ -49,6 +49,11 @@
       </button>
     </div>
 
+    <!-- Version diff error banner (Issue #2108) -->
+    <div v-if="versionDiffError" class="version-diff-error">
+      {{ versionDiffError }}
+    </div>
+
     <!-- Resource Grid / List -->
     <div class="resource-grid-container p-2">
       <!-- Initial loading spinner -->
@@ -202,6 +207,30 @@
                     <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
                   </svg>
                 </button>
+                <!-- Diff actions (Issue #2108) -->
+                <button
+                  v-if="isTextResource(version) && version.version_number > 1"
+                  class="btn btn-sm btn-outline-secondary action-btn"
+                  @click.stop="diffAgainstPrevious(resource, version)"
+                  title="Diff vs previous"
+                  aria-label="Diff vs previous"
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                    <path fill-rule="evenodd" d="M1 11.5a.5.5 0 0 0 .5.5h11.793l-3.147 3.146a.5.5 0 0 0 .708.708l4-4a.5.5 0 0 0 0-.708l-4-4a.5.5 0 0 0-.708.708L13.293 11H1.5a.5.5 0 0 0-.5.5Zm14-7a.5.5 0 0 0-.5-.5H2.707l3.147-3.146a.5.5 0 1 0-.708-.708l-4 4a.5.5 0 0 0 0 .708l4 4a.5.5 0 0 0 .708-.708L2.707 5H14.5a.5.5 0 0 0 .5-.5Z"/>
+                  </svg>
+                </button>
+                <button
+                  v-if="isTextResource(version) && version.version_number < resource.version_count"
+                  class="btn btn-sm btn-outline-secondary action-btn diff-latest-btn"
+                  @click.stop="diffAgainstLatest(resource, version)"
+                  title="Diff vs latest"
+                  aria-label="Diff vs latest"
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                    <path fill-rule="evenodd" d="M1 11.5a.5.5 0 0 0 .5.5h11.793l-3.147 3.146a.5.5 0 0 0 .708.708l4-4a.5.5 0 0 0 0-.708l-4-4a.5.5 0 0 0-.708.708L13.293 11H1.5a.5.5 0 0 0-.5.5Zm14-7a.5.5 0 0 0-.5-.5H2.707l3.147-3.146a.5.5 0 1 0-.708-.708l-4 4a.5.5 0 0 0 0 .708l4 4a.5.5 0 0 0 .708-.708L2.707 5H14.5a.5.5 0 0 0 .5-.5Z"/>
+                  </svg>
+                  <span class="diff-latest-label">L</span>
+                </button>
               </div>
             </div>
           </div>
@@ -310,6 +339,30 @@
                     <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
                   </svg>
                 </button>
+                <!-- Diff actions (Issue #2108) -->
+                <button
+                  v-if="isTextResource(version) && version.version_number > 1"
+                  class="btn btn-sm btn-outline-secondary action-btn"
+                  @click.stop="diffAgainstPrevious(resource, version)"
+                  title="Diff vs previous"
+                  aria-label="Diff vs previous"
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                    <path fill-rule="evenodd" d="M1 11.5a.5.5 0 0 0 .5.5h11.793l-3.147 3.146a.5.5 0 0 0 .708.708l4-4a.5.5 0 0 0 0-.708l-4-4a.5.5 0 0 0-.708.708L13.293 11H1.5a.5.5 0 0 0-.5.5Zm14-7a.5.5 0 0 0-.5-.5H2.707l3.147-3.146a.5.5 0 1 0-.708-.708l-4 4a.5.5 0 0 0 0 .708l4 4a.5.5 0 0 0 .708-.708L2.707 5H14.5a.5.5 0 0 0 .5-.5Z"/>
+                  </svg>
+                </button>
+                <button
+                  v-if="isTextResource(version) && version.version_number < resource.version_count"
+                  class="btn btn-sm btn-outline-secondary action-btn diff-latest-btn"
+                  @click.stop="diffAgainstLatest(resource, version)"
+                  title="Diff vs latest"
+                  aria-label="Diff vs latest"
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                    <path fill-rule="evenodd" d="M1 11.5a.5.5 0 0 0 .5.5h11.793l-3.147 3.146a.5.5 0 0 0 .708.708l4-4a.5.5 0 0 0 0-.708l-4-4a.5.5 0 0 0-.708.708L13.293 11H1.5a.5.5 0 0 0-.5.5Zm14-7a.5.5 0 0 0-.5-.5H2.707l3.147-3.146a.5.5 0 1 0-.708-.708l-4 4a.5.5 0 0 0 0 .708l4 4a.5.5 0 0 0 .708-.708L2.707 5H14.5a.5.5 0 0 0 .5-.5Z"/>
+                  </svg>
+                  <span class="diff-latest-label">L</span>
+                </button>
               </div>
             </div>
           </div>
@@ -338,9 +391,12 @@
 import { computed, inject, ref, watch } from 'vue'
 import { useResourceStore } from '@/stores/resource'
 import { useSessionStore } from '@/stores/session'
+import { useDiffStore } from '@/stores/diff'
+import { buildEditDiff, resolveVersionDiffPair } from '@/utils/diffRender'
 
 const resourceStore = useResourceStore()
 const sessionStore = useSessionStore()
+const diffStore = useDiffStore()
 
 // Inject the addAttachmentFromResource function from parent
 const addAttachmentFromResource = inject('addAttachmentFromResource', null)
@@ -420,6 +476,10 @@ function isImage(resource) {
   return resourceStore.isImageResource(resource)
 }
 
+function isTextResource(version) {
+  return resourceStore.isTextResource(version)
+}
+
 function getIcon(resource) {
   return resourceStore.getResourceIcon(resource)
 }
@@ -480,6 +540,55 @@ function formatVersionTime(timestamp) {
   if (!timestamp) return ''
   const date = new Date(timestamp * 1000)
   return date.toLocaleString()
+}
+
+// Version diffing (Issue #2108)
+const versionDiffError = ref('')
+let versionDiffErrorTimer = null
+
+function showVersionDiffError(message) {
+  versionDiffError.value = message
+  clearTimeout(versionDiffErrorTimer)
+  versionDiffErrorTimer = setTimeout(() => {
+    versionDiffError.value = ''
+  }, 4000)
+}
+
+async function performVersionDiff(pair) {
+  const sid = sessionStore.currentSessionId
+  if (!sid) return
+
+  const [oldText, newText] = await Promise.all([
+    resourceStore.fetchTextContent(sid, pair.oldResourceId),
+    resourceStore.fetchTextContent(sid, pair.newResourceId)
+  ])
+
+  const oldError = resourceStore.getTextContent(pair.oldResourceId)?.error
+  const newError = resourceStore.getTextContent(pair.newResourceId)?.error
+  if (oldError || newError) {
+    showVersionDiffError('Failed to load one or both versions for diffing.')
+    return
+  }
+
+  const { text, added, removed } = buildEditDiff(pair.label, oldText || '', newText || '')
+  diffStore.openFullViewForResourceDiff(sid, pair.label, text, {
+    oldResourceId: pair.oldResourceId,
+    newResourceId: pair.newResourceId,
+    added,
+    removed
+  })
+}
+
+function diffAgainstPrevious(resource, version) {
+  const pair = resolveVersionDiffPair(resource, version, 'previous')
+  if (!pair) return
+  performVersionDiff(pair)
+}
+
+function diffAgainstLatest(resource, version) {
+  const pair = resolveVersionDiffPair(resource, version, 'latest')
+  if (!pair) return
+  performVersionDiff(pair)
 }
 
 function addToAttachments(resource) {
@@ -737,6 +846,25 @@ function loadMoreResources() {
   display: flex;
   gap: 4px;
   flex-shrink: 0;
+}
+
+/* Diff actions (Issue #2108) */
+.diff-latest-btn {
+  gap: 1px;
+}
+
+.diff-latest-label {
+  font-size: 0.55rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.version-diff-error {
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  color: var(--bs-danger-text-emphasis, #842029);
+  background: var(--bs-danger-bg-subtle, #f8d7da);
+  border-bottom: 1px solid var(--bs-danger-border-subtle, #f5c2c7);
 }
 
 /* Controls bar: search + type filter + sort + view toggle */
