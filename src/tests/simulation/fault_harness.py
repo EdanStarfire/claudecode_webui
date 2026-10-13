@@ -133,11 +133,10 @@ class FakeBackend:
 
     def restart(self) -> None:
         """AC3 primitive: Backend process restart — every stream gets a fresh
-        `EventQueue` (cursor space discontinuity, detected locally via
-        `reset_occurred()` exactly as `backend/routers/poll.py` does) AND a bumped
-        `epoch` (epic #1990 stage 5a) — the signal `PollRelay` actually watches for
-        now, independent of whether a given poll happens to also observe a lower
-        cursor. Implicitly comes back up (a restarted process is, by definition, up).
+        `EventQueue` (cursor space discontinuity) AND a bumped `epoch` (epic
+        #1990 stage 5a) — the signal `PollRelay` actually watches for, independent
+        of whether a given poll happens to also observe a lower cursor. Implicitly
+        comes back up (a restarted process is, by definition, up).
         """
         for session_id in list(self._session_queues):
             self._session_queues[session_id] = EventQueue()
