@@ -593,6 +593,21 @@ class ProviderCatalogEntryRequest(BaseModel):
         extra = "allow"  # forward-compat for new provider-specific fields
 
 
+class FleetSnapshotRecordRequest(BaseModel):
+    """Issue #2159 (stage 6c): merge newly-halted session ids into a project's
+    persisted fleet snapshot — used by Stop Selected, which halts sessions
+    individually rather than through the halt-all endpoint."""
+    session_ids: list[str]
+    processing_session_ids: list[str] = Field(default_factory=list)
+
+
+class FleetSnapshotClearRequest(BaseModel):
+    """Issue #2159 (stage 6c): remove specific session ids from a project's
+    persisted fleet snapshot — used once each has been successfully
+    resumed/started outside the bulk resume-all endpoint."""
+    session_ids: list[str]
+
+
 def _validate_additional_directories(dirs: list[str] | None, working_directory: str | None) -> list[str] | None:
     """Validate additional directories: absolute paths, no duplicates, not same as working_dir.
     Returns None (not []) when there are no valid entries so callers can distinguish

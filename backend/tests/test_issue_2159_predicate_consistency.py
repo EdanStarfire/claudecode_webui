@@ -70,7 +70,9 @@ class TestT2PredicateConsistency:
         [
             ("backend.routers.sessions", "is_deliverable"),
             ("backend.legion.comm_router", "is_deliverable"),
-            ("backend.legion.legion_coordinator", "is_deliverable"),
+            # legion_coordinator.resume_all() no longer scans is_deliverable sessions
+            # project-wide (stage 6c) — it resumes exactly the persisted fleet
+            # snapshot, so this predicate import moved out of that module entirely.
             ("backend.legion.scheduler_service", "is_deliverable"),
             ("backend.legion.scheduler_service", "is_auto_startable"),
             ("backend.session_coordinator", "is_interruptible"),

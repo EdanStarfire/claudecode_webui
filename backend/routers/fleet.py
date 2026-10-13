@@ -1,8 +1,10 @@
-"""Fleet control endpoints: halt-all, resume-all"""
+"""Fleet control endpoints: halt-all, resume-all, fleet snapshot (issue #2159 stage 6c)"""
 
 from fastapi import APIRouter, HTTPException
 
 from shared.exception_handlers import handle_exceptions
+
+from ._models import FleetSnapshotClearRequest, FleetSnapshotRecordRequest
 
 
 def build_router(webui) -> APIRouter:
@@ -42,6 +44,66 @@ def build_router(webui) -> APIRouter:
             "resumed_count": result["resumed_count"],
             "failed_minions": result["failed_minions"],
             "total_minions": result["total_minions"]
+        }
+
+    # Issue #2159 (stage 6c): persisted fleet halt/resume snapshot, replacing
+    # frontend/src/utils/stoppedSet.js's sessionStorage-only bookkeeping — this
+    # survives a browser reload and a Backend restart (T3), not just the current
+    # tab's session.
+
+    @router.get("/api/legions/{legion_id}/fleet-snapshot")
+    @handle_exceptions("get fleet snapshot")
+    async def get_fleet_snapshot(legion_id: str):
+        """Current halted-session snapshot for this project, pruned against live
+        session_ids. Replaces ProjectOverview.vue's sessionStorage
+        getStoppedSet()/getProcessingSet() reads."""
+        if not await webui.service.validate_project_exists(legion_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        snapshot = await webui.coordinator.project_manager.get_fleet_snapshot(legion_id)
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        return snapshot
+
+    @router.post("/api/legions/{legion_id}/fleet-snapshot/record")
+    @handle_exceptions("record fleet snapshot")
+    async def record_fleet_snapshot(legion_id: str, request: FleetSnapshotRecordRequest):
+        """Merge newly-halted session ids into the persisted snapshot — used by
+        Stop Selected, which halts sessions individually rather than through
+        halt-all. Replaces sessionStorage addToStoppedSet()/setProcessingSet()."""
+        if not await webui.service.validate_project_exists(legion_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        project = await webui.coordinator.project_manager.record_fleet_stopped(
+            legion_id, request.session_ids, request.processing_session_ids
+        )
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        return {
+            "stopped_session_ids": project.fleet_stopped_session_ids,
+            "processing_session_ids": project.fleet_stopped_processing_ids,
+        }
+
+    @router.post("/api/legions/{legion_id}/fleet-snapshot/clear")
+    @handle_exceptions("clear fleet snapshot")
+    async def clear_fleet_snapshot(legion_id: str, request: FleetSnapshotClearRequest):
+        """Remove specific session ids from the persisted snapshot — used once
+        each has been successfully resumed/started outside of resume-all.
+        Replaces sessionStorage removeFromStoppedSet()/setStoppedSet()."""
+        if not await webui.service.validate_project_exists(legion_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        project = await webui.coordinator.project_manager.clear_fleet_stopped(
+            legion_id, request.session_ids
+        )
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        return {
+            "stopped_session_ids": project.fleet_stopped_session_ids,
+            "processing_session_ids": project.fleet_stopped_processing_ids,
         }
 
     return router

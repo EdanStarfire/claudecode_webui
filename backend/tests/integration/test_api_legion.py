@@ -202,6 +202,97 @@ class TestResumeAll:
         assert resp.status_code == 404
 
 
+class TestFleetSnapshot:
+    """Issue #2159 (stage 6c): the persisted halt/resume snapshot, replacing
+    frontend/src/utils/stoppedSet.js's sessionStorage-only bookkeeping."""
+
+    async def test_snapshot_empty_for_fresh_project(self, api_integration_env):
+        client = api_integration_env["client"]
+        project = await _setup_legion(api_integration_env)
+        lid = project["project_id"]
+
+        resp = await client.get(f"/api/legions/{lid}/fleet-snapshot")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["stopped_session_ids"] == []
+        assert body["processing_session_ids"] == []
+
+    async def test_snapshot_nonexistent_project(self, api_integration_env):
+        client = api_integration_env["client"]
+        fake_id = str(uuid.uuid4())
+
+        resp = await client.get(f"/api/legions/{fake_id}/fleet-snapshot")
+        assert resp.status_code == 404
+
+    async def test_halt_all_populates_snapshot(self, api_integration_env):
+        """halt-all must persist what it stopped, survivable via the snapshot
+        endpoint — not just returned once in the halt-all response body."""
+        client = api_integration_env["client"]
+        create_test_session = api_integration_env["create_test_session"]
+        project = await _setup_legion(api_integration_env)
+        lid = project["project_id"]
+
+        session = await create_test_session(lid, name="to-be-halted")
+        sid = session["session_id"]
+        await client.post(f"/api/sessions/{sid}/start")
+
+        halt_resp = await client.post(f"/api/legions/{lid}/halt-all")
+        assert halt_resp.status_code == 200
+        assert sid in halt_resp.json()["stopped_session_ids"]
+
+        snap_resp = await client.get(f"/api/legions/{lid}/fleet-snapshot")
+        assert snap_resp.status_code == 200
+        assert sid in snap_resp.json()["stopped_session_ids"]
+
+    async def test_record_then_clear_round_trip(self, api_integration_env):
+        client = api_integration_env["client"]
+        create_test_session = api_integration_env["create_test_session"]
+        project = await _setup_legion(api_integration_env)
+        lid = project["project_id"]
+
+        session = await create_test_session(lid, name="stop-selected-target")
+        sid = session["session_id"]
+
+        record_resp = await client.post(
+            f"/api/legions/{lid}/fleet-snapshot/record",
+            json={"session_ids": [sid], "processing_session_ids": [sid]},
+        )
+        assert record_resp.status_code == 200
+        assert record_resp.json()["stopped_session_ids"] == [sid]
+        assert record_resp.json()["processing_session_ids"] == [sid]
+
+        snap_resp = await client.get(f"/api/legions/{lid}/fleet-snapshot")
+        assert snap_resp.json()["stopped_session_ids"] == [sid]
+
+        clear_resp = await client.post(
+            f"/api/legions/{lid}/fleet-snapshot/clear",
+            json={"session_ids": [sid]},
+        )
+        assert clear_resp.status_code == 200
+        assert clear_resp.json()["stopped_session_ids"] == []
+        assert clear_resp.json()["processing_session_ids"] == []
+
+    async def test_record_nonexistent_project(self, api_integration_env):
+        client = api_integration_env["client"]
+        fake_id = str(uuid.uuid4())
+
+        resp = await client.post(
+            f"/api/legions/{fake_id}/fleet-snapshot/record",
+            json={"session_ids": ["s1"]},
+        )
+        assert resp.status_code == 404
+
+    async def test_clear_nonexistent_project(self, api_integration_env):
+        client = api_integration_env["client"]
+        fake_id = str(uuid.uuid4())
+
+        resp = await client.post(
+            f"/api/legions/{fake_id}/fleet-snapshot/clear",
+            json={"session_ids": ["s1"]},
+        )
+        assert resp.status_code == 404
+
+
 class TestDisposeMinionHardDeleteBroadcast:
     """Issue #1986: OverseerController.dispose_minion()'s hard-delete path calls
     session_coordinator.delete_session() directly — bypassing the
