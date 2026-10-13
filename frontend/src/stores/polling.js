@@ -29,7 +29,9 @@ import { pushDebugEvent } from '@/composables/useDebugBuffer'
 // States: idle | connecting | connected | resyncing | backoff | unreachable | archived
 // `transition()` is the single function that ever assigns `.state` — every poll-loop branch
 // calls it, nothing else writes state directly. This is both the one-reducer requirement and
-// the single instrumentation point (every transition emits a 'state-transition' debug event).
+// the single instrumentation point (every GENUINE state change emits a 'state-transition'
+// debug event — issue #2161 AC5 gates this on next !== from, so a same-state no-op call does
+// not; state assignment/hasEverConnected/onTransition still run unconditionally regardless).
 function createStreamConnection(kind, onTransition) {
   const state = ref('idle')
   // 'ok' | 'degraded' | 'unreachable' — the single multiplexed response's own backend_status
@@ -49,7 +51,13 @@ function createStreamConnection(kind, onTransition) {
     const from = state.value
     state.value = next
     if (next === 'connected') hasEverConnected.value = true
-    pushDebugEvent('polling', 'state-transition', { kind, sessionId: sessionId ?? null, from, to: next })
+    // Issue #2161 (AC5): a connected -> connected no-op poll cycle (idle steady state)
+    // called this unconditionally before, logging a debug event on every single poll
+    // cycle. Only an actual state change is debug-worthy; state assignment,
+    // hasEverConnected, and onTransition below all still run unconditionally regardless.
+    if (next !== from) {
+      pushDebugEvent('polling', 'state-transition', { kind, sessionId: sessionId ?? null, from, to: next })
+    }
     // Epic #1990 stage 5c: lets the store keep its own derived, PLAIN (not computed())
     // sessionState ref in sync with this — the single place `.state` ever changes.
     // Plain refs (rather than computed() over the subscriptions Map, which Vue's
@@ -177,6 +185,15 @@ export const usePollingStore = defineStore('polling', () => {
   const legionRetryCount = ref(0)    // stub
 
   let uiCursor = 0
+
+  // Issue #2161: one-shot fast-probe flag. True for exactly the next request built by
+  // startPolling()'s loop after a fresh connect() or a subscription-set change detected
+  // by interruptIfStale() — that one request sends timeout:0 instead of timeout:30 so the
+  // input doesn't stay gated behind a 30s long-poll it has no reason to wait out. Read and
+  // cleared to false SYNCHRONOUSLY in the request-build block, before the await fetch(...),
+  // so it can never cause a busy-poll: the only way it becomes true again is a fresh
+  // connect() or a fresh genuine subscription change.
+  let fastProbePending = true
 
   // Epic #1990 stage 5c: subscription-set model replacing sessionCursors' passive cache.
   // Map<sessionId, {cursor: number, hasEverSeenResponse: boolean}> — every entry here is
@@ -320,8 +337,15 @@ export const usePollingStore = defineStore('polling', () => {
   // identical failure mode for the identical reason, since it too starts polling long
   // before any specific session is ever subscribed).
   function interruptIfStale(sessionId, cursor) {
-    if (activeSessionCursors.get(sessionId) !== cursor && conn.state.value !== 'idle') {
-      conn.abortInFlight()
+    if (activeSessionCursors.get(sessionId) !== cursor) {
+      // Issue #2161 (AC1/T2): a genuine subscription-set change always re-arms the
+      // fast-probe, regardless of conn.state.value — including the case where this
+      // runs before the loop has even started (startPolling()'s own connect() below
+      // then simply finds the flag already true, a harmless no-op double-set).
+      fastProbePending = true
+      if (conn.state.value !== 'idle') {
+        conn.abortInFlight()
+      }
     }
   }
 
@@ -341,6 +365,9 @@ export const usePollingStore = defineStore('polling', () => {
     uiCursor = initialCursor
     startAppDataRetryWatcher()
     const myGeneration = conn.connect()
+    // Issue #2161 (AC1): covers "first request after connect" — including the very
+    // first UI-only request before any session is ever subscribed.
+    fastProbePending = true
     // Issue #1977: tracks "we backed off after an error and are waiting to confirm we're
     // actually back" — retryStaleAppData() fires once, on the next CONFIRMED successful
     // response, not merely once the backoff delay elapses.
@@ -350,8 +377,14 @@ export const usePollingStore = defineStore('polling', () => {
       activeSessionCursors = new Map([...subscriptions.entries()].map(([sid, sub]) => [sid, sub.cursor]))
       try {
         const controller = conn.newAbortController()
+        // Issue #2161: consume the one-shot fast-probe flag for THIS cycle's request,
+        // clearing it synchronously before the await fetch(...) below — a concurrent
+        // interruptIfStale() call (from a click handler) re-arms it correctly for
+        // whichever request runs next rather than racing this one.
+        const useFastProbe = fastProbePending
+        fastProbePending = false
         const body = {
-          timeout: 30,
+          timeout: useFastProbe ? 0 : 30,
           ui: { since: uiCursor },
           sessions: Object.fromEntries(
             [...subscriptions.entries()].map(([sid, sub]) => [sid, { since: sub.cursor }])
@@ -1153,6 +1186,13 @@ export const usePollingStore = defineStore('polling', () => {
     // switching to an already-subscribed session shows input enabled immediately rather than
     // waiting out a fresh connect cycle.
     sessionHasEverConnected: sessionHasEverConnectedRef,
+    // Issue #2161 (AC4): per-CONNECTION (not per-session) signal — true once this page's
+    // transport has reached 'connected' at least once since its last connect()/
+    // disconnect() cycle. Lets InputArea.vue distinguish a genuine first connection
+    // ("Connecting...") from a reconnect after a previously-successful connection was
+    // lost ("Reconnecting..."), unlike sessionHasEverConnected above which is scoped to
+    // one session's own subscription.
+    transportHasEverConnected: conn.hasEverConnected,
     currentSessionId,
     legionConnected,
     legionRetryCount,

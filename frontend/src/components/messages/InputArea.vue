@@ -30,10 +30,15 @@
       class="alert alert-danger mb-0 py-2 px-3 small d-flex align-items-center gap-2"
       role="alert"
     >
-      <span class="flex-shrink-0">❗</span>
-      <strong>Disconnected</strong>
-      <span class="text-muted">—</span>
-      <span>Cannot send messages while reconnecting...</span>
+      <template v-if="hasEverConnectedThisView">
+        <span class="flex-shrink-0">❗</span>
+        <strong>Disconnected</strong>
+        <span class="text-muted">—</span>
+        <span>Cannot send messages while reconnecting...</span>
+      </template>
+      <template v-else>
+        <span>Connecting...</span>
+      </template>
     </div>
 
     <!-- Backend outage banner (issue #1989): browser<->Frontend transport is fine, but
@@ -288,6 +293,19 @@ const isProcessing = computed(() => currentSession.value?.is_processing || false
 // left over from a previously-viewed different session could show the input as usable for a
 // session that will never actually respond.
 const isConnected = computed(() => wsStore.sessionHasEverConnected && wsStore.sessionState !== 'archived')
+// Issue #2161 (AC4): wsStore.transportHasEverConnected tracks the shared multiplexed
+// transport (true almost immediately after app mount, for the rest of the tab's life),
+// not this specific session — using it directly here would make the "Connecting..."
+// banner wording below effectively unreachable after the first session viewed in a tab,
+// since by then the transport has always already connected once. Track per-VIEW instead:
+// true once THIS session's own view has connected at least once; reset whenever the
+// viewed session changes, so switching to a never-before-seen session always renders
+// "Connecting..." rather than "Disconnected — reconnecting" (nothing was ever disconnected).
+const hasEverConnectedThisView = ref(false)
+watch(viewSessionId, () => { hasEverConnectedThisView.value = isConnected.value }, { immediate: true })
+watch(isConnected, (connected) => {
+  if (connected) hasEverConnectedThisView.value = true
+})
 // Issue #1989: independent of isConnected — stays true throughout a pure Backend-side
 // outage, since the browser<->Frontend transport keeps answering polls normally. Drives
 // the warning banner for BOTH degraded/unreachable (unchanged from pre-5b); only
