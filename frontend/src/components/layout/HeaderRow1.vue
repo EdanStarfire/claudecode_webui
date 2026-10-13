@@ -141,12 +141,11 @@ const sessionChannelState = computed(() => {
 })
 const isSessionArchived = computed(() => !!wsStore.currentSessionId && wsStore.sessionState === 'archived')
 
-// Issue #1989: Backend-health signal, independent of the transport states above — stays
-// 'connected' from either transport's point of view throughout a pure Backend-side
-// outage, so this is the only thing that can surface it on the indicator. Checked across
-// both streams' own backendStatus field (decision 1: kept separate per StreamConnection
-// instance, not collapsed into `state`) since whichever one last polled successfully may
-// differ by a beat.
+// Issue #1989: Backend-health signal, independent of the transport state above — stays
+// 'connected' throughout a pure Backend-side outage, so this is the only thing that can
+// surface it on the indicator. uiBackendStatus/sessionBackendStatus are the same
+// underlying value now (epic #1990 stage 5c collapsed the two streams into one shared
+// connection) — checked under both names purely for API-shape stability at this call site.
 const backendChannelState = computed(() => {
   if (wsStore.uiBackendStatus === 'degraded' || wsStore.sessionBackendStatus === 'degraded') return 'backend-degraded'
   if (wsStore.uiBackendStatus === 'unreachable' || wsStore.sessionBackendStatus === 'unreachable') return 'backend-unreachable'

@@ -18,30 +18,28 @@ import { notify } from '@/composables/useNotifications'
 import { getAuthToken, api, triggerReauth } from '@/utils/api'
 import { pushDebugEvent } from '@/composables/useDebugBuffer'
 
-// ========== STREAM CONNECTION STATE MACHINE (Epic #1990 stage 5b) ==========
-// Single state machine per long-poll stream (ui, session). Liveness is derived ONLY from
-// poll responses and fetch outcomes — a successful response (including an empty one after
-// the server's long-poll hold) proves the connection is alive, a thrown fetch error proves
-// it isn't. No wall-clock staleness timer exists anywhere in this design.
+// ========== STREAM CONNECTION STATE MACHINE (Epic #1990 stage 5b, consolidated stage 5c) ==========
+// ONE state machine for the single multiplexed transport (epic #1990 stage 5c collapsed the
+// former uiConn/sessionConn pair into one connection, since there's genuinely only one HTTP
+// long-poll cycle now — UI and every subscribed session ride the same request/response).
+// Liveness is derived ONLY from poll responses and fetch outcomes — a successful response
+// (including an empty one after the server's long-poll hold) proves the connection is alive, a
+// thrown fetch error proves it isn't. No wall-clock staleness timer exists anywhere in this design.
 //
 // States: idle | connecting | connected | resyncing | backoff | unreachable | archived
 // `transition()` is the single function that ever assigns `.state` — every poll-loop branch
 // calls it, nothing else writes state directly. This is both the one-reducer requirement and
 // the single instrumentation point (every transition emits a 'state-transition' debug event).
-function createStreamConnection(kind) {
+function createStreamConnection(kind, onTransition) {
   const state = ref('idle')
-  // 'ok' | 'degraded' | 'unreachable' — kept as its OWN field, not collapsed into `state`, so
-  // the header can still distinguish "degraded" (needs manual restart) from "unreachable"
-  // (self-heals) exactly as the pre-5b STATE_SEVERITY ladder did.
+  // 'ok' | 'degraded' | 'unreachable' — the single multiplexed response's own backend_status
+  // field (one value now, not one per stream — there's only one response per poll cycle).
   const backendStatus = ref('ok')
   const retryCount = ref(0)
   // True once this connection has reached 'connected' at least once since its last connect()/
-  // disconnect() cycle — InputArea's gating boundary (decision 4) keys off this rather than
-  // the live transport state, so a backoff/resync cycle after a prior success doesn't disable
-  // input the way a genuine never-yet-connected session does.
+  // disconnect() cycle.
   const hasEverConnected = ref(false)
 
-  let cursor = 0
   let abortController = null
   let generation = 0
   let backoffTimerHandle = null
@@ -52,6 +50,14 @@ function createStreamConnection(kind) {
     state.value = next
     if (next === 'connected') hasEverConnected.value = true
     pushDebugEvent('polling', 'state-transition', { kind, sessionId: sessionId ?? null, from, to: next })
+    // Epic #1990 stage 5c: lets the store keep its own derived, PLAIN (not computed())
+    // sessionState ref in sync with this — the single place `.state` ever changes.
+    // Plain refs (rather than computed() over the subscriptions Map, which Vue's
+    // reactivity can't track since it's an ordinary, non-reactive Map) both preserve
+    // genuine reactivity for real consumers and stay directly test-assignable, matching
+    // every other exported field here (uiState, sessionRetryCount, etc. are the same
+    // underlying refs handed out directly).
+    onTransition?.(next, sessionId)
   }
 
   function bumpGeneration() {
@@ -89,37 +95,25 @@ function createStreamConnection(kind) {
     })
   }
 
-  function connect(initialCursor, sessionId) {
-    cursor = initialCursor
+  function connect() {
     retryCount.value = 0
     hasEverConnected.value = false
     const gen = bumpGeneration()
-    transition('connecting', sessionId)
+    transition('connecting')
     return gen
   }
 
-  function markArchived(sessionId) {
-    transition('archived', sessionId)
-  }
-
   // Synchronous teardown: abort any in-flight fetch, clear any pending backoff sleep, bump
-  // the generation, and go idle. No awaited exit-budget needed — a since-superseded loop's
-  // own in-flight `await fetch(...)`/`await resync()` simply finds its generation stale on
-  // resume and returns without mutating anything (the loop's own generation check already
-  // guarantees exit).
-  function disconnect(sessionId) {
+  // the generation, and go idle. No awaited exit-budget needed.
+  function disconnect() {
     clearBackoffTimer()
     abortController?.abort()
     abortController = null
     bumpGeneration()
     retryCount.value = 0
     hasEverConnected.value = false
-    // Builder-review finding: with backendStatus now tracked per-StreamConnection (decision
-    // 1) rather than shared, a value left over from the connection this is tearing down
-    // would otherwise freeze and leak into whatever uses this connection next (a different
-    // session, or an archived/no-poll view) with nothing left to ever refresh it.
     backendStatus.value = 'ok'
-    transition('idle', sessionId)
+    transition('idle')
   }
 
   function newAbortController() {
@@ -136,13 +130,10 @@ function createStreamConnection(kind) {
     backendStatus,
     retryCount,
     hasEverConnected,
-    getCursor: () => cursor,
-    setCursor: (c) => { cursor = c },
     newAbortController,
     abortInFlight,
     transition,
     connect,
-    markArchived,
     disconnect,
     bumpGeneration,
     isCurrentGeneration,
@@ -152,36 +143,64 @@ function createStreamConnection(kind) {
 
 export const usePollingStore = defineStore('polling', () => {
   // ========== STATE ==========
-  const uiConn = createStreamConnection('ui')
-  const sessionConn = createStreamConnection('session')
+  // sessionState/sessionHasEverConnected are PLAIN refs (not computed()) kept in sync
+  // explicitly at every point their inputs change — see _syncSessionState()/
+  // _syncSessionHasEverConnected() below. A computed() here would be invisible to Vue's
+  // reactivity system for the input that actually flips most often (a flag on a plain
+  // object inside `subscriptions`, an ordinary non-reactive Map, not a reactive one) and
+  // would also stop being directly assignable the way every other exported field here
+  // (uiState, sessionRetryCount, ...) already is — a pattern existing component tests
+  // (InputArea.test.js, HeaderRow1.test.js) depend on.
+  const sessionStateRef = ref('idle')
+  const sessionHasEverConnectedRef = ref(false)
 
-  // The session the session connection is currently targeting (mirrors the pre-5b field of
-  // the same name) — null when no session has ever been selected/archived-viewed in this tab.
+  function _syncSessionState() {
+    sessionStateRef.value = isCurrentViewArchived.value ? 'archived' : conn.state.value
+  }
+  function _syncSessionHasEverConnected() {
+    sessionHasEverConnectedRef.value = subscriptions.get(currentSessionId.value)?.hasEverSeenResponse ?? false
+  }
+
+  const conn = createStreamConnection('multiplex', () => _syncSessionState())
+
+  // The session the current view is addressing — null when no session has ever been
+  // selected/archived-viewed in this tab. Used for outbound REST addressing (sendMessage etc,
+  // via sessionStore.currentSessionId, independently) and InputArea's gating boundary.
   const currentSessionId = ref(null)
+  // True while the current view is an archived/read-only snapshot — archived views never
+  // subscribe to live polling (decision 5, unchanged from stage 5b). Independent of `conn`'s
+  // own transport state by construction, so a stale in-flight poll response can never revert
+  // an archived view back to "connected" underneath it.
+  const isCurrentViewArchived = ref(false)
   const currentLegionId = ref(null)  // stub - always null
   const legionConnected = ref(false)  // stub - always false
   const legionRetryCount = ref(0)    // stub
 
-  // Poll cursors
   let uiCursor = 0
-  // Issue #1974/#2129 stage 5b: cross-session cursor CACHE — not heuristic bookkeeping, this
-  // is load-bearing stream-position state. Switching A -> B -> back to A, with A's history
-  // already cached in message.js (so loadMessages() is skipped on switch-back), must resume
-  // A's poll from exactly where it left off rather than bootstrapping "cursor right now" and
-  // silently skipping whatever arrived for A while the user was viewing B. Kept as a small
-  // standalone Map, separate from sessionConn's own private live-cursor field (which only ever
-  // tracks ONE session at a time — the one currently being actively polled).
-  const sessionCursors = {}
+
+  // Epic #1990 stage 5c: subscription-set model replacing sessionCursors' passive cache.
+  // Map<sessionId, {cursor: number, hasEverSeenResponse: boolean}> — every entry here is
+  // ACTIVELY polled every cycle (not just cached), so a recently-viewed-but-not-current
+  // session keeps receiving live events via dispatchEvent() the whole time it's subscribed
+  // (US2) instead of only resuming from a remembered cursor on switch-back.
+  const subscriptions = new Map()
+  // Most-recently-touched session ids, front = most recent. Bounds `subscriptions`' size —
+  // current + MAX_SUBSCRIBED_SESSIONS-1 most-recently-viewed stay subscribed; the rest age out.
+  const lruSessionIds = []
+  const MAX_SUBSCRIBED_SESSIONS = 5
+  // Snapshot of session_id -> cursor the CURRENTLY in-flight (or most recently built)
+  // request's body was built from — compared against to decide whether a subscription
+  // change needs to interrupt an in-flight long-poll (see interruptIfStale()'s docstring;
+  // mirrors shared/poll_relay.py's identical `_active_subscription`/cancellation mechanism).
+  // A Map (not a Set) because set-membership alone misses one real case: a session
+  // disconnected and immediately re-subscribed with a DIFFERENT starting cursor while the
+  // OLD in-flight request (keyed by the same session_id, now-stale cursor) is still
+  // pending — the id "isn't new" by membership, but the in-flight request is answering
+  // the wrong question for it regardless.
+  let activeSessionCursors = new Map()
 
   // Page Visibility cleanup
   let visibilityUnsubscribe = null
-
-  // ========== HELPERS ==========
-  function getPollUrl(path, cursor, timeout = 30) {
-    const token = getAuthToken()
-    const base = `${path}?since=${cursor}&timeout=${timeout}`
-    return token ? `${base}&token=${encodeURIComponent(token)}` : base
-  }
 
   // ========== APP DATA LOAD (Issue #1977) ==========
   // In-flight guard so overlapping calls (initial mount + a reconnect racing it) collapse
@@ -240,13 +259,13 @@ export const usePollingStore = defineStore('polling', () => {
     }
   }
 
-  // Issue #1977 (AC7): the reconnect-triggered retry (inside startUIPolling()'s catch
-  // block, below) only fires when the /api/poll/ui transport itself errors. But
+  // Issue #1977 (AC7): the reconnect-triggered retry (inside startPolling()'s catch
+  // block, below) only fires when the /api/poll transport itself errors. But
   // /api/projects, /api/sessions, and a deep-linked session's own fetch are independent
-  // backend routes that can fail while /api/poll/ui stays healthy throughout — without
+  // backend routes that can fail while /api/poll stays healthy throughout — without
   // this, appDataStatus could stay 'failed' forever with LoadStatusBanner's "retrying
   // automatically" claim never actually true. This periodic watcher is the catch-all:
-  // while UI polling is active, retry on a fixed cadence regardless of why the load
+  // while polling is active, retry on a fixed cadence regardless of why the load
   // previously failed. loadAppData()'s own in-flight guard means this can't double-fetch
   // if a reconnect-triggered retry is already in flight.
   const APP_DATA_RETRY_INTERVAL_MS = 15000
@@ -264,50 +283,97 @@ export const usePollingStore = defineStore('polling', () => {
     }
   }
 
-  // Shared by both poll loops: compute the "poll succeeded, not mid-resync" target state
-  // from the response's own backend_status. Per the transition table: backend_status ===
-  // 'unreachable' always wins (AC2 — "backend_status decides the unreachable state"
-  // literally), otherwise plain connected. `degraded` deliberately does NOT divert from
-  // this — it's an independent, non-overriding annotation carried on backendStatus alone
-  // (decision 1). The resyncing->connected transition (once a resync itself resolves) also
-  // goes through this same function, since it's the identical backend_status check — the
-  // caller is just never mid-batch-processing at that point, so there's no separate
-  // "sawResetOrEvicted" case to express here (that transition is made directly via
-  // `transition('resyncing', ...)` at the point the marker is observed).
-  function connectedFamilyTarget(conn) {
+  // Compute the "poll succeeded, not mid-resync" target state from the response's own
+  // backend_status. Per the transition table: backend_status === 'unreachable' always wins,
+  // otherwise plain connected. `degraded` deliberately does NOT divert from this — it's an
+  // independent, non-overriding annotation carried on backendStatus alone.
+  function connectedFamilyTarget() {
     return conn.backendStatus.value === 'unreachable' ? 'unreachable' : 'connected'
   }
 
-  // ========== UI POLL LOOP ==========
-  async function startUIPolling(initialCursor = 0) {
-    if (uiConn.state.value !== 'idle') return
+  // ========== SUBSCRIPTION-SET MANAGEMENT (epic #1990 stage 5c) ==========
+  // Registers/refreshes interest in a session's stream and keeps the LRU bounded to
+  // MAX_SUBSCRIBED_SESSIONS. Does NOT decide interruption itself — callers that know the
+  // session's final cursor (connectSession()) call interruptIfStale() once that's settled;
+  // see its docstring for why set-membership alone isn't a sufficient interrupt condition.
+  function touchSubscription(sessionId) {
+    const idx = lruSessionIds.indexOf(sessionId)
+    if (idx !== -1) lruSessionIds.splice(idx, 1)
+    lruSessionIds.unshift(sessionId)
+
+    if (!subscriptions.has(sessionId)) {
+      subscriptions.set(sessionId, { cursor: 0, hasEverSeenResponse: false })
+    }
+
+    while (lruSessionIds.length > MAX_SUBSCRIBED_SESSIONS) {
+      const evictedId = lruSessionIds.pop()
+      subscriptions.delete(evictedId)
+    }
+  }
+
+  // If this session's desired cursor isn't what the poll loop's CURRENTLY in-flight (or
+  // most recently built) request actually asked Backend for, interrupt it immediately —
+  // without this, a newly subscribed (or disconnect-then-resubscribed-with-a-different-
+  // cursor) session would have to wait out the in-flight request's full long-poll timeout
+  // before the loop even asks about it with the right cursor (the exact regression found
+  // and fixed on the relay side in phase 2; the browser's single poll loop has the
+  // identical failure mode for the identical reason, since it too starts polling long
+  // before any specific session is ever subscribed).
+  function interruptIfStale(sessionId, cursor) {
+    if (activeSessionCursors.get(sessionId) !== cursor && conn.state.value !== 'idle') {
+      conn.abortInFlight()
+    }
+  }
+
+  // Full eviction — used when a session should stop being polled entirely (deleted, or an
+  // explicit disconnect flow that wants a clean slate before reconnecting), as opposed to
+  // merely aging out of the LRU on its own.
+  function evictSubscription(sessionId) {
+    subscriptions.delete(sessionId)
+    const idx = lruSessionIds.indexOf(sessionId)
+    if (idx !== -1) lruSessionIds.splice(idx, 1)
+    if (sessionId === currentSessionId.value) _syncSessionHasEverConnected()
+  }
+
+  // ========== SINGLE MULTIPLEXED POLL LOOP ==========
+  async function startPolling(initialCursor = 0) {
+    if (conn.state.value !== 'idle') return
     uiCursor = initialCursor
     startAppDataRetryWatcher()
-    const myGeneration = uiConn.connect(uiCursor)
-    // Issue #1977: tracks "we backed off after an error and are waiting to confirm
-    // we're actually back" — retryStaleAppData() fires once, on the next CONFIRMED
-    // successful response, not merely once the backoff delay elapses. Firing on backoff
-    // alone would re-fire on every retry tick during a sustained total outage (each
-    // subsequent fetch attempt still failing), roughly doubling REST traffic against a
-    // server that's already known unreachable.
+    const myGeneration = conn.connect()
+    // Issue #1977: tracks "we backed off after an error and are waiting to confirm we're
+    // actually back" — retryStaleAppData() fires once, on the next CONFIRMED successful
+    // response, not merely once the backoff delay elapses.
     let recoveringFromError = false
 
-    while (uiConn.state.value !== 'idle') {
+    while (conn.state.value !== 'idle') {
+      activeSessionCursors = new Map([...subscriptions.entries()].map(([sid, sub]) => [sid, sub.cursor]))
       try {
-        const controller = uiConn.newAbortController()
-        const url = getPollUrl('/api/poll/ui', uiCursor)
-        const response = await fetch(url, { signal: controller.signal })
+        const controller = conn.newAbortController()
+        const body = {
+          timeout: 30,
+          ui: { since: uiCursor },
+          sessions: Object.fromEntries(
+            [...subscriptions.entries()].map(([sid, sub]) => [sid, { since: sub.cursor }])
+          ),
+        }
+        const token = getAuthToken()
+        const headers = { 'Content-Type': 'application/json' }
+        // Issue #2130 (epic #1990 stage 5c): auth token moves from getPollUrl()'s
+        // query-string hack to a normal Authorization header, matching every other
+        // request in this codebase (utils/api.js's apiRequest()) — not routed through
+        // apiRequest() itself here because its generic catch-all rewraps a self-inflicted
+        // AbortError into a generic APIError with no way to tell them apart afterward,
+        // which this loop's AbortError-vs-real-failure branch depends on.
+        if (token) headers['Authorization'] = `Bearer ${token}`
+        const response = await fetch('/api/poll', {
+          method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal,
+        })
 
         if (response.status === 401) {
           triggerReauth(401)
-          // Builder-review finding: a since-superseded generation's in-flight response
-          // (e.g. this loop was stopped and a new one started while this fetch was still
-          // pending) must not tear down the NEWER, actually-current generation's
-          // connection. stopUIPolling() (not a bare flag flip) so stopAppDataRetryWatcher()
-          // actually runs — otherwise appDataRetryInterval keeps firing every 15s with
-          // nothing left to stop it until a full page reload.
-          if (uiConn.isCurrentGeneration(myGeneration)) {
-            stopUIPolling()
+          if (conn.isCurrentGeneration(myGeneration)) {
+            stopPolling()
           }
           return
         }
@@ -317,38 +383,109 @@ export const usePollingStore = defineStore('polling', () => {
         }
 
         const data = await response.json()
-        uiConn.backendStatus.value = data.backend_status || 'ok'
+        conn.backendStatus.value = data.backend_status || 'ok'
         if (recoveringFromError) {
           recoveringFromError = false
-          // Issue #1977 (AC3, AC7): a confirmed successful poll after an outage means
-          // the connection is genuinely back — retry anything that didn't survive that
-          // outage immediately, rather than waiting for the periodic watcher's next tick.
           retryStaleAppData()
         }
 
-        if (data.evicted) {
-          // Issue #2065 AC7: an evicted cursor can't be trusted to deliver a gapless slice, so
-          // re-fetch the UI stream's own ground truth (projects + sessions) instead of risking a
-          // permanent gap by applying this response's events as a complete slice. No
-          // isCurrentGeneration-style guard needed here, unlike the session loop's version — the
-          // UI loop has exactly one poll generation at a time, with no stall-heal-reconnect flow
-          // creating an overlapping second one.
-          pushDebugEvent('polling', 'poll-evicted', {
-            stream: 'ui', staleCursor: uiCursor, next_cursor: data.next_cursor,
-            eventCount: data.events?.length ?? 0, generation: myGeneration
+        if (data.ui) {
+          await _processUIBatch(data.ui, myGeneration)
+        }
+        for (const [sid, sessionBatch] of Object.entries(data.sessions || {})) {
+          await _processSessionBatch(sid, sessionBatch)
+        }
+
+        pushDebugEvent('polling', 'poll-cycle', {
+          stream: 'multiplex', cursorAfter: uiCursor,
+          sessionIds: [...subscriptions.keys()], generation: myGeneration,
+        })
+        // Consolidates any mid-cycle 'resyncing' transition (UI eviction/reset, or the
+        // CURRENT session's own eviction/reset) back to the connected family exactly once,
+        // after every stream in this response has been fully processed — simpler and more
+        // robust than toggling back and forth per sub-step when multiple streams in the
+        // same response could each independently need a resync.
+        if (conn.isCurrentGeneration(myGeneration)) {
+          conn.retryCount.value = 0
+          conn.transition(connectedFamilyTarget())
+        }
+
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          // Self-inflicted (visibility resume, or touchSubscription() interrupting a
+          // stale in-flight request) or genuinely superseded — re-enter immediately, no
+          // state change (nothing actually failed).
+          continue
+        }
+        console.warn(`[poll] Connection error (retry ${conn.retryCount.value + 1}):`, err.message || err)
+        pushDebugEvent('polling', 'poll-error', {
+          stream: 'multiplex', message: err.message || String(err), retryCount: conn.retryCount.value + 1, generation: myGeneration
+        })
+        conn.retryCount.value++
+        conn.transition('backoff')
+        const delay = Math.min(2000 * conn.retryCount.value, 30000)
+        await conn.scheduleBackoff(delay)
+        if (conn.isCurrentGeneration(myGeneration)) {
+          conn.transition('connecting')
+          recoveringFromError = true
+        }
+      }
+    }
+  }
+
+  // Processes the UI stream's batch. Returns true if a resync (evicted/reset) happened.
+  async function _processUIBatch(uiBatch, myGeneration) {
+    if (uiBatch.evicted) {
+      // Issue #2065 AC7: an evicted cursor can't be trusted to deliver a gapless slice, so
+      // re-fetch the UI stream's own ground truth (projects + sessions) instead of risking a
+      // permanent gap by applying this response's events as a complete slice.
+      pushDebugEvent('polling', 'poll-evicted', {
+        stream: 'ui', staleCursor: uiCursor, next_cursor: uiBatch.next_cursor,
+        eventCount: uiBatch.events?.length ?? 0, generation: myGeneration
+      })
+      conn.transition('resyncing')
+      const sessionStore = useSessionStore()
+      const idsBeforeResync = new Set(sessionStore.sessions.keys())
+      await loadAppData()
+      const vanishedIds = [...idsBeforeResync].filter(id => !sessionStore.sessions.has(id))
+      if (vanishedIds.length > 0) {
+        const wasCurrentSessionRemoved = await sessionStore.removeSessionsFromStores(vanishedIds)
+        if (wasCurrentSessionRemoved) {
+          router.push('/')
+        }
+      }
+      uiCursor = uiBatch.next_cursor
+      return true
+    }
+
+    if (uiBatch.events && uiBatch.events.length > 0) {
+      let sawStreamReset = false
+      for (const event of uiBatch.events) {
+        if (event.type === 'stream_reset') {
+          // Epic #1990 stage 5a (AC7): a Backend restart made explicit. Stop treating the
+          // remainder of this batch as normal incremental updates — they're already-new-
+          // epoch events that the resync below (triggered via dispatchEvent ->
+          // UI_EVENT_HANDLERS.stream_reset) will pick up fresh; events already dispatched
+          // above (before this marker, in this same batch) are legitimate pre-reset
+          // history and need no unwinding.
+          pushDebugEvent('polling', 'poll-reset', {
+            stream: 'ui', staleCursor: uiCursor, next_cursor: uiBatch.next_cursor,
+            eventCount: uiBatch.events?.length ?? 0, generation: myGeneration,
+            epoch: event.data
           })
-          uiConn.transition('resyncing')
-          // Review finding: this resync replaces the dropped events entirely, including any
-          // session_deleted this cycle would otherwise have carried — loadAppData()'s own
-          // fetchSessions() only removes a vanished id from the `sessions` Map (it has no
-          // reason to know about the other per-session stores), so without this, a deletion
-          // that happens to land in the same evicted cycle would leak exactly the state
-          // AC6 added removeSessionsFromStores() to clean up. Diff the session id set
-          // before/after the resync and run the same cleanup any other session_deleted goes
-          // through for whatever vanished.
+          for (const laterEvent of uiBatch.events.slice(uiBatch.events.indexOf(event) + 1)) {
+            if (laterEvent.type === 'stream_reset') {
+              pushDebugEvent('polling', 'poll-reset', {
+                stream: 'ui', staleCursor: uiCursor, next_cursor: uiBatch.next_cursor,
+                eventCount: uiBatch.events?.length ?? 0, generation: myGeneration,
+                epoch: laterEvent.data, coalesced: true
+              })
+            }
+          }
+          conn.transition('resyncing')
           const sessionStore = useSessionStore()
           const idsBeforeResync = new Set(sessionStore.sessions.keys())
-          await loadAppData()
+          await dispatchEvent(event, 'ui')
           const vanishedIds = [...idsBeforeResync].filter(id => !sessionStore.sessions.has(id))
           if (vanishedIds.length > 0) {
             const wasCurrentSessionRemoved = await sessionStore.removeSessionsFromStores(vanishedIds)
@@ -356,322 +493,123 @@ export const usePollingStore = defineStore('polling', () => {
               router.push('/')
             }
           }
-          uiCursor = data.next_cursor
-          uiConn.setCursor(uiCursor)
-          uiConn.retryCount.value = 0
-          uiConn.transition(connectedFamilyTarget(uiConn))
-          continue
+          sawStreamReset = true
+          break
         }
-
-        if (data.events && data.events.length > 0) {
-          let sawStreamReset = false
-          for (const event of data.events) {
-            if (event.type === 'stream_reset') {
-              // Epic #1990 stage 5a (AC7): a Backend restart made explicit. Stop
-              // treating the remainder of this batch as normal incremental
-              // updates — they're already-new-epoch events that the resync
-              // below (triggered via dispatchEvent -> UI_EVENT_HANDLERS.
-              // stream_reset) will pick up fresh; events already dispatched
-              // above (before this marker, in this same batch) are legitimate
-              // pre-reset history and need no unwinding.
-              pushDebugEvent('polling', 'poll-reset', {
-                stream: 'ui', staleCursor: uiCursor, next_cursor: data.next_cursor,
-                eventCount: data.events?.length ?? 0, generation: myGeneration,
-                epoch: event.data
-              })
-              // A rare but reachable burst (e.g. a backgrounded tab across two
-              // Backend restarts before its next poll) can land more than one
-              // marker in this same batch — log each so the debug trace doesn't
-              // undercount how many restarts actually happened, even though one
-              // resync below already covers all of them (it pulls live ground
-              // truth, a superset regardless of restart count).
-              for (const laterEvent of data.events.slice(data.events.indexOf(event) + 1)) {
-                if (laterEvent.type === 'stream_reset') {
-                  pushDebugEvent('polling', 'poll-reset', {
-                    stream: 'ui', staleCursor: uiCursor, next_cursor: data.next_cursor,
-                    eventCount: data.events?.length ?? 0, generation: myGeneration,
-                    epoch: laterEvent.data, coalesced: true
-                  })
-                }
-              }
-              uiConn.transition('resyncing')
-              const sessionStore = useSessionStore()
-              const idsBeforeResync = new Set(sessionStore.sessions.keys())
-              await dispatchEvent(event, 'ui')
-              const vanishedIds = [...idsBeforeResync].filter(id => !sessionStore.sessions.has(id))
-              if (vanishedIds.length > 0) {
-                const wasCurrentSessionRemoved = await sessionStore.removeSessionsFromStores(vanishedIds)
-                if (wasCurrentSessionRemoved) {
-                  router.push('/')
-                }
-              }
-              sawStreamReset = true
-              break
-            }
-            await dispatchEvent(event, 'ui')
-          }
-          if (sawStreamReset) {
-            uiCursor = data.next_cursor
-            uiConn.setCursor(uiCursor)
-            uiConn.retryCount.value = 0
-            uiConn.transition(connectedFamilyTarget(uiConn))
-            continue
-          }
-        }
-        pushDebugEvent('polling', 'poll-cycle', {
-          stream: 'ui', cursorBefore: uiCursor, cursorAfter: data.next_cursor, generation: myGeneration
-        })
-        uiCursor = data.next_cursor
-        uiConn.setCursor(uiCursor)
-        uiConn.retryCount.value = 0
-        uiConn.transition(connectedFamilyTarget(uiConn))
-
-      } catch (err) {
-        if (err.name === 'AbortError') {
-          // Visibility resume or stop — re-enter immediately if still polling, no state
-          // change (nothing actually failed).
-          continue
-        }
-        console.warn(`[UI poll] Connection error (retry ${uiConn.retryCount.value + 1}):`, err.message || err)
-        pushDebugEvent('polling', 'poll-error', {
-          stream: 'ui', message: err.message || String(err), retryCount: uiConn.retryCount.value + 1, generation: myGeneration
-        })
-        uiConn.retryCount.value++
-        uiConn.transition('backoff')
-        const delay = Math.min(2000 * uiConn.retryCount.value, 30000)
-        await uiConn.scheduleBackoff(delay)
-        if (uiConn.isCurrentGeneration(myGeneration)) {
-          uiConn.transition('connecting')
-          recoveringFromError = true
-        }
+        await dispatchEvent(event, 'ui')
+      }
+      if (sawStreamReset) {
+        uiCursor = uiBatch.next_cursor
+        return true
       }
     }
+    uiCursor = uiBatch.next_cursor
+    return false
   }
 
-  function stopUIPolling() {
-    uiConn.disconnect()
+  // Processes one subscribed session's batch — applied regardless of whether this session
+  // is the CURRENT one (US2: background subscriptions are genuinely live, not just cached).
+  // Only the current session's own resync surfaces as a visible `conn.transition('resyncing')`
+  // — a background session's resync is a silent data-correctness detail (AC2: background
+  // updates must not surface a new notification/badge beyond what already exists).
+  // Returns true if a resync (evicted/reset) happened for the CURRENT session specifically.
+  async function _processSessionBatch(sessionId, batch) {
+    const sub = subscriptions.get(sessionId)
+    if (!sub) return false // aged out locally between request and response
+    const isCurrent = currentSessionId.value === sessionId
+
+    if (batch.evicted) {
+      // Issue #1988: an evicted cursor (predates the server's retained ring-buffer window)
+      // can't be trusted to deliver a gapless slice — fall back to a full resync via the
+      // same proven event_cursor-capturing pattern the initial session load already uses.
+      pushDebugEvent('polling', 'poll-evicted', {
+        stream: 'session', sessionId, staleCursor: sub.cursor, next_cursor: batch.next_cursor,
+        evicted: batch.evicted,
+      })
+      if (isCurrent) conn.transition('resyncing', sessionId)
+      const messageStore = useMessageStore()
+      await messageStore.loadMessages(sessionId)
+      if (!subscriptions.has(sessionId)) return isCurrent // evicted locally during the await
+      _adoptResyncCursor(sub, sessionId, messageStore, batch.next_cursor)
+      return isCurrent
+    }
+
+    if (batch.events && batch.events.length > 0) {
+      let sawStreamReset = false
+      for (const event of batch.events) {
+        if (event.type === 'stream_reset') {
+          // Epic #1990 stage 5a (AC7): a Backend restart made explicit.
+          pushDebugEvent('polling', 'poll-reset', {
+            stream: 'session', sessionId, staleCursor: sub.cursor, next_cursor: batch.next_cursor,
+            epoch: event.data
+          })
+          for (const laterEvent of batch.events.slice(batch.events.indexOf(event) + 1)) {
+            if (laterEvent.type === 'stream_reset') {
+              pushDebugEvent('polling', 'poll-reset', {
+                stream: 'session', sessionId, staleCursor: sub.cursor, next_cursor: batch.next_cursor,
+                epoch: laterEvent.data, coalesced: true
+              })
+            }
+          }
+          if (isCurrent) conn.transition('resyncing', sessionId)
+          const messageStore = useMessageStore()
+          await messageStore.loadMessages(sessionId)
+          if (!subscriptions.has(sessionId)) return isCurrent
+          _adoptResyncCursor(sub, sessionId, messageStore, batch.next_cursor)
+          sawStreamReset = true
+          break
+        }
+        await dispatchEvent(event, 'session', sessionId)
+      }
+      if (sawStreamReset) return isCurrent
+    }
+
+    sub.cursor = batch.next_cursor
+    sub.hasEverSeenResponse = true
+    if (isCurrent) _syncSessionHasEverConnected()
+    return false
+  }
+
+  // Shared by both resync branches above: prefer the REST reload's own event_cursor
+  // (aligned with the history it just loaded) over the poll batch's next_cursor.
+  function _adoptResyncCursor(sub, sessionId, messageStore, fallbackCursor) {
+    const restCursor = messageStore.loadedEventCursors.get(sessionId)
+    let newCursor
+    if (restCursor !== undefined) {
+      messageStore.loadedEventCursors.delete(sessionId)
+      newCursor = restCursor
+    } else {
+      newCursor = fallbackCursor
+    }
+    sub.cursor = newCursor
+    sub.hasEverSeenResponse = true
+    if (sessionId === currentSessionId.value) _syncSessionHasEverConnected()
+  }
+
+  function stopPolling() {
+    conn.disconnect()
     stopAppDataRetryWatcher()
   }
 
   // Compat aliases
-  function connectUI() { startUIPolling() }
-  function disconnectUI() { stopUIPolling() }
-
-  // ========== SESSION POLL LOOP ==========
-  async function _runSessionPollLoop(sessionId, myGeneration) {
-    while (sessionConn.isCurrentGeneration(myGeneration)
-           && sessionConn.state.value !== 'idle'
-           && currentSessionId.value === sessionId) {
-      try {
-        const controller = sessionConn.newAbortController()
-        const cursor = sessionConn.getCursor()
-        const url = getPollUrl(`/api/poll/session/${sessionId}`, cursor)
-        const response = await fetch(url, { signal: controller.signal })
-
-        if (response.status === 401) {
-          triggerReauth(401)
-          // Builder-review finding: a since-superseded generation's response must not write
-          // the shared sessionConn singleton's state — the same guard every other write path
-          // in this loop already applies. `break` runs regardless since exiting a stale
-          // loop is always correct; only the state write itself needs the guard.
-          if (sessionConn.isCurrentGeneration(myGeneration) && currentSessionId.value === sessionId) {
-            sessionConn.transition('idle', sessionId)
-          }
-          break
-        }
-
-        if (response.status === 404) {
-          // Session not found - stop polling
-          if (sessionConn.isCurrentGeneration(myGeneration) && currentSessionId.value === sessionId) {
-            sessionConn.transition('idle', sessionId)
-          }
-          break
-        }
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`)
-        }
-
-        const data = await response.json()
-        // Issue #1795: any successful response — even one carrying zero events after the
-        // server's long-poll hold — proves this connection is alive. But only for the
-        // CURRENT generation/session: an in-flight response can still land after the
-        // generation was bumped (e.g. a session switch racing this same response, still
-        // mid `await response.json()` when the abort fired too late to matter). A response
-        // from a since-superseded generation must not write backendStatus or advance the
-        // cursor cache — doing so would clobber state a newer generation already owns.
-        const isCurrentGeneration = sessionConn.isCurrentGeneration(myGeneration) && currentSessionId.value === sessionId
-        if (isCurrentGeneration) {
-          sessionConn.backendStatus.value = data.backend_status || 'ok'
-        }
-
-        if (data.evicted) {
-          // Issue #1988: an evicted cursor (predates the server's retained ring-buffer
-          // window) can't be trusted to deliver a gapless slice — fall back to a full
-          // resync via the same proven event_cursor-capturing pattern the initial
-          // session load already uses (loadMessages()), instead of risking a
-          // permanent gap by applying this response's events as if they were a
-          // complete slice.
-          pushDebugEvent('polling', 'poll-evicted', {
-            stream: 'session', sessionId, staleCursor: cursor, next_cursor: data.next_cursor,
-            evicted: data.evicted, generation: myGeneration
-          })
-          if (isCurrentGeneration) {
-            sessionConn.transition('resyncing', sessionId)
-            const messageStore = useMessageStore()
-            // Deliberately not wrapped in a local try/catch: a failure here is a
-            // connection-level problem exactly like any other poll failure, so it
-            // should go through the SAME backoff/retry-count path as the outer
-            // catch below rather than a second, weaker, unthrottled one — swallowing
-            // it locally and retrying immediately would let a persistent failure
-            // hammer the history endpoint every poll cycle with no backoff, which is
-            // the same "wasted round trips" pattern this issue exists to eliminate.
-            await messageStore.loadMessages(sessionId)
-            // Re-check the guard AFTER the await: a concurrent session switch can
-            // supersede this loop's generation while the reload is in flight. Adopting
-            // this reload's cursor onto a since-superseded generation would clobber the
-            // freshly-reconnected generation's own correct cursor with a stale one.
-            if (sessionConn.isCurrentGeneration(myGeneration) && currentSessionId.value === sessionId) {
-              const restCursor = messageStore.loadedEventCursors.get(sessionId)
-              let newCursor
-              if (restCursor !== undefined) {
-                messageStore.loadedEventCursors.delete(sessionId)
-                newCursor = restCursor
-              } else {
-                newCursor = data.next_cursor
-              }
-              sessionConn.setCursor(newCursor)
-              sessionCursors[sessionId] = newCursor
-              sessionConn.retryCount.value = 0
-              sessionConn.transition(connectedFamilyTarget(sessionConn), sessionId)
-            }
-          } else {
-            sessionCursors[sessionId] = data.next_cursor
-          }
-          continue
-        }
-
-        if (data.events && data.events.length > 0) {
-          let sawStreamReset = false
-          for (const event of data.events) {
-            if (event.type === 'stream_reset') {
-              // Epic #1990 stage 5a (AC7): a Backend restart made explicit — the
-              // restart-during-stall case issue #1988's evicted/reset split used to
-              // cover (reset=true, evicted deliberately false) now arrives this way
-              // instead of as a top-level flag. Stop treating the remainder of this
-              // batch as normal incremental updates — they're already-new-epoch
-              // events the resync below will pick up fresh; events already
-              // dispatched above (before this marker, in this same batch) are
-              // legitimate pre-reset history and need no unwinding.
-              pushDebugEvent('polling', 'poll-reset', {
-                stream: 'session', sessionId, staleCursor: cursor, next_cursor: data.next_cursor,
-                generation: myGeneration, epoch: event.data
-              })
-              // See the UI loop's identical comment above: a rare but reachable
-              // burst can land more than one marker in this same batch — log
-              // each so the debug trace doesn't undercount restarts, even though
-              // one resync below already covers all of them.
-              for (const laterEvent of data.events.slice(data.events.indexOf(event) + 1)) {
-                if (laterEvent.type === 'stream_reset') {
-                  pushDebugEvent('polling', 'poll-reset', {
-                    stream: 'session', sessionId, staleCursor: cursor, next_cursor: data.next_cursor,
-                    generation: myGeneration, epoch: laterEvent.data, coalesced: true
-                  })
-                }
-              }
-              if (isCurrentGeneration) {
-                sessionConn.transition('resyncing', sessionId)
-                const messageStore = useMessageStore()
-                // Calls loadMessages() directly rather than through dispatchEvent():
-                // dispatchEvent()'s own currentSessionId guard reads the session
-                // store's value, while isCurrentGeneration above is the polling
-                // store's own tracked value — the two can legitimately diverge
-                // (e.g. mid-switch), and isCurrentGeneration is already the
-                // authoritative guard for this resync; routing through a second,
-                // differently-sourced guard risked silently skipping the reload.
-                // Same not-locally-caught rationale as the evicted branch above.
-                await messageStore.loadMessages(sessionId)
-                if (sessionConn.isCurrentGeneration(myGeneration) && currentSessionId.value === sessionId) {
-                  const restCursor = messageStore.loadedEventCursors.get(sessionId)
-                  let newCursor
-                  if (restCursor !== undefined) {
-                    messageStore.loadedEventCursors.delete(sessionId)
-                    newCursor = restCursor
-                  } else {
-                    newCursor = data.next_cursor
-                  }
-                  sessionConn.setCursor(newCursor)
-                  sessionCursors[sessionId] = newCursor
-                  sessionConn.retryCount.value = 0
-                  sessionConn.transition(connectedFamilyTarget(sessionConn), sessionId)
-                }
-              } else {
-                sessionCursors[sessionId] = data.next_cursor
-              }
-              sawStreamReset = true
-              break
-            }
-            await dispatchEvent(event, 'session', sessionId)
-          }
-          if (sawStreamReset) {
-            continue
-          }
-        }
-        pushDebugEvent('polling', 'poll-cycle', {
-          stream: 'session', sessionId, cursorBefore: cursor, cursorAfter: data.next_cursor, generation: myGeneration
-        })
-        if (isCurrentGeneration) {
-          sessionConn.setCursor(data.next_cursor)
-          sessionCursors[sessionId] = data.next_cursor
-          sessionConn.retryCount.value = 0
-          sessionConn.transition(connectedFamilyTarget(sessionConn), sessionId)
-        } else {
-          sessionCursors[sessionId] = data.next_cursor
-        }
-
-      } catch (err) {
-        if (err.name === 'AbortError') {
-          continue
-        }
-        console.warn(`[Session poll] Connection error for session ${sessionId} (retry ${sessionConn.retryCount.value + 1}):`, err.message || err)
-        pushDebugEvent('polling', 'poll-error', {
-          stream: 'session', sessionId, message: err.message || String(err), retryCount: sessionConn.retryCount.value + 1, generation: myGeneration
-        })
-        if (!sessionConn.isCurrentGeneration(myGeneration) || currentSessionId.value !== sessionId) {
-          // Superseded by a session switch/disconnect while this fetch was in flight —
-          // let the while-loop's own guard end the loop, no state to touch here.
-          continue
-        }
-        sessionConn.retryCount.value++
-        sessionConn.transition('backoff', sessionId)
-        const delay = Math.min(2000 * sessionConn.retryCount.value, 30000)
-        await sessionConn.scheduleBackoff(delay)
-        if (sessionConn.isCurrentGeneration(myGeneration) && currentSessionId.value === sessionId) {
-          sessionConn.transition('connecting', sessionId)
-        }
-      }
-    }
-  }
+  function connectUI() { startPolling() }
+  function disconnectUI() { stopPolling() }
 
   async function connectSession(sessionId) {
-    // Tear down any existing session connection first — always synchronous now, no 3-second
-    // exit budget needed (see disconnect()'s own comment).
-    await disconnectSession()
-
-    currentSessionId.value = sessionId
-
     // Issue #1000: Prefer cursor from loadMessages() REST response (aligned with loaded
-    // history). Falls back to the cross-session cache (resuming a previously-viewed
-    // session exactly where it left off), then to a fresh API bootstrap for a genuinely
-    // first-time connection.
+    // history). Falls back to the subscription's own cursor (resuming a previously-viewed,
+    // still-subscribed session exactly where it left off — including one that's been live
+    // in the background the whole time, per US2), then to a fresh API bootstrap for a
+    // genuinely first-time connection.
     const messageStore = useMessageStore()
     const restCursor = messageStore.loadedEventCursors.get(sessionId)
+    const existing = subscriptions.get(sessionId)
     let initialCursor
     if (restCursor !== undefined) {
       initialCursor = restCursor
       messageStore.loadedEventCursors.delete(sessionId)
-    } else if (sessionCursors[sessionId] !== undefined) {
-      initialCursor = sessionCursors[sessionId]
+    } else if (existing !== undefined) {
+      initialCursor = existing.cursor
     } else {
       try {
         const result = await api.get(`/api/poll/session/${sessionId}/cursor`)
@@ -680,55 +618,70 @@ export const usePollingStore = defineStore('polling', () => {
         initialCursor = 0
       }
     }
-    sessionCursors[sessionId] = initialCursor
 
-    // A session switch may have raced this cursor-resolution await — if a newer connect()
-    // already landed for a different session, don't start a loop for a stale one.
-    if (currentSessionId.value !== sessionId) return
-
-    const myGeneration = sessionConn.connect(initialCursor, sessionId)
-    _runSessionPollLoop(sessionId, myGeneration)
+    currentSessionId.value = sessionId
+    isCurrentViewArchived.value = false
+    touchSubscription(sessionId)
+    subscriptions.get(sessionId).cursor = initialCursor
+    interruptIfStale(sessionId, initialCursor)
+    _syncSessionState()
+    _syncSessionHasEverConnected()
+    // The shared loop is normally already running by the time any session is ever
+    // selected (App.vue's initializeApp() calls startPolling() at mount, before any
+    // session selection is possible) — but connectSession() must not depend on that
+    // ordering: if nothing has started the loop yet, start it now, fire-and-forget,
+    // exactly like the pre-consolidation design's own connectSession() always
+    // guaranteed a live, polling connection on its own.
+    if (conn.state.value === 'idle') {
+      startPolling(uiCursor)
+    }
   }
 
   async function disconnectSession() {
     const sessionId = currentSessionId.value
-    sessionConn.disconnect(sessionId)
+    // Full eviction, not just "stop showing it as current" — every existing call site
+    // (mark-unread race prevention, restart/reset-then-reconnect, end session) wants a
+    // clean slate, not "keep polling it quietly in the background." Normal navigation
+    // away from a session (switching to view another one) never calls this at all —
+    // connectSession() for the NEW session is all that runs, leaving the old one's
+    // subscription live in the LRU exactly as US2 intends.
+    if (sessionId) evictSubscription(sessionId)
     currentSessionId.value = null
+    isCurrentViewArchived.value = false
+    _syncSessionState()
+    _syncSessionHasEverConnected()
   }
 
-  // Issue #1974/#2129 stage 5b: clears the cross-session cursor cache entry for one session,
-  // forcing its NEXT connect() to start fresh from cursor 0 instead of resuming an old
-  // position — used right after disconnecting a session whose server-side history/epoch was
-  // just reset/restarted, so the stale pre-reset cursor is never resumed from.
+  // Epic #1990 stage 5c: clears a session's subscription entirely (cursor + LRU membership),
+  // forcing its NEXT connectSession() to start fresh (bootstrap cursor) instead of resuming an
+  // old position. In practice always redundant with disconnectSession() already having evicted
+  // it (every call site calls both), but kept as its own idempotent function for API-shape
+  // compatibility with existing callers.
   function resetSessionCursor(sessionId) {
-    delete sessionCursors[sessionId]
+    evictSubscription(sessionId)
   }
 
-  // Full teardown of a permanently-deleted session's cached cursor, called from
+  // Full teardown of a permanently-deleted session's subscription, called from
   // session.js's deleteSession()/removeSessionsFromStores(). Unlike resetSessionCursor()
   // above (always the single current session being reset/restarted by the user), this can
   // be called for many sessions at once, most of which are NOT the current session.
   function cleanupSessionPollingState(sessionId) {
-    delete sessionCursors[sessionId]
+    evictSubscription(sessionId)
   }
 
   // Epic #1990 stage 5b (AC3/UC3, decision 5): an archived/ephemeral-with-no-archives
-  // session view never starts a poll loop at all — this makes that an explicit, inspectable
-  // state instead of an implicit absence (wsStore.currentSessionId/sessionConn.state simply
-  // never being touched). Called from SessionView.vue's archive-mode activation.
+  // session view never starts a poll loop at all. Deliberately does NOT touch `subscriptions`
+  // — an archived snapshot view must neither subscribe a session that isn't already live, nor
+  // interrupt one that happens to share the same sessionId and IS genuinely still live
+  // elsewhere (e.g. open in another tab/background). `isCurrentViewArchived` is a plain,
+  // independently-owned ref (not derived from `conn`'s transport state), so unlike stage 5b's
+  // per-connection 'archived' state, no stale in-flight poll response can ever revert it —
+  // nothing else ever writes it.
   function markSessionArchived(sessionId) {
-    // Builder-review finding: without tearing down first, marking the CURRENTLY-live
-    // session's own connection archived (same sessionId, e.g. opening /archive/X for the
-    // session already being actively viewed) left its still-running poll loop's generation
-    // and currentSessionId both unchanged — its very next successful poll would overwrite
-    // 'archived' straight back to 'connected' underneath the archive view. Routing through
-    // the same disconnect() every other state transition uses bumps the generation (so the
-    // stale loop's next cycle sees itself superseded and stops self-correcting) and resets
-    // backendStatus/hasEverConnected, consistent with every other path that changes which
-    // session this connection targets.
-    sessionConn.disconnect(currentSessionId.value)
     currentSessionId.value = sessionId
-    sessionConn.markArchived(sessionId)
+    isCurrentViewArchived.value = true
+    _syncSessionState()
+    _syncSessionHasEverConnected()
   }
 
   // ========== PAGE VISIBILITY ==========
@@ -738,8 +691,7 @@ export const usePollingStore = defineStore('polling', () => {
     const handler = () => {
       if (document.visibilityState === 'visible') {
         pushDebugEvent('polling', 'visibility-reconnect', { sessionId: currentSessionId.value })
-        uiConn.abortInFlight()
-        sessionConn.abortInFlight()
+        conn.abortInFlight()
       }
     }
     document.addEventListener('visibilitychange', handler)
@@ -828,9 +780,9 @@ export const usePollingStore = defineStore('polling', () => {
 
   // ========== MESSAGE HANDLERS ==========
   // Each handler: (payload, sessionId) => void. sessionId is only meaningful for
-  // SESSION_EVENT_HANDLERS (always equal to the current session, enforced by
-  // dispatchEvent below); UI_EVENT_HANDLERS entries read whatever session id they need
-  // from payload.data.
+  // SESSION_EVENT_HANDLERS (now any member of the subscription set, enforced by
+  // dispatchEvent below — no longer only the current session, epic #1990 stage 5c AC1);
+  // UI_EVENT_HANDLERS entries read whatever session id they need from payload.data.
   const UI_EVENT_HANDLERS = {
     state_change: (payload) => {
       const sessionStore = useSessionStore()
@@ -889,14 +841,12 @@ export const usePollingStore = defineStore('polling', () => {
         uiStore.setRateLimits(null)
         const sessionStore = useSessionStore()
         sessionStore.recordSessionReset(resetSessionId)
-        // Epic #1990 stage 5b: only clears the cross-session cursor CACHE entry — this is
-        // independent of sessionConn's own live cursor (private to whichever session is
-        // actively being polled), so this is safe to run even if a resync is concurrently
-        // in flight for this exact session (the "reset arriving during a history load" race
-        // the stage 5b plan calls out): the in-flight resync's own generation-guarded cursor
-        // adoption (in _runSessionPollLoop above) still runs to completion independently and
-        // writes its own authoritative value into this same cache afterward.
-        delete sessionCursors[resetSessionId]
+        // Epic #1990 stage 5c: clears the subscription cursor entirely (not just a cache
+        // entry) — safe to run even if a resync is concurrently in flight for this exact
+        // session (the "reset arriving during a history load" race): the in-flight resync's
+        // own cursor adoption (_adoptResyncCursor above) re-checks subscriptions.has()
+        // after its own await and simply no-ops if this ran first.
+        evictSubscription(resetSessionId)
       }
     },
 
@@ -1040,10 +990,10 @@ export const usePollingStore = defineStore('polling', () => {
     },
 
     // Epic #1990 stage 5a (AC7): a Backend restart, made explicit. The caller
-    // (the UI poll loop below) is responsible for the surrounding bookkeeping
+    // (the poll loop above) is responsible for the surrounding bookkeeping
     // (vanished-session cleanup, cursor adoption, stopping further per-event
     // processing of that batch) — this handler is only the data-level resync
-    // itself, same as the pre-stage-5a data.reset branch did.
+    // itself.
     stream_reset: async () => {
       await loadAppData()
     },
@@ -1151,13 +1101,10 @@ export const usePollingStore = defineStore('polling', () => {
 
     // Epic #1990 stage 5a (AC7): a Backend restart, made explicit. Registered
     // here so registeredEventTypes.session covers it (completeness test), but
-    // the session poll loop below never actually reaches this entry via
-    // dispatchEvent() — it intercepts stream_reset itself and calls
-    // messageStore.loadMessages() directly, gated on its own isCurrentGeneration
-    // check rather than dispatchEvent()'s separate (sessionStore-sourced)
-    // currentSessionId guard, which can diverge from it mid-resync. Kept as a
-    // correct, self-consistent fallback in case anything else ever dispatches
-    // this type through the normal path.
+    // the poll loop above never actually reaches this entry via dispatchEvent()
+    // — it intercepts stream_reset itself and calls messageStore.loadMessages()
+    // directly. Kept as a correct, self-consistent fallback in case anything
+    // else ever dispatches this type through the normal path.
     stream_reset: async (payload, sessionId) => {
       await useMessageStore().loadMessages(sessionId)
     },
@@ -1165,13 +1112,13 @@ export const usePollingStore = defineStore('polling', () => {
 
   function dispatchEvent(payload, stream, sessionId) {
     if (stream === 'session') {
-      // The one place the current-session guard lives now (AC1). UI-stream events are
-      // never guarded — unchanged from today: handleUIMessage never checked currentSessionId,
-      // because UI events carry their own target session id in their payload and can
-      // legitimately apply to a session that isn't currently open (e.g. state_change for a
-      // background session).
-      const sessionStore = useSessionStore()
-      if (sessionStore.currentSessionId !== sessionId) return
+      // Epic #1990 stage 5c (AC1): the current-session-only guard becomes a
+      // subscription-SET membership guard — any subscribed session (current or
+      // a recently-viewed background one) gets its events applied live, not just
+      // the one currently open. UI-stream events are never guarded — unchanged
+      // from before: they carry their own target session id in their payload and
+      // can legitimately apply to a background session.
+      if (!subscriptions.has(sessionId)) return
     }
     const handlers = stream === 'ui' ? UI_EVENT_HANDLERS : SESSION_EVENT_HANDLERS
     // Object.hasOwn guard: a plain object literal otherwise inherits Object.prototype, so a
@@ -1183,27 +1130,29 @@ export const usePollingStore = defineStore('polling', () => {
       return
     }
     // Returned (not just invoked) so a caller that needs to wait for an async
-    // handler — currently only stream_reset's resync — can await it (issue
-    // #1990 stage 5a, AC7). Every other handler is synchronous, so awaiting
-    // this return value elsewhere is a no-op for them.
+    // handler — currently only stream_reset's resync — can await it.
     return handler(payload, sessionId)
   }
 
   // ========== RETURN ==========
   return {
-    uiState: uiConn.state,
-    uiRetryCount: uiConn.retryCount,
-    // Issue #1989: Backend-health signal carried on every successful poll response ("ok" /
-    // "unreachable" / "degraded") — independent of either transport state, which stays
-    // 'connected' throughout a pure Backend-side outage (Frontend keeps answering polls
-    // normally). Session's own backendStatus tracks the same signal from the session-poll
-    // channel's responses; the two are expected to agree in practice (both reflect the same
-    // Backend), exposed separately per-stream per decision 1.
-    uiBackendStatus: uiConn.backendStatus,
-    sessionState: sessionConn.state,
-    sessionRetryCount: sessionConn.retryCount,
-    sessionBackendStatus: sessionConn.backendStatus,
-    sessionHasEverConnected: sessionConn.hasEverConnected,
+    // Epic #1990 stage 5c: one shared multiplexed connection now backs both of these —
+    // uiState/sessionState (and the backend-status/retry-count pairs below) are exposed
+    // separately only for API-shape compatibility with existing call sites (InputArea.vue,
+    // HeaderRow1.vue); their values agree by construction except sessionState's archived
+    // override, which `conn` itself can never produce or revert on its own.
+    uiState: conn.state,
+    uiRetryCount: conn.retryCount,
+    uiBackendStatus: conn.backendStatus,
+    sessionState: sessionStateRef,
+    sessionRetryCount: conn.retryCount,
+    sessionBackendStatus: conn.backendStatus,
+    // Per-session now (epic #1990 stage 5c) rather than per-connection: true once THIS
+    // session's subscription has received at least one successful poll response since being
+    // subscribed — including one that's been live in the background the whole time, so
+    // switching to an already-subscribed session shows input enabled immediately rather than
+    // waiting out a fresh connect cycle.
+    sessionHasEverConnected: sessionHasEverConnectedRef,
     currentSessionId,
     legionConnected,
     legionRetryCount,
@@ -1216,8 +1165,8 @@ export const usePollingStore = defineStore('polling', () => {
     connectUI,
     disconnectUI,
     loadAppData,
-    startUIPolling,
-    stopUIPolling,
+    startUIPolling: startPolling,
+    stopUIPolling: stopPolling,
     setupVisibilityHandler,
     connectSession,
     disconnectSession,
