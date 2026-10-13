@@ -173,7 +173,9 @@ def test_live_session_lifecycle_through_two_real_processes(tmp_path: Path):
             # EventQueue -> Frontend's poll.py -> this HTTP response. This is the
             # actual streaming mechanism the browser depends on, not a side detail.
             def _got_streamed_message():
-                events = client.get(f"/api/poll/session/{session_id}?since=0&timeout=2").json()["events"]
+                events = client.post(
+                    "/api/poll", json={"timeout": 2, "sessions": {session_id: {"since": 0}}}
+                ).json()["sessions"][session_id]["events"]
                 return any(e.get("type") == "message" for e in events)
 
             _wait_for(_got_streamed_message, timeout=15, description="streamed message event via poll-relay")
@@ -285,7 +287,9 @@ def test_live_session_survives_backend_restart_mid_poll(tmp_path: Path):
             assert msg_resp.status_code == 200, msg_resp.text
 
             def _got_streamed_message():
-                events = client.get(f"/api/poll/session/{session_id}?since=0&timeout=2").json()["events"]
+                events = client.post(
+                    "/api/poll", json={"timeout": 2, "sessions": {session_id: {"since": 0}}}
+                ).json()["sessions"][session_id]["events"]
                 return any(e.get("type") == "message" for e in events)
 
             _wait_for(_got_streamed_message, timeout=15,
@@ -294,7 +298,9 @@ def test_live_session_survives_backend_restart_mid_poll(tmp_path: Path):
             # Record the poll cursor a connected browser would be holding right
             # before the restart — the "stale, still-high since" from the bug
             # report.
-            stale_poll = client.get(f"/api/poll/session/{session_id}?since=0&timeout=1").json()
+            stale_poll = client.post(
+                "/api/poll", json={"timeout": 1, "sessions": {session_id: {"since": 0}}}
+            ).json()["sessions"][session_id]
             stale_cursor = stale_poll["next_cursor"]
             assert stale_cursor > 0
 
@@ -328,8 +334,10 @@ def test_live_session_survives_backend_restart_mid_poll(tmp_path: Path):
             # must surface the post-restart event(s) — never a silent empty
             # list with a silently-adopted next_cursor (the original bug). ---
             def _poll_with_stale_cursor():
-                resp = client.get(f"/api/poll/session/{session_id}?since={stale_cursor}&timeout=2")
-                data = resp.json()
+                resp = client.post(
+                    "/api/poll", json={"timeout": 2, "sessions": {session_id: {"since": stale_cursor}}}
+                )
+                data = resp.json()["sessions"][session_id]
                 return data if data["events"] else None
 
             deadline = time.monotonic() + 20
@@ -442,7 +450,9 @@ def test_live_session_restart_mid_poll_genuinely_in_flight(tmp_path: Path):
             assert msg_resp.status_code == 200, msg_resp.text
 
             def _got_streamed_message():
-                events = client.get(f"/api/poll/session/{session_id}?since=0&timeout=2").json()["events"]
+                events = client.post(
+                    "/api/poll", json={"timeout": 2, "sessions": {session_id: {"since": 0}}}
+                ).json()["sessions"][session_id]["events"]
                 return any(e.get("type") == "message" for e in events)
 
             _wait_for(_got_streamed_message, timeout=15,
@@ -452,13 +462,15 @@ def test_live_session_restart_mid_poll_genuinely_in_flight(tmp_path: Path):
             # one round trip) — the session is now genuinely quiet. Capture the current
             # cursor and record every pre-restart event so the post-restart assertion
             # can confirm no duplication, not just "something new arrived."
-            pre_restart_poll = client.get(f"/api/poll/session/{session_id}?since=0&timeout=1").json()
+            pre_restart_poll = client.post(
+                "/api/poll", json={"timeout": 1, "sessions": {session_id: {"since": 0}}}
+            ).json()["sessions"][session_id]
             pre_restart_cursor = pre_restart_poll["next_cursor"]
             pre_restart_events = pre_restart_poll["events"]
             assert pre_restart_cursor > 0
             assert len(pre_restart_events) > 0
 
-        # --- The core setup: issue a genuinely long-poll GET from a SEPARATE
+        # --- The core setup: issue a genuinely long-poll request from a SEPARATE
         # client/thread, confirm it's actually parked (not yet returned) before
         # killing Backend while that exact request is still in flight. ---
         in_flight_result: dict = {}
@@ -466,11 +478,12 @@ def test_live_session_restart_mid_poll_genuinely_in_flight(tmp_path: Path):
         def _blocked_poll():
             try:
                 with httpx.Client(base_url=base_url, timeout=30) as poll_client:
-                    resp = poll_client.get(
-                        f"/api/poll/session/{session_id}?since={pre_restart_cursor}&timeout=25"
+                    resp = poll_client.post(
+                        "/api/poll",
+                        json={"timeout": 25, "sessions": {session_id: {"since": pre_restart_cursor}}},
                     )
                     in_flight_result["status_code"] = resp.status_code
-                    in_flight_result["body"] = resp.json()
+                    in_flight_result["body"] = resp.json().get("sessions", {}).get(session_id)
             except httpx.HTTPError as exc:
                 in_flight_result["error"] = repr(exc)
 
@@ -541,8 +554,10 @@ def test_live_session_restart_mid_poll_genuinely_in_flight(tmp_path: Path):
             # pre-stage-5a "only what's currently buffered post-reset" behavior,
             # but the no-duplicate-message_id guarantee below holds either way. ---
             def _post_restart_events():
-                resp = client.get(f"/api/poll/session/{session_id}?since=0&timeout=5")
-                data = resp.json()
+                resp = client.post(
+                    "/api/poll", json={"timeout": 5, "sessions": {session_id: {"since": 0}}}
+                )
+                data = resp.json()["sessions"][session_id]
                 return data if data["events"] else None
 
             deadline = time.monotonic() + 20

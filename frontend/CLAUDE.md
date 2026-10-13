@@ -84,12 +84,21 @@ Hash-based routing (`createWebHashHistory`):
 - **Features**: Orphaned-tool status (`_isOrphaned`/`_orphanedInfo`) sourced directly from the backend's own `interrupted` tool_call record — no browser-side restart/interrupt sweep, deduplication on reconnect
 
 #### `polling.js` — HTTP long-polling
-- **State** (Epic #1990 stage 5b: one `StreamConnection` state machine per stream — states
-  `idle | connecting | connected | resyncing | backoff | unreachable | archived`): `uiState`,
-  `uiRetryCount`, `uiBackendStatus`, `sessionState`, `sessionRetryCount`, `sessionBackendStatus`,
-  `sessionHasEverConnected`, `sessionCursors` (Map, cross-session cursor cache)
+- **State** (Epic #1990 stage 5c: ONE shared `StreamConnection` for the whole multiplexed
+  transport — states `idle | connecting | connected | resyncing | backoff | unreachable |
+  archived`): `uiState`/`uiRetryCount`/`uiBackendStatus` and `sessionState`/`sessionRetryCount`/
+  `sessionBackendStatus` (same underlying connection, exposed under both names for API-shape
+  compatibility), `sessionHasEverConnected` (per-session now, not per-connection), a
+  `subscriptions` Map (sessionId -> `{cursor, hasEverSeenResponse}`) LRU-bounded to
+  `MAX_SUBSCRIBED_SESSIONS` (5) replacing the old passive `sessionCursors` cache — every
+  subscribed session is now ACTIVELY polled, not just cached
 - **Key actions**: `startUIPolling()`, `connectSession(sessionId)`, `markSessionArchived(sessionId)`, `sendMessage()`, `sendPermissionResponse()`, `sendPermissionResponseWithInput()`, `interruptSession()`
-- **Features**: Cursor-based incremental polling (`/api/poll/ui`, `/api/poll/session/{id}`), exponential backoff (up to 30s), liveness derived only from poll responses/fetch outcomes (no wall-clock staleness timers)
+- **Features**: one multiplexed `POST /api/poll` request per cycle (UI stream plus the current
+  subscription set), cursor-based incremental polling per stream, exponential backoff (up to
+  30s), liveness derived only from poll responses/fetch outcomes (no wall-clock staleness
+  timers). A background (recently-viewed, not current) subscribed session's events are applied
+  live via `message.js`'s `applyRecord()` — switching back shows everything that happened while
+  it was backgrounded, with no reload/resync.
 
 #### `legion.js` — Multi-agent data
 - **State**: `commsByLegion` (Map), `minionsByLegion` (Map), `currentLegionId`

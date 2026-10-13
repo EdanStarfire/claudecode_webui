@@ -3,10 +3,11 @@ multiplexed poll stream out to local per-session/UI EventQueues (issue #498,
 epic #1990 stage 5c).
 
 Backend owns the real EventQueues (SessionCoordinator pushes events there
-directly, same-process). Frontend's own `/api/poll` handler (`src/routers/poll.py`,
-plus the legacy `/api/poll/ui`/`/api/poll/session/{id}` routes while they still
-exist) reads from LOCAL EventQueues exactly as before the split — what changed is
-who *populates* them: one background task continuously long-polls Backend's own
+directly, same-process). Frontend's own `/api/poll` handler (`src/routers/poll.py`
+— the legacy `/api/poll/ui`/`/api/poll/session/{id}` routes this module used to
+relay through were removed in stage 5c phase 5) reads from LOCAL EventQueues
+exactly as before the #498 split — what changed is who *populates* them: one
+background task continuously long-polls Backend's own
 `POST /api/poll` (`backend/routers/poll.py`, which owns the real EventQueues
 SessionCoordinator writes to) with a subscription set — UI plus every session a
 local browser request has touched recently — and re-appends what it gets back.

@@ -1,8 +1,8 @@
-"""Issue #2130 (epic #1990 stage 5c), phase 1: integration tests for the new
-multiplexed `POST /api/poll` endpoint on the Backend tier. Legacy
-`/api/poll/ui`/`/api/poll/session/{id}` endpoints are untouched by this stage and
-keep their own test coverage (test_issue_782_long_poll.py et al.) — these tests
-cover only the new endpoint.
+"""Issue #2130 (epic #1990 stage 5c), phase 1: integration tests for the
+multiplexed `POST /api/poll` endpoint on the Backend tier, written when the
+legacy `/api/poll/ui`/`/api/poll/session/{id}` endpoints were still present
+(removed in phase 5 — test_issue_782_long_poll.py migrated to this same
+endpoint then). These tests cover only the multiplexed endpoint.
 
 T1 (US1 — fair delivery): sustained delta load on one subscribed session does not
 delay UI-stream events for another stream in the same multiplexed response.

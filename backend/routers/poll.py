@@ -1,9 +1,17 @@
-"""Long-poll endpoints: /api/poll/* — Backend-owned (issue #498).
+"""Long-poll endpoint: POST /api/poll — Backend-owned (issue #498).
 
 Backend is the process where SessionCoordinator pushes events into ui_queue/
-session_queues, so it's the side that must actually serve these long-poll
-requests. The Frontend API's src/routers/poll.py becomes a poll-relay client
-against these same endpoints (Phase 2) rather than a direct EventQueue consumer.
+session_queues, so it's the side that must actually serve the long-poll
+request. The Frontend API's src/routers/poll.py is a poll-relay client
+against this same endpoint rather than a direct EventQueue consumer.
+
+Epic #1990 stage 5c phase 5: the legacy single-stream GET /api/poll/ui and
+GET /api/poll/session/{id} long-poll endpoints are removed — every consumer
+(the browser, backend/tools/scenario_driver/poll_consumer.py,
+src/tests/simulation/fault_harness.py) migrated to the multiplexed
+POST /api/poll in phases 2-4. The one-shot GET /api/poll/cursor and
+GET /api/poll/session/{id}/cursor REST bootstrap endpoints are NOT
+long-polling and were never named for removal — they stay.
 """
 
 from dataclasses import asdict
@@ -11,11 +19,11 @@ from dataclasses import asdict
 from fastapi import APIRouter, HTTPException
 
 from shared.event_envelope import PROCESS_EPOCH
-from shared.event_queue import EventQueue, reset_occurred
+from shared.event_queue import EventQueue
 from shared.exception_handlers import handle_exceptions
 from shared.logging_config import get_logger
 from shared.poll_multiplex import multiplex_poll
-from shared.poll_protocol import MultiplexPollRequest, MultiplexStreamResponse, PollResponse
+from shared.poll_protocol import MultiplexPollRequest, MultiplexStreamResponse
 
 _polling_logger = get_logger('polling', category='POLL')
 
@@ -99,30 +107,6 @@ def build_router(webui) -> APIRouter:
         response["sessions"] = sessions_response
         return response
 
-    @router.get("/api/poll/ui")
-    @handle_exceptions("poll ui")
-    async def poll_ui(since: int = 0, timeout: int = 30):
-        """HTTP long-poll endpoint for global UI events."""
-        effective_timeout = min(float(timeout), 30.0)
-        await webui.ui_queue.wait_for_events(since, timeout=effective_timeout)
-        events, next_cursor, evicted = webui.ui_queue.events_since(since)
-        # Epic #1990 stage 5a intentionally left this as-is: it's Backend's own
-        # API contract for detecting THIS process's EventQueue instance being
-        # replaced beneath a stale caller (issues #1984/#1988) — a narrower,
-        # same-process signal that cross-process epoch comparison can't catch by
-        # construction. Stage 5a's cursor-regression removal was about the
-        # cross-tier coupling (src/poll_relay.py no longer adopts or trusts this
-        # field) — not about this endpoint's own internal contract, which stays.
-        reset = reset_occurred(next_cursor, since)
-        if events:
-            _polling_logger.info(
-                "poll ui returned %d event(s) since=%d next_cursor=%d",
-                len(events), since, next_cursor
-            )
-        return asdict(PollResponse(
-            events=events, next_cursor=next_cursor, reset=reset, evicted=evicted, epoch=PROCESS_EPOCH
-        ))
-
     @router.get("/api/poll/cursor")
     @handle_exceptions("poll cursor")
     async def get_poll_cursor():
@@ -138,39 +122,5 @@ def build_router(webui) -> APIRouter:
                 raise HTTPException(status_code=404, detail="Session not found")
             return {"cursor": 0}  # session exists but queue not yet initialized
         return {"cursor": webui.session_queues[session_id].current_cursor}
-
-    @router.get("/api/poll/session/{session_id}")
-    @handle_exceptions("poll session")
-    async def poll_session(session_id: str, since: int = 0, timeout: int = 30):
-        """HTTP long-poll endpoint for session-specific events."""
-        if session_id not in webui.session_queues:
-            if not await webui.service.get_session_exists(session_id):
-                raise HTTPException(status_code=404, detail="Session not found")
-            webui.session_queues[session_id] = EventQueue(on_append=webui._queue_append_hook(session_id))
-        queue = webui.session_queues[session_id]
-
-        # Issue #1598: Mark session viewed at poll START, not poll END.
-        # Recording the timestamp here ensures any completion event arriving
-        # during wait_for_events() is timestamped AFTER last_viewed_at and
-        # correctly surfaces as unread once the user navigates away.
-        try:
-            await webui.coordinator.session_manager.mark_viewed(session_id)
-        except Exception:
-            _polling_logger.exception("mark_viewed failed for session %s", session_id)
-
-        effective_timeout = min(float(timeout), 30.0)
-        await queue.wait_for_events(since, timeout=effective_timeout)
-        events, next_cursor, evicted = queue.events_since(since)
-        # See poll_ui()'s comment above — unchanged post-stage-5a for the same reason.
-        reset = reset_occurred(next_cursor, since)
-
-        if events:
-            _polling_logger.info(
-                "poll session %s returned %d event(s) since=%d next_cursor=%d",
-                session_id, len(events), since, next_cursor
-            )
-        return asdict(PollResponse(
-            events=events, next_cursor=next_cursor, reset=reset, evicted=evicted, epoch=PROCESS_EPOCH
-        ))
 
     return router

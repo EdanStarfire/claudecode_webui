@@ -56,7 +56,9 @@ from shared.poll_multiplex import multiplex_poll
 from shared.poll_protocol import parse_poll_response
 from src.poll_relay import PollRelay
 
-UI_PATH = "/api/poll/ui"
+# Internal multiplex stream key, not a URL path — epic #1990 stage 5c phase 5
+# removed the legacy GET-path dispatch this constant used to double as.
+_STREAM_KEY_UI = "ui"
 
 # run_fault_scenario() stamps this onto every event it appends, as a stable,
 # cursor-independent delivery identity (epic #1990 stage 5a — see its docstring
@@ -177,7 +179,7 @@ class FakeBackend:
         streams: dict[str, tuple[EventQueue, int]] = {}
         ui_query = body.get("ui")
         if ui_query is not None:
-            streams[UI_PATH] = (self._ui_queue, int(ui_query.get("since", 0)))
+            streams[_STREAM_KEY_UI] = (self._ui_queue, int(ui_query.get("since", 0)))
         session_queries = body.get("sessions") or {}
         for session_id, query in session_queries.items():
             streams[session_id] = (self.queue_for(session_id), int(query.get("since", 0)))
@@ -186,7 +188,7 @@ class FakeBackend:
 
         response: dict[str, Any] = {}
         if ui_query is not None:
-            result = results[UI_PATH]
+            result = results[_STREAM_KEY_UI]
             response["ui"] = {
                 "events": result.events, "next_cursor": result.next_cursor,
                 "reset": result.reset, "evicted": result.evicted, "epoch": str(self._epoch),

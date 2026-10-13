@@ -30,21 +30,12 @@ def parse_poll_response(body: dict) -> PollBatch:
     )
 
 
-@dataclass
-class PollResponse:
-    events: list[dict]
-    next_cursor: int
-    reset: bool
-    evicted: bool
-    epoch: str
-
-
-@dataclass
-class FrontendPollResponse(PollResponse):
-    backend_status: str
-
-
 # --- Multiplexed POST /api/poll (epic #1990 stage 5c) -----------------------------
+# PollResponse/FrontendPollResponse (the legacy single-stream GET /api/poll/ui and
+# GET /api/poll/session/{id} response shapes) were removed in stage 5c phase 5 along
+# with the endpoints themselves — MultiplexStreamResponse below is their direct
+# successor, carrying the identical {events, next_cursor, reset, evicted, epoch}
+# shape per-stream instead of as the whole response body.
 # One request body shape and one response-entry shape, shared by both tiers'
 # `POST /api/poll` handlers so the wire contract can't drift between them.
 

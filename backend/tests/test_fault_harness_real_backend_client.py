@@ -75,13 +75,9 @@ def _build_app(webui: _StandinWebUI) -> FastAPI:
 @pytest.fixture(autouse=True)
 def _fast_poll_timing(monkeypatch):
     """Scoped-down determinism pattern, same intent as
-    src/tests/test_fault_simulation.py's `_fast_poll_timing` — but unlike that
-    file's `FakeBackend` (whose hand-rolled `get_json()` accepts a float
-    `timeout` param), the REAL `backend.routers.poll.build_router()` endpoint
-    declares `timeout: int`; a float value here gets rejected by FastAPI's
-    query-param coercion with a 422 before ever reaching the relay logic. `1`
-    is the smallest valid value that still exercises genuine long-poll
-    waiting semantics.
+    src/tests/test_fault_simulation.py's `_fast_poll_timing`. `1` is the
+    smallest value that still exercises genuine long-poll waiting semantics
+    for `PollRelay`'s own request body (built from this patched constant).
     """
     monkeypatch.setattr("src.poll_relay._POLL_TIMEOUT_SECONDS", 1)
     monkeypatch.setattr("src.poll_relay._POLL_CLIENT_TIMEOUT_SECONDS", 5.0)
@@ -101,13 +97,13 @@ async def test_real_backend_client_response_is_actually_gzipped():
         webui.session_queues[session_id].append({"type": "test_event", "seq": i, "pad": "x" * 50})
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as raw_client:
-        resp = await raw_client.get(
-            f"/api/poll/session/{session_id}", params={"since": 0, "timeout": 0},
+        resp = await raw_client.post(
+            "/api/poll", json={"timeout": 0, "sessions": {session_id: {"since": 0}}},
             headers={"accept-encoding": "gzip"},
         )
     assert resp.status_code == 200
     assert resp.headers.get("content-encoding") == "gzip"
-    assert len(resp.json()["events"]) == 50
+    assert len(resp.json()["sessions"][session_id]["events"]) == 50
 
 
 @pytest.mark.asyncio

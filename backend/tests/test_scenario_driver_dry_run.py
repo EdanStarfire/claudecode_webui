@@ -145,14 +145,34 @@ def _create_and_start_session(base_url: str, token: str, name: str) -> str:
 
 
 def _all_events(base_url: str, token: str, session_id: str) -> list[TaggedEvent]:
-    body = httpx.get(
-        f"{base_url}/api/poll/session/{session_id}", params={"since": 0, "timeout": 2},
-        headers={"Authorization": f"Bearer {token}"}, timeout=10,
-    ).json()
-    return [
-        TaggedEvent(source="session", event=EventEnvelope.from_dict(e), seq=i)
-        for i, e in enumerate(body["events"])
-    ]
+    """Drains the session's entire event history via repeated polls. Epic #1990
+    stage 5c: the multiplexed endpoint quota-truncates each response
+    (shared/poll_multiplex.py) where the legacy single-stream endpoint this
+    replaced never did — a raw-replay fixture easily exceeds that per-response
+    quota, so a single poll is no longer guaranteed to return everything.
+    """
+    events: list[TaggedEvent] = []
+    since = 0
+    headers = {"Authorization": f"Bearer {token}"}
+    while True:
+        # timeout=0: the full fixture is already synchronously replayed into the
+        # queue before this loop starts (see _create_and_start_session's comment),
+        # so there's never anything to actually wait for — a real long-poll
+        # timeout here would just add dead time to the terminating call.
+        body = httpx.post(
+            f"{base_url}/api/poll", json={"timeout": 0, "sessions": {session_id: {"since": since}}},
+            headers=headers, timeout=10,
+        ).json()
+        stream = body["sessions"][session_id]
+        batch_events = stream["events"]
+        start = len(events)
+        for i, e in enumerate(batch_events):
+            events.append(TaggedEvent(source="session", event=EventEnvelope.from_dict(e), seq=start + i))
+        next_cursor = stream["next_cursor"]
+        if next_cursor == since or not batch_events:
+            break
+        since = next_cursor
+    return events
 
 
 def test_required_markers_all_covered_by_scenarios():

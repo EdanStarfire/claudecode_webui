@@ -6,8 +6,8 @@ session queues stopped adopting Backend's cursor numbering in stage 5a (see
 src/poll_relay.py), so Backend-space and Frontend-local-space cursors are two
 different numberings now. This route substitutes the exact LOCAL cursor
 corresponding to Backend's answer, via PollRelay.wait_until_relayed()'s
-checkpoint interpolation, so the browser's next poll
-(GET /api/poll/session/{id}?since=...) resumes against the numbering that
+checkpoint interpolation, so the browser's next poll (POST /api/poll, this
+session's cursor in its `sessions` block) resumes against the numbering that
 endpoint actually understands.
 """
 
