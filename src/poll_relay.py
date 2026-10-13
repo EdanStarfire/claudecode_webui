@@ -173,6 +173,13 @@ class PollRelay:
         # even a small added per-cycle latency can widen a loss that wouldn't
         # otherwise occur).
         self._in_flight_task: asyncio.Task | None = None
+        # Issue #2161: one-shot fast-probe flag, mirroring the identical mechanism on
+        # the browser tier (frontend/src/stores/polling.js). Initialized True so this
+        # relay's very first-ever cycle is also fast. Set True (unconditionally, when
+        # `is_new`) by touch_session()/start_ui_relay() at the exact same spot they
+        # already call _interrupt_if_in_flight() — read-and-cleared synchronously in
+        # _relay_loop() before `await task`, so it can never degrade into a busy-poll.
+        self._fast_probe_pending = True
         self._stopped = False
         # Epic #1990 stage 5a: last Backend epoch observed per stream key ("ui" or a
         # session_id) — the value the Frontend's own poll responses surface, and what an
@@ -222,6 +229,7 @@ class PollRelay:
         self._ui_started = True
         self._ensure_task_running()
         if is_new:
+            self._fast_probe_pending = True
             self._interrupt_if_in_flight()
 
     def touch_session(self, session_id: str) -> None:
@@ -246,6 +254,7 @@ class PollRelay:
             self._session_queues[session_id] = EventQueue()
         self._ensure_task_running()
         if is_new:
+            self._fast_probe_pending = True
             self._interrupt_if_in_flight()
 
     def _interrupt_if_in_flight(self) -> None:
@@ -300,12 +309,18 @@ class PollRelay:
                 await asyncio.sleep(_ERROR_BACKOFF_SECONDS)
                 continue
             session_ids = subscription - {_STREAM_KEY_UI}
-            body = {"timeout": _POLL_TIMEOUT_SECONDS, "sessions": {
-                session_id: {"since": self._backend_cursor.get(session_id, 0)}
-                for session_id in session_ids
-            }}
+            body = {
+                "timeout": 0 if self._fast_probe_pending else _POLL_TIMEOUT_SECONDS,
+                "sessions": {
+                    session_id: {"since": self._backend_cursor.get(session_id, 0)}
+                    for session_id in session_ids
+                },
+            }
             if _STREAM_KEY_UI in subscription:
                 body["ui"] = {"since": self._backend_cursor.get(_STREAM_KEY_UI, 0)}
+            # Issue #2161: consume the one-shot flag for THIS cycle's request,
+            # synchronously, before `await task` below.
+            self._fast_probe_pending = False
 
             # This request's subscription is now authoritative for "is a stream
             # new" purposes until the NEXT cycle — touch_session()/start_ui_relay()

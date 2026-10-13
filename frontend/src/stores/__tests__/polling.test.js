@@ -16,11 +16,14 @@ vi.mock('@/utils/api', () => ({
   triggerReauth: triggerReauthMock
 }))
 vi.mock('@/composables/useNotifications', () => ({ notify: vi.fn() }))
+const pushDebugEventMock = vi.hoisted(() => vi.fn())
+vi.mock('@/composables/useDebugBuffer', () => ({ pushDebugEvent: pushDebugEventMock }))
 
 beforeEach(() => {
   setActivePinia(createPinia())
   Object.values(apiMock).forEach(fn => fn.mockReset())
   triggerReauthMock.mockReset()
+  pushDebugEventMock.mockReset()
 })
 
 function flush() {
@@ -1816,5 +1819,211 @@ describe('polling store - markSessionArchived (issue #2129 stage 5b, AC3/AC4; ep
     expect(pollingStore.currentSessionId).toBe(sid)
 
     pollingStore.stopUIPolling()
+  })
+})
+
+// Issue #2161: input stayed gated behind a "reconnecting" banner for up to 30s after
+// stage 5c (#2130), because every poll cycle — including the very first one — asked for
+// a full 30s long-poll. The fix is a one-shot client-side fast-probe flag: exactly the
+// next request built after a fresh connect() or a subscription-set change sends
+// timeout:0 instead of timeout:30, then reverts. The one-shot discipline is the single
+// point of failure for this mechanism (a flag that fails to clear degrades every poll
+// cycle into a 0-timeout busy-poll, worse than the bug being fixed) — hence the dedicated
+// THIRD-cycle assertions below, not just first-vs-second.
+describe('polling store - fast-probe one-shot timeout (issue #2161)', () => {
+  it('T1 (AC1/AC2/AC3): the first request after connect sends timeout:0 and reaches connected off that single response', async () => {
+    vi.useFakeTimers()
+    try {
+      const { pollingStore, sid } = await setupPollSession({ session_id: 'sess-fp-t1' })
+      const fetchMock = sequencedPollMock([
+        { ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [], next_cursor: 0 } } },
+      ])
+
+      await pollingStore.connectSession(sid)
+      // Deliberately NOT advancing by anything near 30s — a regression that silently
+      // reintroduces the 30s dependency must fail by never reaching 'connected' here,
+      // not just run slow.
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(parseBody(fetchMock.mock.calls[0][1]).timeout).toBe(0)
+      expect(pollingStore.sessionHasEverConnected).toBe(true)
+      expect(pollingStore.uiState).toBe('connected')
+
+      await pollingStore.disconnectSession()
+      pollingStore.stopUIPolling()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('one-shot regression: the SECOND request reverts to timeout:30, and a THIRD (unchanged) cycle stays at 30 — not an off-by-one', async () => {
+    const { pollingStore, sid } = await setupPollSession({ session_id: 'sess-fp-oneshot' })
+    const fetchMock = sequencedPollMock([
+      { ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [], next_cursor: 0 } } },
+      { ui: { events: [], next_cursor: 2 }, sessions: { [sid]: { events: [], next_cursor: 0 } } },
+      { ui: { events: [], next_cursor: 3 }, sessions: { [sid]: { events: [], next_cursor: 0 } } },
+    ])
+
+    await pollingStore.connectSession(sid)
+    await flush()
+    await flush()
+    await flush()
+
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3)
+    expect(parseBody(fetchMock.mock.calls[0][1]).timeout).toBe(0)
+    expect(parseBody(fetchMock.mock.calls[1][1]).timeout).toBe(30)
+    expect(parseBody(fetchMock.mock.calls[2][1]).timeout).toBe(30)
+
+    await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
+  })
+
+  it('T2: a subscription-set change mid-flight interrupts the in-flight request; the REPLACEMENT request sends timeout:0 and a THIRD (unchanged) cycle reverts to 30', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useSessionStore } = await import('@/stores/session')
+    const pollingStore = usePollingStore()
+    const sessionStore = useSessionStore()
+
+    sessionStore.sessions.set('sess-fp-old', makeSession({ session_id: 'sess-fp-old' }))
+    sessionStore.sessions.set('sess-fp-new', makeSession({ session_id: 'sess-fp-new' }))
+    apiMock.get.mockResolvedValue({ cursor: 0 })
+
+    let fetchCallCount = 0
+    const bodies = []
+    vi.spyOn(global, 'fetch').mockImplementation((url, opts) => {
+      fetchCallCount++
+      bodies.push(parseBody(opts))
+      if (fetchCallCount === 1) {
+        // First cycle (ui + sess-fp-old) left pending so the switch below interrupts it
+        // instead of it resolving naturally.
+        return new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () => {
+            const err = new Error('Aborted'); err.name = 'AbortError'; reject(err)
+          })
+        })
+      }
+      if (fetchCallCount === 2) {
+        // The replacement request (carrying the new subscription) resolves normally.
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ui: { events: [], next_cursor: 1 }, sessions: { 'sess-fp-new': { events: [], next_cursor: 0 } } }),
+        })
+      }
+      // Third cycle onward hangs — only the timeout value matters from here.
+      return hangingAbortAwareFetch(url, opts)
+    })
+
+    await pollingStore.connectSession('sess-fp-old')
+    expect(fetchCallCount).toBe(1)
+    expect(bodies[0].timeout).toBe(0) // the very first connect is fast-probed too (AC1)
+
+    await pollingStore.connectSession('sess-fp-new')
+    await flush()
+
+    expect(fetchCallCount).toBe(3)
+    expect(bodies[1].timeout).toBe(0)
+    expect(bodies[1].sessions).toHaveProperty('sess-fp-new')
+    expect(bodies[2].timeout).toBe(30)
+
+    await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
+  })
+})
+
+// Issue #2161 (AC4): `conn.hasEverConnected` already tracked exactly this signal — it
+// was unused dead state before this fix. Exposed as `transportHasEverConnected` so
+// InputArea.vue can distinguish a genuine first connection from a reconnect after a
+// previously-successful connection was lost.
+describe('polling store - transportHasEverConnected (AC4, issue #2161)', () => {
+  it('is false immediately after connect()/before the first response, true after the first connected transition, and resets to false on disconnect()', async () => {
+    const { pollingStore, sid } = await setupPollSession({ session_id: 'sess-ac4' })
+    let resolveFetch
+    vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveFetch = resolve }))
+
+    await pollingStore.connectSession(sid)
+    expect(pollingStore.transportHasEverConnected).toBe(false)
+
+    resolveFetch({
+      ok: true,
+      json: () => Promise.resolve({ ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [], next_cursor: 0 } } }),
+    })
+    await flush()
+    expect(pollingStore.transportHasEverConnected).toBe(true)
+
+    await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
+    expect(pollingStore.transportHasEverConnected).toBe(false)
+  })
+})
+
+// Issue #2161 (AC5): transition() used to call pushDebugEvent() unconditionally, logging
+// a 'connected -> connected' no-op on every single idle poll cycle. Only an actual state
+// change should be debug-worthy.
+describe('polling store - debug-event noise guard on no-op transitions (AC5, issue #2161)', () => {
+  it('does not log a state-transition debug event for a connected -> connected no-op cycle, but does for the genuine connecting -> connected transition', async () => {
+    const { pollingStore, sid } = await setupPollSession({ session_id: 'sess-ac5' })
+    sequencedPollMock([
+      { ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [], next_cursor: 0 } } },
+      { ui: { events: [], next_cursor: 2 }, sessions: { [sid]: { events: [], next_cursor: 0 } } },
+    ])
+
+    await pollingStore.connectSession(sid)
+    await flush()
+
+    const transitionsToConnected = pushDebugEventMock.mock.calls.filter(
+      ([, tag, data]) => tag === 'state-transition' && data.to === 'connected'
+    )
+    expect(transitionsToConnected).toHaveLength(1) // the genuine connecting -> connected transition
+
+    pushDebugEventMock.mockClear()
+    await flush() // second (connected -> connected no-op) cycle
+
+    const noOpTransitions = pushDebugEventMock.mock.calls.filter(
+      ([, tag, data]) => tag === 'state-transition' && data.to === 'connected'
+    )
+    expect(noOpTransitions).toHaveLength(0)
+
+    await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
+  })
+
+  it('still logs a state-transition debug event across a genuine connected -> backoff -> connecting -> connected cycle', async () => {
+    vi.useFakeTimers()
+    try {
+      const { pollingStore, sid } = await setupPollSession({ session_id: 'sess-ac5-cycle' })
+      let callCount = 0
+      vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => {
+        callCount++
+        if (callCount === 1) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [], next_cursor: 0 } } }),
+          })
+        }
+        if (callCount === 2) {
+          return Promise.reject(new Error('Connection refused'))
+        }
+        return hangingAbortAwareFetch(_url, opts)
+      })
+
+      await pollingStore.connectSession(sid)
+      await vi.advanceTimersByTimeAsync(0) // cycle 1: connecting -> connected
+      await vi.advanceTimersByTimeAsync(0) // cycle 2: fetch throws -> connected -> backoff
+      await vi.advanceTimersByTimeAsync(2000) // backoff timer fires -> connecting (retry)
+
+      const transitions = pushDebugEventMock.mock.calls
+        .filter(([, tag]) => tag === 'state-transition')
+        .map(([, , data]) => `${data.from}->${data.to}`)
+
+      expect(transitions.filter(t => t === 'connecting->connected')).toHaveLength(1)
+      expect(transitions).not.toContain('connected->connected')
+      expect(transitions).toContain('connected->backoff')
+      expect(transitions).toContain('backoff->connecting')
+
+      await pollingStore.disconnectSession()
+      pollingStore.stopUIPolling()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

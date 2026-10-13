@@ -79,18 +79,57 @@ def test_poll_client_timeout_has_margin_above_server_ceiling():
 @pytest.mark.asyncio
 async def test_poll_once_posts_multiplex_body_with_client_timeout_margin():
     relay, backend_client, _, _ = _make_relay(
-        request_json_side_effect=[_batch(ui=_stream())]
+        request_json_side_effect=[_batch(ui=_stream()), _batch(ui=_stream())]
     )
     relay.start_ui_relay()
-    await _wait_until(lambda: backend_client.request_json.await_count >= 1)
+    await _wait_until(lambda: backend_client.request_json.await_count >= 2)
 
-    backend_client.request_json.assert_awaited()
-    args, kwargs = backend_client.request_json.call_args
+    calls = backend_client.request_json.call_args_list
+    args, kwargs = calls[0]
     assert args[0] == "POST"
     assert args[1] == "/api/poll"
     assert kwargs["timeout"] == _POLL_CLIENT_TIMEOUT_SECONDS
-    assert kwargs["timeout"] > kwargs["json"]["timeout"]
     assert "ui" in kwargs["json"]
+    # Issue #2161: the very first-ever request is one-shot fast-probed (json timeout:0),
+    # so the margin check below uses the SECOND (steady-state) request instead, where
+    # json["timeout"] has reverted to _POLL_TIMEOUT_SECONDS (30) — the actual server
+    # long-poll ceiling this margin exists to protect against racing with zero slack.
+    _, second_kwargs = calls[1]
+    assert second_kwargs["json"]["timeout"] == _POLL_TIMEOUT_SECONDS
+    assert second_kwargs["timeout"] > second_kwargs["json"]["timeout"]
+
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_touch_session_one_shot_fast_probe_timeout():
+    """Issue #2161: mirrors the identical one-shot mechanism on the browser tier
+    (frontend/src/stores/polling.js). touch_session() on a brand-new session must
+    produce a request whose body has timeout:0 — the fast probe — and the NEXT
+    cycle's request (nothing new touched) must revert to _POLL_TIMEOUT_SECONDS.
+    Checked through a THIRD cycle too (not just first vs. second), since the
+    one-shot discipline is the single point of failure for this whole mechanism:
+    if the flag isn't reliably cleared, every subsequent cycle degrades into a
+    0-timeout busy-poll against Backend — worse than the bug being fixed."""
+    request_bodies = []
+
+    async def side_effect(*args, **kwargs):
+        # A real network round trip (matching
+        # test_rapid_touch_of_many_new_sessions_does_not_starve_the_loop's template),
+        # not an instant-return mock, so the loop actually completes multiple
+        # distinct cycles rather than this coroutine racing _wait_until.
+        await asyncio.sleep(0.01)
+        request_bodies.append(kwargs["json"])
+        return _batch(ui=_stream(), sessions={"sess-fp": _stream()})
+
+    relay, backend_client, _, _ = _make_relay(request_json_side_effect=side_effect)
+    relay.touch_session("sess-fp")
+
+    await _wait_until(lambda: len(request_bodies) >= 3)
+
+    assert request_bodies[0]["timeout"] == 0
+    assert request_bodies[1]["timeout"] == _POLL_TIMEOUT_SECONDS
+    assert request_bodies[2]["timeout"] == _POLL_TIMEOUT_SECONDS
 
     await relay.stop()
 

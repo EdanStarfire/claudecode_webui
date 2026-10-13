@@ -423,4 +423,85 @@ describe('InputArea', () => {
       expect(screen.getByRole('textbox')).toBeDisabled()
     })
   })
+
+  // Issue #2161 (AC4): wsStore.transportHasEverConnected (the shared multiplexed
+  // transport's own signal) is true almost immediately after app mount and stays true
+  // for the rest of the tab's life — builder-review found that branching the banner on
+  // it directly would make "Connecting..." effectively unreachable after the first
+  // session viewed in a tab, since the transport has by then always already connected
+  // once. InputArea.vue instead tracks a per-VIEW signal (hasEverConnectedThisView,
+  // reset on viewSessionId change) so a never-before-seen session still renders
+  // "Connecting...", not "Disconnected — reconnecting", even when the shared transport
+  // already succeeded for a previously viewed session.
+  describe('connecting vs reconnecting wording is scoped per-view, not per-transport (AC4, issue #2161)', () => {
+    it('shows "Connecting..." for a session that has never connected, even though the shared transport already connected once (a previously viewed session)', async () => {
+      const { pinia } = renderWithStores(InputArea, {
+        provide: { viewSessionId: viewSessionIdRef },
+        stubs: { AttachmentList: true, SlashCommandDropdown: true }
+      })
+
+      const { useSessionStore } = await import('@/stores/session')
+      const { usePollingStore } = await import('@/stores/polling')
+      const sessionStore = useSessionStore(pinia)
+      const pollingStore = usePollingStore(pinia)
+      sessionStore.currentSessionId = SESSION_ID
+      // The shared transport already connected (e.g. for the UI stream, or a prior
+      // session) — this alone must NOT make this never-before-connected session show
+      // "reconnecting" wording.
+      pollingStore.transportHasEverConnected = true
+      pollingStore.sessionHasEverConnected = false
+      await nextTick()
+
+      expect(screen.getByText('Connecting...')).toBeTruthy()
+      expect(screen.queryByText('Disconnected')).toBeFalsy()
+    })
+
+    it('shows "Disconnected — reconnecting" once this session\'s own view had connected before and then lost it', async () => {
+      const { pinia } = renderWithStores(InputArea, {
+        provide: { viewSessionId: viewSessionIdRef },
+        stubs: { AttachmentList: true, SlashCommandDropdown: true }
+      })
+
+      const { useSessionStore } = await import('@/stores/session')
+      const { usePollingStore } = await import('@/stores/polling')
+      const sessionStore = useSessionStore(pinia)
+      const pollingStore = usePollingStore(pinia)
+      sessionStore.currentSessionId = SESSION_ID
+      pollingStore.transportHasEverConnected = true
+      pollingStore.sessionHasEverConnected = true
+      await nextTick()
+      expect(screen.queryByText('Connecting...')).toBeFalsy() // connected: no banner at all yet
+
+      pollingStore.sessionHasEverConnected = false
+      await nextTick()
+
+      expect(screen.getByText('Disconnected')).toBeTruthy()
+      expect(screen.queryByText('Connecting...')).toBeFalsy()
+    })
+
+    it('resets the per-view signal when switching to a different, never-before-connected session', async () => {
+      const { pinia } = renderWithStores(InputArea, {
+        provide: { viewSessionId: viewSessionIdRef },
+        stubs: { AttachmentList: true, SlashCommandDropdown: true }
+      })
+
+      const { useSessionStore } = await import('@/stores/session')
+      const { usePollingStore } = await import('@/stores/polling')
+      const sessionStore = useSessionStore(pinia)
+      const pollingStore = usePollingStore(pinia)
+      sessionStore.currentSessionId = SESSION_ID
+      pollingStore.transportHasEverConnected = true
+      pollingStore.sessionHasEverConnected = true
+      await nextTick()
+      expect(screen.queryByText('Connecting...')).toBeFalsy()
+
+      // Switch views to a brand-new, never-before-connected session.
+      viewSessionIdRef.value = 'sess-2'
+      pollingStore.sessionHasEverConnected = false
+      await nextTick()
+
+      expect(screen.getByText('Connecting...')).toBeTruthy()
+      expect(screen.queryByText('Disconnected')).toBeFalsy()
+    })
+  })
 })
