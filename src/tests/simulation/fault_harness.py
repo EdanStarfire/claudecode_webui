@@ -46,6 +46,7 @@ import httpx
 import src.poll_relay as _relay_timeout_module
 from shared.event_envelope import EventEnvelope
 from shared.event_queue import EventQueue, reset_occurred
+from shared.poll_multiplex import multiplex_poll
 from shared.poll_protocol import parse_poll_response
 from src.poll_relay import PollRelay
 
@@ -86,11 +87,23 @@ async def wait_until(predicate, timeout: float = 5.0, interval: float = 0.02) ->
 
 
 class FakeBackend:
-    """Stands in for Backend's real poll endpoints (backend/routers/poll.py) —
-    same `wait_for_events()` -> `events_since()` -> `reset_occurred()` logic,
-    against a real `EventQueue` per stream, reached via a `get_json()` method
-    shaped exactly like `src/backend_client.py`'s real one so the real,
-    unmodified `PollRelay._poll_once()` can call it directly, in-process.
+    """Stands in for Backend's real poll endpoints (backend/routers/poll.py).
+
+    `get_json()` (single-stream, `reset_occurred()`-based) is the legacy shape,
+    kept for reference/any remaining direct caller. `request_json()` is what the
+    real, unmodified `PollRelay` actually calls now (epic #1990 stage 5c's relay
+    consolidation switched it to Backend's multiplexed `POST /api/poll`) — both
+    are reached via a `backend_client`-compatible interface shaped exactly like
+    `src/backend_client.py`'s real one, so the real relay code runs unmodified,
+    polling this fake exactly as it would poll `backend/routers/poll.py` over
+    HTTP. `request_json()` delegates to the REAL `shared/poll_multiplex.py`
+    helper against this fake's own real per-stream `EventQueue`s — no inline
+    reimplementation of the race/quota/assembly logic, same fidelity principle
+    `get_json()` already applied to `wait_for_events()`/`events_since()`/
+    `reset_occurred()`. `FakeFrontend`'s own consumer-facing `poll_ui()`/
+    `poll_session()` shape stays single-stream for now (full migration of the
+    test-harness-facing surface to the multiplexed protocol is epic #1990 stage
+    5c phase 4's scope, not this structural necessity).
     """
 
     def __init__(self) -> None:
@@ -174,6 +187,48 @@ class FakeBackend:
             "epoch": str(self._epoch),
         }
 
+    async def request_json(
+        self, method: str, path: str, json: dict[str, Any] | None = None, timeout: float | None = None
+    ) -> dict[str, Any]:
+        """`backend_client`-compatible POST entry point — what the real,
+        unmodified `PollRelay` now calls (see class docstring). Only
+        `POST /api/poll` is implemented; nothing in this harness sends anything
+        else through this method today."""
+        assert method == "POST" and path == "/api/poll", f"unexpected request_json call: {method} {path}"
+        if self._down:
+            raise httpx.ConnectError("FakeBackend is down", request=httpx.Request(method, path))
+        if self._extra_delay:
+            await asyncio.sleep(self._extra_delay)
+
+        body = json or {}
+        poll_timeout = min(float(body.get("timeout", 30)), 30.0)
+        streams: dict[str, tuple[EventQueue, int]] = {}
+        ui_query = body.get("ui")
+        if ui_query is not None:
+            streams[UI_PATH] = (self._ui_queue, int(ui_query.get("since", 0)))
+        session_queries = body.get("sessions") or {}
+        for session_id, query in session_queries.items():
+            streams[session_id] = (self.queue_for(session_id), int(query.get("since", 0)))
+
+        results = await multiplex_poll(streams, timeout=poll_timeout)
+
+        response: dict[str, Any] = {}
+        if ui_query is not None:
+            result = results[UI_PATH]
+            response["ui"] = {
+                "events": result.events, "next_cursor": result.next_cursor,
+                "reset": result.reset, "evicted": result.evicted, "epoch": str(self._epoch),
+            }
+        response["sessions"] = {
+            session_id: {
+                "events": results[session_id].events, "next_cursor": results[session_id].next_cursor,
+                "reset": results[session_id].reset, "evicted": results[session_id].evicted,
+                "epoch": str(self._epoch),
+            }
+            for session_id in session_queries
+        }
+        return response
+
 
 class FakeFrontend:
     """Stands in for Frontend's poll-relay side (src/poll_relay.py +
@@ -220,7 +275,7 @@ class FakeFrontend:
         }
 
     async def poll_session(self, session_id: str, since: int, timeout: float = 1.0) -> dict[str, Any]:
-        self.poll_relay.ensure_session_relay(session_id)
+        self.poll_relay.touch_session(session_id)
         queue = self.session_queues[session_id]
         effective_timeout = min(float(timeout), 30.0)
         await queue.wait_for_events(since, timeout=effective_timeout)

@@ -25,7 +25,7 @@ def _make_webui(*, is_unreachable=False, degraded=None):
     webui.ui_queue = EventQueue()
     webui.session_queues = {}
     webui.poll_relay.start_ui_relay = MagicMock()
-    webui.poll_relay.ensure_session_relay = MagicMock()
+    webui.poll_relay.touch_session = MagicMock()
     webui.backend_client.reachability.is_unreachable = is_unreachable
     # MagicMock()'s auto-created attributes are truthy, so backend_supervisor must be
     # set explicitly — see test_relay_router.py's _make_app for the same gotcha.
@@ -106,6 +106,33 @@ async def test_poll_session_backend_status_degraded():
     webui.session_queues["session-1"] = EventQueue()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/api/poll/session/session-1?timeout=0")
+
+    assert resp.status_code == 200
+    assert resp.json()["backend_status"] == "degraded"
+
+
+# --- epic #1990 stage 5c: the same backend_status field on the multiplexed endpoint ---
+
+
+@pytest.mark.asyncio
+async def test_poll_multiplex_backend_status_ok():
+    app, _ = _make_webui(is_unreachable=False)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post("/api/poll", json={"timeout": 0, "ui": {"since": 0}})
+
+    assert resp.status_code == 200
+    assert resp.json()["backend_status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_poll_multiplex_backend_status_degraded_takes_precedence():
+    app, webui = _make_webui(is_unreachable=True, degraded=True)
+    webui.session_queues["session-1"] = EventQueue()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/poll",
+            json={"timeout": 0, "ui": {"since": 0}, "sessions": {"session-1": {"since": 0}}},
+        )
 
     assert resp.status_code == 200
     assert resp.json()["backend_status"] == "degraded"

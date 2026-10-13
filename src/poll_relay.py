@@ -1,45 +1,46 @@
-"""Poll-relay: background long-poll tasks that fan Backend's poll streams out to
-local per-session/UI EventQueues (issue #498).
+"""Poll-relay: one consolidated background long-poll task fanning Backend's
+multiplexed poll stream out to local per-session/UI EventQueues (issue #498,
+epic #1990 stage 5c).
 
 Backend owns the real EventQueues (SessionCoordinator pushes events there
-directly, same-process). Frontend's own /api/poll/ui and /api/poll/session/{id}
-handlers (src/routers/poll.py) still read from LOCAL EventQueues exactly as
-before the split — what changed is who *populates* them: instead of direct
-in-process coordinator callbacks, a background task per stream continuously
-long-polls the matching Backend endpoint and re-appends what it gets back.
-This is the "poll-relay" pattern (as opposed to the generic reverse-proxy):
-needed here specifically because multiple browser tabs share one local
-EventQueue, which would otherwise mean multiple duplicate upstream long-poll
-connections to Backend for the same stream.
+directly, same-process). Frontend's own `/api/poll` handler (`src/routers/poll.py`,
+plus the legacy `/api/poll/ui`/`/api/poll/session/{id}` routes while they still
+exist) reads from LOCAL EventQueues exactly as before the split — what changed is
+who *populates* them: one background task continuously long-polls Backend's own
+`POST /api/poll` (`backend/routers/poll.py`, which owns the real EventQueues
+SessionCoordinator writes to) with a subscription set — UI plus every session a
+local browser request has touched recently — and re-appends what it gets back.
 
-Per-session relay tasks self-stop after an idle window with no local browser
-poll (issue #498 review finding): Backend's poll_session handler calls
-session_manager.mark_viewed() on every request it receives, since pre-split
-that request only ever happened because a real browser was actively polling
-(issue #1598's whole premise). Post-split, a relay task that ran forever once
-started would keep calling Backend's poll endpoint indefinitely even after
-every browser tab closed, permanently marking the session "viewed" and
-defeating #1598's unread-detection fix. ensure_session_relay() is called on
-every local poll request and refreshes the last-activity timestamp; the loop
-checks it and stops itself once idle, restarting lazily next time a real
-browser poll arrives.
+**Consolidation (epic #1990 stage 5c).** Before this stage, one relay task ran
+per stream (one for UI, one per actively-viewed session), each independently
+long-polling its own single-stream endpoint and self-stopping after an idle
+window. Now there is exactly ONE task, always running once started, carrying a
+subscription set recomputed every cycle from `_session_last_activity` (UI is
+always subscribed). A session dropping out of the subscription set is no longer
+"a task stopping" — it's simply omitted from the next request body, and this
+module's own per-stream bookkeeping dicts (`_last_epoch`, `_backend_cursor`,
+`_checkpoints`, `_pending_evicted`, `_session_last_activity`) are explicitly
+pruned for that session_id (US3: today this state lived inside a dying task's
+own closure and was GC'd for free; the single consolidated task has no such
+closure teardown, so pruning is now this module's own explicit responsibility).
+`touch_session(session_id)` (replacing `ensure_session_relay()` — renamed, not
+kept as a compat alias) registers/refreshes interest and lazily creates the
+local `EventQueue`; it no longer starts a dedicated task.
 
-Epic #1990 stage 5a: every local queue — UI and every session — now uses the
-SAME plain auto-increment append discipline uniformly (issue #1890's
-mixed-discipline collision can no longer happen by construction). Session
-queues previously adopted Backend's own cursor numbering 1:1 (issue #1886);
-that coupling is exactly what broke across a Backend restart (cursor space
-restarts at 0; the same value can mean two different generations — issue
-#1889). `_backend_cursor` tracks, per stream, the LAST Backend-space cursor
-this relay has consumed — distinct from (and no longer equal to) the local
-queue's own auto-increment cursor — so a session relay task restarting after
-an idle-stop still resumes Backend polling from exactly where it left off
-(not from Backend cursor 0, and not from the now-unrelated local queue
+Epic #1990 stage 5a: every local queue — UI and every session — uses the SAME
+plain auto-increment append discipline uniformly (issue #1890's mixed-discipline
+collision can no longer happen by construction). Session queues previously
+adopted Backend's own cursor numbering 1:1 (issue #1886); that coupling is
+exactly what broke across a Backend restart (cursor space restarts at 0; the
+same value can mean two different generations — issue #1889). `_backend_cursor`
+tracks, per stream, the LAST Backend-space cursor this relay has consumed —
+distinct from (and no longer equal to) the local queue's own auto-increment
+cursor — so resuming a subscription polls Backend from exactly where this relay
+left off (not from Backend cursor 0, and not from the now-unrelated local queue
 cursor). `_last_epoch` tracks the last Backend `epoch` seen per stream; an
 observed change emits an explicit `stream_reset` event into the local queue
-BEFORE appending that poll's own (already-new-epoch) events, making a
-Backend restart a visible, ordered event instead of a cursor-magnitude
-inference.
+BEFORE appending that poll's own (already-new-epoch) events, making a Backend
+restart a visible, ordered event instead of a cursor-magnitude inference.
 
 **The Frontend-issued history cursor (AC3).** Since session queues no longer
 mirror Backend's own cursor numbering, `GET /api/sessions/{id}/messages`
@@ -60,7 +61,8 @@ skip whatever lies between the two. Checkpoints are pruned after each append:
 kept only if within `_CHECKPOINT_GRACE_SECONDS` of a single relay-to-Frontend
 HTTP round trip, or still needed to straddle the smallest Backend-cursor among
 currently-registered waiters for that stream, or the single latest checkpoint
-(so a resolution is always possible even when fully idle).
+(so a resolution is always possible even when fully idle). This machinery is
+unchanged by the stage 5c consolidation — only the outer transport loop changed.
 """
 
 import asyncio
@@ -109,6 +111,8 @@ _STALE_EPOCH_GRACE_SECONDS = 5.0
 # the relay's own 30s upstream long-poll ceiling.
 _HISTORY_CURSOR_WAIT_TIMEOUT_SECONDS = 10.0
 
+_STREAM_KEY_UI = "ui"
+
 
 @dataclass
 class _Checkpoint:
@@ -127,24 +131,57 @@ class WaitUntilRelayedResult:
 
 
 class PollRelay:
-    """Owns the background relay tasks fanning Backend's poll streams into local queues."""
+    """Owns the single consolidated background task fanning Backend's
+    multiplexed poll stream into local queues."""
 
     def __init__(self, backend_client, ui_queue: EventQueue, session_queues: dict[str, EventQueue]):
         self._backend_client = backend_client
         self._ui_queue = ui_queue
         self._session_queues = session_queues
-        self._ui_task: asyncio.Task | None = None
-        self._session_tasks: dict[str, asyncio.Task] = {}
+        self._task: asyncio.Task | None = None
+        # Gates "ui" inclusion in the subscription set — mirrors pre-consolidation
+        # behavior exactly (a dedicated ui task only ever started on demand) rather
+        # than unconditionally racing an idle ui_queue's wait_for_events() on every
+        # single cycle regardless of whether anything has ever asked for it. Besides
+        # matching intent, this avoids silently cutting into a session stream's own
+        # effective poll cadence when nothing is actually subscribed to ui — a real
+        # throughput cost, not just a cosmetic one (a session polling against a
+        # small, permanently-shrunk retained window can't tolerate extra per-cycle
+        # overhead from racing a stream nobody asked for).
+        self._ui_started = False
         self._session_last_activity: dict[str, float] = {}
+        # What the CURRENTLY in-flight (or most recently built) request's
+        # subscription set is — distinct from `_current_subscription()`'s live
+        # recomputation. A newly touched stream not yet covered by this needs to
+        # interrupt an in-flight long-poll rather than wait for it to time out
+        # (see `_subscription_changed`).
+        self._active_subscription: set[str] = set()
+        # The in-flight _poll_once() Task, if any — touch_session()/start_ui_relay()
+        # cancel it directly when they add a stream not already covered by
+        # `_active_subscription`, rather than waiting out its full
+        # `_POLL_TIMEOUT_SECONDS` before the relay even asks Backend about the new
+        # stream. This was a real, observed regression (epic #1990 stage 5c
+        # review): the Frontend starts its UI relay unconditionally at process
+        # boot (`src/web_server.py`), so by the time a browser's first session
+        # poll arrives, the single consolidated task is routinely already deep
+        # into a ui-only long-poll. Direct cancellation (rather than racing an
+        # extra waiter task every single cycle via `asyncio.wait()`) keeps the
+        # common, no-interruption cycle's cost identical to a bare `await` —
+        # measurably significant under this module's own worst case (a session
+        # whose Backend-side retained window has been shrunk by eviction, where
+        # even a small added per-cycle latency can widen a loss that wouldn't
+        # otherwise occur).
+        self._in_flight_task: asyncio.Task | None = None
         self._stopped = False
         # Epic #1990 stage 5a: last Backend epoch observed per stream key ("ui" or a
         # session_id) — the value the Frontend's own poll responses surface, and what an
         # observed change against triggers a `stream_reset` emission for.
         self._last_epoch: dict[str, str] = {}
-        # Last Backend-space cursor consumed per stream — survives a session relay
-        # task's idle-stop/restart (unlike a local variable scoped to _relay_loop), so
-        # resuming polls Backend from exactly where this relay left off rather than from
-        # 0 or from the now-independent local queue cursor. See module docstring.
+        # Last Backend-space cursor consumed per stream — survives a session aging out
+        # and back into the subscription set (unlike a local variable scoped to one
+        # task iteration), so resuming polls Backend from exactly where this relay left
+        # off rather than from 0 or from the now-independent local queue cursor. See
+        # module docstring.
         self._backend_cursor: dict[str, int] = {}
         # Sticky, consume-once flag: Backend reporting its OWN `evicted=True` (this
         # relay's remembered Backend-cursor fell outside Backend's retained window —
@@ -173,113 +210,196 @@ class PollRelay:
 
     def last_epoch(self, stream_key: str) -> str | None:
         """Most recent Backend epoch observed for this stream, or None if no poll has
-        completed yet (e.g. a session whose relay hasn't started)."""
+        completed yet (e.g. a session that's never been subscribed)."""
         return self._last_epoch.get(stream_key)
 
     def start_ui_relay(self) -> None:
-        """Start the single background task relaying Backend's /api/poll/ui stream."""
-        if self._ui_task is not None and not self._ui_task.done():
-            return
-        self._ui_task = asyncio.create_task(
-            self._relay_loop("/api/poll/ui", self._ui_queue, stream_key="ui"), name="poll_relay_ui"
-        )
+        """Register interest in the UI stream (no idle timeout — once started, it
+        stays subscribed for the process lifetime) and ensure the single
+        consolidated relay task is running."""
+        is_new = not self._ui_started
+        self._ui_started = True
+        self._ensure_task_running()
+        if is_new:
+            self._interrupt_if_in_flight()
 
-    def ensure_session_relay(self, session_id: str) -> None:
-        """Start a background relay task for this session if one isn't already running,
-        and record that a local browser poll just happened (keeps the relay alive —
-        see module docstring for why this matters for issue #1598's mark_viewed semantics).
+    def touch_session(self, session_id: str) -> None:
+        """Register/refresh interest in relaying this session's stream, and ensure
+        the local `EventQueue` exists. Called on every local request involving this
+        session_id — both `/api/poll`'s subscription-set handler and `GET /messages`'
+        history-cursor handoff — so a real browser's continued interest keeps the
+        session in the subscription set (see module docstring's US3 discussion for
+        why this must be refreshed, not just checked once).
+
+        Replaces `ensure_session_relay()` (epic #1990 stage 5c) — renamed, not kept
+        as a compat alias. Unlike its predecessor, this no longer starts a dedicated
+        task: the single consolidated task (started via `start_ui_relay()`) picks up
+        this session_id on its next cycle purely from `_session_last_activity` — and
+        if this session isn't already covered by whatever the relay's current
+        in-flight request is polling for, interrupts it immediately rather than
+        leaving this session waiting out that request's full long-poll timeout.
         """
+        is_new = session_id not in self._active_subscription
         self._session_last_activity[session_id] = time.monotonic()
-        existing = self._session_tasks.get(session_id)
-        if existing is not None and not existing.done():
-            return
         if session_id not in self._session_queues:
             self._session_queues[session_id] = EventQueue()
-        path = f"/api/poll/session/{session_id}"
-        self._session_tasks[session_id] = asyncio.create_task(
-            self._relay_loop(path, self._session_queues[session_id], session_id=session_id, stream_key=session_id),
-            name=f"poll_relay_session_{session_id}",
-        )
+        self._ensure_task_running()
+        if is_new:
+            self._interrupt_if_in_flight()
 
-    async def _relay_loop(
-        self, path: str, queue: EventQueue, session_id: str | None = None, stream_key: str = "ui"
-    ) -> None:
-        cursor = self._backend_cursor.get(stream_key, 0)
-        family = QUEUE_SESSION if session_id is not None else QUEUE_UI
+    def _interrupt_if_in_flight(self) -> None:
+        if self._in_flight_task is not None and not self._in_flight_task.done():
+            self._in_flight_task.cancel()
+
+    def _ensure_task_running(self) -> None:
+        if self._task is not None and not self._task.done():
+            return
+        self._task = asyncio.create_task(self._relay_loop(), name="poll_relay")
+
+    def _current_subscription(self) -> set[str]:
+        now = time.monotonic()
+        active_sessions = {
+            session_id
+            for session_id, last_activity in self._session_last_activity.items()
+            if now - last_activity <= _SESSION_IDLE_TIMEOUT_SECONDS
+        }
+        if self._ui_started:
+            return {_STREAM_KEY_UI} | active_sessions
+        return active_sessions
+
+    def _prune_aged_out_sessions(self, subscription: set[str]) -> None:
+        """US3: explicit bookkeeping release for every session that just dropped out
+        of the subscription set. Pre-consolidation, this state lived inside a dying
+        per-session task's own closure and was freed automatically; the single
+        consolidated task has no such closure teardown to rely on."""
+        aged_out = [
+            session_id for session_id in self._session_last_activity if session_id not in subscription
+        ]
+        for session_id in aged_out:
+            logger.info("Poll-relay subscription for session %s aged out, pruning bookkeeping", session_id)
+            self._session_last_activity.pop(session_id, None)
+            self._last_epoch.pop(session_id, None)
+            self._backend_cursor.pop(session_id, None)
+            self._checkpoints.pop(session_id, None)
+            self._pending_evicted.pop(session_id, None)
+            self._frontier.pop(session_id, None)
+            # _pending_waiter_cursors / _stream_activity are keyed by in-flight
+            # wait_until_relayed() callers, which self-clean via their own `finally`
+            # blocks — never pruned here, a waiter may still be registered.
+
+    async def _relay_loop(self) -> None:
         while not self._stopped:
-            if session_id is not None:
-                last_activity = self._session_last_activity.get(session_id, 0.0)
-                if time.monotonic() - last_activity > _SESSION_IDLE_TIMEOUT_SECONDS:
-                    logger.info("Poll-relay for session %s idle, stopping", session_id)
-                    self._session_tasks.pop(session_id, None)
-                    self._session_last_activity.pop(session_id, None)
-                    return
+            subscription = self._current_subscription()
+            self._prune_aged_out_sessions(subscription)
+            if not subscription:
+                # Every session aged out before ui was ever started (or at all) —
+                # nothing to poll. Avoid both a wasted call and a busy-spin; the
+                # task stays alive (it never self-stops) and picks back up the
+                # moment touch_session()/start_ui_relay() is called again.
+                await asyncio.sleep(_ERROR_BACKOFF_SECONDS)
+                continue
+            session_ids = subscription - {_STREAM_KEY_UI}
+            body = {"timeout": _POLL_TIMEOUT_SECONDS, "sessions": {
+                session_id: {"since": self._backend_cursor.get(session_id, 0)}
+                for session_id in session_ids
+            }}
+            if _STREAM_KEY_UI in subscription:
+                body["ui"] = {"since": self._backend_cursor.get(_STREAM_KEY_UI, 0)}
+
+            # This request's subscription is now authoritative for "is a stream
+            # new" purposes until the NEXT cycle — touch_session()/start_ui_relay()
+            # compare against this to decide whether to call _interrupt_if_in_flight().
+            self._active_subscription = subscription
+            task = asyncio.ensure_future(self._poll_once(body))
+            self._in_flight_task = task
             try:
-                events, next_cursor, epoch, backend_evicted = await self._poll_once(path, cursor)
-                if backend_evicted:
-                    self._pending_evicted[stream_key] = True
-
-                previous_epoch = self._last_epoch.get(stream_key)
-                if previous_epoch is not None and epoch != previous_epoch:
-                    # Observed Backend restart: make it an explicit, ordered event in
-                    # the local queue BEFORE this poll's own (already-new-epoch)
-                    # events, rather than inferring it from cursor magnitude.
-                    emit(
-                        queue, family, "stream_reset",
-                        {"old_epoch": previous_epoch, "new_epoch": epoch},
-                        scope=session_id,
-                        backend_id=FRONTEND_LOCAL_BACKEND_ID,
-                    )
-                self._last_epoch[stream_key] = epoch
-
-                # Every local queue — UI and every session — uses the same plain
-                # auto-increment discipline now (issue #1890's mixed-discipline
-                # collision can no longer happen by construction).
-                local_cursor_before = queue.current_cursor
-                for event in events:
-                    queue.append(event)
-                cursor = next_cursor
-                self._backend_cursor[stream_key] = next_cursor
-                self._frontier[stream_key] = (epoch, next_cursor, queue.current_cursor)
-
-                if events:
-                    backend_cursor_before = next_cursor - len(events)
-                    self._record_checkpoint(
-                        stream_key,
-                        _Checkpoint(
-                            epoch=epoch,
-                            backend_cursor_before=backend_cursor_before,
-                            backend_cursor_after=next_cursor,
-                            local_cursor_before=local_cursor_before,
-                            local_cursor_after=queue.current_cursor,
-                            recorded_at=time.monotonic(),
-                        ),
-                    )
-                self._notify_stream(stream_key)
+                response = await task
             except asyncio.CancelledError:
-                raise
+                if self._stopped:
+                    raise
+                # Interrupted by touch_session()/start_ui_relay() adding a stream
+                # this now-stale request didn't cover — restart immediately with
+                # the fresh subscription rather than waiting out this request's
+                # full _POLL_TIMEOUT_SECONDS (see `_in_flight_task`'s docstring).
+                continue
             except httpx.RequestError:
-                # No local log here — BackendClient.get_json() already recorded this
-                # failure via its shared reachability tracker (issue #1844); logging
-                # it again here on every 2s retry would just re-flood error.log.
+                # No local log here — BackendClient.request_json() already recorded
+                # this failure via its shared reachability tracker (issue #1844);
+                # logging it again here on every 2s retry would just re-flood
+                # error.log.
                 await asyncio.sleep(_ERROR_BACKOFF_SECONDS)
+                continue
             except httpx.HTTPStatusError:
-                logger.exception("Poll-relay for %s: Backend returned an error response", path)
+                logger.exception("Poll-relay: Backend returned an error response")
                 await asyncio.sleep(_ERROR_BACKOFF_SECONDS)
+                continue
             except Exception:
-                logger.exception("Poll-relay for %s: unexpected error, retrying", path)
+                logger.exception("Poll-relay: unexpected error, retrying")
                 await asyncio.sleep(_ERROR_BACKOFF_SECONDS)
+                continue
+            finally:
+                self._in_flight_task = None
 
-    async def _poll_once(self, path: str, cursor: int) -> tuple[list[dict], int, str, bool]:
-        body = await self._backend_client.get_json(
-            path,
-            params={"since": cursor, "timeout": _POLL_TIMEOUT_SECONDS},
-            timeout=_POLL_CLIENT_TIMEOUT_SECONDS,
+            ui_body = response.get("ui")
+            if ui_body is not None:
+                self._process_stream_response(_STREAM_KEY_UI, self._ui_queue, ui_body)
+            for session_id, stream_body in response.get("sessions", {}).items():
+                queue = self._session_queues.get(session_id)
+                if queue is None:
+                    continue
+                self._process_stream_response(session_id, queue, stream_body)
+
+    async def _poll_once(self, body: dict) -> dict:
+        return await self._backend_client.request_json(
+            "POST", "/api/poll", json=body, timeout=_POLL_CLIENT_TIMEOUT_SECONDS,
         )
-        return (
-            body.get("events", []), body.get("next_cursor", cursor),
-            body.get("epoch", ""), body.get("evicted", False),
-        )
+
+    def _process_stream_response(self, stream_key: str, queue: EventQueue, stream_body: dict) -> None:
+        events = stream_body.get("events", [])
+        next_cursor = stream_body.get("next_cursor", self._backend_cursor.get(stream_key, 0))
+        epoch = stream_body.get("epoch", "")
+        backend_evicted = stream_body.get("evicted", False)
+        if backend_evicted:
+            self._pending_evicted[stream_key] = True
+
+        family = QUEUE_UI if stream_key == _STREAM_KEY_UI else QUEUE_SESSION
+        scope = None if stream_key == _STREAM_KEY_UI else stream_key
+        previous_epoch = self._last_epoch.get(stream_key)
+        if previous_epoch is not None and epoch != previous_epoch:
+            # Observed Backend restart: make it an explicit, ordered event in
+            # the local queue BEFORE this poll's own (already-new-epoch)
+            # events, rather than inferring it from cursor magnitude.
+            emit(
+                queue, family, "stream_reset",
+                {"old_epoch": previous_epoch, "new_epoch": epoch},
+                scope=scope,
+                backend_id=FRONTEND_LOCAL_BACKEND_ID,
+            )
+        self._last_epoch[stream_key] = epoch
+
+        # Every local queue — UI and every session — uses the same plain
+        # auto-increment discipline now (issue #1890's mixed-discipline
+        # collision can no longer happen by construction).
+        local_cursor_before = queue.current_cursor
+        for event in events:
+            queue.append(event)
+        self._backend_cursor[stream_key] = next_cursor
+        self._frontier[stream_key] = (epoch, next_cursor, queue.current_cursor)
+
+        if events:
+            backend_cursor_before = next_cursor - len(events)
+            self._record_checkpoint(
+                stream_key,
+                _Checkpoint(
+                    epoch=epoch,
+                    backend_cursor_before=backend_cursor_before,
+                    backend_cursor_after=next_cursor,
+                    local_cursor_before=local_cursor_before,
+                    local_cursor_after=queue.current_cursor,
+                    recorded_at=time.monotonic(),
+                ),
+            )
+        self._notify_stream(stream_key)
 
     def _record_checkpoint(self, stream_key: str, checkpoint: "_Checkpoint") -> None:
         checkpoints = self._checkpoints.setdefault(stream_key, [])
@@ -334,7 +454,7 @@ class PollRelay:
         self._stream_activity[stream_key] = []
 
     def current_local_cursor(self, stream_key: str) -> int:
-        queue = self._ui_queue if stream_key == "ui" else self._session_queues.get(stream_key)
+        queue = self._ui_queue if stream_key == _STREAM_KEY_UI else self._session_queues.get(stream_key)
         return queue.current_cursor if queue is not None else 0
 
     async def wait_until_relayed(
@@ -425,13 +545,11 @@ class PollRelay:
                 activity.remove(waiter)
 
     async def stop(self) -> None:
-        """Cancel all relay tasks (called during app shutdown)."""
+        """Cancel the relay task (called during app shutdown)."""
         self._stopped = True
-        tasks = [t for t in [self._ui_task, *self._session_tasks.values()] if t is not None]
-        for task in tasks:
-            task.cancel()
-        for task in tasks:
+        if self._task is not None:
+            self._task.cancel()
             try:
-                await task
+                await self._task
             except (asyncio.CancelledError, Exception):
                 pass

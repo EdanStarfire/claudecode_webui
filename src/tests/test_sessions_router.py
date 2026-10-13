@@ -15,10 +15,30 @@ from src.routers.sessions import build_router
 
 
 def _make_webui(get_json_side_effect):
+    """`get_json_side_effect` keeps its original single-stream-shaped signature
+    (`path, params, timeout`) — reused both for the `/messages` REST call
+    (`src/routers/sessions.py`'s own `get_json` call, unchanged by epic #1990
+    stage 5c) and, via the adapter below, for what used to be the relay's own
+    single-stream poll call. The relay itself now speaks the multiplexed
+    `POST /api/poll` protocol (`request_json`); the adapter translates between
+    the two so every existing test's per-test side_effect body didn't need to
+    change shape."""
     webui = MagicMock()
     webui.app = FastAPI()
     webui.app.include_router(build_router(webui))
     webui.backend_client.get_json = AsyncMock(side_effect=get_json_side_effect)
+
+    async def request_json_side_effect(method, path, json=None, timeout=None):
+        assert method == "POST" and path == "/api/poll"
+        sessions_req = (json or {}).get("sessions") or {}
+        response: dict = {"sessions": {}}
+        for session_id, query in sessions_req.items():
+            response["sessions"][session_id] = await get_json_side_effect(
+                f"/api/poll/session/{session_id}", params={"since": query["since"]}, timeout=None,
+            )
+        return response
+
+    webui.backend_client.request_json = AsyncMock(side_effect=request_json_side_effect)
     webui.backend_supervisor = None
     webui.backend_client.reachability.is_unreachable = False
     webui.poll_relay = PollRelay(webui.backend_client, EventQueue(), {})

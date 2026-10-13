@@ -52,7 +52,7 @@ def build_router(webui) -> APIRouter:
             # happened for it) — nothing to resolve against; leave event_cursor as-is.
             return result
 
-        webui.poll_relay.ensure_session_relay(session_id)
+        webui.poll_relay.touch_session(session_id)
         wait_result = await webui.poll_relay.wait_until_relayed(
             session_id, backend_cursor=backend_cursor, epoch=epoch,
             timeout=_HISTORY_CURSOR_WAIT_TIMEOUT_SECONDS,

@@ -10,6 +10,16 @@ Includes regression tests for two bugs found during builder-review:
    with zero margin, risking a client-side ReadTimeout on a normal idle poll
    response arriving right at the server's deadline. Fixed by giving the
    poll-relay's HTTP calls a timeout with margin above the server ceiling.
+
+Epic #1990 stage 5c: `PollRelay` was restructured from N per-stream tasks (one
+per session, one for UI, each self-stopping when idle) into ONE consolidated
+task carrying a dynamic subscription set recomputed every cycle. The "idle
+timeout" regression test from point 1 above is preserved, but its mechanism
+changed: a session aging out no longer stops a task (there's only one task,
+and it never stops) — it drops out of the next request body AND the relay's
+own per-stream bookkeeping dicts are explicitly pruned (US3/T3, epic #1990
+stage 5c). `ensure_session_relay()` is renamed `touch_session()` — not kept as
+a compat alias.
 """
 
 import asyncio
@@ -29,13 +39,34 @@ from src.poll_relay import (
 )
 
 
-def _make_relay(get_json_side_effect):
+def _make_relay(request_json_side_effect):
     backend_client = MagicMock()
-    backend_client.get_json = AsyncMock(side_effect=get_json_side_effect)
+    backend_client.request_json = AsyncMock(side_effect=request_json_side_effect)
     ui_queue = EventQueue()
     session_queues: dict[str, EventQueue] = {}
     relay = PollRelay(backend_client, ui_queue, session_queues)
     return relay, backend_client, ui_queue, session_queues
+
+
+def _batch(*, ui=None, sessions=None) -> dict:
+    """Build a multiplexed /api/poll-shaped response body."""
+    body: dict = {}
+    if ui is not None:
+        body["ui"] = ui
+    body["sessions"] = sessions or {}
+    return body
+
+
+def _stream(events=None, next_cursor=0, epoch="e1", evicted=False) -> dict:
+    return {"events": events or [], "next_cursor": next_cursor, "epoch": epoch, "evicted": evicted}
+
+
+async def _wait_until(predicate, attempts=300, interval=0.01) -> bool:
+    for _ in range(attempts):
+        if predicate():
+            return True
+        await asyncio.sleep(interval)
+    return predicate()
 
 
 def test_poll_client_timeout_has_margin_above_server_ceiling():
@@ -46,38 +77,39 @@ def test_poll_client_timeout_has_margin_above_server_ceiling():
 
 
 @pytest.mark.asyncio
-async def test_poll_once_passes_client_timeout_with_margin():
+async def test_poll_once_posts_multiplex_body_with_client_timeout_margin():
     relay, backend_client, _, _ = _make_relay(
-        get_json_side_effect=[{"events": [], "next_cursor": 0}]
+        request_json_side_effect=[_batch(ui=_stream())]
     )
-    await relay._poll_once("/api/poll/ui", 0)
+    relay.start_ui_relay()
+    await _wait_until(lambda: backend_client.request_json.await_count >= 1)
 
-    backend_client.get_json.assert_awaited_once()
-    _, kwargs = backend_client.get_json.call_args
+    backend_client.request_json.assert_awaited()
+    args, kwargs = backend_client.request_json.call_args
+    assert args[0] == "POST"
+    assert args[1] == "/api/poll"
     assert kwargs["timeout"] == _POLL_CLIENT_TIMEOUT_SECONDS
-    assert kwargs["timeout"] > kwargs["params"]["timeout"]
+    assert kwargs["timeout"] > kwargs["json"]["timeout"]
+    assert "ui" in kwargs["json"]
+
+    await relay.stop()
 
 
 @pytest.mark.asyncio
-async def test_ensure_session_relay_starts_task_and_appends_events():
+async def test_touch_session_appends_events_from_subscription_response():
     events_batches = [
-        {"events": [{"type": "message"}], "next_cursor": 1},
-        {"events": [], "next_cursor": 1},
+        _batch(ui=_stream(), sessions={"sess-1": _stream(events=[{"type": "message"}], next_cursor=1)}),
     ]
 
     async def side_effect(*args, **kwargs):
         if events_batches:
             return events_batches.pop(0)
-        # Stay idle forever after the fixture is exhausted (until cancelled)
         await asyncio.sleep(100)
 
-    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
-    relay.ensure_session_relay("sess-1")
+    relay, backend_client, _, session_queues = _make_relay(request_json_side_effect=side_effect)
+    relay.touch_session("sess-1")
 
-    for _ in range(100):
-        if session_queues["sess-1"].events_since(0)[0]:
-            break
-        await asyncio.sleep(0.01)
+    await _wait_until(lambda: session_queues["sess-1"].events_since(0)[0])
 
     events, _, _ = session_queues["sess-1"].events_since(0)
     assert len(events) == 1
@@ -87,58 +119,164 @@ async def test_ensure_session_relay_starts_task_and_appends_events():
 
 
 @pytest.mark.asyncio
-async def test_session_relay_stops_itself_after_idle_timeout():
-    """Regression test for the mark_viewed bug: a per-session relay task must
-    stop once nobody's actively polling it locally, not run forever."""
-    call_count = 0
+async def test_single_task_serves_both_ui_and_session_subscriptions():
+    """The consolidated task must request both streams at once — exactly one
+    HTTP call per cycle regardless of how many streams are subscribed."""
+    calls = []
 
     async def side_effect(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        return {"events": [], "next_cursor": 0}
+        calls.append(kwargs["json"])
+        if len(calls) == 1:
+            return _batch(ui=_stream(), sessions={"sess-a": _stream(), "sess-b": _stream()})
+        await asyncio.sleep(100)
 
-    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
+    relay, backend_client, _, _ = _make_relay(request_json_side_effect=side_effect)
+    relay.start_ui_relay()
+    relay.touch_session("sess-a")
+    relay.touch_session("sess-b")
 
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("src.poll_relay._SESSION_IDLE_TIMEOUT_SECONDS", 0.05)
-        relay.ensure_session_relay("sess-idle")
-        task = relay._session_tasks["sess-idle"]
+    await _wait_until(lambda: len(calls) >= 1)
+    await asyncio.sleep(0.02)  # let a stray second cycle happen if the loop is misbehaving
 
-        for _ in range(200):
-            if task.done():
-                break
-            await asyncio.sleep(0.01)
+    # Only one underlying task exists: calls may happen more than once as the
+    # loop cycles, but the first body must carry every subscribed stream at once.
+    first_body = calls[0]
+    assert set(first_body["sessions"].keys()) == {"sess-a", "sess-b"}
+    assert "ui" in first_body
 
-        assert task.done()
-        assert "sess-idle" not in relay._session_tasks
-        assert "sess-idle" not in relay._session_last_activity
+    await relay.stop()
 
 
 @pytest.mark.asyncio
-async def test_ensure_session_relay_refreshes_activity_and_restarts_after_idle_stop():
-    """A real browser that keeps polling must keep the relay alive; one that
-    comes back after the relay idled out must get a fresh task, not a dead one."""
-    async def side_effect(*args, **kwargs):
-        return {"events": [], "next_cursor": 0}
+async def test_session_subscription_ages_out_without_stopping_the_task():
+    """Epic #1990 stage 5c: a session dropping out of the subscription set no
+    longer stops any task (there is only one, consolidated task, and it never
+    stops) — it's simply omitted from the next request body."""
+    seen_session_keys = []
 
-    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
+    async def side_effect(*args, **kwargs):
+        seen_session_keys.append(set(kwargs["json"]["sessions"].keys()))
+        await asyncio.sleep(0.01)
+        return _batch(ui=_stream(), sessions={sid: _stream() for sid in kwargs["json"]["sessions"]})
+
+    relay, backend_client, _, _ = _make_relay(request_json_side_effect=side_effect)
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr("src.poll_relay._SESSION_IDLE_TIMEOUT_SECONDS", 0.05)
-        relay.ensure_session_relay("sess-2")
-        first_task = relay._session_tasks["sess-2"]
+        # ui stays subscribed forever (no idle timeout applies to it), so the
+        # relay keeps polling — and thus keeps calling side_effect — after the
+        # session ages out, giving this test an observable later call to assert
+        # against. Without this, subscription would go fully empty on age-out
+        # and the loop would stop calling the backend at all (nothing left to
+        # poll for), freezing seen_session_keys at its last pre-age-out value.
+        relay.start_ui_relay()
+        relay.touch_session("sess-idle")
+        await _wait_until(lambda: len(seen_session_keys) >= 1)
+        assert "sess-idle" in seen_session_keys[-1]
 
-        for _ in range(200):
-            if first_task.done():
-                break
-            await asyncio.sleep(0.01)
-        assert first_task.done()
+        # Let the session age out with no further touch_session() calls.
+        await _wait_until(
+            lambda: len(seen_session_keys) >= 1 and "sess-idle" not in seen_session_keys[-1],
+            attempts=500,
+        )
+        assert "sess-idle" not in seen_session_keys[-1]
 
-        # Simulate a browser tab coming back after the relay idled out
-        relay.ensure_session_relay("sess-2")
-        second_task = relay._session_tasks["sess-2"]
-        assert second_task is not first_task
-        assert not second_task.done()
+        # The relay task itself is still alive and serving the UI stream.
+        assert relay._task is not None and not relay._task.done()
+
+        await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_us3_aged_out_session_bookkeeping_is_pruned_directly():
+    """US3/T3: after a session ages out, every one of the relay's own per-stream
+    bookkeeping dicts must no longer contain that session_id — asserted
+    directly, not inferred from event-correctness alone."""
+    delivered = False
+
+    async def side_effect(*args, **kwargs):
+        nonlocal delivered
+        sessions_req = kwargs["json"]["sessions"]
+        await asyncio.sleep(0.01)  # always yield — a real Backend call always awaits I/O
+        if "sess-prune" in sessions_req and not delivered:
+            delivered = True
+            return _batch(
+                ui=_stream(),
+                sessions={"sess-prune": _stream(events=[{"type": "message"}], next_cursor=1, epoch="e1")},
+            )
+        # Idle Backend: echo back whatever cursor was requested, no progress.
+        return _batch(ui=_stream(), sessions={
+            sid: _stream(next_cursor=query["since"], epoch="e1") for sid, query in sessions_req.items()
+        })
+
+    relay, backend_client, _, session_queues = _make_relay(request_json_side_effect=side_effect)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("src.poll_relay._SESSION_IDLE_TIMEOUT_SECONDS", 0.05)
+        relay.touch_session("sess-prune")
+        await _wait_until(lambda: session_queues["sess-prune"].current_cursor >= 1)
+
+        assert "sess-prune" in relay._session_last_activity
+        assert "sess-prune" in relay._last_epoch
+        assert "sess-prune" in relay._backend_cursor
+        assert "sess-prune" in relay._checkpoints
+        assert "sess-prune" in relay._frontier
+
+        await _wait_until(lambda: "sess-prune" not in relay._session_last_activity, attempts=500)
+
+        assert "sess-prune" not in relay._session_last_activity
+        assert "sess-prune" not in relay._last_epoch
+        assert "sess-prune" not in relay._backend_cursor
+        assert "sess-prune" not in relay._checkpoints
+        assert "sess-prune" not in relay._pending_evicted
+        assert "sess-prune" not in relay._frontier
+
+        await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_touch_session_after_aging_out_resumes_from_persisted_backend_cursor():
+    """A session that ages out and is touched again later must resume Backend
+    polling from exactly where this relay last left off — not from 0."""
+    resume_since_value = []
+    delivered_batches = {"first": False, "second": False}
+
+    async def side_effect(*args, **kwargs):
+        sessions_req = kwargs["json"]["sessions"]
+        await asyncio.sleep(0.01)  # always yield — a real Backend call always awaits I/O
+        if "sess-resume" not in sessions_req:
+            return _batch(ui=_stream(), sessions={})
+        since = sessions_req["sess-resume"]["since"]
+        if not delivered_batches["first"]:
+            delivered_batches["first"] = True
+            return _batch(ui=_stream(), sessions={"sess-resume": _stream(events=[{"n": 1}, {"n": 2}], next_cursor=2)})
+        if not delivered_batches["second"] and since == 2:
+            delivered_batches["second"] = True
+            resume_since_value.append(since)  # the cursor the RESUMED request was seeded with
+            return _batch(ui=_stream(), sessions={"sess-resume": _stream(events=[{"n": 3}], next_cursor=3)})
+        # Idle Backend thereafter: echo back whatever cursor was requested.
+        return _batch(ui=_stream(), sessions={"sess-resume": _stream(next_cursor=since)})
+
+    relay, backend_client, _, session_queues = _make_relay(request_json_side_effect=side_effect)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("src.poll_relay._SESSION_IDLE_TIMEOUT_SECONDS", 0.05)
+        relay.touch_session("sess-resume")
+        await _wait_until(lambda: session_queues["sess-resume"].current_cursor == 2)
+
+        # Let it age out of the subscription set.
+        await _wait_until(lambda: "sess-resume" not in relay._session_last_activity, attempts=500)
+
+        # Simulate a browser tab reconnecting after the age-out.
+        relay.touch_session("sess-resume")
+        await _wait_until(lambda: session_queues["sess-resume"].current_cursor == 3)
+
+        events, next_cursor, _ = session_queues["sess-resume"].events_since(0)
+        assert [e["n"] for e in events] == [1, 2, 3]  # no gap, no redelivery
+        assert next_cursor == 3
+        # The resumed request was seeded from the persisted Backend-cursor (2),
+        # not from 0.
+        assert resume_since_value == [2]
 
         await relay.stop()
 
@@ -153,18 +291,15 @@ async def test_ui_relay_has_no_idle_timeout():
         nonlocal call_count
         call_count += 1
         await asyncio.sleep(0.01)  # avoid busy-spinning the event loop in the test
-        return {"events": [], "next_cursor": 0}
+        return _batch(ui=_stream())
 
-    relay, backend_client, _, _ = _make_relay(get_json_side_effect=side_effect)
+    relay, backend_client, _, _ = _make_relay(request_json_side_effect=side_effect)
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr("src.poll_relay._SESSION_IDLE_TIMEOUT_SECONDS", 0.05)
         relay.start_ui_relay()
-        for _ in range(50):
-            if call_count > 1:
-                break
-            await asyncio.sleep(0.01)
-        assert not relay._ui_task.done()
+        await _wait_until(lambda: call_count > 1, attempts=50)
+        assert not relay._task.done()
         assert call_count > 1  # kept polling — no idle timeout applies to the UI stream
 
         await relay.stop()
@@ -176,7 +311,7 @@ async def test_ui_relay_has_no_idle_timeout():
 @pytest.mark.asyncio
 async def test_issue_1844_request_error_retries_silently_without_local_log(caplog):
     """A connection-level failure (Backend unreachable) must retry without a
-    local log line — BackendClient.get_json() already recorded it via the
+    local log line — BackendClient.request_json() already recorded it via the
     shared reachability tracker; logging it again here on every 2s retry
     would re-flood error.log for the whole outage."""
     call_count = 0
@@ -188,16 +323,13 @@ async def test_issue_1844_request_error_retries_silently_without_local_log(caplo
             raise httpx.ConnectError("refused")
         await asyncio.sleep(100)
 
-    relay, backend_client, ui_queue, _ = _make_relay(get_json_side_effect=side_effect)
+    relay, backend_client, ui_queue, _ = _make_relay(request_json_side_effect=side_effect)
 
     with caplog.at_level(logging.WARNING, logger="src.poll_relay"):
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr("src.poll_relay._ERROR_BACKOFF_SECONDS", 0.01)
             relay.start_ui_relay()
-            for _ in range(200):
-                if call_count >= 2:
-                    break
-                await asyncio.sleep(0.01)
+            await _wait_until(lambda: call_count >= 2)
             await relay.stop()
 
     assert call_count >= 2  # retried past the failure
@@ -220,16 +352,13 @@ async def test_issue_1844_http_status_error_logs_full_traceback_and_retries(capl
             )
         await asyncio.sleep(100)
 
-    relay, backend_client, ui_queue, _ = _make_relay(get_json_side_effect=side_effect)
+    relay, backend_client, ui_queue, _ = _make_relay(request_json_side_effect=side_effect)
 
     with caplog.at_level(logging.ERROR, logger="src.poll_relay"):
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr("src.poll_relay._ERROR_BACKOFF_SECONDS", 0.01)
             relay.start_ui_relay()
-            for _ in range(200):
-                if call_count >= 2:
-                    break
-                await asyncio.sleep(0.01)
+            await _wait_until(lambda: call_count >= 2)
             await relay.stop()
 
     assert call_count >= 2  # retried past the failure
@@ -237,69 +366,6 @@ async def test_issue_1844_http_status_error_logs_full_traceback_and_retries(capl
 
 
 # --- epic #1990 stage 5a: relay-owned Backend-cursor tracking (replaces #1886's adoption) ---
-
-
-@pytest.mark.asyncio
-async def test_relay_restart_resumes_backend_polling_from_last_known_backend_cursor():
-    """A relay task restarting after an idle-stop must resume polling BACKEND from
-    where this relay last left off in Backend's OWN cursor space — tracked
-    independently in `PollRelay._backend_cursor`, not read back off the local
-    queue's own (now purely auto-incrementing, Backend-independent) cursor."""
-    first_batch_done = asyncio.Event()
-
-    async def first_side_effect(*args, **kwargs):
-        if not first_batch_done.is_set():
-            first_batch_done.set()
-            return {"events": [{"n": 1}, {"n": 2}], "next_cursor": 2, "epoch": "e1"}
-        await asyncio.sleep(0.005)  # yield control — avoid starving the event loop
-        return {"events": [], "next_cursor": 2, "epoch": "e1"}
-
-    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=first_side_effect)
-
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("src.poll_relay._SESSION_IDLE_TIMEOUT_SECONDS", 0.05)
-        relay.ensure_session_relay("sess-restart")
-        task = relay._session_tasks["sess-restart"]
-
-        for _ in range(300):
-            if task.done():
-                break
-            await asyncio.sleep(0.01)
-
-        queue = session_queues["sess-restart"]
-        assert task.done()
-        assert queue.current_cursor == 2  # local auto-increment: 2 events relayed so far
-        assert relay._backend_cursor["sess-restart"] == 2
-
-        seen_since_values = []
-        reconnect_done = asyncio.Event()
-
-        async def second_side_effect(*args, **kwargs):
-            seen_since_values.append(kwargs["params"]["since"])
-            if not reconnect_done.is_set():
-                reconnect_done.set()
-                return {"events": [{"n": 3}], "next_cursor": 3, "epoch": "e1"}
-            await asyncio.sleep(0.005)  # yield control — avoid starving the event loop
-            return {"events": [], "next_cursor": 3, "epoch": "e1"}
-
-        backend_client.get_json.side_effect = second_side_effect
-
-        # Simulate a browser tab reconnecting after the idle-stop.
-        relay.ensure_session_relay("sess-restart")
-
-        for _ in range(300):
-            if queue.current_cursor == 3:
-                break
-            await asyncio.sleep(0.01)
-
-        assert queue.current_cursor == 3
-        events, next_cursor, _ = queue.events_since(0)
-        assert [e["n"] for e in events] == [1, 2, 3]  # no gap, no redelivery
-        assert next_cursor == 3
-        # Seeded from the persisted Backend-cursor tracker (2), not from 0.
-        assert seen_since_values[0] == 2
-
-        await relay.stop()
 
 
 @pytest.mark.asyncio
@@ -315,26 +381,25 @@ async def test_backend_restart_emits_stream_reset_and_preserves_pre_restart_hist
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return {
-                "events": [{"n": "pre-1"}, {"n": "pre-2"}], "next_cursor": 100, "epoch": "e1",
-            }
+            return _batch(ui=_stream(), sessions={
+                "sess-regress": _stream(events=[{"n": "pre-1"}, {"n": "pre-2"}], next_cursor=100, epoch="e1")
+            })
         if call_count == 2:
             # Backend restarted: fresh queue, no events yet, low current cursor,
             # but a DIFFERENT epoch — the signal the relay now actually watches.
-            return {"events": [], "next_cursor": 0, "epoch": "e2"}
+            return _batch(ui=_stream(), sessions={"sess-regress": _stream(events=[], next_cursor=0, epoch="e2")})
         if call_count == 3:
             # First genuinely new event generated after the restart.
-            return {"events": [{"n": "post-1"}], "next_cursor": 1, "epoch": "e2"}
+            return _batch(ui=_stream(), sessions={
+                "sess-regress": _stream(events=[{"n": "post-1"}], next_cursor=1, epoch="e2")
+            })
         await asyncio.sleep(0.005)  # yield control — avoid starving the event loop
-        return {"events": [], "next_cursor": 1, "epoch": "e2"}
+        return _batch(ui=_stream(), sessions={"sess-regress": _stream(events=[], next_cursor=1, epoch="e2")})
 
-    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
-    relay.ensure_session_relay("sess-regress")
+    relay, backend_client, _, session_queues = _make_relay(request_json_side_effect=side_effect)
+    relay.touch_session("sess-regress")
 
-    for _ in range(300):
-        if session_queues["sess-regress"].current_cursor >= 4:
-            break
-        await asyncio.sleep(0.01)
+    await _wait_until(lambda: session_queues["sess-regress"].current_cursor >= 4)
 
     queue = session_queues["sess-regress"]
     events, next_cursor, _ = queue.events_since(0)
@@ -362,16 +427,13 @@ async def test_ui_relay_uses_auto_increment_not_backend_cursor():
     async def side_effect(*args, **kwargs):
         if not first_batch_done.is_set():
             first_batch_done.set()
-            return {"events": [{"type": "message", "n": 1}], "next_cursor": 500}
+            return _batch(ui=_stream(events=[{"type": "message", "n": 1}], next_cursor=500))
         await asyncio.sleep(100)
 
-    relay, backend_client, ui_queue, _ = _make_relay(get_json_side_effect=side_effect)
+    relay, backend_client, ui_queue, _ = _make_relay(request_json_side_effect=side_effect)
     relay.start_ui_relay()
 
-    for _ in range(300):
-        if ui_queue.current_cursor:
-            break
-        await asyncio.sleep(0.01)
+    await _wait_until(lambda: ui_queue.current_cursor)
 
     assert ui_queue.current_cursor == 1  # local auto-increment, not Backend's next_cursor=500
     events, next_cursor, _ = ui_queue.events_since(0)
@@ -397,10 +459,10 @@ async def test_ui_queue_local_write_and_relay_write_do_not_collide():
             # Chosen so pre-fix cursor-adoption arithmetic (next_cursor - len + 1)
             # would land exactly on 1 — the cursor the direct write below already
             # bumped to, triggering the dedup-skip branch and dropping this event.
-            return {"events": [{"type": "message", "n": "relay-1"}], "next_cursor": 1}
+            return _batch(ui=_stream(events=[{"type": "message", "n": "relay-1"}], next_cursor=1))
         await asyncio.sleep(100)
 
-    relay, backend_client, ui_queue, _ = _make_relay(get_json_side_effect=side_effect)
+    relay, backend_client, ui_queue, _ = _make_relay(request_json_side_effect=side_effect)
 
     # Simulate /api/system/restart's direct local write happening first.
     ui_queue.append({"type": "server_restarting", "n": "restart-notice"})
@@ -408,11 +470,7 @@ async def test_ui_queue_local_write_and_relay_write_do_not_collide():
 
     relay.start_ui_relay()
 
-    for _ in range(300):
-        events, _, _ = ui_queue.events_since(0)
-        if len(events) >= 2:
-            break
-        await asyncio.sleep(0.01)
+    await _wait_until(lambda: len(ui_queue.events_since(0)[0]) >= 2)
 
     events, next_cursor, _ = ui_queue.events_since(0)
     assert [e["n"] for e in events] == ["restart-notice", "relay-1"]  # no drop, no reset
@@ -431,16 +489,15 @@ async def test_wait_until_relayed_resolves_immediately_when_already_caught_up():
     async def side_effect(*args, **kwargs):
         if not first_batch_done.is_set():
             first_batch_done.set()
-            return {"events": [{"n": 1}, {"n": 2}, {"n": 3}], "next_cursor": 3, "epoch": "e1"}
+            return _batch(ui=_stream(), sessions={
+                "sess-wait": _stream(events=[{"n": 1}, {"n": 2}, {"n": 3}], next_cursor=3, epoch="e1")
+            })
         await asyncio.sleep(100)
 
-    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
-    relay.ensure_session_relay("sess-wait")
+    relay, backend_client, _, session_queues = _make_relay(request_json_side_effect=side_effect)
+    relay.touch_session("sess-wait")
 
-    for _ in range(300):
-        if session_queues["sess-wait"].current_cursor == 3:
-            break
-        await asyncio.sleep(0.01)
+    await _wait_until(lambda: session_queues["sess-wait"].current_cursor == 3)
 
     # K falls strictly inside the batch, not just on a boundary.
     result = await relay.wait_until_relayed("sess-wait", backend_cursor=2, epoch="e1", timeout=1.0)
@@ -467,8 +524,8 @@ async def test_wait_until_relayed_bootstrap_brand_new_session_resolves_to_zero()
     async def side_effect(*args, **kwargs):
         await asyncio.sleep(100)
 
-    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
-    relay.ensure_session_relay("sess-brandnew")
+    relay, backend_client, _, session_queues = _make_relay(request_json_side_effect=side_effect)
+    relay.touch_session("sess-brandnew")
 
     start = time.monotonic()
     result = await relay.wait_until_relayed("sess-brandnew", backend_cursor=0, epoch="e1", timeout=5.0)
@@ -493,18 +550,16 @@ async def test_wait_until_relayed_quiet_gap_resolves_via_frontier():
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return {"events": [{"n": 1}], "next_cursor": 1, "epoch": "e1"}
+            return _batch(ui=_stream(), sessions={"sess-quiet": _stream(events=[{"n": 1}], next_cursor=1, epoch="e1")})
         if call_count == 2:
-            return {"events": [], "next_cursor": 5, "epoch": "e1"}  # Backend advanced, nothing new
+            # Backend advanced, nothing new.
+            return _batch(ui=_stream(), sessions={"sess-quiet": _stream(events=[], next_cursor=5, epoch="e1")})
         await asyncio.sleep(100)
 
-    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
-    relay.ensure_session_relay("sess-quiet")
+    relay, backend_client, _, session_queues = _make_relay(request_json_side_effect=side_effect)
+    relay.touch_session("sess-quiet")
 
-    for _ in range(300):
-        if call_count >= 2:
-            break
-        await asyncio.sleep(0.01)
+    await _wait_until(lambda: call_count >= 2)
     await asyncio.sleep(0.02)  # let the 2nd iteration's frontier update land
 
     result = await relay.wait_until_relayed("sess-quiet", backend_cursor=5, epoch="e1", timeout=1.0)
@@ -526,11 +581,13 @@ async def test_wait_until_relayed_waits_for_relay_to_catch_up():
             await release.wait()
         if not first_batch_done.is_set():
             first_batch_done.set()
-            return {"events": [{"n": 1}, {"n": 2}], "next_cursor": 2, "epoch": "e1"}
+            return _batch(ui=_stream(), sessions={
+                "sess-catchup": _stream(events=[{"n": 1}, {"n": 2}], next_cursor=2, epoch="e1")
+            })
         await asyncio.sleep(100)  # yield control — avoid starving the event loop
 
-    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
-    relay.ensure_session_relay("sess-catchup")
+    relay, backend_client, _, session_queues = _make_relay(request_json_side_effect=side_effect)
+    relay.touch_session("sess-catchup")
 
     wait_task = asyncio.create_task(
         relay.wait_until_relayed("sess-catchup", backend_cursor=2, epoch="e1", timeout=2.0)
@@ -560,19 +617,16 @@ async def test_wait_until_relayed_aborts_on_confirmed_stale_epoch():
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return {"events": [{"n": 1}], "next_cursor": 1, "epoch": "e1"}
+            return _batch(ui=_stream(), sessions={"sess-staleepoch": _stream(events=[{"n": 1}], next_cursor=1, epoch="e1")})
         if call_count == 2:
             # Backend restarted before the relay ever reached backend_cursor=50.
-            return {"events": [], "next_cursor": 0, "epoch": "e2"}
+            return _batch(ui=_stream(), sessions={"sess-staleepoch": _stream(events=[], next_cursor=0, epoch="e2")})
         await asyncio.sleep(100)
 
-    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
-    relay.ensure_session_relay("sess-staleepoch")
+    relay, backend_client, _, session_queues = _make_relay(request_json_side_effect=side_effect)
+    relay.touch_session("sess-staleepoch")
 
-    for _ in range(300):
-        if call_count >= 2:
-            break
-        await asyncio.sleep(0.01)
+    await _wait_until(lambda: call_count >= 2)
     await asyncio.sleep(0.02)
 
     with pytest.MonkeyPatch.context() as mp:
@@ -602,22 +656,19 @@ async def test_wait_until_relayed_grace_window_lets_relay_catch_up_without_false
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return {"events": [{"n": 1}], "next_cursor": 1, "epoch": "e1"}
+            return _batch(ui=_stream(), sessions={"sess-gracecatchup": _stream(events=[{"n": 1}], next_cursor=1, epoch="e1")})
         if call_count == 2:
             # The relay's own poll observing the SAME epoch the caller already
             # knows about — simulates it catching up shortly after a fresh
             # Backend read already landed on e2.
             await release_second_poll.wait()
-            return {"events": [{"n": 2}], "next_cursor": 2, "epoch": "e2"}
+            return _batch(ui=_stream(), sessions={"sess-gracecatchup": _stream(events=[{"n": 2}], next_cursor=2, epoch="e2")})
         await asyncio.sleep(100)
 
-    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
-    relay.ensure_session_relay("sess-gracecatchup")
+    relay, backend_client, _, session_queues = _make_relay(request_json_side_effect=side_effect)
+    relay.touch_session("sess-gracecatchup")
 
-    for _ in range(300):
-        if call_count >= 2:
-            break
-        await asyncio.sleep(0.01)
+    await _wait_until(lambda: call_count >= 2)
     # At this point last_epoch is still "e1" (the relay is parked awaiting
     # release_second_poll) while the caller already knows Backend is on "e2".
 
@@ -641,8 +692,8 @@ async def test_wait_until_relayed_falls_back_to_current_cursor_on_timeout():
     async def side_effect(*args, **kwargs):
         await asyncio.sleep(100)  # relay never makes progress
 
-    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=side_effect)
-    relay.ensure_session_relay("sess-timeout")
+    relay, backend_client, _, session_queues = _make_relay(request_json_side_effect=side_effect)
+    relay.touch_session("sess-timeout")
     for n in range(1, 8):
         session_queues["sess-timeout"].append({"n": n})  # relay is sitting at local cursor 7
 
@@ -659,7 +710,7 @@ async def test_checkpoints_pruned_when_idle_but_retained_for_pending_waiter():
     """Old checkpoints are dropped once idle (past the grace window), except the
     single latest, and except one still needed to straddle a pending waiter's
     requested backend_cursor even if it's past the grace window."""
-    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=lambda *a, **k: None)
+    relay, backend_client, _, session_queues = _make_relay(request_json_side_effect=lambda *a, **k: None)
     relay._session_queues["sess-prune"] = EventQueue()
     queue = relay._session_queues["sess-prune"]
 
@@ -706,7 +757,7 @@ async def test_checkpoints_retained_for_every_pending_waiter_not_just_the_minimu
     non-minimum, non-latest waiter's checkpoint and corrupting its eventual
     interpolation (it would fall through to the frontier's "current position"
     instead, skipping everything in between)."""
-    relay, backend_client, _, session_queues = _make_relay(get_json_side_effect=lambda *a, **k: None)
+    relay, backend_client, _, session_queues = _make_relay(request_json_side_effect=lambda *a, **k: None)
     relay._session_queues["sess-prune-multi"] = EventQueue()
     queue = relay._session_queues["sess-prune-multi"]
 
