@@ -188,6 +188,57 @@ async def test_session_subscription_ages_out_without_stopping_the_task():
 
 
 @pytest.mark.asyncio
+async def test_rapid_touch_of_many_new_sessions_does_not_starve_the_loop():
+    """WebUI-Agent review (stage 5c, Phase 2 checkpoint): the cancel-and-restart
+    interruption mechanism (touch_session()/start_ui_relay() cancelling the
+    in-flight _poll_once() task) raises a thrashing question under rapid
+    subscription churn — if session A is touched (cancel+restart), then B is
+    touched 10ms later before that restart produced anything, does it cancel
+    again, and can enough rapid touches in a row prevent the task from EVER
+    completing a useful poll cycle? This asserts it can't: touching 5 brand-new
+    sessions back-to-back with no yield in between (each touch is synchronous —
+    nothing here awaits between them) must still converge to one completed
+    cycle, carrying every touched session, within a small bounded time — not
+    hang indefinitely re-cancelling forever."""
+    completed_cycle_session_keys = []
+
+    async def side_effect(*args, **kwargs):
+        # A real network round trip, unlike the instant-return mocks elsewhere in
+        # this file — needed so an in-flight call actually HAS a window in which
+        # a rapid-fire touch can interrupt it (an instantly-resolving mock would
+        # never be interruptible, defeating the point of this test).
+        await asyncio.sleep(0.02)
+        sessions_req = kwargs["json"]["sessions"]
+        completed_cycle_session_keys.append(set(sessions_req.keys()))
+        return _batch(ui=_stream(), sessions={sid: _stream() for sid in sessions_req})
+
+    relay, backend_client, _, _ = _make_relay(request_json_side_effect=side_effect)
+    relay.start_ui_relay()
+
+    # Rapid-fire touch of 5 distinct brand-new sessions, no await in between —
+    # each one is "new" (not yet in _active_subscription), so each triggers
+    # _interrupt_if_in_flight() on whatever the loop is currently doing.
+    new_session_ids = [f"sess-churn-{i}" for i in range(5)]
+    for sid in new_session_ids:
+        relay.touch_session(sid)
+
+    converged = await _wait_until(
+        lambda: completed_cycle_session_keys
+        and set(new_session_ids) <= completed_cycle_session_keys[-1],
+        attempts=200,  # 200 * 0.01s = 2s ceiling — generous vs. the mock's 0.02s RTT
+    )
+    assert converged, (
+        f"loop never completed a cycle covering every touched session; "
+        f"completed cycles so far: {completed_cycle_session_keys}"
+    )
+    # Bounded, not unbounded: converging shouldn't have required anywhere near
+    # the attempts ceiling given the mock's RTT is 1/10th of the poll interval.
+    assert len(completed_cycle_session_keys) < 50
+
+    await relay.stop()
+
+
+@pytest.mark.asyncio
 async def test_us3_aged_out_session_bookkeeping_is_pruned_directly():
     """US3/T3: after a session ages out, every one of the relay's own per-stream
     bookkeeping dicts must no longer contain that session_id — asserted
