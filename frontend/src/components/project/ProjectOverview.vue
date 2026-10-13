@@ -696,7 +696,6 @@ import { compareAgents, normalizeLastActive } from '@/utils/agentSort'
 import { getDisplayState } from '@/composables/useSessionState'
 import { api } from '@/utils/api'
 import { findInHierarchy, filterHierarchy } from '@/utils/hierarchyUtils'
-import { getStoppedSet, setStoppedSet, addToStoppedSet, clearStoppedSet, pruneStoppedSet, removeFromStoppedSet, getProcessingSet, setProcessingSet } from '@/utils/stoppedSet'
 import MinionTreeNode from '../legion/MinionTreeNode.vue'
 
 const props = defineProps({
@@ -726,9 +725,19 @@ const stopState = ref('default') // 'default' | 'confirming' | 'stopping'
 const resumeState = ref('default') // 'default' | 'confirming' | 'resuming'
 const resumeBatchSizeInput = ref(uiStore.resumeBatchSize)
 const resumeBatchDelayInput = ref(uiStore.resumeBatchDelaySeconds)
-const stoppedCount = ref(0)
 const fleetToast = ref(null)
 let fleetToastTimer = null
+
+// Issue #2159 (stage 6c): local cache of the Backend-persisted fleet snapshot —
+// replaces frontend/src/utils/stoppedSet.js's sessionStorage-only bookkeeping,
+// which never survived a browser reload or a Backend restart. Loaded from
+// legionStore.getFleetSnapshot() on mount/project-switch (restoreFleetSnapshot()
+// below); every mutation below updates this local Set immediately (so the UI
+// doesn't wait on a network round trip) and persists the same change via
+// legionStore.recordFleetStopped()/clearFleetStopped().
+const fleetStoppedIds = ref(new Set())
+const fleetProcessingIds = ref(new Set())
+const stoppedCount = computed(() => fleetStoppedIds.value.size)
 
 // Issue #1934: Batch selection controls (Stop Selected / Start Selected)
 const stopSelectedState = ref('default') // 'default' | 'confirming' | 'stopping'
@@ -744,22 +753,33 @@ function setFleetToast(type, message, autoDismissMs = 8000) {
   }
 }
 
+// Local-only prune against currently-known live sessions, for display accuracy
+// between network round trips. The Backend's own get_fleet_snapshot() self-prunes
+// server-side on every real fetch, so this never needs its own backend call.
 function refreshStoppedCount() {
-  const allIds = projectSessions.value.map(s => s.session_id)
-  const pruned = pruneStoppedSet(props.projectId, allIds)
-  stoppedCount.value = pruned.length
+  const allIds = new Set(projectSessions.value.map(s => s.session_id))
+  fleetStoppedIds.value = new Set([...fleetStoppedIds.value].filter(id => allIds.has(id)))
+  fleetProcessingIds.value = new Set([...fleetProcessingIds.value].filter(id => allIds.has(id)))
 }
 
-function releaseStartedSessions() {
-  const current = getStoppedSet(props.projectId)
+async function releaseStartedSessions() {
+  const current = [...fleetStoppedIds.value]
   if (current.length === 0) return
   const started = current.filter(id => {
     const s = sessionStore.getSession(id)
     return s?.state?.toUpperCase() === 'ACTIVE'
   })
   if (started.length === 0) return
-  removeFromStoppedSet(props.projectId, started)
+  started.forEach(id => {
+    fleetStoppedIds.value.delete(id)
+    fleetProcessingIds.value.delete(id)
+  })
   refreshStoppedCount()
+  try {
+    await legionStore.clearFleetStopped(props.projectId, started)
+  } catch (err) {
+    console.error('Failed to clear fleet snapshot for released sessions:', err)
+  }
 }
 
 function beginStopConfirm() {
@@ -787,16 +807,20 @@ function isSessionTerminated(sessionId) {
   return s?.state?.toUpperCase?.() === 'TERMINATED'
 }
 
-function applyReconciledStopped(confirmedStopped, processingSnapshot) {
+async function applyReconciledStopped(confirmedStopped, processingSnapshot) {
   if (confirmedStopped.length === 0) return
-  addToStoppedSet(props.projectId, confirmedStopped)
   const wasProcessing = confirmedStopped.filter(id => processingSnapshot.get(id))
-  // Merge (not overwrite): issue #1934's Stop Selected can write to this same
-  // per-project processingSet concurrently — overwriting would silently drop
-  // whatever it just added.
-  const mergedProcessing = new Set([...getProcessingSet(props.projectId), ...wasProcessing])
-  setProcessingSet(props.projectId, [...mergedProcessing])
+  confirmedStopped.forEach(id => fleetStoppedIds.value.add(id))
+  wasProcessing.forEach(id => fleetProcessingIds.value.add(id))
   refreshStoppedCount()
+  try {
+    // Merge (not overwrite): issue #1934's Stop Selected can record into this same
+    // project's fleet snapshot concurrently — the Backend union()s, so overwriting
+    // here would still be safe, but recordFleetStopped() always merges regardless.
+    await legionStore.recordFleetStopped(props.projectId, confirmedStopped, wasProcessing)
+  } catch (err) {
+    console.error('Failed to record fleet snapshot:', err)
+  }
 }
 
 async function reconcileStopFailure(targetIds, processingSnapshot) {
@@ -805,12 +829,12 @@ async function reconcileStopFailure(targetIds, processingSnapshot) {
   // newly-confirmed sessions as soon as each poll tick detects them, rather than
   // making the operator wait out the full bounded window to see any result.
   let confirmedStopped = targetIds.filter(isSessionTerminated)
-  applyReconciledStopped(confirmedStopped, processingSnapshot)
+  await applyReconciledStopped(confirmedStopped, processingSnapshot)
 
   while (confirmedStopped.length < targetIds.length && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, STOP_RECONCILE_INTERVAL_MS))
     confirmedStopped = targetIds.filter(isSessionTerminated)
-    applyReconciledStopped(confirmedStopped, processingSnapshot)
+    await applyReconciledStopped(confirmedStopped, processingSnapshot)
   }
 
   return confirmedStopped
@@ -825,7 +849,7 @@ async function confirmStop() {
   // Exclude already-TERMINATED sessions from the reconciliation target set —
   // mirrors emergency_halt_all()'s own exclusion (legion_coordinator.py), so a
   // session stopped earlier for unrelated reasons doesn't get folded into this
-  // Stop All's stoppedSet/Resume Sessions tracking on the failure-path.
+  // Stop All's fleet snapshot/Resume Sessions tracking on the failure-path.
   const targetIds = projectSessions.value
     .filter(s => s.state?.toUpperCase?.() !== 'TERMINATED')
     .map(s => s.session_id)
@@ -834,14 +858,11 @@ async function confirmStop() {
     const stopped = result.stopped_session_ids ?? []
     const failed = result.failed_sessions ?? []
 
-    addToStoppedSet(props.projectId, stopped)
-    // Record which stopped sessions were actively processing at halt time.
-    // Merge (not overwrite): issue #1934's Stop Selected can write to this same
-    // per-project processingSet concurrently — overwriting would silently drop
-    // whatever it just added.
+    // emergency_halt_all() already persisted the snapshot server-side (issue
+    // #2159) — just mirror it into the local cache, no redundant backend call.
     const wasProcessing = stopped.filter(id => processingSnapshot.get(id))
-    const mergedProcessing = new Set([...getProcessingSet(props.projectId), ...wasProcessing])
-    setProcessingSet(props.projectId, [...mergedProcessing])
+    stopped.forEach(id => fleetStoppedIds.value.add(id))
+    wasProcessing.forEach(id => fleetProcessingIds.value.add(id))
     refreshStoppedCount()
 
     if (failed.length === 0) {
@@ -892,15 +913,16 @@ async function confirmResume() {
   resumeState.value = 'resuming'
   fleetToast.value = null
   try {
-    const allIds = projectSessions.value.map(s => s.session_id)
-    const toResume = pruneStoppedSet(props.projectId, allIds).filter(id => {
+    const allIds = new Set(projectSessions.value.map(s => s.session_id))
+    fleetStoppedIds.value = new Set([...fleetStoppedIds.value].filter(id => allIds.has(id)))
+    const toResume = [...fleetStoppedIds.value].filter(id => {
       const s = sessionStore.getSession(id)
       if (!s) return false
       const state = s.state?.toUpperCase?.() || s.state
       return state !== 'ACTIVE' && state !== 'STARTING'
     })
 
-    const processingSet = getProcessingSet(props.projectId)
+    const processingSet = fleetProcessingIds.value
 
     // Throttle: resume in sequential batches of `batchSize` so we don't fire every
     // stopped session's start/enqueue concurrently (issue #1733).
@@ -924,17 +946,20 @@ async function confirmResume() {
 
     const succeeded = toResume.filter((_, i) => settled[i].status === 'fulfilled')
     const failed = toResume.filter((_, i) => settled[i].status === 'rejected')
-    const failedSet = new Set(failed)
 
-    // Clear successfully resumed sessions from stopped set; keep failed for retry
-    const remaining = getStoppedSet(props.projectId).filter(id => failedSet.has(id))
-    setStoppedSet(props.projectId, remaining)
-
-    // Keep processing set consistent with remaining stopped set for correct retry behavior
-    const remainingProcessing = [...processingSet].filter(id => failedSet.has(id))
-    setProcessingSet(props.projectId, remainingProcessing)
-
+    // Clear successfully resumed sessions from the fleet snapshot; keep failed for retry.
+    succeeded.forEach(id => {
+      fleetStoppedIds.value.delete(id)
+      fleetProcessingIds.value.delete(id)
+    })
     refreshStoppedCount()
+    if (succeeded.length > 0) {
+      try {
+        await legionStore.clearFleetStopped(props.projectId, succeeded)
+      } catch (err) {
+        console.error('Failed to clear fleet snapshot for resumed sessions:', err)
+      }
+    }
 
     if (failed.length === 0) {
       setFleetToast('success', `✓ Resumed ${succeeded.length} session${succeeded.length !== 1 ? 's' : ''}. They will restart shortly.`)
@@ -1004,13 +1029,9 @@ async function confirmStopSelected() {
     const failed = ids.filter((_, i) => settled[i].status === 'rejected')
 
     if (succeeded.length > 0) {
-      // Fold into the same stoppedSet/processingSet Stop All uses, so Resume
-      // Sessions remains the single undo regardless of which path stopped a session.
-      addToStoppedSet(props.projectId, succeeded)
-      const wasProcessing = succeeded.filter(id => processingSnapshot.get(id))
-      const mergedProcessing = new Set([...getProcessingSet(props.projectId), ...wasProcessing])
-      setProcessingSet(props.projectId, [...mergedProcessing])
-      refreshStoppedCount()
+      // Fold into the same fleet snapshot Stop All uses, so Resume Sessions
+      // remains the single undo regardless of which path stopped a session.
+      await applyReconciledStopped(succeeded, processingSnapshot)
     }
 
     uiStore.clearSessionSelection()
@@ -1054,7 +1075,7 @@ async function confirmStartSelected() {
   const totalSelected = selectedSessions.value.length
   const toStart = startableSelectedSessions.value.map(s => s.session_id)
   const skipped = totalSelected - toStart.length
-  const processingSet = getProcessingSet(props.projectId)
+  const processingSet = fleetProcessingIds.value
 
   try {
     const settled = []
@@ -1077,19 +1098,20 @@ async function confirmStartSelected() {
 
     const succeeded = toStart.filter((_, i) => settled[i].status === 'fulfilled')
     const failed = toStart.filter((_, i) => settled[i].status === 'rejected')
-    const succeededSet = new Set(succeeded)
 
     if (succeeded.length > 0) {
       // Same shared tracking as Resume Sessions: drop successfully-started ids,
       // keep failed ones for retry via the existing Resume Sessions control.
-      // Re-read processingSet fresh rather than reusing the pre-loop snapshot —
-      // the batched loop above can span multiple delayed batches, during which
-      // another path (e.g. Stop Selected) may have written new entries that a
-      // stale-snapshot-based overwrite would silently drop.
-      removeFromStoppedSet(props.projectId, succeeded)
-      const remainingProcessing = [...getProcessingSet(props.projectId)].filter(id => !succeededSet.has(id))
-      setProcessingSet(props.projectId, remainingProcessing)
+      succeeded.forEach(id => {
+        fleetStoppedIds.value.delete(id)
+        fleetProcessingIds.value.delete(id)
+      })
       refreshStoppedCount()
+      try {
+        await legionStore.clearFleetStopped(props.projectId, succeeded)
+      } catch (err) {
+        console.error('Failed to clear fleet snapshot for started sessions:', err)
+      }
     }
 
     uiStore.clearSessionSelection()
@@ -1476,6 +1498,28 @@ function showCreateModal() {
   }
 }
 
+// Issue #2159 (stage 6c): load the Backend-persisted fleet snapshot for a
+// project — replaces the old sessionStorage getStoppedSet()/getProcessingSet()
+// read, so "Stop All from earlier still pending" survives a browser reload
+// AND a Backend restart. Raw snapshot without pruning against live sessions —
+// they may not be loaded yet when this runs; pruning happens in
+// refreshStoppedCount() after any stop/resume action.
+async function restoreFleetSnapshot(projectId) {
+  try {
+    const snapshot = await legionStore.getFleetSnapshot(projectId)
+    fleetStoppedIds.value = new Set(snapshot.stopped_session_ids || [])
+    fleetProcessingIds.value = new Set(snapshot.processing_session_ids || [])
+  } catch (err) {
+    console.error('Failed to load fleet snapshot:', err)
+    fleetStoppedIds.value = new Set()
+    fleetProcessingIds.value = new Set()
+  }
+  await releaseStartedSessions()
+  if (stoppedCount.value > 0) {
+    setFleetToast('info', `ⓘ Stop All from earlier still pending — Resume is available for ${stoppedCount.value} session${stoppedCount.value !== 1 ? 's' : ''}.`, 0)
+  }
+}
+
 // Select project on mount and load hierarchy
 onMounted(() => {
   projectStore.selectProject(props.projectId)
@@ -1489,15 +1533,7 @@ onMounted(() => {
   uiStore.clearSessionSelection()
   resetFilters()
 
-  // Restore stopped set from sessionStorage — read raw count without pruning,
-  // since sessions may not be loaded yet when onMounted fires.
-  // Pruning happens in refreshStoppedCount() after stop/resume actions.
-  const restored = getStoppedSet(props.projectId)
-  stoppedCount.value = restored.length
-  releaseStartedSessions()
-  if (stoppedCount.value > 0) {
-    setFleetToast('info', `ⓘ Stop All from earlier still pending — Resume is available for ${stoppedCount.value} session${stoppedCount.value !== 1 ? 's' : ''}.`, 0)
-  }
+  restoreFleetSnapshot(props.projectId)
 
   // Load minion hierarchy
   loadMinionHierarchy()
@@ -1562,12 +1598,7 @@ watch(() => props.projectId, (newId) => {
   resetFilters()
   fleetToast.value = null
   clearTimeout(fleetToastTimer)
-  const restored = getStoppedSet(newId)
-  stoppedCount.value = restored.length
-  releaseStartedSessions()
-  if (stoppedCount.value > 0) {
-    setFleetToast('info', `ⓘ Stop All from earlier still pending — Resume is available for ${stoppedCount.value} session${stoppedCount.value !== 1 ? 's' : ''}.`, 0)
-  }
+  restoreFleetSnapshot(newId)
   loadMinionHierarchy()
 })
 
