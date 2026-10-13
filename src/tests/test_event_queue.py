@@ -7,7 +7,7 @@ a Backend restart is surfaced via an explicit `stream_reset` event
 predecessor of this file for that history, issue #1886/#1889/#1890).
 """
 
-from shared.event_queue import EventQueue, reset_occurred
+from shared.event_queue import EventQueue
 
 
 def test_append_auto_increments_cursor():
@@ -50,13 +50,3 @@ def test_eviction_past_max_size_advances_oldest_cursor():
     assert [e["n"] for e in events] == [3, 4, 5]  # 1, 2 evicted
     assert next_cursor == 5
     assert evicted is True
-
-
-def test_reset_occurred_detects_a_lower_next_cursor_than_since():
-    """A queue INSTANCE being replaced (e.g. BackendApp recreating a fresh
-    EventQueue() on its own restart) produces a lower next_cursor than a stale
-    caller's `since` — this is still a real, tested signal for Backend's own
-    poll endpoints (backend/routers/poll.py), independent of cursor adoption."""
-    assert reset_occurred(next_cursor=1, since=100) is True
-    assert reset_occurred(next_cursor=5, since=3) is False
-    assert reset_occurred(next_cursor=5, since=5) is False

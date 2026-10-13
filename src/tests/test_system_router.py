@@ -134,7 +134,7 @@ class TestRestartNoticeAgainstLiveQueue:
         release_relay = asyncio.Event()
         delivered = asyncio.Event()
 
-        async def get_json_side_effect(*args, **kwargs):
+        async def request_json_side_effect(*args, **kwargs):
             await release_relay.wait()
             if not delivered.is_set():
                 delivered.set()
@@ -142,11 +142,11 @@ class TestRestartNoticeAgainstLiveQueue:
                 # exactly on the cursor the restart notice's auto-increment write
                 # already bumped ui_queue to (1), triggering the old dedup-skip
                 # branch instead of appending this event.
-                return {"events": [{"type": "message", "n": "relay-1"}], "next_cursor": 1}
+                return {"ui": {"events": [{"type": "message", "n": "relay-1"}], "next_cursor": 1}}
             await asyncio.sleep(100)
 
         backend_client = MagicMock()
-        backend_client.get_json = AsyncMock(side_effect=get_json_side_effect)
+        backend_client.request_json = AsyncMock(side_effect=request_json_side_effect)
         relay = PollRelay(backend_client, webui.ui_queue, {})
         relay.start_ui_relay()
 

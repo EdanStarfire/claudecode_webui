@@ -1,11 +1,13 @@
 """Poll consumers and the shared event buffer (issue #2038).
 
 Three `PollConsumer`s (UI stream, main session, Test Minion session) run as
-concurrent `asyncio.Task`s, each long-polling its own Frontend API endpoint
-and appending every event it sees — tagged with its stream — into one
-`SharedEventBuffer`. Scenario steps call `wait_for()` against that shared
-buffer so out-of-band events (background task chatter, comm replies from
-other streams) never look like a mismatch — they're just skipped.
+concurrent `asyncio.Task`s, each long-polling the Frontend API's multiplexed
+`POST /api/poll` endpoint (issue #2130, epic #1990 stage 5c) with a single-
+stream request body and appending every event it sees — tagged with its
+stream — into one `SharedEventBuffer`. Scenario steps call `wait_for()`
+against that shared buffer so out-of-band events (background task chatter,
+comm replies from other streams) never look like a mismatch — they're just
+skipped.
 
 Reconnection: a consumer treats several consecutive transport failures as a
 signal the server may have restarted — it waits for `GET /ready` to report
@@ -124,10 +126,21 @@ class PollConsumer:
         self._stop = asyncio.Event()
         self._task: asyncio.Task | None = None
 
-    def _path(self) -> str:
+    def _multiplex_body(self, timeout: int) -> dict:
+        """Issue #2130 (epic #1990 stage 5c, phase 4): a single-stream request
+        against the multiplexed `POST /api/poll` endpoint, carrying only this
+        consumer's own stream — unwrap() below pulls the matching block back out
+        of the multiplexed response, so the rest of this class (and callers'
+        `parse_poll_response()` contract) is unaffected by the endpoint change.
+        """
         if self.session_id is None:
-            return "/api/poll/ui"
-        return f"/api/poll/session/{self.session_id}"
+            return {"timeout": timeout, "ui": {"since": self.cursor}}
+        return {"timeout": timeout, "sessions": {self.session_id: {"since": self.cursor}}}
+
+    def _unwrap(self, body: dict) -> dict:
+        if self.session_id is None:
+            return body["ui"]
+        return body["sessions"][self.session_id]
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.token}"} if self.token else {}
@@ -138,9 +151,9 @@ class PollConsumer:
 
     async def _poll_once(self, client: httpx.AsyncClient) -> None:
         try:
-            resp = await client.get(
-                self._path(),
-                params={"since": self.cursor, "timeout": int(self.poll_timeout)},
+            resp = await client.post(
+                "/api/poll",
+                json=self._multiplex_body(int(self.poll_timeout)),
                 headers=self._headers(),
                 timeout=self.poll_timeout + 10.0,
             )
@@ -154,7 +167,7 @@ class PollConsumer:
             return
 
         self.consecutive_failures = 0
-        batch = parse_poll_response(resp.json())
+        batch = parse_poll_response(self._unwrap(resp.json()))
         # A reset/evicted response still carries a complete event batch, so
         # events are always buffered and the cursor is always adopted,
         # regardless of that flag. Full-app-restart recovery is handled by
@@ -169,14 +182,14 @@ class PollConsumer:
         resume so events from before the reattach — notably a failed attempt at
         the scenario being retried — can never match that scenario's waits."""
         async with httpx.AsyncClient(base_url=self.base_url) as client:
-            resp = await client.get(
-                self._path(),
-                params={"since": self.cursor, "timeout": 0},
+            resp = await client.post(
+                "/api/poll",
+                json=self._multiplex_body(0),
                 headers=self._headers(),
                 timeout=30.0,
             )
             resp.raise_for_status()
-        self.cursor = parse_poll_response(resp.json()).next_cursor
+        self.cursor = parse_poll_response(self._unwrap(resp.json())).next_cursor
 
     async def run(self) -> None:
         async with httpx.AsyncClient(base_url=self.base_url) as client:

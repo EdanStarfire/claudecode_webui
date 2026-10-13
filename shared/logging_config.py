@@ -59,11 +59,16 @@ from pathlib import Path
 
 
 class PollAccessLogFilter(logging.Filter):
-    """Filter for uvicorn.access that suppresses idle /api/poll/* log lines.
+    """Filter for uvicorn.access that suppresses idle /api/poll* log lines.
 
-    When allow_all=False (default), records whose request path starts with
-    /api/poll/ are dropped so idle long-poll lines don't flood stdout.
-    When allow_all=True (--debug-all-polling), all records pass through.
+    When allow_all=False (default), records whose request path is the
+    multiplexed /api/poll endpoint (epic #1990 stage 5c) or starts with
+    /api/poll/ (the one-shot /api/poll/cursor and /api/poll/session/{id}/cursor
+    bootstrap endpoints, kept — the legacy /api/poll/ui and
+    /api/poll/session/{id} long-poll endpoints this originally targeted were
+    removed in stage 5c phase 5) are dropped so idle long-poll lines don't
+    flood stdout. When allow_all=True (--debug-all-polling), all records pass
+    through.
 
     Robust against uvicorn access-log record shapes: if args is not the
     expected tuple, falls back to getMessage() substring match; on any
@@ -86,7 +91,7 @@ class PollAccessLogFilter(logging.Filter):
                 path = record.getMessage()
         except Exception:
             return True
-        return "/api/poll/" not in path
+        return path != "/api/poll" and "/api/poll/" not in path
 
 # Logging configuration constants
 MAX_LOG_FILE_SIZE = 10 * 1024 * 1024  # 10 MB

@@ -27,11 +27,20 @@ function flush() {
   return new Promise(resolve => setTimeout(resolve, 0))
 }
 
-// Issue #1988/#2129 stage 5b: serves each entry of `responses` (a JSON-body object, or a
-// function taking (url, opts) for full control) to successive fetch() calls in order; once
-// exhausted, every further call hangs until aborted, so the poll loop parks instead of
-// spinning once the scripted sequence ends.
-function sequencedFetchMock(responses) {
+// Epic #1990 stage 5c: the wire shape is now one multiplexed POST /api/poll call
+// carrying {timeout, ui: {since}, sessions: {id: {since}}}, answered with
+// {ui: {...}, sessions: {...}, backend_status}. `parseBody()` reads back what a
+// given fetch() call's JSON body was, for assertions that need to inspect which
+// streams/cursors a specific cycle actually requested.
+function parseBody(opts) {
+  return JSON.parse(opts.body)
+}
+
+// Serves each entry of `responses` (a {ui, sessions, backend_status}-shaped body, or a
+// function taking (url, opts) for full control) to successive fetch() calls in order;
+// once exhausted, every further call hangs until aborted, so the poll loop parks
+// instead of spinning once the scripted sequence ends.
+function sequencedPollMock(responses) {
   let i = 0
   return vi.spyOn(global, 'fetch').mockImplementation((url, opts) => {
     if (i < responses.length) {
@@ -50,37 +59,14 @@ function sequencedFetchMock(responses) {
   })
 }
 
-// Delivers a single 'session_reset' UI-poll event for sessionId, while any concurrent
-// session-poll fetch ('/api/poll/session/...') keeps hanging until aborted — used by the
-// reset-during-resync dedicated test below.
-async function fireSessionResetEvent(pollingStore, sessionId) {
-  let uiFetchCallCount = 0
-  vi.spyOn(global, 'fetch').mockImplementation((url, opts) => {
-    if (String(url).includes('/api/poll/session/')) {
-      return new Promise((_resolve, reject) => {
-        opts?.signal?.addEventListener('abort', () => {
-          const err = new Error('Aborted')
-          err.name = 'AbortError'
-          reject(err)
-        })
-      })
-    }
-    uiFetchCallCount++
-    if (uiFetchCallCount === 1) {
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({
-          events: [{ type: 'session_reset', data: { session_id: sessionId } }],
-          next_cursor: 1
-        })
-      })
-    }
-    return new Promise(() => {})
+function hangingAbortAwareFetch(_url, opts) {
+  return new Promise((_resolve, reject) => {
+    opts?.signal?.addEventListener('abort', () => {
+      const err = new Error('Aborted')
+      err.name = 'AbortError'
+      reject(err)
+    })
   })
-
-  pollingStore.startUIPolling()
-  await flush()
-  pollingStore.stopUIPolling()
 }
 
 async function setupPollSession(sessionOverrides) {
@@ -145,19 +131,24 @@ describe('polling store', () => {
     )
   })
 
-  it('stopUIPolling sets uiState to idle', async () => {
+  it('stopUIPolling sets uiState and sessionState to idle (one shared connection, epic #1990 stage 5c)', async () => {
     const { usePollingStore } = await import('@/stores/polling')
     const pollingStore = usePollingStore()
 
-    pollingStore.uiState = 'connected'
+    sequencedPollMock([{ ui: { events: [], next_cursor: 1 }, sessions: {} }])
+    pollingStore.startUIPolling()
+    await flush()
+    expect(pollingStore.uiState).toBe('connected')
+
     pollingStore.stopUIPolling()
 
     expect(pollingStore.uiState).toBe('idle')
+    expect(pollingStore.sessionState).toBe('idle')
   })
 
   // Helper: drive a sequence of state_change events (each item is a session state
-  // override) through startUIPolling() in a single poll response, then hang until
-  // stopUIPolling() aborts the fetch.
+  // override) through the UI stream of a single multiplexed poll response, then hang
+  // until stopUIPolling() aborts the fetch.
   async function runStateChangeSequence(sessionId, stateOverridesList) {
     apiMock.get.mockResolvedValue({ messages: [], total_count: 0, has_more: false })
 
@@ -171,24 +162,21 @@ describe('polling store', () => {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve({
-            events: stateOverridesList.map(overrides => ({
-              type: 'state_change',
-              data: {
-                session_id: sessionId,
-                session: makeSession({ session_id: sessionId, ...overrides })
-              }
-            })),
-            next_cursor: 1
+            ui: {
+              events: stateOverridesList.map(overrides => ({
+                type: 'state_change',
+                data: {
+                  session_id: sessionId,
+                  session: makeSession({ session_id: sessionId, ...overrides })
+                }
+              })),
+              next_cursor: 1
+            },
+            sessions: {},
           })
         })
       }
-      return new Promise((_resolve, reject) => {
-        opts?.signal?.addEventListener('abort', () => {
-          const err = new Error('Aborted')
-          err.name = 'AbortError'
-          reject(err)
-        })
-      })
+      return hangingAbortAwareFetch(_url, opts)
     })
 
     pollingStore.startUIPolling()
@@ -300,8 +288,13 @@ describe('polling store', () => {
   })
 })
 
-describe('polling store - backendStatus (issue #1989, stage 5b: tracked per StreamConnection)', () => {
-  it('starts as ok on both streams', async () => {
+// Epic #1990 stage 5c: ONE shared connection now carries both the UI and every
+// subscribed session's stream in a single response's backend_status field — there is
+// no longer an independent per-stream value to track. uiBackendStatus/sessionBackendStatus
+// are kept as separate exported names purely for API-shape compatibility with existing
+// call sites (HeaderRow1.vue, InputArea.vue); they always agree by construction now.
+describe('polling store - backendStatus (issue #1989, consolidated epic #1990 stage 5c)', () => {
+  it('starts as ok on both exported names', async () => {
     const { usePollingStore } = await import('@/stores/polling')
     const pollingStore = usePollingStore()
 
@@ -309,29 +302,27 @@ describe('polling store - backendStatus (issue #1989, stage 5b: tracked per Stre
     expect(pollingStore.sessionBackendStatus).toBe('ok')
   })
 
-  it('a UI-poll response carrying backend_status updates the UI stream\'s own field', async () => {
+  it('a poll response carrying backend_status updates both exported names identically', async () => {
     const { usePollingStore } = await import('@/stores/polling')
     const pollingStore = usePollingStore()
 
-    sequencedFetchMock([
-      { events: [], next_cursor: 1, backend_status: 'unreachable' },
+    sequencedPollMock([
+      { ui: { events: [], next_cursor: 1 }, sessions: {}, backend_status: 'unreachable' },
     ])
 
     pollingStore.startUIPolling()
     await flush()
-    // Asserted before stopUIPolling(): disconnect() now resets backendStatus to 'ok'
-    // (builder-review fix — otherwise a stale unreachable/degraded value from a torn-down
-    // connection could leak into whatever uses this connection next).
     expect(pollingStore.uiBackendStatus).toBe('unreachable')
+    expect(pollingStore.sessionBackendStatus).toBe('unreachable')
     pollingStore.stopUIPolling()
   })
 
-  it('a UI-poll response carrying backend_status: degraded updates it', async () => {
+  it('a poll response carrying backend_status: degraded updates it', async () => {
     const { usePollingStore } = await import('@/stores/polling')
     const pollingStore = usePollingStore()
 
-    sequencedFetchMock([
-      { events: [], next_cursor: 1, backend_status: 'degraded' },
+    sequencedPollMock([
+      { ui: { events: [], next_cursor: 1 }, sessions: {}, backend_status: 'degraded' },
     ])
 
     pollingStore.startUIPolling()
@@ -344,18 +335,15 @@ describe('polling store - backendStatus (issue #1989, stage 5b: tracked per Stre
     const { usePollingStore } = await import('@/stores/polling')
     const pollingStore = usePollingStore()
 
-    // Single mutable resolver: each fetch() call gets a fresh pending promise and
-    // repoints this variable at its resolve function, so successive calls can be
-    // driven one at a time from the test.
     let resolveFetch
     vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveFetch = resolve }))
 
     pollingStore.startUIPolling()
-    resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 1, backend_status: 'unreachable' }) })
+    resolveFetch({ ok: true, json: () => Promise.resolve({ ui: { events: [], next_cursor: 1 }, sessions: {}, backend_status: 'unreachable' }) })
     await flush()
     expect(pollingStore.uiBackendStatus).toBe('unreachable')
 
-    resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 2, backend_status: 'ok' }) })
+    resolveFetch({ ok: true, json: () => Promise.resolve({ ui: { events: [], next_cursor: 2 }, sessions: {}, backend_status: 'ok' }) })
     await flush()
     pollingStore.stopUIPolling()
 
@@ -366,8 +354,8 @@ describe('polling store - backendStatus (issue #1989, stage 5b: tracked per Stre
     const { usePollingStore } = await import('@/stores/polling')
     const pollingStore = usePollingStore()
 
-    sequencedFetchMock([
-      { events: [], next_cursor: 1 },
+    sequencedPollMock([
+      { ui: { events: [], next_cursor: 1 }, sessions: {} },
     ])
 
     pollingStore.startUIPolling()
@@ -377,59 +365,29 @@ describe('polling store - backendStatus (issue #1989, stage 5b: tracked per Stre
     expect(pollingStore.uiBackendStatus).toBe('ok')
   })
 
-  it('a session-poll response carrying backend_status updates the SESSION stream\'s own field, independent of the UI stream\'s', async () => {
+  it('a subscribed session\'s own batch arriving in the same response does not need a separate backend_status (one shared field now)', async () => {
     const { usePollingStore } = await import('@/stores/polling')
     const { useSessionStore } = await import('@/stores/session')
     const pollingStore = usePollingStore()
     const sessionStore = useSessionStore()
 
     sessionStore.sessions.set('sess-bs', makeSession({ session_id: 'sess-bs' }))
-    apiMock.get.mockResolvedValue({ messages: [], total_count: 0, has_more: false })
+    apiMock.get.mockResolvedValue({ cursor: 0 })
 
-    sequencedFetchMock([
-      { events: [], next_cursor: 1, backend_status: 'unreachable' },
+    sequencedPollMock([
+      { ui: { events: [], next_cursor: 1 }, sessions: { 'sess-bs': { events: [], next_cursor: 0 } }, backend_status: 'unreachable' },
     ])
 
     await pollingStore.connectSession('sess-bs')
     await flush()
-    // Asserted before disconnectSession(): disconnect() now resets backendStatus to 'ok'.
     expect(pollingStore.sessionBackendStatus).toBe('unreachable')
-    expect(pollingStore.uiBackendStatus).toBe('ok')
+    expect(pollingStore.uiBackendStatus).toBe('unreachable')
     await pollingStore.disconnectSession()
-  })
-
-  // Regression test (builder-review finding, carried over from pre-5b): the session-poll
-  // loop's backendStatus write originally happened before the isCurrentGeneration guard —
-  // a stale response landing after this session was superseded (e.g. by a session switch)
-  // could clobber a fresher value written by whatever poll loop replaced it.
-  it('a session-poll response for a no-longer-current session does not clobber a fresher backendStatus', async () => {
-    const { usePollingStore } = await import('@/stores/polling')
-    const { useSessionStore } = await import('@/stores/session')
-    const pollingStore = usePollingStore()
-    const sessionStore = useSessionStore()
-
-    sessionStore.sessions.set('sess-race', makeSession({ session_id: 'sess-race' }))
-    apiMock.get.mockResolvedValue({ messages: [], total_count: 0, has_more: false })
-
-    let resolveFetch
-    vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveFetch = resolve }))
-
-    await pollingStore.connectSession('sess-race')
-    pollingStore.sessionBackendStatus = 'ok'
-
-    // Simulate this session no longer being current (e.g. a session switch) while the
-    // poll request above is still in flight.
-    pollingStore.currentSessionId = 'some-other-session'
-
-    resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 1, backend_status: 'unreachable' }) })
-    await flush()
-
-    expect(pollingStore.sessionBackendStatus).toBe('ok')
   })
 })
 
 describe('polling store - 401 re-auth (issue #2040)', () => {
-  it('startUIPolling: a 401 calls triggerReauth, sets uiState idle, and does not schedule a backoff retry', async () => {
+  it('startUIPolling: a 401 calls triggerReauth, sets uiState/sessionState idle, and does not schedule a backoff retry', async () => {
     vi.useFakeTimers()
     try {
       const { usePollingStore } = await import('@/stores/polling')
@@ -465,9 +423,6 @@ describe('polling store - 401 re-auth (issue #2040)', () => {
       const pollingStore = usePollingStore()
       const uiStore = useUIStore()
 
-      // A real-world confluence: app-data load had already failed before the 401 hit,
-      // so the periodic watcher (started by startUIPolling()) would otherwise keep
-      // retrying loadAppData() every 15s forever once the UI-poll loop exits.
       uiStore.setAppDataStatus('failed')
       apiMock.get.mockResolvedValue({})
 
@@ -483,9 +438,6 @@ describe('polling store - 401 re-auth (issue #2040)', () => {
       expect(pollingStore.uiState).toBe('idle')
 
       apiMock.get.mockClear()
-      // Past the periodic watcher's 15s interval — if stopAppDataRetryWatcher() wasn't
-      // called, this would fire retryStaleAppData() -> loadAppData() -> /api/projects
-      // and /api/sessions.
       await vi.advanceTimersByTimeAsync(16000)
 
       expect(apiMock.get).not.toHaveBeenCalled()
@@ -494,14 +446,8 @@ describe('polling store - 401 re-auth (issue #2040)', () => {
     }
   })
 
-  it('_runSessionPollLoop (via connectSession): a 401 calls triggerReauth, sets sessionState idle, and stops the loop', async () => {
-    const { usePollingStore } = await import('@/stores/polling')
-    const { useSessionStore } = await import('@/stores/session')
-    const pollingStore = usePollingStore()
-    const sessionStore = useSessionStore()
-
-    sessionStore.sessions.set('sess-401', makeSession({ session_id: 'sess-401' }))
-    apiMock.get.mockResolvedValue({ cursor: 0 })
+  it('connectSession (via the shared loop): a 401 calls triggerReauth, sets sessionState idle, and stops the loop', async () => {
+    const { pollingStore, sid } = await setupPollSession({ session_id: 'sess-401' })
 
     const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({
       ok: false,
@@ -509,7 +455,7 @@ describe('polling store - 401 re-auth (issue #2040)', () => {
       json: () => Promise.resolve({ detail: 'unauthorized' })
     })
 
-    await pollingStore.connectSession('sess-401')
+    await pollingStore.connectSession(sid)
     await flush()
 
     expect(triggerReauthMock).toHaveBeenCalledWith(401)
@@ -517,30 +463,7 @@ describe('polling store - 401 re-auth (issue #2040)', () => {
 
     const callsAfterFirst = fetchSpy.mock.calls.length
     await flush()
-    // Loop must have exited (break) rather than continuing to poll.
     expect(fetchSpy.mock.calls.length).toBe(callsAfterFirst)
-  })
-
-  it('_runSessionPollLoop: existing 404 "session not found" behavior is unaffected (regression check)', async () => {
-    const { usePollingStore } = await import('@/stores/polling')
-    const { useSessionStore } = await import('@/stores/session')
-    const pollingStore = usePollingStore()
-    const sessionStore = useSessionStore()
-
-    sessionStore.sessions.set('sess-404', makeSession({ session_id: 'sess-404' }))
-    apiMock.get.mockResolvedValue({ cursor: 0 })
-
-    vi.spyOn(global, 'fetch').mockResolvedValue({
-      ok: false,
-      status: 404,
-      json: () => Promise.resolve({ detail: 'not found' })
-    })
-
-    await pollingStore.connectSession('sess-404')
-    await flush()
-
-    expect(triggerReauthMock).not.toHaveBeenCalled()
-    expect(pollingStore.sessionState).toBe('idle')
   })
 
   it('startUIPolling: a 403 still enters the existing generic catch/backoff path, unchanged (regression check)', async () => {
@@ -609,10 +532,6 @@ function mockAppDataEndpoints({ projectsOk = true, sessionsOk = true } = {}) {
   })
 }
 
-// A fetch mock for startUIPolling()'s own transport: the first call rejects (driving the
-// catch → backoff → reconnect path under test), every call after that hangs until aborted
-// (mirrors abortAwareFetchMock above) so the loop doesn't spin through repeated real errors
-// once stopUIPolling() is called at the end of each test.
 function rejectOnceThenHangFetchMock() {
   let callCount = 0
   return vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => {
@@ -620,20 +539,13 @@ function rejectOnceThenHangFetchMock() {
     if (callCount === 1) {
       return Promise.reject(new Error('Connection refused'))
     }
-    return new Promise((_resolve, reject) => {
-      opts?.signal?.addEventListener('abort', () => {
-        const err = new Error('Aborted')
-        err.name = 'AbortError'
-        reject(err)
-      })
-    })
+    return hangingAbortAwareFetch(_url, opts)
   })
 }
 
 // Like rejectOnceThenHangFetchMock(), but the second call succeeds with an empty poll
 // response — this is what actually confirms a reconnect (retryStaleAppData() only fires
-// on a CONFIRMED successful poll, not merely once the backoff delay elapses; see #1977).
-// Every call after the second hangs until aborted, same as above.
+// on a CONFIRMED successful poll). Every call after the second hangs until aborted.
 function rejectOnceThenSucceedThenHangFetchMock() {
   let callCount = 0
   return vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => {
@@ -644,16 +556,10 @@ function rejectOnceThenSucceedThenHangFetchMock() {
     if (callCount === 2) {
       return Promise.resolve({
         ok: true,
-        json: () => Promise.resolve({ events: [], next_cursor: 1 }),
+        json: () => Promise.resolve({ ui: { events: [], next_cursor: 1 }, sessions: {} }),
       })
     }
-    return new Promise((_resolve, reject) => {
-      opts?.signal?.addEventListener('abort', () => {
-        const err = new Error('Aborted')
-        err.name = 'AbortError'
-        reject(err)
-      })
-    })
+    return hangingAbortAwareFetch(_url, opts)
   })
 }
 
@@ -698,10 +604,6 @@ describe('polling store - loadAppData / appDataStatus (issue #1977)', () => {
     const first = pollingStore.loadAppData()
     pollingStore.loadAppData()
 
-    // One call each for /api/projects and /api/sessions — the second loadAppData()
-    // call must not have triggered a second pair of fetches (Pinia's action wrapper
-    // means the two calls don't return the identical Promise instance, so the in-flight
-    // guard is verified here via call count instead of reference equality).
     expect(apiMock.get).toHaveBeenCalledTimes(2)
 
     resolveProjects({ projects: [] })
@@ -722,12 +624,8 @@ describe('polling store - loadAppData / appDataStatus (issue #1977)', () => {
 
       pollingStore.startUIPolling()
 
-      // Flush the rejected first poll fetch through the catch block, then advance past
-      // the first backoff delay (2000ms * 1 retry) to the reconnect point.
       await vi.advanceTimersByTimeAsync(0)
       await vi.advanceTimersByTimeAsync(2000)
-      // Let the confirming second poll fetch (a real, unfaked promise chain) resolve,
-      // then the reconnect-triggered loadAppData() it fires settle.
       await vi.advanceTimersByTimeAsync(0)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -747,8 +645,6 @@ describe('polling store - loadAppData / appDataStatus (issue #1977)', () => {
       const pollingStore = usePollingStore()
       const uiStore = useUIStore()
 
-      // Happy path: initial load already resolved appDataStatus before startUIPolling()
-      // was ever called (as App.vue's initializeApp() does).
       uiStore.setAppDataStatus('loaded')
       mockAppDataEndpoints()
       rejectOnceThenHangFetchMock()
@@ -759,8 +655,6 @@ describe('polling store - loadAppData / appDataStatus (issue #1977)', () => {
       await vi.advanceTimersByTimeAsync(2000)
       await vi.advanceTimersByTimeAsync(0)
 
-      // loadAppData() would call /api/projects and /api/sessions — neither should have
-      // been hit by the reconnect, since appDataStatus was already 'loaded'.
       expect(apiMock.get).not.toHaveBeenCalledWith('/api/projects')
       expect(apiMock.get).not.toHaveBeenCalledWith('/api/sessions')
 
@@ -780,14 +674,10 @@ describe('polling store - loadAppData / appDataStatus (issue #1977)', () => {
 
       uiStore.setAppDataStatus('failed')
       mockAppDataEndpoints()
-      // Every /api/poll/ui call fails — a sustained total outage, not a one-off blip.
       vi.spyOn(global, 'fetch').mockRejectedValue(new Error('Connection refused'))
 
       pollingStore.startUIPolling()
 
-      // Three backoff cycles (2000ms, 4000ms, 6000ms) — each re-enters 'connecting'
-      // optimistically, but since /api/poll/ui never actually succeeds, retryStaleAppData()
-      // (and its two REST calls) must never fire during any of them.
       await vi.advanceTimersByTimeAsync(0)
       await vi.advanceTimersByTimeAsync(2000)
       await vi.advanceTimersByTimeAsync(0)
@@ -806,7 +696,7 @@ describe('polling store - loadAppData / appDataStatus (issue #1977)', () => {
     }
   })
 
-  it('periodic watcher retries a failed app-data load even when /api/poll/ui itself never errors (AC7)', async () => {
+  it('periodic watcher retries a failed app-data load even when /api/poll itself never errors (AC7)', async () => {
     vi.useFakeTimers()
     try {
       const { usePollingStore } = await import('@/stores/polling')
@@ -814,24 +704,13 @@ describe('polling store - loadAppData / appDataStatus (issue #1977)', () => {
       const pollingStore = usePollingStore()
       const uiStore = useUIStore()
 
-      // /api/projects failed on the initial load, but the UI-poll transport itself is
-      // healthy throughout (a real, independent failure mode) — the reconnect-triggered
-      // retry inside startUIPolling()'s catch block never fires in this case, so recovery
-      // depends entirely on the periodic watcher.
       uiStore.setAppDataStatus('failed')
       mockAppDataEndpoints()
-      vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => new Promise((_resolve, reject) => {
-        opts?.signal?.addEventListener('abort', () => {
-          const err = new Error('Aborted')
-          err.name = 'AbortError'
-          reject(err)
-        })
-      }))
+      vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => hangingAbortAwareFetch(_url, opts))
 
       pollingStore.startUIPolling()
       await vi.advanceTimersByTimeAsync(0)
 
-      // Before the watcher's first tick, still failed.
       expect(uiStore.appDataStatus).toBe('failed')
 
       await vi.advanceTimersByTimeAsync(15000)
@@ -853,16 +732,8 @@ describe('polling store - loadAppData / appDataStatus (issue #1977)', () => {
       const uiStore = useUIStore()
 
       uiStore.setAppDataStatus('failed')
-      // Always failing — if the watcher kept running after stop, appDataStatus would
-      // still flip through 'loading' on every tick, which we can detect below.
       apiMock.get.mockRejectedValue(new Error('still down'))
-      vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => new Promise((_resolve, reject) => {
-        opts?.signal?.addEventListener('abort', () => {
-          const err = new Error('Aborted')
-          err.name = 'AbortError'
-          reject(err)
-        })
-      }))
+      vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => hangingAbortAwareFetch(_url, opts))
 
       pollingStore.startUIPolling()
       await vi.advanceTimersByTimeAsync(0)
@@ -889,9 +760,6 @@ describe('polling store - loadAppData / appDataStatus (issue #1977)', () => {
 
       uiStore.setAppDataStatus('failed')
       uiStore.setDeepLinkFailure({ sessionId: 'sess-deep', kind: 'transient', message: 'oops' })
-      // The user is still on the session the deep-link fetch failed for (selectSession()
-      // sets currentSessionId optimistically even on failure) — this is the condition the
-      // retry is gated on, so it must be set for the retry to actually fire.
       sessionStore.currentSessionId = 'sess-deep'
       mockAppDataEndpoints()
       rejectOnceThenSucceedThenHangFetchMock()
@@ -906,8 +774,6 @@ describe('polling store - loadAppData / appDataStatus (issue #1977)', () => {
       await vi.advanceTimersByTimeAsync(0)
 
       expect(selectSpy).toHaveBeenCalledWith('sess-deep')
-      // Bypasses selectSession()'s early-return guard (currentSessionId already equals
-      // sessionId with no selection in flight) — without this reset the retry is a no-op.
       expect(sessionStore.currentSessionId).toBeNull()
 
       pollingStore.stopUIPolling()
@@ -928,8 +794,6 @@ describe('polling store - loadAppData / appDataStatus (issue #1977)', () => {
 
       uiStore.setAppDataStatus('failed')
       uiStore.setDeepLinkFailure({ sessionId: 'sess-deep', kind: 'transient', message: 'oops' })
-      // The user navigated to a different session after the deep-link failure — the stale
-      // failure must not hijack them back to 'sess-deep'.
       sessionStore.currentSessionId = 'sess-other'
       mockAppDataEndpoints()
       rejectOnceThenSucceedThenHangFetchMock()
@@ -999,26 +863,19 @@ describe('polling store - UI-stream evicted/reset consistency (issue #2065 AC7)'
     sessionStore.currentSessionId = sid
     messageStore.messagesBySession.set(sid, [{ id: 'm1', type: 'user' }])
 
-    // mockAppDataEndpoints()'s /api/sessions mock returns an empty list — the seeded
-    // session "vanishes" from the resync's own ground truth, exactly like a real
-    // session_deleted that landed in the same evicted/reset cycle would.
     mockAppDataEndpoints()
 
-    sequencedFetchMock([
+    sequencedPollMock([
       {
-        // Epic #1990 stage 5a: reset is now derived from "batch contains a
-        // stream_reset event" — a real backend never sends reset=true without one.
-        events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }],
-        next_cursor: 5,
-        reset: true,
+        ui: {
+          events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }],
+          next_cursor: 5,
+        },
+        sessions: {},
       },
     ])
 
     pollingStore.startUIPolling()
-    // More awaited steps than the other evicted/reset tests — disconnectSession() plus
-    // removeSessionsFromStores()'s own chain of per-store dynamic imports — and dynamic
-    // import() resolution under real timers doesn't reliably settle within a fixed count
-    // of flush() ticks, so poll for completion instead of counting ticks.
     for (let i = 0; i < 20; i++) {
       if (!messageStore.messagesBySession.has(sid)) break
       await flush()
@@ -1030,7 +887,7 @@ describe('polling store - UI-stream evicted/reset consistency (issue #2065 AC7)'
     expect(sessionStore.currentSessionId).toBeNull()
   })
 
-  it('reset=true triggers loadAppData() and does not dispatch the carried events', async () => {
+  it('ui.evicted triggers loadAppData() and does not dispatch the carried events', async () => {
     const { usePollingStore } = await import('@/stores/polling')
     const { useUIStore } = await import('@/stores/ui')
     const pollingStore = usePollingStore()
@@ -1039,17 +896,14 @@ describe('polling store - UI-stream evicted/reset consistency (issue #2065 AC7)'
     mockAppDataEndpoints()
     const setRateLimitsSpy = vi.spyOn(uiStore, 'setRateLimits')
 
-    sequencedFetchMock([
+    sequencedPollMock([
       {
-        // Epic #1990 stage 5a: a carried event AFTER the stream_reset marker in the
-        // same batch — must be dropped in favor of the fallback resync, not
-        // dispatched as if it were a trustworthy incremental update.
-        events: [
-          { type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } },
-          { type: 'rate_limits_update', data: { requests_remaining: 999 } },
-        ],
-        next_cursor: 5,
-        reset: true,
+        ui: {
+          events: [{ type: 'rate_limits_update', data: { requests_remaining: 999 } }],
+          next_cursor: 5,
+          evicted: true,
+        },
+        sessions: {},
       },
     ])
 
@@ -1062,7 +916,7 @@ describe('polling store - UI-stream evicted/reset consistency (issue #2065 AC7)'
     expect(setRateLimitsSpy).not.toHaveBeenCalledWith({ requests_remaining: 999 })
   })
 
-  it('mid-batch stream_reset: events before the marker are dispatched normally, the marker and anything after trigger the resync (epic #1990 stage 5a)', async () => {
+  it('mid-batch stream_reset on the UI stream: events before the marker are dispatched normally, the marker and anything after trigger the resync', async () => {
     const { usePollingStore } = await import('@/stores/polling')
     const { useUIStore } = await import('@/stores/ui')
     const pollingStore = usePollingStore()
@@ -1071,18 +925,17 @@ describe('polling store - UI-stream evicted/reset consistency (issue #2065 AC7)'
     mockAppDataEndpoints()
     const setRateLimitsSpy = vi.spyOn(uiStore, 'setRateLimits')
 
-    sequencedFetchMock([
+    sequencedPollMock([
       {
-        // A pre-marker event is legitimate pre-reset history and needs no
-        // unwinding; a post-marker event in the SAME batch is superseded by
-        // the resync and must not be applied as a trustworthy incremental update.
-        events: [
-          { type: 'rate_limits_update', data: { requests_remaining: 111 } },
-          { type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } },
-          { type: 'rate_limits_update', data: { requests_remaining: 999 } },
-        ],
-        next_cursor: 5,
-        reset: true,
+        ui: {
+          events: [
+            { type: 'rate_limits_update', data: { requests_remaining: 111 } },
+            { type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } },
+            { type: 'rate_limits_update', data: { requests_remaining: 999 } },
+          ],
+          next_cursor: 5,
+        },
+        sessions: {},
       },
     ])
 
@@ -1096,33 +949,7 @@ describe('polling store - UI-stream evicted/reset consistency (issue #2065 AC7)'
     expect(apiMock.get).toHaveBeenCalledWith('/api/sessions')
   })
 
-  it('evicted=true triggers loadAppData() and does not dispatch the carried events', async () => {
-    const { usePollingStore } = await import('@/stores/polling')
-    const { useUIStore } = await import('@/stores/ui')
-    const pollingStore = usePollingStore()
-    const uiStore = useUIStore()
-
-    mockAppDataEndpoints()
-    const setRateLimitsSpy = vi.spyOn(uiStore, 'setRateLimits')
-
-    sequencedFetchMock([
-      {
-        events: [{ type: 'rate_limits_update', data: { requests_remaining: 999 } }],
-        next_cursor: 5,
-        evicted: true,
-      },
-    ])
-
-    pollingStore.startUIPolling()
-    await flush()
-    pollingStore.stopUIPolling()
-
-    expect(apiMock.get).toHaveBeenCalledWith('/api/projects')
-    expect(apiMock.get).toHaveBeenCalledWith('/api/sessions')
-    expect(setRateLimitsSpy).not.toHaveBeenCalledWith({ requests_remaining: 999 })
-  })
-
-  it('a normal response with no evicted/reset still dispatches its events as before', async () => {
+  it('a normal response with no evicted/reset still dispatches its UI events as before', async () => {
     const { usePollingStore } = await import('@/stores/polling')
     const { useUIStore } = await import('@/stores/ui')
     const pollingStore = usePollingStore()
@@ -1130,8 +957,8 @@ describe('polling store - UI-stream evicted/reset consistency (issue #2065 AC7)'
 
     const setRateLimitsSpy = vi.spyOn(uiStore, 'setRateLimits')
 
-    sequencedFetchMock([
-      { events: [{ type: 'rate_limits_update', data: { requests_remaining: 42 } }], next_cursor: 1 },
+    sequencedPollMock([
+      { ui: { events: [{ type: 'rate_limits_update', data: { requests_remaining: 42 } }], next_cursor: 1 }, sessions: {} },
     ])
 
     pollingStore.startUIPolling()
@@ -1139,39 +966,33 @@ describe('polling store - UI-stream evicted/reset consistency (issue #2065 AC7)'
     pollingStore.stopUIPolling()
 
     expect(setRateLimitsSpy).toHaveBeenCalledWith({ requests_remaining: 42 })
-    // No app-data resync should have been triggered for a plain, non-evicted/reset cycle.
     expect(apiMock.get).not.toHaveBeenCalledWith('/api/projects')
   })
 })
 
 // ============================================================================
-// Epic #1990 stage 5b: StreamConnection state machine replaces the stall/heal
-// heuristic layer entirely. The describe blocks below replace the deleted
-// stall-heal watchdog (#1795), freeze-forgiveness watchdog (#1974), and
-// cursor-atomicity (#1988) suites — liveness is now derived only from poll
-// responses/fetch outcomes, so there's no wall-clock heuristic left to test.
+// Epic #1990 stage 5c: the N-task/two-connection design collapses into ONE shared
+// StreamConnection — uiState/sessionState (mod the archived override) now agree by
+// construction. The describe blocks below exercise the merged transition behavior.
 // ============================================================================
 
-describe('polling store - StreamConnection transition table (T1, issue #2129 stage 5b)', () => {
-  it('idle -> connect(cursor) -> connecting, immediately on connectSession()', async () => {
+describe('polling store - StreamConnection transition table (consolidated, epic #1990 stage 5c)', () => {
+  it('idle -> connect() -> connecting, immediately on connectSession()', async () => {
     const { pollingStore, sid } = await setupPollSession({ session_id: 'sess-t1-connecting' })
-    // Never resolves — only the synchronous state right after connect() matters here.
-    vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => new Promise((_resolve, reject) => {
-      opts?.signal?.addEventListener('abort', () => {
-        const err = new Error('Aborted'); err.name = 'AbortError'; reject(err)
-      })
-    }))
+    vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => hangingAbortAwareFetch(_url, opts))
 
     await pollingStore.connectSession(sid)
 
     expect(pollingStore.sessionState).toBe('connecting')
+    expect(pollingStore.uiState).toBe('connecting')
     expect(pollingStore.sessionRetryCount).toBe(0)
     await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
   })
 
-  it('connecting + poll OK normal batch -> connected, retryCount resets to 0', async () => {
+  it('connecting + poll OK normal batch -> connected, retryCount resets to 0, hasEverSeenResponse flips true', async () => {
     const { pollingStore, sid } = await setupPollSession({ session_id: 'sess-t1-connected' })
-    sequencedFetchMock([{ events: [], next_cursor: 1 }])
+    sequencedPollMock([{ ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [], next_cursor: 0 } } }])
 
     await pollingStore.connectSession(sid)
     await flush()
@@ -1180,32 +1001,31 @@ describe('polling store - StreamConnection transition table (T1, issue #2129 sta
     expect(pollingStore.sessionRetryCount).toBe(0)
     expect(pollingStore.sessionHasEverConnected).toBe(true)
     await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
   })
 
   it('connected + poll OK but backend_status unreachable -> unreachable (AC2: backend_status decides it, literally)', async () => {
     const { pollingStore, sid } = await setupPollSession({ session_id: 'sess-t1-unreachable' })
-    // Manual single-resolver pacing (same pattern as the kept backendStatus tests above) —
-    // sequencedFetchMock's immediately-resolving entries would otherwise all be consumed
-    // within one flush(), since nothing forces a macrotask boundary between loop iterations.
     let resolveFetch
     vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveFetch = resolve }))
 
     await pollingStore.connectSession(sid)
-    resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 1 }) })
+    resolveFetch({ ok: true, json: () => Promise.resolve({ ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [], next_cursor: 0 } } }) })
     await flush()
     expect(pollingStore.sessionState).toBe('connected')
 
-    resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 2, backend_status: 'unreachable' }) })
+    resolveFetch({ ok: true, json: () => Promise.resolve({ ui: { events: [], next_cursor: 2 }, sessions: { [sid]: { events: [], next_cursor: 0 } }, backend_status: 'unreachable' }) })
     await flush()
 
     expect(pollingStore.sessionState).toBe('unreachable')
     expect(pollingStore.sessionBackendStatus).toBe('unreachable')
     await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
   })
 
   it('connected + poll OK with backend_status degraded stays connected (decision 1: degraded is a non-overriding annotation, not a state)', async () => {
     const { pollingStore, sid } = await setupPollSession({ session_id: 'sess-t1-degraded' })
-    sequencedFetchMock([{ events: [], next_cursor: 1, backend_status: 'degraded' }])
+    sequencedPollMock([{ ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [], next_cursor: 0 } }, backend_status: 'degraded' }])
 
     await pollingStore.connectSession(sid)
     await flush()
@@ -1213,9 +1033,10 @@ describe('polling store - StreamConnection transition table (T1, issue #2129 sta
     expect(pollingStore.sessionState).toBe('connected')
     expect(pollingStore.sessionBackendStatus).toBe('degraded')
     await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
   })
 
-  it('connected + poll OK, batch contains stream_reset -> resyncing, then connected once the resync resolves', async () => {
+  it('connected + poll OK, the CURRENT session\'s batch contains stream_reset -> resyncing, then connected once the resync resolves', async () => {
     const { pollingStore, sessionStore, sid } = await setupPollSession({ session_id: 'sess-t1-resync' })
     const { useMessageStore } = await import('@/stores/message')
     const messageStore = useMessageStore()
@@ -1223,8 +1044,8 @@ describe('polling store - StreamConnection transition table (T1, issue #2129 sta
     let resolveLoad
     vi.spyOn(messageStore, 'loadMessages').mockImplementation(() => new Promise(resolve => { resolveLoad = resolve }))
 
-    sequencedFetchMock([
-      { events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }], next_cursor: 5 },
+    sequencedPollMock([
+      { ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }], next_cursor: 5 } } },
     ])
 
     await pollingStore.connectSession(sid)
@@ -1237,6 +1058,7 @@ describe('polling store - StreamConnection transition table (T1, issue #2129 sta
 
     expect(pollingStore.sessionState).toBe('connected')
     await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
   })
 
   it('connecting/connected/resyncing/unreachable + fetch throws (non-abort) -> backoff, retryCount++', async () => {
@@ -1249,6 +1071,7 @@ describe('polling store - StreamConnection transition table (T1, issue #2129 sta
     expect(pollingStore.sessionState).toBe('backoff')
     expect(pollingStore.sessionRetryCount).toBe(1)
     await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
   })
 
   it('backoff + timer fires -> connecting (retry fetch)', async () => {
@@ -1259,11 +1082,7 @@ describe('polling store - StreamConnection transition table (T1, issue #2129 sta
       vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => {
         callCount++
         if (callCount === 1) return Promise.reject(new Error('Connection refused'))
-        return new Promise((_resolve, reject) => {
-          opts?.signal?.addEventListener('abort', () => {
-            const err = new Error('Aborted'); err.name = 'AbortError'; reject(err)
-          })
-        })
+        return hangingAbortAwareFetch(_url, opts)
       })
 
       await pollingStore.connectSession(sid)
@@ -1275,6 +1094,7 @@ describe('polling store - StreamConnection transition table (T1, issue #2129 sta
       expect(callCount).toBe(2)
 
       await pollingStore.disconnectSession()
+      pollingStore.stopUIPolling()
     } finally {
       vi.useRealTimers()
     }
@@ -1289,11 +1109,7 @@ describe('polling store - StreamConnection transition table (T1, issue #2129 sta
         const err = new Error('Aborted'); err.name = 'AbortError'
         return Promise.reject(err)
       }
-      return new Promise((_resolve, reject) => {
-        opts?.signal?.addEventListener('abort', () => {
-          const err = new Error('Aborted'); err.name = 'AbortError'; reject(err)
-        })
-      })
+      return hangingAbortAwareFetch(_url, opts)
     })
 
     await pollingStore.connectSession(sid)
@@ -1303,6 +1119,7 @@ describe('polling store - StreamConnection transition table (T1, issue #2129 sta
     expect(pollingStore.sessionRetryCount).toBe(0)
     expect(callCount).toBe(2)
     await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
   })
 
   it('resyncing + resync (loadMessages) throws -> backoff, same path as any other fetch error (no second retry mechanism)', async () => {
@@ -1312,8 +1129,8 @@ describe('polling store - StreamConnection transition table (T1, issue #2129 sta
     sessionStore.currentSessionId = sid
     vi.spyOn(messageStore, 'loadMessages').mockRejectedValue(new Error('history fetch failed'))
 
-    sequencedFetchMock([
-      { events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }], next_cursor: 5 },
+    sequencedPollMock([
+      { ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }], next_cursor: 5 } } },
     ])
 
     await pollingStore.connectSession(sid)
@@ -1323,44 +1140,7 @@ describe('polling store - StreamConnection transition table (T1, issue #2129 sta
     expect(pollingStore.sessionState).toBe('backoff')
     expect(pollingStore.sessionRetryCount).toBe(1)
     await pollingStore.disconnectSession()
-  })
-
-  it('any non-idle/non-archived + disconnect() -> idle (abort, clear backoff timer, bump generation, retryCount=0)', async () => {
-    const { pollingStore, sid } = await setupPollSession({ session_id: 'sess-t1-disconnect' })
-    sequencedFetchMock([{ events: [], next_cursor: 1 }])
-
-    await pollingStore.connectSession(sid)
-    await flush()
-    expect(pollingStore.sessionState).toBe('connected')
-
-    await pollingStore.disconnectSession()
-
-    expect(pollingStore.sessionState).toBe('idle')
-    expect(pollingStore.sessionRetryCount).toBe(0)
-    expect(pollingStore.currentSessionId).toBeNull()
-  })
-
-  it('disconnect() during an active backoff sleep wakes the loop immediately instead of waiting out the full delay', async () => {
-    vi.useFakeTimers()
-    try {
-      const { pollingStore, sid } = await setupPollSession({ session_id: 'sess-t1-disconnect-backoff' })
-      vi.spyOn(global, 'fetch').mockRejectedValue(new Error('Connection refused'))
-
-      await pollingStore.connectSession(sid)
-      await vi.advanceTimersByTimeAsync(0)
-      expect(pollingStore.sessionState).toBe('backoff')
-
-      await pollingStore.disconnectSession()
-      expect(pollingStore.sessionState).toBe('idle')
-
-      // If the backoff sleep weren't cancelled, advancing past its 2000ms delay would
-      // still be a no-op here (generation already stale) — the real assertion is that
-      // disconnectSession() itself resolved promptly above, not hung on the old timer.
-      await vi.advanceTimersByTimeAsync(2000)
-      expect(pollingStore.sessionState).toBe('idle')
-    } finally {
-      vi.useRealTimers()
-    }
+    pollingStore.stopUIPolling()
   })
 
   it('UI stream: connecting + poll OK -> connected; batch with stream_reset -> resyncing -> connected', async () => {
@@ -1373,22 +1153,19 @@ describe('polling store - StreamConnection transition table (T1, issue #2129 sta
     const sessionStore = useSessionStore()
     vi.spyOn(sessionStore, 'fetchSessions').mockImplementation(() => new Promise(resolve => { resolveLoad = resolve }))
 
-    // Manual single-resolver pacing — see the identical note on the session-side test
-    // above; an immediately-resolving sequencedFetchMock entry would race straight past
-    // the intermediate 'connected' observation within the same microtask flush.
     let resolveFetch
     vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveFetch = resolve }))
 
     pollingStore.startUIPolling()
-    resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 1 }) })
+    resolveFetch({ ok: true, json: () => Promise.resolve({ ui: { events: [], next_cursor: 1 }, sessions: {} }) })
     await flush()
     expect(pollingStore.uiState).toBe('connected')
 
     resolveFetch({
       ok: true,
       json: () => Promise.resolve({
-        events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }],
-        next_cursor: 5,
+        ui: { events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }], next_cursor: 5 },
+        sessions: {},
       })
     })
     await flush()
@@ -1402,11 +1179,7 @@ describe('polling store - StreamConnection transition table (T1, issue #2129 sta
   })
 })
 
-// T2 (plan's Testing Strategy): proves the ABSENCE of any wall-clock staleness mechanism —
-// a frozen tab (JS timers simply not firing for a long stretch) must not trigger any
-// reconnect storm or state change on its own, since nothing in the new design is driven by
-// elapsed wall-clock time at all. This test exists to prove that absence, not to exercise
-// forgiveness math (there is none left).
+// T2 (plan's Testing Strategy): proves the ABSENCE of any wall-clock staleness mechanism.
 describe('polling store - frozen tab, no wall-clock timers (T2, issue #2129 stage 5b)', () => {
   it('a long-pending in-flight poll fetch produces no reconnect storm and loses no events once it finally resolves', async () => {
     vi.useFakeTimers()
@@ -1422,67 +1195,56 @@ describe('polling store - frozen tab, no wall-clock timers (T2, issue #2129 stag
       await pollingStore.connectSession(sid)
       expect(fetchCallCount).toBe(1)
 
-      // Simulate a tab frozen for 10 minutes — nothing in the new design schedules any
-      // timer off this poll's wall-clock duration, so advancing fake time here must not
-      // provoke a second fetch call or any state change at all.
       await vi.advanceTimersByTimeAsync(10 * 60 * 1000)
       expect(fetchCallCount).toBe(1)
       expect(pollingStore.sessionState).toBe('connecting')
 
-      // The tab "wakes up" and the long-held poll finally resolves normally.
-      resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 7 }) })
+      resolveFetch({ ok: true, json: () => Promise.resolve({ ui: { events: [], next_cursor: 7 }, sessions: { [sid]: { events: [], next_cursor: 0 } } }) })
       await vi.advanceTimersByTimeAsync(0)
 
       expect(pollingStore.sessionState).toBe('connected')
       expect(pollingStore.sessionRetryCount).toBe(0)
 
       await pollingStore.disconnectSession()
+      pollingStore.stopUIPolling()
     } finally {
       vi.useRealTimers()
     }
   })
 })
 
-// T3 (plan's Testing Strategy): backend_status ok -> unreachable -> ok across successive
-// poll responses, asserting the state/backendStatus sequence tracks exactly as specified.
-// InputArea's own consumption of this sequence (isConnected/isBackendBlocking) is covered
-// directly in InputArea.test.js's "backend outage gating" describe block — this test
-// covers the STORE side of the same sequence.
 describe('polling store - backend_status ok -> unreachable -> ok scenario (T3, issue #2129 stage 5b)', () => {
-  it('session connection tracks the full ok -> unreachable -> ok sequence correctly', async () => {
+  it('the shared connection tracks the full ok -> unreachable -> ok sequence correctly', async () => {
     const { pollingStore, sid } = await setupPollSession({ session_id: 'sess-t3' })
-    // Manual single-resolver pacing — see the note on the T1 "unreachable" test above.
     let resolveFetch
     vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveFetch = resolve }))
 
     await pollingStore.connectSession(sid)
-    resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 1, backend_status: 'ok' }) })
+    resolveFetch({ ok: true, json: () => Promise.resolve({ ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [], next_cursor: 0 } }, backend_status: 'ok' }) })
     await flush()
     expect(pollingStore.sessionState).toBe('connected')
     expect(pollingStore.sessionBackendStatus).toBe('ok')
 
-    resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 2, backend_status: 'unreachable' }) })
+    resolveFetch({ ok: true, json: () => Promise.resolve({ ui: { events: [], next_cursor: 2 }, sessions: { [sid]: { events: [], next_cursor: 0 } }, backend_status: 'unreachable' }) })
     await flush()
     expect(pollingStore.sessionState).toBe('unreachable')
     expect(pollingStore.sessionBackendStatus).toBe('unreachable')
-    // sessionHasEverConnected stays true throughout — InputArea's gate (decision 4) must
-    // not flip back to "never connected" just because the backend self-heals later.
     expect(pollingStore.sessionHasEverConnected).toBe(true)
 
-    resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 3, backend_status: 'ok' }) })
+    resolveFetch({ ok: true, json: () => Promise.resolve({ ui: { events: [], next_cursor: 3 }, sessions: { [sid]: { events: [], next_cursor: 0 } }, backend_status: 'ok' }) })
     await flush()
     expect(pollingStore.sessionState).toBe('connected')
     expect(pollingStore.sessionBackendStatus).toBe('ok')
 
     await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
   })
 })
 
-// Dedicated risk test (plan's Risks & Considerations): the evicted/reset cursor-adoption
-// handoff via loadedEventCursors must transfer byte-for-byte into the new design — this is
-// called out as the highest-value-to-regress path in the whole rewrite.
-describe('polling store - dedicated risk: evicted/reset resync cursor fidelity (issue #2129 stage 5b)', () => {
-  it('adopts the cursor from loadedEventCursors (not next_cursor) once the resync completes, and clears the map entry', async () => {
+// Dedicated risk test: the evicted/reset cursor-adoption handoff via loadedEventCursors
+// must transfer byte-for-byte into the new subscription-map design.
+describe('polling store - dedicated risk: evicted/reset resync cursor fidelity (epic #1990 stage 5c)', () => {
+  it('adopts the cursor from loadedEventCursors (not next_cursor) once the resync completes', async () => {
     const { pollingStore, sessionStore, sid } = await setupPollSession({ session_id: 'sess-risk-cursor' })
     const { useMessageStore } = await import('@/stores/message')
     const messageStore = useMessageStore()
@@ -1492,9 +1254,9 @@ describe('polling store - dedicated risk: evicted/reset resync cursor fidelity (
       messageStore.loadedEventCursors.set(sessionId, 999)
     })
 
-    const fetchMock = sequencedFetchMock([
-      { events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }], next_cursor: 5 },
-      { events: [], next_cursor: 6 },
+    const fetchMock = sequencedPollMock([
+      { ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }], next_cursor: 5 } } },
+      { ui: { events: [], next_cursor: 2 }, sessions: { [sid]: { events: [], next_cursor: 6 } } },
     ])
 
     await pollingStore.connectSession(sid)
@@ -1502,17 +1264,11 @@ describe('polling store - dedicated risk: evicted/reset resync cursor fidelity (
     await flush()
 
     expect(messageStore.loadedEventCursors.has(sid)).toBe(false)
-    // The poll cycle issued immediately after the resync completes proves which cursor was
-    // actually adopted — 999 from loadedEventCursors, not 5 (the evicted response's own
-    // next_cursor). Call index 1: call 0 is the initial evicted/reset response itself, both
-    // of which the loop races through within the same microtask flush (no real network
-    // delay in this mock), so a THIRD call (index 2, using the second response's own
-    // next_cursor=6) also lands before disconnectSession() runs — index 1 is the one that
-    // actually reflects the resync's cursor adoption.
     expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2)
-    expect(fetchMock.mock.calls[1][0]).toContain('since=999')
+    expect(parseBody(fetchMock.mock.calls[1][1]).sessions[sid].since).toBe(999)
 
     await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
   })
 
   it('falls back to next_cursor when loadMessages() does not set loadedEventCursors', async () => {
@@ -1522,9 +1278,9 @@ describe('polling store - dedicated risk: evicted/reset resync cursor fidelity (
     sessionStore.currentSessionId = sid
     vi.spyOn(messageStore, 'loadMessages').mockResolvedValue(undefined)
 
-    const fetchMock = sequencedFetchMock([
-      { events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }], next_cursor: 5 },
-      { events: [], next_cursor: 6 },
+    const fetchMock = sequencedPollMock([
+      { ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }], next_cursor: 5 } } },
+      { ui: { events: [], next_cursor: 2 }, sessions: { [sid]: { events: [], next_cursor: 6 } } },
     ])
 
     await pollingStore.connectSession(sid)
@@ -1532,14 +1288,13 @@ describe('polling store - dedicated risk: evicted/reset resync cursor fidelity (
     await flush()
 
     expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2)
-    expect(fetchMock.mock.calls[1][0]).toContain('since=5')
+    expect(parseBody(fetchMock.mock.calls[1][1]).sessions[sid].since).toBe(5)
 
     await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
   })
 
   it('an evicted session that vanishes from the UI resync still gets full session_deleted cleanup (carried over from #2065 AC7)', async () => {
-    // Same guarantee as the kept UI-stream evicted/reset consistency tests above, exercised
-    // once more here as part of the dedicated risk coverage this stage explicitly calls out.
     const { usePollingStore } = await import('@/stores/polling')
     const { useSessionStore } = await import('@/stores/session')
     const { useMessageStore } = await import('@/stores/message')
@@ -1553,8 +1308,8 @@ describe('polling store - dedicated risk: evicted/reset resync cursor fidelity (
     messageStore.messagesBySession.set(sid, [{ id: 'm1', type: 'user' }])
     mockAppDataEndpoints()
 
-    sequencedFetchMock([
-      { events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }], next_cursor: 5 },
+    sequencedPollMock([
+      { ui: { events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }], next_cursor: 5 }, sessions: {} },
     ])
 
     pollingStore.startUIPolling()
@@ -1569,103 +1324,55 @@ describe('polling store - dedicated risk: evicted/reset resync cursor fidelity (
   })
 })
 
-// Dedicated risk test (plan's Risks & Considerations): a session_reset UI broadcast arriving
-// while a resync is already in flight for the SAME session must not corrupt state or crash —
-// there's no heal-mutex left to (coincidentally) protect any part of this anymore.
-describe('polling store - dedicated risk: session_reset arriving mid-resync (issue #2129 stage 5b)', () => {
-  it('a session_reset for the session currently mid-resync clears the cursor cache without disturbing the in-flight resync, which still completes correctly', async () => {
-    const { pollingStore, sessionStore, sid } = await setupPollSession({ session_id: 'sess-risk-reset-mid-resync' })
+// Epic #1990 stage 5c structural note: the old "session_reset arriving mid-resync" risk
+// test relied on TWO independent concurrent poll loops (UI, session) racing each other —
+// that race can no longer occur by construction, since there is only one combined fetch
+// cycle now and UI/session batches within it are processed sequentially, not concurrently.
+// The new equivalent risk is ORDERING within one response: a UI session_reset event and
+// that same session's own stream_reset arriving in the SAME multiplexed batch.
+describe('polling store - dedicated risk: session_reset ordering within one multiplexed batch (epic #1990 stage 5c)', () => {
+  it('a UI session_reset for the session whose OWN batch in the same response also carries a stream_reset: eviction wins cleanly, no stale resync is attempted', async () => {
+    const { pollingStore, sessionStore, sid } = await setupPollSession({ session_id: 'sess-risk-reset-order' })
     const { useMessageStore } = await import('@/stores/message')
     const { useResourceStore } = await import('@/stores/resource')
     const messageStore = useMessageStore()
     const resourceStore = useResourceStore()
     sessionStore.currentSessionId = sid
 
-    let resolveLoad
-    vi.spyOn(messageStore, 'loadMessages').mockImplementation((sessionId) => new Promise(resolve => {
-      resolveLoad = () => {
-        messageStore.loadedEventCursors.set(sessionId, 42)
-        resolve()
-      }
-    }))
+    const loadMessagesSpy = vi.spyOn(messageStore, 'loadMessages').mockResolvedValue(undefined)
     const clearMessagesSpy = vi.spyOn(messageStore, 'clearMessages')
     const clearResourcesSpy = vi.spyOn(resourceStore, 'clearResources')
 
-    const sessionFetchMock = vi.spyOn(global, 'fetch').mockImplementation((url, opts) => {
-      if (String(url).includes('/api/poll/session/')) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({
-            events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }],
-            next_cursor: 5,
-          })
-        })
-      }
-      return new Promise((_resolve, reject) => {
-        opts?.signal?.addEventListener('abort', () => {
-          const err = new Error('Aborted'); err.name = 'AbortError'; reject(err)
-        })
-      })
-    })
+    sequencedPollMock([
+      {
+        // UI stream's session_reset for sid is processed FIRST (ui before sessions in
+        // the loop), evicting sid's subscription before sid's own batch (also in this
+        // same response) is ever looked at.
+        ui: { events: [{ type: 'session_reset', data: { session_id: sid } }], next_cursor: 1 },
+        sessions: { [sid]: { events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }], next_cursor: 5 } },
+      },
+    ])
 
     await pollingStore.connectSession(sid)
     await flush()
-    expect(pollingStore.sessionState).toBe('resyncing')
-
-    // The session_reset UI broadcast for this exact session arrives WHILE the resync's
-    // loadMessages() is still pending. UI-poll calls after the first must hang (not keep
-    // re-resolving the same event), or the UI loop spins on it forever.
-    let uiCallCount = 0
-    sessionFetchMock.mockImplementation((url, opts) => {
-      if (String(url).includes('/api/poll/session/')) {
-        return new Promise((_resolve, reject) => {
-          opts?.signal?.addEventListener('abort', () => {
-            const err = new Error('Aborted'); err.name = 'AbortError'; reject(err)
-          })
-        })
-      }
-      uiCallCount++
-      if (uiCallCount === 1) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({
-            events: [{ type: 'session_reset', data: { session_id: sid } }],
-            next_cursor: 1,
-          })
-        })
-      }
-      return new Promise((_resolve, reject) => {
-        opts?.signal?.addEventListener('abort', () => {
-          const err = new Error('Aborted'); err.name = 'AbortError'; reject(err)
-        })
-      })
-    })
-    pollingStore.startUIPolling()
-    await flush()
-    pollingStore.stopUIPolling()
 
     expect(clearMessagesSpy).toHaveBeenCalledWith(sid)
     expect(clearResourcesSpy).toHaveBeenCalledWith(sid)
-    // Still resyncing — the UI-side session_reset handler doesn't touch the session
-    // connection's own in-flight resync at all (separate, independent state).
-    expect(pollingStore.sessionState).toBe('resyncing')
+    // The session's own batch bailed out immediately (subscription already evicted by
+    // the UI handler moments earlier in the same cycle) — no resync was attempted for
+    // data that's about to be cleared anyway.
+    expect(loadMessagesSpy).not.toHaveBeenCalled()
 
-    // Now the in-flight resync itself resolves — it must complete correctly despite the
-    // concurrent reset, adopting its own cursor and reaching 'connected'.
-    resolveLoad()
-    await flush()
-
-    expect(pollingStore.sessionState).toBe('connected')
-    await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
   })
 })
 
-// Dedicated risk test (plan's Risks & Considerations): the old awaited 3-second teardown
-// budget is replaced by a synchronous generation-guarded teardown — switching sessions while
-// a fetch is in flight for the old session must not let its stale response corrupt the new
-// session's state.
-describe('polling store - dedicated risk: session-switch-mid-fetch race (issue #2129 stage 5b)', () => {
-  it('a stale in-flight response for the OLD session cannot clobber the NEW session\'s state after a mid-fetch switch', async () => {
+// Epic #1990 stage 5c structural note: the old "session-switch-mid-fetch race" test relied
+// on each session having its OWN independent fetch — now there is one shared in-flight
+// request covering everything, and touchSubscription() interrupts it outright (not just
+// "the old session's slice") when a genuinely new stream is added.
+describe('polling store - dedicated risk: subscribing a new session interrupts a stale in-flight cycle (epic #1990 stage 5c)', () => {
+  it('connectSession for a brand-new session aborts the in-flight request and restarts with the updated subscription, rather than waiting out the long-poll timeout', async () => {
     const { usePollingStore } = await import('@/stores/polling')
     const { useSessionStore } = await import('@/stores/session')
     const pollingStore = usePollingStore()
@@ -1675,51 +1382,47 @@ describe('polling store - dedicated risk: session-switch-mid-fetch race (issue #
     sessionStore.sessions.set('sess-new', makeSession({ session_id: 'sess-new' }))
     apiMock.get.mockResolvedValue({ cursor: 0 })
 
-    let resolveOldFetch
+    const abortedUrls = []
     let fetchCallCount = 0
-    vi.spyOn(global, 'fetch').mockImplementation((url) => {
+    vi.spyOn(global, 'fetch').mockImplementation((url, opts) => {
       fetchCallCount++
       if (fetchCallCount === 1) {
-        // The OLD session's poll — left pending so the switch below races it.
-        return new Promise(resolve => { resolveOldFetch = resolve })
+        // The first cycle (ui + sess-old only) — left pending so the switch below
+        // interrupts it instead of it resolving naturally.
+        return new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () => {
+            abortedUrls.push(JSON.parse(opts.body))
+            const err = new Error('Aborted'); err.name = 'AbortError'; reject(err)
+          })
+        })
       }
-      // The NEW session's poll(s) — hang indefinitely, same as abortAwareFetchMock.
-      return new Promise(() => {})
+      // Every subsequent cycle hangs too — only the abort-vs-not distinction matters here.
+      return hangingAbortAwareFetch(url, opts)
     })
 
     await pollingStore.connectSession('sess-old')
     expect(fetchCallCount).toBe(1)
 
-    // Switch to a different session WHILE the old session's first fetch is still pending —
-    // disconnectSession() (called internally by connectSession()) is now fully synchronous,
-    // no 3-second exit budget to await.
     await pollingStore.connectSession('sess-new')
 
     expect(pollingStore.currentSessionId).toBe('sess-new')
-    expect(pollingStore.sessionState).toBe('connecting')
-
-    // The old session's stale response finally arrives — it must be a complete no-op.
-    resolveOldFetch({
-      ok: true,
-      json: () => Promise.resolve({ events: [], next_cursor: 999, backend_status: 'unreachable' })
-    })
-    await flush()
-
-    expect(pollingStore.currentSessionId).toBe('sess-new')
-    // Neither the state nor backendStatus were clobbered by the stale sess-old response.
-    expect(pollingStore.sessionState).toBe('connecting')
-    expect(pollingStore.sessionBackendStatus).toBe('ok')
+    // The stale first request was aborted (not left to resolve naturally) and a second
+    // cycle was issued immediately, carrying the updated subscription set.
+    expect(fetchCallCount).toBe(2)
+    expect(abortedUrls).toHaveLength(1)
+    expect(abortedUrls[0].sessions).toHaveProperty('sess-old')
 
     await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
   })
 })
 
-// Explicit test for the gap WebUI-Agent confirmed should stay load-bearing: sessionCursors
-// is a cross-session cursor CACHE (not heuristic bookkeeping), separate from each
-// StreamConnection's own private live-cursor field — switching away and back must resume
-// from exactly where the session left off, not silently skip the gap period.
-describe('polling store - cross-session cursor cache (issue #1974/#2129 stage 5b)', () => {
-  it('switching A -> B -> back to A resumes A from its cached cursor, not a fresh "cursor right now" bootstrap', async () => {
+// Epic #1990 stage 5c (US2/US3): the subscription-set model replaces sessionCursors'
+// passive cache — every entry is now ACTIVELY polled, so a recently-viewed-but-not-current
+// session keeps receiving live events the whole time it's subscribed, and switching back to
+// it resumes from its own live cursor (not a fresh bootstrap).
+describe('polling store - subscription-set cursor continuity (US2, epic #1990 stage 5c)', () => {
+  it('switching A -> B -> back to A resumes A from its own subscription cursor, not a fresh "cursor right now" bootstrap', async () => {
     const { usePollingStore } = await import('@/stores/polling')
     const { useSessionStore } = await import('@/stores/session')
     const { useMessageStore } = await import('@/stores/message')
@@ -1729,41 +1432,33 @@ describe('polling store - cross-session cursor cache (issue #1974/#2129 stage 5b
 
     sessionStore.sessions.set('sess-a', makeSession({ session_id: 'sess-a' }))
     sessionStore.sessions.set('sess-b', makeSession({ session_id: 'sess-b' }))
-    // A's history is already cached from a prior visit — loadedEventCursors has nothing for
-    // it (that map is only populated by a fresh loadMessages() call, which switch-back must
-    // NOT trigger here), forcing connectSession() to fall back to sessionCursors.
     messageStore.messagesBySession.set('sess-a', [{ id: 'm1', type: 'user' }])
     apiMock.get.mockResolvedValue({ cursor: 0 }) // only hit for a genuinely first-time connect
 
-    // Each phase gets its OWN single-entry mock (consumed, then torn down, before the next
-    // phase begins) — a SHARED multi-entry sequence would let session A's own loop race
-    // straight through B's entry too, within the same microtask flush, before
-    // disconnectSession() ever gets a chance to run.
-    sequencedFetchMock([{ events: [], next_cursor: 123 }])  // A's first poll cycle
+    sequencedPollMock([{ ui: { events: [], next_cursor: 1 }, sessions: { 'sess-a': { events: [], next_cursor: 123 } } }])
     await pollingStore.connectSession('sess-a')
     await flush()
-    await pollingStore.disconnectSession()
 
-    sequencedFetchMock([{ events: [], next_cursor: 1 }])  // B's first poll cycle
+    sequencedPollMock([{ ui: { events: [], next_cursor: 2 }, sessions: { 'sess-a': { events: [], next_cursor: 123 }, 'sess-b': { events: [], next_cursor: 1 } } }])
     await pollingStore.connectSession('sess-b')
     await flush()
-    await pollingStore.disconnectSession()
 
     apiMock.get.mockClear()
     const fetchMock = vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(() => {}))
 
     await pollingStore.connectSession('sess-a')
 
-    // Resumed from A's cached cursor (123) — NOT a fresh bootstrap GET (which would only
-    // happen if the cache had been lost) and not from cursor 0.
+    // Resumed from A's own subscription cursor (123, kept live from A's own first poll
+    // cycle above) — NOT a fresh bootstrap GET (which would only happen if A had aged
+    // out of the LRU) and not from cursor 0.
     expect(apiMock.get).not.toHaveBeenCalledWith('/api/poll/session/sess-a/cursor')
-    const lastFetchUrl = fetchMock.mock.calls[fetchMock.mock.calls.length - 1][0]
-    expect(lastFetchUrl).toContain('since=123')
+    const lastBody = parseBody(fetchMock.mock.calls[fetchMock.mock.calls.length - 1][1])
+    expect(lastBody.sessions['sess-a'].since).toBe(123)
 
-    await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
   })
 
-  it('resetSessionCursor() clears only the named session\'s cache entry, forcing its next connect to start fresh', async () => {
+  it('resetSessionCursor() evicts the named session entirely, forcing its next connect to start fresh', async () => {
     const { usePollingStore } = await import('@/stores/polling')
     const { useSessionStore } = await import('@/stores/session')
     const pollingStore = usePollingStore()
@@ -1772,27 +1467,25 @@ describe('polling store - cross-session cursor cache (issue #1974/#2129 stage 5b
     sessionStore.sessions.set('sess-reset', makeSession({ session_id: 'sess-reset' }))
     apiMock.get.mockResolvedValue({ cursor: 0 })
 
-    const fetchMock = sequencedFetchMock([{ events: [], next_cursor: 55 }])
-
+    sequencedPollMock([{ ui: { events: [], next_cursor: 1 }, sessions: { 'sess-reset': { events: [], next_cursor: 55 } } }])
     await pollingStore.connectSession('sess-reset')
     await flush()
     await pollingStore.disconnectSession()
     pollingStore.resetSessionCursor('sess-reset')
 
     apiMock.get.mockClear()
-    fetchMock.mockImplementation(() => new Promise(() => {}))
+    const fetchMock = vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(() => {}))
 
     await pollingStore.connectSession('sess-reset')
 
-    // No cache left — falls all the way back to the API bootstrap, cursor 0.
     expect(apiMock.get).toHaveBeenCalledWith('/api/poll/session/sess-reset/cursor')
-    const lastFetchUrl = fetchMock.mock.calls[fetchMock.mock.calls.length - 1][0]
-    expect(lastFetchUrl).toContain('since=0')
+    const lastBody = parseBody(fetchMock.mock.calls[fetchMock.mock.calls.length - 1][1])
+    expect(lastBody.sessions['sess-reset'].since).toBe(0)
 
-    await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
   })
 
-  it('cleanupSessionPollingState() clears a deleted (non-current) session\'s cache entry too', async () => {
+  it('cleanupSessionPollingState() evicts a deleted (non-current) session\'s subscription too', async () => {
     const { usePollingStore } = await import('@/stores/polling')
     const { useSessionStore } = await import('@/stores/session')
     const pollingStore = usePollingStore()
@@ -1801,7 +1494,7 @@ describe('polling store - cross-session cursor cache (issue #1974/#2129 stage 5b
     sessionStore.sessions.set('sess-cleanup', makeSession({ session_id: 'sess-cleanup' }))
     apiMock.get.mockResolvedValue({ cursor: 0 })
 
-    const fetchMock = sequencedFetchMock([{ events: [], next_cursor: 77 }])
+    sequencedPollMock([{ ui: { events: [], next_cursor: 1 }, sessions: { 'sess-cleanup': { events: [], next_cursor: 77 } } }])
     await pollingStore.connectSession('sess-cleanup')
     await flush()
     await pollingStore.disconnectSession()
@@ -1809,18 +1502,256 @@ describe('polling store - cross-session cursor cache (issue #1974/#2129 stage 5b
     pollingStore.cleanupSessionPollingState('sess-cleanup')
 
     apiMock.get.mockClear()
-    fetchMock.mockImplementation(() => new Promise(() => {}))
+    vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(() => {}))
     await pollingStore.connectSession('sess-cleanup')
 
     expect(apiMock.get).toHaveBeenCalledWith('/api/poll/session/sess-cleanup/cursor')
+    pollingStore.stopUIPolling()
+  })
+
+  it('disconnectSession() evicts the session entirely — unlike normal navigation away, which keeps it live in the background', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useSessionStore } = await import('@/stores/session')
+    const pollingStore = usePollingStore()
+    const sessionStore = useSessionStore()
+
+    sessionStore.sessions.set('sess-explicit-disc', makeSession({ session_id: 'sess-explicit-disc' }))
+    apiMock.get.mockResolvedValue({ cursor: 0 })
+
+    sequencedPollMock([{ ui: { events: [], next_cursor: 1 }, sessions: { 'sess-explicit-disc': { events: [], next_cursor: 0 } } }])
+    await pollingStore.connectSession('sess-explicit-disc')
+    await flush()
+    expect(pollingStore.sessionHasEverConnected).toBe(true)
+
     await pollingStore.disconnectSession()
+
+    expect(pollingStore.currentSessionId).toBeNull()
+    // sessionHasEverConnected is now about whatever currentSessionId is (null) — not
+    // meaningful once there's no current session, but exercised here for completeness.
+    expect(pollingStore.sessionHasEverConnected).toBe(false)
+
+    pollingStore.stopUIPolling()
   })
 })
 
-// AC3/UC3, decision 5: an archive/no-live-stream session view marks the session connection
+// US2's core claim: a recently-viewed, still-subscribed (but not current) session's events
+// are applied LIVE — not just cached — so switching back shows everything that happened
+// while it was in the background, with no reload/resync needed.
+describe('polling store - background live sessions (US2, epic #1990 stage 5c AC1/AC2)', () => {
+  it('dispatchEvent applies a background (non-current) subscribed session\'s events live, not just the current session\'s', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useSessionStore } = await import('@/stores/session')
+    const { useMessageStore } = await import('@/stores/message')
+    const pollingStore = usePollingStore()
+    const sessionStore = useSessionStore()
+    const messageStore = useMessageStore()
+
+    sessionStore.sessions.set('sess-fg', makeSession({ session_id: 'sess-fg' }))
+    sessionStore.sessions.set('sess-bg', makeSession({ session_id: 'sess-bg' }))
+    apiMock.get.mockResolvedValue({ cursor: 0 })
+
+    // Subscribe to both (bg first, then switch to fg as current — bg stays subscribed,
+    // same LRU-background pattern US2 is about).
+    sequencedPollMock([{ ui: { events: [], next_cursor: 1 }, sessions: { 'sess-bg': { events: [], next_cursor: 0 } } }])
+    await pollingStore.connectSession('sess-bg')
+    await flush()
+
+    sequencedPollMock([{
+      ui: { events: [], next_cursor: 2 },
+      sessions: {
+        'sess-fg': { events: [], next_cursor: 0 },
+        // sess-bg is still subscribed (within the LRU) and gets a LIVE message while
+        // the user is looking at sess-fg instead.
+        'sess-bg': { events: [{ type: 'message', data: { type: 'assistant', id: 'bg-m1', text: 'hi' } }], next_cursor: 1 },
+      },
+    }])
+    await pollingStore.connectSession('sess-fg')
+    await flush()
+
+    // Applied live via message.js's applyRecord(), with no loadMessages()/resync needed —
+    // this is the whole point of US2 over the old passive-cache model.
+    const bgMessages = messageStore.messagesBySession.get('sess-bg') || []
+    expect(bgMessages.some(m => m.id === 'bg-m1')).toBe(true)
+    expect(pollingStore.currentSessionId).toBe('sess-fg')
+
+    pollingStore.stopUIPolling()
+  })
+
+  it('a batch for a session that is no longer subscribed is ignored, not applied (subscription-set gate)', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useSessionStore } = await import('@/stores/session')
+    const { useMessageStore } = await import('@/stores/message')
+    const pollingStore = usePollingStore()
+    const sessionStore = useSessionStore()
+    const messageStore = useMessageStore()
+
+    sessionStore.sessions.set('sess-evicted-late', makeSession({ session_id: 'sess-evicted-late' }))
+    apiMock.get.mockResolvedValue({ cursor: 0 })
+
+    // Subscribe, then explicitly evict (disconnectSession's full-eviction semantics) —
+    // a real server would stop being asked about this session on the NEXT request, but
+    // a late-arriving response for a cycle built before the eviction is exactly the
+    // scenario _processSessionBatch()'s own `subscriptions.get(sessionId)` guard exists
+    // for: defense against exactly this ordering, not just a theoretical case.
+    let resolveFetch
+    vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveFetch = resolve }))
+    await pollingStore.connectSession('sess-evicted-late')
+    await pollingStore.disconnectSession()
+
+    resolveFetch({
+      ok: true,
+      json: () => Promise.resolve({
+        ui: { events: [], next_cursor: 1 },
+        sessions: { 'sess-evicted-late': { events: [{ type: 'message', data: { type: 'assistant', id: 'x', text: 'hi' } }], next_cursor: 1 } },
+      }),
+    })
+    await flush()
+
+    expect(messageStore.messagesBySession.has('sess-evicted-late')).toBe(false)
+    pollingStore.stopUIPolling()
+  })
+})
+
+// US3: LRU-bounded subscription set — once more than MAX_SUBSCRIBED_SESSIONS (5) sessions
+// have been viewed, the least-recently-touched ones age out of the subscription set
+// entirely (bookkeeping released), while the most recent 5 stay live.
+describe('polling store - LRU subscription-set eviction (US3, epic #1990 stage 5c)', () => {
+  it('viewing a 6th session evicts the least-recently-viewed one from the subscription set', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useSessionStore } = await import('@/stores/session')
+    const pollingStore = usePollingStore()
+    const sessionStore = useSessionStore()
+    apiMock.get.mockResolvedValue({ cursor: 0 })
+
+    for (let i = 1; i <= 6; i++) {
+      sessionStore.sessions.set(`sess-lru-${i}`, makeSession({ session_id: `sess-lru-${i}` }))
+    }
+
+    // Must be abort-aware: each new connectSession() call interrupts the previous
+    // cycle's in-flight request (interruptIfStale()), and the loop can only progress
+    // to pick up the fresh subscription if that in-flight promise actually rejects on
+    // abort rather than hanging forever regardless.
+    vi.spyOn(global, 'fetch').mockImplementation(hangingAbortAwareFetch)
+
+    for (let i = 1; i <= 6; i++) {
+      await pollingStore.connectSession(`sess-lru-${i}`)
+      await flush()
+    }
+
+    const fetchMock = vi.spyOn(global, 'fetch')
+    const lastBody = parseBody(fetchMock.mock.calls[fetchMock.mock.calls.length - 1][1])
+    // sess-lru-1 (touched first, longest ago) aged out; the 5 most recent (2-6) remain.
+    expect(lastBody.sessions).not.toHaveProperty('sess-lru-1')
+    for (let i = 2; i <= 6; i++) {
+      expect(lastBody.sessions).toHaveProperty(`sess-lru-${i}`)
+    }
+
+    pollingStore.stopUIPolling()
+  })
+
+  it('re-touching an already-subscribed session refreshes its LRU position instead of letting it age out', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useSessionStore } = await import('@/stores/session')
+    const pollingStore = usePollingStore()
+    const sessionStore = useSessionStore()
+    apiMock.get.mockResolvedValue({ cursor: 0 })
+
+    for (let i = 1; i <= 5; i++) {
+      sessionStore.sessions.set(`sess-refresh-${i}`, makeSession({ session_id: `sess-refresh-${i}` }))
+    }
+    sessionStore.sessions.set('sess-refresh-6', makeSession({ session_id: 'sess-refresh-6' }))
+
+    vi.spyOn(global, 'fetch').mockImplementation(hangingAbortAwareFetch)
+
+    for (let i = 1; i <= 5; i++) {
+      await pollingStore.connectSession(`sess-refresh-${i}`)
+      await flush()
+    }
+    // Re-touch sess-refresh-1 (the oldest) so it's no longer the LRU candidate.
+    await pollingStore.connectSession('sess-refresh-1')
+    await flush()
+    // Now a 6th, genuinely new session — sess-refresh-2 (now the actual oldest) should
+    // age out instead of sess-refresh-1 (just refreshed).
+    await pollingStore.connectSession('sess-refresh-6')
+    await flush()
+
+    const fetchMock = vi.spyOn(global, 'fetch')
+    const lastBody = parseBody(fetchMock.mock.calls[fetchMock.mock.calls.length - 1][1])
+    expect(lastBody.sessions).toHaveProperty('sess-refresh-1')
+    expect(lastBody.sessions).not.toHaveProperty('sess-refresh-2')
+
+    pollingStore.stopUIPolling()
+  })
+
+  // WebUI-Agent review finding (stage 5c, phase 2 checkpoint): the SAME cancel-and-restart
+  // interruption mechanism verified not to thrash on the relay side (interruptIfStale())
+  // needs the same verification on the browser's own single poll loop — rapid back-to-back
+  // connectSession() calls for brand-new sessions must still converge to one completed
+  // cycle covering everything, not re-cancel indefinitely.
+  it('rapid connectSession() calls for many brand-new sessions do not starve the loop', async () => {
+    const { usePollingStore } = await import('@/stores/polling')
+    const { useSessionStore } = await import('@/stores/session')
+    const pollingStore = usePollingStore()
+    const sessionStore = useSessionStore()
+    apiMock.get.mockResolvedValue({ cursor: 0 })
+
+    const sessionIds = Array.from({ length: 5 }, (_, i) => `sess-churn-${i}`)
+    for (const sid of sessionIds) {
+      sessionStore.sessions.set(sid, makeSession({ session_id: sid }))
+    }
+
+    const completedCycleSessionKeys = []
+    vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => {
+      // A real (if tiny) round trip, unlike an instantly-resolving mock — needed so an
+      // in-flight call actually has a window in which a rapid-fire touch can interrupt
+      // it, mirroring the equivalent backend regression test's rationale exactly.
+      return new Promise((resolve, reject) => {
+        const body = parseBody(opts)
+        const timer = setTimeout(() => {
+          completedCycleSessionKeys.push(Object.keys(body.sessions))
+          resolve({ ok: true, json: () => Promise.resolve({ ui: { events: [], next_cursor: 1 }, sessions: {} }) })
+        }, 20)
+        opts?.signal?.addEventListener('abort', () => {
+          clearTimeout(timer)
+          const err = new Error('Aborted'); err.name = 'AbortError'; reject(err)
+        })
+      })
+    })
+
+    // Rapid-fire connect of 5 distinct brand-new sessions, no await of a full cycle in
+    // between (only each connectSession()'s own cursor-bootstrap microtask) — each is
+    // "new", so each triggers interruptIfStale() against whatever the loop is currently
+    // doing.
+    for (const sid of sessionIds) {
+      await pollingStore.connectSession(sid)
+    }
+
+    const converged = await new Promise(resolve => {
+      const deadline = Date.now() + 2000
+      const check = () => {
+        const last = completedCycleSessionKeys[completedCycleSessionKeys.length - 1]
+        if (last && sessionIds.every(sid => last.includes(sid))) {
+          resolve(true)
+        } else if (Date.now() > deadline) {
+          resolve(false)
+        } else {
+          setTimeout(check, 10)
+        }
+      }
+      check()
+    })
+
+    expect(converged).toBe(true)
+    expect(completedCycleSessionKeys.length).toBeLessThan(50)
+
+    pollingStore.stopUIPolling()
+  })
+})
+
+// AC3/UC3, decision 5: an archive/no-live-stream session view marks the session view
 // explicitly archived instead of leaving it an implicit, uninspectable absence.
-describe('polling store - markSessionArchived (issue #2129 stage 5b, AC3/AC4)', () => {
-  it('sets currentSessionId and sessionState to archived without starting any poll loop', async () => {
+describe('polling store - markSessionArchived (issue #2129 stage 5b, AC3/AC4; epic #1990 stage 5c)', () => {
+  it('sets currentSessionId and sessionState to archived without starting any poll loop or subscribing the session', async () => {
     const { usePollingStore } = await import('@/stores/polling')
     const pollingStore = usePollingStore()
     const fetchSpy = vi.spyOn(global, 'fetch')
@@ -1841,7 +1772,7 @@ describe('polling store - markSessionArchived (issue #2129 stage 5b, AC3/AC4)', 
 
     sessionStore.sessions.set('sess-live', makeSession({ session_id: 'sess-live' }))
     apiMock.get.mockResolvedValue({ cursor: 0 })
-    sequencedFetchMock([{ events: [], next_cursor: 1 }])
+    sequencedPollMock([{ ui: { events: [], next_cursor: 1 }, sessions: { 'sess-live': { events: [], next_cursor: 0 } } }])
 
     pollingStore.markSessionArchived('sess-archived-2')
     expect(pollingStore.sessionState).toBe('archived')
@@ -1853,45 +1784,37 @@ describe('polling store - markSessionArchived (issue #2129 stage 5b, AC3/AC4)', 
     expect(pollingStore.sessionState).toBe('connected')
 
     await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
   })
 
-  // Builder-review finding: marking the SAME session's own connection archived (e.g. the
-  // user opens /session/X/archive/Y for the session X they're already actively viewing —
-  // a real scenario, since a live session and its archive can be open as separate
-  // KeepAlive-cached instances) must stop the still-running live loop, not just overwrite
-  // currentSessionId/state once and leave the old generation free to self-correct it right
-  // back to 'connected' on its very next successful poll.
-  it('marking the currently-connected session itself archived stops its still-running poll loop instead of letting it revert the state', async () => {
+  // Epic #1990 stage 5c: `isCurrentViewArchived` is now a plain, independently-owned ref —
+  // unlike stage 5b's per-connection 'archived' STATE (which a stale in-flight poll response
+  // could overwrite back to 'connected'), nothing in the poll loop ever writes this ref, so
+  // this guarantee now holds by construction rather than needing an explicit disconnect-
+  // before-mark dance.
+  it('marking the currently-connected session itself archived is never reverted by a stale in-flight poll response, by construction', async () => {
     const { pollingStore, sessionStore, sid } = await setupPollSession({ session_id: 'sess-archive-self' })
     sessionStore.currentSessionId = sid
 
     let resolveFetch
-    let fetchCallCount = 0
-    vi.spyOn(global, 'fetch').mockImplementation(() => {
-      fetchCallCount++
-      return new Promise(resolve => { resolveFetch = resolve })
-    })
+    vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(resolve => { resolveFetch = resolve }))
 
     await pollingStore.connectSession(sid)
-    resolveFetch({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 1 }) })
+    resolveFetch({ ok: true, json: () => Promise.resolve({ ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [], next_cursor: 0 } } }) })
     await flush()
     expect(pollingStore.sessionState).toBe('connected')
-    // The loop already raced through to its SECOND poll within this same flush (no real
-    // network delay in this mock) — classic long-poll pattern: the next request is already
-    // in flight by the time the user opens the archive view for this same session.
-    // `resolveFetch` now points at this second, about-to-be-superseded call's resolver.
-    expect(fetchCallCount).toBe(2)
+
     const staleResolve = resolveFetch
 
     pollingStore.markSessionArchived(sid)
     expect(pollingStore.sessionState).toBe('archived')
 
-    // The old (now-superseded) generation's in-flight fetch finally resolves — without the
-    // disconnect-first fix, this would silently flip the state straight back to 'connected'.
-    staleResolve({ ok: true, json: () => Promise.resolve({ events: [], next_cursor: 2 }) })
+    staleResolve({ ok: true, json: () => Promise.resolve({ ui: { events: [], next_cursor: 2 }, sessions: { [sid]: { events: [], next_cursor: 0 } } }) })
     await flush()
 
     expect(pollingStore.sessionState).toBe('archived')
     expect(pollingStore.currentSessionId).toBe(sid)
+
+    pollingStore.stopUIPolling()
   })
 })

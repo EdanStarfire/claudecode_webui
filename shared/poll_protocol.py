@@ -6,6 +6,8 @@ or the scripted scenario driver (`backend/tools/scenario_driver/`, issue #2038).
 
 from dataclasses import dataclass
 
+from pydantic import BaseModel
+
 from shared.event_envelope import EventEnvelope
 
 
@@ -28,15 +30,39 @@ def parse_poll_response(body: dict) -> PollBatch:
     )
 
 
+# --- Multiplexed POST /api/poll (epic #1990 stage 5c) -----------------------------
+# PollResponse/FrontendPollResponse (the legacy single-stream GET /api/poll/ui and
+# GET /api/poll/session/{id} response shapes) were removed in stage 5c phase 5 along
+# with the endpoints themselves — MultiplexStreamResponse below is their direct
+# successor, carrying the identical {events, next_cursor, reset, evicted, epoch}
+# shape per-stream instead of as the whole response body.
+# One request body shape and one response-entry shape, shared by both tiers'
+# `POST /api/poll` handlers so the wire contract can't drift between them.
+
+
+class StreamQuery(BaseModel):
+    since: int = 0
+
+
+class MultiplexPollRequest(BaseModel):
+    """Request body for `POST /api/poll`. `ui` is typically always present (the UI
+    stream is always subscribed); `sessions` carries the browser's current
+    subscription-set cursors, keyed by session_id."""
+
+    timeout: int = 30
+    ui: StreamQuery | None = None
+    sessions: dict[str, StreamQuery] = {}
+
+
 @dataclass
-class PollResponse:
+class MultiplexStreamResponse:
+    """One subscribed stream's slice within a `POST /api/poll` response — the same
+    `{events, next_cursor, reset, evicted, epoch}` shape every single-stream poll
+    response has always used, just nested under "ui"/a session_id instead of being
+    the whole response body."""
+
     events: list[dict]
     next_cursor: int
     reset: bool
     evicted: bool
     epoch: str
-
-
-@dataclass
-class FrontendPollResponse(PollResponse):
-    backend_status: str

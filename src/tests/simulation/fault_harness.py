@@ -6,11 +6,19 @@ Composes the REAL, unmodified `shared.event_queue.EventQueue` and
 processes either side of the relay:
 
 - `FakeBackend`: a real `EventQueue` per stream, behind a `backend_client`-
-  compatible `get_json()` interface — the same shape `PollRelay` already
+  compatible `request_json()` interface — the same shape `PollRelay` already
   depends on — so the real relay code runs unmodified, polling this fake
-  exactly as it would poll `backend/routers/poll.py` over HTTP.
+  exactly as it would poll `backend/routers/poll.py`'s multiplexed
+  `POST /api/poll` over HTTP (epic #1990 stage 5c phase 2/4 — the legacy
+  single-stream GET shape this fake used to simulate has no remaining caller).
 - `FakeFrontend`: owns a `PollRelay` instance plus its own local `EventQueue`s
-  (exactly what `src/routers/poll.py` reads from), pointed at a `FakeBackend`.
+  (exactly what `src/routers/poll.py`'s legacy single-stream GET endpoints —
+  still present through stage 5c phase 5 — read from), pointed at a
+  `FakeBackend`. Its own `poll_ui()`/`poll_session()` keep that legacy single-
+  stream external shape (mirroring `BrowserClient`'s one-stream-at-a-time
+  view) but delegate internally to the same real `shared/poll_multiplex.py`
+  helper `FakeBackend` uses, rather than reimplementing the race/assembly
+  logic a second time by hand.
 
 `BrowserClient` is a scripted poll-loop client (pausable, to simulate a frozen
 tab) that mirrors `src/routers/poll.py`'s own reset/evicted handling: on
@@ -18,16 +26,14 @@ either signal it adopts the fresh cursor and continues — a full REST resync
 is a frontend-JS-store concern (covered by AC1/AC2's equivalence harness and
 `polling.test.js`), out of scope for this transport-layer harness.
 
-Epic #1990 stage 5a: `FakeBackend`'s own `reset` signal (computed the same way
-`backend/routers/poll.py` still does, via `reset_occurred()` against ITS OWN
-`EventQueue` instance being replaced on `restart()`) is independent of, and no
-longer consumed by, `PollRelay` — the relay now detects a Backend restart via
-`epoch` comparison (see `src/poll_relay.py`), and `FakeFrontend`'s own `reset`
-field is derived the same new way real `src/routers/poll.py` is: "does this
-batch contain a `stream_reset` marker". Local (Frontend-side) queues are pure
-auto-increment now (no more `EventQueue.append(cursor=...)` cursor adoption,
-issue #1886/#1889/#1890) — a session queue no longer mirrors Backend's own
-cursor numbering 1:1.
+Epic #1990 stage 5a: a Backend restart is detected via `epoch` comparison
+(see `src/poll_relay.py`), not cursor magnitude — `FakeFrontend`'s own `reset`
+field is derived the same way real `src/routers/poll.py` is: "does this batch
+contain a `stream_reset` marker" (now computed by `shared/poll_multiplex.py`
+itself, consumed via its `StreamResult.reset`). Local (Frontend-side) queues
+are pure auto-increment now (no more `EventQueue.append(cursor=...)` cursor
+adoption, issue #1886/#1889/#1890) — a session queue no longer mirrors
+Backend's own cursor numbering 1:1.
 
 No fake clock: this reuses the codebase's established determinism pattern
 (monkeypatched tiny module-level time constants — see `src/poll_relay.py`'s
@@ -45,29 +51,20 @@ import httpx
 
 import src.poll_relay as _relay_timeout_module
 from shared.event_envelope import EventEnvelope
-from shared.event_queue import EventQueue, reset_occurred
+from shared.event_queue import EventQueue
+from shared.poll_multiplex import multiplex_poll
 from shared.poll_protocol import parse_poll_response
 from src.poll_relay import PollRelay
 
-UI_PATH = "/api/poll/ui"
+# Internal multiplex stream key, not a URL path — epic #1990 stage 5c phase 5
+# removed the legacy GET-path dispatch this constant used to double as.
+_STREAM_KEY_UI = "ui"
 
 # run_fault_scenario() stamps this onto every event it appends, as a stable,
 # cursor-independent delivery identity (epic #1990 stage 5a — see its docstring
 # for why cursor arithmetic alone stopped being safe). Namespaced well past
 # anything a recorded fixture's own content would plausibly use.
 _FAULT_HARNESS_SEQ_KEY = "__fault_harness_seq__"
-
-
-def session_path(session_id: str) -> str:
-    return f"/api/poll/session/{session_id}"
-
-
-def _contains_stream_reset(events: list[dict]) -> bool:
-    """Mirrors src/routers/poll.py's own derivation (epic #1990 stage 5a): `reset`
-    is "does this batch contain a stream_reset marker", not a cursor-magnitude
-    inference — local queues are pure auto-increment now and never regress on
-    their own."""
-    return any(e.get("type") == "stream_reset" for e in events)
 
 
 async def wait_until(predicate, timeout: float = 5.0, interval: float = 0.02) -> bool:
@@ -86,11 +83,23 @@ async def wait_until(predicate, timeout: float = 5.0, interval: float = 0.02) ->
 
 
 class FakeBackend:
-    """Stands in for Backend's real poll endpoints (backend/routers/poll.py) —
-    same `wait_for_events()` -> `events_since()` -> `reset_occurred()` logic,
-    against a real `EventQueue` per stream, reached via a `get_json()` method
-    shaped exactly like `src/backend_client.py`'s real one so the real,
-    unmodified `PollRelay._poll_once()` can call it directly, in-process.
+    """Stands in for Backend's real poll endpoints (backend/routers/poll.py).
+
+    `request_json()` is the sole entry point now (epic #1990 stage 5c phase 4
+    removed the legacy single-stream `get_json()` shape entirely, once the real
+    `PollRelay` it was written to serve switched to the multiplexed `POST
+    /api/poll` in phase 2 — `get_json()` had no remaining caller). Reached via
+    a `backend_client`-compatible interface shaped exactly like
+    `src/backend_client.py`'s real one, so the real relay code runs unmodified,
+    polling this fake exactly as it would poll `backend/routers/poll.py` over
+    HTTP. `request_json()` delegates to the REAL `shared/poll_multiplex.py`
+    helper against this fake's own real per-stream `EventQueue`s — no inline
+    reimplementation of the race/quota/assembly logic. `FakeFrontend`'s own
+    consumer-facing `poll_ui()`/`poll_session()` methods delegate to the same
+    shared helper now too, for the identical fidelity reason — their external
+    single-stream shape is unchanged (mirrors `BrowserClient`'s own one-
+    stream-at-a-time view), only their internals stopped reimplementing
+    `wait_for_events()`/`events_since()`/marker-detection by hand.
     """
 
     def __init__(self) -> None:
@@ -124,11 +133,10 @@ class FakeBackend:
 
     def restart(self) -> None:
         """AC3 primitive: Backend process restart — every stream gets a fresh
-        `EventQueue` (cursor space discontinuity, detected locally via
-        `reset_occurred()` exactly as `backend/routers/poll.py` does) AND a bumped
-        `epoch` (epic #1990 stage 5a) — the signal `PollRelay` actually watches for
-        now, independent of whether a given poll happens to also observe a lower
-        cursor. Implicitly comes back up (a restarted process is, by definition, up).
+        `EventQueue` (cursor space discontinuity) AND a bumped `epoch` (epic
+        #1990 stage 5a) — the signal `PollRelay` actually watches for, independent
+        of whether a given poll happens to also observe a lower cursor. Implicitly
+        comes back up (a restarted process is, by definition, up).
         """
         for session_id in list(self._session_queues):
             self._session_queues[session_id] = EventQueue()
@@ -152,27 +160,47 @@ class FakeBackend:
         to become ready (e.g. mid-startup). 0 clears it."""
         self._extra_delay = delay
 
-    async def get_json(
-        self, path: str, params: dict[str, Any] | None = None, timeout: float | None = None
+    async def request_json(
+        self, method: str, path: str, json: dict[str, Any] | None = None, timeout: float | None = None
     ) -> dict[str, Any]:
+        """`backend_client`-compatible POST entry point — what the real,
+        unmodified `PollRelay` now calls (see class docstring). Only
+        `POST /api/poll` is implemented; nothing in this harness sends anything
+        else through this method today."""
+        assert method == "POST" and path == "/api/poll", f"unexpected request_json call: {method} {path}"
         if self._down:
-            raise httpx.ConnectError("FakeBackend is down", request=httpx.Request("GET", path))
+            raise httpx.ConnectError("FakeBackend is down", request=httpx.Request(method, path))
         if self._extra_delay:
             await asyncio.sleep(self._extra_delay)
 
-        params = params or {}
-        since = int(params.get("since", 0))
-        poll_timeout = float(params.get("timeout", 30))
-        effective_timeout = min(poll_timeout, 30.0)
+        body = json or {}
+        poll_timeout = min(float(body.get("timeout", 30)), 30.0)
+        streams: dict[str, tuple[EventQueue, int]] = {}
+        ui_query = body.get("ui")
+        if ui_query is not None:
+            streams[_STREAM_KEY_UI] = (self._ui_queue, int(ui_query.get("since", 0)))
+        session_queries = body.get("sessions") or {}
+        for session_id, query in session_queries.items():
+            streams[session_id] = (self.queue_for(session_id), int(query.get("since", 0)))
 
-        queue = self._ui_queue if path == UI_PATH else self.queue_for(path.rsplit("/", 1)[-1])
-        await queue.wait_for_events(since, timeout=effective_timeout)
-        events, next_cursor, evicted = queue.events_since(since)
-        reset = reset_occurred(next_cursor, since)
-        return {
-            "events": events, "next_cursor": next_cursor, "reset": reset, "evicted": evicted,
-            "epoch": str(self._epoch),
+        results = await multiplex_poll(streams, timeout=poll_timeout)
+
+        response: dict[str, Any] = {}
+        if ui_query is not None:
+            result = results[_STREAM_KEY_UI]
+            response["ui"] = {
+                "events": result.events, "next_cursor": result.next_cursor,
+                "reset": result.reset, "evicted": result.evicted, "epoch": str(self._epoch),
+            }
+        response["sessions"] = {
+            session_id: {
+                "events": results[session_id].events, "next_cursor": results[session_id].next_cursor,
+                "reset": results[session_id].reset, "evicted": results[session_id].evicted,
+                "epoch": str(self._epoch),
+            }
+            for session_id in session_queries
         }
+        return response
 
 
 class FakeFrontend:
@@ -207,30 +235,39 @@ class FakeFrontend:
     async def stop(self) -> None:
         await self.poll_relay.stop()
 
-    async def poll_ui(self, since: int, timeout: float = 1.0) -> dict[str, Any]:
-        self.poll_relay.start_ui_relay()
+    async def _poll_one_local_stream(
+        self, stream_key: str, queue: EventQueue, since: int, timeout: float
+    ) -> dict[str, Any]:
+        """Shared by poll_ui()/poll_session(): races+assembles exactly one local
+        stream via the REAL shared/poll_multiplex.py helper — no inline
+        reimplementation of wait_for_events()/events_since()/marker-detection.
+        quota_per_stream is set to the queue's own MAX_SIZE (effectively
+        unbounded for any event count this harness realistically exercises):
+        poll_ui()/poll_session() simulate the LEGACY single-stream endpoints,
+        which never truncated a batch, so adopting the newer endpoint's default
+        quota here would be a real (if usually invisible) behavior change, not
+        a pure refactor.
+        """
         effective_timeout = min(float(timeout), 30.0)
-        await self.ui_queue.wait_for_events(since, timeout=effective_timeout)
-        events, next_cursor, local_evicted = self.ui_queue.events_since(since)
-        evicted = local_evicted or self.poll_relay.consume_pending_evicted("ui")
-        reset = _contains_stream_reset(events)
+        results = await multiplex_poll(
+            {stream_key: (queue, since)}, timeout=effective_timeout, quota_per_stream=EventQueue.MAX_SIZE
+        )
+        result = results[stream_key]
+        evicted = result.evicted or self.poll_relay.consume_pending_evicted(stream_key)
         return {
-            "events": events, "next_cursor": next_cursor, "reset": reset, "evicted": evicted,
-            "epoch": self.poll_relay.last_epoch("ui") or "",
+            "events": result.events, "next_cursor": result.next_cursor,
+            "reset": result.reset, "evicted": evicted,
+            "epoch": self.poll_relay.last_epoch(stream_key) or "",
         }
 
+    async def poll_ui(self, since: int, timeout: float = 1.0) -> dict[str, Any]:
+        self.poll_relay.start_ui_relay()
+        return await self._poll_one_local_stream("ui", self.ui_queue, since, timeout)
+
     async def poll_session(self, session_id: str, since: int, timeout: float = 1.0) -> dict[str, Any]:
-        self.poll_relay.ensure_session_relay(session_id)
+        self.poll_relay.touch_session(session_id)
         queue = self.session_queues[session_id]
-        effective_timeout = min(float(timeout), 30.0)
-        await queue.wait_for_events(since, timeout=effective_timeout)
-        events, next_cursor, local_evicted = queue.events_since(since)
-        evicted = local_evicted or self.poll_relay.consume_pending_evicted(session_id)
-        reset = _contains_stream_reset(events)
-        return {
-            "events": events, "next_cursor": next_cursor, "reset": reset, "evicted": evicted,
-            "epoch": self.poll_relay.last_epoch(session_id) or "",
-        }
+        return await self._poll_one_local_stream(session_id, queue, since, timeout)
 
 
 class BrowserClient:

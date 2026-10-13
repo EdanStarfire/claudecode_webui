@@ -18,7 +18,7 @@ Composable Chrome DevTools MCP skills for UI testing of the Claude Code WebUI.
 ## Design Principles
 
 1. **No fixed sleeps** — all wait steps use `mcp__chrome_devtools__wait_for` polling
-2. **Long-poll aware** — connection is HTTP long-poll (`/api/poll/ui`, `/api/poll/session/{id}`), not WebSocket. Connection check uses `.header-indicator.connected`
+2. **Long-poll aware** — connection is HTTP long-poll (`POST /api/poll`, multiplexed across the UI stream and every subscribed session), not WebSocket. Connection check uses `.header-indicator.connected`
 3. **Idempotent** — handle "already in desired state" without error
 4. **Clear errors** — specific failure messages with current UI state context
 5. **Composable** — no side effects that break subsequent skills

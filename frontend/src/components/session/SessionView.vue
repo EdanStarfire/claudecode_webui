@@ -189,9 +189,9 @@ onActivated(async () => {
     // Set currentSessionId so AgentOverview can display for deleted agents
     sessionStore.currentSessionId = props.sessionId
     sessionStore.lastViewedArchive.set(props.sessionId, effectiveArchiveId.value)
-    // Epic #1990 stage 5b (AC3/UC3): an archived session view never starts a poll
-    // loop at all — mark the session connection explicitly archived instead of
-    // leaving wsStore.currentSessionId/sessionConn.state untouched (an implicit,
+    // Epic #1990 stage 5b (AC3/UC3), consolidated stage 5c: an archived session view
+    // never subscribes to live polling at all — mark the view explicitly archived
+    // instead of leaving wsStore.currentSessionId/sessionState untouched (an implicit,
     // uninspectable absence the header could misread as either a stale "connected"
     // from a previously-viewed live session, or a spurious "disconnected").
     pollingStore.markSessionArchived(props.sessionId)

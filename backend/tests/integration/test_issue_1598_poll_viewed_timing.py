@@ -1,5 +1,6 @@
 """
-Issue #1598: Integration tests for poll_session() viewed-timestamp timing.
+Issue #1598: Integration tests for the multiplexed poll endpoint's
+viewed-timestamp timing.
 
 The fix moves mark_viewed() to BEFORE wait_for_events() so that any completion
 arriving during the long-poll window is timestamped after last_viewed_at and
@@ -9,6 +10,11 @@ Tests:
 1. mark_viewed() is called before wait_for_events() (call-order guarantee)
 2. Completion arriving during the poll window stays unread after the poll returns
 3. Session with no prior completion: mark_viewed is a no-op (existing behavior)
+
+Epic #1990 stage 5c phase 5: migrated from the legacy single-stream
+GET /api/poll/session/{id} endpoint (removed this phase) to POST /api/poll —
+backend/routers/poll.py's poll_multiplex() calls mark_viewed() for every
+subscribed session before multiplex_poll(), same ordering guarantee.
 """
 
 from datetime import UTC, datetime
@@ -40,7 +46,9 @@ class TestPollViewedTiming:
         webui.coordinator.session_manager.mark_viewed = patched_mark_viewed
         queue.wait_for_events = patched_wait
         try:
-            resp = await client.get(f"/api/poll/session/{sid}?since=0&timeout=0")
+            resp = await client.post(
+                "/api/poll", json={"timeout": 0, "sessions": {sid: {"since": 0}}}
+            )
             assert resp.status_code == 200
             assert len(call_order) >= 2, f"Expected both calls, got: {call_order}"
             assert call_order[0] == "mark_viewed", (
@@ -77,7 +85,7 @@ class TestPollViewedTiming:
         # last_viewed_at up to it (guard B's "already caught up" state).
         first_ts = datetime.now(UTC)
         await session_mgr.mark_completion(sid, first_ts)
-        resp = await client.get(f"/api/poll/session/{sid}?since=0&timeout=0")
+        resp = await client.post("/api/poll", json={"timeout": 0, "sessions": {sid: {"since": 0}}})
         assert resp.status_code == 200
         baseline_viewed_at = session_mgr._active_sessions[sid].last_viewed_at
         assert baseline_viewed_at is not None
@@ -91,7 +99,7 @@ class TestPollViewedTiming:
 
         queue.wait_for_events = patched_wait_with_completion
         try:
-            resp = await client.get(f"/api/poll/session/{sid}?since=0&timeout=0")
+            resp = await client.post("/api/poll", json={"timeout": 0, "sessions": {sid: {"since": 0}}})
             assert resp.status_code == 200
 
             info = session_mgr._active_sessions.get(sid)
@@ -118,7 +126,7 @@ class TestPollViewedTiming:
         sid = session["session_id"]
 
         # No completion has been recorded — mark_viewed should be a no-op
-        resp = await client.get(f"/api/poll/session/{sid}?since=0&timeout=0")
+        resp = await client.post("/api/poll", json={"timeout": 0, "sessions": {sid: {"since": 0}}})
         assert resp.status_code == 200
 
         info = webui.coordinator.session_manager._active_sessions.get(sid)

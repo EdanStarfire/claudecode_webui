@@ -3,10 +3,15 @@ Issue #782: Integration tests for HTTP long-polling endpoints and REST inbound a
 
 Tests:
 - EventQueue: append, events_since (normal cursor, too-old cursor snapshot), MAX_SIZE eviction
-- GET /api/poll/ui: returns events, correct next_cursor
-- GET /api/poll/session/{id}: returns events for that session only
+- POST /api/poll (ui block): returns events, correct next_cursor
+- POST /api/poll (sessions block): returns events for that session only
 - POST /api/sessions/{id}/interrupt: calls coordinator interrupt
 - POST /api/sessions/{id}/permission/{request_id}: resolves Future with allow/deny
+
+Epic #1990 stage 5c phase 5: TestPollUI/TestPollSession originally covered the
+legacy single-stream GET /api/poll/ui and GET /api/poll/session/{id} endpoints,
+removed in this phase — migrated here to POST /api/poll, same regression intent
+(issues #1984/#1988's reset/evicted semantics, session isolation).
 """
 
 import asyncio
@@ -134,13 +139,24 @@ class TestEventQueue:
 # Poll endpoint tests
 # ===========================================================================
 
+async def _poll_multiplex(client, *, ui_since=None, sessions=None):
+    """Helper shared by TestPollUI/TestPollSession below: builds a POST /api/poll
+    body with timeout=0 (no real waiting needed for these direct-injection tests)."""
+    body: dict = {"timeout": 0}
+    if ui_since is not None:
+        body["ui"] = {"since": ui_since}
+    if sessions:
+        body["sessions"] = sessions
+    return await client.post("/api/poll", json=body)
+
+
 class TestPollUI:
     async def test_poll_ui_returns_empty_on_no_events(self, api_integration_env):
         client = api_integration_env["client"]
         # Use short timeout to avoid long wait in tests
-        resp = await client.get("/api/poll/ui?since=0&timeout=0")
+        resp = await _poll_multiplex(client, ui_since=0)
         assert resp.status_code == 200
-        data = resp.json()
+        data = resp.json()["ui"]
         assert "events" in data
         assert "next_cursor" in data
         assert isinstance(data["events"], list)
@@ -153,9 +169,9 @@ class TestPollUI:
         webui.ui_queue.append({"type": "test_event", "value": 42})
         webui.ui_queue.append({"type": "test_event_2", "value": 99})
 
-        resp = await client.get("/api/poll/ui?since=0&timeout=0")
+        resp = await _poll_multiplex(client, ui_since=0)
         assert resp.status_code == 200
-        data = resp.json()
+        data = resp.json()["ui"]
         assert len(data["events"]) >= 2
         assert data["next_cursor"] >= 2
 
@@ -167,9 +183,9 @@ class TestPollUI:
         webui.ui_queue.append({"type": "second"})
 
         # Poll since c1 — should only get second
-        resp = await client.get(f"/api/poll/ui?since={c1}&timeout=0")
+        resp = await _poll_multiplex(client, ui_since=c1)
         assert resp.status_code == 200
-        data = resp.json()
+        data = resp.json()["ui"]
         assert len(data["events"]) == 1
         assert data["events"][0]["type"] == "second"
 
@@ -178,12 +194,12 @@ class TestPollUI:
         webui = api_integration_env["webui"]
 
         webui.ui_queue.append({"type": "evt"})
-        resp1 = await client.get("/api/poll/ui?since=0&timeout=0")
-        cursor1 = resp1.json()["next_cursor"]
+        resp1 = await _poll_multiplex(client, ui_since=0)
+        cursor1 = resp1.json()["ui"]["next_cursor"]
 
         webui.ui_queue.append({"type": "evt2"})
-        resp2 = await client.get(f"/api/poll/ui?since={cursor1}&timeout=0")
-        assert resp2.json()["next_cursor"] > cursor1
+        resp2 = await _poll_multiplex(client, ui_since=cursor1)
+        assert resp2.json()["ui"]["next_cursor"] > cursor1
 
     async def test_poll_ui_state_change_event_appears(self, api_integration_env):
         """State change events from session creation appear in the UI queue."""
@@ -196,18 +212,18 @@ class TestPollUI:
         project = await api_integration_env["create_test_project"]("Poll UI Test")
         await api_integration_env["create_test_session"](project["project_id"])
 
-        resp = await client.get(f"/api/poll/ui?since={cursor_before}&timeout=0")
+        resp = await _poll_multiplex(client, ui_since=cursor_before)
         assert resp.status_code == 200
-        data = resp.json()
+        data = resp.json()["ui"]
         event_types = [e.get("type") for e in data["events"]]
         # state_change event should appear when session is created
         assert "state_change" in event_types
 
-    async def test_poll_ui_reset_true_with_full_events_after_queue_reset(self, api_integration_env):
+    async def test_poll_ui_queue_instance_swap_loses_no_data(self, api_integration_env):
         """Issue #1984: simulates a Backend restart replacing the queue instance
         with a fresh EventQueue() at cursor 0. A stale, still-high `since` held by
-        an already-connected browser must get the full post-reset buffer and
-        reset=true — never an empty batch with a silently-adopted next_cursor."""
+        an already-connected browser must get the full post-reset buffer — never
+        an empty batch with a silently-adopted next_cursor."""
         client = api_integration_env["client"]
         webui = api_integration_env["webui"]
 
@@ -221,11 +237,28 @@ class TestPollUI:
         webui.ui_queue.append({"type": "post_reset_1"})
         webui.ui_queue.append({"type": "post_reset_2"})
 
-        resp = await client.get(f"/api/poll/ui?since={stale_cursor}&timeout=0")
+        resp = await _poll_multiplex(client, ui_since=stale_cursor)
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["reset"] is True
+        data = resp.json()["ui"]
+        # Epic #1990 stage 5c: the legacy same-process `reset_occurred()` signal
+        # (cursor-magnitude based) this test originally asserted is retired on the
+        # new endpoint by design — `reset` is purely marker-based now (Backend
+        # never emits a stream_reset marker on its own queues; only the Frontend
+        # relay does, on an observed cross-process epoch change) and `evicted` is
+        # a genuine retained-window check (`cursor < oldest_retained - 1`), which
+        # this scenario doesn't trigger either (the stale cursor is simply ahead
+        # of the fresh queue's own still-low cursor, the "cursor > current" branch
+        # of events_since(), not a retained-window miss). Nothing in real Backend
+        # code ever replaces an existing EventQueue instance mid-process (only a
+        # genuine process restart does, caught by the relay's own PROCESS_EPOCH
+        # comparison) — this was always a same-process white-box simulation, not
+        # a reachable production path. The property that still matters, and is
+        # still correctly preserved, is asserted below: no data loss, and the
+        # cursor is resumable.
+        assert data["reset"] is False
+        assert data["evicted"] is False
         assert [e["type"] for e in data["events"]] == ["post_reset_1", "post_reset_2"]
+        assert data["next_cursor"] == 2
 
     async def test_poll_ui_reset_false_in_normal_case(self, api_integration_env):
         client = api_integration_env["client"]
@@ -233,18 +266,22 @@ class TestPollUI:
 
         webui.ui_queue.append({"type": "evt"})
 
-        resp = await client.get("/api/poll/ui?since=0&timeout=0")
+        resp = await _poll_multiplex(client, ui_since=0)
         assert resp.status_code == 200
-        data = resp.json()
+        data = resp.json()["ui"]
         assert data["reset"] is False
         assert data["evicted"] is False
 
 
 class TestPollSession:
-    async def test_poll_session_404_for_unknown(self, api_integration_env):
+    async def test_poll_session_unknown_omitted_from_response(self, api_integration_env):
+        """Epic #1990 stage 5c: the multiplexed endpoint omits an unknown session
+        from its response rather than 404ing the whole request — see
+        backend/routers/poll.py's poll_multiplex() for why."""
         client = api_integration_env["client"]
-        resp = await client.get("/api/poll/session/nonexistent-id?since=0&timeout=0")
-        assert resp.status_code == 404
+        resp = await _poll_multiplex(client, sessions={"nonexistent-id": {"since": 0}})
+        assert resp.status_code == 200
+        assert "nonexistent-id" not in resp.json()["sessions"]
 
     async def test_poll_session_returns_empty_on_no_events(self, api_integration_env):
         client = api_integration_env["client"]
@@ -255,9 +292,9 @@ class TestPollSession:
 
         assert sid in webui.session_queues
 
-        resp = await client.get(f"/api/poll/session/{sid}?since=0&timeout=0")
+        resp = await _poll_multiplex(client, sessions={sid: {"since": 0}})
         assert resp.status_code == 200
-        data = resp.json()
+        data = resp.json()["sessions"][sid]
         assert "events" in data
         assert "next_cursor" in data
 
@@ -270,9 +307,9 @@ class TestPollSession:
 
         webui.session_queues[sid].append({"type": "message", "data": {"text": "hello"}})
 
-        resp = await client.get(f"/api/poll/session/{sid}?since=0&timeout=0")
+        resp = await _poll_multiplex(client, sessions={sid: {"since": 0}})
         assert resp.status_code == 200
-        data = resp.json()
+        data = resp.json()["sessions"][sid]
         assert len(data["events"]) == 1
         assert data["events"][0]["type"] == "message"
 
@@ -288,9 +325,9 @@ class TestPollSession:
 
         webui.session_queues[sid_a].append({"type": "only_for_a"})
 
-        resp = await client.get(f"/api/poll/session/{sid_b}?since=0&timeout=0")
+        resp = await _poll_multiplex(client, sessions={sid_b: {"since": 0}})
         assert resp.status_code == 200
-        data = resp.json()
+        data = resp.json()["sessions"][sid_b]
         types = [e["type"] for e in data["events"]]
         assert "only_for_a" not in types
 
@@ -301,11 +338,13 @@ class TestPollSession:
         sid = session["session_id"]
         assert sid in webui.session_queues
 
-    async def test_poll_session_reset_true_with_full_events_after_queue_reset(self, api_integration_env):
-        """Issue #1984: mirrors the UI-queue reset case for a session queue —
-        a fresh EventQueue() replacing the session's queue (Backend restart)
-        must surface reset=true and the full post-reset buffer to a stale,
-        still-high `since`."""
+    async def test_poll_session_queue_instance_swap_loses_no_data(self, api_integration_env):
+        """Issue #1984: mirrors the UI-queue case for a session queue — see
+        test_poll_ui_reset_true_with_full_events_after_queue_reset's comment for
+        why neither `reset` nor `evicted` fire for this same-process (not a real
+        restart) queue-instance swap under the new endpoint's semantics, and why
+        that's correct rather than a regression. What still matters, and is still
+        correctly preserved: no data loss, and the cursor is resumable."""
         client = api_integration_env["client"]
         webui = api_integration_env["webui"]
         project = await api_integration_env["create_test_project"]()
@@ -322,11 +361,13 @@ class TestPollSession:
         webui.session_queues[sid].append({"type": "post_reset_1"})
         webui.session_queues[sid].append({"type": "post_reset_2"})
 
-        resp = await client.get(f"/api/poll/session/{sid}?since={stale_cursor}&timeout=0")
+        resp = await _poll_multiplex(client, sessions={sid: {"since": stale_cursor}})
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["reset"] is True
+        data = resp.json()["sessions"][sid]
+        assert data["reset"] is False
+        assert data["evicted"] is False
         assert [e["type"] for e in data["events"]] == ["post_reset_1", "post_reset_2"]
+        assert data["next_cursor"] == 2
 
     async def test_poll_session_reset_false_in_normal_case(self, api_integration_env):
         client = api_integration_env["client"]
@@ -337,9 +378,9 @@ class TestPollSession:
 
         webui.session_queues[sid].append({"type": "evt"})
 
-        resp = await client.get(f"/api/poll/session/{sid}?since=0&timeout=0")
+        resp = await _poll_multiplex(client, sessions={sid: {"since": 0}})
         assert resp.status_code == 200
-        data = resp.json()
+        data = resp.json()["sessions"][sid]
         assert data["reset"] is False
         assert data["evicted"] is False
 
@@ -358,9 +399,9 @@ class TestPollSession:
         for i in range(5):
             queue.append({"type": str(i), "i": i})
 
-        resp = await client.get(f"/api/poll/session/{sid}?since=0&timeout=0")
+        resp = await _poll_multiplex(client, sessions={sid: {"since": 0}})
         assert resp.status_code == 200
-        data = resp.json()
+        data = resp.json()["sessions"][sid]
         assert data["reset"] is False
         assert data["evicted"] is True
 

@@ -361,18 +361,28 @@ For detailed store documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE.md#
 - Orphaned tool detection: session restart, interrupt, termination
 
 ### 4. Polling Store (`stores/polling.js`)
-**Responsibility**: HTTP long-polling event streams (UI + per-session), outbound message dispatch
+**Responsibility**: HTTP long-polling (one multiplexed stream carrying UI + every subscribed session), outbound message dispatch
 
-**State** (Epic #1990 stage 5b: one `StreamConnection` state machine per stream — states
-`idle | connecting | connected | resyncing | backoff | unreachable | archived`, liveness
-derived only from poll responses/fetch outcomes, no wall-clock staleness timers):
-- `uiState`, `uiRetryCount`, `uiBackendStatus`: UI stream's own connection state/backend health
-- `sessionState`, `sessionRetryCount`, `sessionBackendStatus`, `sessionHasEverConnected`: session stream's own connection state/backend health
-- `sessionCursors` (Map): cross-session cursor cache so switching back to a previously-viewed session resumes incrementally, separate from each StreamConnection's own live cursor
+**State** (Epic #1990 stage 5c: one shared `StreamConnection` state machine for the whole
+multiplexed transport — states `idle | connecting | connected | resyncing | backoff |
+unreachable | archived`, liveness derived only from poll responses/fetch outcomes, no
+wall-clock staleness timers):
+- `uiState`/`uiRetryCount`/`uiBackendStatus` and `sessionState`/`sessionRetryCount`/
+  `sessionBackendStatus`: same underlying shared connection, exposed under both names for
+  API-shape compatibility (`sessionState` additionally reflects an independent per-view
+  archived flag `conn` itself can never produce or revert)
+- `sessionHasEverConnected`: per-session now (not per-connection) — true once the CURRENT
+  session's own subscription entry has received at least one successful poll response
+- A `subscriptions` Map (sessionId -> `{cursor, hasEverSeenResponse}`), LRU-bounded to
+  `MAX_SUBSCRIBED_SESSIONS` (5: current + 4 recently-viewed) — every entry is ACTIVELY
+  polled (not just cached), so a recently-viewed-but-not-current session keeps receiving
+  live events the whole time it's subscribed, replacing the old passive `sessionCursors` cache
 
 **Key Actions**:
-- `startUIPolling()`: Long-poll loop against `/api/poll/ui`
-- `startSessionPolling(sessionId)`: Long-poll loop against `/api/poll/session/{id}`
+- `startUIPolling()`: starts the single shared long-poll loop against `POST /api/poll`,
+  carrying the UI stream plus the current subscription set in one request body
+- `connectSession(sessionId)`: subscribes a session (adds to the LRU, seeds its cursor,
+  starts the shared loop if not already running)
 - `sendMessage()`: POST to `/api/sessions/{id}/messages`
 - `sendPermissionResponse()`, `interruptSession()`: REST calls
 - Exponential backoff on error (up to 30 seconds), page-visibility pause/resume
@@ -527,8 +537,11 @@ manually-run or genuinely remote Backend instead.
 
 ### `src/routers/` - **Frontend-Side Routes Only**
 - **`core.py`**: `/`, `/health`, `/ready`, `/api/auth/check`
-- **`poll.py`**: `/api/poll/ui`, `/api/poll/session/{id}` — reads LOCAL
-  EventQueues populated by `poll_relay.py`, not direct coordinator callbacks
+- **`poll.py`**: `POST /api/poll` — one multiplexed request carrying the UI
+  stream plus a subscription set of session streams; reads LOCAL EventQueues
+  populated by `poll_relay.py`, not direct coordinator callbacks. Also the
+  one-shot `GET /api/poll/cursor`/`GET /api/poll/session/{id}/cursor`
+  bootstrap endpoints (not long-polling, not part of epic #1990's removal)
 - **`config.py`**: `/api/config` — merged read (local `networking`/
   `backend_connection` + relayed Backend sections) / split write
 - **`system.py`**: `POST /api/system/restart` only — pulls/switches Frontend's
@@ -552,9 +565,10 @@ manually-run or genuinely remote Backend instead.
 - **`backend_supervisor.py`**: owns the auto-started local Backend subprocess
   — OS-assigned port, fresh token, readiness gating, crash/restart with
   backoff (capped, then marks degraded), clean SIGTERM-then-SIGKILL shutdown.
-- **`poll_relay.py`**: one background long-poll task per stream (UI, each
-  active session) continuously polling Backend's own poll endpoints and
-  fanning results into local `EventQueue`s.
+- **`poll_relay.py`**: one consolidated background long-poll task carrying a
+  dynamic subscription set (UI plus every recently-active session) against
+  Backend's own multiplexed `POST /api/poll`, fanning results into local
+  `EventQueue`s.
 - **`frontend_config.py`**: Frontend's own `networking`/`backend_connection`
   config sections — reads/writes only its own keys in the shared
   `~/.config/cc_webui/config.json`, leaving Backend's sections untouched.
@@ -580,8 +594,8 @@ manually-run or genuinely remote Backend instead.
 - Own `AuthMiddleware` validating the backend-scoped bearer token
 - Own `/health` (liveness) + `/ready` (readiness — true once
   `SessionCoordinator` and its managers finish constructing)
-- Own `/api/poll/ui`, `/api/poll/session/{id}` (`backend/routers/poll.py`) —
-  the real EventQueues SessionCoordinator writes to
+- Own `POST /api/poll` (`backend/routers/poll.py`) — the real EventQueues
+  SessionCoordinator writes to, served through one multiplexed endpoint
 - Own `/api/config` (`backend/routers/config.py`) — every AppConfig section
   except `networking`/`backend_connection`
 - `/api/internal/oauth-callback-paths` — exposes the dynamic custom-OAuth-
@@ -878,7 +892,7 @@ therefore captured into `frontend.log` by the tee.
 
 For the complete endpoint reference with request/response details, see [.claude/API_REFERENCE.md](./.claude/API_REFERENCE.md).
 
-**Summary**: 50+ REST endpoints across 10 domains (projects, sessions, files, resources, diffs, queue, legion, schedules, templates, system), owned by `backend/routers/` and reached through Frontend's generic relay (`src/routers/relay.py`) — plus `core.py`/`poll.py`/`config.py`/`system.py`'s handful of Frontend-side routes. 2 HTTP long-polling endpoints exist on **both** tiers post-#498 (`/api/poll/ui`, `/api/poll/session/{id}`) — Backend's are the real ones SessionCoordinator writes to; Frontend's read from local EventQueues kept in sync by `poll_relay.py`. The browser only ever talks to Frontend's copy.
+**Summary**: 50+ REST endpoints across 10 domains (projects, sessions, files, resources, diffs, queue, legion, schedules, templates, system), owned by `backend/routers/` and reached through Frontend's generic relay (`src/routers/relay.py`) — plus `core.py`/`poll.py`/`config.py`/`system.py`'s handful of Frontend-side routes. One multiplexed HTTP long-polling endpoint (`POST /api/poll`) exists on **both** tiers post-#498/epic #1990 stage 5c — Backend's is the real one SessionCoordinator writes to; Frontend's reads from local EventQueues kept in sync by `poll_relay.py`. The browser only ever talks to Frontend's copy.
 
 ## Message Flow Architecture
 
@@ -912,8 +926,9 @@ For the complete endpoint reference with request/response details, see [.claude/
    endpoint) receives the event, re-appends it to Frontend's LOCAL EventQueue
    ↓
 8. Frontend's own poll.py (src/routers/poll.py) serves it from that local
-   queue to the browser's long-poll request — same {events, next_cursor}
-   shape as before the #498 split
+   queue to the browser's long-poll request — nested under this session's
+   entry in the multiplexed response's {events, next_cursor, ...} per-stream
+   shape (epic #1990 stage 5c), same per-stream fields as before the #498 split
    ↓
 9. Frontend poll loop (browser) receives it, updates Pinia stores reactively
 ```

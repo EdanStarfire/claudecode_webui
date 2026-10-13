@@ -35,16 +35,24 @@ function flush() {
   return new Promise(resolve => setTimeout(resolve, 0))
 }
 
-// Serves `batch` (a single {events, next_cursor} poll response) to the first fetch()
-// call, then hangs (abort-aware, like the real long-poll's idle wait) for every call
-// after — so the poll loop's first response carries the entire recorded queue_event
-// stream, and every call after that parks harmlessly until disconnectSession() aborts it.
-function singleBatchFetchMock(batch) {
+// Serves the entire recorded queue_event stream, for `sessionId` alone, as the ONE
+// subscribed session's batch in a single multiplexed poll response (epic #1990 stage
+// 5c: the wire shape is now {ui, sessions}, not a bare {events, next_cursor}) to the
+// first fetch() call, then hangs (abort-aware, like the real long-poll's idle wait)
+// for every call after — every call after the first parks harmlessly until
+// disconnectSession() aborts it.
+function singleBatchFetchMock(sessionId, events) {
   let served = false
   return vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => {
     if (!served) {
       served = true
-      return Promise.resolve({ ok: true, json: () => Promise.resolve(batch) })
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({
+          ui: { events: [], next_cursor: 0 },
+          sessions: { [sessionId]: { events, next_cursor: events.length } },
+        }),
+      })
     }
     return new Promise((_resolve, reject) => {
       opts?.signal?.addEventListener('abort', () => {
@@ -66,18 +74,18 @@ async function replayLivePath(fixture) {
   const messageStore = useMessageStore()
   const pollingStore = usePollingStore()
 
-  // dispatchEvent()'s session-stream guard only applies an event when session.js's own
-  // currentSessionId matches — mirrors how the real app keeps them in sync via selectSession().
+  // Epic #1990 stage 5c: dispatchEvent()'s session-stream guard is now a subscription-
+  // set membership check (polling.js's own, independent of session.js) — connectSession()
+  // below subscribes fixture.sessionId regardless of this. Still set to mirror how the
+  // real app keeps them in sync via selectSession(), since other pipeline code
+  // (SESSION_EVENT_HANDLERS) reads sessionStore state too.
   sessionStore.currentSessionId = fixture.sessionId
 
   apiMock.get.mockImplementation((url) => {
     if (String(url).includes('/cursor')) return Promise.resolve({ cursor: 0 })
     return Promise.resolve({})
   })
-  const fetchMock = singleBatchFetchMock({
-    events: fixture.queueEvents,
-    next_cursor: fixture.queueEvents.length,
-  })
+  const fetchMock = singleBatchFetchMock(fixture.sessionId, fixture.queueEvents)
 
   await pollingStore.connectSession(fixture.sessionId)
   await flush()

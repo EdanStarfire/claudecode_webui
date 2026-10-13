@@ -71,6 +71,23 @@ class TestPollAccessLogFilter:
         record = _make_access_record("GET", "/api/poll/ui")
         assert f.filter(record) is True
 
+    # Epic #1990 stage 5c: the multiplexed POST /api/poll endpoint has no
+    # trailing-slash segment, unlike every other poll path this filter already
+    # matched — without an exact-match branch, "/api/poll" doesn't contain
+    # "/api/poll/" and would slip through unfiltered, reintroducing exactly the
+    # log-flooding problem issue #1200 exists to prevent (now that stage 5c
+    # phase 5 removed the legacy /api/poll/ui and /api/poll/session/{id}
+    # long-poll endpoints, this bare path is the ONLY poll traffic left).
+    def test_bare_multiplex_poll_path_suppressed_when_allow_all_false(self):
+        f = PollAccessLogFilter(allow_all=False)
+        record = _make_access_record("POST", "/api/poll")
+        assert f.filter(record) is False
+
+    def test_bare_multiplex_poll_path_allowed_when_allow_all_true(self):
+        f = PollAccessLogFilter(allow_all=True)
+        record = _make_access_record("POST", "/api/poll")
+        assert f.filter(record) is True
+
     def test_non_poll_path_always_allowed(self):
         f = PollAccessLogFilter(allow_all=False)
         for path in ("/api/sessions", "/api/projects", "/", "/api/poll-unrelated"):

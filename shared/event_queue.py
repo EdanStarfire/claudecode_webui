@@ -8,16 +8,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def reset_occurred(next_cursor: int, since: int) -> bool:
-    """Whether an `events_since(since)` result reflects a queue reset.
-
-    A `next_cursor` lower than the `since` a caller asked for is only
-    possible if the queue's cursor space started over beneath the caller —
-    proof of a reset (e.g. Backend restart), not just an empty poll.
-    """
-    return next_cursor < since
-
-
 class EventQueue:
     """Bounded in-memory event queue for HTTP long-polling."""
 
@@ -70,11 +60,11 @@ class EventQueue:
 
         `evicted` is true only when `cursor` predates the buffer's oldest
         retained event — i.e. genuinely-lost history, not a resettable cursor
-        space (that case is `reset_occurred()`, checked independently by
-        callers against `next_cursor`/`since`). Callers that need an explicit
-        signal for "some history was silently dropped" (e.g. a stall-heal
-        deciding whether to fall back to a full resync) should check this
-        field rather than inferring it from `reset_occurred()`.
+        space (a `next_cursor` lower than `cursor` instead — e.g. a Backend
+        restart — which callers detect via the explicit `stream_reset` marker,
+        not this field). Callers that need an explicit signal for "some
+        history was silently dropped" (e.g. a stall-heal deciding whether to
+        fall back to a full resync) should check this field.
         """
         if not self._events:
             return [], self._cursor, False

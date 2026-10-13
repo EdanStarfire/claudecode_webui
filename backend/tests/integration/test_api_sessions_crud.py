@@ -551,9 +551,13 @@ class TestDeleteSession:
         assert not any(record.exc_info for record in caplog.records)
 
     async def test_delete_session_two_poll_clients_converge_on_session_deleted(self, api_integration_env):
-        """T2 (issue #1986): a second /api/poll/ui long-poll cursor (modeled on a
+        """T2 (issue #1986): a second POST /api/poll long-poll cursor (modeled on a
         second browser tab) also observes the session_deleted event, not just the
-        client issuing the delete — mirrors test_issue_782_long_poll.py's pattern."""
+        client issuing the delete — mirrors test_issue_782_long_poll.py's pattern.
+
+        Epic #1990 stage 5c phase 5: migrated from the legacy GET /api/poll/ui
+        (removed this phase) to POST /api/poll's `ui` block.
+        """
         create_project = api_integration_env["create_test_project"]
         create_session = api_integration_env["create_test_session"]
         client = api_integration_env["client"]
@@ -571,12 +575,12 @@ class TestDeleteSession:
         resp = await client.delete(f"/api/sessions/{sid}")
         assert resp.status_code == 200
 
-        resp_a = await client.get(f"/api/poll/ui?since={cursor_tab_a}&timeout=0")
-        resp_b = await client.get(f"/api/poll/ui?since={cursor_tab_b}&timeout=0")
+        resp_a = await client.post("/api/poll", json={"timeout": 0, "ui": {"since": cursor_tab_a}})
+        resp_b = await client.post("/api/poll", json={"timeout": 0, "ui": {"since": cursor_tab_b}})
 
         for resp_tab in (resp_a, resp_b):
             assert resp_tab.status_code == 200
-            events = resp_tab.json()["events"]
+            events = resp_tab.json()["ui"]["events"]
             session_deleted_events = [e for e in events if e["type"] == "session_deleted"]
             assert len(session_deleted_events) == 1
             assert session_deleted_events[0]["data"] == {"session_id": sid}

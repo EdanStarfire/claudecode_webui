@@ -141,54 +141,91 @@ Complete REST and WebSocket API reference for Claude WebUI. For backend architec
 
 Issue #498 replaced WebSockets with HTTP long-polling across both tiers; issue #2063 (epic
 #1990 stage 2a) added a typed event registry server-side, with a temporary browser-compatibility
-shim for one event type. This section describes the real, current wire shape.
+shim for one event type. Epic #1990 stage 5c replaced the original two per-stream long-poll
+endpoints (`GET /api/poll/ui`, `GET /api/poll/session/{id}`) with one multiplexed endpoint
+carrying a subscription set. This section describes the real, current wire shape.
 
 ### Poll Endpoints
 
-| Method | Path | Query params | Description |
+| Method | Path | Body / query params | Description |
 |---|---|---|---|
-| `GET` | `/api/poll/ui` | `since` (cursor, default 0), `timeout` (seconds) | Global UI event stream — one per browser tab |
-| `GET` | `/api/poll/session/{session_id}` | `since`, `timeout` | Per-session event stream |
+| `POST` | `/api/poll` | `{"timeout": 30, "ui": {"since": N}, "sessions": {"<id>": {"since": N}, ...}}` | Multiplexed long-poll: UI stream plus a subscription set of session streams in one request |
+| `GET` | `/api/poll/cursor` | — | One-shot: current UI queue cursor, for client bootstrap |
+| `GET` | `/api/poll/session/{session_id}/cursor` | — | One-shot: current session queue cursor, for client bootstrap |
 
-Both exist on **both** tiers post-#498: Backend's are the real queues `SessionCoordinator`
-writes to; the Frontend API's read from a local `EventQueue` kept in sync by
-`src/poll_relay.py`'s background fan-out. The browser only ever talks to the Frontend API's copy.
+`POST /api/poll` exists on **both** tiers: Backend's (`backend/routers/poll.py`) is the real
+one `SessionCoordinator` writes to; the Frontend API's (`src/routers/poll.py`) reads from local
+`EventQueue`s kept in sync by `src/poll_relay.py`'s single consolidated background task. The
+browser only ever talks to the Frontend API's copy. `ui`/`sessions` are each optional in the
+request — a caller interested in only one stream omits the other. Auth is a normal
+`Authorization: Bearer` header (not a query-string token, unlike the endpoints this replaced).
+
+Fairness across the subscribed streams in one request — so one noisy session can't delay UI
+events or another session's updates — is implemented once in `shared/poll_multiplex.py`,
+shared verbatim by both tiers' routers: it races `wait_for_events()` across every subscribed
+queue (`asyncio.wait(..., return_when=FIRST_COMPLETED)`), then assembles each stream's slice via
+`events_since()`, truncated to a per-stream quota (`DEFAULT_EVENTS_PER_STREAM_QUOTA = 200`).
 
 ### Poll Response Envelope
 
 ```json
 {
-  "events": [ /* array of event dicts — see Event Shape below */ ],
-  "next_cursor": 1234,
-  "reset": false,
-  "evicted": false,
-  "epoch": "a1b2c3d4e5f6a7b8"
+  "ui": {
+    "events": [ /* array of event dicts — see Event Shape below */ ],
+    "next_cursor": 1234,
+    "reset": false,
+    "evicted": false,
+    "epoch": "a1b2c3d4e5f6a7b8"
+  },
+  "sessions": {
+    "<session_id>": {
+      "events": [ /* ... */ ],
+      "next_cursor": 42,
+      "reset": false,
+      "evicted": false,
+      "epoch": "a1b2c3d4e5f6a7b8"
+    }
+  },
+  "backend_status": "ok"
 }
 ```
 
-- `next_cursor`: pass as `since` on the next poll.
-- `reset`: on Backend's own response (`backend/routers/poll.py`), still the original
-  cursor-magnitude signal (`shared/event_queue.py`'s `reset_occurred()`) — Backend's OWN
-  `EventQueue` instance was replaced beneath the caller (e.g. Backend's own restart). On the
-  Frontend API's response (`src/routers/poll.py`), epic #1990 stage 5a redefined it: "does
-  this batch contain a `stream_reset` event" — the LOCAL queue is pure auto-increment and
-  never regresses on its own, so the old cursor-magnitude check would never fire there for
-  the case it exists to catch. Either way: treat `reset: true` as "local view may be stale,"
-  not just "nothing new."
-- `evicted`: `since` predated the buffer's oldest retained event (genuinely-lost history,
-  distinct from a reset). On the Frontend API's response this also surfaces a Backend-
+`ui` is present iff the request included a `ui` block; `sessions` always present (possibly
+`{}`), one entry per subscribed session_id that's still known (an unknown/deleted session_id
+is silently omitted from the response rather than failing the whole request). `backend_status`
+is Frontend-tier only (issue #1997).
+
+Per-stream fields, identical shape on both tiers now (`shared/poll_protocol.py`'s
+`MultiplexStreamResponse`):
+
+- `next_cursor`: pass as this stream's `since` on the next poll. If this stream's slice was
+  quota-truncated, `next_cursor` reflects only the truncated portion actually returned (the
+  untruncated remainder stays buffered for the next poll cycle) — never the queue's full
+  current cursor.
+- `reset`: whether the TRUNCATED/actually-delivered `events` array for this stream contains a
+  `stream_reset` marker (epic #1990 stage 5c correction: computed from the truncated slice
+  only, via `_contains_stream_reset()`, on both tiers now — not a cursor-magnitude inference).
+  A marker sitting beyond a truncation cutoff is simply not yet reflected in `reset`; it
+  arrives, with an accurate `reset: true`, once the cursor catches up on a later poll. Backend
+  never emits this marker on its own queues (nothing there ever restarts mid-process); the
+  Frontend relay emits it into a LOCAL queue when it observes the polled Backend `epoch`
+  differ from what it last saw for that stream (a Backend restart made explicit).
+- `evicted`: computed from the UNTRUNCATED `events_since()` result for this stream — `since`
+  predated the buffer's oldest retained event (genuinely-lost history, distinct from a reset),
+  independent of truncation. On the Frontend API's response this also surfaces a Backend-
   reported eviction the relay itself observed (`PollRelay.consume_pending_evicted()`) even
   though nothing about the LOCAL queue's own retained window changed.
-- `epoch`: which Backend-process generation produced this response (`secrets.token_hex(8)`,
+- `epoch`: which Backend-process generation produced this stream's data (`secrets.token_hex(8)`,
   regenerated once per Backend process at first import of `shared/event_envelope.py` —
-  `PROCESS_EPOCH`). Epic #1990 stage 5a. Not persisted — every Backend restart is a new
-  epoch by design. The Frontend API's own response surfaces the last epoch its poll-relay
-  observed for that stream (`PollRelay.last_epoch()`), not necessarily Backend's CURRENT
-  epoch if the relay hasn't polled since a restart yet.
-- The Frontend API's own response additionally carries `backend_status` (issue #1997).
+  `PROCESS_EPOCH`). Not persisted — every Backend restart is a new epoch by design. The
+  Frontend API's own response surfaces the last epoch its poll-relay observed for that stream
+  (`PollRelay.last_epoch()`), not necessarily Backend's CURRENT epoch if the relay hasn't
+  polled since a restart yet.
 
 Typed on both tiers via `shared/poll_protocol.py`'s `PollBatch`/`parse_poll_response()`
-(`events: list[EventEnvelope]`).
+(`events: list[EventEnvelope]`) — consumers (`backend/tools/scenario_driver/poll_consumer.py`,
+`src/tests/simulation/fault_harness.py`) call this per-stream, after unwrapping that stream's
+own block out of the multiplexed response.
 
 ### Event Shape
 
@@ -248,14 +285,14 @@ in production a mismatch is logged, not rejected (`STRICT=False`), so a registry
 never silently drop a user-visible event; tests can opt into the strict/raising behavior via
 `strict_mode()`.
 
-Both poll routes (`backend/routers/poll.py`, `src/routers/poll.py`) return a typed response —
-`shared/poll_protocol.py`'s `PollResponse` (`events`/`next_cursor`/`reset`/`evicted`) on
-Backend, `FrontendPollResponse` (adds `backend_status`) on the Frontend tier — constructed
-explicitly rather than built as an ad-hoc dict. `parse_poll_response()`/`PollBatch` remain the
-consumer-side typed read (`events: list[EventEnvelope]`), unchanged since #2063 — reading
-either a legacy flat dict or a real envelope dict through `EventEnvelope.from_dict()` already
-produced the same `.data` shape, so nothing there needed to change when the wire format
-caught up to it.
+Both poll routes (`backend/routers/poll.py`, `src/routers/poll.py`) build each stream's entry
+via `shared/poll_protocol.py`'s `MultiplexStreamResponse` (`events`/`next_cursor`/`reset`/
+`evicted`/`epoch`) — constructed explicitly rather than as an ad-hoc dict — and nest it under
+`"ui"`/the session_id in the overall response dict; the Frontend tier adds the top-level
+`backend_status` field. `parse_poll_response()`/`PollBatch` remain the consumer-side typed
+read (`events: list[EventEnvelope]`), applied per-stream after unwrapping — reading either a
+legacy flat dict or a real envelope dict through `EventEnvelope.from_dict()` already produced
+the same `.data` shape, so nothing there needed to change when the wire format caught up to it.
 
 ### Event Type Registry
 
