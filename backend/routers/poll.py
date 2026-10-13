@@ -14,13 +14,90 @@ from shared.event_envelope import PROCESS_EPOCH
 from shared.event_queue import EventQueue, reset_occurred
 from shared.exception_handlers import handle_exceptions
 from shared.logging_config import get_logger
-from shared.poll_protocol import PollResponse
+from shared.poll_multiplex import multiplex_poll
+from shared.poll_protocol import MultiplexPollRequest, MultiplexStreamResponse, PollResponse
 
 _polling_logger = get_logger('polling', category='POLL')
 
 
 def build_router(webui) -> APIRouter:
     router = APIRouter()
+
+    @router.post("/api/poll")
+    @handle_exceptions("poll multiplex")
+    async def poll_multiplex(request: MultiplexPollRequest):
+        """Multiplexed long-poll endpoint (epic #1990 stage 5c): one request carries
+        the UI stream plus a subscription set of session streams, each with its own
+        cursor. Fairness across subscribed streams is delegated to
+        shared/poll_multiplex.py so one noisy session can't delay UI events or
+        another session's updates — see that module's docstring for the
+        evicted-vs-reset truncation semantics.
+        """
+        effective_timeout = min(float(request.timeout), 30.0)
+
+        streams: dict[str, tuple[EventQueue, int]] = {}
+        if request.ui is not None:
+            streams["ui"] = (webui.ui_queue, request.ui.since)
+
+        valid_session_ids: list[str] = []
+        for session_id, query in request.sessions.items():
+            if session_id not in webui.session_queues:
+                if not await webui.service.get_session_exists(session_id):
+                    # Unknown/deleted session: omit it from this response rather
+                    # than failing the whole multiplexed request over one stale
+                    # subscription entry — the UI stream's own session_deleted
+                    # event is what tells the browser to drop it.
+                    continue
+                webui.session_queues[session_id] = EventQueue(
+                    on_append=webui._queue_append_hook(session_id)
+                )
+            # Issue #1598: mark session viewed at poll START, not poll END —
+            # recording the timestamp here ensures any completion event arriving
+            # during multiplex_poll() is timestamped AFTER last_viewed_at and
+            # correctly surfaces as unread once the user navigates away.
+            try:
+                await webui.coordinator.session_manager.mark_viewed(session_id)
+            except Exception:
+                _polling_logger.exception("mark_viewed failed for session %s", session_id)
+            valid_session_ids.append(session_id)
+            streams[session_id] = (webui.session_queues[session_id], query.since)
+
+        results = await multiplex_poll(streams, timeout=effective_timeout)
+
+        response: dict = {}
+        if "ui" in results:
+            result = results["ui"]
+            response["ui"] = asdict(MultiplexStreamResponse(
+                events=result.events,
+                next_cursor=result.next_cursor,
+                reset=result.reset,
+                evicted=result.evicted,
+                epoch=PROCESS_EPOCH,
+            ))
+            if result.events:
+                _polling_logger.info(
+                    "poll multiplex ui returned %d event(s) since=%d next_cursor=%d",
+                    len(result.events), request.ui.since, result.next_cursor,
+                )
+
+        sessions_response: dict = {}
+        for session_id in valid_session_ids:
+            result = results[session_id]
+            sessions_response[session_id] = asdict(MultiplexStreamResponse(
+                events=result.events,
+                next_cursor=result.next_cursor,
+                reset=result.reset,
+                evicted=result.evicted,
+                epoch=PROCESS_EPOCH,
+            ))
+            if result.events:
+                _polling_logger.info(
+                    "poll multiplex session %s returned %d event(s) since=%d next_cursor=%d",
+                    session_id, len(result.events), request.sessions[session_id].since,
+                    result.next_cursor,
+                )
+        response["sessions"] = sessions_response
+        return response
 
     @router.get("/api/poll/ui")
     @handle_exceptions("poll ui")
