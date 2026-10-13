@@ -45,6 +45,7 @@ from .project_manager import ProjectInfo, ProjectManager
 from .queue_manager import QueueManager
 from .queue_processor import QueueProcessor
 from .session_config import SessionConfig
+from .session_lifecycle import is_interruptible
 from .session_manager import STOPPED_STATES, SessionManager, SessionState
 from .session_recorder import SessionRecorder
 from .task_registry import TASK_LIFECYCLE_SUBTYPES, TaskLegRegistry
@@ -433,9 +434,19 @@ class SessionCoordinator:
         host: str = "127.0.0.1",
         port: int = 8000,
         session_recording_enabled: bool = False,
+        watchdog: Any | None = None,
     ):
         self.data_dir = data_dir or Path("data")
         self.experimental = experimental
+        # Issue #2159: watchdog is now a declared constructor dependency (same
+        # None-default-then-reassign pattern as litellm_proxy_manager below) —
+        # web_server.py still constructs SessionWatchdogService after this coordinator
+        # (it needs self.session_manager/self.template_manager, which only exist once
+        # __init__ returns) and reassigns it via set_watchdog(), but every consumer now
+        # finds `self._watchdog` always present (never missing the attribute entirely),
+        # so the `hasattr(self, '_watchdog')` half of every guard is gone — only the
+        # `is not None` half remains, same as litellm_proxy_manager's own guard.
+        self._watchdog = watchdog
         # Issue #1998: dev-only raw SDK traffic capture, structurally unavailable unless the
         # Backend was started with --enable-session-recording. See start_session()'s recorder
         # gate and routers/sessions.py's config-save rejection when this is False.
@@ -523,6 +534,8 @@ class SessionCoordinator:
         self._message_callbacks: dict[str, list[Callable]] = {}
         self._error_callbacks: dict[str, list[Callable]] = {}
         self._state_change_callbacks: list[Callable] = []
+        # Issue #2159: metadata-only updates — separate from _state_change_callbacks.
+        self._metadata_change_callbacks: list[Callable] = []
         self._session_reset_callbacks: list[Callable] = []
         self._session_deleted_callbacks: list[Callable] = []
         self._tool_call_broadcast_callbacks: list[Callable] = []
@@ -535,6 +548,12 @@ class SessionCoordinator:
 
         # Audit writer (set after construction via set_audit_writer; optional)
         self._audit_writer = None
+
+        # Issue #2159: PermissionService back-reference (set after construction via
+        # set_permission_service — PermissionService's own constructor takes this
+        # coordinator, so it can't be passed in here without a cycle at construction
+        # time; optional, same pattern as _audit_writer/litellm_proxy_manager above).
+        self.permission_service = None
 
         # SDK factory for dependency injection (enables MockClaudeSDK for testing)
         self._sdk_factory = self._default_sdk_factory
@@ -663,6 +682,21 @@ class SessionCoordinator:
     def set_analytics_store(self, store) -> None:
         """Inject the AnalyticsStore instance (issue #1125)."""
         self.analytics_store = store
+
+    def set_watchdog(self, watchdog) -> None:
+        """Inject the SessionWatchdogService instance (issue #1130/#2159)."""
+        self._watchdog = watchdog
+
+    def set_permission_service(self, permission_service) -> None:
+        """Inject the PermissionService instance (issue #2159).
+
+        PermissionService's constructor already takes `coordinator` as a
+        back-reference; this is the other half of that pair, needed so
+        interrupt_session() can deny/resolve a PAUSED session's own pending
+        permission(s) without every caller (REST router, comm_router's HALT/PIVOT
+        path) having to reach into PermissionService itself.
+        """
+        self.permission_service = permission_service
 
     def set_audit_writer(self, writer) -> None:
         """Wire an AuditWriter into all existing and future storage managers."""
@@ -895,6 +929,9 @@ class SessionCoordinator:
 
             # Register callback to receive session manager state changes
             self.session_manager.add_state_change_callback(self._on_session_manager_state_change)
+            # Issue #2159: same wiring for metadata-only updates (name, model,
+            # permission_mode, etc.) — a separate callback/event stream from state_change.
+            self.session_manager.add_metadata_change_callback(self._on_session_manager_metadata_change)
 
             # Initialize storage managers for all existing sessions
             await self._initialize_existing_session_storage()
@@ -1042,6 +1079,7 @@ class SessionCoordinator:
         content: str,
         reset_session: bool | None = None,
         metadata: dict | None = None,
+        inject_timestamp: bool = True,
     ) -> dict:
         """Enqueue a message for a session. Returns the queue item dict."""
         session_info = await self.session_manager.get_session_info(session_id)
@@ -1066,6 +1104,7 @@ class SessionCoordinator:
             reset_session=reset_session,
             metadata=metadata,
             max_queue_size=max_queue_size,
+            inject_timestamp=inject_timestamp,
         )
 
         # Start processor if not paused
@@ -1725,15 +1764,11 @@ class SessionCoordinator:
             if _ec_path_updates:
                 effective_config = effective_config.model_copy(update=_ec_path_updates)
 
-            # Check if we have a valid Claude Code session ID to resume
-            resume_sdk_session = None
-            # if session_info.claude_code_session_id:
-            #     logger.info(f"Resuming session with Claude Code session ID: {session_info.claude_code_session_id}")
-            #     resume_sdk_session = session_id  # Use WebUI session ID as resume identifier
-            # else:
-            #     logger.info(f"No Claude Code session ID found - starting fresh session for {session_id}")
-            if session_info.claude_code_session_id:
-                resume_sdk_session = session_id  # Use WebUI session ID as resume identifier
+            # Check if we have a valid Claude Code session ID to resume.
+            # Issue #2159: pass the actual Claude Code session id directly — ClaudeSDK
+            # no longer reaches back into session_manager.get_session_info() itself to
+            # resolve it (that reach-in is gone from claude_sdk.py's start()).
+            resume_sdk_session = session_info.claude_code_session_id or None
 
             # Issue #1375: Resolve secret placeholders early so MCP header substitution
             # can use them before the mcp_servers dict is built.
@@ -2233,6 +2268,7 @@ class SessionCoordinator:
                 extra_env=_merged_extra_env,
                 permission_handler=permission_handler,
                 recorder=recorder,
+                phase_callback=self._create_phase_callback(session_id),
             )
             # Issue #707: Set auto-approval callback so can_use_tool can notify us
             sdk.auto_approval_callback = self._create_auto_approval_callback(session_id)
@@ -2283,16 +2319,7 @@ class SessionCoordinator:
                 error_message = self._extract_claude_cli_error(raw_error_message, result_error)
 
                 # Update session state to ERROR and reset processing state
-                try:
-                    await self.session_manager.update_session_state(
-                        session_id, SessionState.ERROR, error_message, **structured_error_kwargs
-                    )
-                    # Also ensure processing state is reset when going to error state
-                    await self.session_manager.update_processing_state(session_id, False)
-                    await self._notify_state_change(session_id, SessionState.ERROR)
-                    # logger.info(f"Updated session {session_id} state to ERROR and reset processing state")
-                except Exception:
-                    logger.exception("Failed to update session state to ERROR")
+                await self._transition_to_error(session_id, error_message, **structured_error_kwargs)
 
                 # Send system message explaining the failure (with raw details)
                 await self._send_session_failure_message(
@@ -2337,13 +2364,8 @@ class SessionCoordinator:
             error_message = self._extract_claude_cli_error(raw_error_str)
 
             # Update session state to ERROR and reset processing state
-            try:
-                await self.session_manager.update_session_state(session_id, SessionState.ERROR, error_message)
-                await self.session_manager.update_processing_state(session_id, False)
-                await self._notify_state_change(session_id, SessionState.ERROR)
-                coord_logger.info(f"Updated session {session_id} state to ERROR after exception")
-            except Exception:
-                logger.exception("Failed to update session state to ERROR")
+            await self._transition_to_error(session_id, error_message)
+            coord_logger.info(f"Updated session {session_id} state to ERROR after exception")
 
             # Send system message explaining the failure (with raw details)
             await self._send_session_failure_message(session_id, error_message, raw_error_str)
@@ -2503,8 +2525,10 @@ class SessionCoordinator:
             # Issue #894: Cleanup retry sequence tracking
             self._retry_sequences.pop(session_id, None)
 
-            if success:
-                await self._notify_state_change(session_id, SessionState.TERMINATED)
+            # Issue #2159: no explicit _notify_state_change() here — this used to be
+            # a 3rd, redundant state_change emission on top of the 2 that
+            # session_manager.terminate_session() already fires on its own
+            # (TERMINATING, then TERMINATED) via its callback chain.
 
             coord_logger.info(f"Session {session_id} stopped")
             return success
@@ -2585,9 +2609,9 @@ class SessionCoordinator:
             session_info.is_ephemeral = True
             session_info.updated_at = datetime.now(UTC)
             await self.session_manager._persist_session_state(session_id)
-            await self.session_manager._notify_state_change_callbacks(
-                session_id, session_info.state
-            )
+            # Issue #2159: this is a metadata-only flag flip, not a SessionState
+            # transition — fires session_metadata_updated, not state_change.
+            await self.session_manager._notify_metadata_change_callbacks(session_id)
 
         coord_logger.info(
             f"Created ephemeral session {session_id} for schedule '{schedule_name}' "
@@ -2649,12 +2673,11 @@ class SessionCoordinator:
     async def update_session_name(self, session_id: str, name: str) -> bool:
         """Update session name"""
         try:
+            # Issue #2159: session_manager.update_session_name() already notifies via
+            # its own metadata-change callback chain — this used to ALSO fire a
+            # redundant explicit _notify_state_change() on top of that (and on the
+            # wrong event type: name is metadata, not a SessionState transition).
             success = await self.session_manager.update_session_name(session_id, name)
-            if success:
-                # Notify about state change to trigger UI updates
-                session_info = await self.session_manager.get_session_info(session_id)
-                if session_info:
-                    await self._notify_state_change(session_id, session_info.state)
             coord_logger.info(f"Updated session {session_id} name to '{name}'")
             return success
         except Exception:
@@ -3040,17 +3063,30 @@ class SessionCoordinator:
                 logger.warning(f"Session {session_id} not found - cannot interrupt")
                 return False
 
-            # Only allow interrupt for active/processing sessions
-            if session_info.state not in [SessionState.ACTIVE] and not session_info.is_processing:
+            # Issue #2159 (UC4): PAUSED is interruptible too, via the shared predicate —
+            # this used to be `state not in [ACTIVE] and not is_processing`, which
+            # actually let a PAUSED-but-still-processing session through while leaving
+            # it stuck PAUSED (nothing resumed it), and depended on a service-wide
+            # deny-all the REST router did separately. is_interruptible() plus the
+            # scoped deny below replaces both.
+            was_paused = session_info.state == SessionState.PAUSED
+            if not is_interruptible(session_info.state):
                 logger.warning(f"Session {session_id} not in interruptible state (state: {session_info.state}, processing: {session_info.is_processing})")
                 return False
 
-            # Update processing state to indicate interrupting
-            # Note: We don't have an "INTERRUPTING" state, so we'll just leave it processing until interrupt completes
-            # logger.info(f"Attempting to interrupt session {session_id}")
-
             # Call SDK interrupt method
             result = await sdk.interrupt_session()
+
+            # Issue #2159: deny/resolve a PAUSED session's own pending permission(s)
+            # regardless of whether the SDK-level interrupt itself reported success —
+            # if the SDK's own internal phase has already moved off "connected" (e.g.
+            # a concurrent error/terminate mid-flight), sdk.interrupt_session() can
+            # return False while the backend-level state is still PAUSED; gating this
+            # on `result` would leave that permission Future dangling forever with no
+            # other recovery path. Resolving it is a backend-state concern, independent
+            # of whatever the transport-level interrupt call itself returns.
+            if was_paused and self.permission_service is not None:
+                await self.permission_service.deny_for_session(session_id)
 
             if result:
                 coord_logger.info(f"Session {session_id} interrupted")
@@ -3309,7 +3345,7 @@ class SessionCoordinator:
                 await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
 
             # Issue #1130: Clear watchdog state so next episode starts fresh
-            if hasattr(self, '_watchdog') and self._watchdog is not None:
+            if self._watchdog is not None:
                 self._watchdog.reset_session(session_id)
 
             # Issue #1513: Reset unread state — a restart is a new context.
@@ -3367,7 +3403,7 @@ class SessionCoordinator:
                 self.queue_processor.stop(session_id)
 
             # Issue #1130: Clear watchdog state so next episode starts fresh
-            if hasattr(self, '_watchdog') and self._watchdog is not None:
+            if self._watchdog is not None:
                 self._watchdog.reset_session(session_id)
 
             # Get current SDK and disconnect
@@ -3982,6 +4018,10 @@ class SessionCoordinator:
         """Add callback for session state changes"""
         self._state_change_callbacks.append(callback)
 
+    def add_metadata_change_callback(self, callback: Callable):
+        """Add callback for metadata-only session updates (issue #2159)."""
+        self._metadata_change_callbacks.append(callback)
+
     def add_session_reset_callback(self, callback: Callable):
         """Add callback for session reset events (Issue #500)."""
         self._session_reset_callbacks.append(callback)
@@ -4271,7 +4311,7 @@ class SessionCoordinator:
             self._remove_active_tool_call(session_id, tool_use_id)
 
             # Issue #1131: Record DENIED outcome for error-rate watchdog
-            if hasattr(self, '_watchdog') and self._watchdog is not None:
+            if self._watchdog is not None:
                 self._watchdog.record_tool_outcome(session_id, tool_use_id, "denied")
 
         coord_logger.debug(
@@ -4373,7 +4413,7 @@ class SessionCoordinator:
         self._schedule_tool_call_update_storage(session_id, tool_call, triggering_message)
 
         # Issue #1131: Record terminal tool outcome for error-rate watchdog
-        if hasattr(self, '_watchdog') and self._watchdog is not None:
+        if self._watchdog is not None:
             outcome = "failed" if is_error else "completed"
             self._watchdog.record_tool_outcome(session_id, tool_use_id, outcome)
 
@@ -4524,7 +4564,7 @@ class SessionCoordinator:
             ToolState.DENIED, ToolState.COMPLETED, ToolState.FAILED, ToolState.INTERRUPTED,
         ):
             self._remove_active_tool_call(session_id, tool_call.tool_use_id)
-            if tool_call.status != ToolState.INTERRUPTED and hasattr(self, '_watchdog') and self._watchdog is not None:
+            if tool_call.status != ToolState.INTERRUPTED and self._watchdog is not None:
                 self._watchdog.record_tool_outcome(session_id, tool_call.tool_use_id, tool_call.status.value)
 
         return tool_call
@@ -4937,6 +4977,53 @@ class SessionCoordinator:
 
         return callback
 
+    def _create_phase_callback(self, session_id: str) -> Callable:
+        """Create the phase callback for a session's ClaudeSDK instance (issue #2159).
+
+        ClaudeSDK's own internal lifecycle phase ("connecting"/"connected"/
+        "disconnected"/"stopped") replaced its deleted local SessionState enum; only
+        "connected" drives an actual backend transition here (mark_session_active(),
+        same as the direct reach-in this replaces) — "disconnected" is already handled
+        richer/separately via error_callback (ERROR with a real message), and "stopped"
+        via terminate_session()'s own call into sdk.terminate(). "connecting" has no
+        corresponding backend transition: session_manager.start_session() already moved
+        the session to STARTING before this SDK instance was even constructed.
+        """
+        async def callback(phase: str) -> None:
+            if phase == "connected":
+                await self.session_manager.mark_session_active(session_id)
+
+        return callback
+
+    async def _transition_to_error(
+        self, session_id: str, error_message: str, **structured_error_kwargs: Any
+    ) -> None:
+        """Collapse the state-transition half of the ERROR path into one call
+        (issue #2159) — the caller still owns its own _send_session_failure_message()
+        and _active_sdks cleanup/terminate around this; those weren't identical
+        across the 3 original call sites and aren't touched here.
+
+        Replaces 3 separately-maintained copies of the same sequence
+        (update_session_state(ERROR) + update_processing_state(False) +
+        an explicit _notify_state_change(ERROR)) that had drifted into a real
+        redundant-emission bug: update_session_state() already fires exactly one
+        state_change event on its own (via session_manager's callback chain), so the
+        explicit _notify_state_change() call each copy also made was a second,
+        redundant emission for the same transition. Also closes a Future-leak this
+        stage is explicitly about eliminating: ERROR_OCCURRED denies/resolves this
+        session's own dangling pending permission Future(s) — the SDK that would
+        have answered them is gone, so nothing else ever will.
+        """
+        try:
+            await self.session_manager.update_session_state(
+                session_id, SessionState.ERROR, error_message, **structured_error_kwargs
+            )
+            await self.session_manager.update_processing_state(session_id, False)
+            if self.permission_service is not None:
+                await self.permission_service.deny_for_session(session_id)
+        except Exception:
+            logger.exception("Failed to update session state to ERROR")
+
     def _create_error_callback(self, session_id: str) -> Callable:
         """Create error callback for a session"""
         async def callback(error_type: str, error: Exception):
@@ -4985,16 +5072,9 @@ class SessionCoordinator:
                     self.mark_session_tools_interrupted(session_id)
 
                     # Update session state to ERROR and reset processing state
-                    try:
-                        await self.session_manager.update_session_state(
-                            session_id, SessionState.ERROR, user_error_message, **structured_error_kwargs
-                        )
-                        # Also ensure processing state is reset when going to error state
-                        await self.session_manager.update_processing_state(session_id, False)
-                        await self._notify_state_change(session_id, SessionState.ERROR)
-                        # logger.info(f"Updated session {session_id} state to ERROR and reset processing state due to SDK error")
-                    except Exception:
-                        logger.exception("Failed to update session state to ERROR")
+                    await self._transition_to_error(
+                        session_id, user_error_message, **structured_error_kwargs
+                    )
 
                     # Send system message explaining the runtime failure (with raw details)
                     await self._send_session_failure_message(
@@ -5412,6 +5492,24 @@ class SessionCoordinator:
         """Handle state changes from session manager"""
         # logger.info(f"Received state change from session manager: {session_id} -> {new_state.value}")
         await self._notify_state_change(session_id, new_state)
+
+    async def _notify_metadata_change(self, session_id: str) -> None:
+        """Notify registered callbacks about a metadata-only update (issue #2159)."""
+        try:
+            for callback in self._metadata_change_callbacks:
+                try:
+                    if asyncio.iscoroutinefunction(callback):
+                        await callback(session_id)
+                    else:
+                        callback(session_id)
+                except Exception:
+                    logger.exception("Error in metadata change callback")
+        except Exception:
+            logger.exception(f"Error notifying metadata change for {session_id}")
+
+    async def _on_session_manager_metadata_change(self, session_id: str) -> None:
+        """Handle metadata-only updates from session manager (issue #2159)."""
+        await self._notify_metadata_change(session_id)
 
     async def _check_sdk_generated_name(self, session_id: str) -> None:
         """Check if SDK has generated a session title and store it (issue #904)."""

@@ -23,6 +23,8 @@ from backend.models.legion_models import (
     CommType,
     InterruptPriority,
 )
+from backend.session_lifecycle import is_deliverable
+from backend.session_manager import SessionState
 from shared.logging_config import get_logger
 
 if TYPE_CHECKING:
@@ -310,7 +312,6 @@ class CommRouter:
                 return False
 
             # Auto-start minion if not active
-            from backend.session_manager import SessionState
             if target_minion.state == SessionState.STARTING:
                 # Session is starting but SDK may not be ready yet — wait for readiness
                 legion_logger.info(
@@ -330,7 +331,7 @@ class CommRouter:
                             original_comm_id=comm.comm_id
                         )
                     return False
-            elif target_minion.state not in [SessionState.ACTIVE, SessionState.PAUSED]:
+            elif not is_deliverable(target_minion.state):
                 legion_logger.info(f"Target minion {comm.to_minion_id} is in {target_minion.state} state - auto-starting")
 
                 # Register WebSocket message callback before starting
@@ -485,8 +486,11 @@ class CommRouter:
                 # above for user inspection.
                 legion_logger.info(f"Comm {comm.comm_id} has HALT priority - interrupting {comm.to_minion_id} (message not delivered to SDK)")
                 try:
-                    await self.system.session_coordinator.interrupt_session(comm.to_minion_id)
-                    legion_logger.debug(f"Successfully interrupted session {comm.to_minion_id}")
+                    interrupted = await self.system.session_coordinator.interrupt_session(comm.to_minion_id)
+                    if interrupted:
+                        legion_logger.debug(f"Successfully interrupted session {comm.to_minion_id}")
+                    else:
+                        legion_logger.warning(f"interrupt_session returned False for session {comm.to_minion_id}")
                 except Exception as e:
                     legion_logger.warning(f"Failed to interrupt session {comm.to_minion_id}: {e}")
                 legion_logger.info(f"HALT comm {comm.comm_id} from {from_name} - minion {comm.to_minion_id} interrupted")
@@ -496,8 +500,11 @@ class CommRouter:
                 # PIVOT: interrupt first to stop current work, then deliver new direction.
                 legion_logger.info(f"Comm {comm.comm_id} has PIVOT priority - interrupting then sending to {comm.to_minion_id}")
                 try:
-                    await self.system.session_coordinator.interrupt_session(comm.to_minion_id)
-                    legion_logger.debug(f"Successfully interrupted session {comm.to_minion_id}")
+                    interrupted = await self.system.session_coordinator.interrupt_session(comm.to_minion_id)
+                    if interrupted:
+                        legion_logger.debug(f"Successfully interrupted session {comm.to_minion_id}")
+                    else:
+                        legion_logger.warning(f"interrupt_session returned False for session {comm.to_minion_id}")
                 except Exception as e:
                     legion_logger.warning(f"Failed to interrupt session {comm.to_minion_id}: {e}")
                 # Fall through to send_message below
@@ -586,7 +593,6 @@ class CommRouter:
 
             # Send to minion (but don't trigger auto-start to avoid loops)
             target_minion = await self.system.session_coordinator.session_manager.get_session_info(to_minion_id)
-            from backend.session_manager import SessionState
 
             if target_minion and target_minion.state == SessionState.ACTIVE:
                 # Issue #1779: system error comms aren't "user messages" — skip timestamp injection.

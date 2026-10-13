@@ -11,7 +11,7 @@ from shared.event_queue import EventQueue
 from shared.exception_handlers import handle_exceptions
 
 from ..fixture_export import FixtureExportError, export_fixture
-from ..session_manager import SessionState
+from ..session_lifecycle import is_deliverable
 from ._models import (
     FixtureExportRequest,
     MessageRequest,
@@ -475,7 +475,7 @@ def build_router(webui) -> APIRouter:
         # already accepts input regardless of an in-flight permission callback, and it will
         # simply wait its turn to be delivered once the current turn resolves, the same way an
         # ordinary busy/is_processing session already queues a message today.
-        if state not in (SessionState.ACTIVE, SessionState.PAUSED):
+        if not is_deliverable(state):
             raise HTTPException(status_code=409, detail="Session is not active")
         success = await webui.coordinator.send_message(
             session_id, request.message, metadata=request.metadata

@@ -25,6 +25,7 @@ def legion_system():
 
     mock_session_coordinator = Mock()
     mock_session_coordinator.send_message = AsyncMock(return_value=True)
+    mock_session_coordinator.enqueue_message = AsyncMock(return_value={"queue_id": "test-queue-id"})
     mock_session_coordinator.session_manager = Mock()
     mock_session_coordinator.session_manager.list_sessions = AsyncMock(return_value=[active_minion])
     mock_session_coordinator.data_dir = Path("/tmp/test")
@@ -38,14 +39,96 @@ def legion_system():
 
 class TestIssue1779ResumeAllTimestampScoping:
     """resume_all()'s bulk "continue" nudge is system-generated, not a user message —
-    it must opt out of timestamp injection the same way comm_router.py's comms do."""
+    it must opt out of timestamp injection the same way comm_router.py's comms do.
+
+    Issue #2159: resume_all() now routes "continue" through enqueue_message() (so a
+    PAUSED minion isn't skipped — see TestIssue2159ResumeAllDeliverable below) rather
+    than calling send_message() directly and synchronously, so this now asserts on
+    the enqueue call's inject_timestamp kwarg rather than an immediate send."""
 
     @pytest.mark.asyncio
     async def test_resume_all_skips_timestamp_injection(self, legion_system):
         await legion_system.legion_coordinator.resume_all("test-legion-456")
 
-        send_mock = legion_system.session_coordinator.send_message
-        send_mock.assert_called_once_with("test-minion-123", "continue", inject_timestamp=False)
+        enqueue_mock = legion_system.session_coordinator.enqueue_message
+        enqueue_mock.assert_called_once_with(
+            "test-minion-123", "continue", reset_session=False, inject_timestamp=False
+        )
+
+
+class TestIssue2159ResumeAllDeliverable:
+    """resume_all() used to raw-string-compare `minion.state.value == "active"` and
+    skip PAUSED minions outright — a minion mid-permission-wait never got its
+    "continue". It must now include every is_deliverable minion (ACTIVE or PAUSED)
+    and still exclude everything else (CREATED/TERMINATED/ERROR/STARTING)."""
+
+    @staticmethod
+    def _minion(session_id: str, project_id: str, state) -> Mock:
+        from backend.session_manager import SessionInfo
+
+        m = Mock(spec=SessionInfo)
+        m.session_id = session_id
+        m.project_id = project_id
+        m.state = state
+        return m
+
+    @pytest.mark.asyncio
+    async def test_resume_all_includes_paused_minion(self):
+        from backend.session_manager import SessionState
+
+        paused_minion = self._minion("paused-minion", "legion-1", SessionState.PAUSED)
+
+        mock_session_coordinator = Mock()
+        mock_session_coordinator.enqueue_message = AsyncMock(return_value={"queue_id": "q1"})
+        mock_session_coordinator.session_manager = Mock()
+        mock_session_coordinator.session_manager.list_sessions = AsyncMock(
+            return_value=[paused_minion]
+        )
+        mock_session_coordinator.data_dir = Path("/tmp/test")
+
+        system = LegionSystem(
+            session_coordinator=mock_session_coordinator,
+            data_storage_manager=Mock(),
+            template_manager=Mock(),
+        )
+
+        result = await system.legion_coordinator.resume_all("legion-1")
+
+        mock_session_coordinator.enqueue_message.assert_called_once_with(
+            "paused-minion", "continue", reset_session=False, inject_timestamp=False
+        )
+        assert result["resumed_count"] == 1
+        assert result["failed_minions"] == []
+
+    @pytest.mark.asyncio
+    async def test_resume_all_excludes_non_deliverable_states(self):
+        from backend.session_manager import SessionState
+
+        minions = [
+            self._minion("created", "legion-1", SessionState.CREATED),
+            self._minion("starting", "legion-1", SessionState.STARTING),
+            self._minion("terminated", "legion-1", SessionState.TERMINATED),
+            self._minion("error", "legion-1", SessionState.ERROR),
+            self._minion("terminating", "legion-1", SessionState.TERMINATING),
+        ]
+
+        mock_session_coordinator = Mock()
+        mock_session_coordinator.enqueue_message = AsyncMock(return_value={"queue_id": "q1"})
+        mock_session_coordinator.session_manager = Mock()
+        mock_session_coordinator.session_manager.list_sessions = AsyncMock(return_value=minions)
+        mock_session_coordinator.data_dir = Path("/tmp/test")
+
+        system = LegionSystem(
+            session_coordinator=mock_session_coordinator,
+            data_storage_manager=Mock(),
+            template_manager=Mock(),
+        )
+
+        result = await system.legion_coordinator.resume_all("legion-1")
+
+        mock_session_coordinator.enqueue_message.assert_not_called()
+        assert result["resumed_count"] == 0
+        assert result["total_minions"] == len(minions)
 
 
 class TestIssue1933EmergencyHaltAllConcurrency:

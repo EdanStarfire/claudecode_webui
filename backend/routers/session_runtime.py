@@ -5,7 +5,6 @@ from fastapi import APIRouter, HTTPException
 from shared.exception_handlers import handle_exceptions
 
 from ..models.permission_mode import PermissionMode
-from ..session_manager import SessionState
 from ._models import (
     AddDirectoryRequest,
     McpReconnectRequest,
@@ -27,12 +26,16 @@ def build_router(webui) -> APIRouter:
     @router.post("/api/sessions/{session_id}/interrupt")
     @handle_exceptions("interrupt session")
     async def interrupt_session_rest(session_id: str):
-        """Interrupt a session via REST (replaces WebSocket interrupt_session message)."""
+        """Interrupt a session via REST (replaces WebSocket interrupt_session message).
+
+        Issue #2159: the service-wide deny-all that used to run here (denying every
+        OTHER session's pending permissions too, whenever this one happened to be
+        PAUSED) is gone — coordinator.interrupt_session() now handles PAUSED itself,
+        scoped to this session only, via is_interruptible()/PermissionService.deny_for_session().
+        """
         state = await webui.service.get_session_state(session_id)
         if state is None:
             raise HTTPException(status_code=404, detail="Session not found")
-        if state == SessionState.PAUSED:
-            webui.permission_service.deny_all_for_interrupt()
         result = await webui.coordinator.interrupt_session(session_id)
         return {"success": bool(result)}
 
