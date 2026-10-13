@@ -3311,8 +3311,24 @@ class SessionCoordinator:
         Restart a session by disconnecting SDK and resuming with same session ID.
 
         This is useful for unsticking the agent without losing conversation history.
+
+        Issue #2159: deliberately ACTIVE-only, not is_deliverable() — restarting the
+        live turn is a different predicate than deliverability (a PAUSED session has
+        no live turn to restart; it's blocked on a permission decision, not running).
+        Enforced here, the one place every caller (REST endpoint, legion_mcp_tools's
+        restart_session MCP tool, ApplicationService.restart_session) funnels through,
+        so the gate holds regardless of entry point rather than being trusted to
+        whichever caller remembers to check it themselves.
         """
         try:
+            session_info = await self.session_manager.get_session_info(session_id)
+            if not session_info or session_info.state != SessionState.ACTIVE:
+                logger.warning(
+                    f"Cannot restart session {session_id}: not ACTIVE "
+                    f"(state: {session_info.state if session_info else 'not found'})"
+                )
+                return False
+
             coord_logger.info(f"Restarting session {session_id}")
 
             # Issue #2109 (AC1): mark open tools interrupted on restart, same as

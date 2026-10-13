@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from shared.exception_handlers import handle_exceptions
 
 from ..models.permission_mode import PermissionMode
+from ..session_manager import SessionState
 from ._models import (
     AddDirectoryRequest,
     McpReconnectRequest,
@@ -157,9 +158,19 @@ def build_router(webui) -> APIRouter:
     @router.post("/api/sessions/{session_id}/restart")
     @handle_exceptions("restart session")
     async def restart_session(session_id: str):
-        """Restart a session (disconnect and resume)"""
-        if not await webui.service.get_session_exists(session_id):
+        """Restart a session (disconnect and resume).
+
+        Issue #2159: ACTIVE-only, matching legion_mcp_tools.py's restart_session MCP
+        tool and session_coordinator.restart_session()'s own now-centralized guard —
+        restarting a live turn is a different predicate than deliverability, not a
+        missed migration. Checked here too for a specific 409 instead of a generic
+        {"success": false}.
+        """
+        state = await webui.service.get_session_state(session_id)
+        if state is None:
             raise HTTPException(status_code=404, detail="Session not found")
+        if state != SessionState.ACTIVE:
+            raise HTTPException(status_code=409, detail="Session is not active")
 
         # Clear any existing callbacks to prevent duplicates, then register fresh one
         webui.coordinator.clear_message_callbacks(session_id)

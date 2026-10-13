@@ -2241,10 +2241,13 @@ class LegionMCPTools:
         if not session_info:
             return self._err("Error: Session not found")
         # Issue #2159: deliberately not using the shared deliverability predicate —
-        # restarting the live turn is
-        # a genuinely different predicate than deliverability. A PAUSED session has no
-        # live turn to restart (it's blocked on a permission decision, not running),
-        # so strict ACTIVE-only stays correct here; this is not a missed migration.
+        # restarting the live turn is a genuinely different predicate than
+        # deliverability. A PAUSED session has no live turn to restart (it's blocked
+        # on a permission decision, not running), so strict ACTIVE-only stays correct
+        # here; this is not a missed migration. This check is now also enforced
+        # centrally in session_coordinator.restart_session() itself (the one place
+        # every caller funnels through) — kept here too for an early, specific error
+        # message before the coordinator call.
         if session_info.state != SessionState.ACTIVE:
             return self._err(f"Error: Session is not active (state: {session_info.state.value})")
 

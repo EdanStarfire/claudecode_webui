@@ -108,9 +108,16 @@ async def test_issue_801_restart_registers_message_callback():
         session_id = "test-session-801"
         webui.coordinator._message_callbacks[session_id] = []
 
-        # Mock session_manager.get_session_info to return a non-None session
-        # (the restart_session endpoint now checks session existence first).
-        mock_session = object()
+        # Mock session_manager.get_session_info to return a non-None, ACTIVE session
+        # (the restart_session endpoint checks session existence and, since issue
+        # #2159, that it's ACTIVE — restarting a live turn is a different predicate
+        # than deliverability, enforced the same way everywhere restart is reachable).
+        from unittest.mock import Mock
+
+        from backend.session_manager import SessionState
+
+        mock_session = Mock()
+        mock_session.state = SessionState.ACTIVE
         with patch.object(
             webui.coordinator, "restart_session", new_callable=AsyncMock
         ) as mock_restart, patch.object(
@@ -135,3 +142,41 @@ async def test_issue_801_restart_registers_message_callback():
             "restart endpoint must register a message callback "
             f"in coordinator._message_callbacks[{session_id!r}]"
         )
+
+
+@pytest.mark.asyncio
+async def test_issue_2159_restart_endpoint_rejects_non_active_session():
+    """Issue #2159: the REST /restart endpoint enforces ACTIVE-only directly (409),
+    not just a courtesy check elsewhere — same gate as
+    session_coordinator.restart_session() itself and legion_mcp_tools.py's MCP tool,
+    enforced regardless of entry point."""
+    from unittest.mock import Mock
+
+    from httpx import ASGITransport, AsyncClient
+
+    from backend.session_manager import SessionState
+    from backend.web_server import BackendApp
+
+    with tempfile.TemporaryDirectory() as tmp:
+        webui = BackendApp(data_dir=Path(tmp))
+
+        session_id = "test-session-2159-not-active"
+        mock_session = Mock()
+        mock_session.state = SessionState.PAUSED
+
+        with patch.object(
+            webui.coordinator, "restart_session", new_callable=AsyncMock
+        ) as mock_restart, patch.object(
+            webui.coordinator.session_manager, "get_session_info",
+            new_callable=AsyncMock, return_value=mock_session
+        ):
+            async with AsyncClient(
+                transport=ASGITransport(app=webui.app), base_url="http://test"
+            ) as client:
+                response = await client.post(
+                    f"/api/sessions/{session_id}/restart"
+                )
+
+        assert response.status_code == 409
+        # The coordinator method must never have been reached.
+        mock_restart.assert_not_called()
