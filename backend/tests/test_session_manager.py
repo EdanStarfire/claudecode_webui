@@ -651,9 +651,12 @@ class TestSessionManager:
     async def test_sessions_reset_from_paused_surfaced_for_tool_repair_scan(
         self, sample_session_config
     ):
-        """Issue #2111: a session reset from PAUSED (awaiting a permission
-        response) on startup must also be surfaced — it was live when the process
-        stopped too."""
+        """Issue #2111/#2159: a PAUSED session (awaiting a permission response) at
+        boot must be surfaced for the tool-repair scan — it was live when the
+        process stopped too — but issue #2159 (UC3) fixes the state itself to stay
+        PAUSED rather than being force-rewritten to TERMINATED. The old
+        force-rewrite made scheduler_service's own PAUSED-recovery branch (#1918)
+        dead code, since by the time it ran this had already clobbered the state."""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
 
@@ -668,7 +671,7 @@ class TestSessionManager:
             await manager2.initialize()
 
             assert manager2.get_sessions_needing_tool_repair_scan() == [session_id]
-            assert manager2._active_sessions[session_id].state == SessionState.TERMINATED
+            assert manager2._active_sessions[session_id].state == SessionState.PAUSED
 
     @pytest.mark.asyncio
     async def test_untouched_session_excluded_from_tool_repair_scan(
@@ -1243,13 +1246,14 @@ class TestMarkUnread:
         session = manager._active_sessions.get(sid)
         assert session.last_viewed_at is not None, "Expected last_viewed_at set after mark_viewed"
 
-        # Register a state-change callback to confirm broadcast fires
-        state_changes = []
+        # Issue #2159: mark_unread is a metadata-only update, not a SessionState
+        # transition — it fires the metadata-change callback, not state-change.
+        metadata_changes = []
 
-        async def _capture_change(session_id, new_state, is_processing, **kwargs):
-            state_changes.append(session_id)
+        async def _capture_change(session_id):
+            metadata_changes.append(session_id)
 
-        manager.add_state_change_callback(_capture_change)
+        manager.add_metadata_change_callback(_capture_change)
 
         result = await manager.mark_unread(sid)
 
@@ -1264,8 +1268,8 @@ class TestMarkUnread:
         reloaded = await manager2.get_session_info(sid)
         assert reloaded.last_viewed_at is None, "last_viewed_at must persist as None"
 
-        # State-change broadcast fired
-        assert sid in state_changes, "mark_unread must broadcast state change"
+        # Metadata-change broadcast fired
+        assert sid in metadata_changes, "mark_unread must broadcast metadata change"
 
     @pytest.mark.asyncio
     async def test_mark_unread_no_completion_returns_false(
@@ -1351,7 +1355,8 @@ class TestMarkRead:
     async def test_mark_read_persists_state_and_broadcasts(
         self, temp_session_manager, sample_session_config
     ):
-        """mark_read must persist to disk and broadcast state-change callback."""
+        """mark_read must persist to disk and broadcast the metadata-change callback
+        (issue #2159: it's a metadata-only update, not a SessionState transition)."""
         manager = temp_session_manager
         sid = str(uuid.uuid4())
         await manager.create_session(sid, config=sample_session_config)
@@ -1359,17 +1364,17 @@ class TestMarkRead:
         completion_ts = datetime.now(UTC)
         await manager.mark_completion(sid, completion_ts)
 
-        state_changes = []
+        metadata_changes = []
 
-        async def _capture_change(session_id, new_state, is_processing, **kwargs):
-            state_changes.append(session_id)
+        async def _capture_change(session_id):
+            metadata_changes.append(session_id)
 
-        manager.add_state_change_callback(_capture_change)
+        manager.add_metadata_change_callback(_capture_change)
 
         result = await manager.mark_read(sid)
 
         assert result is True
-        assert sid in state_changes, "mark_read must broadcast state change"
+        assert sid in metadata_changes, "mark_read must broadcast metadata change"
 
         # Confirm persisted: reload and verify
         data_dir = manager.sessions_dir.parent

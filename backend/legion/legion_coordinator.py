@@ -12,6 +12,7 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Optional
 
+from backend.session_lifecycle import is_deliverable
 from backend.session_manager import SessionState
 from shared.logging_config import get_logger
 
@@ -563,11 +564,17 @@ class LegionCoordinator:
 
     async def resume_all(self, legion_id: str) -> dict:
         """
-        Resume all ACTIVE minions in a legion by sending "continue".
+        Resume all deliverable minions in a legion by sending "continue".
 
         Note: This endpoint is superseded by frontend resume orchestration for issue #1613.
         The frontend reads sessionStorage stopped set and enqueues the resume message per
         session directly. This method remains for backward compatibility.
+
+        Issue #2159 (UC1/UC2): used to raw-string-compare the state's .value against
+        the literal "active" and skip PAUSED minions outright (a minion mid-permission-wait never got its
+        "continue"). Now routes through the queue/queue_processor for every
+        is_deliverable minion — queue_processor's own PAUSED handling (issue #2159's
+        queue_processor.py fix) waits for the permission decision instead of failing.
 
         Args:
             legion_id: Legion UUID (project_id)
@@ -588,22 +595,22 @@ class LegionCoordinator:
         failed_minions = []
 
         for minion in minions:
-            # Send "continue" to all ACTIVE minions
-            if minion.state.value == "active":
-                try:
-                    # Issue #1779: bulk-resume nudge is system-generated, not a user message.
-                    success = await self.system.session_coordinator.send_message(
-                        minion.session_id,
-                        "continue",
-                        inject_timestamp=False,
-                    )
-
-                    if success:
-                        resumed_count += 1
-                    else:
-                        failed_minions.append((minion.session_id, "Send message returned False"))
-                except Exception as e:
-                    failed_minions.append((minion.session_id, str(e)))
+            if not is_deliverable(minion.state):
+                continue
+            try:
+                # reset_session=False: resuming must not clear conversation history.
+                # inject_timestamp=False: this "continue" nudge is system-generated,
+                # not a user message (issue #1779) — same opt-out as comm_router.py's
+                # comms and the direct send_message() path this replaces.
+                await self.system.session_coordinator.enqueue_message(
+                    minion.session_id,
+                    "continue",
+                    reset_session=False,
+                    inject_timestamp=False,
+                )
+                resumed_count += 1
+            except Exception as e:
+                failed_minions.append((minion.session_id, str(e)))
 
         return {
             "resumed_count": resumed_count,

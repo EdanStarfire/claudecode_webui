@@ -568,15 +568,35 @@ class PermissionService:
         Issue #1746: previously this ran unconditionally whenever *any* request
         resolved, so resolving one agent's permission could clear another
         agent's still-open "needs attention" PAUSED state on the same session.
+
+        Called from both the happy path and the finally block of the same
+        permission_callback invocation (issue #1746's cancellation-safety design) —
+        the PAUSED pre-check keeps the second call a true no-op rather than an extra
+        (harmless but pointless) resolve_permission_closed() round trip.
         """
         if self.open_permission_count(session_id) != 0:
             return
         try:
             session_info = await self.coordinator.session_manager.get_session_info(session_id)
-            if session_info and session_info.state == SessionState.PAUSED:
-                # Use update_session_state instead of start_session to avoid re-initializing SDK
-                await self.coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+            if not session_info or session_info.state != SessionState.PAUSED:
+                return
+            resumed = await self.coordinator.session_manager.resolve_permission_closed(session_id)
+            if not resumed:
+                return
+            # resolve_permission_closed() returns True for its own no-op case too (the
+            # session wasn't PAUSED by the time it acquired its lock — e.g. a
+            # concurrent error/interrupt moved it to ERROR/TERMINATING between the
+            # pre-check above and here). Re-check the actual resulting state before
+            # logging/recording a resume that may not have happened.
+            post_info = await self.coordinator.session_manager.get_session_info(session_id)
+            if post_info and post_info.state == SessionState.ACTIVE:
                 debug_logger.info(f"Restored session {session_id} to ACTIVE state after permission decision")
+                # Issue #1998: resume is triggered from here, not session_manager
+                # directly — record it here, mirroring the existing pause recording
+                # above, rather than adding a recorder dependency into session_manager.
+                recorder = self.coordinator.get_session_recorder(session_id)
+                if recorder is not None:
+                    recorder.record_lifecycle("resume")
         except Exception:
             logger.exception(f"Failed to restore session {session_id} to ACTIVE after permission")
 
@@ -608,19 +628,31 @@ class PermissionService:
         except Exception:
             logger.exception(f"Error cleaning up pending permissions for session {session_id}")
 
-    def deny_all_for_interrupt(self) -> None:
-        """Deny all pending permission requests due to a session interrupt."""
-        for request_id, future in list(self.pending_permissions.items()):
-            if not future.done():
+    async def deny_for_session(self, session_id: str) -> None:
+        """Deny this session's own pending permission request(s) due to an interrupt.
+
+        Issue #2159 (UC4): replaces the old deny_all_for_interrupt(), which denied
+        every session's pending permissions service-wide — interrupting one PAUSED
+        session used to nuke every other session's in-flight permission prompts too.
+        Scoped via pending_by_session (issue #1746), same as cleanup_pending_for_session,
+        but additionally resumes this session to ACTIVE once its requests are cleared —
+        termination doesn't need that (the session is going away regardless), an
+        interrupt does.
+        """
+        request_ids = list(self.pending_by_session.get(session_id, ()))
+        for request_id in request_ids:
+            future = self.pending_permissions.pop(request_id, None)
+            if future and not future.done():
                 future.set_result({
                     "behavior": "deny",
                     "message": "Permission denied due to session interrupt",
                     "interrupt": True
                 })
-                self.pending_permissions.pop(request_id, None)
-        # Issue #1746: This denies every pending request service-wide, so
-        # every session's open-request set is now empty.
-        self.pending_by_session.clear()
+                debug_logger.info(
+                    f"Denied pending permission {request_id} due to interrupt of session {session_id}"
+                )
+            self._discard_pending(session_id, request_id)
+        await self._maybe_resume_session(session_id)
 
     def resolve(self, request_id: str, response: dict) -> bool:
         """Resolve a pending permission request.

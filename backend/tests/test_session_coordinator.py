@@ -277,6 +277,11 @@ class TestSessionCoordinator:
 
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
+        # Issue #2159: restart_session() is now ACTIVE-only (the tool was left open
+        # mid-turn, which implies the session was live) — a freshly created session
+        # defaults to CREATED, which this test's actual invariant (tool-interruption
+        # marking) doesn't depend on.
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
 
         tool_call = coordinator.create_tool_call(
             session_id=session_id,
@@ -301,6 +306,31 @@ class TestSessionCoordinator:
         assert broadcast_data["tool_use_id"] == "tu-restart-1"
         # Active tool-call tracking is cleared after being marked interrupted.
         assert coordinator._get_active_tool_call(session_id, "tu-restart-1") is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "state",
+        [SessionState.CREATED, SessionState.PAUSED, SessionState.TERMINATED, SessionState.ERROR],
+    )
+    async def test_issue_2159_restart_session_rejects_non_active(
+        self, temp_coordinator, sample_session_config, state
+    ):
+        """Issue #2159: session_coordinator.restart_session() enforces ACTIVE-only
+        directly, regardless of entry point — not just as a courtesy check in
+        legion_mcp_tools.py's MCP tool or the REST router. Restarting a live turn is
+        a different predicate than deliverability (a PAUSED/ERROR/TERMINATED session
+        has no live turn to restart)."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, state)
+
+        with patch.object(coordinator, 'start_session', AsyncMock(return_value=True)):
+            success = await coordinator.restart_session(session_id)
+
+        assert success is False
+        # The disconnect/terminate/start side effects must not have run either.
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.state == state
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

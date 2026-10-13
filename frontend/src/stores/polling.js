@@ -861,6 +861,17 @@ export const usePollingStore = defineStore('polling', () => {
       }
     },
 
+    // Issue #2159: metadata-only session updates (name, model, permission_mode,
+    // allowed_tools, order, unread tracking, etc.) — split out of state_change
+    // since the SessionState itself never changes for these. Same local-apply as
+    // state_change's own session merge, minus the state-transition side effects
+    // (error reload, mcp refetch, notifications) that don't apply here.
+    session_metadata_updated: (payload) => {
+      if (payload.data && payload.data.session_id && payload.data.session) {
+        useSessionStore().updateSession(payload.data.session_id, payload.data.session)
+      }
+    },
+
     session_reset: (payload) => {
       const resetSessionId = payload.data?.session_id
       if (resetSessionId) {

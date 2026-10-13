@@ -27,12 +27,16 @@ def build_router(webui) -> APIRouter:
     @router.post("/api/sessions/{session_id}/interrupt")
     @handle_exceptions("interrupt session")
     async def interrupt_session_rest(session_id: str):
-        """Interrupt a session via REST (replaces WebSocket interrupt_session message)."""
+        """Interrupt a session via REST (replaces WebSocket interrupt_session message).
+
+        Issue #2159: the service-wide deny-all that used to run here (denying every
+        OTHER session's pending permissions too, whenever this one happened to be
+        PAUSED) is gone — coordinator.interrupt_session() now handles PAUSED itself,
+        scoped to this session only, via is_interruptible()/PermissionService.deny_for_session().
+        """
         state = await webui.service.get_session_state(session_id)
         if state is None:
             raise HTTPException(status_code=404, detail="Session not found")
-        if state == SessionState.PAUSED:
-            webui.permission_service.deny_all_for_interrupt()
         result = await webui.coordinator.interrupt_session(session_id)
         return {"success": bool(result)}
 
@@ -154,9 +158,19 @@ def build_router(webui) -> APIRouter:
     @router.post("/api/sessions/{session_id}/restart")
     @handle_exceptions("restart session")
     async def restart_session(session_id: str):
-        """Restart a session (disconnect and resume)"""
-        if not await webui.service.get_session_exists(session_id):
+        """Restart a session (disconnect and resume).
+
+        Issue #2159: ACTIVE-only, matching legion_mcp_tools.py's restart_session MCP
+        tool and session_coordinator.restart_session()'s own now-centralized guard —
+        restarting a live turn is a different predicate than deliverability, not a
+        missed migration. Checked here too for a specific 409 instead of a generic
+        {"success": false}.
+        """
+        state = await webui.service.get_session_state(session_id)
+        if state is None:
             raise HTTPException(status_code=404, detail="Session not found")
+        if state != SessionState.ACTIVE:
+            raise HTTPException(status_code=409, detail="Session is not active")
 
         # Clear any existing callbacks to prevent duplicates, then register fresh one
         webui.coordinator.clear_message_callbacks(session_id)

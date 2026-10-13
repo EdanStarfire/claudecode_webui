@@ -10,7 +10,7 @@ import uuid
 
 import pytest
 
-from backend.claude_sdk import ClaudeSDK, SessionState
+from backend.claude_sdk import ClaudeSDK
 from backend.session_config import SessionConfig
 
 
@@ -60,7 +60,7 @@ async def wait_for(predicate, timeout=30, interval=0.3):
 
 async def wait_for_running(sdk, timeout=30):
     """Wait until SDK reaches RUNNING state."""
-    return await wait_for(lambda: sdk.info.state == SessionState.RUNNING, timeout=timeout)
+    return await wait_for(lambda: sdk.info.state == "connected", timeout=timeout)
 
 
 @pytest.mark.slow
@@ -75,7 +75,7 @@ class TestClaudeSDKIntegration:
             assert result is True
             reached = await wait_for_running(sdk)
             assert reached, f"SDK did not reach RUNNING state, got: {sdk.info.state}"
-            assert sdk.info.state == SessionState.RUNNING
+            assert sdk.info.state == "connected"
         finally:
             await sdk.terminate()
 
@@ -222,7 +222,7 @@ class TestClaudeSDKIntegration:
         finally:
             result = await sdk.terminate()
             assert result is True
-            assert sdk.info.state == SessionState.TERMINATED
+            assert sdk.info.state == "stopped"
             assert sdk.is_running() is False
 
     async def test_set_permission_mode(self, tmp_working_dir):
@@ -321,15 +321,15 @@ class TestClaudeSDKIntegration:
                 await sdk.send_message("Hello")
                 # Wait for failure
                 failed = await wait_for(
-                    lambda: sdk.info.state == SessionState.FAILED or len(errors) > 0,
+                    lambda: sdk.info.state == "disconnected" or len(errors) > 0,
                     timeout=30,
                 )
-                assert failed or sdk.info.state == SessionState.FAILED, (
+                assert failed or sdk.info.state == "disconnected", (
                     f"Expected FAILED state with invalid model, got: {sdk.info.state}"
                 )
             else:
                 # start() returned False — immediate failure
-                assert sdk.info.state == SessionState.FAILED
+                assert sdk.info.state == "disconnected"
                 assert sdk.info.error_message is not None
         finally:
             await sdk.terminate()
@@ -344,4 +344,4 @@ class TestClaudeSDKIntegration:
             await sdk.terminate()
             # Second terminate should be safe
             await sdk.terminate()
-            assert sdk.info.state == SessionState.TERMINATED
+            assert sdk.info.state == "stopped"

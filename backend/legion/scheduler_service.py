@@ -31,7 +31,8 @@ from backend.models.schedule_models import (
     is_error_status,
     validate_cron_expression,
 )
-from backend.session_manager import AUTO_START_STATES, SessionState
+from backend.session_lifecycle import is_auto_startable, is_deliverable
+from backend.session_manager import SessionState
 from backend.task_utils import task_done_log_exception
 from shared.logging_config import get_logger
 
@@ -649,7 +650,7 @@ class SchedulerService:
 
         # Guard: skip unless agent is in an auto-start-eligible state (issue #1918 —
         # must not force-start a session PAUSED mid-permission-wait)
-        if session_info and session_info.state not in AUTO_START_STATES:
+        if session_info and not is_auto_startable(session_info.state):
             legion_logger.info(
                 f"Skipping ephemeral schedule {schedule.schedule_id} '{schedule.name}' — "
                 f"agent {agent_id} in state {session_info.state.value}"
@@ -890,6 +891,11 @@ class SchedulerService:
 
         Mirrors queue_processor.py auto-start pattern. start_session() is non-blocking;
         polls session state until ACTIVE or timeout.
+
+        Issue #2159: PAUSED is_deliverable but not is_auto_startable — it used to fall
+        through to the unconditional start_session() call below, force-restarting a
+        session mid-permission-wait (discarding the in-flight turn) instead of simply
+        waiting for the permission decision like the poll loop already does.
         """
         session_info = await self.system.session_coordinator.session_manager.get_session_info(session_id)
         if not session_info:
@@ -899,9 +905,16 @@ class SchedulerService:
         if session_info.state == SessionState.ACTIVE:
             return True
 
-        started = await self.system.session_coordinator.start_session(session_id)
-        if not started:
-            return False
+        if is_auto_startable(session_info.state):
+            started = await self.system.session_coordinator.start_session(session_id)
+            if not started:
+                return False
+        elif not is_deliverable(session_info.state):
+            # Neither auto-startable nor already-deliverable (e.g. STARTING) — nothing
+            # to kick off, just poll below until it resolves.
+            pass
+        # else: PAUSED — is_deliverable but not auto-startable; don't force-restart,
+        # just wait for it to resolve to ACTIVE below.
 
         deadline = asyncio.get_event_loop().time() + timeout
         while asyncio.get_event_loop().time() < deadline:

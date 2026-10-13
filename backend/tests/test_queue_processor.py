@@ -159,7 +159,7 @@ class TestQueueProcessorDelivery:
             await asyncio.sleep(1.5)
             proc.stop("s1")
 
-            coord.send_message.assert_called_once_with("s1", "deliver me")
+            coord.send_message.assert_called_once_with("s1", "deliver me", inject_timestamp=True)
 
     @pytest.mark.asyncio
     async def test_auto_starts_terminated_session(self):
@@ -270,3 +270,74 @@ class TestQueueProcessorPausedState:
                 proc.stop("s1")
 
             coord.start_session.assert_not_called()
+
+
+class TestQueueProcessorWaitTimeoutByState:
+    """Issue #2159: only PAUSED gets the unbounded (timeout=None) wait — every
+    other non-ACTIVE state (including an in-flight STARTING/TERMINATING found
+    already in progress, not just a freshly auto-started CREATED/TERMINATED)
+    must keep the original bounded 120s wait. A prior version of this fix let
+    STARTING/TERMINATING fall through to the unbounded branch by accident,
+    which would wedge the queue forever on a hung SDK start/stop instead of
+    failing after 120s."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("state", [SessionState.STARTING, SessionState.TERMINATING])
+    async def test_in_flight_state_gets_bounded_wait(self, state):
+        with tempfile.TemporaryDirectory() as tmp:
+            sdir = Path(tmp)
+            info = _make_session_info(state=state)
+            coord = _make_coordinator(info, sdir)
+            proc = QueueProcessor(coord)
+            await coord.queue_manager.enqueue("s1", sdir, "msg")
+
+            with patch.object(proc, "_wait_for_active", AsyncMock(return_value=False)) as wait_mock:
+                proc.ensure_running("s1")
+                for _ in range(50):
+                    await asyncio.sleep(0)
+                    if not proc.is_running("s1"):
+                        break
+                proc.stop("s1")
+
+            wait_mock.assert_awaited_once_with("s1", timeout=120)
+            coord.start_session.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_paused_gets_unbounded_wait(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sdir = Path(tmp)
+            info = _make_session_info(state=SessionState.PAUSED)
+            coord = _make_coordinator(info, sdir)
+            proc = QueueProcessor(coord)
+            await coord.queue_manager.enqueue("s1", sdir, "msg")
+
+            with patch.object(proc, "_wait_for_active", AsyncMock(return_value=False)) as wait_mock:
+                proc.ensure_running("s1")
+                for _ in range(50):
+                    await asyncio.sleep(0)
+                    if not proc.is_running("s1"):
+                        break
+                proc.stop("s1")
+
+            wait_mock.assert_awaited_once_with("s1", timeout=None)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("state", [SessionState.CREATED, SessionState.TERMINATED])
+    async def test_auto_started_state_gets_bounded_wait(self, state):
+        with tempfile.TemporaryDirectory() as tmp:
+            sdir = Path(tmp)
+            info = _make_session_info(state=state)
+            coord = _make_coordinator(info, sdir)
+            proc = QueueProcessor(coord)
+            await coord.queue_manager.enqueue("s1", sdir, "msg")
+
+            with patch.object(proc, "_wait_for_active", AsyncMock(return_value=False)) as wait_mock:
+                proc.ensure_running("s1")
+                for _ in range(50):
+                    await asyncio.sleep(0)
+                    if not proc.is_running("s1"):
+                        break
+                proc.stop("s1")
+
+            coord.start_session.assert_awaited_once_with("s1", None)
+            wait_mock.assert_awaited_once_with("s1", timeout=120)

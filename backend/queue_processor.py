@@ -142,38 +142,47 @@ class QueueProcessor:
                     )
                     break
 
-                # Auto-start session if needed
-                if session_info.state in AUTO_START_STATES:
-                    queue_proc_logger.info(f"Auto-starting session {session_id} for queue processing")
-                    # Register WebSocket message callback so messages are broadcast to frontend
-                    self._ensure_message_callback(session_id)
-                    # Get permission callback from factory if available
-                    perm_callback = None
-                    if self._coordinator._permission_callback_factory:
-                        perm_callback = self._coordinator._permission_callback_factory(session_id)
-                    success = await self._coordinator.start_session(session_id, perm_callback)
-                    if not success:
-                        queue_proc_logger.error(f"Failed to auto-start session {session_id}")
+                # Issue #2159 (UC1): ACTIVE sends now (skip the wait below entirely).
+                # CREATED/TERMINATED auto-start first. Every other non-ACTIVE state —
+                # including a just-auto-started session and an in-flight STARTING/
+                # TERMINATING found already in progress — keeps the original bounded
+                # 120s wait, EXCEPT PAUSED (mid-permission-wait), which waits with NO
+                # timeout: a permission decision can take as long as the user takes,
+                # the same "overnight wait" philosophy _wait_for_idle() below already
+                # uses. PAUSED used to fall into the same bounded wait as everything
+                # else and simply fail after 120s.
+                if session_info.state != SessionState.ACTIVE:
+                    if session_info.state in AUTO_START_STATES:
+                        queue_proc_logger.info(f"Auto-starting session {session_id} for queue processing")
+                        # Register WebSocket message callback so messages are broadcast to frontend
+                        self._ensure_message_callback(session_id)
+                        # Get permission callback from factory if available
+                        perm_callback = None
+                        if self._coordinator._permission_callback_factory:
+                            perm_callback = self._coordinator._permission_callback_factory(session_id)
+                        success = await self._coordinator.start_session(session_id, perm_callback)
+                        if not success:
+                            queue_proc_logger.error(f"Failed to auto-start session {session_id}")
+                            session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
+                            if session_dir:
+                                await self._coordinator.queue_manager.mark_failed(
+                                    session_id, session_dir, item.queue_id,
+                                    "Failed to auto-start session"
+                                )
+                                await self._broadcast("failed", session_id, item)
+                            break
+
+                    wait_timeout = None if session_info.state == SessionState.PAUSED else 120
+                    if not await self._wait_for_active(session_id, timeout=wait_timeout):
+                        queue_proc_logger.error(f"Session {session_id} did not become active")
                         session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
                         if session_dir:
                             await self._coordinator.queue_manager.mark_failed(
                                 session_id, session_dir, item.queue_id,
-                                "Failed to auto-start session"
+                                "Session did not become active"
                             )
                             await self._broadcast("failed", session_id, item)
                         break
-
-                # Wait for session to become active
-                if not await self._wait_for_active(session_id):
-                    queue_proc_logger.error(f"Session {session_id} did not become active")
-                    session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
-                    if session_dir:
-                        await self._coordinator.queue_manager.mark_failed(
-                            session_id, session_dir, item.queue_id,
-                            "Session did not become active"
-                        )
-                        await self._broadcast("failed", session_id, item)
-                    break
 
                 # Reset session if requested
                 if item.reset_session:
@@ -215,7 +224,9 @@ class QueueProcessor:
                     f"Sending queued message {item.queue_id} to session {session_id}: "
                     f"{item.content[:80]}..."
                 )
-                send_result = await self._coordinator.send_message(session_id, item.content)
+                send_result = await self._coordinator.send_message(
+                    session_id, item.content, inject_timestamp=item.inject_timestamp
+                )
                 if not send_result:
                     queue_proc_logger.error(f"Failed to send queue item {item.queue_id}")
                     session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
@@ -257,10 +268,15 @@ class QueueProcessor:
     # Helpers
     # =========================================================================
 
-    async def _wait_for_active(self, session_id: str, timeout: float = 120) -> bool:
-        """Wait for a session to reach ACTIVE state. Returns False on error/timeout."""
+    async def _wait_for_active(self, session_id: str, timeout: float | None = 120) -> bool:
+        """Wait for a session to reach ACTIVE state. Returns False on error/timeout.
+
+        timeout=None waits indefinitely — used for a session already PAUSED on a
+        permission decision (issue #2159/UC1), which can take as long as the user
+        takes, not a bounded SDK-startup wait.
+        """
         elapsed = 0.0
-        while elapsed < timeout:
+        while timeout is None or elapsed < timeout:
             info = await self._coordinator.session_manager.get_session_info(session_id)
             if not info:
                 return False

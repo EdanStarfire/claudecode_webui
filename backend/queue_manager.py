@@ -35,6 +35,12 @@ class QueueItem:
     created_at: float = 0.0
     sent_at: float | None = None
     error: str | None = None
+    # Issue #2159: lets a system-generated enqueue (e.g. legion_coordinator.resume_all()'s
+    # bulk "continue" nudge) opt out of issue #1779's timestamp injection, the same way
+    # the direct send_message(..., inject_timestamp=False) path already does. Defaults
+    # True so every pre-existing enqueue() caller (real user messages, cron/schedule
+    # prompts) keeps the feature's intended behavior unchanged.
+    inject_timestamp: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -123,6 +129,7 @@ class QueueManager:
                             status="pending",
                             position=entry.get("position", 0),
                             created_at=entry.get("created_at", 0.0),
+                            inject_timestamp=entry.get("inject_timestamp", True),
                         )
                         items_by_id[queue_id] = item
 
@@ -162,6 +169,7 @@ class QueueManager:
         reset_session: bool = True,
         metadata: dict | None = None,
         max_queue_size: int = 100,
+        inject_timestamp: bool = True,
     ) -> QueueItem:
         """Add a message to the session's queue."""
         queue = self._queues.get(session_id, [])
@@ -182,6 +190,7 @@ class QueueManager:
             status="pending",
             position=next_pos,
             created_at=get_unix_timestamp(),
+            inject_timestamp=inject_timestamp,
         )
 
         queue.append(item)
@@ -195,6 +204,7 @@ class QueueManager:
             "metadata": item.metadata,
             "position": item.position,
             "created_at": item.created_at,
+            "inject_timestamp": item.inject_timestamp,
         })
 
         queue_logger.info(f"Enqueued {item.queue_id} for session {session_id} at position {next_pos}")
@@ -276,6 +286,7 @@ class QueueManager:
             content=original.content,
             reset_session=original.reset_session,
             metadata=original.metadata,
+            inject_timestamp=original.inject_timestamp,
         )
         # Override position to be at the front
         new_item.position = front_pos
