@@ -26,7 +26,6 @@ from src.tests.simulation.fault_harness import (
     FakeFrontend,
     resolve_delivered_seqs,
     run_fault_scenario,
-    session_path,
     wait_until,
 )
 
@@ -233,7 +232,9 @@ async def test_backend_down_recovers_with_no_loss():
     probe_backend = FakeBackend()
     probe_backend.go_down()
     with pytest.raises(httpx.ConnectError):
-        await probe_backend.get_json(session_path("probe-session"))
+        await probe_backend.request_json(
+            "POST", "/api/poll", json={"timeout": 0, "sessions": {"probe-session": {"since": 0}}}
+        )
 
     result = await run_fault_scenario("backend_down", _SAMPLE_EVENTS)
     client = result["client"]
