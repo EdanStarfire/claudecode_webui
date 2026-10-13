@@ -41,6 +41,14 @@ TOP_LEVEL_EVENT_TYPES: dict[str, EventTypeSpec] = {
     "project_deleted": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"data"})),
     "session_deleted": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"data"})),
     "state_change": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"data"})),
+    # Issue #2159 (epic #1990 stage 6a): the 13 session metadata setters (name,
+    # sdk_generated_name, permission_mode, model, allowed_tools, latest_message,
+    # mark_completion/viewed/unread/read, order, the generic update_session(), and
+    # the ephemeral-flag broadcast) used to piggyback on state_change even though
+    # the SessionState itself never changed. Same payload shape as state_change
+    # (same consumer-side `_broadcast_state_change`-style handler), just its own
+    # type — same pattern as stream_reset's own additive entry (stage 5a).
+    "session_metadata_updated": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"data"})),
     "server_restarting": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"message"})),
     "mcp_oauth_complete": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"server_id"})),
     "secret_oauth_complete": EventTypeSpec(

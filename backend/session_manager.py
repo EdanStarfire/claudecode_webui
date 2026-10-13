@@ -16,7 +16,6 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +24,15 @@ from shared.logging_config import get_logger
 from .models.messages import CURRENT_MESSAGE_SCHEMA_VERSION, LegacyMessageFormatError
 from .models.permission_mode import PermissionMode
 from .session_config import CONFIG_FIELDS, DEFAULTS, SessionConfig
+from .session_lifecycle import (  # noqa: F401 — re-exported; see module docstring below
+    AUTO_START_STATES,
+    RUNNABLE_STATES,
+    STARTABLE_STATES,
+    STOPPED_STATES,
+    LifecycleEvent,
+    SessionState,
+    transition,
+)
 from .slug_utils import slugify_name
 from .template_manager import TemplateManager
 
@@ -37,32 +45,12 @@ logger = logging.getLogger(__name__)
 # Default model for new sessions
 DEFAULT_MODEL = "sonnet"
 
-
-class SessionState(Enum):
-    """Session lifecycle states"""
-    CREATED = "created"
-    STARTING = "starting"
-    ACTIVE = "active"
-    PAUSED = "paused"
-    TERMINATING = "terminating"
-    TERMINATED = "terminated"
-    ERROR = "error"
-
-
-# Named SessionState groupings — update these when adding new states
-STOPPED_STATES: frozenset[SessionState] = frozenset({
-    SessionState.CREATED, SessionState.PAUSED,
-    SessionState.TERMINATED, SessionState.ERROR,
-})
-STARTABLE_STATES: frozenset[SessionState] = frozenset({
-    SessionState.CREATED, SessionState.PAUSED, SessionState.TERMINATED,
-})
-RUNNABLE_STATES: frozenset[SessionState] = frozenset({
-    SessionState.ACTIVE, SessionState.STARTING,
-})
-AUTO_START_STATES: frozenset[SessionState] = frozenset({
-    SessionState.CREATED, SessionState.TERMINATED,
-})
+# Issue #2159 (epic #1990 stage 6a): SessionState and its groupings now live in
+# session_lifecycle.py — the one module owning lifecycle state. Re-exported here
+# (imported above) so the ~30 existing `from .session_manager import SessionState`
+# call sites across routers/legion/tests keep working unchanged; 6b migrates the
+# callers that need the new predicates to import them from session_lifecycle
+# directly, but nothing requires every importer to move for 6a/6b to be correct.
 
 
 @dataclass
@@ -386,6 +374,13 @@ class SessionManager:
         self._active_sessions: dict[str, SessionInfo] = {}
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._state_change_callbacks: list[Callable] = []
+        # Issue #2159: metadata-only updates (name, model, permission_mode,
+        # allowed_tools, order, unread tracking, the generic update_session(), etc.)
+        # fire this SEPARATE callback list instead of _state_change_callbacks — the
+        # SessionState itself never changes for these, so they no longer masquerade
+        # as a "state_change" event (see shared/event_registry.py's
+        # session_metadata_updated entry).
+        self._metadata_change_callbacks: list[Callable] = []
         # Issue #2111: session IDs that could plausibly have a dangling non-terminal
         # tool call left by a crash — sessions this boot's _load_existing_sessions()
         # reset from RUNNABLE_STATES/PAUSED (the post-reset state alone can't
@@ -497,14 +492,19 @@ class SessionManager:
                                 self._sessions_needing_tool_repair_scan.append(session_info.session_id)
                                 session_logger.info(f"Reset session {session_info.session_id} from {original_state.value} to {session_info.state.value} on startup")
 
-                            # Reset PAUSED sessions to TERMINATED (orphaned permission requests)
-                            # PAUSED state means session was waiting for permission response
+                            # Issue #2159 (epic #1990 stage 6a, UC3 fix): PAUSED now stays
+                            # PAUSED on boot. It used to be force-rewritten to TERMINATED
+                            # here — unconditionally, before scheduler_service's own
+                            # "don't terminate a PAUSED agent, it's mid-permission-wait"
+                            # recovery branch (#1918) ever got a chance to run, making that
+                            # branch dead code. A PAUSED session's pending permission Future
+                            # is gone regardless (no SDK is running to resolve it), but the
+                            # state itself was never false — only the in-memory Future was.
+                            # Still flagged for the tool-call-repair scan: that scan targets
+                            # orphaned tool records, a separate concern from state
+                            # truthfulness, and a PAUSED session can have one too.
                             if session_info.state == SessionState.PAUSED:
-                                session_info.state = SessionState.TERMINATED
-                                session_info.updated_at = datetime.now(UTC)
-                                state_changed = True
                                 self._sessions_needing_tool_repair_scan.append(session_info.session_id)
-                                session_logger.info(f"Reset session {session_info.session_id} from PAUSED to TERMINATED on startup (orphaned permission request)")
 
                             # Issue #2111: ERROR is reachable only while the process was live
                             # (the critical-error callback path), and its own
@@ -662,11 +662,12 @@ class SessionManager:
                     logger.error(f"Session {session_id} not found")
                     return False
 
-                if session.state not in STARTABLE_STATES:
+                new_state = transition(session.state, LifecycleEvent.START_REQUESTED)
+                if new_state == session.state:
                     session_logger.warning(f"Cannot start session {session_id} in state {session.state}")
                     return False
 
-                await self._update_session_state(session_id, SessionState.STARTING)
+                await self._update_session_state(session_id, new_state)
 
                 # Session will remain in STARTING state until SDK is ready
                 # SDK will call mark_session_active() when context manager is initialized
@@ -687,11 +688,12 @@ class SessionManager:
                     logger.error(f"Session {session_id} not found")
                     return False
 
-                if session.state != SessionState.STARTING:
+                new_state = transition(session.state, LifecycleEvent.SDK_READY)
+                if new_state == session.state:
                     session_logger.warning(f"Cannot activate session {session_id} in state {session.state}")
                     return False
 
-                await self._update_session_state(session_id, SessionState.ACTIVE)
+                await self._update_session_state(session_id, new_state)
                 session_logger.info(f"Session {session_id} marked as ACTIVE - SDK ready")
                 return True
 
@@ -700,7 +702,13 @@ class SessionManager:
             return False
 
     async def pause_session(self, session_id: str) -> bool:
-        """Pause an active session (used internally for permission prompt waiting)"""
+        """Pause an active session (used internally for permission prompt waiting).
+
+        Issue #2159: called by PermissionService only when a permission request just
+        became the first one open for this session — open_permission_count=1 reflects
+        that fact, not a caller-supplied target state; transition() decides PAUSED vs.
+        leaving the state alone.
+        """
         async with self._get_session_lock(session_id):
             try:
                 session = self._active_sessions.get(session_id)
@@ -708,16 +716,47 @@ class SessionManager:
                     logger.error(f"Session {session_id} not found")
                     return False
 
-                if session.state != SessionState.ACTIVE:
+                new_state = transition(
+                    session.state, LifecycleEvent.PERMISSION_OPENED, open_permission_count=1
+                )
+                if new_state == session.state:
                     session_logger.warning(f"Cannot pause session {session_id} in state {session.state}")
                     return False
 
-                await self._update_session_state(session_id, SessionState.PAUSED)
+                await self._update_session_state(session_id, new_state)
                 session_logger.info(f"Paused session {session_id}")
                 return True
 
             except Exception as e:
                 logger.error(f"Failed to pause session {session_id}: {e}")
+                return False
+
+    async def resolve_permission_closed(self, session_id: str) -> bool:
+        """Restore PAUSED -> ACTIVE once no permission request remains open.
+
+        Issue #2159: the ACTIVE-restore counterpart to pause_session() — called by
+        PermissionService._maybe_resume_session() once open_permission_count reaches 0.
+        A no-op (not an error) if the session isn't currently PAUSED.
+        """
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                new_state = transition(
+                    session.state, LifecycleEvent.PERMISSION_CLOSED, open_permission_count=0
+                )
+                if new_state == session.state:
+                    return True
+
+                await self._update_session_state(session_id, new_state)
+                session_logger.info(f"Restored session {session_id} to ACTIVE after permission decision")
+                return True
+
+            except Exception as e:
+                logger.error(f"Failed to resolve permission-closed for session {session_id}: {e}")
                 return False
 
     async def terminate_session(self, session_id: str) -> bool:
@@ -729,11 +768,12 @@ class SessionManager:
                     session_logger.warning(f"Session {session_id} not found for termination")
                     return False
 
-                if session.state == SessionState.TERMINATED:
+                terminating_state = transition(session.state, LifecycleEvent.TERMINATE_REQUESTED)
+                if terminating_state == session.state:
                     session_logger.info(f"Session {session_id} already terminated")
                     return True
 
-                await self._update_session_state(session_id, SessionState.TERMINATING)
+                await self._update_session_state(session_id, terminating_state)
 
                 # Issue #827: Clear per-session secrets token on termination.
                 if hasattr(session, "secret_fetch_token") and session.secret_fetch_token:
@@ -742,7 +782,8 @@ class SessionManager:
                 # Perform cleanup tasks
                 await asyncio.sleep(0.1)  # Placeholder for cleanup logic
 
-                await self._update_session_state(session_id, SessionState.TERMINATED)
+                terminated_state = transition(terminating_state, LifecycleEvent.TERMINATED)
+                await self._update_session_state(session_id, terminated_state)
                 session_logger.info(f"Terminated session {session_id}")
                 return True
 
@@ -768,6 +809,13 @@ class SessionManager:
         optional structured fields populated when the failure originated from a
         ResultError (issue #1902); they default to None so existing call sites are
         unaffected.
+
+        Remains a direct setter (not event-gated): restart_session()/reset_session()
+        rely on forcing TERMINATED from whatever state they're currently in as
+        internal bookkeeping before re-starting, which has no corresponding
+        LifecycleEvent. For ERROR specifically this is still exactly what
+        transition()'s ERROR_OCCURRED would compute — it's unconditional regardless
+        of current state, since a critical SDK error can land from anywhere.
         """
         async with self._get_session_lock(session_id):
             try:
@@ -955,7 +1003,7 @@ class SessionManager:
                 session.slug = slugify_name(name.strip())
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
-                await self._notify_state_change_callbacks(session_id, session.state)
+                await self._notify_metadata_change_callbacks(session_id)
                 session_logger.info(f"Updated session {session_id} name to '{name}'")
                 return True
             except Exception as e:
@@ -974,7 +1022,7 @@ class SessionManager:
                 session.sdk_generated_name = sdk_name
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
-                await self._notify_state_change_callbacks(session_id, session.state)
+                await self._notify_metadata_change_callbacks(session_id)
                 session_logger.info(f"Updated session {session_id} sdk_generated_name to '{sdk_name}'")
                 return True
             except Exception as e:
@@ -1008,7 +1056,7 @@ class SessionManager:
                 session.config["permission_mode"] = mode
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
-                await self._notify_state_change_callbacks(session_id, session.state)
+                await self._notify_metadata_change_callbacks(session_id)
                 session_logger.info(f"Updated session {session_id} permission mode to '{mode}'")
                 return True
             except Exception as e:
@@ -1042,7 +1090,7 @@ class SessionManager:
                 session.config["model"] = model
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
-                await self._notify_state_change_callbacks(session_id, session.state)
+                await self._notify_metadata_change_callbacks(session_id)
                 session_logger.info(f"Updated session {session_id} model to '{model}'")
                 return True
             except Exception as e:
@@ -1126,7 +1174,7 @@ class SessionManager:
                 session.config["allowed_tools"] = list(existing | set(new_tools))
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
-                await self._notify_state_change_callbacks(session_id, session.state)
+                await self._notify_metadata_change_callbacks(session_id)
                 session_logger.info(
                     f"Added {len(new_tools)} tools to session {session_id} "
                     f"allowed_tools: {new_tools}"
@@ -1163,7 +1211,7 @@ class SessionManager:
                 await self._persist_session_state(session_id)
 
                 # Trigger state change callback
-                await self._notify_state_change_callbacks(session_id, session.state)
+                await self._notify_metadata_change_callbacks(session_id)
 
                 session_logger.debug(f"Updated latest message for session {session_id}: {message_type}")
                 return True
@@ -1183,7 +1231,7 @@ class SessionManager:
                 session.last_completion_at = timestamp
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
-                await self._notify_state_change_callbacks(session_id, session.state)
+                await self._notify_metadata_change_callbacks(session_id)
                 session_logger.debug(f"Marked completion for session {session_id} at {timestamp}")
                 return True
             except Exception as e:
@@ -1208,7 +1256,7 @@ class SessionManager:
                 session.last_viewed_at = datetime.now(UTC)
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
-                await self._notify_state_change_callbacks(session_id, session.state)
+                await self._notify_metadata_change_callbacks(session_id)
                 session_logger.debug(f"Marked viewed for session {session_id}")
                 return True
             except Exception as e:
@@ -1231,7 +1279,7 @@ class SessionManager:
                 session.last_viewed_at = None
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
-                await self._notify_state_change_callbacks(session_id, session.state)
+                await self._notify_metadata_change_callbacks(session_id)
                 session_logger.debug(f"Marked unread for session {session_id}")
                 return True
             except Exception as e:
@@ -1258,7 +1306,7 @@ class SessionManager:
                 session.last_viewed_at = session.last_completion_at
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
-                await self._notify_state_change_callbacks(session_id, session.state)
+                await self._notify_metadata_change_callbacks(session_id)
                 session_logger.debug(f"Marked read for session {session_id}")
                 return True
             except Exception as e:
@@ -1341,7 +1389,7 @@ class SessionManager:
                 session.order = order
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
-                await self._notify_state_change_callbacks(session_id, session.state)
+                await self._notify_metadata_change_callbacks(session_id)
                 session_logger.info(f"Updated session {session_id} order to {order}")
                 return True
             except Exception as e:
@@ -1388,7 +1436,7 @@ class SessionManager:
 
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
-                await self._notify_state_change_callbacks(session_id, session.state)
+                await self._notify_metadata_change_callbacks(session_id)
                 session_logger.info(f"Updated session {session_id} fields: {list(kwargs.keys())}")
                 return True
             except Exception as e:
@@ -1446,6 +1494,22 @@ class SessionManager:
                 await callback(session_id, new_state, is_processing, project_id=project_id)
             except Exception as e:
                 logger.error(f"Error in state change callback: {e}")
+
+    def add_metadata_change_callback(self, callback: Callable):
+        """Add callback for metadata-only session updates (issue #2159)."""
+        self._metadata_change_callbacks.append(callback)
+
+    async def _notify_metadata_change_callbacks(self, session_id: str):
+        """Notify registered callbacks about a metadata-only update (issue #2159).
+
+        Unlike _notify_state_change_callbacks, there is no new_state to report — the
+        SessionState didn't change. Callbacks re-read current session info themselves.
+        """
+        for callback in self._metadata_change_callbacks:
+            try:
+                await callback(session_id)
+            except Exception as e:
+                logger.error(f"Error in metadata change callback: {e}")
 
 
 def _derive_last_completion_from_jsonl(path: Path) -> datetime | None:

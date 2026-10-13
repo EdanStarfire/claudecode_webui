@@ -22,7 +22,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .claude_sdk import SDK_ACTIVE_STATES, ClaudeSDK, SessionInfo, SessionState
+from .claude_sdk import ClaudeSDK, SessionInfo
 from .models.messages import MessageRecord, _message_dict_to_record
 from .raw_replay import KNOWN_UNHANDLED_SDK_TYPES, reconstruct_sdk_message
 
@@ -590,6 +590,13 @@ class MockClaudeSDK:
             self.timestamp_injection_timezone = "UTC"
         self.storage_manager = kwargs.get("storage_manager")
         self.session_manager = kwargs.get("session_manager")
+        # Issue #2159: real ClaudeSDK now drives backend state off this instead of
+        # reaching into session_manager directly. Mock still calls
+        # session_manager.mark_session_active() directly below (its existing,
+        # already-correct behavior for the "connected" phase) — this is wired too
+        # so a future phase_callback handler extension (e.g. "disconnected"/
+        # "stopped") doesn't silently skip mock/fixture-replay sessions.
+        self.phase_callback = kwargs.get("phase_callback")
         # Issue #2109 (AC8/4a-F): optional real SessionCoordinator reference, used only
         # by raw-layer replay (_start_raw_replay) to call mark_session_tools_interrupted()
         # at recorded restart/interrupt points. Not part of ClaudeSDK's real constructor
@@ -693,7 +700,7 @@ class MockClaudeSDK:
         the raw-layer replay path (_start_raw_replay) instead.
         """
         try:
-            self.info.state = SessionState.STARTING
+            await self._set_phase("connecting")
             self.info.start_time = time.time()
 
             if self._raw_mode:
@@ -702,7 +709,7 @@ class MockClaudeSDK:
                 # returning, so setting RUNNING afterward would leave any concurrent status
                 # check (is_running(), a session-status poll) seeing STARTING while messages
                 # are already being persisted and streamed.
-                self.info.state = SessionState.RUNNING
+                await self._set_phase("connected")
                 await self._start_raw_replay()
             else:
                 # Load recording
@@ -720,7 +727,7 @@ class MockClaudeSDK:
                 if self._recording.get_segment_count() > 0:
                     self._engine._segment_cursor = 1
 
-                self.info.state = SessionState.RUNNING
+                await self._set_phase("connected")
 
             # Notify session manager if available
             if self.session_manager:
@@ -733,7 +740,7 @@ class MockClaudeSDK:
 
         except Exception as e:
             logger.error(f"Failed to start mock session: {e}")
-            self.info.state = SessionState.FAILED
+            await self._set_phase("disconnected")
             self.info.error_message = str(e)
             if self.error_callback:
                 await self._safe_callback(self.error_callback, "startup_failed", e)
@@ -786,7 +793,7 @@ class MockClaudeSDK:
         Validates that the expected action is USER_MESSAGE, then replays
         the next segment of SDK messages.
         """
-        if self.info.state != SessionState.RUNNING:
+        if self.info.state != "connected":
             return False
 
         if self._raw_mode:
@@ -948,7 +955,7 @@ class MockClaudeSDK:
 
     async def terminate(self, timeout: float = 5.0) -> bool:
         """Terminate the mock session."""
-        self.info.state = SessionState.TERMINATED
+        await self._set_phase("stopped")
         self._shutdown_event.set()
         if self._replay_task and not self._replay_task.done():
             self._replay_task.cancel()
@@ -967,13 +974,21 @@ class MockClaudeSDK:
         from dataclasses import asdict
 
         info_dict = asdict(self.info)
-        info_dict["state"] = self.info.state.value
+        # state is already a plain string (issue #2159)
         info_dict["mock"] = True
         return info_dict
 
     def is_running(self) -> bool:
         """Check if mock session is running."""
-        return self.info.state in SDK_ACTIVE_STATES
+        return self.info.state == "connected"
+
+    async def _set_phase(self, phase: str) -> None:
+        """Update this mock's own phase and notify phase_callback (issue #2159),
+        mirroring ClaudeSDK._set_phase() so a future phase_callback handler
+        extension doesn't silently skip mock/fixture-replay sessions."""
+        self.info.state = phase
+        if self.phase_callback:
+            await self._safe_callback(self.phase_callback, phase)
 
     async def _safe_callback(self, callback, *args):
         """Safely execute a callback."""

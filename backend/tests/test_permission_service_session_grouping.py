@@ -66,7 +66,7 @@ def _make_coordinator() -> MagicMock:
     coord.update_tool_call_permission_request = MagicMock(return_value=None)
     coord._tool_calls = tool_calls
 
-    # Track per-session state so update_session_state's effect is visible to
+    # Track per-session state so resolve_permission_closed's effect is visible to
     # a later get_session_info call — mirrors the real SessionManager closely
     # enough that _maybe_resume_session's "already ACTIVE" guard behaves the
     # same as in production (a redundant resume attempt is a real no-op, not
@@ -76,12 +76,16 @@ def _make_coordinator() -> MagicMock:
     async def _get_session_info(sid):
         return MagicMock(state=session_states.get(sid, SessionState.PAUSED))
 
-    async def _update_session_state(sid, state):
-        session_states[sid] = state
+    async def _resolve_permission_closed(sid):
+        # Issue #2159: mirrors session_lifecycle.transition()'s PERMISSION_CLOSED —
+        # PAUSED -> ACTIVE, no-op (but still "success") from anywhere else.
+        if session_states.get(sid, SessionState.PAUSED) == SessionState.PAUSED:
+            session_states[sid] = SessionState.ACTIVE
+        return True
 
     coord.session_manager = MagicMock()
     coord.session_manager.pause_session = AsyncMock()
-    coord.session_manager.update_session_state = AsyncMock(side_effect=_update_session_state)
+    coord.session_manager.resolve_permission_closed = AsyncMock(side_effect=_resolve_permission_closed)
     coord.session_manager.get_session_info = AsyncMock(side_effect=_get_session_info)
     coord._session_states = session_states
     return coord
@@ -135,7 +139,7 @@ async def test_two_concurrent_requests_same_session_only_resumes_after_both_reso
                 break
 
         assert svc.open_permission_count(session_id) == 1
-        coord.session_manager.update_session_state.assert_not_called()
+        coord.session_manager.resolve_permission_closed.assert_not_called()
 
         # Resolve the second — now the session should resume.
         svc.resolve(request_ids[1], {"behavior": "allow"})
@@ -143,9 +147,7 @@ async def test_two_concurrent_requests_same_session_only_resumes_after_both_reso
         await task2
 
         assert svc.open_permission_count(session_id) == 0
-        coord.session_manager.update_session_state.assert_awaited_once_with(
-            session_id, SessionState.ACTIVE
-        )
+        coord.session_manager.resolve_permission_closed.assert_awaited_once_with(session_id)
         assert session_id not in svc.pending_by_session
 
 
@@ -183,9 +185,7 @@ async def test_single_request_still_resumes_session_on_resolve():
         svc.resolve(request_id, {"behavior": "allow"})
         await task
 
-        coord.session_manager.update_session_state.assert_awaited_once_with(
-            session_id, SessionState.ACTIVE
-        )
+        coord.session_manager.resolve_permission_closed.assert_awaited_once_with(session_id)
         assert session_id not in svc.pending_by_session
 
 
@@ -335,9 +335,7 @@ async def test_two_different_sessions_do_not_interact():
 
         # Session A resumes on its own resolution; session B's open set (and
         # state) is untouched by it.
-        coord.session_manager.update_session_state.assert_awaited_once_with(
-            session_a, SessionState.ACTIVE
-        )
+        coord.session_manager.resolve_permission_closed.assert_awaited_once_with(session_a)
         assert session_b in svc.pending_by_session
         assert svc.open_permission_count(session_b) == 1
 
@@ -345,10 +343,8 @@ async def test_two_different_sessions_do_not_interact():
         svc.resolve(req_id_b, {"behavior": "allow"})
         await task_b
 
-        assert coord.session_manager.update_session_state.await_count == 2
-        coord.session_manager.update_session_state.assert_any_await(
-            session_b, SessionState.ACTIVE
-        )
+        assert coord.session_manager.resolve_permission_closed.await_count == 2
+        coord.session_manager.resolve_permission_closed.assert_any_await(session_b)
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +387,4 @@ async def test_cancelled_await_still_releases_pending_by_session():
 
         assert svc.open_permission_count(session_id) == 0
         assert session_id not in svc.pending_by_session
-        coord.session_manager.update_session_state.assert_awaited_once_with(
-            session_id, SessionState.ACTIVE
-        )
+        coord.session_manager.resolve_permission_closed.assert_awaited_once_with(session_id)

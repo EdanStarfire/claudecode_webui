@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from backend.claude_sdk import ClaudeSDK, SessionInfo, SessionState
+from backend.claude_sdk import ClaudeSDK, SessionInfo
 from backend.config_manager import AppConfig, FeaturesConfig
 from backend.session_config import SessionConfig
 
@@ -45,13 +45,13 @@ class TestClaudeSDK:
         assert sdk_instance.session_id == session_id
         assert str(sdk_instance.working_directory) == temp_dir
         assert sdk_instance.system_prompt == "Hello, test!"
-        assert sdk_instance.info.state == SessionState.CREATED
+        assert sdk_instance.info.state == "created"
 
     def test_session_info(self, sdk_instance):
         """Test session info retrieval."""
         info = sdk_instance.get_info()
         assert info["session_id"] == sdk_instance.session_id
-        assert info["state"] == SessionState.CREATED.value
+        assert info["state"] == "created"
         assert "working_directory" in info
 
     @pytest.mark.asyncio
@@ -62,7 +62,7 @@ class TestClaudeSDK:
 
         assert success is True
         # Session may be STARTING or RUNNING depending on initialization timing
-        assert sdk_instance.info.state in [SessionState.STARTING, SessionState.RUNNING]
+        assert sdk_instance.info.state in ["connecting", "connected"]
         assert sdk_instance.info.start_time is not None
 
     @pytest.mark.asyncio
@@ -76,7 +76,7 @@ class TestClaudeSDK:
         success = await sdk_instance.start()
 
         assert success is False
-        assert sdk_instance.info.state == SessionState.FAILED
+        assert sdk_instance.info.state == "disconnected"
         assert sdk_instance.info.error_message is not None
 
     @pytest.mark.asyncio
@@ -140,23 +140,19 @@ class TestClaudeSDK:
         success = await sdk_instance.terminate()
 
         assert success is True
-        assert sdk_instance.info.state == SessionState.TERMINATED
+        assert sdk_instance.info.state == "stopped"
 
     def test_is_running_states(self, sdk_instance):
         """Test is_running method with different states."""
         # Initially not running
         assert sdk_instance.is_running() is False
 
-        # Set to running state
-        sdk_instance.info.state = SessionState.RUNNING
+        # Set to connected (the only phase is_running() treats as running)
+        sdk_instance.info.state = "connected"
         assert sdk_instance.is_running() is True
 
-        # Set to processing state
-        sdk_instance.info.state = SessionState.PROCESSING
-        assert sdk_instance.is_running() is True
-
-        # Set to completed state
-        sdk_instance.info.state = SessionState.COMPLETED
+        # Any other phase is not running
+        sdk_instance.info.state = "disconnected"
         assert sdk_instance.is_running() is False
 
     def test_convert_sdk_message_dict(self, sdk_instance):
@@ -1068,7 +1064,7 @@ class TestClaudeSDK:
             working_directory=temp_dir,
             error_callback=error_callback,
         )
-        sdk.info.state = SessionState.RUNNING
+        sdk.info.state = "connected"
 
         async def immediate_return():
             return
@@ -1079,7 +1075,7 @@ class TestClaudeSDK:
         alive = await sdk._check_consumer_alive(task)
 
         assert alive is False
-        assert sdk.info.state == SessionState.FAILED
+        assert sdk.info.state == "disconnected"
         assert sdk.info.error_message is not None
         assert len(errors_received) == 1
         assert errors_received[0][0] == "consumer_task_died"
@@ -1098,7 +1094,7 @@ class TestClaudeSDK:
             working_directory=temp_dir,
             error_callback=error_callback,
         )
-        sdk.info.state = SessionState.RUNNING
+        sdk.info.state = "connected"
 
         async def gets_cancelled():
             await asyncio.sleep(10)
@@ -1111,7 +1107,7 @@ class TestClaudeSDK:
         alive = await sdk._check_consumer_alive(task)
 
         assert alive is False
-        assert sdk.info.state == SessionState.FAILED
+        assert sdk.info.state == "disconnected"
         assert errors_received[0][0] == "consumer_task_died"
 
     @pytest.mark.asyncio
@@ -1127,7 +1123,7 @@ class TestClaudeSDK:
             working_directory=temp_dir,
             error_callback=error_callback,
         )
-        sdk.info.state = SessionState.RUNNING
+        sdk.info.state = "connected"
         sdk._shutdown_event.set()
 
         async def immediate_return():
@@ -1139,14 +1135,14 @@ class TestClaudeSDK:
         alive = await sdk._check_consumer_alive(task)
 
         assert alive is True
-        assert sdk.info.state == SessionState.RUNNING  # untouched
+        assert sdk.info.state == "connected"  # untouched
         assert errors_received == []
 
     @pytest.mark.asyncio
     async def test_check_consumer_alive_healthy_task(self, temp_dir, session_id):
         """Issue #1503: watchdog returns True and leaves state unchanged for a running task."""
         sdk = ClaudeSDK(session_id=session_id, working_directory=temp_dir)
-        sdk.info.state = SessionState.RUNNING
+        sdk.info.state = "connected"
 
         async def long_running():
             await asyncio.sleep(10)
@@ -1155,7 +1151,7 @@ class TestClaudeSDK:
         try:
             alive = await sdk._check_consumer_alive(task)
             assert alive is True
-            assert sdk.info.state == SessionState.RUNNING
+            assert sdk.info.state == "connected"
         finally:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -1169,7 +1165,7 @@ class TestClaudeSDK:
         mock_query = AsyncMock()
         mock_query._send_control_request.return_value = {"directory": "/tmp/resolved"}
         sdk_instance._sdk_client = Mock(_query=mock_query)
-        sdk_instance.info.state = SessionState.RUNNING
+        sdk_instance.info.state = "connected"
 
         result = await sdk_instance.register_repo_root("/tmp/some/dir")
 
@@ -1183,7 +1179,7 @@ class TestClaudeSDK:
         """If the SDK's internal _query/_send_control_request API is renamed on upgrade,
         this should surface as an actionable RuntimeError instead of a raw AttributeError."""
         sdk_instance._sdk_client = Mock(spec=[])  # no `_query` attribute at all
-        sdk_instance.info.state = SessionState.RUNNING
+        sdk_instance.info.state = "connected"
 
         with pytest.raises(RuntimeError, match="claude-agent-sdk internals"):
             await sdk_instance.register_repo_root("/tmp/some/dir")
@@ -1198,7 +1194,7 @@ class TestClaudeSDK:
     @pytest.mark.asyncio
     async def test_inactive_state_raises(self, sdk_instance):
         sdk_instance._sdk_client = Mock()
-        sdk_instance.info.state = SessionState.TERMINATED
+        sdk_instance.info.state = "stopped"
 
         with pytest.raises(RuntimeError, match="not in valid state"):
             await sdk_instance.register_repo_root("/tmp/some/dir")
@@ -1328,7 +1324,7 @@ class TestSetModel:
         """set_model() calls through to the SDK client and updates local tracking."""
         from unittest.mock import AsyncMock
 
-        sdk_instance.info.state = SessionState.RUNNING
+        sdk_instance.info.state = "connected"
         sdk_instance._sdk_client = AsyncMock()
 
         result = await sdk_instance.set_model("opus")
@@ -1342,7 +1338,7 @@ class TestSetModel:
         """set_model() accepts (trimmed) arbitrary model strings, not just the 4 aliases."""
         from unittest.mock import AsyncMock
 
-        sdk_instance.info.state = SessionState.RUNNING
+        sdk_instance.info.state = "connected"
         sdk_instance._sdk_client = AsyncMock()
 
         result = await sdk_instance.set_model("  not-a-real-model  ")
@@ -1356,7 +1352,7 @@ class TestSetModel:
         """set_model() still rejects an empty/whitespace-only model without touching the SDK client."""
         from unittest.mock import AsyncMock
 
-        sdk_instance.info.state = SessionState.RUNNING
+        sdk_instance.info.state = "connected"
         sdk_instance._sdk_client = AsyncMock()
 
         result = await sdk_instance.set_model("   ")
@@ -1367,7 +1363,7 @@ class TestSetModel:
     @pytest.mark.asyncio
     async def test_set_model_no_active_client(self, sdk_instance):
         """set_model() returns False when there is no connected SDK client."""
-        sdk_instance.info.state = SessionState.RUNNING
+        sdk_instance.info.state = "connected"
         sdk_instance._sdk_client = None
 
         result = await sdk_instance.set_model("opus")
@@ -1379,7 +1375,7 @@ class TestSetModel:
         """set_model() returns False when the session isn't in an active SDK state."""
         from unittest.mock import AsyncMock
 
-        sdk_instance.info.state = SessionState.CREATED
+        sdk_instance.info.state = "created"
         sdk_instance._sdk_client = AsyncMock()
 
         result = await sdk_instance.set_model("opus")
@@ -1398,7 +1394,7 @@ class TestSetModel:
             errors_received.append((kind, exc))
 
         sdk_instance.error_callback = error_callback
-        sdk_instance.info.state = SessionState.RUNNING
+        sdk_instance.info.state = "connected"
         sdk_instance._sdk_client = AsyncMock()
         sdk_instance._sdk_client.set_model.side_effect = RuntimeError("boom")
 
@@ -1458,7 +1454,7 @@ class TestIssue1902ResultErrorHandling:
             success = await sdk.start()
 
         assert success is False
-        assert sdk.info.state == SessionState.FAILED
+        assert sdk.info.state == "disconnected"
         assert sdk.info.error_message == str(result_error)
         assert sdk.info.error_subtype == "error_max_turns"
         assert sdk.info.error_terminal_reason == "max_turns"
@@ -1516,7 +1512,7 @@ class TestIssue1902ResultErrorHandling:
             success = await sdk.start()
 
         assert success is False
-        assert sdk.info.state == SessionState.FAILED
+        assert sdk.info.state == "disconnected"
         assert sdk.info.error_message == "boom"
         assert sdk.info.error_subtype is None
         assert sdk.info.error_terminal_reason is None
@@ -1558,7 +1554,7 @@ class TestIssue1902ResultErrorHandling:
         with patch("backend.claude_sdk.ClaudeSDKClient", return_value=_FailingClient()):
             await sdk._message_processing_loop()
 
-        assert sdk.info.state == SessionState.FAILED
+        assert sdk.info.state == "disconnected"
         assert sdk.info.error_message == str(result_error)
         assert sdk.info.error_subtype == "error_max_turns"
         assert sdk.info.error_terminal_reason == "max_turns"
@@ -1595,7 +1591,7 @@ class TestIssue1902ResultErrorHandling:
         with patch("backend.claude_sdk.ClaudeSDKClient", return_value=_FailingClient()):
             await sdk._message_processing_loop()
 
-        assert sdk.info.state == SessionState.FAILED
+        assert sdk.info.state == "disconnected"
         assert sdk.info.error_subtype is None
         assert sdk.info.error_terminal_reason is None
         assert sdk.info.error_list is None
@@ -1619,21 +1615,9 @@ class TestSessionInfo:
 
         assert info.session_id == "test-123"
         assert info.working_directory == "/test/dir"
-        assert info.state == SessionState.CREATED
+        assert info.state == "created"
         assert info.start_time is None
         assert info.message_count == 0
-
-
-class TestSessionState:
-    """Test cases for SessionState enum."""
-
-    def test_session_states(self):
-        """Test SessionState enum values."""
-        assert SessionState.CREATED.value == "created"
-        assert SessionState.RUNNING.value == "running"
-        assert SessionState.COMPLETED.value == "completed"
-        assert SessionState.FAILED.value == "failed"
-        assert SessionState.TERMINATED.value == "terminated"
 
 
 class TestStderrHandlerClassification:

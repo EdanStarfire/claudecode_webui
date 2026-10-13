@@ -8,7 +8,6 @@ import tempfile
 import time
 from collections.abc import Callable, Coroutine
 from dataclasses import asdict, dataclass
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -91,28 +90,20 @@ perm_logger = get_logger('sdk_debug', category='PERMISSIONS')
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)
 
+# Issue #2159: this wrapper's own internal lifecycle phases (SessionInfo.state, the
+# phase_callback argument) — named constants instead of repeated string literals so a
+# typo fails fast (NameError) rather than silently evaluating a guard to always-false.
+PHASE_CREATED = "created"
+PHASE_CONNECTING = "connecting"
+PHASE_CONNECTED = "connected"
+PHASE_DISCONNECTED = "disconnected"
+PHASE_STOPPED = "stopped"
+
 
 def _schedule_coro(coro: Coroutine) -> None:
     """Schedule a coroutine as a task and attach error logging done callback."""
     task = asyncio.ensure_future(coro)
     task.add_done_callback(task_done_log_exception)
-
-
-class SessionState(Enum):
-    """Claude Code SDK session states."""
-    CREATED = "created"
-    STARTING = "starting"
-    RUNNING = "running"
-    PROCESSING = "processing"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    TERMINATED = "terminated"
-
-
-# Named SessionState groupings — update these when adding new states
-SDK_ACTIVE_STATES: frozenset[SessionState] = frozenset({
-    SessionState.RUNNING, SessionState.PROCESSING,
-})
 
 
 class SDKErrorDetectionHandler(logging.Handler):
@@ -160,7 +151,12 @@ class SessionInfo:
     """Information about a Claude Code SDK session."""
     session_id: str
     working_directory: str
-    state: SessionState = SessionState.CREATED
+    # Issue #2159 (epic #1990 stage 6a): internal lifecycle phase only — one of
+    # "created"/"connecting"/"connected"/"disconnected"/"stopped". This is NOT the
+    # backend's authoritative SessionState (that lives in session_manager, driven
+    # through session_lifecycle.transition()); it exists purely so this wrapper can
+    # answer _is_ready_for_input()/is_running() and surface debug info via get_info().
+    state: str = PHASE_CREATED
     start_time: float | None = None
     last_activity: float | None = None
     message_count: int = 0
@@ -203,6 +199,7 @@ class ClaudeSDK:
         extra_env: dict[str, str] | None = None,
         permission_handler: Any | None = None,
         recorder: Any | None = None,
+        phase_callback: Callable[[str], Any] | None = None,
     ):
         """
         Initialize enhanced Claude Code SDK wrapper.
@@ -212,11 +209,15 @@ class ClaudeSDK:
             working_directory: Directory where Claude Code should run
             config: Bundled configuration (permission, tools, model, etc.)
             storage_manager: Data storage manager for persistence
-            session_manager: Session manager for state updates
+            session_manager: Session manager for the one remaining write this wrapper
+                does directly — update_claude_code_session_id() — once the real SDK
+                session id is captured from the init message
             message_callback: Called when new messages are received
             error_callback: Called when errors occur
             permission_callback: Called to check for tool permissions
-            resume_session_id: SDK session ID to resume
+            resume_session_id: SDK session ID to resume — the actual Claude Code
+                session id (not the WebUI session id); the caller resolves this from
+                session_info.claude_code_session_id before constructing this wrapper
             mcp_servers: List of MCP servers to attach (for multi-agent)
             hooks_settings: Resolved {"hooks": {...}} settings.json block from the
                 session's attached global hook configs (issue #1629), already flattened
@@ -229,6 +230,13 @@ class ClaudeSDK:
             recorder: Optional SessionRecorder (issue #1998) — when set, captures raw SDK
                 traffic for fixture building. None on every non-recording session (AC7);
                 every capture point below short-circuits on `self.recorder is None`.
+            phase_callback: Called with this wrapper's own internal lifecycle phase —
+                "connecting"/"connected"/"disconnected"/"stopped" — as it changes
+                (issue #2159). Replaces the old direct `self.info.state = SessionState.X`
+                writes to a now-deleted SDK-local SessionState enum; the coordinator's
+                phase_callback handler is what actually drives the backend's
+                authoritative SessionState (session_lifecycle.transition()), e.g. on
+                "connected" it calls session_manager.mark_session_active().
         """
         if config is None:
             config = SessionConfig()
@@ -255,6 +263,7 @@ class ClaudeSDK:
         self.disallowed_tools = config.disallowed_tools if config.disallowed_tools is not None else []
         self.model = config.model
         self.resume_session_id = resume_session_id
+        self.phase_callback = phase_callback
         self.mcp_servers = mcp_servers if mcp_servers is not None else []
         self.hooks_settings = hooks_settings
         self.sandbox_enabled = config.sandbox_enabled
@@ -387,7 +396,7 @@ class ClaudeSDK:
             self._shutdown_event.clear()
             self._ready_event.clear()
 
-            self.info.state = SessionState.STARTING
+            await self._set_phase(PHASE_CONNECTING)
             self.info.start_time = time.time()
 
             # Verify working directory exists
@@ -398,23 +407,11 @@ class ClaudeSDK:
             if not ClaudeSDKClient or not ClaudeAgentOptions:
                 raise ImportError("Claude Agent SDK components not available")
 
-            # Check for existing Claude Code session ID if this is a resume operation
-            if self.resume_session_id is not None and self.session_manager:
-                session_info = await self.session_manager.get_session_info(self.session_id)
-                if session_info and session_info.claude_code_session_id:
-                    sdk_logger.info(f"Using stored Claude Code session ID for resume: {session_info.claude_code_session_id}")
-                    # Temporarily override resume_session_id with actual Claude Code ID
-                    original_resume_id = self.resume_session_id
-                    self.resume_session_id = session_info.claude_code_session_id
-                    self._sdk_options = self._get_sdk_options()
-                    # Restore original for tracking purposes
-                    self.resume_session_id = original_resume_id
-                else:
-                    logger.warning(f"No stored Claude Code session ID found for WebUI session {self.session_id}, using WebUI ID for resume")
-                    self._sdk_options = self._get_sdk_options()
-            else:
-                # Configure SDK options normally for new sessions
-                self._sdk_options = self._get_sdk_options()
+            # Issue #2159: resume_session_id is already the real Claude Code session id
+            # (the caller resolves it from session_info.claude_code_session_id before
+            # constructing this wrapper) — no more reaching back into session_manager
+            # here to look it up and temporarily swap it in.
+            self._sdk_options = self._get_sdk_options()
             sdk_logger.info("Claude Code SDK options configured")
 
             # Start message processing task
@@ -427,7 +424,7 @@ class ClaudeSDK:
 
         except ResultError as e:
             logger.exception("Failed to start Claude Code SDK session (ResultError)")
-            self.info.state = SessionState.FAILED
+            await self._set_phase(PHASE_DISCONNECTED)
             self.info.error_message = str(e)
             self._apply_result_error_fields(e)
             self._record_sdk_message(e)
@@ -437,7 +434,7 @@ class ClaudeSDK:
 
         except Exception as e:
             logger.exception("Failed to start Claude Code SDK session")
-            self.info.state = SessionState.FAILED
+            await self._set_phase(PHASE_DISCONNECTED)
             self.info.error_message = str(e)
             if self.error_callback:
                 await self._safe_callback(self.error_callback, "startup_failed", e)
@@ -499,7 +496,7 @@ class ClaudeSDK:
                 return False
 
             # Check if we're in a state that can be interrupted
-            if self.info.state not in SDK_ACTIVE_STATES:
+            if self.info.state != PHASE_CONNECTED:
                 sdk_logger.debug(f"Session {self.session_id} not in interruptible state: {self.info.state}")
                 return False
 
@@ -562,7 +559,7 @@ class ClaudeSDK:
                 return False
 
             # Check if we're in a valid state
-            if self.info.state not in SDK_ACTIVE_STATES:
+            if self.info.state != PHASE_CONNECTED:
                 logger.warning(f"Session {self.session_id} not in valid state for permission mode change: {self.info.state}")
                 return False
 
@@ -605,7 +602,7 @@ class ClaudeSDK:
                 return False
 
             # Check if we're in a valid state
-            if self.info.state not in SDK_ACTIVE_STATES:
+            if self.info.state != PHASE_CONNECTED:
                 logger.warning(f"Session {self.session_id} not in valid state for model change: {self.info.state}")
                 return False
 
@@ -631,7 +628,7 @@ class ClaudeSDK:
                 logger.warning(f"No active SDK client for session {self.session_id} - cannot get MCP status")
                 return {"servers": []}
 
-            if self.info.state not in SDK_ACTIVE_STATES:
+            if self.info.state != PHASE_CONNECTED:
                 logger.warning(f"Session {self.session_id} not in valid state for MCP status: {self.info.state}")
                 return {"servers": []}
 
@@ -647,7 +644,7 @@ class ClaudeSDK:
             if not self._sdk_client:
                 logger.warning(f"No active SDK client for session {self.session_id}")
                 return {}
-            if self.info.state not in SDK_ACTIVE_STATES:
+            if self.info.state != PHASE_CONNECTED:
                 return {}
             result = await self._sdk_client.get_context_usage()
             return dict(result)
@@ -660,7 +657,7 @@ class ClaudeSDK:
         if not self._sdk_client:
             raise RuntimeError(f"No active SDK client for session {self.session_id}")
 
-        if self.info.state not in SDK_ACTIVE_STATES:
+        if self.info.state != PHASE_CONNECTED:
             raise RuntimeError(f"Session not in valid state for MCP toggle: {self.info.state}")
 
         await self._sdk_client.toggle_mcp_server(name, enabled)
@@ -670,7 +667,7 @@ class ClaudeSDK:
         if not self._sdk_client:
             raise RuntimeError(f"No active SDK client for session {self.session_id}")
 
-        if self.info.state not in SDK_ACTIVE_STATES:
+        if self.info.state != PHASE_CONNECTED:
             raise RuntimeError(f"Session not in valid state for MCP reconnect: {self.info.state}")
 
         await self._sdk_client.reconnect_mcp_server(name)
@@ -688,7 +685,7 @@ class ClaudeSDK:
         if not self._sdk_client:
             raise RuntimeError(f"No active SDK client for session {self.session_id}")
 
-        if self.info.state not in SDK_ACTIVE_STATES:
+        if self.info.state != PHASE_CONNECTED:
             raise RuntimeError(f"Session not in valid state for add-directory: {self.info.state}")
 
         try:
@@ -761,14 +758,12 @@ class ClaudeSDK:
                 self._session_health_checks["client_object_valid"] = True
                 self._session_health_checks["session_start_time"] = time.time()
 
-                # NOW the SDK is truly ready - change session state to RUNNING
-                self.info.state = SessionState.RUNNING
+                # NOW the SDK is truly ready — notify via phase_callback("connected"),
+                # which the coordinator wires to session_manager.mark_session_active()
+                # (issue #2159: no more reaching into session_manager directly here).
+                await self._set_phase(PHASE_CONNECTED)
                 self._ready_event.set()  # Signal readiness to waiting comm_router callers
                 sdk_logger.info(f"Session {self.session_id} state changed to RUNNING")
-
-                # Also notify session manager that SDK is ready
-                if self.session_manager:
-                    await self.session_manager.mark_session_active(self.session_id)
 
                 # Start SINGLE global response consumer for ALL queries
                 async def consume_all_responses():
@@ -802,7 +797,7 @@ class ClaudeSDK:
                             # Issue #1902: structured result, no exit-code regex needed —
                             # surface the real exception (with subtype/terminal_reason/etc.)
                             # to the error callback instead of the container-crash fallback.
-                            self.info.state = SessionState.FAILED
+                            await self._set_phase(PHASE_DISCONNECTED)
                             self.info.error_message = str(consumer_err)
                             self._apply_result_error_fields(consumer_err)
                             self._record_sdk_message(consumer_err)
@@ -823,7 +818,7 @@ class ClaudeSDK:
                             )
                             if parsed:
                                 error_msg = parsed
-                            self.info.state = SessionState.FAILED
+                            await self._set_phase(PHASE_DISCONNECTED)
                             self.info.error_message = error_msg
                             if self.error_callback:
                                 await self._safe_callback(
@@ -934,7 +929,7 @@ class ClaudeSDK:
             except Exception:
                 logger.exception("Health check failed during fatal error handling")
 
-            self.info.state = SessionState.FAILED
+            await self._set_phase(PHASE_DISCONNECTED)
             self._ready_event.set()  # Unblock any waiters even on fatal failure
             # Issue #1902: structured result — no exit-code regex/stderr enrichment
             # needed (the CLI already told us why), and critically: pass the real
@@ -969,7 +964,7 @@ class ClaudeSDK:
             except Exception:
                 logger.exception("Health check failed during fatal error handling")
 
-            self.info.state = SessionState.FAILED
+            await self._set_phase(PHASE_DISCONNECTED)
             self._ready_event.set()  # Unblock any waiters even on fatal failure
             # Include buffered stderr in error message (issue #517)
             error_msg = str(e)
@@ -1013,7 +1008,7 @@ class ClaudeSDK:
 
         sdk_logger.error(f"[session {self.session_id}] {reason}")
 
-        self.info.state = SessionState.FAILED
+        await self._set_phase(PHASE_DISCONNECTED)
         self.info.error_message = reason
 
         if self.error_callback:
@@ -1747,6 +1742,18 @@ class ClaudeSDK:
         self.info.error_list = list(e.errors) if e.errors else None
         self.info.error_result = e.result
 
+    async def _set_phase(self, phase: str) -> None:
+        """Update this wrapper's own internal lifecycle phase and notify phase_callback.
+
+        Issue #2159: replaces the old raw `self.info.state = SessionState.X` writes to
+        a now-deleted SDK-local enum. `self.info.state` is internal bookkeeping only
+        (drives _is_ready_for_input()/is_running()) — the backend's authoritative
+        SessionState lives in session_manager, reached only through phase_callback.
+        """
+        self.info.state = phase
+        if self.phase_callback:
+            await self._safe_callback(self.phase_callback, phase)
+
     async def _safe_callback(self, callback: Callable, *args, **kwargs):
         """Safely execute callback with error handling"""
         try:
@@ -1913,7 +1920,7 @@ class ClaudeSDK:
 
     def _is_ready_for_input(self) -> bool:
         """Check if the session is ready to accept input."""
-        return self.info.state in [SessionState.RUNNING]
+        return self.info.state == PHASE_CONNECTED
 
     async def terminate(self, timeout: float = 5.0) -> bool:
         """
@@ -1927,7 +1934,7 @@ class ClaudeSDK:
         """
         sdk_logger.info(f"Terminating Claude Code SDK session {self.session_id}")
 
-        self.info.state = SessionState.TERMINATED
+        await self._set_phase(PHASE_STOPPED)
         self._shutdown_event.set()
 
         try:
@@ -1980,14 +1987,11 @@ class ClaudeSDK:
 
     def get_info(self) -> dict[str, Any]:
         """Get current session information."""
-        info_dict = asdict(self.info)
-        # Convert enum to string value for JSON serialization
-        info_dict["state"] = self.info.state.value
-        return info_dict
+        return asdict(self.info)
 
     def is_running(self) -> bool:
         """Check if the session is currently running."""
-        return self.info.state in SDK_ACTIVE_STATES
+        return self.info.state == PHASE_CONNECTED
 
     async def wait_until_ready(self, timeout: float = 60.0) -> bool:
         """Wait until SDK is ready to accept messages. Returns False on timeout."""
@@ -2038,7 +2042,7 @@ class ClaudeSDK:
             health_status["context_manager_active"] and
             health_status["client_object_valid"] and
             not health_status["shutdown_event_set"] and
-            self.info.state in SDK_ACTIVE_STATES
+            self.info.state == PHASE_CONNECTED
         )
 
         health_status["overall_health"] = "healthy" if is_healthy else "unhealthy"

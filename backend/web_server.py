@@ -169,7 +169,12 @@ class BackendApp:
             app_config=_cfg,
             ui_queue=self.ui_queue,
         )
-        self.coordinator._watchdog = self._watchdog
+        # Issue #2159: watchdog is a declared SessionCoordinator constructor
+        # dependency now (defaulting to None) — it can't be passed in at
+        # construction time above since it needs this coordinator's own
+        # session_manager/template_manager, so it's injected via set_watchdog()
+        # immediately after, same pattern as set_permission_service() below.
+        self.coordinator.set_watchdog(self._watchdog)
 
         from .config_manager import AppConfigManager
         from .litellm_proxy_manager import LiteLLMProxyManager
@@ -214,6 +219,11 @@ class BackendApp:
 
         # Permission lifecycle management (session_queues must be initialized first)
         self.permission_service = PermissionService(self.coordinator, self.session_queues)
+        # Issue #2159: give the coordinator the other half of this back-reference pair
+        # so interrupt_session() can deny/resolve a PAUSED session's own pending
+        # permission(s) directly, regardless of which caller (REST router, comm_router)
+        # invoked it.
+        self.coordinator.set_permission_service(self.permission_service)
 
         # Rate limiting for restart endpoint (issue #434)
         self._last_restart_time: float = 0
@@ -458,6 +468,25 @@ class BackendApp:
             logger.info("Appended state_change for session %s", session_id)
         except Exception:
             logger.exception("Error appending state_change")
+
+    def _broadcast_metadata_change(self, session_id: str, session_dict: dict) -> None:
+        """Emit session_metadata_updated to the global UI poll queue (issue #2159).
+
+        Same payload shape as _broadcast_state_change's state_change event, minus a
+        timestamp (metadata updates don't track one the way state transitions do) —
+        deliberately not wired into the frontend yet (6a+6b is backend-only; see
+        shared/event_registry.py's session_metadata_updated entry).
+        """
+        try:
+            emit(
+                self.ui_queue, QUEUE_UI, "session_metadata_updated", {
+                    "data": {"session_id": session_id, "session": session_dict}
+                },
+                scope=session_id,
+            )
+            logger.info("Appended session_metadata_updated for session %s", session_id)
+        except Exception:
+            logger.exception("Error appending session_metadata_updated")
 
     def _broadcast_server_restarting(self, pull_output: str, sync_output: str) -> None:
         """Emit server_restarting to the global UI poll queue."""
@@ -771,6 +800,7 @@ class BackendApp:
 
         # Register callbacks
         self.coordinator.add_state_change_callback(self._on_state_change)
+        self.coordinator.add_metadata_change_callback(self._on_metadata_change)
         self.coordinator.add_session_reset_callback(self._on_session_reset)
         self.coordinator.add_session_deleted_callback(self._on_session_deleted)
         self.coordinator.add_tool_call_broadcast_callback(self._on_tool_call_broadcast)
@@ -1241,6 +1271,23 @@ class BackendApp:
         except Exception:
             logger.exception("Error handling state change")
 
+    async def _on_metadata_change(self, session_id: str) -> None:
+        """Handle a metadata-only session update (issue #2159) — name, model,
+        permission_mode, allowed_tools, order, unread tracking, etc. Mirrors
+        _on_state_change(), but broadcasts session_metadata_updated instead of
+        state_change since the SessionState itself didn't change.
+        """
+        try:
+            session_info_dict = await self.coordinator.get_session_info(session_id)
+            if session_info_dict:
+                session_dict = session_info_dict.get("session", {})
+                session_dict["queue_pending_count"] = (
+                    self.coordinator.queue_manager.get_pending_count(session_id)
+                )
+                self._broadcast_metadata_change(session_id, session_dict)
+        except Exception:
+            logger.exception("Error handling metadata change")
+
     def _on_tool_call_broadcast(self, session_id: str, tool_call_data: dict):
         """Issue #520: Append tool_call message to session poll queue. Called synchronously from coordinator."""
         if session_id in self.session_queues:
@@ -1280,7 +1327,7 @@ class BackendApp:
         # Issue #1387: Stop vault refresh manager
         await self.coordinator.vault_refresh_manager.stop()
         # Issue #1130: Stop session watchdog service
-        if hasattr(self, '_watchdog') and self._watchdog is not None:
+        if self._watchdog is not None:
             await self._watchdog.stop()
         try:
             await self.litellm_proxy_manager.stop()

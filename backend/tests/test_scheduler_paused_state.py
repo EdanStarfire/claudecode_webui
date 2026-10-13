@@ -246,3 +246,67 @@ async def test_e2e_paused_session_survives_schedule_fire_then_resumes(tmp_path):
     resumed_ok = await session_manager.update_session_state(agent_id, SessionState.ACTIVE)
     assert resumed_ok is True
     assert (await session_manager.get_session_info(agent_id)).state == SessionState.ACTIVE
+
+
+# ---------------------------------------------------------------------------
+# Issue #2159 (epic #1990 stage 6a/6b): the orphan-recovery PAUSED branch above
+# was previously dead code in a genuine boot sequence — not because its own
+# logic was wrong (the unit test above already covered that correctly), but
+# because SessionManager._load_existing_sessions() force-rewrote every on-disk
+# PAUSED session to TERMINATED *before* scheduler_service ever got a chance to
+# see it, every single boot. Once 6a's boot fix lands (PAUSED stays PAUSED),
+# this branch is reachable for the first time with a REAL disk reload — not a
+# mock session_info.state set directly, which never exercised the force-rewrite
+# at all. This is the regression test the plan's Risks section calls for.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_recover_orphaned_paused_survives_real_boot_reload(tmp_path):
+    """A PAUSED session persisted to disk, then reloaded via a fresh
+    SessionManager (simulating a real process restart), must still read back as
+    PAUSED by the time _recover_orphaned_ephemeral_sessions() runs — and that
+    function must still correctly leave it alone."""
+    agent_id = "agent-boot-reload"
+    now = datetime.now(UTC)
+
+    from backend.models.messages import CURRENT_MESSAGE_SCHEMA_VERSION
+
+    manager1 = SessionManager(data_dir=tmp_path)
+    await manager1.initialize()
+    manager1._active_sessions[agent_id] = SessionInfo(
+        session_id=agent_id,
+        state=SessionState.ACTIVE,
+        created_at=now,
+        updated_at=now,
+        message_schema_version=CURRENT_MESSAGE_SCHEMA_VERSION,
+    )
+    await manager1.pause_session(agent_id)
+    assert (await manager1.get_session_info(agent_id)).state == SessionState.PAUSED
+
+    # Simulate a process restart: a fresh SessionManager reloading from disk.
+    manager2 = SessionManager(data_dir=tmp_path)
+    await manager2.initialize()
+    reloaded = await manager2.get_session_info(agent_id)
+    assert reloaded is not None
+    assert reloaded.state == SessionState.PAUSED, (
+        "Boot reload must preserve PAUSED (issue #2159/UC3) — if this assertion "
+        "fails, the orphan-recovery branch below is untestable against a real "
+        "reload because the state was already clobbered before scheduler_service "
+        "ever ran, exactly the bug this stage fixes."
+    )
+
+    system = MagicMock()
+    system.session_coordinator = MagicMock()
+    system.session_coordinator.session_manager = manager2
+    system.session_coordinator.archive_and_clear_session = AsyncMock(return_value=True)
+
+    svc = _make_svc(system)
+    schedule = _make_ephemeral_schedule(ephemeral_agent_id=agent_id)
+    svc._schedules[schedule.schedule_id] = schedule
+
+    await svc._recover_orphaned_ephemeral_sessions()
+
+    system.session_coordinator.archive_and_clear_session.assert_not_awaited()
+    assert (await manager2.get_session_info(agent_id)).state == SessionState.PAUSED
+    assert schedule.ephemeral_agent_id == agent_id
