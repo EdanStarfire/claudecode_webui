@@ -18,7 +18,11 @@ submission, logged to client_debug.log). Issue #1998 added 1 route: POST
 403s unless the Backend was started with --enable-session-recording). Epic #1990
 stage 5c phase 5 (issue #2130) removed poll.py's 2 legacy long-poll routes
 (GET /api/poll/ui, GET /api/poll/session/{session_id}) and added 1 multiplexed
-route (POST /api/poll) replacing both, net -1.
+route (POST /api/poll) replacing both, net -1. Epic #1990 stage 6c (issue #2159)
+added 3 fleet-snapshot routes to fleet.py (GET /api/legions/{legion_id}/fleet-snapshot,
+POST .../fleet-snapshot/record, POST .../fleet-snapshot/clear) — the persisted
+halt/resume snapshot replacing frontend/src/utils/stoppedSet.js's sessionStorage-only
+bookkeeping.
 """
 
 
@@ -46,7 +50,7 @@ def test_route_count_unchanged():
     from backend.web_server import create_app
     app = create_app()
     api_routes_count = _count_api_routes(app)
-    assert api_routes_count == 164, (
+    assert api_routes_count == 167, (
         f"Expected 164 Backend routes post-#498 split (core.py's 3 browser routes "
         f"stayed Frontend-side only; config.py now has its own 2 backend-owned routes "
         f"here PLUS 2 more on the Frontend side doing merged-read/split-write; poll.py's "
@@ -60,6 +64,7 @@ def test_route_count_unchanged():
         f"+1 POST /api/debug/client-buffer from issue #1931; "
         f"+1 POST /api/sessions/{{session_id}}/export-fixture from issue #1998; "
         f"-1 net from issue #2130 (epic #1990 stage 5c phase 5: removed 2 legacy "
-        f"long-poll routes, added 1 multiplexed POST /api/poll replacing both)), "
+        f"long-poll routes, added 1 multiplexed POST /api/poll replacing both); "
+        f"+3 fleet-snapshot routes from issue #2159 (epic #1990 stage 6c)), "
         f"got {api_routes_count}. A route was added or removed."
     )

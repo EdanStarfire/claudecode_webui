@@ -98,11 +98,12 @@ export const useLegionStore = defineStore('legion', () => {
   }
 
   /**
-   * Resume all ACTIVE minions in legion (sends "continue" directly).
-   * Superseded by frontend resume orchestration for issue #1613:
-   * ProjectOverview.vue reads sessionStorage stopped set and enqueues the
-   * resume message per session directly via queueStore.enqueueMessage().
-   * This endpoint is left in place for backward compatibility.
+   * Resume exactly the sessions this project's Stop All/Stop Selected halted
+   * (issue #2159 stage 6c's persisted fleet snapshot), not just "every ACTIVE
+   * minion". Bulk, unbatched — ProjectOverview.vue's confirmResume() keeps its
+   * own throttled per-session orchestration against getFleetSnapshot()/
+   * clearFleetStopped() below for the configurable batch-size/delay UX; this is
+   * the coarse-grained equivalent for any other caller.
    */
   async function resumeAll(legionId) {
     try {
@@ -119,6 +120,38 @@ export const useLegionStore = defineStore('legion', () => {
       console.error('Failed to resume all minions:', error)
       throw error
     }
+  }
+
+  /**
+   * Issue #2159 (stage 6c): current fleet halt/resume snapshot for a project —
+   * { stopped_session_ids, processing_session_ids } — replacing
+   * frontend/src/utils/stoppedSet.js's sessionStorage-only bookkeeping, which
+   * didn't survive a browser reload or a Backend restart.
+   */
+  async function getFleetSnapshot(legionId) {
+    return await api.get(`/api/legions/${legionId}/fleet-snapshot`)
+  }
+
+  /**
+   * Merge newly-halted session ids into the persisted fleet snapshot — used by
+   * Stop Selected, which halts sessions individually rather than through
+   * halt-all (which records its own snapshot entries server-side).
+   */
+  async function recordFleetStopped(legionId, sessionIds, processingSessionIds = []) {
+    return await api.post(`/api/legions/${legionId}/fleet-snapshot/record`, {
+      session_ids: sessionIds,
+      processing_session_ids: processingSessionIds,
+    })
+  }
+
+  /**
+   * Remove specific session ids from the persisted fleet snapshot — used once
+   * each has been successfully resumed/started outside of resumeAll() above.
+   */
+  async function clearFleetStopped(legionId, sessionIds) {
+    return await api.post(`/api/legions/${legionId}/fleet-snapshot/clear`, {
+      session_ids: sessionIds,
+    })
   }
 
   /**
@@ -160,6 +193,9 @@ export const useLegionStore = defineStore('legion', () => {
     createMinion,
     haltAll,
     resumeAll,
+    getFleetSnapshot,
+    recordFleetStopped,
+    clearFleetStopped,
     reparentMinion,
     clearLegionData
   }

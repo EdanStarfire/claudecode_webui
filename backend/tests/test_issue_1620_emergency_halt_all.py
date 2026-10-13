@@ -23,6 +23,7 @@ def _make_session(session_id: str, state: SessionState) -> Mock:
     s.session_id = session_id
     s.project_id = LEGION_ID
     s.state = state
+    s.is_processing = False
     return s
 
 
@@ -33,6 +34,9 @@ def _make_system(sessions: list) -> Mock:
     system.session_coordinator.session_manager = Mock()
     system.session_coordinator.session_manager.list_sessions = AsyncMock(return_value=sessions)
     system.session_coordinator.terminate_session = AsyncMock(return_value=True)
+    # Issue #2159 (stage 6c): emergency_halt_all() now persists the halted set.
+    system.session_coordinator.project_manager = Mock()
+    system.session_coordinator.project_manager.record_fleet_stopped = AsyncMock(return_value=Mock())
     return system
 
 

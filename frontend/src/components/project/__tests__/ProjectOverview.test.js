@@ -5,21 +5,40 @@ import userEvent from '@testing-library/user-event'
 import { renderWithStores } from '@/test-utils/render'
 import ProjectOverview from '@/components/project/ProjectOverview.vue'
 import { makeProject, makeSession } from '@/test-utils/factories'
-import { setStoppedSet, setProcessingSet, getStoppedSet, clearStoppedSet, clearProcessingSet } from '@/utils/stoppedSet'
 
 const apiMock = vi.hoisted(() => ({
   get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), patch: vi.fn()
 }))
 vi.mock('@/utils/api', () => ({ api: apiMock, getAuthToken: vi.fn() }))
 
+// Issue #2159 (stage 6c): the minion-hierarchy GET and the fleet-snapshot GET now
+// share one mocked `apiMock.get` (routed by URL in mountForResume() below), so a
+// test that wants a custom hierarchy response sets this instead of calling
+// apiMock.get.mockResolvedValue()/mockImplementation() directly, which would
+// otherwise clobber mountForResume()'s own routing (or vice versa, depending on
+// call order).
+let hierarchyResponse = { id: 'root', name: 'User', children: [] }
+
 beforeEach(() => {
   setActivePinia(createPinia())
   Object.values(apiMock).forEach(fn => fn.mockReset())
-  apiMock.get.mockResolvedValue({ id: 'root', name: 'User', children: [] })
+  hierarchyResponse = { id: 'root', name: 'User', children: [] }
 })
 
 async function flush() {
   await new Promise(r => setTimeout(r, 0))
+}
+
+// Issue #2159 (stage 6c): the fleet snapshot's record/clear calls are POSTs to
+// /api/legions/{id}/fleet-snapshot/{record|clear} — introspecting them replaces
+// the old direct getStoppedSet()/getProcessingSet() sessionStorage reads.
+function fleetSnapshotCalls(endpoint) {
+  return apiMock.post.mock.calls.filter(([url]) => url.includes(`/fleet-snapshot/${endpoint}`))
+}
+
+function lastFleetSessionIds(endpoint) {
+  const calls = fleetSnapshotCalls(endpoint)
+  return calls.length ? calls[calls.length - 1][1].session_ids : []
 }
 
 // Deferred-promise controller for api.post so tests can assert in-flight call counts
@@ -51,10 +70,14 @@ async function mountForResume(project, sessions, { stoppedIds, processingIds = [
   const { useSessionStore } = await import('@/stores/session')
   const { useUIStore } = await import('@/stores/ui')
 
-  clearStoppedSet(project.project_id)
-  clearProcessingSet(project.project_id)
-  setStoppedSet(project.project_id, stoppedIds)
-  if (processingIds.length > 0) setProcessingSet(project.project_id, processingIds)
+  // Issue #2159 (stage 6c): seeds the fleet snapshot GET onMounted's
+  // restoreFleetSnapshot() fetches, replacing the old sessionStorage seeding.
+  apiMock.get.mockImplementation((url) => {
+    if (url.includes('/fleet-snapshot')) {
+      return Promise.resolve({ stopped_session_ids: stoppedIds, processing_session_ids: processingIds })
+    }
+    return Promise.resolve(hierarchyResponse)
+  })
 
   const rendered = renderWithStores(ProjectOverview, {
     props: { projectId: project.project_id },
@@ -128,7 +151,9 @@ describe('ProjectOverview - Throttled Resume Sessions (issue #1733)', () => {
 
       deferred.resolveNext(1)
       await vi.advanceTimersByTimeAsync(0)
-      expect(apiMock.post).toHaveBeenCalledTimes(5)
+      // 5 resume dispatches + 1 trailing fleet-snapshot/clear call once all batches
+      // settle (issue #2159 stage 6c).
+      expect(apiMock.post).toHaveBeenCalledTimes(6)
     } finally {
       vi.useRealTimers()
     }
@@ -149,7 +174,9 @@ describe('ProjectOverview - Throttled Resume Sessions (issue #1733)', () => {
     await flush()
     await flush()
 
-    expect(getStoppedSet('p1')).toEqual(['s1'])
+    // s2 succeeded and was cleared from the fleet snapshot; s1 (rejected) was not
+    // — i.e. it's still in the stopped set, available for retry.
+    expect(lastFleetSessionIds('clear')).toEqual(['s2'])
   })
 
   it('uses the per-operation override instead of the persistent default', async () => {
@@ -220,13 +247,13 @@ describe('ProjectOverview - Stop All failure-path reconciliation (issue #1933)',
 
       // Written progressively — visible immediately after the tick that detects it,
       // not only once the full bounded window elapses.
-      expect(getStoppedSet('p1')).toEqual(['s1'])
+      expect(lastFleetSessionIds('record')).toEqual(['s1'])
 
       // s2 never terminates, so the poll loop keeps running until the bounded
       // window's deadline; only then does the reconciled toast get set.
       await vi.advanceTimersByTimeAsync(130000)
 
-      expect(getStoppedSet('p1')).toEqual(['s1'])
+      expect(lastFleetSessionIds('record')).toEqual(['s1'])
       expect(screen.getByText(/1 of 2 sessions were confirmed stopped/)).toBeTruthy()
     } finally {
       vi.useRealTimers()
@@ -250,7 +277,7 @@ describe('ProjectOverview - Stop All failure-path reconciliation (issue #1933)',
 
       await vi.advanceTimersByTimeAsync(130000)
 
-      expect(getStoppedSet('p1')).toEqual([])
+      expect(lastFleetSessionIds('record')).toEqual([])
       expect(screen.getByText(/✗ Stop All failed: network error/)).toBeTruthy()
     } finally {
       vi.useRealTimers()
@@ -313,7 +340,7 @@ describe('ProjectOverview - Stop All failure-path reconciliation (issue #1933)',
 
       // s3 must not be folded into stoppedSet just for already being terminated,
       // and the toast's "of M" denominator must reflect only the 2 real targets.
-      expect(getStoppedSet('p1')).toEqual([])
+      expect(lastFleetSessionIds('record')).toEqual([])
       expect(screen.getByText(/✗ Stop All failed: network error/)).toBeTruthy()
     } finally {
       vi.useRealTimers()
@@ -337,7 +364,10 @@ describe('ProjectOverview - Stop All failure-path reconciliation (issue #1933)',
     await fireEvent.click(screen.getByText('Confirm Stop All'))
     await flush()
 
-    expect(getStoppedSet('p1')).toEqual(ids)
+    // confirmStop()'s happy path deliberately skips a redundant fleet-snapshot
+    // record call — emergency_halt_all() already persisted it server-side — so
+    // assert via the rendered stopped count instead of introspecting a POST call.
+    expect(screen.getByTitle('Resume 2 stopped sessions')).toBeTruthy()
     expect(screen.getByText(/✓ Stopped 2 sessions/)).toBeTruthy()
   })
 })
@@ -476,7 +506,7 @@ describe('ProjectOverview - Selection-based batch Stop/Start (issue #1934)', () 
     expect(apiMock.post).toHaveBeenCalledWith('/api/sessions/s1/terminate')
     expect(apiMock.post).toHaveBeenCalledWith('/api/sessions/s2/terminate')
     expect(apiMock.post).not.toHaveBeenCalledWith('/api/sessions/s3/terminate')
-    expect(getStoppedSet('p1').sort()).toEqual(['s1', 's2'])
+    expect(lastFleetSessionIds('record').sort()).toEqual(['s1', 's2'])
     expect(uiStore.selectedSessionIds.size).toBe(0)
     expect(sessionStore.getSession('s3').state).toBe('ACTIVE')
     expect(screen.getByText(/✓ Stopped 2 of 2 selected/)).toBeTruthy()
@@ -600,11 +630,11 @@ describe('ProjectOverview - Hierarchy view User root row removal (issue #2060)',
     const project = makeProject({ project_id: 'p1', session_ids: ['s1'] })
     const session = makeSession({ session_id: 's1', project_id: 'p1', name: 'Minion One' })
 
-    apiMock.get.mockResolvedValue({
+    hierarchyResponse = {
       id: 'root',
       name: 'User',
       children: [{ id: 's1', name: 'Minion One', type: 'minion', children: [] }],
-    })
+    }
 
     const { container } = await mountForResume(project, [session], { stoppedIds: [] })
 
@@ -846,7 +876,7 @@ describe('ProjectOverview - Filter bar (issue #2050, Stage A)', () => {
 
 describe('ProjectOverview - Hierarchy view filtering (issue #2050, Stage B)', () => {
   async function mountHierarchy(project, sessions, hierarchyChildren) {
-    apiMock.get.mockResolvedValue({ id: 'root', name: 'User', children: hierarchyChildren })
+    hierarchyResponse = { id: 'root', name: 'User', children: hierarchyChildren }
     const rendered = await mountForResume(project, sessions, { stoppedIds: [] })
     rendered.uiStore.setProjectViewMode('hierarchy')
     await flush()

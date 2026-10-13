@@ -52,6 +52,15 @@ class ProjectInfo:
     kanban_groups: list[dict] = None
     kanban_group_assignments: dict[str, str] = None
 
+    # Fleet halt/resume snapshot (issue #2159 stage 6c): which sessions this
+    # project's "Stop All"/"Stop Selected" halted, so "Resume Sessions" survives a
+    # browser reload or a Backend restart instead of only living in sessionStorage
+    # (the bug this stage replaces). fleet_stopped_processing_ids is always a subset
+    # of fleet_stopped_session_ids — the sessions that were actively mid-task when
+    # halted, which get a catch-up message on resume instead of a bare cold start.
+    fleet_stopped_session_ids: list[str] = None
+    fleet_stopped_processing_ids: list[str] = None
+
     def __post_init__(self):
         if self.created_at is None:
             self.created_at = datetime.now(UTC)
@@ -66,6 +75,10 @@ class ProjectInfo:
             self.kanban_groups = []
         if self.kanban_group_assignments is None:
             self.kanban_group_assignments = {}
+        if self.fleet_stopped_session_ids is None:
+            self.fleet_stopped_session_ids = []
+        if self.fleet_stopped_processing_ids is None:
+            self.fleet_stopped_processing_ids = []
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization"""
@@ -95,6 +108,11 @@ class ProjectInfo:
             data['kanban_groups'] = []
         if 'kanban_group_assignments' not in data:
             data['kanban_group_assignments'] = {}
+        # Migration: Add fleet snapshot fields if missing (issue #2159 stage 6c)
+        if 'fleet_stopped_session_ids' not in data:
+            data['fleet_stopped_session_ids'] = []
+        if 'fleet_stopped_processing_ids' not in data:
+            data['fleet_stopped_processing_ids'] = []
         return cls(**data)
 
 
@@ -602,6 +620,101 @@ class ProjectManager:
             except Exception as e:
                 logger.error(f"Failed to cleanup kanban group assignment in project {project_id}: {e}")
                 return False
+
+    async def record_fleet_stopped(
+        self, project_id: str, session_ids: list[str], processing_session_ids: list[str] | None = None
+    ) -> ProjectInfo | None:
+        """Merge newly-halted session ids into the project's fleet snapshot
+        (issue #2159 stage 6c). Union, not overwrite — "Stop All" and "Stop
+        Selected" can both contribute to the same snapshot independently; a
+        later call must not drop what an earlier one already recorded.
+        """
+        async with self._get_project_lock(project_id):
+            try:
+                project = self._active_projects.get(project_id)
+                if not project:
+                    logger.error(f"Project {project_id} not found")
+                    return None
+
+                stopped = set(project.fleet_stopped_session_ids) | set(session_ids)
+                project.fleet_stopped_session_ids = sorted(stopped)
+                if processing_session_ids:
+                    processing = set(project.fleet_stopped_processing_ids) | set(processing_session_ids)
+                    project.fleet_stopped_processing_ids = sorted(processing)
+
+                project.updated_at = datetime.now(UTC)
+                await self._persist_project_state(project_id)
+                project_logger.info(
+                    f"Recorded {len(session_ids)} fleet-stopped session(s) for project {project_id}"
+                )
+                return project
+
+            except Exception as e:
+                logger.error(f"Failed to record fleet-stopped sessions for project {project_id}: {e}")
+                return None
+
+    async def clear_fleet_stopped(self, project_id: str, session_ids: list[str]) -> ProjectInfo | None:
+        """Remove specific session ids from the project's fleet snapshot
+        (issue #2159 stage 6c) — called once each has been successfully
+        resumed/started, or no longer exists."""
+        async with self._get_project_lock(project_id):
+            try:
+                project = self._active_projects.get(project_id)
+                if not project:
+                    logger.error(f"Project {project_id} not found")
+                    return None
+
+                drop = set(session_ids)
+                project.fleet_stopped_session_ids = [
+                    sid for sid in project.fleet_stopped_session_ids if sid not in drop
+                ]
+                project.fleet_stopped_processing_ids = [
+                    sid for sid in project.fleet_stopped_processing_ids if sid not in drop
+                ]
+
+                project.updated_at = datetime.now(UTC)
+                await self._persist_project_state(project_id)
+                project_logger.info(
+                    f"Cleared {len(session_ids)} fleet-stopped session(s) for project {project_id}"
+                )
+                return project
+
+            except Exception as e:
+                logger.error(f"Failed to clear fleet-stopped sessions for project {project_id}: {e}")
+                return None
+
+    async def get_fleet_snapshot(self, project_id: str) -> dict[str, list[str]] | None:
+        """Return the project's current fleet snapshot (issue #2159 stage 6c),
+        pruned against its own live session_ids so a deleted session doesn't
+        linger forever. Mutates and persists the pruned result, mirroring the
+        old sessionStorage pruneStoppedSet()'s side effect."""
+        async with self._get_project_lock(project_id):
+            try:
+                project = self._active_projects.get(project_id)
+                if not project:
+                    return None
+
+                valid = set(project.session_ids)
+                pruned_stopped = [sid for sid in project.fleet_stopped_session_ids if sid in valid]
+                pruned_processing = [sid for sid in project.fleet_stopped_processing_ids if sid in valid]
+
+                if (
+                    pruned_stopped != project.fleet_stopped_session_ids
+                    or pruned_processing != project.fleet_stopped_processing_ids
+                ):
+                    project.fleet_stopped_session_ids = pruned_stopped
+                    project.fleet_stopped_processing_ids = pruned_processing
+                    project.updated_at = datetime.now(UTC)
+                    await self._persist_project_state(project_id)
+
+                return {
+                    "stopped_session_ids": list(project.fleet_stopped_session_ids),
+                    "processing_session_ids": list(project.fleet_stopped_processing_ids),
+                }
+
+            except Exception as e:
+                logger.error(f"Failed to get fleet snapshot for project {project_id}: {e}")
+                return None
 
     async def reorder_projects(self, project_ids: list[str]) -> bool:
         """Reorder projects by assigning sequential order values"""

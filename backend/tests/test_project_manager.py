@@ -473,6 +473,149 @@ async def test_project_info_kanban_legacy_migration():
 
 
 @pytest.mark.asyncio
+async def test_project_info_fleet_snapshot_fields_default():
+    """New ProjectInfo defaults fleet snapshot fields to empty lists (issue #2159)"""
+    project = ProjectInfo(
+        project_id="test-fleet-defaults",
+        name="Test",
+        working_directory="/absolute/path",
+        session_ids=[],
+    )
+    assert project.fleet_stopped_session_ids == []
+    assert project.fleet_stopped_processing_ids == []
+
+
+@pytest.mark.asyncio
+async def test_project_info_fleet_snapshot_round_trip():
+    """fleet_stopped_session_ids/fleet_stopped_processing_ids survive to_dict/from_dict"""
+    project = ProjectInfo(
+        project_id="test-fleet-roundtrip",
+        name="Test",
+        working_directory="/absolute/path",
+        session_ids=["s1", "s2"],
+        fleet_stopped_session_ids=["s1", "s2"],
+        fleet_stopped_processing_ids=["s1"],
+    )
+
+    data = project.to_dict()
+    restored = ProjectInfo.from_dict(data)
+
+    assert restored.fleet_stopped_session_ids == ["s1", "s2"]
+    assert restored.fleet_stopped_processing_ids == ["s1"]
+
+
+@pytest.mark.asyncio
+async def test_project_info_fleet_snapshot_legacy_migration():
+    """from_dict defaults missing fleet snapshot fields for pre-feature state.json data"""
+    legacy_data = {
+        "project_id": "legacy-project-fleet",
+        "name": "Legacy",
+        "working_directory": "/absolute/path",
+        "session_ids": ["s1"],
+        "is_expanded": True,
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat(),
+        "order": 0,
+    }
+
+    restored = ProjectInfo.from_dict(dict(legacy_data))
+
+    assert restored.fleet_stopped_session_ids == []
+    assert restored.fleet_stopped_processing_ids == []
+
+
+@pytest.mark.asyncio
+async def test_record_fleet_stopped_merges_not_overwrites(project_manager, temp_data_dir):
+    """Stop All and Stop Selected can both record into the same snapshot — a
+    second call must union with, not overwrite, the first."""
+    project = await project_manager.create_project(
+        name="Fleet Test", working_directory=str(temp_data_dir / "fleet")
+    )
+    pid = project.project_id
+
+    await project_manager.record_fleet_stopped(pid, ["s1"], ["s1"])
+    await project_manager.record_fleet_stopped(pid, ["s2"], [])
+
+    updated = await project_manager.get_project(pid)
+    assert set(updated.fleet_stopped_session_ids) == {"s1", "s2"}
+    assert updated.fleet_stopped_processing_ids == ["s1"]
+
+
+@pytest.mark.asyncio
+async def test_record_fleet_stopped_nonexistent_project(project_manager):
+    result = await project_manager.record_fleet_stopped("nonexistent", ["s1"], [])
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_clear_fleet_stopped_removes_only_specified_ids(project_manager, temp_data_dir):
+    project = await project_manager.create_project(
+        name="Fleet Test", working_directory=str(temp_data_dir / "fleet")
+    )
+    pid = project.project_id
+    await project_manager.record_fleet_stopped(pid, ["s1", "s2"], ["s1"])
+
+    await project_manager.clear_fleet_stopped(pid, ["s1"])
+
+    updated = await project_manager.get_project(pid)
+    assert updated.fleet_stopped_session_ids == ["s2"]
+    assert updated.fleet_stopped_processing_ids == []
+
+
+@pytest.mark.asyncio
+async def test_clear_fleet_stopped_nonexistent_project(project_manager):
+    result = await project_manager.clear_fleet_stopped("nonexistent", ["s1"])
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_fleet_snapshot_prunes_deleted_sessions(project_manager, temp_data_dir):
+    """A session removed from the project (e.g. deleted) must not linger in the
+    snapshot forever — get_fleet_snapshot self-prunes and persists the result."""
+    project = await project_manager.create_project(
+        name="Fleet Test", working_directory=str(temp_data_dir / "fleet")
+    )
+    pid = project.project_id
+    await project_manager.add_session_to_project(pid, "s1")
+    await project_manager.record_fleet_stopped(pid, ["s1", "s-deleted"], ["s-deleted"])
+
+    snapshot = await project_manager.get_fleet_snapshot(pid)
+
+    assert snapshot["stopped_session_ids"] == ["s1"]
+    assert snapshot["processing_session_ids"] == []
+
+    # The pruned result is persisted, not just returned once.
+    updated = await project_manager.get_project(pid)
+    assert updated.fleet_stopped_session_ids == ["s1"]
+
+
+@pytest.mark.asyncio
+async def test_get_fleet_snapshot_nonexistent_project(project_manager):
+    result = await project_manager.get_fleet_snapshot("nonexistent")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_fleet_snapshot_persists_across_restarts(temp_data_dir):
+    """The fleet snapshot survives a ProjectManager restart (issue #2159 T3) —
+    not just living in frontend sessionStorage."""
+    manager1 = ProjectManager(data_dir=temp_data_dir)
+    await manager1.initialize()
+    project = await manager1.create_project(
+        name="Fleet Restart Test", working_directory=str(temp_data_dir / "fleet-restart")
+    )
+    await manager1.add_session_to_project(project.project_id, "s1")
+    await manager1.record_fleet_stopped(project.project_id, ["s1"], ["s1"])
+
+    manager2 = ProjectManager(data_dir=temp_data_dir)
+    await manager2.initialize()
+
+    snapshot = await manager2.get_fleet_snapshot(project.project_id)
+    assert snapshot["stopped_session_ids"] == ["s1"]
+    assert snapshot["processing_session_ids"] == ["s1"]
+
+
+@pytest.mark.asyncio
 async def test_create_kanban_group(project_manager, temp_data_dir):
     """Creating a kanban group appends it to the ordered list"""
     project = await project_manager.create_project(

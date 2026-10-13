@@ -13,21 +13,39 @@ import pytest
 from backend.legion_system import LegionSystem
 
 
+def _make_project_manager(snapshot=None):
+    """Mock ProjectManager backing the fleet snapshot (issue #2159 stage 6c)."""
+    pm = Mock()
+    pm.get_fleet_snapshot = AsyncMock(
+        return_value=snapshot or {"stopped_session_ids": [], "processing_session_ids": []}
+    )
+    pm.record_fleet_stopped = AsyncMock(return_value=Mock())
+    pm.clear_fleet_stopped = AsyncMock(return_value=Mock())
+    return pm
+
+
 @pytest.fixture
 def legion_system():
-    """Create a mock LegionSystem with one ACTIVE minion for resume_all tests."""
+    """Create a mock LegionSystem with one TERMINATED, snapshot-tracked minion
+    for resume_all tests."""
     from backend.session_manager import SessionInfo, SessionState
 
-    active_minion = Mock(spec=SessionInfo)
-    active_minion.session_id = "test-minion-123"
-    active_minion.project_id = "test-legion-456"
-    active_minion.state = SessionState.ACTIVE
+    terminated_minion = Mock(spec=SessionInfo)
+    terminated_minion.session_id = "test-minion-123"
+    terminated_minion.project_id = "test-legion-456"
+    terminated_minion.state = SessionState.TERMINATED
 
     mock_session_coordinator = Mock()
     mock_session_coordinator.send_message = AsyncMock(return_value=True)
     mock_session_coordinator.enqueue_message = AsyncMock(return_value={"queue_id": "test-queue-id"})
+    mock_session_coordinator.start_session = AsyncMock(return_value=True)
+    mock_session_coordinator._permission_callback_factory = None
     mock_session_coordinator.session_manager = Mock()
-    mock_session_coordinator.session_manager.list_sessions = AsyncMock(return_value=[active_minion])
+    mock_session_coordinator.session_manager.get_session_info = AsyncMock(return_value=terminated_minion)
+    mock_session_coordinator.session_manager.list_sessions = AsyncMock(return_value=[terminated_minion])
+    mock_session_coordinator.project_manager = _make_project_manager(
+        {"stopped_session_ids": ["test-minion-123"], "processing_session_ids": ["test-minion-123"]}
+    )
     mock_session_coordinator.data_dir = Path("/tmp/test")
 
     return LegionSystem(
@@ -38,29 +56,29 @@ def legion_system():
 
 
 class TestIssue1779ResumeAllTimestampScoping:
-    """resume_all()'s bulk "continue" nudge is system-generated, not a user message —
-    it must opt out of timestamp injection the same way comm_router.py's comms do.
-
-    Issue #2159: resume_all() now routes "continue" through enqueue_message() (so a
-    PAUSED minion isn't skipped — see TestIssue2159ResumeAllDeliverable below) rather
-    than calling send_message() directly and synchronously, so this now asserts on
-    the enqueue call's inject_timestamp kwarg rather than an immediate send."""
+    """resume_all()'s bulk "continue"-equivalent nudge is system-generated, not a
+    user message — it must opt out of timestamp injection the same way
+    comm_router.py's comms do."""
 
     @pytest.mark.asyncio
     async def test_resume_all_skips_timestamp_injection(self, legion_system):
         await legion_system.legion_coordinator.resume_all("test-legion-456")
 
         enqueue_mock = legion_system.session_coordinator.enqueue_message
-        enqueue_mock.assert_called_once_with(
-            "test-minion-123", "continue", reset_session=False, inject_timestamp=False
-        )
+        enqueue_mock.assert_called_once()
+        args, kwargs = enqueue_mock.call_args
+        assert args[0] == "test-minion-123"
+        assert kwargs["inject_timestamp"] is False
+        assert kwargs["reset_session"] is False
 
 
-class TestIssue2159ResumeAllDeliverable:
+class TestIssue2159ResumeAllUsesSnapshot:
     """resume_all() used to raw-string-compare `minion.state.value == "active"` and
-    skip PAUSED minions outright — a minion mid-permission-wait never got its
-    "continue". It must now include every is_deliverable minion (ACTIVE or PAUSED)
-    and still exclude everything else (CREATED/TERMINATED/ERROR/STARTING)."""
+    skip PAUSED minions outright, or (post-6b) scan every is_deliverable minion in
+    the project regardless of whether Stop All ever touched it. Issue #2159 stage
+    6c: it must resume exactly the persisted fleet snapshot — nothing more, nothing
+    less — distinguishing a catch-up message (was processing) from a bare cold
+    start (wasn't), and clearing resolved entries from the snapshot."""
 
     @staticmethod
     def _minion(session_id: str, project_id: str, state) -> Mock:
@@ -73,16 +91,17 @@ class TestIssue2159ResumeAllDeliverable:
         return m
 
     @pytest.mark.asyncio
-    async def test_resume_all_includes_paused_minion(self):
+    async def test_resume_all_sends_catchup_message_for_processing_entry(self):
         from backend.session_manager import SessionState
 
-        paused_minion = self._minion("paused-minion", "legion-1", SessionState.PAUSED)
+        minion = self._minion("was-processing", "legion-1", SessionState.TERMINATED)
 
         mock_session_coordinator = Mock()
         mock_session_coordinator.enqueue_message = AsyncMock(return_value={"queue_id": "q1"})
         mock_session_coordinator.session_manager = Mock()
-        mock_session_coordinator.session_manager.list_sessions = AsyncMock(
-            return_value=[paused_minion]
+        mock_session_coordinator.session_manager.get_session_info = AsyncMock(return_value=minion)
+        mock_session_coordinator.project_manager = _make_project_manager(
+            {"stopped_session_ids": ["was-processing"], "processing_session_ids": ["was-processing"]}
         )
         mock_session_coordinator.data_dir = Path("/tmp/test")
 
@@ -94,28 +113,55 @@ class TestIssue2159ResumeAllDeliverable:
 
         result = await system.legion_coordinator.resume_all("legion-1")
 
-        mock_session_coordinator.enqueue_message.assert_called_once_with(
-            "paused-minion", "continue", reset_session=False, inject_timestamp=False
+        mock_session_coordinator.enqueue_message.assert_called_once()
+        mock_session_coordinator.project_manager.clear_fleet_stopped.assert_awaited_once_with(
+            "legion-1", ["was-processing"]
         )
         assert result["resumed_count"] == 1
         assert result["failed_minions"] == []
 
     @pytest.mark.asyncio
-    async def test_resume_all_excludes_non_deliverable_states(self):
+    async def test_resume_all_cold_starts_non_processing_entry(self):
         from backend.session_manager import SessionState
 
-        minions = [
-            self._minion("created", "legion-1", SessionState.CREATED),
-            self._minion("starting", "legion-1", SessionState.STARTING),
-            self._minion("terminated", "legion-1", SessionState.TERMINATED),
-            self._minion("error", "legion-1", SessionState.ERROR),
-            self._minion("terminating", "legion-1", SessionState.TERMINATING),
-        ]
+        minion = self._minion("was-idle", "legion-1", SessionState.TERMINATED)
+
+        mock_session_coordinator = Mock()
+        mock_session_coordinator.start_session = AsyncMock(return_value=True)
+        mock_session_coordinator._permission_callback_factory = None
+        mock_session_coordinator.session_manager = Mock()
+        mock_session_coordinator.session_manager.get_session_info = AsyncMock(return_value=minion)
+        mock_session_coordinator.project_manager = _make_project_manager(
+            {"stopped_session_ids": ["was-idle"], "processing_session_ids": []}
+        )
+        mock_session_coordinator.data_dir = Path("/tmp/test")
+
+        system = LegionSystem(
+            session_coordinator=mock_session_coordinator,
+            data_storage_manager=Mock(),
+            template_manager=Mock(),
+        )
+
+        result = await system.legion_coordinator.resume_all("legion-1")
+
+        mock_session_coordinator.start_session.assert_called_once_with("was-idle", None)
+        assert result["resumed_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_resume_all_skips_entry_not_in_snapshot(self):
+        """A deliverable minion that Stop All never touched must not be resumed —
+        the old project-wide is_deliverable scan would have included it."""
+        from backend.session_manager import SessionState
+
+        untouched_minion = self._minion("never-stopped", "legion-1", SessionState.PAUSED)
 
         mock_session_coordinator = Mock()
         mock_session_coordinator.enqueue_message = AsyncMock(return_value={"queue_id": "q1"})
+        mock_session_coordinator.start_session = AsyncMock(return_value=True)
         mock_session_coordinator.session_manager = Mock()
-        mock_session_coordinator.session_manager.list_sessions = AsyncMock(return_value=minions)
+        mock_session_coordinator.session_manager.get_session_info = AsyncMock(return_value=untouched_minion)
+        mock_session_coordinator.session_manager.list_sessions = AsyncMock(return_value=[untouched_minion])
+        mock_session_coordinator.project_manager = _make_project_manager()  # empty snapshot
         mock_session_coordinator.data_dir = Path("/tmp/test")
 
         system = LegionSystem(
@@ -127,8 +173,42 @@ class TestIssue2159ResumeAllDeliverable:
         result = await system.legion_coordinator.resume_all("legion-1")
 
         mock_session_coordinator.enqueue_message.assert_not_called()
+        mock_session_coordinator.start_session.assert_not_called()
         assert result["resumed_count"] == 0
-        assert result["total_minions"] == len(minions)
+        assert result["total_minions"] == 0
+
+    @pytest.mark.asyncio
+    async def test_resume_all_clears_snapshot_entry_already_active(self):
+        """A snapshot entry already brought back some other way (e.g. started
+        individually) is skipped but still cleared from the stale snapshot."""
+        from backend.session_manager import SessionState
+
+        already_active = self._minion("already-active", "legion-1", SessionState.ACTIVE)
+
+        mock_session_coordinator = Mock()
+        mock_session_coordinator.enqueue_message = AsyncMock(return_value={"queue_id": "q1"})
+        mock_session_coordinator.start_session = AsyncMock(return_value=True)
+        mock_session_coordinator.session_manager = Mock()
+        mock_session_coordinator.session_manager.get_session_info = AsyncMock(return_value=already_active)
+        mock_session_coordinator.project_manager = _make_project_manager(
+            {"stopped_session_ids": ["already-active"], "processing_session_ids": []}
+        )
+        mock_session_coordinator.data_dir = Path("/tmp/test")
+
+        system = LegionSystem(
+            session_coordinator=mock_session_coordinator,
+            data_storage_manager=Mock(),
+            template_manager=Mock(),
+        )
+
+        result = await system.legion_coordinator.resume_all("legion-1")
+
+        mock_session_coordinator.enqueue_message.assert_not_called()
+        mock_session_coordinator.start_session.assert_not_called()
+        mock_session_coordinator.project_manager.clear_fleet_stopped.assert_awaited_once_with(
+            "legion-1", ["already-active"]
+        )
+        assert result["resumed_count"] == 1
 
 
 class TestIssue1933EmergencyHaltAllConcurrency:
@@ -152,6 +232,7 @@ class TestIssue1933EmergencyHaltAllConcurrency:
             s.session_id = f"minion-{i}"
             s.project_id = "test-legion-456"
             s.state = SessionState.ACTIVE
+            s.is_processing = False
             sessions.append(s)
 
         async def fake_terminate_session(session_id):
@@ -160,6 +241,7 @@ class TestIssue1933EmergencyHaltAllConcurrency:
 
         mock_session_coordinator = Mock()
         mock_session_coordinator.terminate_session = AsyncMock(side_effect=fake_terminate_session)
+        mock_session_coordinator.project_manager = _make_project_manager()
         mock_session_coordinator.session_manager = Mock()
         mock_session_coordinator.session_manager.list_sessions = AsyncMock(return_value=sessions)
         mock_session_coordinator.data_dir = Path("/tmp/test")
