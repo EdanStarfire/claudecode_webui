@@ -200,7 +200,10 @@ def test_t1_mock_replay_produces_passively_replayable_markers(tmp_path: Path):
     token = secrets.token_urlsafe(16)
     env = _base_env()
 
-    proc = _spawn_backend(port, token, tmp_path / "data", RAW_FIXTURES_DIR, env)
+    fixtures_root = tmp_path / "fixtures"
+    shutil.copytree(RAW_FIXTURES_DIR / PRIMARY_FIXTURE, fixtures_root / PRIMARY_FIXTURE)
+
+    proc = _spawn_backend(port, token, tmp_path / "data", fixtures_root, env)
     try:
         base_url = f"http://127.0.0.1:{port}"
         _wait_for_predicate(
@@ -292,10 +295,12 @@ def test_t3_poll_consumer_reconnects_after_full_app_restart(tmp_path: Path):
     env = _base_env()
     base_url = f"http://127.0.0.1:{frontend_port}"
     data_dir = tmp_path / "backend_data"
+    fixtures_root = tmp_path / "fixtures"
+    shutil.copytree(RAW_FIXTURES_DIR / PRIMARY_FIXTURE, fixtures_root / PRIMARY_FIXTURE)
     procs: list[subprocess.Popen] = []
 
     def spawn_pair() -> None:
-        backend_proc = _spawn_backend(backend_port, backend_token, data_dir, RAW_FIXTURES_DIR, env)
+        backend_proc = _spawn_backend(backend_port, backend_token, data_dir, fixtures_root, env)
         procs.append(backend_proc)
         _wait_for_predicate(
             lambda: httpx.get(f"http://127.0.0.1:{backend_port}/health", timeout=1).status_code == 200,
