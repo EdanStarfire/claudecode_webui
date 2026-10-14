@@ -28,6 +28,7 @@
     "api_retry",
     "client_launched",
     "compact_boundary",
+    "ephemeral_orphan_resolved",
     "hook_response",
     "hook_started",
     "init",

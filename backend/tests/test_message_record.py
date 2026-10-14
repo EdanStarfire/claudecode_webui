@@ -543,7 +543,7 @@ class TestToolCallFlatShape:
 
 class TestSubtypeRegistryRoundTrip:
     def test_every_registered_subtype_round_trips_on_message_record(self):
-        assert len(SYSTEM_SUBTYPES) == 22
+        assert len(SYSTEM_SUBTYPES) == 23
         for subtype in SYSTEM_SUBTYPES:
             record = MessageRecord(
                 type="system", timestamp=time.time(), session_id="sess-1",

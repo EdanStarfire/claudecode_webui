@@ -5364,6 +5364,47 @@ class SessionCoordinator:
         except Exception:
             logger.exception(f"Failed to send interrupt message for {session_id}")
 
+    async def resolve_orphaned_ephemeral_session(self, session_id: str) -> None:
+        """Resolve a scheduled/ephemeral session found PAUSED at boot (issue #2165).
+
+        A PAUSED ephemeral session has no live SDK/Future that could ever answer its
+        pending permission decision — unlike an interactive session (#2159), nothing
+        will ever revisit it, so it would otherwise stay wedged in PAUSED forever.
+        Transitions it to ERROR via the existing _transition_to_error() helper
+        (ERROR_OCCURRED semantics: state update, processing-state reset, and denying
+        the dangling permission Future) and emits a synthetic system message with a
+        distinct subtype so the auto-resolution is independently auditable, mirroring
+        _send_session_failure_message()'s store-then-callback pattern.
+        """
+        error_message = (
+            "This scheduled agent was paused awaiting a permission decision when the "
+            "server restarted. Since no process remains to resolve that decision, the "
+            "session has been marked as errored so its schedule can start a fresh agent."
+        )
+        try:
+            await self._transition_to_error(session_id, error_message)
+
+            message_data = {
+                "type": "system",
+                "subtype": "ephemeral_orphan_resolved",
+                "is_error": True,
+                "content": error_message,
+                "session_id": session_id,
+                "timestamp": get_unix_timestamp(),
+                "sdk_message_type": "SystemMessage",
+            }
+            try:
+                await self._store_processed_message(session_id, message_data)
+            except Exception:
+                pass
+
+            callback = self._create_message_callback(session_id)
+            await callback(message_data)
+
+            coord_logger.info(f"Resolved orphaned ephemeral session {session_id} to ERROR")
+        except Exception:
+            logger.exception(f"Failed to resolve orphaned ephemeral session {session_id}")
+
     def _format_failure_content(self, friendly_error: str, raw_error: str | None) -> str:
         """Extract a short, meaningful headline from raw stderr for the session_failed pill.
 
