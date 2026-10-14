@@ -156,6 +156,38 @@ async def test_timeout_elapses_with_no_events_on_any_stream():
 
 
 @pytest.mark.asyncio
+async def test_burst_above_max_size_does_not_starve_other_streams():
+    """AC5 (issue #2160): a single noisy stream's backlog — 6,000 events (T3's literal
+    figure), deliberately larger than EventQueue.MAX_SIZE (5,000) — must not starve the
+    UI stream's or another session's own prompt delivery in the same multiplexed
+    response, proving the per-stream quota genuinely isolates a noisy stream rather
+    than exhausting the shared wait/assembly pass. Existing fairness coverage
+    (test_quiet_stream_does_not_block_active_stream) only exercises a 500-event
+    backlog, well under MAX_SIZE; this is the first literal above-MAX_SIZE burst case."""
+    noisy = EventQueue()
+    for i in range(6000):
+        noisy.append({"type": "message", "i": i})
+
+    ui_queue = EventQueue()
+    ui_queue.append({"type": "message", "marker": "ui"})
+
+    session_b = EventQueue()
+    session_b.append({"type": "message", "marker": "session-b"})
+
+    results = await multiplex_poll(
+        {"noisy": (noisy, 0), "ui": (ui_queue, 0), "session-b": (session_b, 0)},
+        timeout=1.0,
+    )
+
+    assert [e.get("marker") for e in results["ui"].events] == ["ui"]
+    assert [e.get("marker") for e in results["session-b"].events] == ["session-b"]
+    # The noisy stream still gets its own slice in the SAME response — just
+    # quota-capped, not the full 6,000-event backlog, and not starved out entirely.
+    assert results["noisy"].events
+    assert len(results["noisy"].events) <= DEFAULT_EVENTS_PER_STREAM_QUOTA
+
+
+@pytest.mark.asyncio
 async def test_multiple_streams_assembled_independent_of_which_one_woke():
     """Once any stream wakes, every subscribed stream is assembled from whatever
     its queue currently holds — not just the one that triggered the wake."""
