@@ -9,6 +9,7 @@ import httpx
 import pytest
 from mcp.types import CallToolResult, TextContent, Tool
 
+from backend.mcp.proxy_server_factory import build_proxy_server
 from backend.mcp.secret_resolver import SharedSecretResolutionError
 from backend.mcp.shared_connection_manager import (
     SharedMcpConnectionManager,
@@ -73,8 +74,8 @@ def _fake_session(tools=None):
 
 
 @asynccontextmanager
-async def _fake_http_transport(read=None, write=None, get_id=None):
-    yield (read or MagicMock(), write or MagicMock(), get_id or (lambda: None))
+async def _fake_http_transport(read=None, write=None):
+    yield (read or MagicMock(), write or MagicMock())
 
 
 @asynccontextmanager
@@ -498,7 +499,7 @@ async def test_call_tool_returns_disconnect_error_when_reconnecting_too_long():
     finally:
         conn.reconnect_lock.release()
 
-    assert result.isError is True
+    assert result.is_error is True
     assert "disconnected" in result.content[0].text.lower()
 
 
@@ -645,16 +646,21 @@ async def test_oauth_header_built_for_http():
     token.access_token = "tok123"
     mgr._oauth_manager.get_stored_token = AsyncMock(return_value=token)
 
-    captured_headers = {}
+    captured = {}
 
     @asynccontextmanager
-    async def fake_http(url, headers=None, **kw):
-        captured_headers.update(headers or {})
-        yield (MagicMock(), MagicMock(), lambda: None)
+    async def fake_http(url, http_client=None, **kw):
+        # mcp 2.x: headers now live on the httpx2.AsyncClient passed as
+        # `http_client`, not a `headers` kwarg on streamable_http_client itself.
+        # Keep the real Headers object (case-insensitive lookup) rather than
+        # a plain dict() copy, which would flatten keys to lowercase.
+        if http_client is not None:
+            captured["headers"] = http_client.headers
+        yield (MagicMock(), MagicMock())
 
     with (
         patch("backend.mcp.shared_connection_manager.ClientSession") as mock_session_cls,
-        patch("backend.mcp.shared_connection_manager.streamablehttp_client", fake_http),
+        patch("backend.mcp.shared_connection_manager.streamable_http_client", fake_http),
     ):
         sess = _fake_session()
         mock_session_cls.return_value = sess
@@ -663,7 +669,7 @@ async def test_oauth_header_built_for_http():
         except Exception:
             pass
 
-    assert captured_headers.get("Authorization") == "Bearer tok123"
+    assert captured["headers"].get("Authorization") == "Bearer tok123"
 
 
 @pytest.mark.asyncio
@@ -690,24 +696,29 @@ async def test_secret_refs_resolved_in_http_headers_before_open():
 
     mgr._vault.resolve_secrets_for_assignment = fake_resolve
 
-    captured_headers = {}
+    captured = {}
 
     @asynccontextmanager
-    async def fake_http(url, headers=None, **kw):
-        captured_headers.update(headers or {})
-        yield (MagicMock(), MagicMock(), lambda: None)
+    async def fake_http(url, http_client=None, **kw):
+        # mcp 2.x: headers now live on the httpx2.AsyncClient passed as
+        # `http_client`, not a `headers` kwarg on streamable_http_client itself.
+        # Keep the real Headers object (case-insensitive lookup) rather than
+        # a plain dict() copy, which would flatten keys to lowercase.
+        if http_client is not None:
+            captured["headers"] = http_client.headers
+        yield (MagicMock(), MagicMock())
 
     with (
         patch("backend.mcp.shared_connection_manager.ClientSession") as mock_session_cls,
-        patch("backend.mcp.shared_connection_manager.streamablehttp_client", fake_http),
+        patch("backend.mcp.shared_connection_manager.streamable_http_client", fake_http),
     ):
         sess = _fake_session()
         mock_session_cls.return_value = sess
         conn = _SharedConn(cfg_id=cfg.id)
         await mgr._open_locked(cfg, conn)
 
-    assert captured_headers.get("X-API-Key") == "sk-real"
-    assert "${secret:KEY}" not in str(captured_headers)
+    assert captured["headers"].get("X-API-Key") == "sk-real"
+    assert "${secret:KEY}" not in str(captured["headers"])
 
 
 @pytest.mark.asyncio
@@ -725,11 +736,11 @@ async def test_secret_refs_resolved_in_http_url_before_open():
     @asynccontextmanager
     async def fake_http(url, headers=None, **kw):
         captured_url["url"] = url
-        yield (MagicMock(), MagicMock(), lambda: None)
+        yield (MagicMock(), MagicMock())
 
     with (
         patch("backend.mcp.shared_connection_manager.ClientSession") as mock_session_cls,
-        patch("backend.mcp.shared_connection_manager.streamablehttp_client", fake_http),
+        patch("backend.mcp.shared_connection_manager.streamable_http_client", fake_http),
     ):
         sess = _fake_session()
         mock_session_cls.return_value = sess
@@ -795,9 +806,9 @@ async def test_missing_secret_raises_and_no_transport_opened():
     @asynccontextmanager
     async def fake_http(url, headers=None, **kw):
         transport_opened.append(True)
-        yield (MagicMock(), MagicMock(), lambda: None)
+        yield (MagicMock(), MagicMock())
 
-    with patch("backend.mcp.shared_connection_manager.streamablehttp_client", fake_http):
+    with patch("backend.mcp.shared_connection_manager.streamable_http_client", fake_http):
         conn = _SharedConn(cfg_id=cfg.id)
         with pytest.raises(SharedSecretResolutionError):
             await mgr._open_locked(cfg, conn)
@@ -822,7 +833,7 @@ async def test_call_tool_returns_disconnect_on_closed_resource_error():
 
     result = await mgr.call_tool(cfg, "t1", {})
 
-    assert result.isError is True
+    assert result.is_error is True
     assert "disconnected" in result.content[0].text.lower()
     assert conn.session is None
 
@@ -845,7 +856,7 @@ async def test_next_call_after_closed_resource_error_triggers_reopen():
     # First call raises ClosedResourceError — session should be cleared
     conn.session.call_tool = AsyncMock(side_effect=anyio.ClosedResourceError())
     result = await mgr.call_tool(cfg, "t1", {})
-    assert result.isError is True
+    assert result.is_error is True
     assert conn.session is None
 
     # Second call should trigger reopen via get_or_open's elif branch
@@ -853,7 +864,7 @@ async def test_next_call_after_closed_resource_error_triggers_reopen():
         result2 = await mgr.call_tool(cfg, "t1", {})
 
     assert len(open_calls) == 2
-    assert result2.isError is False
+    assert result2.is_error is False
 
 
 @pytest.mark.asyncio
@@ -868,7 +879,7 @@ async def test_broken_resource_error_also_recovers():
 
     result = await mgr.call_tool(cfg, "t1", {})
 
-    assert result.isError is True
+    assert result.is_error is True
     assert "disconnected" in result.content[0].text.lower()
     assert conn.session is None
 
@@ -966,7 +977,7 @@ async def test_cleanup_failure_surfaces_in_call_tool():
     from backend.mcp.shared_connection_manager import _disconnect_error_result_named
 
     result = _disconnect_error_result_named(cfg.id, reason="boom")
-    assert result.isError is True
+    assert result.is_error is True
     assert "boom" in result.content[0].text
 
 
@@ -1257,3 +1268,62 @@ async def test_token_refresh_reconnects_conn_that_never_opened():
         "token refresh must attempt to open a conn that never succeeded before, "
         "not just one that was open and later dropped"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #2004 story 4: mcp 2.x delivers client cancellation to this project's
+# proxy Server for the first time (mcp 1.x never did — a slow/stuck call used
+# to run to completion even after Claude Code gave up on it). A cancellation
+# delivered mid-flight through build_proxy_server()'s on_call_tool handler must
+# reach SharedMcpConnectionManager.call_tool() and leave reconnect_lock released,
+# not stuck held forever.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cancellation_mid_call_releases_reconnect_lock_and_recovers():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+
+    call_started = asyncio.Event()
+
+    async def blocking_call_tool(name, arguments):
+        call_started.set()
+        await asyncio.sleep(9999)  # stands in for an abandoned/hung upstream call
+
+    conn.session.call_tool = blocking_call_tool
+
+    server_config = build_proxy_server(cfg, mgr)
+    entry = server_config["instance"].get_request_handler("tools/call")
+    params = MagicMock()
+    params.name = "t1"
+    params.arguments = {}
+
+    task = asyncio.create_task(entry.handler(MagicMock(), params))
+    await asyncio.wait_for(call_started.wait(), timeout=1.0)
+
+    assert conn.reconnect_lock.locked(), (
+        "precondition: the lock must actually be held at the point of cancellation, "
+        "or releasing it below proves nothing"
+    )
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert not conn.reconnect_lock.locked(), (
+        "a cancelled call_tool must still release reconnect_lock via the "
+        "existing try/finally — not leave it held for the next caller"
+    )
+
+    # A subsequent call on the same cfg.id must still succeed normally.
+    conn.session.call_tool = AsyncMock(
+        return_value=CallToolResult(
+            content=[TextContent(type="text", text="ok")], isError=False
+        )
+    )
+    result = await mgr.call_tool(cfg, "t1", {})
+    assert result.is_error is False

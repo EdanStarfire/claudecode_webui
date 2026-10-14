@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from mcp.server import Server
-from mcp.types import CallToolRequest, CallToolResult, ListToolsRequest, TextContent, Tool
+from mcp.types import CallToolResult, TextContent, Tool
 
 from backend.mcp.proxy_server_factory import build_proxy_server
 from backend.mcp_config_manager import McpServerConfig, McpServerType
@@ -67,15 +67,13 @@ async def test_list_tools_handler_delegates_to_shared_manager():
     result = build_proxy_server(cfg, mgr)
     server: Server = result["instance"]
 
-    # Invoke the registered handler directly
-    handler = server.request_handlers[ListToolsRequest]
-    req = MagicMock()
-    req.params = None
-    response = await handler(req)
+    # mcp 2.x: handlers are registered by method string, not request type, and
+    # the handler itself returns the Result directly (no ServerResult wrapping).
+    entry = server.get_request_handler("tools/list")
+    response = await entry.handler(MagicMock(), None)
 
     mgr.list_tools_or_cached.assert_awaited_once_with(cfg)
-    # Handler wraps result in ServerResult; unwrap via .root
-    assert response.root.tools == tools
+    assert response.tools == tools
 
 
 @pytest.mark.asyncio
@@ -88,15 +86,14 @@ async def test_call_tool_handler_delegates_and_returns_call_tool_result():
     result = build_proxy_server(cfg, mgr)
     server: Server = result["instance"]
 
-    handler = server.request_handlers[CallToolRequest]
-    req = MagicMock()
-    req.params = MagicMock()
-    req.params.name = "echo"
-    req.params.arguments = {"msg": "hi"}
-    response = await handler(req)
+    entry = server.get_request_handler("tools/call")
+    params = MagicMock()
+    params.name = "echo"
+    params.arguments = {"msg": "hi"}
+    response = await entry.handler(MagicMock(), params)
 
     mgr.call_tool.assert_awaited_once_with(cfg, "echo", {"msg": "hi"})
-    assert response.root == expected
+    assert response == expected
 
 
 # ---------------------------------------------------------------------------

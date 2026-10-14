@@ -1,16 +1,15 @@
 """Tests for video resource support in ResourceMCPTools (issue #1546)."""
 
 import pytest
-from mcp.types import ListToolsRequest
 
 from backend.mcp.resource_mcp_tools import MIME_TYPES, VIDEO_EXTENSIONS, ResourceMCPTools
 
 
 async def _get_tools_by_name(server_config):
     """Introspect a session MCP server's registered tool schemas (issue #1912)."""
-    handler = server_config["instance"].request_handlers[ListToolsRequest]
-    result = await handler(ListToolsRequest(method="tools/list"))
-    return {t.name: t for t in result.root.tools}
+    entry = server_config["instance"].get_request_handler("tools/list")
+    result = await entry.handler(None, None)
+    return {t.name: t for t in result.tools}
 
 # Minimal WebM bytes: EBML header magic + padding
 VALID_WEBM_BYTES = b'\x1a\x45\xdf\xa3' + b'\x00' * 100
@@ -260,15 +259,15 @@ async def test_schema_required_fields():
     server_config = t.create_mcp_server_for_session("sess1")
     tools_by_name = await _get_tools_by_name(server_config)
 
-    assert set(tools_by_name["register_resource"].inputSchema.get("required", [])) == {
+    assert set(tools_by_name["register_resource"].input_schema.get("required", [])) == {
         "file_path", "title"
     }
-    assert set(tools_by_name["register_image"].inputSchema.get("required", [])) == {
+    assert set(tools_by_name["register_image"].input_schema.get("required", [])) == {
         "file_path", "title"
     }
-    assert list(tools_by_name["list_resources"].inputSchema.get("required", [])) == []
+    assert list(tools_by_name["list_resources"].input_schema.get("required", [])) == []
     # get_resource's "exactly one of" constraint is handler-only, not schema-expressible.
-    assert list(tools_by_name["get_resource"].inputSchema.get("required", [])) == []
+    assert list(tools_by_name["get_resource"].input_schema.get("required", [])) == []
 
 
 # ---- register_resource/register_image title required (issue #1912) ----

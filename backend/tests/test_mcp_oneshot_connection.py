@@ -94,13 +94,14 @@ _STUB_STDIO_SERVER_SCRIPT = textwrap.dedent("""
     from mcp.server.lowlevel import Server
     from mcp.server.stdio import stdio_server
     from mcp.server.models import InitializationOptions
-    from mcp.types import ServerCapabilities, ToolsCapability, Tool
+    from mcp.types import ListToolsResult, ServerCapabilities, ToolsCapability, Tool
 
-    server = Server("stub-stdio")
+    async def _on_list_tools(ctx, params):
+        return ListToolsResult(
+            tools=[Tool(name="ping", description="ping tool", inputSchema={"type": "object"})]
+        )
 
-    @server.list_tools()
-    async def _list():
-        return [Tool(name="ping", description="ping tool", inputSchema={"type": "object"})]
+    server = Server("stub-stdio", on_list_tools=_on_list_tools)
 
     async def main():
         init_options = InitializationOptions(
@@ -197,22 +198,27 @@ async def test_http_oauth_bearer_header_injected_and_tools_returned():
     token.access_token = "tok123"
     connector._oauth_manager.get_stored_token = AsyncMock(return_value=token)
 
-    captured_headers = {}
+    captured = {}
 
     @asynccontextmanager
-    async def fake_http(url, headers=None, **kw):
-        captured_headers.update(headers or {})
-        yield (MagicMock(), MagicMock(), lambda: None)
+    async def fake_http(url, http_client=None, **kw):
+        # mcp 2.x: headers now live on the httpx2.AsyncClient passed as
+        # `http_client`, not a `headers` kwarg on streamable_http_client itself.
+        # Keep the real Headers object (case-insensitive lookup) rather than
+        # a plain dict() copy, which would flatten keys to lowercase.
+        if http_client is not None:
+            captured["headers"] = http_client.headers
+        yield (MagicMock(), MagicMock())
 
     sess = _fake_session(tools=[Tool(name="ping", description="pong", inputSchema={"type": "object"})])
 
     with (
         patch("backend.mcp.oneshot_connection.ClientSession", return_value=sess),
-        patch("backend.mcp.oneshot_connection.streamablehttp_client", fake_http),
+        patch("backend.mcp.oneshot_connection.streamable_http_client", fake_http),
     ):
         result = await connector.test_connect(cfg)
 
-    assert captured_headers.get("Authorization") == "Bearer tok123"
+    assert captured["headers"].get("Authorization") == "Bearer tok123"
     assert result["status"] == "connected"
     assert result["stage"] is None
     assert [t.name for t in result["tools"]] == ["ping"]
@@ -256,13 +262,13 @@ async def test_http_handshake_failure_tagged_distinctly_from_transport_failure()
 
     @asynccontextmanager
     async def fake_http(url, headers=None, **kw):
-        yield (MagicMock(), MagicMock(), lambda: None)
+        yield (MagicMock(), MagicMock())
 
     sess = _fake_session(initialize_side_effect=RuntimeError("401 Unauthorized"))
 
     with (
         patch("backend.mcp.oneshot_connection.ClientSession", return_value=sess),
-        patch("backend.mcp.oneshot_connection.streamablehttp_client", fake_http),
+        patch("backend.mcp.oneshot_connection.streamable_http_client", fake_http),
     ):
         result = await connector.test_connect(cfg)
 
@@ -278,13 +284,13 @@ async def test_list_tools_failure_tagged_as_list_tools_stage():
 
     @asynccontextmanager
     async def fake_http(url, headers=None, **kw):
-        yield (MagicMock(), MagicMock(), lambda: None)
+        yield (MagicMock(), MagicMock())
 
     sess = _fake_session(list_tools_side_effect=RuntimeError("boom"))
 
     with (
         patch("backend.mcp.oneshot_connection.ClientSession", return_value=sess),
-        patch("backend.mcp.oneshot_connection.streamablehttp_client", fake_http),
+        patch("backend.mcp.oneshot_connection.streamable_http_client", fake_http),
     ):
         result = await connector.test_connect(cfg)
 
@@ -421,7 +427,7 @@ async def test_issue_1800_cleanup_failure_after_success_returns_failed_not_raise
     @asynccontextmanager
     async def fake_http_raises_on_close(url, headers=None, **kw):
         try:
-            yield (MagicMock(), MagicMock(), lambda: None)
+            yield (MagicMock(), MagicMock())
         finally:
             raise RuntimeError("cleanup boom")
 
@@ -429,7 +435,7 @@ async def test_issue_1800_cleanup_failure_after_success_returns_failed_not_raise
 
     with (
         patch("backend.mcp.oneshot_connection.ClientSession", return_value=sess),
-        patch("backend.mcp.oneshot_connection.streamablehttp_client", fake_http_raises_on_close),
+        patch("backend.mcp.oneshot_connection.streamable_http_client", fake_http_raises_on_close),
     ):
         result = await connector.test_connect(cfg)
 
@@ -449,13 +455,13 @@ async def test_no_persistent_state_after_successful_call():
 
     @asynccontextmanager
     async def fake_http(url, headers=None, **kw):
-        yield (MagicMock(), MagicMock(), lambda: None)
+        yield (MagicMock(), MagicMock())
 
     sess = _fake_session(tools=[Tool(name="ping", description="pong", inputSchema={"type": "object"})])
 
     with (
         patch("backend.mcp.oneshot_connection.ClientSession", return_value=sess),
-        patch("backend.mcp.oneshot_connection.streamablehttp_client", fake_http),
+        patch("backend.mcp.oneshot_connection.streamable_http_client", fake_http),
     ):
         await connector.test_connect(cfg)
 

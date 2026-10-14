@@ -17,6 +17,7 @@ from mcp.server.models import InitializationOptions
 from mcp.shared.memory import create_client_server_memory_streams
 from mcp.types import (
     CallToolResult,
+    ListToolsResult,
     ServerCapabilities,
     TextContent,
     Tool,
@@ -34,21 +35,21 @@ from backend.mcp_config_manager import McpServerConfig, McpServerType
 
 def _make_stub_server(name: str = "stub-upstream"):
     """Create a minimal stub MCP server that counts tool invocations."""
-    server = Server(name)
     counters = {"calls": 0}
 
-    @server.list_tools()
-    async def _list():
-        return [Tool(name="ping", description="ping tool", inputSchema={"type": "object"})]
+    async def _on_list_tools(ctx, params):
+        return ListToolsResult(
+            tools=[Tool(name="ping", description="ping tool", inputSchema={"type": "object"})]
+        )
 
-    @server.call_tool(validate_input=False)
-    async def _call(tool_name, arguments):
+    async def _on_call_tool(ctx, params):
         counters["calls"] += 1
         return CallToolResult(
             content=[TextContent(type="text", text=f"pong-{counters['calls']}")],
             isError=False,
         )
 
+    server = Server(name, on_list_tools=_on_list_tools, on_call_tool=_on_call_tool)
     return server, counters
 
 
@@ -153,8 +154,8 @@ async def test_one_upstream_connection_for_two_proxy_sessions():
         result1 = await mgr.call_tool(cfg, "ping", {})
         result2 = await mgr.call_tool(cfg, "ping", {})
 
-        assert result1.isError is False
-        assert result2.isError is False
+        assert result1.is_error is False
+        assert result2.is_error is False
         assert counters["calls"] == 2, "stub must have received exactly 2 tool calls"
         assert "pong-1" in result1.content[0].text
         assert "pong-2" in result2.content[0].text
@@ -174,7 +175,7 @@ async def test_one_upstream_connection_for_two_proxy_sessions():
 @pytest.mark.asyncio
 async def test_shared_endtoend_secret_ref_header():
     """Secret ${secret:X} in config headers resolves to plaintext before transport opens."""
-    captured_headers: dict = {}
+    captured: dict = {}
 
     oauth_manager = MagicMock()
     oauth_manager.get_stored_token = AsyncMock(return_value=None)
@@ -200,9 +201,14 @@ async def test_shared_endtoend_secret_ref_header():
     )
 
     @asynccontextmanager
-    async def fake_http(url, headers=None, **kw):
-        captured_headers.update(headers or {})
-        yield (MagicMock(), MagicMock(), lambda: None)
+    async def fake_http(url, http_client=None, **kw):
+        # mcp 2.x: headers now live on the httpx2.AsyncClient passed as
+        # `http_client`, not a `headers` kwarg on streamable_http_client itself.
+        # Keep the real Headers object (case-insensitive lookup) rather than
+        # a plain dict() copy, which would flatten keys to lowercase.
+        if http_client is not None:
+            captured["headers"] = http_client.headers
+        yield (MagicMock(), MagicMock())
 
     fake_session = MagicMock()
     fake_session.__aenter__ = AsyncMock(return_value=fake_session)
@@ -213,15 +219,15 @@ async def test_shared_endtoend_secret_ref_header():
     fake_session.list_tools = AsyncMock(return_value=list_result)
 
     with (
-        patch("backend.mcp.shared_connection_manager.streamablehttp_client", fake_http),
+        patch("backend.mcp.shared_connection_manager.streamable_http_client", fake_http),
         patch("backend.mcp.shared_connection_manager.ClientSession", return_value=fake_session),
     ):
         conn = _SharedConn(cfg_id=cfg.id)
         await mgr._open_locked(cfg, conn)
 
-    assert captured_headers.get("X-API-Key") == "sk-test", (
+    assert captured["headers"].get("X-API-Key") == "sk-test", (
         "Plaintext secret value must be sent to the upstream transport"
     )
-    assert "${secret:" not in str(captured_headers), (
+    assert "${secret:" not in str(captured["headers"]), (
         "Raw placeholder must NEVER appear in outbound headers"
     )
