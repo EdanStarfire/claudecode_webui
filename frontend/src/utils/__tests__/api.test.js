@@ -127,3 +127,29 @@ describe('triggerReauth / authRequired (issue #2040)', () => {
     expect(authRequired.value).toBe(false)
   })
 })
+
+describe('apiGet signal passthrough (issue #2140)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('forwards an AbortSignal passed in options to the underlying fetch call', async () => {
+    const fetchMock = mockFetchOk({ ok: true })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const controller = new AbortController()
+    await apiGet('/api/sessions/123/messages?limit=10&offset=0', { signal: controller.signal })
+
+    const [, init] = fetchMock.mock.calls[0]
+    expect(init.signal).toBe(controller.signal)
+  })
+
+  it('an already-aborted signal causes fetch to reject with AbortError, surfaced as an APIError', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const abortErr = new DOMException('Aborted', 'AbortError')
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(abortErr))
+
+    await expect(apiGet('/api/sessions/123/messages', { signal: controller.signal })).rejects.toThrow()
+  })
+})

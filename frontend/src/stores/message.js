@@ -39,6 +39,16 @@ export const useMessageStore = defineStore('message', () => {
   // Used by websocket.connectSession() to start polling from the correct position.
   const loadedEventCursors = new Map()
 
+  // Issue #2140: single shared per-session in-progress history-load tracker — the one
+  // source of truth for "is there a current in-flight paginated history load for this
+  // session, and here's its controller." Both session.js's retryHydration() and
+  // polling.js's resync trigger read/write this same map via claimHydrationLoad()
+  // instead of each keeping an independent AbortController map (the design this issue's
+  // review explicitly flagged as the likeliest source of a Retry-vs-resync abort race).
+  // Non-reactive — nothing renders off this directly (same pattern as loadedEventCursors).
+  // Map<sessionId, { target, nextOffset, epoch, totalCount, controller }>
+  const _hydrationLoadStateBySession = new Map()
+
   // Issue #2131: per-session identity indices mirroring messagesBySession/toolCallsBySession
   // 1:1, so identity/retry/tool lookups in applyRecord are O(1) instead of O(n) array scans.
   // Non-reactive (same pattern as loadedEventCursors above) — nothing renders off these
@@ -122,28 +132,214 @@ export const useMessageStore = defineStore('message', () => {
   // ever violates its has_more contract. Not expected to trigger under real usage.
   const MAX_PAGINATION_ITERATIONS = 500
 
+  // Issue #2140: default per-page inactivity timeout, used only when a caller invokes the
+  // paginated path without specifying one (session.js/polling.js always pass their own
+  // HISTORY_PAGE_INACTIVITY_TIMEOUT_MS explicitly; this is a safety-net default for any
+  // other/direct caller, e.g. tests exercising loadMessages() in isolation).
+  const DEFAULT_HISTORY_PAGE_INACTIVITY_MS = 30000
+
   /**
-   * Issue #1747: page through GET /api/sessions/{id}/messages, accumulating
-   * results until the backend reports has_more === false, so callers never
-   * silently truncate history at a single page's size.
+   * Issue #2140: aborts any existing in-flight history load for this session (if present)
+   * and installs + returns a fresh AbortController for a new attempt. The single place
+   * both retryHydration() (session.js) and the resync trigger (polling.js) go through
+   * before starting a new loadMessages() call, so abort-before-start is enforced in one
+   * place regardless of which side initiates — see _hydrationLoadStateBySession's own
+   * comment above for why this collapses what would otherwise be two independently
+   * maintained controller maps into one.
    */
-  async function fetchAllMessagePages(sessionId, pageSize, startOffset = 0) {
-    const messages = []
-    let offset = startOffset
-    let totalCount = 0
+  function claimHydrationLoad(sessionId) {
+    const existing = _hydrationLoadStateBySession.get(sessionId)
+    const controller = new AbortController()
+    if (existing) {
+      existing.controller.abort()
+      existing.controller = controller
+    } else {
+      _hydrationLoadStateBySession.set(sessionId, {
+        // Issue #2140 (builder-review fix): seed from whatever's ALREADY installed for this
+        // session (if anything) rather than always an empty target. A fresh claim with
+        // nothing to seed from (the common first-ever-load case) just gets an empty target,
+        // same as before. But a resync (polling.js's _resyncSession, always resume:true) of
+        // an already-fully-loaded session hits this same "no pending entry" branch — without
+        // seeding, its first re-fetched page would install via _installPageAndNotify() with
+        // only that one page's worth of records, visibly shrinking the message list before it
+        // grows back page by page. Seeding from the current arrays means every re-fetched
+        // page's records are already present (deduped via the seeded index Maps), so the
+        // resync's redundant-but-necessary re-fetch-from-offset-0 never visibly regresses
+        // what's already on screen.
+        target: _seedRecordTargetFromCurrent(sessionId),
+        nextOffset: 0,
+        epoch: undefined,
+        totalCount: 0,
+        controller,
+      })
+    }
+    return controller
+  }
+
+  /**
+   * Issue #2140: builds a _createRecordTarget()-shaped accumulator pre-populated from this
+   * session's CURRENTLY installed messages/tool calls/index Maps, or a genuinely empty one
+   * if nothing is installed yet (the ordinary first-ever-load case). See claimHydrationLoad()
+   * for why this matters specifically for a resync of an already-loaded session.
+   */
+  function _seedRecordTargetFromCurrent(sessionId) {
+    const messages = messagesBySession.value.get(sessionId)
+    const toolCalls = toolCallsBySession.value.get(sessionId)
+    if (!messages && !toolCalls) return _createRecordTarget()
+    return {
+      messages: messages ? [...messages] : [],
+      toolCalls: toolCalls ? [...toolCalls] : [],
+      messageIndex: new Map(messageIndexBySession.get(sessionId) || []),
+      toolIndex: new Map(toolIndexBySession.get(sessionId) || []),
+      retryIndex: new Map(retryIndexBySession.get(sessionId) || []),
+    }
+  }
+
+  /** Issue #2140: true while a paginated history load for this session hasn't finished. */
+  function hasPendingHistoryLoad(sessionId) {
+    return _hydrationLoadStateBySession.has(sessionId)
+  }
+
+  /**
+   * Issue #2140: shared per-page apply step for both the single-shot (`limit` given) and
+   * paginated (no `limit`) loadMessages() branches — capture init data, then replay each
+   * record into `target` without triggering reactivity (see applyRecord()'s own comment).
+   */
+  function _applyPageToTarget(sessionId, pageMessages, target) {
+    pageMessages.forEach(message => {
+      // Capture init data for session info modal — not a per-record store side effect, so it
+      // stays here rather than in applyRecord (same split as polling.js's own init-data
+      // capture ahead of its applyRecord() call for the live path).
+      if (message.type === 'system' &&
+          (message.subtype === 'init' || message.metadata?.subtype === 'init') &&
+          message.metadata?.init_data) {
+        const sessionStore = useSessionStore()
+        sessionStore.storeInitData(sessionId, message.metadata.init_data)
+      }
+
+      // notify:false — see applyRecord()'s own comment: avoid O(N) reactive broadcasts while
+      // replaying a page's worth of history; _installPageAndNotify() covers all of them with
+      // one reassignment per page instead.
+      applyRecord(sessionId, message, 'load', { notify: false, target })
+    })
+  }
+
+  /**
+   * Issue #2140: installs `target` as this session's real state and bumps reactivity once —
+   * shared by the single-shot branch (once) and fetchAllMessagePages's per-page loop (once
+   * per completed page, which is what makes "pages already received stay visible/retained"
+   * true for both on-screen progress and a resumed Retry/resync).
+   */
+  function _installPageAndNotify(sessionId, target) {
+    _installRecordTarget(sessionId, target)
+    messagesBySession.value = new Map(messagesBySession.value)
+    toolCallsBySession.value = new Map(toolCallsBySession.value)
+    lastStopReasonBySession.value = new Map(lastStopReasonBySession.value)
+    deferredToolUseBySession.value = new Map(deferredToolUseBySession.value)
+  }
+
+  /**
+   * Issue #1747 / #2140: page through GET /api/sessions/{id}/messages, accumulating
+   * results until the backend reports has_more === false, so callers never silently
+   * truncate history at a single page's size.
+   *
+   * Issue #2140: each page's records are applied and installed into the reactive store
+   * immediately after that page completes (via `state.target`/`state.nextOffset`, the same
+   * accumulator tracked in _hydrationLoadStateBySession) instead of all at once at the end.
+   * A per-page inactivity timer (`inactivityMs`) aborts only the in-flight page's own fetch,
+   * composed with the caller's own `signal` (the claimed session-level controller) via
+   * AbortSignal.any() — either one aborting ends the current page's fetch; the outer signal
+   * firing propagates as a plain abort, the per-page timer firing propagates as a distinguished
+   * timeout error naming the page. An epoch mismatch between pages (Backend restarted
+   * mid-load) discards this session's data and throws a distinguished restart-required error
+   * instead of silently mixing two processes' data.
+   */
+  async function fetchAllMessagePages(sessionId, pageSize, options = {}) {
+    const {
+      signal: outerSignal,
+      inactivityMs = DEFAULT_HISTORY_PAGE_INACTIVITY_MS,
+      onPageComplete,
+      state,
+    } = options
+
+    let offset = state.nextOffset
+    let totalCount = state.totalCount
     let eventCursor
+    const messages = []
 
     for (let iteration = 0; iteration < MAX_PAGINATION_ITERATIONS; iteration++) {
-      const data = await api.get(
-        `/api/sessions/${sessionId}/messages?limit=${pageSize}&offset=${offset}`
-      )
+      const pageIndex = Math.floor(offset / pageSize)
+      const pageController = new AbortController()
+      const fetchSignal = outerSignal ? AbortSignal.any([outerSignal, pageController.signal]) : pageController.signal
+      const timeoutId = setTimeout(() => pageController.abort(), inactivityMs)
+
+      let data
+      try {
+        data = await api.get(
+          `/api/sessions/${sessionId}/messages?limit=${pageSize}&offset=${offset}`,
+          { signal: fetchSignal }
+        )
+      } catch (err) {
+        if (outerSignal?.aborted) {
+          // The shared session-level controller is what fired — a genuine abort (claimed by
+          // a concurrent Retry/resync attempt), not a page stall. Propagate as-is.
+          throw err
+        }
+        if (pageController.signal.aborted) {
+          const timeoutErr = new Error(
+            `Timed out loading page ${pageIndex} (offset ${offset}) for session ${sessionId}`
+          )
+          timeoutErr.isHydrationTimeout = true
+          timeoutErr.page = pageIndex
+          pushDebugEvent('message', 'hydration-timeout', { sessionId, stage: 'loading_history', page: pageIndex })
+          throw timeoutErr
+        }
+        throw err
+      } finally {
+        clearTimeout(timeoutId)
+      }
 
       const pageMessages = data.messages || []
       totalCount = data.total_count || (offset + pageMessages.length)
       if (data.event_cursor !== undefined) {
         eventCursor = data.event_cursor
       }
+
+      // Issue #2140 (AC6): a later page reporting a different PROCESS_EPOCH than the first
+      // page means Backend restarted mid-load — resuming against new process state would
+      // silently mix two processes' data. Discard what this attempt has installed so far and
+      // surface a distinguished error so the caller restarts cleanly from offset 0.
+      if (state.epoch === undefined) {
+        state.epoch = data.epoch
+      } else if (data.epoch !== undefined && data.epoch !== state.epoch) {
+        pushDebugEvent('message', 'hydration-restart', { sessionId, oldEpoch: state.epoch, newEpoch: data.epoch })
+        // Issue #2140 (builder-review fix): delete the tracked entry BEFORE calling
+        // clearMessages() — clearMessages() aborts a still-pending entry's controller as
+        // part of its own cleanup (see its own comment), and that controller here is THIS
+        // attempt's own `state.controller`, the same one the caller (runDataHydrationChain)
+        // is about to check for "was I pre-empted by someone else" once this throw
+        // propagates. Deleting first means clearMessages() finds nothing to abort, so this
+        // attempt's own controller stays unaborted and the caller correctly reaches its
+        // isHydrationRestartRequired handling instead of mistaking this restart for a
+        // concurrent-claim pre-emption and silently swallowing it.
+        _hydrationLoadStateBySession.delete(sessionId)
+        clearMessages(sessionId)
+        const restartErr = new Error(
+          `Backend restarted mid-load for session ${sessionId} (epoch ${state.epoch} -> ${data.epoch})`
+        )
+        restartErr.isHydrationRestartRequired = true
+        throw restartErr
+      }
+
       messages.push(...pageMessages)
+      _applyPageToTarget(sessionId, pageMessages, state.target)
+      _installPageAndNotify(sessionId, state.target)
+      state.totalCount = totalCount
+
+      pushDebugEvent('message', 'history-page', { sessionId, offset, records: pageMessages.length, totalCount })
+      if (onPageComplete) {
+        onPageComplete({ page: pageIndex, recordsReceived: state.target.messages.length, totalCount })
+      }
 
       const hasMore = data.has_more || false
       if (!hasMore) {
@@ -156,6 +352,7 @@ export const useMessageStore = defineStore('message', () => {
       // tool_call messages are interleaved). Advancing by the response length would
       // desync from the backend's raw-line cursor and skip messages.
       offset += pageSize
+      state.nextOffset = offset
     }
 
     console.error(
@@ -167,11 +364,25 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   /**
-   * Load messages for a session from backend
+   * Load messages for a session from backend.
+   *
+   * Issue #2140: `options` is only meaningful for the no-`limit` (full pagination) path:
+   * `{ signal, inactivityMs, resume, onPageComplete }`. `resume: true` continues the tracked
+   * in-progress accumulator (_hydrationLoadStateBySession) from its last completed page
+   * instead of restarting at offset 0; omitted/false always starts fresh regardless of any
+   * pre-existing entry for this session. `signal`, if omitted, is obtained by claiming (or
+   * reusing an already-claimed) controller for this session — callers that already called
+   * claimHydrationLoad() themselves (retryHydration(), polling.js's resync) pass its signal
+   * through instead of claiming a second time.
    */
-  async function loadMessages(sessionId, limit = null, offset = 0) {
+  async function loadMessages(sessionId, limit = null, offset = 0, options = {}) {
     try {
       let messages, totalCount, hasMore, eventCursor
+
+      // Issue #1955: any live streaming preview for this session is purely cosmetic and was
+      // never part of the canonical message array — discard it outright instead of merging.
+      // The freshly-fetched history is authoritative; there is nothing to reconcile it against.
+      _discardStreamingPreview(sessionId, 'reload')
 
       if (limit) {
         // Explicit limit requested: preserve today's single-shot-fetch behavior.
@@ -182,14 +393,45 @@ export const useMessageStore = defineStore('message', () => {
         totalCount = data.total_count || messages.length
         hasMore = data.has_more || false
         eventCursor = data.event_cursor
+
+        // Issue #2110 (stage 4b-B) / #2131: thin fetch-then-apply-per-record wrapper — this
+        // session's display list and tool list are rebuilt from scratch into a local plain
+        // accumulator (outside the reactive Map/array proxies — see applyRecord()'s own
+        // comment), then installed as this session's real state in one shot.
+        const target = _createRecordTarget()
+        _applyPageToTarget(sessionId, messages, target)
+        _installPageAndNotify(sessionId, target)
       } else {
-        // Issue #1747: no limit specified — page until has_more is false so the
-        // full history loads, instead of silently truncating at one page.
-        const result = await fetchAllMessagePages(sessionId, 10000, offset)
+        // Issue #1747: no limit specified — page until has_more is false so the full
+        // history loads, instead of silently truncating at one page.
+        // Issue #2140 (builder-review fix): incremental per-page install + resumable/
+        // abortable shared state. A caller that already called claimHydrationLoad() itself
+        // (session.js's runDataHydrationChain, polling.js's _resyncSession) passes its
+        // signal through here; ANY other caller (e.g. polling.js's state_change-to-'error'
+        // handler, which calls this bare) gets claimed right here instead. This is
+        // deliberately unconditional — never "reuse the existing entry's controller without
+        // aborting it" — so a bare/unclaimed call can never silently race an already-running
+        // fetchAllMessagePages() loop over the same shared state: it always aborts whatever
+        // was there first, exactly like every other entry point into this shared tracker.
+        const { signal: callerSignal, inactivityMs, resume, onPageComplete } = options
+        const signal = callerSignal || claimHydrationLoad(sessionId).signal
+        const state = _hydrationLoadStateBySession.get(sessionId)
+        if (!resume) {
+          state.target = _createRecordTarget()
+          state.nextOffset = offset || 0
+          state.epoch = undefined
+          state.totalCount = 0
+        }
+
+        const result = await fetchAllMessagePages(sessionId, 10000, { signal, inactivityMs, onPageComplete, state })
         messages = result.messages
         totalCount = result.totalCount
         hasMore = result.hasMore
         eventCursor = result.eventCursor
+
+        if (!hasMore) {
+          _hydrationLoadStateBySession.delete(sessionId)
+        }
       }
 
       // Issue #1000: Store event cursor from REST response for poll alignment
@@ -198,39 +440,6 @@ export const useMessageStore = defineStore('message', () => {
       }
 
       console.log(`Loaded ${messages.length} of ${totalCount} messages for session ${sessionId}`)
-
-      // Issue #1955: any live streaming preview for this session is purely cosmetic and was
-      // never part of the canonical message array — discard it outright instead of merging.
-      // The freshly-fetched history is authoritative; there is nothing to reconcile it against.
-      _discardStreamingPreview(sessionId, 'reload')
-
-      // Issue #2110 (stage 4b-B) / #2131: thin fetch-then-apply-per-record wrapper — this
-      // session's display list and tool list are rebuilt from scratch into a local plain
-      // accumulator (outside the reactive Map/array proxies — see applyRecord()'s own comment),
-      // then installed as this session's real state in one shot after the loop.
-      const target = _createRecordTarget()
-
-      messages.forEach(message => {
-        // Capture init data for session info modal — not a per-record store side effect, so it
-        // stays here rather than in applyRecord (same split as polling.js's own init-data
-        // capture ahead of its applyRecord() call for the live path).
-        if (message.type === 'system' &&
-            (message.subtype === 'init' || message.metadata?.subtype === 'init') &&
-            message.metadata?.init_data) {
-          const sessionStore = useSessionStore()
-          sessionStore.storeInitData(sessionId, message.metadata.init_data)
-        }
-
-        // notify:false — see applyRecord()'s own comment: avoid O(N) reactive broadcasts while
-        // replaying a whole session's history, one final reassignment below covers all of them
-        // (including when `messages` is empty, so this session's reset to [] is still observed).
-        applyRecord(sessionId, message, 'load', { notify: false, target })
-      })
-      _installRecordTarget(sessionId, target)
-      messagesBySession.value = new Map(messagesBySession.value)
-      toolCallsBySession.value = new Map(toolCallsBySession.value)
-      lastStopReasonBySession.value = new Map(lastStopReasonBySession.value)
-      deferredToolUseBySession.value = new Map(deferredToolUseBySession.value)
 
       const regularMessages = messagesBySession.value.get(sessionId) || []
 
@@ -1265,6 +1474,15 @@ export const useMessageStore = defineStore('message', () => {
     // Issue #2131: the identity index Maps mirror messagesBySession/toolCallsBySession 1:1 —
     // same session-keyed-state cleanup pattern as taskLegsByTaskId/etc. just below.
     _deleteRecordTargets(sessionId)
+    // Issue #2140 (builder-review fix): a deleted/reset session has no business resuming a
+    // stale history load — and merely deleting the map entry isn't enough, since an
+    // orphaned fetchAllMessagePages() loop already holds its OWN closure reference to this
+    // `state` object and would keep calling _installPageAndNotify() after this clear,
+    // silently resurrecting the data this very call is trying to wipe. Abort its controller
+    // first so that loop's next page fetch actually rejects instead of running to completion.
+    const pendingLoad = _hydrationLoadStateBySession.get(sessionId)
+    if (pendingLoad) pendingLoad.controller.abort()
+    _hydrationLoadStateBySession.delete(sessionId)
 
     // Issue #1746 (stage: subagents): clear only this session's task_id-scoped state
     // (ephemeral, reconstructs via hydrateBackgroundAgents + live frames on reload/reconnect).
@@ -1757,6 +1975,11 @@ export const useMessageStore = defineStore('message', () => {
 
     // Actions
     loadMessages,
+    // Issue #2140: shared per-session in-progress history-load tracker — the single source
+    // of truth both session.js's retryHydration() and polling.js's resync trigger claim
+    // through before starting a new loadMessages() call.
+    claimHydrationLoad,
+    hasPendingHistoryLoad,
     // Issue #2110 (stage 4b-B): the one entry point for every message/tool_call record,
     // regardless of source ('live' | 'load' | 'archive') — supersedes addMessage/handleToolCall.
     applyRecord,

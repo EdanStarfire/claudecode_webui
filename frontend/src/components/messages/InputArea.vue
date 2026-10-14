@@ -24,6 +24,21 @@
       <button class="btn btn-sm btn-outline-danger ms-auto" @click="sessionStore.retryHydration(viewSessionId)">Retry</button>
     </div>
 
+    <!-- Resync stall banner (issue #2140): an evicted-cursor/stream_reset resync for an
+         ALREADY-ready session timed out or threw — independent of hydrationStage/isConnected,
+         both of which can legitimately still read "fine" while only this session's history
+         resync is stuck. Only ever shown once a resync has actually failed (never merely
+         while one is quietly in flight), so a normal fast reconnect never flickers it. -->
+    <div
+      v-else-if="resyncStall.active"
+      class="alert alert-danger mb-0 py-2 px-3 small d-flex align-items-center gap-2"
+      role="alert"
+    >
+      <span class="flex-shrink-0">⚠</span>
+      <span>Resync stalled{{ resyncStall.terminal ? ' — gave up automatically' : ', retrying...' }}</span>
+      <button class="btn btn-sm btn-outline-danger ms-auto" @click="wsStore.retryResync(viewSessionId)">Retry</button>
+    </div>
+
     <!-- Connection warning banner -->
     <div
       v-else-if="!isConnected"
@@ -318,7 +333,7 @@ const backendBannerMessage = computed(() => wsStore.sessionBackendStatus === 'de
 const { isStarting } = useSessionState(currentSession)
 
 // Issue #2035: session data-hydration stage visibility, independent of process state.
-const { hydrationStage, hydrationError, hydrationErrorMessage } = useHydrationStage(viewSessionId)
+const { hydrationStage, hydrationError, hydrationErrorMessage, resyncStall } = useHydrationStage(viewSessionId)
 
 // Check if input has content (text or valid attachments)
 const hasContent = computed(() => !!inputText.value.trim() || attachments.value.filter(a => !a.error).length > 0)

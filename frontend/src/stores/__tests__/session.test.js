@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { makeSession } from '@/test-utils/factories'
+import { makeSession, makeMessage } from '@/test-utils/factories'
 
 const apiMock = vi.hoisted(() => ({
   get: vi.fn(),
@@ -398,8 +398,9 @@ describe('session store', () => {
 
       await store.selectSession('sess-fresh')
 
+      // Issue #2140: the paginated path now passes a second { signal } options arg to api.get().
       expect(apiMock.get).toHaveBeenCalledWith(
-        expect.stringContaining('/api/sessions/sess-fresh/messages')
+        expect.stringContaining('/api/sessions/sess-fresh/messages'), expect.anything()
       )
     })
 
@@ -554,20 +555,34 @@ describe('session store', () => {
       expect(pollingMock.connectSession).not.toHaveBeenCalled()
     })
 
-    it('loadMessages() hanging past 20s surfaces a timeout error', async () => {
+    it('loadMessages() first page hanging past the 30s per-page inactivity window surfaces a timeout error (#2140)', async () => {
+      // Issue #2140: loadMessages() no longer has a whole-call timeout (HYDRATION_STEP_TIMEOUT_MS
+      // / withTimeout() was removed for this step) — a stalled page is now caught by the
+      // per-page HISTORY_PAGE_INACTIVITY_TIMEOUT_MS (30s) inactivity timer instead, which aborts
+      // only that page's own fetch via the signal threaded through api.get().
       vi.useFakeTimers()
       try {
         const { useSessionStore } = await import('@/stores/session')
         const store = useSessionStore()
 
         store.sessions.set('sess-hang', makeSession({ session_id: 'sess-hang', state: 'active' }))
-        apiMock.get.mockImplementation((url) => {
-          if (url.includes('/messages')) return new Promise(() => {}) // never resolves
+        apiMock.get.mockImplementation((url, options) => {
+          if (url.includes('/messages')) {
+            // Abort-aware hang, mirroring what a real fetch() does: never resolves on its
+            // own, but rejects once the per-page inactivity timer aborts its signal.
+            return new Promise((_resolve, reject) => {
+              options?.signal?.addEventListener('abort', () => {
+                const err = new Error('Aborted')
+                err.name = 'AbortError'
+                reject(err)
+              })
+            })
+          }
           return Promise.resolve({ agents: [] })
         })
 
         const selectPromise = store.selectSession('sess-hang')
-        await vi.advanceTimersByTimeAsync(20000)
+        await vi.advanceTimersByTimeAsync(30000)
         await selectPromise
 
         const entry = store.hydrationStageBySession.get('sess-hang')
@@ -693,6 +708,297 @@ describe('session store', () => {
       await reselect
 
       expect(store.hydrationStageBySession.get('sess-stale')?.stage).toBe('ready')
+    })
+  })
+
+  describe('paginated history load — per-page inactivity/resume/abort (issue #2140)', () => {
+    it('T1: 10 pages each resolving within the per-page window succeed, with progress observed after each page, even though their sum exceeds the old 20s whole-call budget', async () => {
+      vi.useFakeTimers()
+      try {
+        const { useSessionStore } = await import('@/stores/session')
+        const { useMessageStore } = await import('@/stores/message')
+        const store = useSessionStore()
+        const msgStore = useMessageStore()
+        store.sessions.set('sess-t1', makeSession({ session_id: 'sess-t1', state: 'active' }))
+
+        const PAGE_COUNT = 10
+        const PAGE_DELAY_MS = 25000 // > the old 20s whole-call budget, well within the new 30s per-page one
+
+        apiMock.get.mockImplementation((url) => {
+          if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
+          const offset = Number(url.match(/offset=(\d+)/)[1])
+          const pageIndex = offset / 10000
+          return new Promise((resolve) => {
+            setTimeout(() => {
+              resolve({
+                messages: [makeMessage({ content: `page${pageIndex}` })],
+                total_count: PAGE_COUNT, has_more: pageIndex < PAGE_COUNT - 1,
+                event_cursor: pageIndex, epoch: 'e1',
+              })
+            }, PAGE_DELAY_MS)
+          })
+        })
+
+        const selectPromise = store.selectSession('sess-t1')
+
+        // Partway through: still loading, with progress reflecting exactly what's landed so far.
+        await vi.advanceTimersByTimeAsync(PAGE_DELAY_MS * 3)
+        let entry = store.hydrationStageBySession.get('sess-t1')
+        expect(entry.stage).toBe('loading_history')
+        expect(entry.progress).toMatchObject({ page: 2, recordsReceived: 3 })
+
+        await vi.advanceTimersByTimeAsync(PAGE_DELAY_MS * (PAGE_COUNT - 3))
+        await selectPromise
+
+        entry = store.hydrationStageBySession.get('sess-t1')
+        expect(entry.stage).toBe('ready')
+        expect(msgStore.messagesBySession.get('sess-t1').length).toBe(PAGE_COUNT)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('T2/T3: a stalled page times out naming loading_history and the stalled page; retryHydration() resumes from that page without re-counting earlier ones', async () => {
+      vi.useFakeTimers()
+      try {
+        const { useSessionStore } = await import('@/stores/session')
+        const { useMessageStore } = await import('@/stores/message')
+        const store = useSessionStore()
+        const msgStore = useMessageStore()
+        store.sessions.set('sess-t2', makeSession({ session_id: 'sess-t2', state: 'active' }))
+
+        // Pages 0-2 succeed; page 3 (the 4th page) never responds on its own.
+        apiMock.get.mockImplementation((url, options) => {
+          if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
+          const offset = Number(url.match(/offset=(\d+)/)[1])
+          const pageIndex = offset / 10000
+          if (pageIndex < 3) {
+            return Promise.resolve({
+              messages: [makeMessage({ content: `page${pageIndex}` })],
+              total_count: 10, has_more: true, event_cursor: pageIndex, epoch: 'e1',
+            })
+          }
+          return new Promise((_resolve, reject) => {
+            options?.signal?.addEventListener('abort', () => {
+              const err = new Error('Aborted'); err.name = 'AbortError'; reject(err)
+            })
+          })
+        })
+
+        const selectPromise = store.selectSession('sess-t2')
+        await vi.advanceTimersByTimeAsync(30000)
+        await selectPromise
+
+        let entry = store.hydrationStageBySession.get('sess-t2')
+        expect(entry.stage).toBe('error')
+        expect(entry.error.kind).toBe('timeout')
+        expect(entry.error.stage).toBe('loading_history')
+        expect(entry.error.message).toContain('page 3')
+        // T1's three successful pages are retained, not discarded by the later timeout.
+        expect(msgStore.messagesBySession.get('sess-t2').map(m => m.content)).toEqual(['page0', 'page1', 'page2'])
+
+        // T3: resume via retryHydration() — the rest of the pages now succeed.
+        apiMock.get.mockImplementation((url) => {
+          if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
+          const offset = Number(url.match(/offset=(\d+)/)[1])
+          const pageIndex = offset / 10000
+          return Promise.resolve({
+            messages: [makeMessage({ content: `page${pageIndex}-resumed` })],
+            total_count: 10, has_more: pageIndex < 9, event_cursor: pageIndex, epoch: 'e1',
+          })
+        })
+        const callCountBeforeRetry = apiMock.get.mock.calls.length
+
+        await store.retryHydration('sess-t2')
+
+        const callsDuringRetry = apiMock.get.mock.calls.slice(callCountBeforeRetry)
+        const firstMessagesCall = callsDuringRetry.find(([url]) => url.includes('/messages'))
+        // Resumes at page 3's own offset (30000) — not restarted from 0.
+        expect(firstMessagesCall[0]).toContain('offset=30000')
+
+        entry = store.hydrationStageBySession.get('sess-t2')
+        expect(entry.stage).toBe('ready')
+        const contents = msgStore.messagesBySession.get('sess-t2').map(m => m.content)
+        // Pages 0-2 are still present and not re-counted/duplicated; 3-9 came from the resume.
+        expect(contents.slice(0, 3)).toEqual(['page0', 'page1', 'page2'])
+        expect(contents.length).toBe(10)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('two rapid retryHydration() calls result in the first attempt being aborted before the second starts (no concurrent double-fetch)', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useSessionStore()
+      const msgStore = useMessageStore()
+      store.sessions.set('sess-concurrent', makeSession({ session_id: 'sess-concurrent', state: 'active' }))
+
+      const capturedSignals = []
+      apiMock.get.mockImplementation((url, options) => {
+        if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
+        capturedSignals.push(options?.signal)
+        return new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener('abort', () => {
+            const err = new Error('Aborted'); err.name = 'AbortError'; reject(err)
+          })
+        })
+      })
+
+      const firstSelect = store.selectSession('sess-concurrent')
+      await vi.waitFor(() => {
+        expect(msgStore.hasPendingHistoryLoad('sess-concurrent')).toBe(true)
+      })
+
+      const retry1 = store.retryHydration('sess-concurrent')
+      await vi.waitFor(() => {
+        expect(capturedSignals.length).toBeGreaterThanOrEqual(2)
+      })
+
+      // A second, rapid retry claims ownership again before retry1's own attempt ever
+      // succeeds — retry1's just-claimed controller must be the one aborted.
+      apiMock.get.mockImplementation((url) => {
+        if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
+        return Promise.resolve({ messages: [], total_count: 0, has_more: false, epoch: 'e1' })
+      })
+      await store.retryHydration('sess-concurrent')
+      await Promise.allSettled([firstSelect, retry1])
+
+      expect(capturedSignals.length).toBeGreaterThanOrEqual(2)
+      // Every attempt before the final, successful one was aborted — exactly one attempt
+      // ever reaches a genuinely live (non-aborted) fetch; no doubled network passes.
+      expect(capturedSignals.slice(0, -1).every(s => s.aborted)).toBe(true)
+      expect(store.hydrationStageBySession.get('sess-concurrent')?.stage).toBe('ready')
+    })
+
+    it('switching away from a session whose history load is stuck, then back, aborts the orphaned attempt instead of running two loops concurrently (builder-review fix)', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useSessionStore()
+      const msgStore = useMessageStore()
+      store.sessions.set('sess-switch-a', makeSession({ session_id: 'sess-switch-a', state: 'active' }))
+      store.sessions.set('sess-switch-b', makeSession({ session_id: 'sess-switch-b', state: 'active' }))
+
+      // Only the FIRST request for A's messages hangs (simulating the stuck load) — a
+      // SECOND request (the re-entry's own, fresh attempt) resolves normally. Changing
+      // apiMock's implementation mid-test wouldn't affect a promise a prior call already
+      // returned, so this has to be done via a counter instead of a later mock swap.
+      const capturedSignalsA = []
+      let sessAMessagesCallCount = 0
+      apiMock.get.mockImplementation((url, options) => {
+        if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
+        if (url.includes('sess-switch-a') && url.includes('/messages')) {
+          capturedSignalsA.push(options?.signal)
+          sessAMessagesCallCount++
+          if (sessAMessagesCallCount === 1) {
+            return new Promise((_resolve, reject) => {
+              options?.signal?.addEventListener('abort', () => {
+                const err = new Error('Aborted'); err.name = 'AbortError'; reject(err)
+              })
+            })
+          }
+        }
+        return Promise.resolve({ messages: [], total_count: 0, has_more: false, epoch: 'e1' })
+      })
+
+      const selectA = store.selectSession('sess-switch-a')
+      await vi.waitFor(() => {
+        expect(msgStore.hasPendingHistoryLoad('sess-switch-a')).toBe(true)
+      })
+
+      // Switch away (A's load is left running, orphaned — not the current selection
+      // anymore) and then immediately back, while A's first attempt is still stuck.
+      await store.selectSession('sess-switch-b')
+      const selectAAgain = store.selectSession('sess-switch-a')
+      await vi.waitFor(() => {
+        expect(capturedSignalsA.length).toBeGreaterThanOrEqual(2)
+      })
+
+      // The FIRST attempt's signal must already be aborted by the re-entry's claim —
+      // otherwise two fetchAllMessagePages() loops would run concurrently over the same
+      // shared state, each making its own redundant network request.
+      expect(capturedSignalsA[0].aborted).toBe(true)
+
+      await Promise.allSettled([selectA, selectAAgain])
+
+      expect(store.hydrationStageBySession.get('sess-switch-a')?.stage).toBe('ready')
+    })
+
+    it('a concurrent claim stealing this attempt\'s own controller (distinct from this selection\'s outer abort) does not surface a false hydration error (builder-review fix)', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useSessionStore()
+      const msgStore = useMessageStore()
+      store.sessions.set('sess-stolen', makeSession({ session_id: 'sess-stolen', state: 'active' }))
+
+      apiMock.get.mockImplementation((url, options) => {
+        if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
+        return new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener('abort', () => {
+            const err = new Error('Aborted'); err.name = 'AbortError'; reject(err)
+          })
+        })
+      })
+
+      const selectPromise = store.selectSession('sess-stolen')
+      await vi.waitFor(() => {
+        expect(msgStore.hasPendingHistoryLoad('sess-stolen')).toBe(true)
+      })
+
+      // Something ELSE (e.g. polling.js's resync) steals the claim — this selection's OWN
+      // outer abortController is never touched.
+      msgStore.claimHydrationLoad('sess-stolen')
+      await selectPromise
+
+      // Pre-empted, not failed: no error banner left behind for the user to see/retry.
+      expect(store.hydrationStageBySession.has('sess-stolen')).toBe(false)
+    })
+
+    it('an epoch mismatch mid-load triggers the automatic restart-from-scratch, not a silent pre-emption no-op (builder-review fix, AC6)', async () => {
+      // Regression coverage for a fix-interaction bug: clearMessages() (called internally by
+      // fetchAllMessagePages() on an epoch mismatch) aborts a still-pending entry's own
+      // controller as part of its OWN unrelated cleanup duty — which, without the ordering
+      // fix, would self-abort THIS attempt's own controller moments before the
+      // isHydrationRestartRequired error reaches runDataHydrationChain's catch block, making
+      // it indistinguishable from "pre-empted by someone else" and silently swallowing the
+      // restart (no retry, hydrationStageBySession entry just vanishes).
+      const { useSessionStore } = await import('@/stores/session')
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useSessionStore()
+      const msgStore = useMessageStore()
+      store.sessions.set('sess-epoch', makeSession({ session_id: 'sess-epoch', state: 'active' }))
+
+      let messagesCallCount = 0
+      apiMock.get.mockImplementation((url) => {
+        if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
+        messagesCallCount++
+        if (messagesCallCount === 1) {
+          // First page of the first attempt: epoch 5, more pages to come.
+          return Promise.resolve({
+            messages: [makeMessage({ content: 'page0-e5' })],
+            total_count: 2, has_more: true, event_cursor: 1, epoch: 5,
+          })
+        }
+        if (messagesCallCount === 2) {
+          // Second page: epoch changed to 6 — Backend restarted mid-load.
+          return Promise.resolve({
+            messages: [makeMessage({ content: 'page1-e6' })],
+            total_count: 2, has_more: true, event_cursor: 2, epoch: 6,
+          })
+        }
+        // The automatic restart-from-scratch (offset 0 again) succeeds on the new epoch.
+        return Promise.resolve({
+          messages: [makeMessage({ content: 'page0-restarted' })],
+          total_count: 1, has_more: false, event_cursor: 1, epoch: 6,
+        })
+      })
+
+      await store.selectSession('sess-epoch')
+
+      expect(messagesCallCount).toBe(3)
+      const entry = store.hydrationStageBySession.get('sess-epoch')
+      expect(entry.stage).toBe('ready')
+      expect(msgStore.messagesBySession.get('sess-epoch').map(m => m.content)).toEqual(['page0-restarted'])
     })
   })
 })

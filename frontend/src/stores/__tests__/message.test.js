@@ -59,7 +59,8 @@ describe('message store', () => {
 
     const result = await store.loadMessages('sess-1')
 
-    expect(apiMock.get).toHaveBeenCalledWith(expect.stringContaining('/api/sessions/sess-1/messages'))
+    // Issue #2140: the paginated path now passes a second { signal } options arg to api.get().
+    expect(apiMock.get).toHaveBeenCalledWith(expect.stringContaining('/api/sessions/sess-1/messages'), expect.anything())
     expect(store.messagesBySession.get('sess-1').length).toBe(2)
     expect(result.totalCount).toBe(2)
   })
@@ -121,6 +122,192 @@ describe('message store', () => {
     expect(apiMock.get.mock.calls[0][0]).toContain('offset=0')
     expect(apiMock.get.mock.calls[1][0]).toContain('offset=10000')
     expect(apiMock.get.mock.calls[2][0]).toContain('offset=20000')
+  })
+
+  describe('incremental pagination / resume / epoch-restart / per-page timeout (issue #2140)', () => {
+    it('page 1 messages stay installed in the store even if page 2 subsequently throws', async () => {
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useMessageStore()
+
+      apiMock.get
+        .mockResolvedValueOnce({
+          messages: [makeMessage({ content: 'page1-a' })],
+          total_count: 2, has_more: true, event_cursor: 1, epoch: 'e1',
+        })
+        .mockRejectedValueOnce(new Error('page2 network error'))
+
+      await expect(store.loadMessages('sess-1')).rejects.toThrow('page2 network error')
+
+      expect(store.messagesBySession.get('sess-1').map(m => m.content)).toEqual(['page1-a'])
+      expect(store.hasPendingHistoryLoad('sess-1')).toBe(true)
+    })
+
+    it('a resumed call after a thrown error starts its first fetch at the tracked next-offset, not 0', async () => {
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useMessageStore()
+
+      apiMock.get
+        .mockResolvedValueOnce({
+          messages: [makeMessage({ content: 'page1-a' })],
+          total_count: 2, has_more: true, event_cursor: 1, epoch: 'e1',
+        })
+        .mockRejectedValueOnce(new Error('page2 network error'))
+
+      await expect(store.loadMessages('sess-1')).rejects.toThrow('page2 network error')
+
+      // Mirrors what retryHydration()/polling.js's resync do before resuming.
+      store.claimHydrationLoad('sess-1')
+      apiMock.get.mockResolvedValueOnce({
+        messages: [makeMessage({ content: 'page2-a' })],
+        total_count: 2, has_more: false, event_cursor: 2, epoch: 'e1',
+      })
+
+      const result = await store.loadMessages('sess-1', null, 0, { resume: true })
+
+      expect(apiMock.get.mock.calls[2][0]).toContain('offset=10000')
+      expect(result.messages.map(m => m.content)).toEqual(['page1-a', 'page2-a'])
+      expect(store.hasPendingHistoryLoad('sess-1')).toBe(false)
+    })
+
+    it('an epoch mismatch between pages discards the in-progress accumulator and surfaces a restart-required error', async () => {
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useMessageStore()
+
+      apiMock.get
+        .mockResolvedValueOnce({
+          messages: [makeMessage({ content: 'page1-a' })],
+          total_count: 2, has_more: true, event_cursor: 1, epoch: 5,
+        })
+        .mockResolvedValueOnce({
+          messages: [makeMessage({ content: 'page2-stale-epoch' })],
+          total_count: 2, has_more: true, event_cursor: 2, epoch: 6,
+        })
+
+      const error = await store.loadMessages('sess-1').catch(e => e)
+      expect(error.isHydrationRestartRequired).toBe(true)
+
+      // The whole session's data for this bad attempt is discarded, not left half-mixed.
+      expect(store.messagesBySession.has('sess-1')).toBe(false)
+      expect(store.hasPendingHistoryLoad('sess-1')).toBe(false)
+    })
+
+    it('a per-page inactivity timeout aborts only the stalled page and names it', async () => {
+      vi.useFakeTimers()
+      try {
+        const { useMessageStore } = await import('@/stores/message')
+        const store = useMessageStore()
+
+        apiMock.get.mockImplementation((url, options) => {
+          if (url.includes('offset=0')) {
+            return Promise.resolve({
+              messages: [makeMessage({ content: 'page1-a' })],
+              total_count: 2, has_more: true, event_cursor: 1, epoch: 'e1',
+            })
+          }
+          // Page 2 never resolves on its own — abort-aware, like a real fetch().
+          return new Promise((_resolve, reject) => {
+            options?.signal?.addEventListener('abort', () => {
+              const err = new Error('Aborted')
+              err.name = 'AbortError'
+              reject(err)
+            })
+          })
+        })
+
+        const loadPromise = store.loadMessages('sess-1', null, 0, { inactivityMs: 30000 })
+        // Attach the rejection assertion immediately (same microtask turn as the promise's
+        // creation) so Node doesn't flag it as an unhandled rejection while the fake-timer
+        // advance below is still in flight — only await it after advancing.
+        const assertion = expect(loadPromise).rejects.toMatchObject({ isHydrationTimeout: true, page: 1 })
+        await vi.advanceTimersByTimeAsync(30000)
+        await assertion
+        // Page 1's data survives the page-2 timeout — incremental install, not all-or-nothing.
+        expect(store.messagesBySession.get('sess-1').map(m => m.content)).toEqual(['page1-a'])
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('clearMessages() aborts an in-flight history load, so an orphaned loop cannot resurrect the data just cleared (builder-review fix)', async () => {
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useMessageStore()
+
+      let page2Signal
+      apiMock.get.mockImplementation((url, options) => {
+        if (url.includes('offset=0')) {
+          return Promise.resolve({
+            messages: [makeMessage({ content: 'page1-a' })],
+            total_count: 2, has_more: true, event_cursor: 1, epoch: 'e1',
+          })
+        }
+        page2Signal = options?.signal
+        return new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener('abort', () => {
+            const err = new Error('Aborted'); err.name = 'AbortError'; reject(err)
+          })
+        })
+      })
+
+      const loadPromise = store.loadMessages('sess-clear').catch(() => {})
+      await vi.waitFor(() => {
+        expect(store.messagesBySession.get('sess-clear')?.length).toBe(1)
+      })
+
+      store.clearMessages('sess-clear')
+      await loadPromise
+
+      // Without aborting the orphaned loop's controller, its page-2 fetch would keep running
+      // and could re-populate messagesBySession right after this clear.
+      expect(page2Signal.aborted).toBe(true)
+      expect(store.messagesBySession.has('sess-clear')).toBe(false)
+      expect(store.hasPendingHistoryLoad('sess-clear')).toBe(false)
+    })
+
+    it("claimHydrationLoad() seeds a fresh claim from the session's currently-installed messages, so a resync of an already-loaded session never visibly drops to a partial list (builder-review fix)", async () => {
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useMessageStore()
+
+      apiMock.get.mockResolvedValueOnce({
+        messages: [makeMessage({ content: 'already-loaded', message_id: 'am-seed-1' })],
+        total_count: 1, has_more: false, event_cursor: 1, epoch: 'e1',
+      })
+      await store.loadMessages('sess-seed')
+      expect(store.messagesBySession.get('sess-seed').map(m => m.content)).toEqual(['already-loaded'])
+      // Fully completed — no pending entry, exactly the state a resync's claim encounters.
+      expect(store.hasPendingHistoryLoad('sess-seed')).toBe(false)
+
+      // Mirrors polling.js's _resyncSession(): claim fresh, then resume from offset 0 — the
+      // resync's own re-fetch of page 1 redelivers the SAME record (same message_id).
+      const controller = store.claimHydrationLoad('sess-seed')
+      apiMock.get.mockResolvedValueOnce({
+        messages: [makeMessage({ content: 'already-loaded', message_id: 'am-seed-1' })],
+        total_count: 1, has_more: false, event_cursor: 1, epoch: 'e1',
+      })
+      await store.loadMessages('sess-seed', null, 0, { signal: controller.signal, resume: true })
+
+      // Still exactly one message throughout — never dropped to empty/partial before
+      // growing back, because the claim seeded the target from what was already displayed.
+      expect(store.messagesBySession.get('sess-seed').map(m => m.content)).toEqual(['already-loaded'])
+    })
+
+    it('a bare loadMessages() call with no explicit signal always claims fresh, aborting any existing in-flight attempt rather than silently reusing its controller (builder-review fix)', async () => {
+      // Mirrors polling.js's state_change-to-'error' handler, which calls
+      // loadMessages(sessionId) with no options at all — unlike session.js/_resyncSession,
+      // which always pass an already-claimed signal explicitly.
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useMessageStore()
+
+      const firstController = store.claimHydrationLoad('sess-bare')
+      expect(firstController.signal.aborted).toBe(false)
+
+      apiMock.get.mockResolvedValue({ messages: [], total_count: 0, has_more: false, epoch: 'e1' })
+      await store.loadMessages('sess-bare')
+
+      // The first attempt's controller must be aborted — otherwise a second, unrelated bare
+      // call could reset/resume the same shared state a still-running fetchAllMessagePages()
+      // loop is actively iterating over, corrupting its accumulator.
+      expect(firstController.signal.aborted).toBe(true)
+    })
   })
 
   it('handleToolCall creates new entry then updates on second call', async () => {
