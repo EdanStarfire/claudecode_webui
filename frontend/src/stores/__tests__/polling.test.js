@@ -1125,7 +1125,7 @@ describe('polling store - StreamConnection transition table (consolidated, epic 
     pollingStore.stopUIPolling()
   })
 
-  it('resyncing + resync (loadMessages) throws -> backoff, same path as any other fetch error (no second retry mechanism)', async () => {
+  it('resyncing + resync (loadMessages) throws -> backoff, same path as any other fetch error; one failure is not yet terminal (#2140)', async () => {
     const { pollingStore, sessionStore, sid } = await setupPollSession({ session_id: 'sess-t1-resync-fail' })
     const { useMessageStore } = await import('@/stores/message')
     const messageStore = useMessageStore()
@@ -1142,6 +1142,93 @@ describe('polling store - StreamConnection transition table (consolidated, epic 
 
     expect(pollingStore.sessionState).toBe('backoff')
     expect(pollingStore.sessionRetryCount).toBe(1)
+    // Issue #2140 (AC5/D4): a bounded, resync-specific retry/stall mechanism now exists
+    // (distinct from the generic connection backoff above) — one failure marks the stall
+    // active but not yet terminal, so a subsequent poll cycle would still auto-retry it.
+    const stall = pollingStore.resyncStallBySession.get(sid)
+    expect(stall.active).toBe(true)
+    expect(stall.terminal).toBe(false)
+    await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
+  })
+
+  it('five consecutive resync failures reach a terminal stall and stop auto-retriggering; retryResync() resets it (#2140)', async () => {
+    vi.useFakeTimers()
+    try {
+      const { pollingStore, sessionStore, sid } = await setupPollSession({ session_id: 'sess-t1-resync-ceiling' })
+      const { useMessageStore } = await import('@/stores/message')
+      const messageStore = useMessageStore()
+      sessionStore.currentSessionId = sid
+      const loadMessagesSpy = vi.spyOn(messageStore, 'loadMessages').mockRejectedValue(new Error('history fetch failed'))
+
+      const resetEvent = { type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }
+      sequencedPollMock([
+        { ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [resetEvent], next_cursor: 2 } } },
+        { ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [resetEvent], next_cursor: 3 } } },
+        { ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [resetEvent], next_cursor: 4 } } },
+        { ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [resetEvent], next_cursor: 5 } } },
+        { ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [resetEvent], next_cursor: 6 } } },
+        // A 6th reset-carrying response would trigger a 6th auto-attempt if the ceiling
+        // didn't suppress it — asserted below via loadMessagesSpy's call count staying at 5.
+        { ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [resetEvent], next_cursor: 7 } } },
+      ])
+
+      await pollingStore.connectSession(sid)
+      // Mirrors the connection-error backoff tests above: retryCount increments 1..5 after
+      // each failed attempt, backoff delay = min(2000 * retryCount, 30000).
+      await vi.advanceTimersByTimeAsync(0)      // attempt 1
+      await vi.advanceTimersByTimeAsync(2000)   // -> attempt 2
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(4000)   // -> attempt 3
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(6000)   // -> attempt 4
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(8000)   // -> attempt 5 (reaches the ceiling)
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(10000)  // -> attempt 6 (terminal — skipped, no throw)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(loadMessagesSpy).toHaveBeenCalledTimes(5)
+      const stall = pollingStore.resyncStallBySession.get(sid)
+      expect(stall.terminal).toBe(true)
+
+      loadMessagesSpy.mockResolvedValue({ messages: [], totalCount: 0, hasMore: false })
+      await pollingStore.retryResync(sid)
+
+      expect(loadMessagesSpy).toHaveBeenCalledTimes(6)
+      expect(pollingStore.resyncStallBySession.has(sid)).toBe(false)
+
+      await pollingStore.disconnectSession()
+      pollingStore.stopUIPolling()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('resync stall does not surface while merely in flight, only once it actually throws (no-flicker, #2140)', async () => {
+    const { pollingStore, sessionStore, sid } = await setupPollSession({ session_id: 'sess-t1-resync-noflicker' })
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore()
+    sessionStore.currentSessionId = sid
+    let resolveLoad
+    vi.spyOn(messageStore, 'loadMessages').mockImplementation(() => new Promise((resolve) => { resolveLoad = resolve }))
+
+    sequencedPollMock([
+      { ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }], next_cursor: 5 } } },
+    ])
+
+    await pollingStore.connectSession(sid)
+    await flush()
+
+    // Still pending — no stall banner yet, matching decision D3 (no flicker on a slow-but-
+    // progressing resync).
+    expect(pollingStore.resyncStallBySession.has(sid)).toBe(false)
+
+    resolveLoad({ messages: [], totalCount: 0, hasMore: false })
+    await flush()
+    await flush()
+
+    expect(pollingStore.resyncStallBySession.has(sid)).toBe(false)
     await pollingStore.disconnectSession()
     pollingStore.stopUIPolling()
   })

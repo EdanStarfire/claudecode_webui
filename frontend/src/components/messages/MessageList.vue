@@ -16,6 +16,19 @@
           @chip-click="onGutterChipClick"
         />
 
+        <!-- Resync stall banner (issue #2140): independent of hydrationStage/displayableItems
+             — a resync happens to an already-ready, already-populated session. Only shown once
+             a resync has actually timed out or thrown (see resyncStall's own comment). -->
+        <div
+          v-if="resyncStall.active"
+          class="alert alert-danger mb-0 py-2 px-3 small d-flex align-items-center gap-2"
+          role="alert"
+        >
+          <span class="flex-shrink-0">⚠</span>
+          <span>Resync stalled{{ resyncStall.terminal ? ' — gave up automatically' : ', retrying...' }}</span>
+          <button class="btn btn-sm btn-outline-danger ms-auto" @click="pollingStore.retryResync(viewSessionId)">Retry</button>
+        </div>
+
         <div v-if="displayableItems.length === 0 && isHydrationLoading" class="text-muted text-center py-5">
           <div class="spinner-border spinner-border-sm mb-2" role="status"></div>
           <div>{{ hydrationStageLabel }}</div>
@@ -130,6 +143,7 @@ import { useVirtualizer } from '@tanstack/vue-virtual'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
+import { usePollingStore } from '@/stores/polling'
 import MessageItem from './MessageItem.vue'
 import CompactionEventGroup from './CompactionEventGroup.vue'
 import StreamingPreview from './StreamingPreview.vue'
@@ -148,6 +162,7 @@ import { HYDRATION_STAGE_LABELS } from '@/utils/hydrationStage'
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
+const pollingStore = usePollingStore()
 
 // Injected per-instance session id (provided by SessionView).
 // Every computed in this component reads from this id, not the global currentSessionId,
@@ -155,7 +170,7 @@ const uiStore = useUIStore()
 const viewSessionId = inject('viewSessionId', ref(null))
 
 // Issue #2035: session data-hydration stage visibility for the empty-state area.
-const { hydrationStage, isHydrationLoading, hydrationErrorMessage } = useHydrationStage(viewSessionId)
+const { hydrationStage, isHydrationLoading, hydrationErrorMessage, resyncStall } = useHydrationStage(viewSessionId)
 const hydrationStageLabel = computed(() => HYDRATION_STAGE_LABELS[hydrationStage.value] || '')
 
 const messagesArea = ref(null)

@@ -11,6 +11,7 @@ import { useQueueStore } from './queue'
 import { useTaskStore } from './task'
 import { useDiffStore } from './diff'
 import { useLinksStore } from './links'
+import { pushDebugEvent } from '../composables/useDebugBuffer'
 
 /**
  * Session Store - Manages session state and operations
@@ -111,6 +112,21 @@ export const useSessionStore = defineStore('session', () => {
 
   const HYDRATION_STEP_TIMEOUT_MS = 20000
 
+  // Issue #2140: per-page (not whole-call) inactivity budget for the paginated history
+  // load — a large session's page count is unbounded, so a single whole-call deadline
+  // (the old HYDRATION_STEP_TIMEOUT_MS behavior loadMessages() used to be wrapped in)
+  // fails sessions that are merely slow-but-steady rather than genuinely stuck.
+  const HISTORY_PAGE_INACTIVITY_TIMEOUT_MS = 30000
+
+  // Issue #2140: merges `progress` into an owned hydrationStageBySession entry without
+  // clobbering its stage/error/controller — called after each history page completes.
+  function updateHydrationProgress(sessionId, controller, progress) {
+    const entry = hydrationStageBySession.value.get(sessionId)
+    if (!entry || entry.controller !== controller) return
+    hydrationStageBySession.value.set(sessionId, { ...entry, progress })
+    hydrationStageBySession.value = new Map(hydrationStageBySession.value)
+  }
+
   function withTimeout(promise, ms, stageLabel) {
     let timeoutId
     const timeout = new Promise((_, reject) => {
@@ -135,19 +151,52 @@ export const useSessionStore = defineStore('session', () => {
    * connection explicitly archived instead of starting a connection that will sit idle
    * forever (an implicit, uninspectable "nothing will ever arrive" turned into an
    * explicit state).
+   *
+   * Issue #2140: `allowEpochRestart` (internal, never passed by external callers) guards
+   * the one automatic re-invocation on an epoch-mismatch restart (Backend restarted
+   * mid-load) — set false on that single recursive call so a second mismatch in a row
+   * surfaces as a normal error instead of looping forever.
    */
-  async function runDataHydrationChain(sessionId, abortController, { includeUsage = true, skipPolling = false } = {}) {
+  async function runDataHydrationChain(sessionId, abortController, { includeUsage = true, skipPolling = false, allowEpochRestart = true } = {}) {
     const messageStore = await import('./message')
     const msgStore = messageStore.useMessageStore()
 
-    if (!msgStore.messagesBySession.has(sessionId)) {
+    const needsHistoryLoad = !msgStore.messagesBySession.has(sessionId) || msgStore.hasPendingHistoryLoad(sessionId)
+    if (needsHistoryLoad) {
       setHydrationStage(sessionId, abortController, 'loading_history')
+      // Issue #2140 (builder-review fix): claim the shared history-load controller HERE,
+      // unconditionally — not just when retryHydration() happens to call it first. Without
+      // this, re-entering this branch for a session whose PREVIOUS load is still orphaned
+      // mid-pagination (e.g. the user switched away before it finished, then switched back)
+      // would resume using the stale, still-live controller instead of aborting it first —
+      // two fetchAllMessagePages() loops would then run concurrently over the same shared
+      // state, each making redundant network requests (the exact concurrent-refetch bug
+      // this issue exists to fix, just reachable via a switch-away/switch-back instead of a
+      // double Retry click). Also gives the catch block below the actual signal that
+      // matters for "was my attempt the one just pre-empted" — the outer `abortController`
+      // here only tracks THIS selection's stage-ownership, not whether a concurrent
+      // claimant (a later retry, or polling.js's resync) stole the underlying fetch.
+      const resume = msgStore.hasPendingHistoryLoad(sessionId)
+      const historyController = msgStore.claimHydrationLoad(sessionId)
       try {
         await withTimeout(msgStore.hydrateBackgroundAgents(sessionId), HYDRATION_STEP_TIMEOUT_MS, 'loading_history')
         if (abortController.signal.aborted) { clearHydrationStageIfOwned(sessionId, abortController); return false }
-        await withTimeout(msgStore.loadMessages(sessionId), HYDRATION_STEP_TIMEOUT_MS, 'loading_history')
+        pushDebugEvent('session', 'hydration-stage', { sessionId, stage: 'loading_history', resume })
+        await msgStore.loadMessages(sessionId, null, 0, {
+          signal: historyController.signal,
+          inactivityMs: HISTORY_PAGE_INACTIVITY_TIMEOUT_MS,
+          resume,
+          onPageComplete: (progress) => updateHydrationProgress(sessionId, abortController, progress),
+        })
       } catch (error) {
-        if (abortController.signal.aborted) { clearHydrationStageIfOwned(sessionId, abortController); return false }
+        if (abortController.signal.aborted || historyController.signal.aborted) {
+          clearHydrationStageIfOwned(sessionId, abortController)
+          return false
+        }
+        if (error.isHydrationRestartRequired && allowEpochRestart) {
+          pushDebugEvent('session', 'hydration-retry', { sessionId, reason: 'epoch-mismatch' })
+          return runDataHydrationChain(sessionId, abortController, { includeUsage, skipPolling, allowEpochRestart: false })
+        }
         setHydrationError(sessionId, abortController, 'loading_history', error)
         return false
       }
@@ -192,6 +241,13 @@ export const useSessionStore = defineStore('session', () => {
    * re-checks messagesBySession.has(sessionId) itself, calling it again automatically
    * skips whichever step already succeeded and resumes at the failed one — no separate
    * "resume from stage X" parameter needed.
+   *
+   * Issue #2140: runDataHydrationChain() itself claims the shared history-load controller
+   * (message.js's claimHydrationLoad()) whenever it re-enters the loading_history step, so
+   * this function doesn't need its own claim — whether the previous attempt was this same
+   * session's stuck initial load, a prior retry, or a concurrent polling.js resync, the
+   * claim inside runDataHydrationChain() aborts it before resuming, so exactly one attempt
+   * is ever running regardless of which side initiated it.
    */
   async function retryHydration(sessionId) {
     if (pendingSelectAbort) {

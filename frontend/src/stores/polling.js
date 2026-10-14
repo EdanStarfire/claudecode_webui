@@ -259,6 +259,26 @@ export const usePollingStore = defineStore('polling', () => {
   // current + MAX_SUBSCRIBED_SESSIONS-1 most-recently-viewed stay subscribed; the rest age out.
   const lruSessionIds = []
   const MAX_SUBSCRIBED_SESSIONS = 5
+
+  // Issue #2140: resync (evicted/stream_reset) uses the same per-page-inactivity/abort/
+  // resume machinery as the initial hydration load — see message.js's
+  // claimHydrationLoad()/fetchAllMessagePages() and session.js's identically-valued
+  // constant of the same name.
+  const HISTORY_PAGE_INACTIVITY_TIMEOUT_MS = 30000
+  // After this many CONSECUTIVE resync failures for a session, stop auto-retriggering it
+  // from the poll loop (today's literally-unbounded retry loop for this failure path) —
+  // the stall banner becomes terminal until the user clicks Retry (retryResync()).
+  const RESYNC_FAILURE_CEILING = 5
+  // sessionId -> { active: true, terminal: boolean, error: string } — only ever written on
+  // an actual resync timeout/throw (never merely "in flight"), so a normal fast resync never
+  // flickers this banner. A separate map from hydrationStageBySession (session.js), which is
+  // semantically "pre-ready" and gets deleted once a session first reaches ready — a resync
+  // happens to an already-ready, already-displayed session.
+  const resyncStallBySession = ref(new Map())
+  // sessionId -> consecutive failure count. Non-reactive internal bookkeeping only (same
+  // pattern as message.js's loadedEventCursors) — nothing renders off the raw count, only
+  // the derived `terminal` flag stored in resyncStallBySession above.
+  const resyncAttemptsBySession = new Map()
   // Snapshot of session_id -> cursor the CURRENTLY in-flight (or most recently built)
   // request's body was built from — compared against to decide whether a subscription
   // change needs to interrupt an in-flight long-poll (see interruptIfStale()'s docstring;
@@ -412,6 +432,13 @@ export const usePollingStore = defineStore('polling', () => {
     const idx = lruSessionIds.indexOf(sessionId)
     if (idx !== -1) lruSessionIds.splice(idx, 1)
     if (sessionId === currentSessionId.value) _syncSessionHasEverConnected()
+    // Issue #2140: a deleted/disconnected session has no business carrying a stale resync
+    // stall/failure count forward to whatever this session id means next.
+    resyncAttemptsBySession.delete(sessionId)
+    if (resyncStallBySession.value.has(sessionId)) {
+      resyncStallBySession.value.delete(sessionId)
+      resyncStallBySession.value = new Map(resyncStallBySession.value)
+    }
   }
 
   // ========== SINGLE MULTIPLEXED POLL LOOP ==========
@@ -595,6 +622,71 @@ export const usePollingStore = defineStore('polling', () => {
     return false
   }
 
+  // Issue #2140: the single resync entry point for both _processSessionBatch call sites
+  // below (evicted and stream_reset) AND retryResync() — claims the shared per-session
+  // history-load tracker in message.js (aborting whichever attempt was previously current,
+  // whether that was a prior resync or session.js's own retryHydration()) before resuming
+  // via the same per-page-inactivity/abort-aware loadMessages() the initial hydration load
+  // uses. Returns true if a resync was actually attempted (and succeeded); false if skipped
+  // because this session's resync already hit RESYNC_FAILURE_CEILING consecutive failures
+  // (terminal — only a manual retryResync() clears that). A thrown error propagates to the
+  // caller, which (via the existing poll-loop catch) lands the connection in 'backoff' —
+  // unchanged from before, for any attempt short of the ceiling.
+  async function _resyncSession(sessionId) {
+    const stall = resyncStallBySession.value.get(sessionId)
+    if (stall?.terminal) return false
+
+    const messageStore = useMessageStore()
+    const controller = messageStore.claimHydrationLoad(sessionId)
+    try {
+      await messageStore.loadMessages(sessionId, null, 0, {
+        signal: controller.signal,
+        resume: true,
+        inactivityMs: HISTORY_PAGE_INACTIVITY_TIMEOUT_MS,
+        onPageComplete: (progress) => pushDebugEvent('polling', 'hydration-stage', { sessionId, stage: 'resync', progress }),
+      })
+      resyncAttemptsBySession.delete(sessionId)
+      if (resyncStallBySession.value.has(sessionId)) {
+        resyncStallBySession.value.delete(sessionId)
+        resyncStallBySession.value = new Map(resyncStallBySession.value)
+      }
+      return true
+    } catch (error) {
+      const attempts = (resyncAttemptsBySession.get(sessionId) || 0) + 1
+      resyncAttemptsBySession.set(sessionId, attempts)
+      const terminalNow = attempts >= RESYNC_FAILURE_CEILING
+      pushDebugEvent('polling', 'hydration-retry', { sessionId, attempts, terminal: terminalNow, reason: error?.message })
+      resyncStallBySession.value.set(sessionId, {
+        active: true,
+        terminal: terminalNow,
+        error: error?.message || String(error),
+      })
+      resyncStallBySession.value = new Map(resyncStallBySession.value)
+      pushDebugEvent('polling', 'hydration-abort', { sessionId, stage: 'resync' })
+      throw error
+    }
+  }
+
+  // Issue #2140: manual recovery from a terminal resync stall (InputArea.vue/MessageList.vue's
+  // Retry button) — resets the consecutive-failure counter/terminal flag and fires one
+  // immediate attempt, adopting the fresh cursor on success exactly like the automatic paths.
+  async function retryResync(sessionId) {
+    const sub = subscriptions.get(sessionId)
+    if (!sub) return
+    resyncAttemptsBySession.delete(sessionId)
+    if (resyncStallBySession.value.has(sessionId)) {
+      resyncStallBySession.value.delete(sessionId)
+      resyncStallBySession.value = new Map(resyncStallBySession.value)
+    }
+    const messageStore = useMessageStore()
+    try {
+      const resynced = await _resyncSession(sessionId)
+      if (resynced) _adoptResyncCursor(sub, sessionId, messageStore, sub.cursor)
+    } catch {
+      // Stall state already recorded by _resyncSession — nothing further to do here.
+    }
+  }
+
   // Processes one subscribed session's batch — applied regardless of whether this session
   // is the CURRENT one (US2: background subscriptions are genuinely live, not just cached).
   // Only the current session's own resync surfaces as a visible `conn.transition('resyncing')`
@@ -616,9 +708,9 @@ export const usePollingStore = defineStore('polling', () => {
       })
       if (isCurrent) conn.transition('resyncing', sessionId)
       const messageStore = useMessageStore()
-      await messageStore.loadMessages(sessionId)
+      const resynced = await _resyncSession(sessionId)
       if (!subscriptions.has(sessionId)) return isCurrent // evicted locally during the await
-      _adoptResyncCursor(sub, sessionId, messageStore, batch.next_cursor)
+      if (resynced) _adoptResyncCursor(sub, sessionId, messageStore, batch.next_cursor)
       return isCurrent
     }
 
@@ -641,9 +733,9 @@ export const usePollingStore = defineStore('polling', () => {
           }
           if (isCurrent) conn.transition('resyncing', sessionId)
           const messageStore = useMessageStore()
-          await messageStore.loadMessages(sessionId)
+          const resynced = await _resyncSession(sessionId)
           if (!subscriptions.has(sessionId)) return isCurrent
-          _adoptResyncCursor(sub, sessionId, messageStore, batch.next_cursor)
+          if (resynced) _adoptResyncCursor(sub, sessionId, messageStore, batch.next_cursor)
           sawStreamReset = true
           break
         }
@@ -1276,5 +1368,10 @@ export const usePollingStore = defineStore('polling', () => {
     sendPermissionResponse,
     sendPermissionResponseWithInput,
     interruptSession,
+
+    // Issue #2140: resync stall visibility (AC5) — a separate map from session.js's
+    // hydrationStageBySession since a resync can happen to an already-ready session.
+    resyncStallBySession,
+    retryResync,
   }
 })
