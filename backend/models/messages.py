@@ -187,6 +187,10 @@ class ToolCall:
     # Issue #707: Auto-approval reason (set when suggestion-based auto-approval fires)
     auto_approved_reason: str | None = None
 
+    # Issue #2127: set when this tool_call's terminal state was produced by boot-time
+    # crash-orphan repair rather than a live interrupt/completion.
+    repair_reason: str | None = None
+
     # Display hints (backend-computed)
     display: "ToolDisplayInfo | None" = None
 
@@ -245,6 +249,10 @@ class ToolCall:
         if self.auto_approved_reason is not None:
             result["auto_approved_reason"] = self.auto_approved_reason
 
+        # Issue #2127: boot-time crash-repair reason tag
+        if self.repair_reason is not None:
+            result["repair_reason"] = self.repair_reason
+
         # Display hints
         if self.display is not None:
             result["display"] = self.display.to_dict()
@@ -293,6 +301,7 @@ class ToolCall:
             error=data.get("error"),
             parent_tool_use_id=data.get("parent_tool_use_id"),
             auto_approved_reason=data.get("auto_approved_reason"),
+            repair_reason=data.get("repair_reason"),
             display=display,
             sender_attachments=data.get("sender_attachments"),
             # Issue #1958 backward compat: pre-rename ToolCallUpdate records on disk carry

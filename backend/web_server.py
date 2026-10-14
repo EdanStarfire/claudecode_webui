@@ -838,7 +838,7 @@ class BackendApp:
         # Issue #1127: Initialize audit subsystem
         try:
             await self._analytics_db.initialize()
-            self.coordinator.set_audit_writer(self._audit_writer)
+            await self.coordinator.set_audit_writer(self._audit_writer)
             self.coordinator.set_analytics_store(self.analytics_store)
             self.coordinator.session_manager.add_state_change_callback(
                 self._audit_writer.on_session_state_change

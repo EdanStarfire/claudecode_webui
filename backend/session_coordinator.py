@@ -549,6 +549,10 @@ class SessionCoordinator:
         # Audit writer (set after construction via set_audit_writer; optional)
         self._audit_writer = None
 
+        # Issue #2127: crash-repair records produced by _repair_crash_orphaned_tool_calls()
+        # before set_audit_writer() has ever been called, queued for replay once it is.
+        self._crash_repair_audit_backlog: list[tuple[str, dict]] = []
+
         # Issue #2159: PermissionService back-reference (set after construction via
         # set_permission_service — PermissionService's own constructor takes this
         # coordinator, so it can't be passed in here without a cycle at construction
@@ -698,20 +702,35 @@ class SessionCoordinator:
         """
         self.permission_service = permission_service
 
-    def set_audit_writer(self, writer) -> None:
-        """Wire an AuditWriter into all existing and future storage managers."""
+    async def set_audit_writer(self, writer) -> None:
+        """Wire an AuditWriter into all existing and future storage managers.
+
+        Issue #2127: also drains `_crash_repair_audit_backlog`, replaying any
+        boot-time crash-repair records queued by `_repair_crash_orphaned_tool_calls()`
+        before this method was ever called — see that method's docstring for why the
+        backlog exists.
+        """
         self._audit_writer = writer
         for session_id, manager in list(self._storage_managers.items()):
             self._apply_audit_writer(manager, session_id)
+
+        if self._crash_repair_audit_backlog:
+            backlog, self._crash_repair_audit_backlog = self._crash_repair_audit_backlog, []
+            for session_id, record in backlog:
+                project_id = self._resolve_project_id(session_id)
+                await writer.on_message_append(session_id, project_id, record)
+
+    def _resolve_project_id(self, session_id: str) -> str | None:
+        """Look up the project_id of an active session, or None if not found."""
+        session = self.session_manager._active_sessions.get(session_id)
+        return session.project_id if session else None
 
     def _apply_audit_writer(self, storage_manager, session_id: str) -> None:
         """Configure audit callbacks on a newly created DataStorageManager."""
         if self._audit_writer is None:
             return
-        session = self.session_manager._active_sessions.get(session_id)
-        project_id = session.project_id if session else None
         storage_manager._session_id = session_id
-        storage_manager._project_id = project_id
+        storage_manager._project_id = self._resolve_project_id(session_id)
         if self._audit_writer.on_message_append not in storage_manager.on_append:
             storage_manager.on_append.append(self._audit_writer.on_message_append)
 
@@ -973,14 +992,17 @@ class SessionCoordinator:
         _active_tool_calls is empty at boot and there's no broadcast subscriber yet to
         notify.
 
-        Known limitation: this repair write lands before BackendApp wires its
-        AuditWriter (set_audit_writer() runs after coordinator.initialize() returns),
-        so the synthetic repaired record itself isn't captured by the audit trail —
-        unlike every live mark_session_tools_interrupted() write. Each session is
+        Issue #2127: this repair write lands before BackendApp wires its AuditWriter
+        (set_audit_writer() runs after coordinator.initialize() returns), so there's
+        no `on_append` hook attached yet to capture the synthetic repaired record the
+        way every live mark_session_tools_interrupted() write is captured. Instead,
+        each repaired record is queued into `self._crash_repair_audit_backlog`
+        alongside the storage write; `set_audit_writer()` drains that backlog and
+        replays the records into the real AuditWriter once it exists. Each session is
         repaired independently and failures are isolated (see except below) so a
         single bad session can't block the others or abort Backend startup, but
         nothing currently retries a session whose repair itself fails this boot;
-        both are accepted scope boundaries for this issue, not addressed here.
+        that remains an accepted scope boundary for this issue, not addressed here.
         """
         import time
 
@@ -1013,11 +1035,14 @@ class SessionCoordinator:
                     tool_call = ToolCall.from_dict(latest_record)
                     tool_call.status = ToolState.INTERRUPTED
                     tool_call.completed_at = time.time()
+                    tool_call.repair_reason = "boot_crash_repair"
                     if tool_call.display:
                         tool_call.display.state = ToolState.INTERRUPTED
                         tool_call.display.style = "orphaned"
 
-                    await storage.append_message(MessageRecord.from_tool_call(tool_call).to_dict())
+                    record = MessageRecord.from_tool_call(tool_call).to_dict()
+                    await storage.append_message(record)
+                    self._crash_repair_audit_backlog.append((session_id, record))
                     coord_logger.info(
                         f"Issue #2111: repaired crash-orphaned tool call "
                         f"{tool_call.tool_use_id} for session {session_id} on boot"
