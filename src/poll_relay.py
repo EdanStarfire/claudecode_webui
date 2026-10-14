@@ -68,6 +68,7 @@ unchanged by the stage 5c consolidation — only the outer transport loop change
 
 import asyncio
 import logging
+import secrets
 import time
 from dataclasses import dataclass
 
@@ -78,6 +79,14 @@ from shared.event_envelope import FRONTEND_LOCAL_BACKEND_ID, QUEUE_SESSION, QUEU
 from shared.event_queue import EventQueue
 
 logger = logging.getLogger(__name__)
+
+# Issue #2160 AC1: minted once per Frontend process, mirroring shared/event_envelope.py's
+# PROCESS_EPOCH for Backend. A Frontend-tier restart never changes Backend's own
+# PROCESS_EPOCH (Backend didn't restart), so that value alone can't signal "the
+# Frontend process the browser was talking to is gone" — this one can, and is
+# deliberately never persisted (same "every restart is a new epoch by design"
+# rationale as Backend's).
+FRONTEND_PROCESS_EPOCH: str = secrets.token_hex(8)
 
 # Backoff on relay-loop errors (Backend unreachable, restarting, etc.) — never
 # busy-loop against a down Backend.
@@ -115,6 +124,16 @@ _HISTORY_CURSOR_WAIT_TIMEOUT_SECONDS = 10.0
 _STREAM_KEY_UI = "ui"
 
 
+def _family_and_scope(stream_key: str) -> tuple[str, str | None]:
+    """The UI stream has no scope (it's not session-specific); every other stream_key
+    is a session_id, scoped to itself. Shared by `_process_stream_response()` and
+    `_maybe_seed_stream_reset()` — both need to know which queue family/scope an
+    `emit()` call targets for a given stream_key."""
+    if stream_key == _STREAM_KEY_UI:
+        return QUEUE_UI, None
+    return QUEUE_SESSION, stream_key
+
+
 @dataclass
 class _Checkpoint:
     epoch: str
@@ -150,6 +169,17 @@ class PollRelay:
         # small, permanently-shrunk retained window can't tolerate extra per-cycle
         # overhead from racing a stream nobody asked for).
         self._ui_started = False
+        # Issue #2160 AC1 (post-review fix): deliberately SEPARATE from `_ui_started` above.
+        # `_ui_started` is consumed by `warm_ui_relay()`'s unconditional boot-time call
+        # (`src/web_server.py`), before any real browser has ever connected — using it as
+        # the seed-eligibility gate too meant that boot-time call (always `since=0`, nothing
+        # to seed) permanently consumed the ONLY chance to seed a `stream_reset` for a real
+        # resuming browser's later `start_ui_relay(since=...)` call, silently making AC1's
+        # seeding dead code for the UI stream specifically (session streams never had this
+        # bug — touch_session() has no equivalent boot-time pre-warm). This flag tracks
+        # only "has start_ui_relay()'s own one-shot seed check already run", independent of
+        # the task/subscription lifecycle `_ui_started` tracks.
+        self._ui_seed_checked = False
         self._session_last_activity: dict[str, float] = {}
         # What the CURRENTLY in-flight (or most recently built) request's
         # subscription set is — distinct from `_current_subscription()`'s live
@@ -221,18 +251,44 @@ class PollRelay:
         completed yet (e.g. a session that's never been subscribed)."""
         return self._last_epoch.get(stream_key)
 
-    def start_ui_relay(self) -> None:
+    def warm_ui_relay(self) -> None:
+        """Issue #2160 AC1 (post-review fix): the boot-time-only entry point for
+        `src/web_server.py`'s unconditional startup call — pre-warms the consolidated
+        relay task for the UI stream exactly as epic #1990 stage 5c's own cold-start-race
+        fix requires (so a browser's very first poll doesn't race a cold task start),
+        WITHOUT touching `start_ui_relay()`'s own separate `_ui_seed_checked` one-shot
+        window. At boot there is no in-flight request to interrupt and `_fast_probe_pending`
+        already starts `True` (see `__init__`), so there is nothing else this needs to do
+        beyond starting the task and marking the UI stream as subscribed.
+        """
+        self._ui_started = True
+        self._ensure_task_running()
+
+    def start_ui_relay(self, since: int = 0) -> None:
         """Register interest in the UI stream (no idle timeout — once started, it
         stays subscribed for the process lifetime) and ensure the single
-        consolidated relay task is running."""
+        consolidated relay task is running. The real entry point for every actual
+        browser `POST /api/poll` request (`src/routers/poll.py`) — `warm_ui_relay()`
+        above is for the Frontend's own boot-time pre-warm only.
+
+        `since` (issue #2160 AC1): the browser's own UI cursor as of this call. On this
+        process's first-ever call to THIS method specifically (tracked by
+        `_ui_seed_checked`, deliberately independent of `_ui_started` — see that flag's
+        own comment in `__init__` for why), a nonzero `since` is proof the browser
+        already holds a cursor from before this Frontend process existed (a brand-new
+        UI stream always arrives with `since=0`) — see `_maybe_seed_stream_reset()`.
+        """
         is_new = not self._ui_started
         self._ui_started = True
         self._ensure_task_running()
         if is_new:
             self._fast_probe_pending = True
             self._interrupt_if_in_flight()
+        if not self._ui_seed_checked:
+            self._ui_seed_checked = True
+            self._maybe_seed_stream_reset(_STREAM_KEY_UI, self._ui_queue, since)
 
-    def touch_session(self, session_id: str) -> None:
+    def touch_session(self, session_id: str, since: int = 0) -> None:
         """Register/refresh interest in relaying this session's stream, and ensure
         the local `EventQueue` exists. Called on every local request involving this
         session_id — both `/api/poll`'s subscription-set handler and `GET /messages`'
@@ -247,15 +303,46 @@ class PollRelay:
         if this session isn't already covered by whatever the relay's current
         in-flight request is polling for, interrupts it immediately rather than
         leaving this session waiting out that request's full long-poll timeout.
+
+        `since` (issue #2160 AC1): the browser's own cursor for this session as of
+        this call — threaded through to `_maybe_seed_stream_reset()` on this
+        session's local queue's first-ever creation in this process's lifetime.
         """
         is_new = session_id not in self._active_subscription
         self._session_last_activity[session_id] = time.monotonic()
-        if session_id not in self._session_queues:
+        queue_is_new = session_id not in self._session_queues
+        if queue_is_new:
             self._session_queues[session_id] = EventQueue()
         self._ensure_task_running()
         if is_new:
             self._fast_probe_pending = True
             self._interrupt_if_in_flight()
+        if queue_is_new:
+            self._maybe_seed_stream_reset(session_id, self._session_queues[session_id], since)
+
+    def _maybe_seed_stream_reset(self, stream_key: str, queue: EventQueue, since: int) -> None:
+        """Issue #2160 AC1: make a Frontend-tier restart a deterministic, explicit
+        `stream_reset` signal instead of relying on cursor-replay coincidence +
+        browser dedup. Called only on a local queue's first-ever creation in this
+        process's lifetime (by `start_ui_relay()`/`touch_session()` above) — a
+        nonzero `since` there is proof the caller already holds a cursor from
+        before this Frontend process existed, since every genuinely-new stream's
+        first-ever poll arrives with `since=0` (confirmed against the bootstrap
+        `GET /api/poll/.../cursor` endpoints, which are never wired to this method).
+        Seeds the marker before anything else can be appended or multiplexed
+        against this queue. `old_epoch=""` is a value Backend's real epoch can
+        never produce — self-documenting in `--debug-polling` logs as a
+        Frontend-tier generation marker, not a genuine Backend-epoch transition.
+        """
+        if since <= 0:
+            return
+        family, scope = _family_and_scope(stream_key)
+        emit(
+            queue, family, "stream_reset",
+            {"old_epoch": "", "new_epoch": FRONTEND_PROCESS_EPOCH},
+            scope=scope,
+            backend_id=FRONTEND_LOCAL_BACKEND_ID,
+        )
 
     def _interrupt_if_in_flight(self) -> None:
         if self._in_flight_task is not None and not self._in_flight_task.done():
@@ -378,8 +465,7 @@ class PollRelay:
         if backend_evicted:
             self._pending_evicted[stream_key] = True
 
-        family = QUEUE_UI if stream_key == _STREAM_KEY_UI else QUEUE_SESSION
-        scope = None if stream_key == _STREAM_KEY_UI else stream_key
+        family, scope = _family_and_scope(stream_key)
         previous_epoch = self._last_epoch.get(stream_key)
         if previous_epoch is not None and epoch != previous_epoch:
             # Observed Backend restart: make it an explicit, ordered event in

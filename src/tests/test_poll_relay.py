@@ -34,6 +34,7 @@ from shared.event_queue import EventQueue
 from src.poll_relay import (
     _POLL_CLIENT_TIMEOUT_SECONDS,
     _POLL_TIMEOUT_SECONDS,
+    FRONTEND_PROCESS_EPOCH,
     PollRelay,
     _Checkpoint,
 )
@@ -499,6 +500,116 @@ async def test_backend_restart_emits_stream_reset_and_preserves_pre_restart_hist
     assert events[2]["data"] == {"old_epoch": "e1", "new_epoch": "e2"}
     assert events[3]["n"] == "post-1"
     assert next_cursor == 4  # local auto-increment cursor: 2 pre + 1 marker + 1 post
+
+    await relay.stop()
+
+
+# --- issue #2160 AC1: Frontend-tier restart seeding ---
+
+
+@pytest.mark.asyncio
+async def test_touch_session_seeds_stream_reset_when_resuming_a_stale_cursor():
+    """Issue #2160 AC1: touch_session()'s first-ever call for a never-before-seen
+    session_id with since > 0 is proof the caller already holds a cursor from
+    before this Frontend process existed — seed the fresh queue's very first
+    entry with an explicit stream_reset marker before anything else is appended."""
+    async def side_effect(*args, **kwargs):
+        await asyncio.sleep(100)
+
+    relay, _, _, session_queues = _make_relay(request_json_side_effect=side_effect)
+    relay.touch_session("s", since=50)
+
+    queue = session_queues["s"]
+    events, next_cursor, _ = queue.events_since(0)
+    assert len(events) == 1
+    assert events[0]["type"] == "stream_reset"
+    assert events[0]["data"] == {"old_epoch": "", "new_epoch": FRONTEND_PROCESS_EPOCH}
+    assert next_cursor == 1
+
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_touch_session_does_not_seed_stream_reset_for_a_brand_new_session():
+    """A genuinely new session's first-ever poll always arrives with since=0 — no
+    prior cursor to resync from, so no marker is seeded."""
+    async def side_effect(*args, **kwargs):
+        await asyncio.sleep(100)
+
+    relay, _, _, session_queues = _make_relay(request_json_side_effect=side_effect)
+    relay.touch_session("s2", since=0)
+
+    queue = session_queues["s2"]
+    events, _, _ = queue.events_since(0)
+    assert events == []
+
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_start_ui_relay_seeds_stream_reset_when_resuming_a_stale_cursor():
+    """Mirrors the touch_session() seeding test above for the UI stream's own
+    first-ever-call path."""
+    async def side_effect(*args, **kwargs):
+        await asyncio.sleep(100)
+
+    relay, _, ui_queue, _ = _make_relay(request_json_side_effect=side_effect)
+    relay.start_ui_relay(since=50)
+
+    events, next_cursor, _ = ui_queue.events_since(0)
+    assert len(events) == 1
+    assert events[0]["type"] == "stream_reset"
+    assert events[0]["data"] == {"old_epoch": "", "new_epoch": FRONTEND_PROCESS_EPOCH}
+    assert next_cursor == 1
+
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_boot_time_warm_ui_relay_does_not_consume_the_real_seed_window():
+    """Regression test (issue #2160 AC1, builder-review finding): `warm_ui_relay()` is
+    the boot-time-only entry point `src/web_server.py` calls unconditionally before any
+    real browser ever connects. Before this fix, `start_ui_relay()`'s seed check was
+    gated on the SAME `_ui_started` flag that boot's own call set `True` — so that
+    since=0 boot call permanently consumed the one-shot seed-eligibility window, and a
+    real resuming browser's later `start_ui_relay(since=...)` call could never seed a
+    `stream_reset`, no matter how stale its `since`. Reproduces the exact real call
+    order (`warm_ui_relay()` first, mirroring Frontend startup, THEN the real poll
+    router's `start_ui_relay(since=...)`) and asserts the marker IS seeded."""
+    async def side_effect(*args, **kwargs):
+        await asyncio.sleep(100)
+
+    relay, _, ui_queue, _ = _make_relay(request_json_side_effect=side_effect)
+
+    relay.warm_ui_relay()  # simulates src/web_server.py's unconditional boot call
+    assert ui_queue.current_cursor == 0  # boot warm-up alone must never seed anything
+
+    relay.start_ui_relay(since=137)  # simulates the real browser's first post-restart poll
+
+    events, next_cursor, _ = ui_queue.events_since(0)
+    assert len(events) == 1
+    assert events[0]["type"] == "stream_reset"
+    assert events[0]["data"] == {"old_epoch": "", "new_epoch": FRONTEND_PROCESS_EPOCH}
+    assert next_cursor == 1
+
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_start_ui_relay_seed_window_is_one_shot_even_across_repeated_calls():
+    """A second start_ui_relay() call (regardless of its own since value) must not
+    seed again — the seed-eligibility window (`_ui_seed_checked`) is consumed by the
+    first start_ui_relay() call specifically, independent of `_ui_started`."""
+    async def side_effect(*args, **kwargs):
+        await asyncio.sleep(100)
+
+    relay, _, ui_queue, _ = _make_relay(request_json_side_effect=side_effect)
+
+    relay.start_ui_relay(since=50)
+    assert ui_queue.current_cursor == 1  # first call seeds exactly once
+
+    relay.start_ui_relay(since=999)
+    assert ui_queue.current_cursor == 1  # second call, even with a nonzero since, no-ops
 
     await relay.stop()
 
