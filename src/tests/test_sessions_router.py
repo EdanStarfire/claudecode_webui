@@ -161,6 +161,7 @@ async def test_limit_and_offset_are_forwarded_to_backend():
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_stale_epoch_retries_once_then_resolves():
     """Backend's own epoch moved between the history read and wait_until_relayed
     resolving — the route must retry once with a fresh read rather than hang or

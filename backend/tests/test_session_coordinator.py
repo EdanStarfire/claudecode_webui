@@ -4063,6 +4063,7 @@ class TestIssue1982McpDegradedStart:
         assert "TaskGroup" not in degraded[0]["content"]
 
     @pytest.mark.asyncio
+    @pytest.mark.slow
     async def test_t4_slow_open_does_not_stall_start_past_startup_timeout(
         self, temp_coordinator
     ):

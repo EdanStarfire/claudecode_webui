@@ -1139,7 +1139,9 @@ kill <PID>
 ### Running Tests
 
 ```bash
-# Both suites — the split is real, they cover different processes
+# Iterative/dev default — both suites, slow + regenerate_fixture tests deselected
+# by pyproject.toml's addopts (the split between backend/tests and src/tests is
+# real, they cover different processes)
 uv run pytest backend/tests/ src/tests/ -v
 
 # Specific test file
@@ -1149,9 +1151,26 @@ uv run pytest src/tests/test_backend_supervisor.py -v
 # With coverage
 uv run pytest backend/tests/ src/tests/ --cov=backend --cov=src --cov-report=html
 
-# The mandatory live two-process E2E test (issue #498's hard acceptance gate —
-# not marked slow, always runs): src/tests/test_live_two_process_e2e.py
+# Full gate — REQUIRED before PR creation: runs every test including all
+# slow-marked ones (only regenerate_fixture is excluded, since it writes to a
+# committed fixture and must be invoked explicitly). Verified via --collect-only
+# to select 3545/3546 tests. This is what guarantees the mandatory live
+# two-process E2E test (issue #498's hard acceptance gate,
+# src/tests/test_live_two_process_e2e.py — now slow-marked for its real
+# subprocess-boot cost) still runs before every merge.
+uv run pytest backend/tests/ src/tests/ shared/tests/ -m "not regenerate_fixture" -v
 ```
+
+**Marking a test `@pytest.mark.slow`**: do this when a test boots a real
+subprocess (`subprocess.Popen`/`asyncio.create_subprocess_exec` spawning a
+`backend.main`/`src` entrypoint or an equivalent real process), or deliberately
+simulates a multi-second timeout/retry/hang path — **and** real
+`pytest --durations=0` data shows it at roughly 3s or more. Name alone is not
+sufficient justification: several suggestively-named files (e.g.
+`test_docker_utils_ssh.py`, `test_ssh_key_secret.py`,
+`test_issue_1825_litellm_port.py`, `test_issue_1789_oauth_custom_callback.py`)
+were measured at under 1.5s and are correctly left unmarked — confirm with real
+numbers before adding the marker.
 
 ### Frontend Development
 
