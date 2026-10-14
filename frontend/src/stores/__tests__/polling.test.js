@@ -1297,6 +1297,68 @@ describe('polling store - dedicated risk: evicted/reset resync cursor fidelity (
     pollingStore.stopUIPolling()
   })
 
+  it('issue #2160 AC7: evicted-without-REST-cursor fallback redelivers overlapping content with no duplicates and nothing missing', async () => {
+    // Simulates src/routers/sessions.py's own "Backend's own session queue isn't
+    // initialized yet ... leave event_cursor as-is" fallback: the REST messages
+    // response carries no event_cursor key at all, so loadMessages() never
+    // populates loadedEventCursors, and _adoptResyncCursor() falls back to the
+    // poll batch's own (local) next_cursor — exactly the "falls back to
+    // next_cursor" test above, but asserting the DOWNSTREAM message-store
+    // consequence: a subsequent poll resuming from that fallback cursor can
+    // legitimately re-deliver content loadMessages() already loaded, and the
+    // message_id dedup in applyRecord() must make that redelivery a no-op
+    // rather than a duplicate — with the one genuinely new record still landing.
+    const { pollingStore, sessionStore, sid } = await setupPollSession({ session_id: 'sess-risk-evicted-no-cursor' })
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore()
+    sessionStore.currentSessionId = sid
+
+    apiMock.get.mockImplementation((url) => {
+      if (String(url).includes(`/api/sessions/${sid}/messages`)) {
+        return Promise.resolve({
+          messages: [
+            { type: 'assistant', message_id: 'm-dup-1', content: 'first' },
+            { type: 'assistant', message_id: 'm-dup-2', content: 'second' },
+          ],
+          total_count: 2, limit: 10000, offset: 0, has_more: false,
+          // Deliberately no event_cursor key.
+        })
+      }
+      return Promise.resolve({ cursor: 0 })
+    })
+
+    const fetchMock = sequencedPollMock([
+      { ui: { events: [], next_cursor: 1 }, sessions: { [sid]: { events: [{ type: 'stream_reset', data: { old_epoch: 'e1', new_epoch: 'e2' } }], next_cursor: 5 } } },
+      {
+        ui: { events: [], next_cursor: 2 },
+        sessions: {
+          [sid]: {
+            events: [
+              { type: 'message', data: { type: 'assistant', message_id: 'm-dup-1', content: 'first' } },
+              { type: 'message', data: { type: 'assistant', message_id: 'm-dup-2', content: 'second' } },
+              { type: 'message', data: { type: 'assistant', message_id: 'm-new-3', content: 'third' } },
+            ],
+            next_cursor: 8,
+          },
+        },
+      },
+    ])
+
+    await pollingStore.connectSession(sid)
+    await flush()
+    await flush()
+
+    expect(messageStore.loadedEventCursors.has(sid)).toBe(false)
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(parseBody(fetchMock.mock.calls[1][1]).sessions[sid].since).toBe(5)
+
+    const finalMessages = messageStore.messagesBySession.get(sid) || []
+    expect(finalMessages.map(m => m.message_id).sort()).toEqual(['m-dup-1', 'm-dup-2', 'm-new-3'])
+
+    await pollingStore.disconnectSession()
+    pollingStore.stopUIPolling()
+  })
+
   it('an evicted session that vanishes from the UI resync still gets full session_deleted cleanup (carried over from #2065 AC7)', async () => {
     const { usePollingStore } = await import('@/stores/polling')
     const { useSessionStore } = await import('@/stores/session')
@@ -1488,7 +1550,7 @@ describe('polling store - subscription-set cursor continuity (US2, epic #1990 st
     pollingStore.stopUIPolling()
   })
 
-  it('cleanupSessionPollingState() evicts a deleted (non-current) session\'s subscription too', async () => {
+  it('resetSessionCursor() also covers the bulk-delete-teardown call pattern (formerly cleanupSessionPollingState(), issue #2160 AC6)', async () => {
     const { usePollingStore } = await import('@/stores/polling')
     const { useSessionStore } = await import('@/stores/session')
     const pollingStore = usePollingStore()
@@ -1502,7 +1564,7 @@ describe('polling store - subscription-set cursor continuity (US2, epic #1990 st
     await flush()
     await pollingStore.disconnectSession()
 
-    pollingStore.cleanupSessionPollingState('sess-cleanup')
+    pollingStore.resetSessionCursor('sess-cleanup')
 
     apiMock.get.mockClear()
     vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(() => {}))

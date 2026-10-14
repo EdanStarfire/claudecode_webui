@@ -23,7 +23,7 @@ vi.mock('@/stores/usage', () => ({
 const pollingMock = vi.hoisted(() => ({
   connectSession: vi.fn().mockResolvedValue(undefined),
   disconnectSession: vi.fn(),
-  cleanupSessionPollingState: vi.fn()
+  resetSessionCursor: vi.fn()
 }))
 vi.mock('@/stores/polling', () => ({
   usePollingStore: vi.fn(() => pollingMock)
@@ -34,7 +34,7 @@ beforeEach(() => {
   Object.values(apiMock).forEach(fn => fn.mockReset())
   pollingMock.connectSession.mockReset().mockResolvedValue(undefined)
   pollingMock.disconnectSession.mockReset()
-  pollingMock.cleanupSessionPollingState.mockReset()
+  pollingMock.resetSessionCursor.mockReset()
 })
 
 describe('session store', () => {
@@ -110,9 +110,9 @@ describe('session store', () => {
 
     await store.deleteSession('sess-1')
 
-    expect(pollingMock.cleanupSessionPollingState).toHaveBeenCalledWith('sess-1')
-    expect(pollingMock.cleanupSessionPollingState).toHaveBeenCalledWith('sess-2')
-    expect(pollingMock.cleanupSessionPollingState).toHaveBeenCalledTimes(2)
+    expect(pollingMock.resetSessionCursor).toHaveBeenCalledWith('sess-1')
+    expect(pollingMock.resetSessionCursor).toHaveBeenCalledWith('sess-2')
+    expect(pollingMock.resetSessionCursor).toHaveBeenCalledTimes(2)
   })
 
   it('deleteSession disconnects the poll loop before the API call when deleting the currently displayed session (#1974)', async () => {

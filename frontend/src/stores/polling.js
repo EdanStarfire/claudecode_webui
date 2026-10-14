@@ -32,6 +32,60 @@ import { pushDebugEvent } from '@/composables/useDebugBuffer'
 // the single instrumentation point (every GENUINE state change emits a 'state-transition'
 // debug event — issue #2161 AC5 gates this on next !== from, so a same-state no-op call does
 // not; state assignment/hasEverConnected/onTransition still run unconditionally regardless).
+//
+// Issue #2160 AC6 — the transition table `connectedFamilyTarget()` and other comments below
+// refer back to (matching the matrix `polling.test.js`'s "StreamConnection transition table"
+// describe block actually encodes):
+//
+//   idle            -> connecting   connect() (connectSession()/startPolling() start the
+//                                    shared loop if it isn't already running)
+//   connecting      -> connected    poll response OK, no reset/evicted signal in THIS
+//                                    response, backend_status !== 'unreachable'
+//   connecting      -> unreachable  poll response OK, no reset/evicted signal in THIS
+//                                    response, backend_status === 'unreachable'
+//   connected       -> connected    poll response OK, no reset/evicted for this stream
+//                                    (backend_status === 'degraded' included — decision 1:
+//                                    a non-overriding annotation, not a state of its own)
+//   connected       -> unreachable  poll response OK, backend_status === 'unreachable'
+//   unreachable     -> connected    poll response OK, backend_status no longer 'unreachable'
+//   connecting/
+//   connected/
+//   unreachable     -> resyncing    this stream's batch carries a stream_reset/evicted signal
+//                                    for the CURRENT session (or the UI stream, for a
+//                                    "Backend restart made explicit") — _processUIBatch()/
+//                                    _processSessionBatch() call conn.transition('resyncing')
+//                                    directly, unconditional on the state at the time (so this
+//                                    fires even on the very first poll cycle after connect(),
+//                                    before the end-of-cycle connectedFamilyTarget() transition
+//                                    below has ever run once — a reset racing a session's very
+//                                    first long-poll response is a real, reachable race, not
+//                                    just a steady-state one)
+//   resyncing       -> connected    the resync (loadMessages()/loadAppData()) resolved and
+//                                   connectedFamilyTarget() says backend_status isn't
+//                                   'unreachable'
+//   resyncing       -> unreachable  the resync resolved but backend_status is 'unreachable'
+//   connecting/
+//   connected/
+//   resyncing/
+//   unreachable     -> backoff      a fetch() call (or the resync's own loadMessages()/
+//                                   loadAppData() call) threw anything other than AbortError;
+//                                   retryCount increments
+//   backoff         -> connecting  the scheduled backoff delay elapsed; retry
+//   *               -> idle        disconnect() (disconnectSession()/stopPolling()) — always
+//                                  synchronous: aborts any in-flight fetch, clears any pending
+//                                  backoff timer, bumps the generation so a still-in-flight
+//                                  stale cycle's own eventual response is ignored
+//
+// Not a `conn` transition at all: an in-flight fetch() rejecting with AbortError (a visibility-
+// resume or a newly-touched stream interrupting a stale cycle) leaves `.state` untouched and
+// does not bump retryCount — "cancelled", not "failed".
+//
+// `archived` is layered independently on top of whatever `conn.state` is doing underneath —
+// see `sessionStateRef`'s own computation just below `createStreamConnection()` — not a value
+// `transition()` itself ever produces. `markSessionArchived()` sets it for the CURRENT
+// session's view only; only connectSession()/disconnectSession() clear it. `conn` can never
+// produce or revert this override on its own, by design (an archived view must never flip back
+// live just because a stale in-flight poll response happens to land).
 function createStreamConnection(kind, onTransition) {
   const state = ref('idle')
   // 'ok' | 'degraded' | 'unreachable' — the single multiplexed response's own backend_status
@@ -301,9 +355,10 @@ export const usePollingStore = defineStore('polling', () => {
   }
 
   // Compute the "poll succeeded, not mid-resync" target state from the response's own
-  // backend_status. Per the transition table: backend_status === 'unreachable' always wins,
-  // otherwise plain connected. `degraded` deliberately does NOT divert from this — it's an
-  // independent, non-overriding annotation carried on backendStatus alone.
+  // backend_status. Per the transition table above createStreamConnection(): backend_status
+  // === 'unreachable' always wins, otherwise plain connected. `degraded` deliberately does
+  // NOT divert from this — it's an independent, non-overriding annotation carried on
+  // backendStatus alone.
   function connectedFamilyTarget() {
     return conn.backendStatus.value === 'unreachable' ? 'unreachable' : 'connected'
   }
@@ -687,18 +742,16 @@ export const usePollingStore = defineStore('polling', () => {
 
   // Epic #1990 stage 5c: clears a session's subscription entirely (cursor + LRU membership),
   // forcing its NEXT connectSession() to start fresh (bootstrap cursor) instead of resuming an
-  // old position. In practice always redundant with disconnectSession() already having evicted
-  // it (every call site calls both), but kept as its own idempotent function for API-shape
-  // compatibility with existing callers.
+  // old position. Used both for a single current session being reset/restarted by the user
+  // (in practice always redundant with disconnectSession() already having evicted it, every
+  // such call site calls both) and for a permanently-deleted session's teardown (session.js's
+  // deleteSession()/removeSessionsFromStores(), which can call this for many sessions at once,
+  // most of which are NOT the current session). Issue #2160 AC6: previously two identical
+  // one-line evictSubscription(sessionId) wrappers (resetSessionCursor/
+  // cleanupSessionPollingState) under different names for these two call patterns —
+  // consolidated into this one export since neither had any behavior of its own beyond the
+  // call to evictSubscription().
   function resetSessionCursor(sessionId) {
-    evictSubscription(sessionId)
-  }
-
-  // Full teardown of a permanently-deleted session's subscription, called from
-  // session.js's deleteSession()/removeSessionsFromStores(). Unlike resetSessionCursor()
-  // above (always the single current session being reset/restarted by the user), this can
-  // be called for many sessions at once, most of which are NOT the current session.
-  function cleanupSessionPollingState(sessionId) {
     evictSubscription(sessionId)
   }
 
@@ -806,10 +859,6 @@ export const usePollingStore = defineStore('polling', () => {
       console.error('Failed to interrupt session:', err)
     }
   }
-
-  // No-op stubs for legion
-  function connectLegion() {}
-  function disconnectLegion() {}
 
   // ========== MESSAGE HANDLERS ==========
   // Each handler: (payload, sessionId) => void. sessionId is only meaningful for
@@ -1222,13 +1271,10 @@ export const usePollingStore = defineStore('polling', () => {
     connectSession,
     disconnectSession,
     resetSessionCursor,
-    cleanupSessionPollingState,
     markSessionArchived,
     sendMessage,
     sendPermissionResponse,
     sendPermissionResponseWithInput,
     interruptSession,
-    connectLegion,
-    disconnectLegion,
   }
 })
