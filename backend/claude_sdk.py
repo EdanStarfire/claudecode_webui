@@ -1664,7 +1664,7 @@ class ClaudeSDK:
                     perm_logger.info(f"Auto-approved via suggestion: {reason}")
                     # Issue #707: Notify coordinator to update the already-created ToolCall
                     if self.auto_approval_callback:
-                        self.auto_approval_callback(tool_name, input_params, reason)
+                        self.auto_approval_callback(tool_name, input_params, reason, context.tool_use_id)
                     return PermissionResultAllow(updated_input=input_params)
                 else:
                     perm_logger.info(f"Auto-denied via suggestion: {reason}")
@@ -1678,7 +1678,7 @@ class ClaudeSDK:
                 if decision == "allow":
                     perm_logger.info(f"Auto-approved via direct rule: {reason}")
                     if self.auto_approval_callback:
-                        self.auto_approval_callback(tool_name, input_params, reason)
+                        self.auto_approval_callback(tool_name, input_params, reason, context.tool_use_id)
                     return PermissionResultAllow(updated_input=input_params)
                 else:
                     perm_logger.info(f"Auto-denied via direct rule: {reason}")
