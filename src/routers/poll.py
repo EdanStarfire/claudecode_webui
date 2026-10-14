@@ -62,7 +62,7 @@ def build_router(webui) -> APIRouter:
         multiplexed endpoint.
         """
         if request.ui is not None:
-            webui.poll_relay.start_ui_relay()
+            webui.poll_relay.start_ui_relay(since=request.ui.since)
 
         streams: dict = {}
         if request.ui is not None:
@@ -83,7 +83,7 @@ def build_router(webui) -> APIRouter:
                     raise
                 except httpx.RequestError as e:
                     raise to_http_exception(e, degraded=is_backend_degraded(webui)) from e
-            webui.poll_relay.touch_session(session_id)
+            webui.poll_relay.touch_session(session_id, since=query.since)
             valid_session_ids.append(session_id)
             streams[session_id] = (webui.session_queues[session_id], query.since)
 

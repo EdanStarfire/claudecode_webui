@@ -672,9 +672,11 @@ export const useSessionStore = defineStore('session', () => {
     }
 
     // Issue #1974: tear down the polling store's per-session state (cursor, heartbeat,
-    // heal-in-flight mutex, frozen-time snapshot) for deleted sessions.
+    // heal-in-flight mutex, frozen-time snapshot) for deleted sessions. Issue #2160 AC6:
+    // resetSessionCursor() (not a dedicated cleanupSessionPollingState()) — both were
+    // identical one-line evictSubscription(sessionId) wrappers, consolidated into one export.
     for (const deletedId of deletedIds) {
-      pollingStore.cleanupSessionPollingState(deletedId)
+      pollingStore.resetSessionCursor(deletedId)
     }
 
     // Trigger reactivity

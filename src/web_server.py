@@ -372,7 +372,7 @@ class ClaudeWebUI:
                     self.backend_client.base_url,
                 )
 
-        self.poll_relay.start_ui_relay()
+        self.poll_relay.warm_ui_relay()
         await self._resync_oauth_callback_paths_with_retry()
         self._oauth_resync_task = asyncio.create_task(
             self._periodic_oauth_resync_loop(), name="oauth_callback_resync"

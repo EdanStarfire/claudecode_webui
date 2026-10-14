@@ -52,6 +52,12 @@ async def _get(webui, path: str):
 
 @pytest.mark.asyncio
 async def test_substitutes_local_cursor_for_backend_cursor_when_already_relayed():
+    """Issue #2160 AC2: Backend's own cursor numbering carries a nonzero baseline
+    (100) this relay never observed directly — as if Backend already had history
+    for this session before the relay's first poll of it — so the checkpoint-
+    interpolated LOCAL cursor (which always starts counting from 0) can never
+    coincidentally equal Backend's raw value the way the old same-baseline
+    fixture did. This proves genuine substitution happened, not passthrough."""
     session_id = "sess-1"
 
     async def side_effect(path, params=None, timeout=None):
@@ -59,12 +65,14 @@ async def test_substitutes_local_cursor_for_backend_cursor_when_already_relayed(
             return {
                 "messages": [{"type": "assistant"}], "total_count": 3,
                 "limit": 50, "offset": 0, "has_more": False,
-                "event_cursor": 2, "epoch": "e1",
+                "event_cursor": 101, "epoch": "e1",
             }
-        # The relay's own poll — deliver 3 events once, then go quiet.
+        # The relay's own poll — deliver 3 events once, then go quiet. next_cursor=103
+        # (not 3) establishes the nonzero Backend-side baseline described above:
+        # backend_cursor_before = next_cursor - len(events) = 100.
         if not getattr(side_effect, "_done", False):
             side_effect._done = True
-            return {"events": [{"n": 1}, {"n": 2}, {"n": 3}], "next_cursor": 3, "epoch": "e1"}
+            return {"events": [{"n": 1}, {"n": 2}, {"n": 3}], "next_cursor": 103, "epoch": "e1"}
         import asyncio
         await asyncio.sleep(100)
 
@@ -74,7 +82,9 @@ async def test_substitutes_local_cursor_for_backend_cursor_when_already_relayed(
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["event_cursor"] == 2  # local cursor for backend_cursor=2, not Backend's own 2
+    # local = local_cursor_before(0) + (backend_cursor(101) - backend_cursor_before(100)) = 1
+    assert body["event_cursor"] == 1
+    assert body["event_cursor"] != 101  # not Backend's raw value — genuine substitution
     assert body["messages"] == [{"type": "assistant"}]
     assert body["total_count"] == 3
 

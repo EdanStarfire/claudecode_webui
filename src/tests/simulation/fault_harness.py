@@ -261,11 +261,11 @@ class FakeFrontend:
         }
 
     async def poll_ui(self, since: int, timeout: float = 1.0) -> dict[str, Any]:
-        self.poll_relay.start_ui_relay()
+        self.poll_relay.start_ui_relay(since=since)
         return await self._poll_one_local_stream("ui", self.ui_queue, since, timeout)
 
     async def poll_session(self, session_id: str, since: int, timeout: float = 1.0) -> dict[str, Any]:
-        self.poll_relay.touch_session(session_id)
+        self.poll_relay.touch_session(session_id, since=since)
         queue = self.session_queues[session_id]
         return await self._poll_one_local_stream(session_id, queue, since, timeout)
 
