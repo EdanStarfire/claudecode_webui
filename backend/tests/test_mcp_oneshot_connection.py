@@ -299,6 +299,7 @@ async def test_list_tools_failure_tagged_as_list_tools_stage():
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_timeout_returns_within_bound_and_kills_hung_process(pid_file, tmp_path):
     script_path = tmp_path / "hang_server.py"
     script_path.write_text(_HANG_SCRIPT)

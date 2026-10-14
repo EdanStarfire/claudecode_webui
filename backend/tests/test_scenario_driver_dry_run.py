@@ -191,6 +191,7 @@ def test_required_markers_all_covered_by_scenarios():
 
 @pytest.mark.skipif(not RAW_FIXTURES_DIR.exists(), reason="raw fixtures directory not present")
 @pytest.mark.timeout(90)  # backend.main boot + full raw-log replay needs more than the 30s default
+@pytest.mark.slow
 def test_t1_mock_replay_produces_passively_replayable_markers(tmp_path: Path):
     """T1 (reduced scope): the 3 markers raw replay can produce passively
     (streaming deltas, subagent task with progress, compaction) actually
@@ -226,6 +227,7 @@ def test_t1_mock_replay_produces_passively_replayable_markers(tmp_path: Path):
 
 @pytest.mark.skipif(not RAW_FIXTURES_DIR.exists(), reason="raw fixtures directory not present")
 @pytest.mark.timeout(90)  # backend.main boot + full raw-log replay needs more than the 30s default
+@pytest.mark.slow
 def test_t2_missing_event_times_out_with_clear_message(tmp_path: Path):
     """T2: strip every `StreamEvent` record from a copy of the fixture, then
     assert the wait for a streaming delta times out naming the awaited
@@ -280,6 +282,7 @@ def test_t2_missing_event_times_out_with_clear_message(tmp_path: Path):
 
 @pytest.mark.skipif(not RAW_FIXTURES_DIR.exists(), reason="raw fixtures directory not present")
 @pytest.mark.timeout(150)  # two full backend+frontend boot cycles needs more than the 30s default
+@pytest.mark.slow
 def test_t3_poll_consumer_reconnects_after_full_app_restart(tmp_path: Path):
     """T3: a full Backend+Frontend process restart — `PollConsumer` detects
     the outage, waits for `/ready`, and resumes."""

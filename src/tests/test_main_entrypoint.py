@@ -47,6 +47,7 @@ def _wait_healthy(port: int, proc: subprocess.Popen, label: str, deadline_second
 
 
 @pytest.mark.timeout(90)
+@pytest.mark.slow
 def test_main_entrypoint_subprocess_smoke(tmp_path: Path):
     """Run both real CLI entrypoints as subprocesses and confirm they boot and relay."""
     backend_port = _free_port()

@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import httpx
+import pytest
 from starlette.testclient import TestClient
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -131,6 +132,7 @@ class TestEmbeddedModeNetworkBinding:
         assert result.returncode != 0
         assert "Network binding requires explicit configuration" in result.stdout
 
+    @pytest.mark.slow
     def test_embedded_invocation_boots_without_gate_approval(self, tmp_path):
         """--embedded must boot and become healthy on loopback with zero config
         approval — it isn't gated by check_network_binding at all (issue #1850)."""

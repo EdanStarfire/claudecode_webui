@@ -9,8 +9,11 @@ layer inside Backend, not the process boundary itself, so this exercises the
 full two-process path with MockClaudeSDK doing deterministic fixture replay
 instead of a live Anthropic API call.
 
-Not marked @pytest.mark.slow — pyproject.toml's default addopts deselect slow
-tests, and this test must never be silently skipped; it's the AC's core claim.
+Marked @pytest.mark.slow (real two-process subprocess boots, several tens of
+seconds each) and therefore deselected by the default addopts. This test must
+never be silently skipped from the pre-PR sweep: the required full-gate
+command (`-m "not regenerate_fixture"`, see CLAUDE.md's "### Running Tests")
+is what guarantees it still runs before every merge.
 """
 
 import os
@@ -94,6 +97,7 @@ def _terminate(proc: subprocess.Popen) -> None:
         proc.wait(timeout=5)
 
 
+@pytest.mark.slow
 def test_live_session_lifecycle_through_two_real_processes(tmp_path: Path):
     """create -> start -> message -> interrupt -> terminate, through two real
     subprocesses (backend.main + main.py), verified via the actual HTTP relay —
@@ -217,6 +221,7 @@ def test_live_session_lifecycle_through_two_real_processes(tmp_path: Path):
 
 
 @pytest.mark.timeout(90)  # a second backend.main boot + health/ready gate needs more than the 30s default
+@pytest.mark.slow
 def test_live_session_survives_backend_restart_mid_poll(tmp_path: Path):
     """Issue #1984 (T2): Backend restarts in place (supervisor-restart-in-place,
     UC2) while Frontend — and a browser holding a pre-restart poll cursor —
@@ -380,6 +385,7 @@ def test_live_session_survives_backend_restart_mid_poll(tmp_path: Path):
 
 
 @pytest.mark.timeout(90)  # a second backend.main boot + health/ready gate needs more than the 30s default
+@pytest.mark.slow
 def test_live_session_restart_mid_poll_genuinely_in_flight(tmp_path: Path):
     """Issue #1999 (US3, AC5): kill Backend while a long-poll GET request is
     genuinely blocked mid-request at Backend/Frontend (parked inside
