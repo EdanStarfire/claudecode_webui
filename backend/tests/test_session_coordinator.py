@@ -4555,3 +4555,53 @@ class TestIssue2111CrashOrphanedToolCallRepair:
                 assert healthy_records[-1]["status"] == "interrupted"
             finally:
                 await coordinator2.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_repaired_tool_call_reaches_audit_writer(self):
+        """Issue #2127: a crash-repair record written before set_audit_writer() is
+        ever called must still reach the audit trail once it is — via the
+        _crash_repair_audit_backlog drain — tagged with repair_reason so it's
+        distinguishable from a live user-initiated interrupt."""
+        import json
+
+        from backend.analytics.audit_writer import AuditWriter
+        from backend.models.messages import ToolState
+
+        class MockDB:
+            def __init__(self):
+                self._initialized = True
+                self.rows = []
+                self._write_lock = asyncio.Lock()
+
+            async def execute_write_many(self, sql, rows):
+                self.rows.extend(rows)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            coordinator1 = SessionCoordinator(temp_path)
+            await coordinator1.initialize()
+            session_id = await self._create_project_and_session(coordinator1)
+            await self._write_tool_call_record(
+                coordinator1, session_id, "tu-audit-1", ToolState.RUNNING
+            )
+            coordinator1.session_manager._active_sessions[session_id].state = SessionState.ACTIVE
+            await coordinator1.session_manager._persist_session_state(session_id)
+
+            coordinator2 = await self._crash_and_reboot(temp_path)
+            db = MockDB()
+            writer = AuditWriter(db)
+            writer.start()
+            try:
+                records = await self._tool_call_records(coordinator2, session_id, "tu-audit-1")
+                assert len(records) == 2
+                assert records[-1]["status"] == "interrupted"
+
+                await coordinator2.set_audit_writer(writer)
+                await writer.stop()
+
+                tool_rows = [r for r in db.rows if r[6] == "tool_call" and r[8] == "interrupted"]
+                assert len(tool_rows) == 1
+                assert json.loads(tool_rows[0][11])["reason"] == "boot_crash_repair"
+            finally:
+                await coordinator2.cleanup()

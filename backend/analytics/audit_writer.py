@@ -215,6 +215,11 @@ class AuditWriter:
                 audit_status = {"completed": "ok", "failed": "error", "interrupted": "interrupted"}[tc_status]
                 summary = _make_tool_result_summary(tool_name, {}, is_error)
                 extra = {"tool_name": tool_name, "tool_use_id": tool_use_id}
+                # Issue #2127: tag boot-time crash-repair records distinctly from a
+                # live user-initiated interrupt.
+                repair_reason = msg.get("repair_reason")
+                if repair_reason is not None:
+                    extra["reason"] = repair_reason
                 self._enqueue_with_ts(
                     timestamp, source_ts, session_id, project_id, None, turn_id,
                     "tool_call", tool_name, audit_status, summary, message_id, extra,
