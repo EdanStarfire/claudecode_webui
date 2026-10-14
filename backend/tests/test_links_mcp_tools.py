@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from mcp.types import ListToolsRequest
 
 from backend.mcp.links_mcp_tools import (
     MAX_LABEL_LENGTH,
@@ -16,9 +15,9 @@ from backend.mcp.links_mcp_tools import (
 
 async def _get_tools_by_name(server_config):
     """Introspect a session MCP server's registered tool schemas (issue #1912)."""
-    handler = server_config["instance"].request_handlers[ListToolsRequest]
-    result = await handler(ListToolsRequest(method="tools/list"))
-    return {t.name: t for t in result.root.tools}
+    entry = server_config["instance"].get_request_handler("tools/list")
+    result = await entry.handler(None, None)
+    return {t.name: t for t in result.tools}
 
 # ---------------------------------------------------------------------------
 # _validate_url
@@ -204,7 +203,7 @@ async def test_schema_negative_control_unchanged():
     server_config = tools.create_mcp_server_for_session("sess1")
     tools_by_name = await _get_tools_by_name(server_config)
 
-    assert set(tools_by_name["register_link"].inputSchema.get("required", [])) == {
+    assert set(tools_by_name["register_link"].input_schema.get("required", [])) == {
         "label", "url"
     }
-    assert list(tools_by_name["list_links"].inputSchema.get("required", [])) == []
+    assert list(tools_by_name["list_links"].input_schema.get("required", [])) == []

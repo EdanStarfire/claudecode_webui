@@ -27,7 +27,8 @@ from contextlib import AsyncExitStack
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.stdio import StdioServerParameters, stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
+from mcp.shared._httpx_utils import create_mcp_http_client
 
 from shared.logging_config import get_logger
 
@@ -145,8 +146,13 @@ class McpOneshotConnector:
         if cfg.type == McpServerType.HTTP:
             url = await resolve_secret_refs_in_str(cfg.url or "", self._vault)
             headers = await self._build_headers(cfg)
-            ctx = streamablehttp_client(url=url, headers=headers, terminate_on_close=True)
-            read, write, _get_id = await stack.enter_async_context(ctx)
+            # mcp 2.x's streamable_http_client no longer takes a `headers` kwarg
+            # directly — headers go on the httpx2.AsyncClient passed as `http_client`.
+            http_client = await stack.enter_async_context(create_mcp_http_client(headers=headers))
+            ctx = streamable_http_client(url=url, http_client=http_client, terminate_on_close=True)
+            # mcp 2.x's streamable_http_client yields a 2-tuple (no get_session_id
+            # callable like mcp 1.x did).
+            read, write = await stack.enter_async_context(ctx)
             return read, write
         elif cfg.type == McpServerType.SSE:
             url = await resolve_secret_refs_in_str(cfg.url or "", self._vault)

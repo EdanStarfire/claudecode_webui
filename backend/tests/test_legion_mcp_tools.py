@@ -5,16 +5,15 @@ Tests for Legion MCP tools with SDK integration.
 from unittest.mock import Mock
 
 import pytest
-from mcp.types import ListToolsRequest
 
 from backend.legion_system import LegionSystem
 
 
 async def _get_tools_by_name(server_config):
     """Introspect a session MCP server's registered tool schemas (issue #1912)."""
-    handler = server_config["instance"].request_handlers[ListToolsRequest]
-    result = await handler(ListToolsRequest(method="tools/list"))
-    return {t.name: t for t in result.root.tools}
+    entry = server_config["instance"].get_request_handler("tools/list")
+    result = await entry.handler(None, None)
+    return {t.name: t for t in result.tools}
 
 
 @pytest.fixture
@@ -62,24 +61,24 @@ async def test_schema_required_fields_for_modified_tools(mcp_tools):
     server_config = mcp_tools.create_mcp_server_for_session("test-session")
     tools_by_name = await _get_tools_by_name(server_config)
 
-    assert set(tools_by_name["pause_schedule"].inputSchema.get("required", [])) == set()
-    assert set(tools_by_name["resume_schedule"].inputSchema.get("required", [])) == set()
-    assert set(tools_by_name["delete_schedule"].inputSchema.get("required", [])) == set()
-    assert set(tools_by_name["create_schedule"].inputSchema.get("required", [])) == {
+    assert set(tools_by_name["pause_schedule"].input_schema.get("required", [])) == set()
+    assert set(tools_by_name["resume_schedule"].input_schema.get("required", [])) == set()
+    assert set(tools_by_name["delete_schedule"].input_schema.get("required", [])) == set()
+    assert set(tools_by_name["create_schedule"].input_schema.get("required", [])) == {
         "name", "cron_expression"
     }
-    assert set(tools_by_name["send_comm"].inputSchema.get("required", [])) == {"to_minion_name"}
-    assert set(tools_by_name["spawn_minion"].inputSchema.get("required", [])) == {
+    assert set(tools_by_name["send_comm"].input_schema.get("required", [])) == {"to_minion_name"}
+    assert set(tools_by_name["spawn_minion"].input_schema.get("required", [])) == {
         "name", "role", "system_prompt", "template_name"
     }
-    assert set(tools_by_name["dispose_minion"].inputSchema.get("required", [])) == {"minion_name"}
-    assert set(tools_by_name["update_expertise"].inputSchema.get("required", [])) == {"capability"}
-    assert set(tools_by_name["update_schedule"].inputSchema.get("required", [])) == set()
-    assert set(tools_by_name["restart_session"].inputSchema.get("required", [])) == {"reason"}
-    assert set(tools_by_name["queue_task"].inputSchema.get("required", [])) == {
+    assert set(tools_by_name["dispose_minion"].input_schema.get("required", [])) == {"minion_name"}
+    assert set(tools_by_name["update_expertise"].input_schema.get("required", [])) == {"capability"}
+    assert set(tools_by_name["update_schedule"].input_schema.get("required", [])) == set()
+    assert set(tools_by_name["restart_session"].input_schema.get("required", [])) == {"reason"}
+    assert set(tools_by_name["queue_task"].input_schema.get("required", [])) == {
         "session_id", "content"
     }
-    assert set(tools_by_name["list_schedules"].inputSchema.get("required", [])) == set()
+    assert set(tools_by_name["list_schedules"].input_schema.get("required", [])) == set()
 
 
 @pytest.mark.asyncio
@@ -88,16 +87,16 @@ async def test_schema_negative_controls_untouched_tools(mcp_tools):
     server_config = mcp_tools.create_mcp_server_for_session("test-session")
     tools_by_name = await _get_tools_by_name(server_config)
 
-    assert set(tools_by_name["search_capability"].inputSchema.get("required", [])) == {
+    assert set(tools_by_name["search_capability"].input_schema.get("required", [])) == {
         "capability"
     }
-    assert list(tools_by_name["list_minions"].inputSchema.get("required", [])) == []
-    assert set(tools_by_name["get_minion_info"].inputSchema.get("required", [])) == {
+    assert list(tools_by_name["list_minions"].input_schema.get("required", [])) == []
+    assert set(tools_by_name["get_minion_info"].input_schema.get("required", [])) == {
         "minion_name"
     }
-    assert list(tools_by_name["list_templates"].inputSchema.get("required", [])) == []
-    assert list(tools_by_name["whoami"].inputSchema.get("required", [])) == []
-    assert set(tools_by_name["reparent_minion"].inputSchema.get("required", [])) == {
+    assert list(tools_by_name["list_templates"].input_schema.get("required", [])) == []
+    assert list(tools_by_name["whoami"].input_schema.get("required", [])) == []
+    assert set(tools_by_name["reparent_minion"].input_schema.get("required", [])) == {
         "subject_name", "new_parent_name"
     }
 
