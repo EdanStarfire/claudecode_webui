@@ -28,6 +28,16 @@
 #   the mount, decides its pyvenv.cfg is invalid for the container's
 #   interpreter, and silently deletes + recreates it out from under the host.
 #
+# Frontend npm install + Playwright Chromium cache (issue #2167):
+#   Same bind-mount-shadowing constraint as above applies to
+#   frontend/node_modules — it can't be baked in with a plain `RUN npm
+#   install` since the workspace bind mount would shadow it at runtime.
+#   Layer 6c pre-warms npm's own cache (~/.npm) and Playwright's Chromium
+#   cache (PLAYWRIGHT_BROWSERS_PATH, a container-local path, so NOT
+#   shadowed) at build time; entrypoint.sh runs the real `npm install`
+#   against the live bind-mounted path at container start, resolving mostly
+#   from the pre-warmed cache.
+#
 # Port forwarding example:
 #   docker run -p 8001:8001 -p 5173:5173 -v $(pwd):/workspace -w /workspace ...
 #
@@ -147,6 +157,32 @@ RUN cd /tmp/prewarm \
     && uv python install 3.14 \
     && uv sync --frozen --no-install-project \
     && rm -rf /tmp/prewarm
+
+# ---------- Layer 6c: Pre-warm frontend npm cache + Playwright Chromium cache (Issue #2167) ----------
+# Mirrors Layer 6b's rationale exactly: frontend/node_modules is workspace-
+# relative, so it would be shadowed by the bind mount at runtime (issue
+# #2003's precedent) — only container-local cache paths can be baked in here.
+# Deliberately NOT a --mount=type=cache layer: cache mounts are build-time-only
+# scratch space that never ships in the final image, which would silently
+# defeat this entire fix. npm's cache (/home/claude/.npm) and the Playwright
+# Chromium cache (PLAYWRIGHT_BROWSERS_PATH, container-local — NOT shadowed by
+# the bind mount) are baked directly into this image layer instead.
+#
+# The npm-cache-prewarm and Playwright-install steps share one layer
+# intentionally: the Playwright step depends on whatever @playwright/test
+# version the npm step resolves, so they already share an invalidation
+# trigger (frontend/package.json) — splitting them would add a layer
+# boundary with no independent-caching benefit.
+#
+# Placement: above the Claude Code CLI layer below, same invalidation-
+# ordering rationale as Layer 6b (frontend/package.json changes far less
+# often than CLAUDE_CODE_VERSION).
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/claude/.cache/ms-playwright
+COPY --chown=claude:claude frontend/package.json frontend/.npmrc /tmp/frontend-prewarm/
+RUN cd /tmp/frontend-prewarm \
+    && npm install --no-audit --no-fund \
+    && npx playwright install chromium \
+    && rm -rf /tmp/frontend-prewarm
 
 # ---------- Layer 7: Claude Code CLI ----------
 # Bump in lockstep with claude-agent-sdk in pyproject.toml/uv.lock.
