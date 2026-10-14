@@ -391,25 +391,12 @@ async def test_generate_fixture_from_real_pipeline(api_integration_env, fixture_
         f"rest_history.json round-trip for fixture '{fixture_name}' came back empty."
     )
 
-    # Issue #2109 (AC11): 2026-09-23-primary is the one committed raw fixture whose
-    # messages.jsonl/rest_history.json are still exactly as non-canonical as stage 3
-    # left them (confirmed via `git log 95b4fc45..041c5280` — no stage since original
-    # canonicalization has touched it). Promote this replay's real, canonically-written
-    # messages.jsonl (and the rest_history.json already captured above) into the
-    # committed fixture directory, overwriting the stale non-canonical content.
+    # Issue #2179: committed-fixture promotion for 2026-09-23-primary (previously done
+    # unconditionally here) now lives in test_regenerate_primary_fixture_messages.py,
+    # opt-in via `-m regenerate_fixture` — this test must never write to a committed
+    # fixture by default. AC12's convergence check below has no dependency on that
+    # write and keeps running unconditionally for this fixture.
     if fixture_name == "2026-09-23-primary":
-        storage = api_integration_env["coordinator"]._storage_managers[session_id]
-        live_messages_path = storage.messages_file
-        assert live_messages_path.exists(), (
-            f"No live messages.jsonl found for fixture '{fixture_name}' at "
-            f"{live_messages_path} — cannot promote into the committed fixture."
-        )
-        committed_dir = RAW_FIXTURES_ROOT / fixture_name
-        shutil.copyfile(live_messages_path, committed_dir / "messages.jsonl")
-        (committed_dir / "rest_history.json").write_text(
-            json.dumps(rest_history, indent=2, default=str), encoding="utf-8"
-        )
-
         # Issue #2109 (AC12): live-streamed and REST-reloaded tool_call records must
         # converge to the same final per-tool_use_id state. The issue text says this
         # recording contains "two restarts"; counted directly it actually has 3
