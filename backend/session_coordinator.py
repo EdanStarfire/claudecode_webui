@@ -4159,32 +4159,36 @@ class SessionCoordinator:
         Create a callback that can_use_tool calls when it auto-approves a tool.
 
         The ToolCall already exists (created from the AssistantMessage tool_use block
-        before can_use_tool fires), so we find it by tool_name, set the reason,
-        store a new ToolCallUpdate, and broadcast via the existing tool_call
-        broadcast mechanism.
+        before can_use_tool fires), so we find it by tool_use_id via the existing O(1)
+        get_tool_call_by_id() lookup, set the reason, store a new ToolCallUpdate, and
+        broadcast via the existing tool_call broadcast mechanism.
         """
-        def callback(tool_name: str, input_params: dict[str, Any], reason: str) -> None:
-            tool_calls = self._active_tool_calls.get(session_id, {})
-            for tool_call in tool_calls.values():
-                if (
-                    tool_call.name == tool_name
-                    and tool_call.auto_approved_reason is None
-                    and tool_call.status == ToolState.PENDING
-                ):
-                    tool_call.auto_approved_reason = reason
-                    coord_logger.info(
-                        f"[707] Auto-approved {tool_call.tool_use_id} ({tool_name}): {reason}"
-                    )
-                    # Store a new ToolCallUpdate with the reason attached
-                    self._schedule_tool_call_update_storage(session_id, tool_call)
-                    # Broadcast via existing tool_call broadcast mechanism
-                    tool_call_data = MessageRecord.from_tool_call(tool_call).to_dict()
-                    for cb in self._tool_call_broadcast_callbacks:
-                        try:
-                            cb(session_id, tool_call_data)
-                        except Exception:
-                            coord_logger.exception("Error in auto-approval broadcast callback")
-                    break
+        def callback(
+            tool_name: str, input_params: dict[str, Any], reason: str, tool_use_id: str | None
+        ) -> None:
+            # Auto-approval fires before any permission request exists (it short-circuits
+            # _can_use_tool_callback before the branch that mints a request_id), so there is
+            # no request_id to fall back to here — tool_use_id is the only linkage (#2126).
+            tool_call = self.get_tool_call_by_id(session_id, tool_use_id) if tool_use_id else None
+            if (
+                tool_call is None
+                or tool_call.auto_approved_reason is not None
+                or tool_call.status != ToolState.PENDING
+            ):
+                return
+            tool_call.auto_approved_reason = reason
+            coord_logger.info(
+                f"[707] Auto-approved {tool_call.tool_use_id} ({tool_name}): {reason}"
+            )
+            # Store a new ToolCallUpdate with the reason attached
+            self._schedule_tool_call_update_storage(session_id, tool_call)
+            # Broadcast via existing tool_call broadcast mechanism
+            tool_call_data = MessageRecord.from_tool_call(tool_call).to_dict()
+            for cb in self._tool_call_broadcast_callbacks:
+                try:
+                    cb(session_id, tool_call_data)
+                except Exception:
+                    coord_logger.exception("Error in auto-approval broadcast callback")
         return callback
 
     # ============================================================
