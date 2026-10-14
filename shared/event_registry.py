@@ -134,6 +134,7 @@ MESSAGE_DATA_TYPES: frozenset[str] = frozenset(
 SYSTEM_SUBTYPES: frozenset[str] = frozenset(
     {
         "client_launched",
+        "ephemeral_orphan_resolved",  # issue #2165: boot-recovered orphaned ephemeral session
         "interrupt",
         "mcp_server_degraded",
         "session_failed",

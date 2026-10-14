@@ -4605,3 +4605,62 @@ class TestIssue2111CrashOrphanedToolCallRepair:
                 assert json.loads(tool_rows[0][11])["reason"] == "boot_crash_repair"
             finally:
                 await coordinator2.cleanup()
+
+
+class TestIssue2165ResolveOrphanedEphemeralSession:
+    """resolve_orphaned_ephemeral_session(): a scheduled/ephemeral session found PAUSED
+    at boot has no live SDK/Future that could ever answer its pending permission, so
+    this method resolves it to ERROR and records a greppable, auditable system message.
+    """
+
+    @pytest.mark.asyncio
+    async def test_resolves_paused_session_to_error_with_message(
+        self, temp_coordinator, sample_session_config
+    ):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        await coordinator.session_manager.update_session_state(
+            session_id, SessionState.PAUSED
+        )
+
+        await coordinator.resolve_orphaned_ephemeral_session(session_id)
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.state == SessionState.ERROR
+        assert session_info.error_message
+        assert not session_info.is_processing
+
+        storage_manager = coordinator._storage_managers[session_id]
+        messages = await storage_manager.read_messages()
+        system_messages = [
+            m for m in messages
+            if m.get("metadata", {}).get("subtype") == "ephemeral_orphan_resolved"
+        ]
+        assert len(system_messages) == 1
+        assert system_messages[0]["type"] == "system"
+        assert system_messages[0]["metadata"]["is_error"] is True
+        assert system_messages[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_does_not_touch_other_sessions(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Regression: resolving one orphaned ephemeral session must not affect any
+        other session's state — scoped strictly to the session_id it's given."""
+        import uuid
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        other_config = dict(sample_session_config)
+        other_config["session_id"] = str(uuid.uuid4())
+        other_session_id = await coordinator.create_session(**other_config)
+        await coordinator.session_manager.update_session_state(
+            other_session_id, SessionState.PAUSED
+        )
+
+        await coordinator.resolve_orphaned_ephemeral_session(session_id)
+
+        other_info = await coordinator.session_manager.get_session_info(other_session_id)
+        assert other_info.state == SessionState.PAUSED

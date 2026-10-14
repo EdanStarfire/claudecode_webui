@@ -1439,6 +1439,9 @@ class SchedulerService:
         For schedules with an ephemeral_agent_id:
         - If agent is active (crash leftover): terminate it so next fire starts clean
         - If agent doesn't exist: clear ephemeral_agent_id (will recreate on next fire)
+        - If agent is PAUSED (issue #2165): no live SDK/Future will ever resolve its
+          pending permission decision, so resolve it to ERROR and clear the reference
+          so the schedule self-heals on its next fire instead of staying wedged
         """
         recovered = 0
         for schedule in list(self._schedules.values()):
@@ -1465,7 +1468,19 @@ class SchedulerService:
             elif session_info.state == SessionState.PAUSED:
                 # Session paused mid-permission-wait (e.g. AskUserQuestion) — issue #1918:
                 # do not misclassify as an orphaned crash leftover and terminate it.
-                pass
+                # Issue #2165: but unlike an interactive session, no process will ever
+                # come back to resolve this pending permission, so resolve it to ERROR
+                # and clear the reference so the schedule starts a fresh agent next fire.
+                legion_logger.info(
+                    f"Resolving orphaned PAUSED ephemeral agent {agent_id} "
+                    f"for schedule {schedule.schedule_id} to ERROR"
+                )
+                await self.system.session_coordinator.resolve_orphaned_ephemeral_session(
+                    agent_id
+                )
+                schedule.ephemeral_agent_id = None
+                schedule.updated_at = datetime.now(UTC).timestamp()
+                recovered += 1
 
             elif session_info.state.value in ("active", "starting"):
                 # Agent still running (crash leftover) — terminate it

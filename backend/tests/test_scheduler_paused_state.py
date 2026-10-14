@@ -11,6 +11,15 @@ Covers the three call sites fixed in backend/legion/scheduler_service.py:
 
 Plus regression checks that ACTIVE/STARTING (already-guarded) and
 CREATED/TERMINATED (auto-start-eligible) behavior is unchanged.
+
+Issue #2165: the PAUSED no-op in _recover_orphaned_ephemeral_sessions above was correct
+as far as it went, but left a scheduled/ephemeral agent wedged in PAUSED forever — unlike
+an interactive session, no process ever comes back to resolve its pending permission.
+That branch now resolves the session to ERROR (via
+SessionCoordinator.resolve_orphaned_ephemeral_session()) and clears
+schedule.ephemeral_agent_id so the schedule self-heals on its next fire. Interactive
+(non-ephemeral) sessions are untouched — this function only ever iterates schedule-owned
+ephemeral agents.
 """
 
 from datetime import UTC, datetime
@@ -48,6 +57,7 @@ def _make_system(session_info=None, data_dir: Path | None = None):
     coordinator.enqueue_message = AsyncMock(return_value={"queue_id": "q-1"})
     coordinator.archive_and_clear_session = AsyncMock(return_value=True)
     coordinator.create_ephemeral_session = AsyncMock(return_value="agent-1")
+    coordinator.resolve_orphaned_ephemeral_session = AsyncMock(return_value=None)
     coordinator.data_dir = data_dir or Path("/nonexistent")
 
     system = MagicMock()
@@ -170,7 +180,10 @@ async def test_run_now_raises_when_active():
 
 @pytest.mark.asyncio
 async def test_recover_orphaned_does_not_terminate_paused():
-    """New: a PAUSED agent found at boot must not be classified as an orphan and terminated."""
+    """New: a PAUSED agent found at boot must not be classified as an orphan and
+    force-terminated via archive_and_clear_session (issue #2165: it is instead
+    resolved to ERROR via resolve_orphaned_ephemeral_session, and the schedule's
+    reference is cleared so it self-heals on the next fire)."""
     session_info = _make_session_info(state=SessionState.PAUSED)
     system = _make_system(session_info=session_info)
     svc = _make_svc(system)
@@ -180,7 +193,43 @@ async def test_recover_orphaned_does_not_terminate_paused():
     await svc._recover_orphaned_ephemeral_sessions()
 
     system.session_coordinator.archive_and_clear_session.assert_not_awaited()
-    assert schedule.ephemeral_agent_id == "agent-1"
+    system.session_coordinator.resolve_orphaned_ephemeral_session.assert_awaited_once_with(
+        "agent-1"
+    )
+    assert schedule.ephemeral_agent_id is None
+
+
+@pytest.mark.asyncio
+async def test_recover_orphaned_does_not_touch_non_ephemeral_paused_session():
+    """New (#2165): a PAUSED interactive session not referenced by any schedule's
+    ephemeral_agent_id must never be reached or resolved by this function — it only
+    ever iterates schedule-owned ephemeral agents, by construction."""
+    ephemeral_info = _make_session_info(session_id="agent-1", state=SessionState.PAUSED)
+    interactive_info = _make_session_info(
+        session_id="agent-interactive", state=SessionState.PAUSED
+    )
+
+    session_infos = {
+        "agent-1": ephemeral_info,
+        "agent-interactive": interactive_info,
+    }
+
+    system = _make_system(session_info=ephemeral_info)
+    system.session_coordinator.session_manager.get_session_info = AsyncMock(
+        side_effect=lambda session_id: session_infos[session_id]
+    )
+    svc = _make_svc(system)
+    schedule = _make_ephemeral_schedule()
+    svc._schedules[schedule.schedule_id] = schedule
+
+    await svc._recover_orphaned_ephemeral_sessions()
+
+    system.session_coordinator.resolve_orphaned_ephemeral_session.assert_awaited_once_with(
+        "agent-1"
+    )
+    system.session_coordinator.session_manager.get_session_info.assert_awaited_once_with(
+        "agent-1"
+    )
 
 
 @pytest.mark.asyncio
@@ -266,7 +315,8 @@ async def test_recover_orphaned_paused_survives_real_boot_reload(tmp_path):
     """A PAUSED session persisted to disk, then reloaded via a fresh
     SessionManager (simulating a real process restart), must still read back as
     PAUSED by the time _recover_orphaned_ephemeral_sessions() runs — and that
-    function must still correctly leave it alone."""
+    function must then resolve it to ERROR (issue #2165), exercised against the
+    real SessionManager state machine, not a mock."""
     agent_id = "agent-boot-reload"
     now = datetime.now(UTC)
 
@@ -296,10 +346,18 @@ async def test_recover_orphaned_paused_survives_real_boot_reload(tmp_path):
         "ever ran, exactly the bug this stage fixes."
     )
 
+    async def _resolve(session_id: str) -> None:
+        await manager2.update_session_state(
+            session_id, SessionState.ERROR, "resolved orphaned PAUSED ephemeral session"
+        )
+
     system = MagicMock()
     system.session_coordinator = MagicMock()
     system.session_coordinator.session_manager = manager2
     system.session_coordinator.archive_and_clear_session = AsyncMock(return_value=True)
+    system.session_coordinator.resolve_orphaned_ephemeral_session = AsyncMock(
+        side_effect=_resolve
+    )
 
     svc = _make_svc(system)
     schedule = _make_ephemeral_schedule(ephemeral_agent_id=agent_id)
@@ -308,5 +366,8 @@ async def test_recover_orphaned_paused_survives_real_boot_reload(tmp_path):
     await svc._recover_orphaned_ephemeral_sessions()
 
     system.session_coordinator.archive_and_clear_session.assert_not_awaited()
-    assert (await manager2.get_session_info(agent_id)).state == SessionState.PAUSED
-    assert schedule.ephemeral_agent_id == agent_id
+    system.session_coordinator.resolve_orphaned_ephemeral_session.assert_awaited_once_with(
+        agent_id
+    )
+    assert (await manager2.get_session_info(agent_id)).state == SessionState.ERROR
+    assert schedule.ephemeral_agent_id is None
