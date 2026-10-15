@@ -8,6 +8,7 @@ import pytest
 
 from backend.session_config import SessionConfig
 from backend.session_coordinator import SessionCoordinator
+from backend.session_manager import SessionState
 
 
 def _make_proxy_manager(port: int = 4000) -> MagicMock:
@@ -566,3 +567,72 @@ async def test_process_wrapper_passed_through_when_docker_disabled(coordinator):
 
     sdk_config = factory.call_args.kwargs["config"]
     assert sdk_config.process_wrapper == "/opt/launcher/wrapper.sh"
+
+
+# ── Proxy down at session start: issue #2183 ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_proxy_not_running_fails_session_start_clearly(coordinator):
+    """A catalog session whose proxy manager failed to boot must fail session
+    start with a clear, named error instead of registering a virtual key against
+    a dead proxy (which previously surfaced as an opaque downstream connection
+    error once the SDK actually tried to use it)."""
+    proxy = _make_proxy_manager(port=4000)
+    proxy.is_running = False
+    proxy.last_error = "UnsafeMasterKeyError: no master key is set"
+    coordinator.litellm_proxy_manager = proxy
+
+    config = SessionConfig(
+        provider_catalog_id="bedrock",
+        provider_model_id="claude-3-5-sonnet",
+    )
+    session_id = await _create_session(coordinator, config)
+
+    factory, _ = _make_sdk_factory()
+    coordinator.set_sdk_factory(factory)
+
+    result = await coordinator.start_session(session_id)
+    assert result is False
+
+    # Never falls through to register a virtual key against the dead proxy.
+    proxy.register_session_key.assert_not_called()
+    factory.assert_not_called()
+
+    session_info = await coordinator.session_manager.get_session_info(session_id)
+    assert session_info.state == SessionState.ERROR
+    assert "LiteLLM proxy is unavailable" in session_info.error_message
+    assert "UnsafeMasterKeyError" in session_info.error_message
+
+    storage = coordinator._storage_managers[session_id]
+    messages = await storage.read_messages(limit=10, offset=0)
+    failure_messages = [m for m in messages if m.get("subtype") == "session_failed"]
+    assert len(failure_messages) == 1
+    assert "LiteLLM proxy is unavailable" in failure_messages[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_proxy_running_still_starts_session_normally(coordinator):
+    """Sanity check that the new is_running guard is additive: a healthy proxy
+    (is_running=True, the default in _make_proxy_manager) still lets a catalog
+    session start exactly as before."""
+    proxy = _make_proxy_manager(port=4000)
+    coordinator.litellm_proxy_manager = proxy
+
+    config = SessionConfig(
+        provider_catalog_id="bedrock",
+        provider_model_id="claude-3-5-sonnet",
+    )
+    session_id = await _create_session(coordinator, config)
+
+    factory, _ = _make_sdk_factory()
+    coordinator.set_sdk_factory(factory)
+
+    result = await coordinator.start_session(session_id)
+    assert result is True
+
+    proxy.register_session_key.assert_called_once_with(session_id)
+    factory.assert_called_once()
+
+    session_info = await coordinator.session_manager.get_session_info(session_id)
+    assert session_info.state != SessionState.ERROR

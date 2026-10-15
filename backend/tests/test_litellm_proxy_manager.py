@@ -477,6 +477,37 @@ async def test_launch_server_unpatches_when_flag_flips_to_false(
     assert real_state._openai_count_tokens_disabled is False
 
 
+# ── Real-boot regression test (issue #2183) ───────────────────────────────
+#
+# Every other test in this file mocks litellm itself. That's exactly why the
+# #2177 litellm 1.98.0 -> 1.105.1 bump's new boot-time master-key check (run
+# from litellm's own ASGI lifespan) passed the full gate silently while
+# actually breaking every catalog-routed session in production. This test
+# builds a LiteLLMProxyManager against the real, installed litellm package
+# and actually starts it, so any future boot-time refusal fails here instead
+# of passing silently again.
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_real_litellm_boot_succeeds_with_generated_master_key():
+    from backend.litellm_proxy_manager import LiteLLMProxyManager
+    from shared.net_utils import allocate_free_port
+
+    catalog = AsyncMock()
+    catalog.list_entries.return_value = []
+
+    vault = AsyncMock()
+
+    mgr = LiteLLMProxyManager(catalog, vault, allocate_free_port())
+    try:
+        await mgr.start()
+        assert mgr.is_running is True
+        assert mgr.last_error is None
+    finally:
+        await mgr.stop()
+
+
 def test_features_config_round_trips_disable_openai_responses_count_tokens_api():
     from backend.config_manager import AppConfig
 

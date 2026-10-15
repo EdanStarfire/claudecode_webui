@@ -6,6 +6,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- LiteLLM proxy failing to boot on every catalog-selected session after the #2177 litellm 1.98.0 → 1.105.1 bump — litellm 1.105 added a boot-time master-key check that our embedded proxy tripped on every start. Backend now provisions a per-boot, process-local `LITELLM_MASTER_KEY` (never exposed via config, logs, or any API response); a catalog session whose proxy failed to boot now fails clearly at session start instead of hanging or surfacing an opaque connection error (#2183)
+
 ## [1.6.0] - 2026-09-10
 
 ### Backend/Frontend Process Split

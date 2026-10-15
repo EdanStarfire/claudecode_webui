@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import secrets
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -54,6 +56,11 @@ class LiteLLMProxyManager:
         self._last_restart: datetime | None = None
         self._last_error: str | None = None
         self._model_count: int = 0
+        # litellm 1.105+ refuses to boot without a master key set (its ASGI lifespan runs
+        # this check on every start, regardless of our custom_auth path). Generated once per
+        # Backend-process boot; never written to config, logs, or any API response — real
+        # request auth continues to go through user_custom_auth exclusively (see auth_callback).
+        os.environ["LITELLM_MASTER_KEY"] = secrets.token_hex(32)
         try:
             from litellm.proxy.proxy_server import app as _  # noqa: F401
         except ImportError as e:
