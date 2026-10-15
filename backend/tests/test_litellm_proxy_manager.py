@@ -1,6 +1,7 @@
 """Unit tests for LiteLLMProxyManager — lifecycle, key registry, auth callback."""
 
 import asyncio
+import gc
 import json
 import types
 from pathlib import Path
@@ -55,6 +56,20 @@ def _make_manager():
         mgr._model_count = 0
         mgr._config_file = None
         return mgr, mock_types
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _avoid_py314_mock_gc_segfault():
+    """Issue #2186: this file's repeated AsyncMock()/MagicMock() construction can trip
+    CPython 3.14's generational GC into an automatic collection pass mid-construction of
+    a mock instance, which segfaults walking the half-built cyclic mock graph. Disabling
+    GC for this file's duration (mocks here don't need cyclic collection — they're freed
+    by refcounting at test/process teardown) avoids it; confirmed via repeated runs."""
+    was_enabled = gc.isenabled()
+    gc.disable()
+    yield
+    if was_enabled:
+        gc.enable()
 
 
 @pytest.fixture
