@@ -134,6 +134,12 @@
         aria-label="Stop reading"
       >&#x23F9;</button>
     </div>
+
+    <!-- In-app message search (issue #2012) — outside scroll container, top-right corner -->
+    <MessageSearchBar
+      :search="messageSearch"
+      @navigate="scrollToMessageMatch"
+    />
   </div>
 </template>
 
@@ -151,7 +157,11 @@ import TruncationBanner from './TruncationBanner.vue'
 import DeferredToolBanner from './DeferredToolBanner.vue'
 import SubagentAnchorRow from './SubagentAnchorRow.vue'
 import SubagentGlobalGutter from './SubagentGlobalGutter.vue'
+import MessageSearchBar from './MessageSearchBar.vue'
 import { useTTSReadAloud } from '@/composables/useTTSReadAloud'
+import { useMessageSearch } from '@/composables/useMessageSearch'
+import { resolveMessageId } from '@/search/messageSearch'
+import { applyHighlight, clearHighlight } from '@/search/highlightMatch'
 import { useVirtualNavigation, forceFreshMeasurements } from '@/composables/useVirtualNavigation'
 import { parseTimestamp, formatDateSeparatorLabel } from '@/utils/time'
 import { getEffectiveStatusForTool } from '@/composables/useToolStatus'
@@ -208,6 +218,9 @@ const sessionToolCalls = computed(() => messageStore.toolCallsBySession.get(view
 // TTS Read Aloud (issue #735)
 const tts = useTTSReadAloud()
 provide('ttsReadAloud', tts)
+
+// In-app message search (issue #2012)
+const messageSearch = useMessageSearch(viewSessionId, { messageStore })
 
 // Provide all messages for play-from-here navigation
 provide('allMessages', sessionMessages)
@@ -349,24 +362,30 @@ const renderedRows = computed(() =>
 // stable domId) to its containing displayableItems index — a pure data lookup, no DOM, rebuilt
 // whenever displayableItems recomputes. This is what lets the gutter and navigation helper
 // resolve a jump target's position without ever touching the DOM (plan §5.2/§5.5).
+
 const indexMaps = computed(() => {
   const toolUseIndex = new Map() // tool_use id -> displayableItems index
   const signalIndex = new Map()  // subagent_signal domId -> displayableItems index
+  const messageIdIndex = new Map() // message id (incl. merged segments) -> displayableItems index
 
   displayableItems.value.forEach((item, index) => {
     if (item.type === 'message') {
       for (const t of item.message?.metadata?.tool_uses || []) toolUseIndex.set(t.id, index)
       for (const t of item.attachedTools || []) toolUseIndex.set(t.id, index)
+      const msgId = resolveMessageId(item.message)
+      if (msgId != null) messageIdIndex.set(msgId, index)
       for (const seg of item.mergedMessages || []) {
         for (const t of seg.metadata?.tool_uses || []) toolUseIndex.set(t.id, index)
         for (const t of seg.attachedTools || []) toolUseIndex.set(t.id, index)
+        const segId = resolveMessageId(seg)
+        if (segId != null) messageIdIndex.set(segId, index)
       }
     } else if (item.type === 'subagent_signal' && item.domId) {
       signalIndex.set(item.domId, index)
     }
   })
 
-  return { toolUseIndex, signalIndex }
+  return { toolUseIndex, signalIndex, messageIdIndex }
 })
 
 function resolveToolAnchorIndex(toolId) {
@@ -521,8 +540,124 @@ async function onGutterChipClick(lane) {
     ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
 }
 
+// Issue #2012: jump to a search match. Mirrors onGutterChipClick's shape — resolve a
+// displayableItems index, scroll+confirm-mount via the shared virtual-nav helper, then run the
+// DOM highlight pass once mount is confirmed. For a tool match, the tool's detail panel must be
+// expanded via the store (same scopeKey resolution ActivityTimeline.vue uses:
+// messageId || tools[0]?.id) BEFORE scrolling, since the panel only mounts when expanded — by
+// the time scrollToItemIndexTrusted's mount-poll resolves, the now-reactively-triggered detail
+// panel has had several nextTick/rAF cycles to mount alongside the row itself.
+// The highlight container is the whole mounted row element (not a narrower tool-panel element):
+// an expanded TimelineDetail is nested inside its row's DOM subtree, so searching the row's text
+// nodes finds a tool-field match there too, without this function needing to separately locate
+// the detail panel.
+let highlightedEl = null
+
+function clearActiveHighlight() {
+  if (highlightedEl) {
+    clearHighlight(highlightedEl)
+    highlightedEl = null
+  }
+}
+
+// Issue #2012 (flagged open sub-case): resolve the scopeKey ActivityTimeline.vue's own
+// `messageId || tools[0]?.id` computed would land on for the owning message's main timeline.
+// Stored message records never carry `.id` (see resolveMessageId above), so that fallback
+// always bottoms out at the first MAIN-timeline tool's id in practice — mirrors
+// AssistantMessage.vue's `mainTimelineTools` filter (`!isSubagentLaunchAnchor(tc) &&
+// tc.name !== 'mcp__legion__send_comm' && !tc.parent_tool_use_id`) via the same three checks,
+// since a message with a send_comm or child tool ahead of the matched tool would otherwise
+// resolve to a scopeKey ActivityTimeline's own `tools[0]?.id` never lands on, leaving the
+// matched tool's detail panel unexpanded even though the match itself is real.
+function resolveMainTimelineScopeKey(messageId) {
+  const msg = sessionMessages.value.find(m => resolveMessageId(m) === messageId)
+  const toolUses = msg?.metadata?.tool_uses || []
+  const toolCalls = messageStore.toolCallsBySession.get(viewSessionId.value)
+  const toolIndex = messageStore.toolIndexBySession.get(viewSessionId.value)
+  for (const t of toolUses) {
+    if (messageStore.getTaskIdForLaunchToolUse(t.id)) continue
+    if (t.name === 'mcp__legion__send_comm') continue
+    const idx = toolIndex?.get(t.id)
+    const fullToolCall = idx !== undefined ? toolCalls?.[idx] : undefined
+    if (fullToolCall?.parent_tool_use_id) continue
+    return t.id
+  }
+  return null
+}
+
+// Issue #2012: guards against a slower, stale scrollToMessageMatch call (e.g. two rapid
+// next()/prev() presses, each jumping to a currently-unmounted row) clobbering a faster, more
+// recent call's already-applied highlight once its own await finally resolves.
+let navigationSeq = 0
+
+async function scrollToMessageMatch(match) {
+  const seq = ++navigationSeq
+
+  if (!match) {
+    clearActiveHighlight()
+    return false
+  }
+
+  const { messageId, toolId } = match
+  const index = toolId != null
+    ? indexMaps.value.toolUseIndex.get(toolId)
+    : indexMaps.value.messageIdIndex.get(messageId)
+  if (index == null) {
+    clearActiveHighlight()
+    messageSearch.markNotFound()
+    return false
+  }
+
+  if (toolId != null) {
+    const launchTaskId = messageStore.getTaskIdForLaunchToolUse(toolId)
+    if (launchTaskId) {
+      // This tool IS a subagent's own launch/resume Task call — its prompt/result render
+      // inside SubagentLegTranscript's own scroll boxes, one layer deeper than the main
+      // ActivityTimeline. Expand the leg transcript itself, not setExpandedTimelineTool
+      // (Task tools never render into the main-timeline detail panel that drives).
+      // KNOWN LIMITATION: this only reveals the leg CARD — SubagentLegTranscript.vue's own
+      // prompt/result sub-panels are gated behind separate, local `ref(true)` collapse state
+      // with no external prop/store hook to force open, so a match inside tool_input/
+      // tool_result text for a Task launch can still fail to find a highlight target below.
+      // That failure is NOT silent: the applyHighlight() check below calls markNotFound()
+      // whenever it can't find the substring in the now-mounted DOM, so the UI surfaces
+      // "couldn't locate match" instead of falsely reporting success with no visible mark.
+      const legEntry = messageStore.getTaskLegEntry(launchTaskId)
+      const legIndex = legEntry?.legs.findIndex(leg => leg.tool_use_id === toolId) ?? -1
+      if (legIndex !== -1) messageStore.setLegExpanded(launchTaskId, legIndex, true)
+    } else {
+      const scopeKey = resolveMainTimelineScopeKey(messageId)
+      if (scopeKey) messageStore.setExpandedTimelineTool(scopeKey, toolId)
+    }
+  }
+
+  const mounted = await scrollToItemIndexTrusted(index, { align: 'center', behavior: 'auto' })
+  if (seq !== navigationSeq) return mounted // superseded by a newer navigation; don't touch shared highlight state
+
+  clearActiveHighlight()
+  if (!mounted) {
+    messageSearch.markNotFound()
+    return false
+  }
+
+  const rowEl = messagesContent.value?.querySelector(`.virtual-item-row[data-index="${index}"]`)
+  const highlighted = rowEl && applyHighlight(rowEl, messageSearch.query.value, match.occurrenceIndex ?? 0)
+  if (highlighted) {
+    highlightedEl = rowEl
+  } else {
+    // The row mounted but the raw-text highlighter couldn't find the substring in it — e.g.
+    // the match is inside a still-collapsed subagent leg prompt/result panel (see comment
+    // above), or a markdown-rendering mismatch (see messageSearch.js's Risks notes). Report
+    // this honestly rather than leaving the "X of Y" counter implying a highlight that isn't
+    // actually visible anywhere on screen.
+    messageSearch.markNotFound()
+  }
+  return mounted
+}
+
 defineExpose({
   scrollToItemIndex: scrollToItemIndexTrusted,
+  scrollToMessageMatch,
   resolveToolAnchorIndex,
   resolveSubagentPrimaryIndex,
   findPrevTurnIndex,
@@ -1299,6 +1434,10 @@ onDeactivated(() => {
   if (viewSessionId.value) {
     sessionStore.saveScrollPosition(viewSessionId.value, computeTopmostVisiblePosition())
   }
+  // Issue #2012: a highlighted row's content could change via background live updates while
+  // this instance is deactivated (recently-viewed sessions keep polling) — don't risk a <mark>
+  // sitting around a since-changed text node once reactivated.
+  clearActiveHighlight()
 })
 
 // Auto-scroll on new messages
