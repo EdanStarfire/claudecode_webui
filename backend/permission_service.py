@@ -269,14 +269,12 @@ class PermissionService:
             # This provides visual feedback that the session is blocked on user input
             try:
                 if is_first_pending_for_session:
+                    # Issue #2184: pause_session() now fires the "pause" lifecycle-record
+                    # callback itself (SessionCoordinator._on_session_manager_lifecycle_record),
+                    # replacing the manual recorder.record_lifecycle("pause") call this used
+                    # to make here.
                     await self.coordinator.session_manager.pause_session(session_id)
                     debug_logger.info(f"Set session {session_id} to PAUSED state while waiting for permission")
-                    # Issue #1998: session pause is triggered from here, not session_manager
-                    # directly — record it here rather than adding a recorder dependency
-                    # into session_manager.
-                    recorder = self.coordinator.get_session_recorder(session_id)
-                    if recorder is not None:
-                        recorder.record_lifecycle("pause")
             except Exception:
                 logger.exception(f"Failed to pause session {session_id} for permission wait")
 
@@ -587,16 +585,13 @@ class PermissionService:
             # session wasn't PAUSED by the time it acquired its lock — e.g. a
             # concurrent error/interrupt moved it to ERROR/TERMINATING between the
             # pre-check above and here). Re-check the actual resulting state before
-            # logging/recording a resume that may not have happened.
+            # logging a resume that may not have happened — the "resume" lifecycle
+            # record itself is handled automatically (issue #2184: resolve_permission_
+            # closed() only fires its lifecycle-record callback when a real transition
+            # occurred, not on this no-op path).
             post_info = await self.coordinator.session_manager.get_session_info(session_id)
             if post_info and post_info.state == SessionState.ACTIVE:
                 debug_logger.info(f"Restored session {session_id} to ACTIVE state after permission decision")
-                # Issue #1998: resume is triggered from here, not session_manager
-                # directly — record it here, mirroring the existing pause recording
-                # above, rather than adding a recorder dependency into session_manager.
-                recorder = self.coordinator.get_session_recorder(session_id)
-                if recorder is not None:
-                    recorder.record_lifecycle("resume")
         except Exception:
             logger.exception(f"Failed to restore session {session_id} to ACTIVE after permission")
 

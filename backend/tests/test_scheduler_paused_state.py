@@ -292,7 +292,7 @@ async def test_e2e_paused_session_survives_schedule_fire_then_resumes(tmp_path):
     system.session_coordinator.start_session.assert_not_awaited()
 
     # User answers the permission prompt — session resumes normally
-    resumed_ok = await session_manager.update_session_state(agent_id, SessionState.ACTIVE)
+    resumed_ok = await session_manager.resolve_permission_closed(agent_id)
     assert resumed_ok is True
     assert (await session_manager.get_session_info(agent_id)).state == SessionState.ACTIVE
 
@@ -347,8 +347,8 @@ async def test_recover_orphaned_paused_survives_real_boot_reload(tmp_path):
     )
 
     async def _resolve(session_id: str) -> None:
-        await manager2.update_session_state(
-            session_id, SessionState.ERROR, "resolved orphaned PAUSED ephemeral session"
+        await manager2.transition_to_error(
+            session_id, "resolved orphaned PAUSED ephemeral session"
         )
 
     system = MagicMock()

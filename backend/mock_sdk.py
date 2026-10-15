@@ -589,13 +589,10 @@ class MockClaudeSDK:
             self.timestamp_injection_frequency = "every_message"
             self.timestamp_injection_timezone = "UTC"
         self.storage_manager = kwargs.get("storage_manager")
-        self.session_manager = kwargs.get("session_manager")
-        # Issue #2159: real ClaudeSDK now drives backend state off this instead of
-        # reaching into session_manager directly. Mock still calls
-        # session_manager.mark_session_active() directly below (its existing,
-        # already-correct behavior for the "connected" phase) — this is wired too
-        # so a future phase_callback handler extension (e.g. "disconnected"/
-        # "stopped") doesn't silently skip mock/fixture-replay sessions.
+        # Issue #2159: real ClaudeSDK drives backend state off this instead of
+        # reaching into session_manager directly — mirrored here identically (issue
+        # #2184 removed this mock's own direct mark_session_active() call in start(),
+        # so phase_callback is now the only path, same as the real wrapper).
         self.phase_callback = kwargs.get("phase_callback")
         # Issue #2109 (AC8/4a-F): optional real SessionCoordinator reference, used only
         # by raw-layer replay (_start_raw_replay) to call mark_session_tools_interrupted()
@@ -728,13 +725,6 @@ class MockClaudeSDK:
                     self._engine._segment_cursor = 1
 
                 await self._set_phase("connected")
-
-            # Notify session manager if available
-            if self.session_manager:
-                try:
-                    await self.session_manager.mark_session_active(self.session_id)
-                except Exception:
-                    pass  # Session manager is optional for mock
 
             return True
 

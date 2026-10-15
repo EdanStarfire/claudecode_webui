@@ -502,11 +502,11 @@ class TemplateManager:
         if session_manager:
             # Import here at runtime to avoid circular import
             # (session_manager.py imports template_manager.py at module level)
-            from .session_manager import SessionState
+            from .session_lifecycle import is_not_terminated
             all_sessions = await session_manager.list_sessions()
             blocking = [
                 s for s in all_sessions
-                if s.template_id == template_id and s.state != SessionState.TERMINATED
+                if s.template_id == template_id and is_not_terminated(s.state)
             ]
             if blocking:
                 raise TemplateInUseError(

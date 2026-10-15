@@ -702,7 +702,7 @@ class SchedulerService:
         and nudge it to continue (issue #1572).
 
         Issue #1019 pattern: an ERROR session has no SDK left to disconnect, so bump
-        ERROR -> TERMINATED directly via update_session_state() — skipping
+        ERROR -> TERMINATED via recover_session() (issue #2184) — skipping
         reset_session()'s destructive history/claude_code_session_id clearing — so
         start_session() resumes the same underlying Claude conversation via the
         preserved claude_code_session_id.
@@ -752,7 +752,7 @@ class SchedulerService:
             return
 
         if session_info.state == SessionState.ERROR:
-            await session_manager.update_session_state(session_id, SessionState.TERMINATED)
+            await session_manager.recover_session(session_id)
             session_info = await session_manager.get_session_info(session_id)
 
         if not (session_info.state == SessionState.ACTIVE or is_auto_startable(session_info.state)):

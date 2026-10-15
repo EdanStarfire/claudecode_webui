@@ -49,6 +49,12 @@ TOP_LEVEL_EVENT_TYPES: dict[str, EventTypeSpec] = {
     # (same consumer-side `_broadcast_state_change`-style handler), just its own
     # type — same pattern as stream_reset's own additive entry (stage 5a).
     "session_metadata_updated": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"data"})),
+    # Issue #2184 (epic #1990 stage 6 residuals): is_processing-only updates split out
+    # of state_change the same way session_metadata_updated was in #2159 — a turn
+    # starting/ending never changes SessionState itself. Same payload shape as
+    # session_metadata_updated (same consumer-side `_broadcast_metadata_change`-style
+    # handler), just its own type.
+    "processing_change": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"data"})),
     "server_restarting": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"message"})),
     "mcp_oauth_complete": EventTypeSpec(frozenset({QUEUE_UI}), frozenset({"server_id"})),
     "secret_oauth_complete": EventTypeSpec(

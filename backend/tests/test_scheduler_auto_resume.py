@@ -54,7 +54,7 @@ def _make_session_info(
 def _make_system(session_info=None, start_session_result: bool = True, enqueue_result: dict | None = None):
     session_manager = MagicMock()
     session_manager.get_session_info = AsyncMock(return_value=session_info)
-    session_manager.update_session_state = AsyncMock(return_value=True)
+    session_manager.recover_session = AsyncMock(return_value=True)
 
     coordinator = MagicMock()
     coordinator.session_manager = session_manager
@@ -216,9 +216,9 @@ async def test_fire_error_session_unsticks_via_terminated_then_starts():
     error_info = _make_session_info(state=SessionState.ERROR)
     terminated_info = _make_session_info(state=SessionState.TERMINATED)
     system = _make_system(session_info=error_info)
-    # update_session_state(ERROR -> TERMINATED) is a direct setter in production;
-    # the mock session_manager doesn't mutate session_info as a side effect, so
-    # the refetch after it must be told to see the new state explicitly.
+    # recover_session() (ERROR -> TERMINATED, issue #2184) doesn't mutate
+    # session_info as a side effect on this mock, so the refetch after it must
+    # be told to see the new state explicitly.
     system.session_coordinator.session_manager.get_session_info = AsyncMock(
         side_effect=[error_info, terminated_info]
     )
@@ -229,8 +229,8 @@ async def test_fire_error_session_unsticks_via_terminated_then_starts():
 
     await svc._fire_auto_resume_schedule(schedule, 1000.0)
 
-    system.session_coordinator.session_manager.update_session_state.assert_awaited_once_with(
-        "sess-1", SessionState.TERMINATED
+    system.session_coordinator.session_manager.recover_session.assert_awaited_once_with(
+        "sess-1"
     )
     svc._ensure_session_active.assert_awaited_once_with("sess-1")
     system.session_coordinator.enqueue_message.assert_awaited_once()
@@ -255,7 +255,7 @@ async def test_fire_active_session_skips_start_goes_straight_to_enqueue():
 
     await svc._fire_auto_resume_schedule(schedule, 1000.0)
 
-    system.session_coordinator.session_manager.update_session_state.assert_not_awaited()
+    system.session_coordinator.session_manager.recover_session.assert_not_awaited()
     svc._ensure_session_active.assert_not_awaited()
     system.session_coordinator.enqueue_message.assert_awaited_once()
     assert schedule.schedule_id not in svc._schedules
@@ -387,7 +387,7 @@ async def test_tick_fires_multiple_auto_resume_schedules_independently_same_fire
     coordinator = MagicMock()
     coordinator.session_manager = MagicMock()
     coordinator.session_manager.get_session_info = AsyncMock(side_effect=lambda sid: infos[sid])
-    coordinator.session_manager.update_session_state = AsyncMock(return_value=True)
+    coordinator.session_manager.recover_session = AsyncMock(return_value=True)
     coordinator.start_session = AsyncMock(return_value=True)
     coordinator.enqueue_message = AsyncMock(return_value={"queue_id": "q-1"})
     coordinator.data_dir = Path("/nonexistent")

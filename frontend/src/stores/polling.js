@@ -962,7 +962,6 @@ export const usePollingStore = defineStore('polling', () => {
       const sessionStore = useSessionStore()
       if (payload.data && payload.data.session_id && payload.data.session) {
         const priorSession = sessionStore.sessions.get(payload.data.session_id)
-        const wasProcessing = priorSession?.is_processing
         const priorState = priorSession?.state
 
         sessionStore.updateSession(payload.data.session_id, payload.data.session)
@@ -993,9 +992,6 @@ export const usePollingStore = defineStore('polling', () => {
         if (newState === 'error' && priorState !== 'error') {
           notify('session_error', { sessionName: payload.data.session.name || 'Session', sessionId: changedSessionId })
         }
-        if (wasProcessing && !payload.data.session.is_processing) {
-          notify('task_complete', { sessionName: payload.data.session.name || 'Session', sessionId: changedSessionId })
-        }
         if (newState === 'paused' && priorState !== 'paused') {
           notify('permission_prompt', { sessionName: payload.data.session.name || 'Session', sessionId: changedSessionId })
         }
@@ -1010,6 +1006,29 @@ export const usePollingStore = defineStore('polling', () => {
     session_metadata_updated: (payload) => {
       if (payload.data && payload.data.session_id && payload.data.session) {
         useSessionStore().updateSession(payload.data.session_id, payload.data.session)
+      }
+    },
+
+    // Issue #2184: is_processing-only session updates — split out of state_change
+    // the same way session_metadata_updated was (SessionState itself never changes
+    // for a turn starting/ending). The task_complete notify trigger moves here from
+    // state_change's handler: most turn completions never change SessionState, so
+    // that notification would otherwise silently stop firing for the common case
+    // once the backend stops emitting state_change for processing-only changes.
+    processing_change: (payload) => {
+      if (payload.data && payload.data.session_id && payload.data.session) {
+        const sessionStore = useSessionStore()
+        const priorSession = sessionStore.sessions.get(payload.data.session_id)
+        const wasProcessing = priorSession?.is_processing
+
+        sessionStore.updateSession(payload.data.session_id, payload.data.session)
+
+        if (wasProcessing && !payload.data.session.is_processing) {
+          notify('task_complete', {
+            sessionName: payload.data.session.name || 'Session',
+            sessionId: payload.data.session_id,
+          })
+        }
       }
     },
 

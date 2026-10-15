@@ -281,7 +281,7 @@ class TestSessionCoordinator:
         # mid-turn, which implies the session was live) — a freshly created session
         # defaults to CREATED, which this test's actual invariant (tool-interruption
         # marking) doesn't depend on.
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
         tool_call = coordinator.create_tool_call(
             session_id=session_id,
@@ -322,7 +322,7 @@ class TestSessionCoordinator:
         has no live turn to restart)."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, state)
+        await coordinator.session_manager._update_session_state(session_id, state)
 
         with patch.object(coordinator, 'start_session', AsyncMock(return_value=True)):
             success = await coordinator.restart_session(session_id)
@@ -589,7 +589,7 @@ class TestSessionCoordinator:
         session_id = await coordinator.create_session(**sample_session_config)
 
         # Set session to ACTIVE state (normally done by SDK when ready)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
         # Mock SDK send_message method
         mock_sdk = AsyncMock()
@@ -1013,7 +1013,7 @@ class TestSessionCoordinator:
         session_id = await coordinator.create_session(**sample_session_config)
 
         # Force session into ERROR state (simulates a failed start)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ERROR, "simulated error")
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ERROR, "simulated error")
         session_info = await coordinator.session_manager.get_session_info(session_id)
         assert session_info.state == SessionState.ERROR
 
@@ -1557,7 +1557,7 @@ class TestIssue811IsProcessingStuck:
         session_id = await coordinator.create_session(**sample_session_config)
 
         # Simulate stale processing state from a previous run.
-        await coordinator.session_manager.update_processing_state(session_id, True)
+        await coordinator.session_manager.start_turn(session_id)
 
         mock_sdk = AsyncMock()
         mock_sdk.start.return_value = True
@@ -1580,7 +1580,7 @@ class TestIssue811IsProcessingStuck:
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
 
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
         mock_sdk = AsyncMock()
         mock_sdk.send_message.side_effect = RuntimeError("SDK blew up")
@@ -1605,9 +1605,9 @@ class TestIssue1002IsProcessingStuckDuringProcessing:
         """Error callback must reset is_processing to False."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
-        await coordinator.session_manager.update_processing_state(session_id, True)
+        await coordinator.session_manager.start_turn(session_id)
 
         # Fire the error callback (as SDK would on client.query() failure)
         error_cb = coordinator._create_error_callback(session_id)
@@ -1627,9 +1627,9 @@ class TestIssue1002IsProcessingStuckDuringProcessing:
         is_processing, preserving #1002/#1029/#748's original regression coverage."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
-        await coordinator.session_manager.update_processing_state(session_id, True)
+        await coordinator.session_manager.start_turn(session_id)
 
         # Simulate the stored 'interrupt' message arriving via the message callback
         callback = coordinator._create_message_callback(session_id)
@@ -1654,9 +1654,9 @@ class TestIssue1002IsProcessingStuckDuringProcessing:
         rather than the removed interrupt_success — see test above for why."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
-        await coordinator.session_manager.update_processing_state(session_id, True)
+        await coordinator.session_manager.start_turn(session_id)
 
         # Simulate the stored 'interrupt' message — is_processing should become False
         callback = coordinator._create_message_callback(session_id)
@@ -1690,7 +1690,7 @@ class TestIssue1002IsProcessingStuckDuringProcessing:
         message must set it back to True (self-healing for folded-message scenario)."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
         callback = coordinator._create_message_callback(session_id)
 
@@ -3174,7 +3174,7 @@ class TestIssue1675AddDirectory:
         """Live SDK call succeeds and the resolved directory is persisted for restart."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
         mock_sdk = AsyncMock()
         mock_sdk.register_repo_root.return_value = {"directory": "/test/project/subdir"}
@@ -3212,7 +3212,7 @@ class TestIssue1675AddDirectory:
         """A directory that isn't a subdirectory of cwd/registered roots is rejected."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
         mock_sdk = AsyncMock()
         coordinator._active_sdks[session_id] = mock_sdk
@@ -3227,7 +3227,7 @@ class TestIssue1675AddDirectory:
         """An active session without a live SDK instance cannot register a directory."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
         with pytest.raises(ValueError, match="No active SDK"):
             await coordinator.add_directory(session_id, "/test/project/subdir")
@@ -3252,7 +3252,7 @@ class TestIssue1779TimestampInjection:
     async def test_disabled_leaves_message_unchanged(self, temp_coordinator, sample_session_config):
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
         mock_sdk = AsyncMock()
         mock_sdk.inject_timestamps_enabled = False
@@ -3267,7 +3267,7 @@ class TestIssue1779TimestampInjection:
     async def test_every_message_prepends_timestamp(self, temp_coordinator, sample_session_config):
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
         mock_sdk = AsyncMock()
         mock_sdk.inject_timestamps_enabled = True
@@ -3292,7 +3292,7 @@ class TestIssue1779TimestampInjection:
         augmented identically regardless of which caller they simulate."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
         mock_sdk = AsyncMock()
         mock_sdk.inject_timestamps_enabled = True
@@ -3319,7 +3319,7 @@ class TestIssue1779TimestampInjection:
     ):
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
         mock_sdk = AsyncMock()
         mock_sdk.inject_timestamps_enabled = True
@@ -3346,7 +3346,7 @@ class TestIssue1779TimestampInjection:
         when the session has the feature enabled."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
         mock_sdk = AsyncMock()
         mock_sdk.inject_timestamps_enabled = True
@@ -3484,7 +3484,7 @@ class TestIssue1838UsageBaselineReset:
         # Session state must be startable again (e.g. paused without the SDK
         # subprocess itself stopping) for a second start_session() call to reach
         # the coordinator's "already running" check at all.
-        await coordinator.session_manager.update_session_state(session_id, SessionState.PAUSED)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.PAUSED)
 
         # Now the SDK reports as running, so the second call takes the
         # "already running" early return and must not touch the baseline.
@@ -3722,7 +3722,7 @@ class TestIssue1902ResultErrorHandling:
 
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
         result_error = ResultError(
             "Claude Code returned an error result: max turns exceeded",
@@ -3766,7 +3766,7 @@ class TestIssue1902ResultErrorHandling:
         as a fallback for non-ResultError failures — structured fields stay None."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
         error_cb = coordinator._create_error_callback(session_id)
         await error_cb("immediate_cli_failure", RuntimeError("Command failed with exit code 1"))
@@ -3803,7 +3803,7 @@ class TestIssue1902ResultErrorHandling:
 
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
 
         result_error = ResultError(
             "Claude Code returned an error result: API Error: Overloaded_error",
@@ -4621,7 +4621,7 @@ class TestIssue2165ResolveOrphanedEphemeralSession:
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
 
-        await coordinator.session_manager.update_session_state(
+        await coordinator.session_manager._update_session_state(
             session_id, SessionState.PAUSED
         )
 
@@ -4657,7 +4657,7 @@ class TestIssue2165ResolveOrphanedEphemeralSession:
         other_config = dict(sample_session_config)
         other_config["session_id"] = str(uuid.uuid4())
         other_session_id = await coordinator.create_session(**other_config)
-        await coordinator.session_manager.update_session_state(
+        await coordinator.session_manager._update_session_state(
             other_session_id, SessionState.PAUSED
         )
 
@@ -4690,7 +4690,7 @@ class TestIssue1572AutoResumeDetection:
 
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
         mock_scheduler = self._mock_legion_system(coordinator)
 
         before = datetime.now(UTC).timestamp()
@@ -4720,7 +4720,7 @@ class TestIssue1572AutoResumeDetection:
         and its resets_at drives the precise fire_at (+5 minutes)."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
         mock_scheduler = self._mock_legion_system(coordinator)
 
         resets_at_ts = datetime.now(UTC).timestamp() + 1800  # 30 minutes out
@@ -4748,7 +4748,7 @@ class TestIssue1572AutoResumeDetection:
         rejection (e.g. a container crash, auth failure) must not create a schedule."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
         mock_scheduler = self._mock_legion_system(coordinator)
 
         error_cb = coordinator._create_error_callback(session_id)
@@ -4764,7 +4764,7 @@ class TestIssue1572AutoResumeDetection:
 
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
         mock_scheduler = self._mock_legion_system(coordinator)
 
         result_error = ResultError(
@@ -4786,7 +4786,7 @@ class TestIssue1572AutoResumeDetection:
 
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
         coordinator.legion_system = None
 
         result_error = ResultError("rate limited", data={"api_error_status": 429})
@@ -4811,7 +4811,7 @@ class TestIssue1572AutoResumeEndToEnd:
 
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
         await coordinator.session_manager.update_claude_code_session_id(session_id, "ccsid-preserved")
 
         # 1. Usage-limit-shaped critical error mid-task
@@ -4836,7 +4836,7 @@ class TestIssue1572AutoResumeEndToEnd:
         # 3. Fire it directly (stand-in for a near-future fire_at / real tick) —
         # patch only start_session so no real SDK subprocess is needed.
         async def _fake_start(sid, *_args, **_kwargs):
-            await coordinator.session_manager.update_session_state(sid, SessionState.ACTIVE)
+            await coordinator.session_manager._update_session_state(sid, SessionState.ACTIVE)
             return True
 
         try:

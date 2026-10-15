@@ -32,6 +32,7 @@ from .session_lifecycle import (  # noqa: F401 — re-exported; see module docst
     LifecycleEvent,
     SessionState,
     transition,
+    transition_processing,
 )
 from .slug_utils import slugify_name
 from .template_manager import TemplateManager
@@ -381,6 +382,18 @@ class SessionManager:
         # as a "state_change" event (see shared/event_registry.py's
         # session_metadata_updated entry).
         self._metadata_change_callbacks: list[Callable] = []
+        # Issue #2184 (epic #1990 stage 6 residuals): is_processing-only updates fire
+        # this SEPARATE callback list instead of _state_change_callbacks — the
+        # SessionState itself never changes for a turn start/end, so it no longer
+        # masquerades as a "state_change" event (the AC1/AC5 double-emission bug this
+        # stage fixes).
+        self._processing_change_callbacks: list[Callable] = []
+        # Issue #2184: fired once per logical lifecycle action (start/restart/reset/
+        # pause/resume/terminate) alongside (not instead of) the state_change emission —
+        # consumed by SessionCoordinator to drive SessionRecorder.record_lifecycle(),
+        # replacing the manual call sites previously duplicated across this file's
+        # callers (session_coordinator.py, permission_service.py).
+        self._lifecycle_record_callbacks: list[Callable] = []
         # Issue #2111: session IDs that could plausibly have a dangling non-terminal
         # tool call left by a crash — sessions this boot's _load_existing_sessions()
         # reset from RUNNABLE_STATES/PAUSED (the post-reset state alone can't
@@ -485,8 +498,9 @@ class SessionManager:
                                             f"{session_info.session_id}: {derived}"
                                         )
 
-                            if session_info.state in RUNNABLE_STATES:
-                                session_info.state = SessionState.CREATED
+                            _boot_state = transition(session_info.state, LifecycleEvent.BOOT_NORMALIZED)
+                            if _boot_state != session_info.state:
+                                session_info.state = _boot_state
                                 session_info.updated_at = datetime.now(UTC)
                                 state_changed = True
                                 self._sessions_needing_tool_repair_scan.append(session_info.session_id)
@@ -516,8 +530,11 @@ class SessionManager:
                                 self._sessions_needing_tool_repair_scan.append(session_info.session_id)
 
                             # Reset processing state since no SDKs are running on startup
-                            if session_info.is_processing:
-                                session_info.is_processing = False
+                            _boot_processing = transition_processing(
+                                session_info.is_processing, LifecycleEvent.BOOT_NORMALIZED
+                            )
+                            if _boot_processing != session_info.is_processing:
+                                session_info.is_processing = _boot_processing
                                 session_info.updated_at = datetime.now(UTC)
                                 state_changed = True
                                 session_logger.info(f"Reset processing state for session {session_info.session_id} from {original_processing} to False on startup")
@@ -653,8 +670,15 @@ class SessionManager:
                 del self._session_locks[session_id]
             raise
 
-    async def start_session(self, session_id: str) -> bool:
-        """Start a session (transition to ACTIVE state)"""
+    async def start_session(self, session_id: str, action: str = "start") -> bool:
+        """Start a session (transition to ACTIVE state).
+
+        Issue #2184: `action` is the raw-log lifecycle label fired on the
+        lifecycle-record callback alongside the state_change emission below —
+        restart_session()/reset_session() pass "restart"/"reset" rather than this
+        method guessing which caller invoked it (same convention the recorder's
+        own vocabulary has always used).
+        """
         async with self._get_session_lock(session_id):
             try:
                 session = self._active_sessions.get(session_id)
@@ -668,6 +692,7 @@ class SessionManager:
                     return False
 
                 await self._update_session_state(session_id, new_state)
+                await self._notify_lifecycle_record_callbacks(session_id, action)
 
                 # Session will remain in STARTING state until SDK is ready
                 # SDK will call mark_session_active() when context manager is initialized
@@ -724,6 +749,7 @@ class SessionManager:
                     return False
 
                 await self._update_session_state(session_id, new_state)
+                await self._notify_lifecycle_record_callbacks(session_id, "pause")
                 session_logger.info(f"Paused session {session_id}")
                 return True
 
@@ -752,6 +778,7 @@ class SessionManager:
                     return True
 
                 await self._update_session_state(session_id, new_state)
+                await self._notify_lifecycle_record_callbacks(session_id, "resume")
                 session_logger.info(f"Restored session {session_id} to ACTIVE after permission decision")
                 return True
 
@@ -784,6 +811,11 @@ class SessionManager:
 
                 terminated_state = transition(terminating_state, LifecycleEvent.TERMINATED)
                 await self._update_session_state(session_id, terminated_state)
+                # Issue #2184: one lifecycle record for the whole logical "terminate"
+                # action, covering both the TERMINATING and TERMINATED sub-transitions
+                # above — preserves the pre-existing one-record-per-logical-action
+                # granularity the committed raw_log.jsonl fixtures depend on (AC7).
+                await self._notify_lifecycle_record_callbacks(session_id, "terminate")
                 session_logger.info(f"Terminated session {session_id}")
                 return True
 
@@ -792,50 +824,18 @@ class SessionManager:
                 await self._update_session_state(session_id, SessionState.ERROR, str(e))
                 return False
 
-    async def update_session_state(
-        self,
-        session_id: str,
-        new_state: SessionState,
-        error_message: str | None = None,
-        *,
-        error_subtype: str | None = None,
-        error_terminal_reason: str | None = None,
-        error_api_error_status: int | None = None,
-        error_list: list[str] | None = None,
-    ) -> bool:
-        """Update session state with optional error message.
+    async def recover_session(self, session_id: str) -> bool:
+        """Force a session back to TERMINATED regardless of its current state
+        (issue #2184, RECOVERY_REQUESTED — unguarded like ERROR_OCCURRED).
 
-        error_subtype/error_terminal_reason/error_api_error_status/error_list are
-        optional structured fields populated when the failure originated from a
-        ResultError (issue #1902); they default to None so existing call sites are
-        unaffected.
-
-        Remains a direct setter (not event-gated): restart_session()/reset_session()
-        rely on forcing TERMINATED from whatever state they're currently in as
-        internal bookkeeping before re-starting, which has no corresponding
-        LifecycleEvent. For ERROR specifically this is still exactly what
-        transition()'s ERROR_OCCURRED would compute — it's unconditional regardless
-        of current state, since a critical SDK error can land from anywhere.
+        Replaces the direct `update_session_state(session_id, SessionState.TERMINATED)`
+        writes previously duplicated across restart_session()/reset_session() (4 call
+        sites) and scheduler_service's auto-resume (#1572 "issue #1019 pattern") — all
+        five wanted identical semantics: force into a startable state in a single hop
+        (no TERMINATING flash), preserving claude_code_session_id so the next
+        start_session() resumes the same underlying conversation. A no-op (not an
+        error) if the session is already TERMINATED and not processing.
         """
-        async with self._get_session_lock(session_id):
-            try:
-                await self._update_session_state(
-                    session_id,
-                    new_state,
-                    error_message,
-                    error_subtype=error_subtype,
-                    error_terminal_reason=error_terminal_reason,
-                    error_api_error_status=error_api_error_status,
-                    error_list=error_list,
-                )
-                session_logger.info(f"Updated session {session_id} state to {new_state.value}")
-                return True
-            except Exception as e:
-                logger.error(f"Failed to update session {session_id} state to {new_state.value}: {e}")
-                return False
-
-    async def update_processing_state(self, session_id: str, is_processing: bool) -> bool:
-        """Update session processing state"""
         async with self._get_session_lock(session_id):
             try:
                 session = self._active_sessions.get(session_id)
@@ -843,18 +843,131 @@ class SessionManager:
                     logger.error(f"Session {session_id} not found")
                     return False
 
-                # Issue #1029: Early-return if value unchanged. The reactive approach
-                # fires update_processing_state(True) on every assistant message
-                # (every streaming chunk). Without this guard, each token triggers
-                # a full JSON file write + callback dispatch.
-                if session.is_processing == is_processing:
+                new_state = transition(session.state, LifecycleEvent.RECOVERY_REQUESTED)
+                new_processing = transition_processing(
+                    session.is_processing, LifecycleEvent.RECOVERY_REQUESTED
+                )
+                if new_state == session.state and new_processing == session.is_processing:
                     return True
 
-                session.is_processing = is_processing
+                session.is_processing = new_processing
+                await self._update_session_state(session_id, new_state)
+                session_logger.info(f"Recovered session {session_id} to TERMINATED")
+                return True
+
+            except Exception as e:
+                logger.error(f"Failed to recover session {session_id}: {e}")
+                return False
+
+    async def transition_to_error(
+        self,
+        session_id: str,
+        error_message: str,
+        *,
+        error_subtype: str | None = None,
+        error_terminal_reason: str | None = None,
+        error_api_error_status: int | None = None,
+        error_list: list[str] | None = None,
+    ) -> bool:
+        """Transition a session to ERROR (issue #2184, ERROR_OCCURRED — unguarded,
+        reachable from any state).
+
+        Collapses the state-transition half of the ERROR path into one state_change
+        emission — replaces 3 separately-maintained copies of
+        `update_session_state(ERROR)` + `update_processing_state(False)` that had
+        drifted into a real redundant-emission bug (update_session_state() already
+        fired its own state_change event on its own; the follow-up
+        update_processing_state() call fired a second, redundant emission for the
+        same transition — AC1/AC5).
+
+        error_subtype/error_terminal_reason/error_api_error_status/error_list are
+        optional structured fields populated when the failure originated from a
+        ResultError (issue #1902); they default to None so existing call sites are
+        unaffected.
+        """
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                session.is_processing = transition_processing(
+                    session.is_processing, LifecycleEvent.ERROR_OCCURRED
+                )
+                await self._update_session_state(
+                    session_id,
+                    SessionState.ERROR,
+                    error_message,
+                    error_subtype=error_subtype,
+                    error_terminal_reason=error_terminal_reason,
+                    error_api_error_status=error_api_error_status,
+                    error_list=error_list,
+                )
+                session_logger.info(f"Transitioned session {session_id} to ERROR")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to transition session {session_id} to ERROR: {e}")
+                return False
+
+    async def start_turn(self, session_id: str) -> bool:
+        """Mark a session as actively processing a turn (issue #2184, TURN_STARTED).
+
+        Replaces update_processing_state(session_id, True) — fires the dedicated
+        processing_change callback, never state_change (the SessionState itself never
+        changes for a turn start/end).
+        """
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                new_processing = transition_processing(
+                    session.is_processing, LifecycleEvent.TURN_STARTED
+                )
+                # Issue #1029: Early-return if value unchanged. The reactive approach
+                # fires this on every assistant message (every streaming chunk).
+                # Without this guard, each token triggers a full JSON file write +
+                # callback dispatch.
+                if new_processing == session.is_processing:
+                    return True
+
+                session.is_processing = new_processing
                 session.updated_at = datetime.now(UTC)
                 await self._persist_processing_state_only(session_id)
-                await self._notify_state_change_callbacks(session_id, session.state)
-                session_logger.info(f"Updated session {session_id} processing state to {is_processing}")
+                await self._notify_processing_change_callbacks(session_id, new_processing)
+                session_logger.info(f"Updated session {session_id} processing state to {new_processing}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to start turn for session {session_id}: {e}")
+                return False
+
+    async def end_turn(self, session_id: str) -> bool:
+        """Mark a session's turn as finished (issue #2184, TURN_ENDED).
+
+        Replaces update_processing_state(session_id, False) — fires the dedicated
+        processing_change callback, never state_change.
+        """
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                new_processing = transition_processing(
+                    session.is_processing, LifecycleEvent.TURN_ENDED
+                )
+                if new_processing == session.is_processing:
+                    return True
+
+                session.is_processing = new_processing
+                session.updated_at = datetime.now(UTC)
+                await self._persist_processing_state_only(session_id)
+                await self._notify_processing_change_callbacks(session_id, new_processing)
+                session_logger.info(f"Updated session {session_id} processing state to {new_processing}")
                 return True
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} processing state: {e}")
@@ -1510,6 +1623,36 @@ class SessionManager:
                 await callback(session_id)
             except Exception as e:
                 logger.error(f"Error in metadata change callback: {e}")
+
+    def add_processing_change_callback(self, callback: Callable):
+        """Add callback for is_processing-only updates (issue #2184)."""
+        self._processing_change_callbacks.append(callback)
+
+    async def _notify_processing_change_callbacks(self, session_id: str, is_processing: bool):
+        """Notify registered callbacks about an is_processing-only update (issue #2184).
+
+        Unlike _notify_state_change_callbacks, there is no new SessionState to report —
+        the state itself didn't change, only the processing flag.
+        """
+        for callback in self._processing_change_callbacks:
+            try:
+                await callback(session_id, is_processing)
+            except Exception as e:
+                logger.error(f"Error in processing change callback: {e}")
+
+    def add_lifecycle_record_callback(self, callback: Callable):
+        """Add callback for a logical lifecycle action (issue #2184) — start/restart/
+        reset/pause/resume/terminate, fired alongside (not instead of) the state_change
+        emission for that transition."""
+        self._lifecycle_record_callbacks.append(callback)
+
+    async def _notify_lifecycle_record_callbacks(self, session_id: str, action: str):
+        """Notify registered callbacks about a logical lifecycle action (issue #2184)."""
+        for callback in self._lifecycle_record_callbacks:
+            try:
+                await callback(session_id, action)
+            except Exception as e:
+                logger.error(f"Error in lifecycle record callback: {e}")
 
 
 def _derive_last_completion_from_jsonl(path: Path) -> datetime | None:
