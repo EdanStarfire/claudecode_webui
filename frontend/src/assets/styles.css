@@ -1892,6 +1892,61 @@ button:focus {
     line-height: 1;
 }
 
+/* ========== MESSAGE SEARCH STYLES (Issue #2012) ========== */
+
+/* Floating search bar — positioned over the scroll container, top-right (TTS controls take
+   bottom-center, so the two never collide). */
+.message-search-bar {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 10;
+    pointer-events: auto;
+}
+
+.message-search-toggle {
+    border-radius: 50%;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    background: rgba(255, 255, 255, 0.95);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.message-search-expanded {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: rgba(255, 255, 255, 0.95);
+    border: 1px solid #dee2e6;
+    border-radius: 20px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.message-search-input {
+    width: 160px;
+}
+
+.message-search-count {
+    font-size: 0.8rem;
+    color: #6c757d;
+    white-space: nowrap;
+}
+
+.message-search-expanded .btn {
+    min-width: 28px;
+    font-size: 1rem;
+    line-height: 1;
+}
+
+mark.message-search-highlight {
+    background-color: #ffe066;
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+}
+
 /* ========== MERMAID DIAGRAM STYLES (Issue #740, #1010) ========== */
 
 /* Issue #1746 (stage: layout): assistant rows are now full-bleed by default (no max-width
