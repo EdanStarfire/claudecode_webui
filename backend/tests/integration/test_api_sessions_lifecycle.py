@@ -249,6 +249,73 @@ class TestSendMessage:
         assert resp.status_code == 200
 
 
+class TestAutoResumeCancellationOnManualSend:
+    """Issue #1572 decision #4: a manual user send through the REST message
+    endpoint cancels any pending auto-resume schedule for that session — the
+    user has already taken over, so a later "continue" nudge would be a
+    duplicate. Scoped to this REST-driven path only; other delivery paths
+    (queue processor, other schedules) must not cancel it."""
+
+    async def test_manual_send_cancels_pending_auto_resume(self, api_integration_env):
+        client = api_integration_env["client"]
+        coordinator = api_integration_env["coordinator"]
+        session = await _create_named_session(api_integration_env, "single_turn")
+        sid = session["session_id"]
+
+        await client.post(f"/api/sessions/{sid}/start")
+        await _wait_for_state(client, sid, "active")
+
+        scheduler = coordinator.legion_system.scheduler_service
+        schedule = await scheduler.upsert_auto_resume_schedule(
+            legion_id=session["project_id"],
+            session_id=sid,
+            session_name=session["name"],
+            fire_at=9999999999.0,
+        )
+
+        resp = await client.post(
+            f"/api/sessions/{sid}/messages",
+            json={"message": "I'm back, taking over"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+        remaining = await scheduler.get_schedule(schedule.schedule_id)
+        assert remaining is None
+
+    async def test_non_rest_delivery_path_does_not_cancel_auto_resume(self, api_integration_env):
+        """coordinator.send_message() is also the delivery primitive used by the
+        queue processor / comm router / MCP tool sends — none of those paths go
+        through the REST router's cancellation call, so a pending auto-resume
+        survives a non-REST send."""
+        api_integration_env["client"]
+        coordinator = api_integration_env["coordinator"]
+        session = await _create_named_session(api_integration_env, "single_turn")
+        sid = session["session_id"]
+
+        await coordinator.start_session(sid)
+        for _ in range(50):
+            info = await coordinator.session_manager.get_session_info(sid)
+            if info.state.value == "active":
+                break
+            import asyncio
+            await asyncio.sleep(0.1)
+
+        scheduler = coordinator.legion_system.scheduler_service
+        schedule = await scheduler.upsert_auto_resume_schedule(
+            legion_id=session["project_id"],
+            session_id=sid,
+            session_name=session["name"],
+            fire_at=9999999999.0,
+        )
+
+        success = await coordinator.send_message(sid, "delivered via a non-REST path")
+        assert success is True
+
+        remaining = await scheduler.get_schedule(schedule.schedule_id)
+        assert remaining is not None, "non-REST send_message() must not cancel the auto-resume"
+
+
 class TestGetMessages:
     async def test_get_messages_empty(self, api_integration_env):
         client = api_integration_env["client"]

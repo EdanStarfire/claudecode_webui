@@ -61,6 +61,11 @@ logger = logging.getLogger(__name__)
 # Issue #1375: Regex for ${secret:<name>} references in MCP server header values.
 _SECRET_REF_RE = re.compile(r"\$\{secret:([^}]+)\}")
 
+# Issue #1572: auto-resume timing — fire 5 minutes after a known rate-limit reset,
+# or fall back to a flat 1 hour out when no fresh reset timestamp is available (AC4).
+AUTO_RESUME_GRACE_PERIOD_SECONDS = 5 * 60
+AUTO_RESUME_FALLBACK_DELAY_SECONDS = 60 * 60
+
 # Issue #1982: max time start_session() waits for a shared-connection MCP server's
 # first open attempt before proceeding degraded. Deliberately shorter than the
 # shared-connection manager's own internal open timeout — a black-holed host
@@ -4085,6 +4090,7 @@ class SessionCoordinator:
             window = getattr(rate_limit_info, 'rate_limit_type', None)
             utilization = getattr(rate_limit_info, 'utilization', None)
             resets_at_ts = getattr(rate_limit_info, 'resets_at', None)
+            status = getattr(rate_limit_info, 'status', None)
 
             if window is None:
                 return
@@ -4094,6 +4100,11 @@ class SessionCoordinator:
                 entry['used_percentage'] = round(utilization * 100, 1)
             if resets_at_ts is not None:
                 entry['resets_at'] = datetime.fromtimestamp(resets_at_ts, tz=UTC).isoformat()
+            # Issue #1572: surfaced so the auto-resume detection hook in
+            # _create_error_callback can tell "account-wide limit hit" (status ==
+            # "rejected") apart from the merely-approaching-limit warning state.
+            if status is not None:
+                entry['status'] = status
 
             self._rate_limits_state[window] = entry
 
@@ -5069,6 +5080,64 @@ class SessionCoordinator:
         except Exception:
             logger.exception("Failed to update session state to ERROR")
 
+    async def _maybe_schedule_auto_resume(
+        self, session_id: str, structured_error_kwargs: dict
+    ) -> None:
+        """Issue #1572: schedule a one-time auto-resume if this ERROR transition looks
+        like a usage/rate limit, not some other critical failure.
+
+        Gated on either the ResultError's own `api_error_status == 429`, or the
+        account-wide `_rate_limits_state` (issue #899) currently holding a `rejected`
+        entry — the latter catches limit-shaped errors that don't surface a structured
+        429 (e.g. a non-ResultError failure that happens to coincide with an
+        already-known account-wide rejection). Non-matching ERROR transitions are
+        logged with their structured fields so the heuristic can be tightened once
+        real-world CLI failure shapes are observed (explicitly flagged as the primary
+        detection risk for this feature).
+        """
+        if self.legion_system is None:
+            return
+
+        api_error_status = structured_error_kwargs.get("error_api_error_status")
+        rejected_entry = next(
+            (v for v in self._rate_limits_state.values() if v.get("status") == "rejected"),
+            None,
+        )
+        if api_error_status != 429 and rejected_entry is None:
+            logger.info(
+                f"ERROR transition for session {session_id} not rate-limit-shaped — "
+                f"error_subtype={structured_error_kwargs.get('error_subtype')}, "
+                f"error_terminal_reason={structured_error_kwargs.get('error_terminal_reason')}, "
+                f"error_api_error_status={api_error_status}"
+            )
+            return
+
+        fire_at = None
+        if rejected_entry is not None and rejected_entry.get("resets_at"):
+            try:
+                resets_at_ts = datetime.fromisoformat(rejected_entry["resets_at"]).timestamp()
+                fire_at = resets_at_ts + AUTO_RESUME_GRACE_PERIOD_SECONDS
+            except (ValueError, TypeError):
+                fire_at = None
+        if fire_at is None:
+            fire_at = datetime.now(UTC).timestamp() + AUTO_RESUME_FALLBACK_DELAY_SECONDS
+
+        try:
+            session_info = await self.session_manager.get_session_info(session_id)
+            if session_info is None:
+                logger.warning(
+                    f"Rate-limit-shaped ERROR for session {session_id} but session info missing"
+                )
+                return
+            await self.legion_system.scheduler_service.upsert_auto_resume_schedule(
+                legion_id=session_info.project_id,
+                session_id=session_id,
+                session_name=session_info.name,
+                fire_at=fire_at,
+            )
+        except Exception:
+            logger.exception(f"Failed to schedule auto-resume for session {session_id}")
+
     def _create_error_callback(self, session_id: str) -> Callable:
         """Create error callback for a session"""
         async def callback(error_type: str, error: Exception):
@@ -5120,6 +5189,15 @@ class SessionCoordinator:
                     await self._transition_to_error(
                         session_id, user_error_message, **structured_error_kwargs
                     )
+
+                    # Issue #1572: detect a rate-limit-shaped critical error and schedule
+                    # an automatic resume. Detection is intentionally session-scoped (this
+                    # callback is a per-session closure) even though the reset timestamp it
+                    # consults comes from the account-wide _rate_limits_state (issue #899) —
+                    # that state tells us *when* the account-wide limit resets, not *which*
+                    # session just stalled, so the gate here is what keeps this scoped to
+                    # the session that actually failed.
+                    await self._maybe_schedule_auto_resume(session_id, structured_error_kwargs)
 
                     # Send system message explaining the runtime failure (with raw details)
                     await self._send_session_failure_message(
