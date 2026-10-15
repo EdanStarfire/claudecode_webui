@@ -2188,6 +2188,23 @@ class SessionCoordinator:
             )
 
             if (tier_active or single_active) and _proxy_mgr is not None:
+                if not _proxy_mgr.is_running:
+                    # Issue #2183: the proxy manager object existing doesn't mean the
+                    # proxy actually booted — without this guard, a catalog session
+                    # proceeds to register a virtual key and build a base_url pointing
+                    # at a dead port, failing downstream with an opaque connection
+                    # error instead of a clear message.
+                    first_line = (_proxy_mgr.last_error or "unknown error").splitlines()[0]
+                    error_message = f"LiteLLM proxy is unavailable: {first_line}"
+                    await self._transition_to_error(session_id, error_message)
+                    # No raw_error passed: last_error is already single-line (see
+                    # LiteLLMProxyManager.start()), so error_message already carries
+                    # the full signal — passing it again as raw_error would send
+                    # _format_failure_content() down its stderr-pattern-matching path
+                    # and overwrite this clear, proxy-specific message.
+                    await self._send_session_failure_message(session_id, error_message)
+                    return False
+
                 virtual_key = _proxy_mgr.register_session_key(session_id)
                 base_url = f"http://127.0.0.1:{_proxy_mgr.port}/"
 
