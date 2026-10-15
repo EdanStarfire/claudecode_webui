@@ -185,3 +185,29 @@ def is_live(state: SessionState) -> bool:
 def is_not_terminated(state: SessionState) -> bool:
     """True if the session has not reached the terminal TERMINATED state."""
     return state is not SessionState.TERMINATED
+
+
+def is_active(state: SessionState) -> bool:
+    """True if the session is in the single live, immediately-deliverable ACTIVE state."""
+    return state is SessionState.ACTIVE
+
+
+def is_paused(state: SessionState) -> bool:
+    """True if the session is paused on an open permission decision."""
+    return state is SessionState.PAUSED
+
+
+def is_errored(state: SessionState) -> bool:
+    """True if the session has hit an unrecoverable runtime error."""
+    return state is SessionState.ERROR
+
+
+def is_terminal(state: SessionState) -> bool:
+    """True if the session is no longer running and not auto-recoverable without an
+    explicit action (TERMINATED or ERROR).
+
+    Distinct from ``is_not_terminated()``, which only excludes TERMINATED — an ERROR
+    session is "not terminated" by that predicate's definition but is still terminal
+    in the sense this predicate captures.
+    """
+    return state in (SessionState.TERMINATED, SessionState.ERROR)

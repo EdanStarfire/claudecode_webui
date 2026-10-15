@@ -31,7 +31,7 @@ from backend.models.schedule_models import (
     is_error_status,
     validate_cron_expression,
 )
-from backend.session_lifecycle import is_auto_startable, is_deliverable
+from backend.session_lifecycle import is_auto_startable, is_deliverable, is_live, is_terminal
 from backend.session_manager import SessionState
 from backend.task_utils import task_done_log_exception
 from shared.logging_config import get_logger
@@ -565,7 +565,7 @@ class SchedulerService:
                     schedule.ephemeral_agent_id
                 )
             )
-            if session_info and session_info.state.value in ("active", "starting", "paused"):
+            if session_info and (is_live(session_info.state) or is_deliverable(session_info.state)):
                 raise RuntimeError(
                     f"Ephemeral agent {schedule.ephemeral_agent_id} is currently active"
                 )
@@ -1067,7 +1067,7 @@ class SchedulerService:
                     break
 
                 # If session already terminated or errored externally, just update state
-                if session_info.state.value in ("terminated", "error"):
+                if is_terminal(session_info.state):
                     legion_logger.info(
                         f"Ephemeral session {session_id} is {session_info.state.value}"
                     )
@@ -1738,7 +1738,7 @@ class SchedulerService:
                 schedule.updated_at = datetime.now(UTC).timestamp()
                 recovered += 1
 
-            elif session_info.state.value in ("active", "starting"):
+            elif is_live(session_info.state):
                 # Agent still running (crash leftover) — terminate it
                 legion_logger.info(
                     f"Terminating orphaned active agent {agent_id} "

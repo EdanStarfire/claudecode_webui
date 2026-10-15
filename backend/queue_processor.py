@@ -12,7 +12,8 @@ from typing import TYPE_CHECKING, Any
 
 from shared.logging_config import get_logger
 
-from .session_manager import AUTO_START_STATES, SessionState
+from .session_lifecycle import is_active, is_errored, is_paused
+from .session_manager import AUTO_START_STATES
 
 if TYPE_CHECKING:
     from .session_coordinator import SessionCoordinator
@@ -135,7 +136,7 @@ class QueueProcessor:
                     continue
 
                 # Check session state
-                if session_info.state == SessionState.ERROR:
+                if is_errored(session_info.state):
                     queue_proc_logger.warning(
                         f"Session {session_id} in ERROR state — halting queue processor. "
                         "User must fix session manually."
@@ -151,7 +152,7 @@ class QueueProcessor:
                 # the same "overnight wait" philosophy _wait_for_idle() below already
                 # uses. PAUSED used to fall into the same bounded wait as everything
                 # else and simply fail after 120s.
-                if session_info.state != SessionState.ACTIVE:
+                if not is_active(session_info.state):
                     if session_info.state in AUTO_START_STATES:
                         queue_proc_logger.info(f"Auto-starting session {session_id} for queue processing")
                         # Register WebSocket message callback so messages are broadcast to frontend
@@ -172,7 +173,7 @@ class QueueProcessor:
                                 await self._broadcast("failed", session_id, item)
                             break
 
-                    wait_timeout = None if session_info.state == SessionState.PAUSED else 120
+                    wait_timeout = None if is_paused(session_info.state) else 120
                     if not await self._wait_for_active(session_id, timeout=wait_timeout):
                         queue_proc_logger.error(f"Session {session_id} did not become active")
                         session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
@@ -280,9 +281,9 @@ class QueueProcessor:
             info = await self._coordinator.session_manager.get_session_info(session_id)
             if not info:
                 return False
-            if info.state == SessionState.ACTIVE:
+            if is_active(info.state):
                 return True
-            if info.state == SessionState.ERROR:
+            if is_errored(info.state):
                 return False
             await asyncio.sleep(1)
             elapsed += 1
@@ -305,7 +306,7 @@ class QueueProcessor:
                 return False
 
             # Session entered error state — mark item failed and stop
-            if info.state == SessionState.ERROR:
+            if is_errored(info.state):
                 session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
                 if session_dir:
                     await self._coordinator.queue_manager.mark_failed(
