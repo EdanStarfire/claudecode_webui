@@ -18,6 +18,13 @@ when ACTIVE" or "skip if already TERMINATED", not duplicated deliverability/
 interruptibility logic). Anything NOT in the allowlist fails loudly — same
 source-scanning regression-guard convention as
 shared/tests/test_event_registry_completeness.py.
+
+AC8 (issue #2189, epic #1990 stage 7 sub-stage ac89) broadens the scan again to also
+catch string-valued duplicates of the same comparisons — ``.state.value ==``/``!=``/
+``in (...)`` — scoped specifically to ``.state.value`` and not bare ``.value``, since
+confirmed-unrelated enums elsewhere (``ToolCall.status.value``,
+``ParsedMessage.type.value``) also appear in comparison-adjacent contexts under
+``backend/`` and must stay out of scope.
 """
 
 from __future__ import annotations
@@ -47,6 +54,12 @@ _COMPARISON_PATTERNS = [
     re.compile(r"SessionState\.\w+\s*==(?!=)"),
     re.compile(r"SessionState\.\w+\s*!="),
     re.compile(r"\bin\s*[\(\[\{][^)\]\}]*SessionState\.\w+[^)\]\}]*[\)\]\}]"),
+    # AC8: string-valued duplicates of the same comparisons — scoped specifically to
+    # ``.state.value`` (not bare ``.value``, which also covers confirmed-unrelated
+    # enums like ``ToolCall.status.value``/``ParsedMessage.type.value``).
+    re.compile(r"\.state\.value\s*==(?!=)"),
+    re.compile(r"\.state\.value\s*!="),
+    re.compile(r"\.state\.value\s+in\s*[\(\[\{]"),
 ]
 
 # file (relative to repo root) -> set of exact stripped line snippets permitted to
@@ -98,25 +111,6 @@ ALLOWLIST: dict[str, set[str]] = {
         # Post-check: resolve_permission_closed() returns True for its own no-op case
         # too, so re-confirm the real resulting state before logging a resume.
         "if post_info and post_info.state == SessionState.ACTIVE:",
-    },
-    "backend/queue_processor.py": {
-        # Halt the processor outright on ERROR — a terminal condition, not a
-        # deliverability check.
-        "if session_info.state == SessionState.ERROR:",
-        # _wait_for_active/_wait_for_idle: give-up-polling terminal check (appears in
-        # both methods, identical text) — not a predicate duplicate, just "stop
-        # waiting, this session errored out."
-        "if info.state == SessionState.ERROR:",
-        # ACTIVE sends immediately (skip the wait-for-active path below); every other
-        # state (including PAUSED, which IS deliverable) goes through the bounded/
-        # unbounded wait instead — this is queueing-timing logic, not deliverability.
-        "if session_info.state != SessionState.ACTIVE:",
-        # PAUSED gets an unbounded wait (permission decisions can take arbitrarily
-        # long); every other non-ACTIVE state gets the normal 120s bound.
-        "wait_timeout = None if session_info.state == SessionState.PAUSED else 120",
-        # _wait_for_active: polling terminal condition (reached ACTIVE), not a
-        # predicate duplicate.
-        "if info.state == SessionState.ACTIVE:",
     },
     "backend/routers/session_runtime.py": {
         # REST restart_session: same deliberate ACTIVE-only restart gate as

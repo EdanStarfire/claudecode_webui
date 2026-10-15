@@ -29,6 +29,8 @@ from backend.config_resolution import resolve_template_config
 from backend.docker_utils import translate_docker_tmp_path
 from backend.session_config import DEFAULTS as _SESSION_DEFAULTS
 from backend.session_config import SessionConfig
+from backend.session_lifecycle import is_active, is_paused
+from backend.session_manager import SessionState
 from backend.task_utils import task_done_log_exception
 from shared.logging_config import get_logger
 
@@ -38,7 +40,7 @@ if TYPE_CHECKING:
     from backend.legion_system import LegionSystem
 
 
-def _compute_activity_status(state: str, is_processing: bool) -> str:
+def _compute_activity_status(state: SessionState, is_processing: bool) -> str:
     """Derive a busy/idle/paused/state-name activity label.
 
     PAUSED always wins over is_processing: a session paused mid permission
@@ -46,11 +48,11 @@ def _compute_activity_status(state: str, is_processing: bool) -> str:
     during the pause/resume cycle), so checking state first prevents a
     paused minion from ever being reported as "busy".
     """
-    if state == "paused":
+    if is_paused(state):
         return "paused"
-    if state == "active":
+    if is_active(state):
         return "busy" if is_processing else "idle"
-    return state
+    return state.value
 
 
 class SendCommInput(TypedDict):
@@ -1471,7 +1473,7 @@ class LegionMCPTools:
                 slug = minion.slug or name
                 role = minion.role or "No role specified"
                 state = minion.state.value if hasattr(minion.state, 'value') else str(minion.state)
-                activity = _compute_activity_status(state, minion.is_processing)
+                activity = _compute_activity_status(minion.state, minion.is_processing)
                 capabilities = ", ".join(minion.capabilities) if minion.capabilities else "None"
                 cwd = minion.working_directory or "N/A"
 
@@ -1561,7 +1563,7 @@ class LegionMCPTools:
         # State
         state_str = minion.state.value if hasattr(minion.state, 'value') else str(minion.state)
         profile_lines.append(f"**State:** {state_str}")
-        activity = _compute_activity_status(state_str, minion.is_processing)
+        activity = _compute_activity_status(minion.state, minion.is_processing)
         profile_lines.append(f"**Activity:** {activity}")
 
         # Capabilities with expertise scores

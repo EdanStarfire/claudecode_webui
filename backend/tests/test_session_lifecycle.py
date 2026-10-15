@@ -23,12 +23,16 @@ from backend.session_lifecycle import (
     STARTABLE_STATES,
     LifecycleEvent,
     SessionState,
+    is_active,
     is_auto_startable,
     is_deliverable,
+    is_errored,
     is_interruptible,
     is_live,
     is_not_terminated,
+    is_paused,
     is_startable,
+    is_terminal,
     transition,
     transition_processing,
 )
@@ -165,6 +169,23 @@ class TestPredicates:
     def test_is_not_terminated(self):
         for state in ALL_STATES:
             assert is_not_terminated(state) == (state is not SessionState.TERMINATED)
+
+    def test_is_active(self):
+        for state in ALL_STATES:
+            assert is_active(state) == (state is SessionState.ACTIVE)
+
+    def test_is_paused(self):
+        for state in ALL_STATES:
+            assert is_paused(state) == (state is SessionState.PAUSED)
+
+    def test_is_errored(self):
+        for state in ALL_STATES:
+            assert is_errored(state) == (state is SessionState.ERROR)
+
+    def test_is_terminal(self):
+        expected = {SessionState.TERMINATED, SessionState.ERROR}
+        for state in ALL_STATES:
+            assert is_terminal(state) == (state in expected)
 
 
 class TestTransitionProcessing:
