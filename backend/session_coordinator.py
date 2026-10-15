@@ -51,7 +51,7 @@ from .session_recorder import SessionRecorder
 from .task_registry import TASK_LIFECYCLE_SUBTYPES, TaskLegRegistry
 from .task_utils import task_done_log_exception
 from .timestamp_injection import maybe_inject_timestamp
-from .timestamp_utils import get_unix_timestamp
+from .timestamp_utils import get_unix_timestamp, parse_rate_limit_reset_time
 
 # Get specialized logger for coordinator actions
 coord_logger = get_logger('coordinator', category='COORDINATOR')
@@ -398,6 +398,26 @@ def _resolve_analytics_model_label(cfg, sdk_reported_model: str | None = None) -
     return sdk_reported_model if sdk_reported_model is not None else cfg.model
 
 
+def _nested_metadata(message_data: Any, parsed_message: Any) -> dict:
+    """Issue #2190: a real SDK-origin message_callback invocation receives
+    MessageRecord.to_dict() (metadata already nested under message_data['metadata'])
+    since issue #2084 stage 3-B — _create_message_callback's own
+    message_processor.process_message(message_data, source="sdk") call then
+    re-dispatches that already-canonical dict through the same flat-shape-oriented
+    message_parser.py handlers a second time, which cannot recover a field like
+    is_error/api_error_status/model from a dict that no longer carries it at the
+    top level (confirmed via a real raw-fixture replay: parsed_message.metadata
+    silently came back empty of these for a genuine nested 'result' record).
+    Prefers message_data's own nested metadata (the reliable source for real
+    SDK-origin messages) and falls back to parsed_message.metadata for callers
+    that still pass a flat dict directly (e.g. synthetic system messages, some
+    test call sites)."""
+    nested = message_data.get('metadata') if isinstance(message_data, dict) else None
+    if isinstance(nested, dict) and nested:
+        return nested
+    return parsed_message.metadata or {}
+
+
 def _extract_send_comm_sender_attachments(result_content: Any) -> list[dict] | None:
     """Issue #1593/#1730: Parse sender resource IDs for mcp__legion__send_comm attachments.
 
@@ -660,6 +680,14 @@ class SessionCoordinator:
         self._subagent_usage_by_session: dict[str, dict[str, float]] = {}
         # Callback for broadcasting usage_updated events (injected by web_server)
         self._usage_broadcast_callback: Callable[[str, dict], None] | None = None
+        # Issue #2190: most recent synthetic (model == "<synthetic>") assistant text
+        # and its timestamp, keyed by session — a usage-limit notice precedes its
+        # ResultMessage within the same turn. Popped unconditionally by the 'result'
+        # branch of _create_message_callback for every result (not just a 429
+        # match), since a stashed notice is only ever paired with the one result
+        # immediately following it — same per-session-dict pattern as
+        # _last_turn_model_by_session.
+        self._last_synthetic_text_by_session: dict[str, tuple[str, float]] = {}
 
         # Issue #404: Resource MCP tools for displaying resources in task panel
         # Callback for broadcasting resource_registered events will be set by web_server
@@ -4873,6 +4901,42 @@ class SessionCoordinator:
                             f"Turn completed with {len(errors)} error(s) for session {session_id}: {errors}"
                         )
 
+                    # Issue #2190 (AC1): the real production usage-limit signal is an
+                    # ordinary ResultMessage (no exception raised, no ERROR transition)
+                    # with is_error + api_error_status == 429 — _create_error_callback's
+                    # critical-error branch (_maybe_schedule_auto_resume) never sees this,
+                    # since nothing failed from the SDK's own perspective. Reads from
+                    # message_data's own nested metadata (via _nested_metadata), not
+                    # parsed_message.metadata — see that helper's docstring.
+                    #
+                    # Pop the synthetic-text stash unconditionally here, regardless of
+                    # whether this particular result turns out to be the 429 case — a
+                    # stashed synthetic notice is only ever paired with the ONE result
+                    # that immediately follows it; leaving it cached past a non-matching
+                    # or non-error result would let a later, unrelated detection for this
+                    # session consult a stale reset-time text.
+                    _synthetic_entry = self._last_synthetic_text_by_session.pop(session_id, None)
+                    _result_meta = _nested_metadata(message_data, parsed_message)
+                    if _result_meta.get('is_error'):
+                        if _result_meta.get('api_error_status') == 429:
+                            _result_ts = parsed_message.timestamp
+                            if isinstance(_result_ts, str):
+                                _result_ts = datetime.fromisoformat(_result_ts).timestamp()
+                            elif not isinstance(_result_ts, (int, float)):
+                                _result_ts = datetime.now(UTC).timestamp()
+                            await self._handle_rate_limited_result(
+                                session_id, _result_ts, _synthetic_entry
+                            )
+                        else:
+                            # Issue #2190 (AC3): WARNING so an unrecognized is_error shape
+                            # (the primary detection risk) is visible even with INFO off.
+                            coord_logger.warning(
+                                f"Result for session {session_id} flagged is_error but is "
+                                f"not a recognized rate-limit signal — "
+                                f"api_error_status={_result_meta.get('api_error_status')}, "
+                                f"subtype={_result_meta.get('subtype')}"
+                            )
+
                 # Issue #1029: Reactive is_processing tracking based on message type.
                 # Instead of counting pending ResultMessages (which breaks when the SDK
                 # folds injected messages into the active turn), we react to message types:
@@ -5001,6 +5065,27 @@ class SessionCoordinator:
                     # model the sub-agent happened to use.
                     _msg_meta = parsed_message.metadata or {}
                     _msg_model = _msg_meta.get('model')
+
+                    # Issue #2190 (AC2 tier 2): a usage-limit notice arrives as a
+                    # synthetic AssistantMessage (model == "<synthetic>") immediately
+                    # before its ResultMessage. Stash it for the result branch's
+                    # fire_at resolver — popped there, so a stale value from an
+                    # earlier turn never leaks into an unrelated later result. Reads
+                    # from message_data's own nested metadata (via _nested_metadata),
+                    # not _msg_meta/parsed_message.metadata — see that helper's
+                    # docstring for why the latter can't be trusted for a real
+                    # SDK-origin message.
+                    _synth_meta = _nested_metadata(message_data, parsed_message)
+                    if _synth_meta.get('model') == '<synthetic>':
+                        _synth_ts = parsed_message.timestamp
+                        if isinstance(_synth_ts, str):
+                            _synth_ts = datetime.fromisoformat(_synth_ts).timestamp()
+                        elif not isinstance(_synth_ts, (int, float)):
+                            _synth_ts = datetime.now(UTC).timestamp()
+                        self._last_synthetic_text_by_session[session_id] = (
+                            parsed_message.content or '', _synth_ts
+                        )
+
                     if _msg_model and not _msg_meta.get('parent_tool_use_id'):
                         self._last_turn_model_by_session[session_id] = _msg_model
                     elif _msg_meta.get('parent_tool_use_id'):
@@ -5129,6 +5214,41 @@ class SessionCoordinator:
         except Exception:
             logger.exception("Failed to update session state to ERROR")
 
+    def _resolve_auto_resume_fire_at(
+        self,
+        rejected_entry: dict | None,
+        synthetic_entry: tuple[str, float] | None,
+        fallback_ts: float,
+    ) -> tuple[float, str]:
+        """Issue #2190 (AC2): shared 3-tier fire_at resolver for both the
+        critical-error path (_maybe_schedule_auto_resume) and the ordinary-result
+        429 path (_handle_rate_limited_result).
+
+        Tiers, in priority order:
+        1. A `rejected` _rate_limits_state entry's resets_at (issue #899).
+        2. The reset time parsed out of a preceding synthetic assistant message's
+           text (parse_rate_limit_reset_time) — silently falls through to tier 3 on
+           any parse failure (unknown timezone, format drift, no match).
+        3. A fixed delay from `fallback_ts`.
+
+        Returns (fire_at, source) where source is one of "rate_limit_state",
+        "synthetic_text", "fallback" — recorded on the schedule for diagnosis.
+        """
+        if rejected_entry is not None and rejected_entry.get("resets_at"):
+            try:
+                resets_at_ts = datetime.fromisoformat(rejected_entry["resets_at"]).timestamp()
+                return resets_at_ts + AUTO_RESUME_GRACE_PERIOD_SECONDS, "rate_limit_state"
+            except (ValueError, TypeError):
+                pass
+
+        if synthetic_entry is not None:
+            text, text_ts = synthetic_entry
+            parsed = parse_rate_limit_reset_time(text, text_ts)
+            if parsed is not None:
+                return parsed + AUTO_RESUME_GRACE_PERIOD_SECONDS, "synthetic_text"
+
+        return fallback_ts + AUTO_RESUME_FALLBACK_DELAY_SECONDS, "fallback"
+
     async def _maybe_schedule_auto_resume(
         self, session_id: str, structured_error_kwargs: dict
     ) -> None:
@@ -5153,7 +5273,10 @@ class SessionCoordinator:
             None,
         )
         if api_error_status != 429 and rejected_entry is None:
-            logger.info(
+            # Issue #2190 (AC3): bumped from INFO to WARNING for consistency with the
+            # new ordinary-result path's equivalent diagnostic — production runs with
+            # INFO logging off, so this must be visible there too.
+            logger.warning(
                 f"ERROR transition for session {session_id} not rate-limit-shaped — "
                 f"error_subtype={structured_error_kwargs.get('error_subtype')}, "
                 f"error_terminal_reason={structured_error_kwargs.get('error_terminal_reason')}, "
@@ -5161,15 +5284,10 @@ class SessionCoordinator:
             )
             return
 
-        fire_at = None
-        if rejected_entry is not None and rejected_entry.get("resets_at"):
-            try:
-                resets_at_ts = datetime.fromisoformat(rejected_entry["resets_at"]).timestamp()
-                fire_at = resets_at_ts + AUTO_RESUME_GRACE_PERIOD_SECONDS
-            except (ValueError, TypeError):
-                fire_at = None
-        if fire_at is None:
-            fire_at = datetime.now(UTC).timestamp() + AUTO_RESUME_FALLBACK_DELAY_SECONDS
+        synthetic_entry = self._last_synthetic_text_by_session.pop(session_id, None)
+        fire_at, fire_at_source = self._resolve_auto_resume_fire_at(
+            rejected_entry, synthetic_entry, datetime.now(UTC).timestamp()
+        )
 
         try:
             session_info = await self.session_manager.get_session_info(session_id)
@@ -5183,6 +5301,77 @@ class SessionCoordinator:
                 session_id=session_id,
                 session_name=session_info.name,
                 fire_at=fire_at,
+                fire_at_source=fire_at_source,
+            )
+            logger.warning(
+                f"Scheduled auto-resume for session {session_id} from ERROR-path "
+                f"detection: fire_at={fire_at}, source={fire_at_source}"
+            )
+        except Exception:
+            logger.exception(f"Failed to schedule auto-resume for session {session_id}")
+
+    async def _handle_rate_limited_result(
+        self,
+        session_id: str,
+        record_ts: float,
+        synthetic_entry: tuple[str, float] | None,
+    ) -> None:
+        """Issue #2190 (AC1): schedule a one-time auto-resume for the real production
+        usage-limit signal — an ordinary ResultMessage (no exception, no ERROR
+        transition) carrying `is_error` + `api_error_status == 429`, delivered
+        through the normal result path `_maybe_schedule_auto_resume` never sees.
+
+        `synthetic_entry` is passed in already popped from
+        `_last_synthetic_text_by_session` by the caller (the 'result' branch of
+        `_create_message_callback`), which pops it unconditionally for every result
+        — not just this 429 path — since a stashed synthetic notice is only ever
+        paired with the one result immediately following it.
+
+        Design decision (Option B): the session is genuinely ACTIVE here (clean CLI
+        completion, live subprocess, is_processing already reset) — forcing an ERROR
+        transition would be false and would needlessly tear down a healthy SDK
+        subprocess. Instead of reusing the ERROR pipeline, this pauses the queue
+        directly via pause_queue() so queued sends hold until the schedule fires
+        (scheduler_service._fire_auto_resume_schedule unpauses it) or a manual send
+        cancels the schedule (routers/sessions.py unpauses it there).
+
+        pause_queue(True) is deliberately the LAST step, only after the schedule is
+        confirmed created — pausing first and then failing to create a schedule
+        (session deleted mid-flight, scheduler/storage error) would leave the queue
+        paused with nothing ever able to unpause it again (no schedule to fire or
+        cancel). A schedule with no queue hold is recoverable (the nudge still gets
+        enqueued on fire); a queue hold with no schedule is not.
+        """
+        if self.legion_system is None:
+            return
+
+        rejected_entry = next(
+            (v for v in self._rate_limits_state.values() if v.get("status") == "rejected"),
+            None,
+        )
+        fire_at, fire_at_source = self._resolve_auto_resume_fire_at(
+            rejected_entry, synthetic_entry, record_ts
+        )
+
+        try:
+            session_info = await self.session_manager.get_session_info(session_id)
+            if session_info is None:
+                logger.warning(
+                    f"Rate-limit-shaped result for session {session_id} but session "
+                    f"info missing"
+                )
+                return
+            await self.legion_system.scheduler_service.upsert_auto_resume_schedule(
+                legion_id=session_info.project_id,
+                session_id=session_id,
+                session_name=session_info.name,
+                fire_at=fire_at,
+                fire_at_source=fire_at_source,
+            )
+            await self.pause_queue(session_id, True)
+            logger.warning(
+                f"Scheduled auto-resume for session {session_id} from ordinary-result "
+                f"429 detection: fire_at={fire_at}, source={fire_at_source}"
             )
         except Exception:
             logger.exception(f"Failed to schedule auto-resume for session {session_id}")

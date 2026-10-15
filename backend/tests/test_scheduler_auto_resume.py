@@ -60,6 +60,7 @@ def _make_system(session_info=None, start_session_result: bool = True, enqueue_r
     coordinator.session_manager = session_manager
     coordinator.start_session = AsyncMock(return_value=start_session_result)
     coordinator.enqueue_message = AsyncMock(return_value=enqueue_result or {"queue_id": "q-1"})
+    coordinator.pause_queue = AsyncMock(return_value=True)
     coordinator.data_dir = Path("/nonexistent")
 
     system = MagicMock()
@@ -329,6 +330,112 @@ async def test_fire_start_failure_marks_failed_and_still_self_deletes():
 
 
 # ---------------------------------------------------------------------------
+# Issue #2190: pause_queue(False) on fire + fire_at_source persistence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fire_unpauses_queue_for_error_recovery_branch():
+    """A session that WAS forced through ERROR (the pre-#2190 critical-error path)
+    still must have its queue unpaused on fire — recover_session() never touches
+    queue_paused itself."""
+    error_info = _make_session_info(state=SessionState.ERROR)
+    terminated_info = _make_session_info(state=SessionState.TERMINATED)
+    system = _make_system(session_info=error_info)
+    system.session_coordinator.session_manager.get_session_info = AsyncMock(
+        side_effect=[error_info, terminated_info]
+    )
+    svc = _make_svc(system)
+    svc._ensure_session_active = AsyncMock(return_value=True)
+    schedule = _make_auto_resume_schedule()
+    svc._schedules[schedule.schedule_id] = schedule
+
+    await svc._fire_auto_resume_schedule(schedule, 1000.0)
+
+    system.session_coordinator.pause_queue.assert_awaited_once_with("sess-1", False)
+
+
+@pytest.mark.asyncio
+async def test_fire_unpauses_queue_for_already_active_direct_nudge_branch():
+    """Option B's new common case: the session was never ERROR (ordinary-result
+    429 detection left it genuinely ACTIVE) — the queue was paused at detection
+    time and must be unpaused here, since nothing else in this branch would do it."""
+    session_info = _make_session_info(state=SessionState.ACTIVE)
+    system = _make_system(session_info=session_info)
+    svc = _make_svc(system)
+    schedule = _make_auto_resume_schedule()
+    svc._schedules[schedule.schedule_id] = schedule
+
+    await svc._fire_auto_resume_schedule(schedule, 1000.0)
+
+    system.session_coordinator.pause_queue.assert_awaited_once_with("sess-1", False)
+
+
+@pytest.mark.asyncio
+async def test_fire_deferred_for_paused_session_does_not_unpause_queue():
+    """A defer (PAUSED mid-permission-wait) must not touch queue_paused — the
+    schedule hasn't actually fired yet."""
+    session_info = _make_session_info(state=SessionState.PAUSED)
+    system = _make_system(session_info=session_info)
+    svc = _make_svc(system)
+    schedule = _make_auto_resume_schedule(next_run=1000.0)
+    svc._schedules[schedule.schedule_id] = schedule
+
+    await svc._fire_auto_resume_schedule(schedule, 1000.0)
+
+    system.session_coordinator.pause_queue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_upsert_records_fire_at_source():
+    svc = _make_svc(_make_system())
+
+    schedule = await svc.upsert_auto_resume_schedule(
+        legion_id="proj-1",
+        session_id="sess-1",
+        session_name="Test",
+        fire_at=5000.0,
+        fire_at_source="synthetic_text",
+    )
+
+    assert schedule.fire_at_source == "synthetic_text"
+
+    bumped = await svc.upsert_auto_resume_schedule(
+        legion_id="proj-1",
+        session_id="sess-1",
+        session_name="Test",
+        fire_at=9000.0,
+        fire_at_source="rate_limit_state",
+    )
+
+    assert bumped.fire_at_source == "rate_limit_state"
+
+
+@pytest.mark.asyncio
+async def test_fire_at_source_round_trips_through_persistence(tmp_path):
+    """fire_at_source must survive a backend restart (fresh SchedulerService
+    reloading from the same on-disk schedules.json), same as next_run."""
+    system = _make_system()
+    system.session_coordinator.data_dir = tmp_path
+    svc = SchedulerService(system)
+
+    schedule = await svc.upsert_auto_resume_schedule(
+        legion_id="proj-1",
+        session_id="sess-1",
+        session_name="Test",
+        fire_at=1234567890.0,
+        fire_at_source="synthetic_text",
+    )
+    assert schedule.fire_at_source == "synthetic_text"
+
+    svc2 = SchedulerService(system)
+    await svc2._load_schedules("proj-1")
+
+    reloaded = svc2._schedules[schedule.schedule_id]
+    assert reloaded.fire_at_source == "synthetic_text"
+
+
+# ---------------------------------------------------------------------------
 # _tick() / run_now() dispatch
 # ---------------------------------------------------------------------------
 
@@ -390,6 +497,7 @@ async def test_tick_fires_multiple_auto_resume_schedules_independently_same_fire
     coordinator.session_manager.recover_session = AsyncMock(return_value=True)
     coordinator.start_session = AsyncMock(return_value=True)
     coordinator.enqueue_message = AsyncMock(return_value={"queue_id": "q-1"})
+    coordinator.pause_queue = AsyncMock(return_value=True)
     coordinator.data_dir = Path("/nonexistent")
     system = MagicMock()
     system.session_coordinator = coordinator

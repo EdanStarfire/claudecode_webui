@@ -487,9 +487,15 @@ def build_router(webui) -> APIRouter:
         # queue_processor/comm_router/MCP-tool sends, which must NOT cancel it (a
         # queued/cron/comm delivery isn't the user taking over).
         if success and webui.coordinator.legion_system:
-            await webui.coordinator.legion_system.scheduler_service.cancel_auto_resume_schedule(
+            cancelled = await webui.coordinator.legion_system.scheduler_service.cancel_auto_resume_schedule(
                 session_id
             )
+            # Issue #2190: only unpause when a pending auto-resume actually existed and
+            # was cancelled — never unconditionally, or this would silently clear a
+            # queue pause the user set manually for unrelated reasons (which has no
+            # pending auto_resume schedule to cancel here).
+            if cancelled:
+                await webui.coordinator.pause_queue(session_id, False)
         return {"success": success}
 
     @router.get("/api/sessions/{session_id}/messages")

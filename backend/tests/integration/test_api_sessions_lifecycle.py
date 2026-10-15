@@ -272,6 +272,11 @@ class TestAutoResumeCancellationOnManualSend:
             session_name=session["name"],
             fire_at=9999999999.0,
         )
+        # Issue #2190: simulate the queue-hold detection would have set alongside
+        # this schedule — the manual send below must clear it too, since
+        # cancel_auto_resume_schedule() returns True here (a pending schedule
+        # actually existed).
+        await coordinator.pause_queue(sid, True)
 
         resp = await client.post(
             f"/api/sessions/{sid}/messages",
@@ -282,6 +287,39 @@ class TestAutoResumeCancellationOnManualSend:
 
         remaining = await scheduler.get_schedule(schedule.schedule_id)
         assert remaining is None
+
+        info = await coordinator.session_manager.get_session_info(sid)
+        assert info.queue_paused is False
+
+    async def test_manual_send_without_pending_auto_resume_does_not_clobber_manual_pause(
+        self, api_integration_env
+    ):
+        """Issue #2190: the unpause-on-cancel must be scoped to exactly the case
+        where cancel_auto_resume_schedule() actually cancelled something. A queue
+        the user paused manually for unrelated reasons (no pending auto_resume
+        schedule to cancel) must survive an ordinary manual send untouched."""
+        client = api_integration_env["client"]
+        coordinator = api_integration_env["coordinator"]
+        session = await _create_named_session(api_integration_env, "single_turn")
+        sid = session["session_id"]
+
+        await client.post(f"/api/sessions/{sid}/start")
+        await _wait_for_state(client, sid, "active")
+
+        await coordinator.pause_queue(sid, True)
+
+        resp = await client.post(
+            f"/api/sessions/{sid}/messages",
+            json={"message": "an ordinary message, no auto-resume involved"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+        info = await coordinator.session_manager.get_session_info(sid)
+        assert info.queue_paused is True, (
+            "a manual send with no pending auto-resume schedule must not clear a "
+            "queue pause the user set for unrelated reasons"
+        )
 
     async def test_non_rest_delivery_path_does_not_cancel_auto_resume(self, api_integration_env):
         """coordinator.send_message() is also the delivery primitive used by the
@@ -314,6 +352,62 @@ class TestAutoResumeCancellationOnManualSend:
 
         remaining = await scheduler.get_schedule(schedule.schedule_id)
         assert remaining is not None, "non-REST send_message() must not cancel the auto-resume"
+
+
+class TestIssue2190RateLimitResultFixtureReplay:
+    """AC4/T1: replay the real production usage-limit signal shape — a synthetic
+    AssistantMessage (model '<synthetic>') immediately followed by an ordinary
+    (non-exception) ResultMessage with is_error + api_error_status == 429 — through
+    the real pipeline via the committed raw fixture
+    backend/tests/fixtures/raw/rate_limit_result/. Proves end-to-end that detection
+    fires for this exact signal shape, not just via a hand-constructed dict in
+    test_session_coordinator.py's unit-level tests."""
+
+    async def test_replay_schedules_auto_resume_at_parsed_reset_time_and_pauses_queue(
+        self, api_integration_env
+    ):
+        from datetime import UTC, datetime
+
+        from backend.timestamp_utils import parse_rate_limit_reset_time
+
+        client = api_integration_env["client"]
+        coordinator = api_integration_env["coordinator"]
+        session = await _create_named_session(api_integration_env, "raw/rate_limit_result")
+        sid = session["session_id"]
+
+        # The fixture's own recorded "timestamp" field is decorative only —
+        # MessageRecord.from_sdk_message() stamps real wall-clock time.time() on
+        # replay (same as live production), so the reference for recomputing the
+        # expected fire_at is "now", not the fixture's authored timestamp.
+        before = datetime.now(UTC).timestamp()
+        resp = await client.post(f"/api/sessions/{sid}/start")
+        assert resp.status_code == 200, f"start session failed: {resp.text}"
+        after = datetime.now(UTC).timestamp()
+
+        # Option B: this signal must never force an ERROR transition.
+        session_info = await coordinator.session_manager.get_session_info(sid)
+        assert session_info.state.value != "error"
+        assert session_info.queue_paused is True
+
+        scheduler = coordinator.legion_system.scheduler_service
+        schedules = await scheduler.list_schedules(
+            legion_id=session_info.project_id, minion_id=sid
+        )
+        auto_resume_schedules = [s for s in schedules if s.schedule_type == "auto_resume"]
+        assert len(auto_resume_schedules) == 1
+        schedule = auto_resume_schedules[0]
+        assert schedule.fire_at_source == "synthetic_text"
+
+        # Independently recompute the expected fire_at from the fixture's own
+        # recorded synthetic text, using the real wall-clock window the replay ran
+        # in as the reference — same resolver the production code calls — rather
+        # than hardcoding an absolute number.
+        parsed = parse_rate_limit_reset_time(
+            "You've hit your session limit · resets 6:10am (UTC)", before
+        )
+        assert parsed is not None
+        expected_fire_at = parsed + 300  # AUTO_RESUME_GRACE_PERIOD_SECONDS
+        assert abs(schedule.next_run - expected_fire_at) < max(after - before, 1.0) + 2.0
 
 
 class TestGetMessages:

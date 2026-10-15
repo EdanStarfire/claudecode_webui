@@ -53,6 +53,9 @@
         />
       </div>
 
+      <!-- Auto-resume pending indicator (Issue #2190) -->
+      <AutoResumeBadge v-if="autoResumeSchedule" :fire-at="autoResumeSchedule.next_run" />
+
       <!-- Center: Context usage indicator (issue #905) -->
       <div v-if="contextPct !== null" class="d-flex align-items-center gap-1">
         <small class="text-muted">Ctx</small>
@@ -120,7 +123,9 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
+import { useScheduleStore } from '@/stores/schedule'
 import RateLimitBadge from './RateLimitBadge.vue'
+import AutoResumeBadge from './AutoResumeBadge.vue'
 
 const props = defineProps({
   sessionId: {
@@ -136,6 +141,7 @@ const props = defineProps({
 const router = useRouter()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
+const scheduleStore = useScheduleStore()
 
 const session = computed(() => sessionStore.sessions.get(props.sessionId))
 // 'manual' is the canonical new-write value for the legacy 'default' mode; normalize
@@ -251,6 +257,12 @@ const hasRateLimitData = computed(() =>
   uiStore.rateLimits?.five_hour?.used_percentage != null ||
   uiStore.rateLimits?.seven_day?.used_percentage != null
 )
+
+// Issue #2190: "rate-limited, auto-resume pending" indicator — independent of
+// SessionState (Option B keeps the session truthfully ACTIVE while held), driven
+// entirely by the existing schedule-store data already eagerly loaded for the
+// current project (see AgentStrip.vue/BreadcrumbNavHeader.vue).
+const autoResumeSchedule = computed(() => scheduleStore.getAutoResumeSchedule(props.sessionId))
 
 // Issue #1848: jump to previous/next turn-boundary message (user message or inbound comm).
 // virtualNav is MessageList's exposed API, forwarded down as a prop from SessionView.vue the

@@ -73,6 +73,9 @@ class Schedule:
     # Disposable schedule support (issue #1538)
     repeat_count: int | None = None  # None = unlimited; positive int = max fires before auto-delete
     fire_count: int = 0              # increments once per fire dispatch regardless of outcome
+    # Issue #2190: records which tier of the auto-resume fire_at resolver was used
+    # ("rate_limit_state" | "synthetic_text" | "fallback"). None for non-auto_resume schedules.
+    fire_at_source: str | None = None
 
     def to_dict(self, metrics: "ScheduleMetrics | None" = None) -> dict[str, Any]:
         """Convert to dictionary for serialization.
@@ -108,6 +111,7 @@ class Schedule:
             "last_exit_code": self.last_exit_code,
             "repeat_count": self.repeat_count,
             "fire_count": self.fire_count,
+            "fire_at_source": self.fire_at_source,
         }
         # Ephemeral fields (issue #578) - only include when set
         if self.session_config is not None:
@@ -149,6 +153,8 @@ class Schedule:
         # Disposable schedule fields (issue #1538) - backwards-compatible defaults
         data.setdefault("repeat_count", None)
         data.setdefault("fire_count", 0)
+        # Issue #2190 - backwards-compatible default
+        data.setdefault("fire_at_source", None)
         # Discard legacy field from old data
         data.pop("current_ephemeral_session_id", None)
         return cls(**data)
