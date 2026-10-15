@@ -440,17 +440,19 @@ class SessionCoordinator:
         port: int = 8000,
         session_recording_enabled: bool = False,
         watchdog: Any | None = None,
+        session_manager: Any | None = None,
+        template_manager: Any | None = None,
     ):
         self.data_dir = data_dir or Path("data")
         self.experimental = experimental
-        # Issue #2159: watchdog is now a declared constructor dependency (same
-        # None-default-then-reassign pattern as litellm_proxy_manager below) —
-        # web_server.py still constructs SessionWatchdogService after this coordinator
-        # (it needs self.session_manager/self.template_manager, which only exist once
-        # __init__ returns) and reassigns it via set_watchdog(), but every consumer now
-        # finds `self._watchdog` always present (never missing the attribute entirely),
-        # so the `hasattr(self, '_watchdog')` half of every guard is gone — only the
-        # `is not None` half remains, same as litellm_proxy_manager's own guard.
+        # Issue #2159: watchdog is a declared constructor dependency (same
+        # None-default-then-reassign pattern as litellm_proxy_manager below).
+        # Issue #2184: web_server.py now constructs SessionManager/TemplateManager
+        # (and the SessionWatchdogService built from them) BEFORE this coordinator,
+        # passing all three in here directly — set_watchdog()'s post-construction
+        # reassignment is gone, every consumer finds `self._watchdog` already correct
+        # from __init__ (only the `is not None` guard remains, same as
+        # litellm_proxy_manager's own guard).
         self._watchdog = watchdog
         # Issue #1998: dev-only raw SDK traffic capture, structurally unavailable unless the
         # Backend was started with --enable-session-recording. See start_session()'s recorder
@@ -460,7 +462,12 @@ class SessionCoordinator:
         # to bind on the same host, and by McpConfigManager's custom-callback conflict checks.
         self.host = host
         self.port = port
-        self.session_manager = SessionManager(self.data_dir)
+        # Issue #2184: accept an externally-constructed SessionManager (web_server.py
+        # needs one before this coordinator exists, to build SessionWatchdogService
+        # from it) rather than unconditionally constructing a second instance here —
+        # construct-if-not-given keeps every other caller (tests, ApplicationService
+        # call sites that construct a bare SessionCoordinator) working unchanged.
+        self.session_manager = session_manager or SessionManager(self.data_dir)
         self.project_manager = ProjectManager(self.data_dir)
         self.message_parser = MessageParser()
         self.message_processor = MessageProcessor(self.message_parser)
@@ -469,9 +476,10 @@ class SessionCoordinator:
         from backend.credential_vault import CredentialVault
         self.credential_vault = CredentialVault(self.data_dir)
 
-        # Template manager for minion templates
+        # Template manager for minion templates (issue #2184: construct-if-not-given,
+        # same convention as session_manager above).
         from backend.template_manager import TemplateManager
-        self.template_manager = TemplateManager(self.data_dir)
+        self.template_manager = template_manager or TemplateManager(self.data_dir)
 
         # Profile manager for composable session config profiles (issue #1062)
         from backend.profile_manager import ProfileManager
@@ -541,6 +549,8 @@ class SessionCoordinator:
         self._state_change_callbacks: list[Callable] = []
         # Issue #2159: metadata-only updates — separate from _state_change_callbacks.
         self._metadata_change_callbacks: list[Callable] = []
+        # Issue #2184: is_processing-only updates — separate from both of the above.
+        self._processing_change_callbacks: list[Callable] = []
         self._session_reset_callbacks: list[Callable] = []
         self._session_deleted_callbacks: list[Callable] = []
         self._tool_call_broadcast_callbacks: list[Callable] = []
@@ -691,10 +701,6 @@ class SessionCoordinator:
     def set_analytics_store(self, store) -> None:
         """Inject the AnalyticsStore instance (issue #1125)."""
         self.analytics_store = store
-
-    def set_watchdog(self, watchdog) -> None:
-        """Inject the SessionWatchdogService instance (issue #1130/#2159)."""
-        self._watchdog = watchdog
 
     def set_permission_service(self, permission_service) -> None:
         """Inject the PermissionService instance (issue #2159).
@@ -956,6 +962,14 @@ class SessionCoordinator:
             # Issue #2159: same wiring for metadata-only updates (name, model,
             # permission_mode, etc.) — a separate callback/event stream from state_change.
             self.session_manager.add_metadata_change_callback(self._on_session_manager_metadata_change)
+            # Issue #2184: same wiring for is_processing-only updates — a separate
+            # callback/event stream from both of the above.
+            self.session_manager.add_processing_change_callback(self._on_session_manager_processing_change)
+            # Issue #2184: the recorder lookup + record_lifecycle(action) + exception
+            # handling previously duplicated across permission_service.py's 2 manual
+            # pause/resume call sites (now deleted) and this file's own start/terminate
+            # call sites (also deleted — see start_session()/terminate_session()).
+            self.session_manager.add_lifecycle_record_callback(self._on_session_manager_lifecycle_record)
 
             # Initialize storage managers for all existing sessions
             await self._initialize_existing_session_storage()
@@ -1685,12 +1699,15 @@ class SessionCoordinator:
                 "reset" here rather than this method guessing which caller invoked it.
         """
         try:
-            # Start session through session manager
-            if not await self.session_manager.start_session(session_id):
+            # Start session through session manager — fires the "start"/"restart"/
+            # "reset" lifecycle-record callback itself now (issue #2184), replacing
+            # the manual recorder.record_lifecycle(_lifecycle_action) call this method
+            # used to make once the recorder was resolved below.
+            if not await self.session_manager.start_session(session_id, action=_lifecycle_action):
                 return False
 
             # Defensively reset processing state on session start
-            await self.session_manager.update_processing_state(session_id, False)
+            await self.session_manager.end_turn(session_id)
 
             # Check if SDK exists and is running
             sdk = self._active_sdks.get(session_id)
@@ -1765,7 +1782,14 @@ class SessionCoordinator:
             ):
                 recorder = SessionRecorder(session_id, session_dir)
                 self._session_recorders[session_id] = recorder
-            if recorder is not None:
+                # Issue #2184: this recorder didn't exist yet when
+                # session_manager.start_session() fired its lifecycle-record hook
+                # above (self._on_session_manager_lifecycle_record), so that hook had
+                # nothing to record into — capture the missed event now that the
+                # recorder exists. restart_session()/reset_session() reuse an
+                # already-existing recorder (the hook already recorded those
+                # correctly), so this only ever fires once per session, on its very
+                # first start.
                 try:
                     recorder.record_lifecycle(_lifecycle_action)
                 except Exception:
@@ -2487,7 +2511,7 @@ class SessionCoordinator:
             self.queue_processor.stop(session_id)
 
             # Reset processing state before termination
-            await self.session_manager.update_processing_state(session_id, False)
+            await self.session_manager.end_turn(session_id)
 
             # Issue #520: Mark active ToolCalls as interrupted and store ToolCallUpdate entries
             self.mark_session_tools_interrupted(session_id)
@@ -2497,18 +2521,6 @@ class SessionCoordinator:
             if sdk:
                 await sdk.terminate()
                 del self._active_sdks[session_id]
-
-            # Issue #1998: recorder is only ever torn down here (not on restart/reset) —
-            # record the final lifecycle event, then release its held file handle.
-            recorder = self._session_recorders.pop(session_id, None)
-            if recorder is not None:
-                try:
-                    recorder.record_lifecycle("terminate")
-                except Exception:
-                    logger.exception(
-                        f"Recorder failed to capture terminate lifecycle event for session {session_id}"
-                    )
-                recorder.close()
 
             if self.litellm_proxy_manager is not None:
                 self.litellm_proxy_manager.unregister_session_key(session_id)
@@ -2524,8 +2536,20 @@ class SessionCoordinator:
             # it (see delete_session()'s own call to this helper).
             await self._flush_unflushed_subagent_usage(session_id)
 
-            # Terminate session through manager
+            # Terminate session through manager — fires the "terminate" lifecycle-
+            # record callback itself now (issue #2184), replacing the manual
+            # recorder.record_lifecycle("terminate") call this method used to make
+            # BEFORE this call (the ordering bug AC7 flagged: recording into an
+            # already-closed/removed recorder would have silently recorded nothing
+            # once recording moved into a hook fired from inside this call).
             success = await self.session_manager.terminate_session(session_id)
+
+            # Issue #1998: recorder is only ever torn down here (not on restart/reset).
+            # Popped/closed AFTER the manager call above so the lifecycle-record hook
+            # it fires still finds this recorder in self._session_recorders.
+            recorder = self._session_recorders.pop(session_id, None)
+            if recorder is not None:
+                recorder.close()
 
             # Issue #820: Clean up session /tmp directory on session end
             # Issue #1933: most sessions never write to /tmp, so check existence
@@ -3055,7 +3079,7 @@ class SessionCoordinator:
                     )
 
             # Mark session as processing before sending message
-            await self.session_manager.update_processing_state(session_id, True)
+            await self.session_manager.start_turn(session_id)
 
             # Send message through SDK (will be queued and processed)
             result = await sdk.send_message(message, metadata=metadata)
@@ -3064,14 +3088,14 @@ class SessionCoordinator:
                 # Issue #1029: Send failed — set is_processing False directly.
                 # If another query is in flight, the next assistant message
                 # from the SDK stream will set it back to True.
-                await self.session_manager.update_processing_state(session_id, False)
+                await self.session_manager.end_turn(session_id)
 
             return result
 
         except Exception:
             logger.exception(f"Failed to send message to session {session_id}")
             try:
-                await self.session_manager.update_processing_state(session_id, False)
+                await self.session_manager.end_turn(session_id)
             except Exception:
                 pass  # Don't fail on state update error
             return False
@@ -3132,7 +3156,7 @@ class SessionCoordinator:
             else:
                 logger.warning(f"Failed to initiate interrupt for session {session_id}")
                 # Reset processing state if interrupt initiation failed
-                await self.session_manager.update_processing_state(session_id, False)
+                await self.session_manager.end_turn(session_id)
 
             return result
 
@@ -3376,7 +3400,7 @@ class SessionCoordinator:
                     logger.warning(f"SDK disconnect returned False for session {session_id}")
 
                 # Update session state to TERMINATED after disconnect
-                await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
+                await self.session_manager.recover_session(session_id)
 
                 # Wait for cleanup — Docker --rm needs time to remove crashed containers
                 # before a new container can be started (issue #781)
@@ -3388,7 +3412,7 @@ class SessionCoordinator:
                 # No active SDK - restart will act like a fresh start
                 coord_logger.debug(f"No existing SDK for session {session_id}, will create new one")
                 # Ensure session state is TERMINATED before starting
-                await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
+                await self.session_manager.recover_session(session_id)
 
             # Issue #1130: Clear watchdog state so next episode starts fresh
             if self._watchdog is not None:
@@ -3456,7 +3480,7 @@ class SessionCoordinator:
             sdk = self._active_sdks.get(session_id)
             if sdk:
                 await sdk.disconnect()
-                await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
+                await self.session_manager.recover_session(session_id)
                 await asyncio.sleep(0.5)
                 del self._active_sdks[session_id]
 
@@ -3464,7 +3488,7 @@ class SessionCoordinator:
             # transition to TERMINATED so start_session() will accept it.
             _pre_reset_info = await self.session_manager.get_session_info(session_id)
             if _pre_reset_info and _pre_reset_info.state == SessionState.ERROR:
-                await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
+                await self.session_manager.recover_session(session_id)
                 coord_logger.info(f"Transitioned errored session {session_id} to TERMINATED for reset")
 
             # Clear Claude Code session ID from state (prevents resume)
@@ -4067,6 +4091,10 @@ class SessionCoordinator:
     def add_metadata_change_callback(self, callback: Callable):
         """Add callback for metadata-only session updates (issue #2159)."""
         self._metadata_change_callbacks.append(callback)
+
+    def add_processing_change_callback(self, callback: Callable):
+        """Add callback for is_processing-only session updates (issue #2184)."""
+        self._processing_change_callbacks.append(callback)
 
     def add_session_reset_callback(self, callback: Callable):
         """Add callback for session reset events (Issue #500)."""
@@ -4838,7 +4866,7 @@ class SessionCoordinator:
 
                 if parsed_message.type.value == 'result':
                     try:
-                        await self.session_manager.update_processing_state(session_id, False)
+                        await self.session_manager.end_turn(session_id)
                     except Exception:
                         logger.exception(f"Failed to reset processing state for session {session_id}")
 
@@ -4945,7 +4973,7 @@ class SessionCoordinator:
 
                 elif parsed_message.type.value == 'assistant':
                     try:
-                        await self.session_manager.update_processing_state(session_id, True)
+                        await self.session_manager.start_turn(session_id)
                     except Exception:
                         logger.exception(f"Failed to set processing state for session {session_id}")
 
@@ -4980,7 +5008,7 @@ class SessionCoordinator:
                 # storage/canonicalization fails for that message.
                 elif parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'interrupt':
                     try:
-                        await self.session_manager.update_processing_state(session_id, False)
+                        await self.session_manager.end_turn(session_id)
                         coord_logger.info(f"Reset processing state for session {session_id} after interrupt")
                     except Exception:
                         logger.exception(f"Failed to reset processing state after interrupt for session {session_id}")
@@ -5069,12 +5097,16 @@ class SessionCoordinator:
         stage is explicitly about eliminating: ERROR_OCCURRED denies/resolves this
         session's own dangling pending permission Future(s) — the SDK that would
         have answered them is gone, so nothing else ever will.
+
+        Issue #2184: now delegates to SessionManager.transition_to_error(), which
+        collapses the state + processing-reset into one state_change emission itself
+        (the double-emission half of the AC1/AC5 bug) — this method no longer makes
+        its own redundant update_processing_state() call.
         """
         try:
-            await self.session_manager.update_session_state(
-                session_id, SessionState.ERROR, error_message, **structured_error_kwargs
+            await self.session_manager.transition_to_error(
+                session_id, error_message, **structured_error_kwargs
             )
-            await self.session_manager.update_processing_state(session_id, False)
             if self.permission_service is not None:
                 await self.permission_service.deny_for_session(session_id)
         except Exception:
@@ -5153,7 +5185,7 @@ class SessionCoordinator:
 
                 # Reset processing state on any error
                 try:
-                    await self.session_manager.update_processing_state(session_id, False)
+                    await self.session_manager.end_turn(session_id)
                 except Exception:
                     logger.exception(f"Failed to reset processing state for session {session_id}")
 
@@ -5674,6 +5706,43 @@ class SessionCoordinator:
     async def _on_session_manager_metadata_change(self, session_id: str) -> None:
         """Handle metadata-only updates from session manager (issue #2159)."""
         await self._notify_metadata_change(session_id)
+
+    async def _notify_processing_change(self, session_id: str, is_processing: bool) -> None:
+        """Notify registered callbacks about an is_processing-only update (issue #2184)."""
+        try:
+            for callback in self._processing_change_callbacks:
+                try:
+                    if asyncio.iscoroutinefunction(callback):
+                        await callback(session_id, is_processing)
+                    else:
+                        callback(session_id, is_processing)
+                except Exception:
+                    logger.exception("Error in processing change callback")
+        except Exception:
+            logger.exception(f"Error notifying processing change for {session_id}")
+
+    async def _on_session_manager_processing_change(self, session_id: str, is_processing: bool) -> None:
+        """Handle is_processing-only updates from session manager (issue #2184)."""
+        await self._notify_processing_change(session_id, is_processing)
+
+    async def _on_session_manager_lifecycle_record(self, session_id: str, action: str) -> None:
+        """Handle a logical lifecycle action from session manager (issue #2184) —
+        start/restart/reset/pause/resume/terminate — by recording it into this
+        session's SessionRecorder, if one is active.
+
+        Replaces the recorder lookup + record_lifecycle(action) + exception handling
+        previously duplicated across permission_service.py's pause/resume call sites
+        and this file's own start_session()/terminate_session() call sites.
+        """
+        recorder = self._session_recorders.get(session_id)
+        if recorder is None:
+            return
+        try:
+            recorder.record_lifecycle(action)
+        except Exception:
+            logger.exception(
+                f"Recorder failed to capture '{action}' lifecycle event for session {session_id}"
+            )
 
     async def _check_sdk_generated_name(self, session_id: str) -> None:
         """Check if SDK has generated a session title and store it (issue #904)."""

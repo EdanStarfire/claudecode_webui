@@ -127,6 +127,28 @@ class BackendApp:
         self.app = FastAPI(title="Claude Code WebUI Backend", version="1.0.0")
         self.host = host
         self.port = port
+        # Issue #2184: construct SessionManager/TemplateManager BEFORE the coordinator
+        # (same data_dir resolution SessionCoordinator itself uses) so SessionWatchdogService
+        # can be built from them below and all three passed into the SessionCoordinator(...)
+        # constructor directly — no more post-construction set_watchdog() reassignment.
+        from .session_manager import SessionManager
+        from .template_manager import TemplateManager
+        _data_dir = data_dir or Path("data")
+        session_manager = SessionManager(_data_dir)
+        template_manager = TemplateManager(_data_dir)
+
+        # Issue #1130/#1131: Session watchdog service (created here, started in initialize())
+        from .config_manager import load_config as _load_cfg
+        from .session_watchdog import SessionWatchdogService
+        _cfg = _load_cfg(config_file) if config_file else _load_cfg()
+        self.ui_queue = EventQueue()
+        self._watchdog = SessionWatchdogService(
+            session_manager=session_manager,
+            template_manager=template_manager,
+            app_config=_cfg,
+            ui_queue=self.ui_queue,
+        )
+
         # Issue #1998: dev-only raw SDK traffic capture, structurally unavailable unless the
         # Backend was started with --enable-session-recording. Single source of truth is
         # self.coordinator.session_recording_enabled — every consumer (routers, this class)
@@ -134,6 +156,9 @@ class BackendApp:
         self.coordinator = SessionCoordinator(
             data_dir, experimental=experimental, host=host, port=port,
             session_recording_enabled=session_recording_enabled,
+            watchdog=self._watchdog,
+            session_manager=session_manager,
+            template_manager=template_manager,
         )
         self.service = ApplicationService(self.coordinator)
         self.config_file = config_file
@@ -153,28 +178,10 @@ class BackendApp:
                 )
             )
         self.skill_manager = SkillManager()
-        self.ui_queue = EventQueue()
         self.session_queues: dict[str, EventQueue] = {}
 
         # Inject ui_queue into LegionSystem so legion components can append events directly
         self.coordinator.legion_system.ui_queue = self.ui_queue
-
-        # Issue #1130/#1131: Session watchdog service (created here, started in initialize())
-        from .config_manager import load_config as _load_cfg
-        from .session_watchdog import SessionWatchdogService
-        _cfg = _load_cfg(config_file) if config_file else _load_cfg()
-        self._watchdog = SessionWatchdogService(
-            session_manager=self.coordinator.session_manager,
-            template_manager=self.coordinator.template_manager,
-            app_config=_cfg,
-            ui_queue=self.ui_queue,
-        )
-        # Issue #2159: watchdog is a declared SessionCoordinator constructor
-        # dependency now (defaulting to None) — it can't be passed in at
-        # construction time above since it needs this coordinator's own
-        # session_manager/template_manager, so it's injected via set_watchdog()
-        # immediately after, same pattern as set_permission_service() below.
-        self.coordinator.set_watchdog(self._watchdog)
 
         from .config_manager import AppConfigManager
         from .litellm_proxy_manager import LiteLLMProxyManager
@@ -487,6 +494,27 @@ class BackendApp:
             logger.info("Appended session_metadata_updated for session %s", session_id)
         except Exception:
             logger.exception("Error appending session_metadata_updated")
+
+    def _broadcast_processing_change(self, session_id: str, session_dict: dict) -> None:
+        """Emit processing_change to the global UI poll queue (issue #2184).
+
+        Same payload shape as _broadcast_metadata_change's session_metadata_updated
+        event — the frontend's processing_change handler applies the same
+        updateSession() merge, plus the task-complete notify check relocated from
+        state_change (AC1's regression fix: most turn completions never change
+        SessionState, so that notify logic can no longer live solely in
+        state_change's handler).
+        """
+        try:
+            emit(
+                self.ui_queue, QUEUE_UI, "processing_change", {
+                    "data": {"session_id": session_id, "session": session_dict}
+                },
+                scope=session_id,
+            )
+            logger.info("Appended processing_change for session %s", session_id)
+        except Exception:
+            logger.exception("Error appending processing_change")
 
     def _broadcast_server_restarting(self, pull_output: str, sync_output: str) -> None:
         """Emit server_restarting to the global UI poll queue."""
@@ -801,6 +829,8 @@ class BackendApp:
         # Register callbacks
         self.coordinator.add_state_change_callback(self._on_state_change)
         self.coordinator.add_metadata_change_callback(self._on_metadata_change)
+        # Issue #2184: is_processing-only updates — separate event stream from both.
+        self.coordinator.add_processing_change_callback(self._on_processing_change)
         self.coordinator.add_session_reset_callback(self._on_session_reset)
         self.coordinator.add_session_deleted_callback(self._on_session_deleted)
         self.coordinator.add_tool_call_broadcast_callback(self._on_tool_call_broadcast)
@@ -1287,6 +1317,22 @@ class BackendApp:
                 self._broadcast_metadata_change(session_id, session_dict)
         except Exception:
             logger.exception("Error handling metadata change")
+
+    async def _on_processing_change(self, session_id: str, is_processing: bool) -> None:
+        """Handle an is_processing-only session update (issue #2184). Mirrors
+        _on_metadata_change(), but broadcasts processing_change instead of
+        session_metadata_updated since the SessionState itself didn't change.
+        """
+        try:
+            session_info_dict = await self.coordinator.get_session_info(session_id)
+            if session_info_dict:
+                session_dict = session_info_dict.get("session", {})
+                session_dict["queue_pending_count"] = (
+                    self.coordinator.queue_manager.get_pending_count(session_id)
+                )
+                self._broadcast_processing_change(session_id, session_dict)
+        except Exception:
+            logger.exception("Error handling processing change")
 
     def _on_tool_call_broadcast(self, session_id: str, tool_call_data: dict):
         """Issue #520: Append tool_call message to session poll queue. Called synchronously from coordinator."""

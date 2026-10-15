@@ -19,14 +19,18 @@ import pytest
 from backend.session_config import SessionConfig
 from backend.session_lifecycle import (
     AUTO_START_STATES,
+    RUNNABLE_STATES,
     STARTABLE_STATES,
     LifecycleEvent,
     SessionState,
     is_auto_startable,
     is_deliverable,
     is_interruptible,
+    is_live,
+    is_not_terminated,
     is_startable,
     transition,
+    transition_processing,
 )
 from backend.session_manager import SessionManager
 
@@ -71,6 +75,15 @@ def _fill_expected_transitions() -> None:
         )
         # ERROR_OCCURRED — unconditional
         EXPECTED_TRANSITIONS[(state, LifecycleEvent.ERROR_OCCURRED)] = SessionState.ERROR
+        # RECOVERY_REQUESTED — unconditional, single-hop to TERMINATED
+        EXPECTED_TRANSITIONS[(state, LifecycleEvent.RECOVERY_REQUESTED)] = SessionState.TERMINATED
+        # BOOT_NORMALIZED
+        EXPECTED_TRANSITIONS[(state, LifecycleEvent.BOOT_NORMALIZED)] = (
+            SessionState.CREATED if state in RUNNABLE_STATES else state
+        )
+        # TURN_STARTED/TURN_ENDED don't affect SessionState, only is_processing.
+        EXPECTED_TRANSITIONS[(state, LifecycleEvent.TURN_STARTED)] = state
+        EXPECTED_TRANSITIONS[(state, LifecycleEvent.TURN_ENDED)] = state
 
 
 _fill_expected_transitions()
@@ -144,6 +157,53 @@ class TestPredicates:
         expected = {SessionState.ACTIVE, SessionState.PAUSED}
         for state in ALL_STATES:
             assert is_interruptible(state) == (state in expected)
+
+    def test_is_live(self):
+        for state in ALL_STATES:
+            assert is_live(state) == (state in RUNNABLE_STATES)
+
+    def test_is_not_terminated(self):
+        for state in ALL_STATES:
+            assert is_not_terminated(state) == (state is not SessionState.TERMINATED)
+
+
+class TestTransitionProcessing:
+    """transition_processing() — parallel pure function for is_processing, driven
+    by the same LifecycleEvent vocabulary as transition()."""
+
+    def test_turn_started_sets_true(self):
+        assert transition_processing(False, LifecycleEvent.TURN_STARTED) is True
+        assert transition_processing(True, LifecycleEvent.TURN_STARTED) is True
+
+    @pytest.mark.parametrize(
+        "event",
+        [
+            LifecycleEvent.TURN_ENDED,
+            LifecycleEvent.ERROR_OCCURRED,
+            LifecycleEvent.RECOVERY_REQUESTED,
+            LifecycleEvent.TERMINATED,
+            LifecycleEvent.BOOT_NORMALIZED,
+        ],
+        ids=lambda e: e.value,
+    )
+    def test_terminal_events_set_false(self, event):
+        assert transition_processing(True, event) is False
+        assert transition_processing(False, event) is False
+
+    @pytest.mark.parametrize(
+        "event",
+        [
+            LifecycleEvent.START_REQUESTED,
+            LifecycleEvent.SDK_READY,
+            LifecycleEvent.PERMISSION_OPENED,
+            LifecycleEvent.PERMISSION_CLOSED,
+            LifecycleEvent.TERMINATE_REQUESTED,
+        ],
+        ids=lambda e: e.value,
+    )
+    def test_unrelated_events_are_noop(self, event):
+        assert transition_processing(True, event) is True
+        assert transition_processing(False, event) is False
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +382,118 @@ class TestSingleEmissionPerTransition:
             (sid, SessionState.TERMINATING),
             (sid, SessionState.TERMINATED),
         ]
+
+    @pytest.mark.asyncio
+    async def test_transition_to_error_mid_turn_emits_exactly_once(
+        self, temp_session_manager, sample_session_config
+    ):
+        """Issue #2184 (AC1/AC5): ERROR_OCCURRED mid-turn is the exact bug this
+        stage fixes — the old _transition_to_error() made two separate manager
+        calls (update_session_state() then update_processing_state()), each firing
+        its own state_change. transition_to_error() collapses the state AND the
+        processing reset into one call, one emission."""
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+        await manager.start_session(sid)
+        await manager.mark_session_active(sid)
+        await manager.start_turn(sid)
+
+        emissions = []
+
+        async def _capture(session_id, new_state, is_processing, **kwargs):
+            emissions.append((session_id, new_state, is_processing))
+
+        manager.add_state_change_callback(_capture)
+
+        result = await manager.transition_to_error(sid, "simulated critical SDK error")
+
+        assert result is True
+        assert emissions == [(sid, SessionState.ERROR, False)]
+
+        session_info = await manager.get_session_info(sid)
+        assert session_info.state == SessionState.ERROR
+        assert session_info.is_processing is False
+
+    @pytest.mark.asyncio
+    async def test_recover_session_from_active_emits_once(
+        self, temp_session_manager, sample_session_config
+    ):
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+        await manager.start_session(sid)
+        await manager.mark_session_active(sid)
+
+        emissions = []
+
+        async def _capture(session_id, new_state, is_processing, **kwargs):
+            emissions.append((session_id, new_state))
+
+        manager.add_state_change_callback(_capture)
+
+        result = await manager.recover_session(sid)
+
+        assert result is True
+        assert emissions == [(sid, SessionState.TERMINATED)]
+
+    @pytest.mark.asyncio
+    async def test_recover_session_from_error_emits_once(
+        self, temp_session_manager, sample_session_config
+    ):
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+        await manager.transition_to_error(sid, "boom")
+
+        emissions = []
+
+        async def _capture(session_id, new_state, is_processing, **kwargs):
+            emissions.append((session_id, new_state))
+
+        manager.add_state_change_callback(_capture)
+
+        result = await manager.recover_session(sid)
+
+        assert result is True
+        assert emissions == [(sid, SessionState.TERMINATED)]
+
+    @pytest.mark.asyncio
+    async def test_lifecycle_record_fires_once_per_logical_action(
+        self, temp_session_manager, sample_session_config
+    ):
+        """Issue #2184 (AC7): the lifecycle-record callback fires exactly once per
+        logical action, matching the existing recorded-fixture vocabulary
+        (start/restart/reset/pause/resume/terminate) — never per sub-transition
+        (terminate_session()'s TERMINATING+TERMINATED pair must still yield ONE
+        "terminate" record, not two)."""
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+
+        actions = []
+
+        async def _capture(session_id, action):
+            actions.append(action)
+
+        manager.add_lifecycle_record_callback(_capture)
+
+        await manager.start_session(sid)  # default action="start"
+        await manager.mark_session_active(sid)
+        await manager.pause_session(sid)
+        await manager.resolve_permission_closed(sid)
+        await manager.terminate_session(sid)
+
+        assert actions == ["start", "pause", "resume", "terminate"]
+
+        # restart_session()/reset_session() pass an explicit action through
+        # start_session(); recover_session() itself (their own preceding TERMINATED
+        # bookkeeping step) must stay silent on this channel — otherwise reusing an
+        # already-recorder-backed session on restart/reset would double-record.
+        actions.clear()
+        await manager.recover_session(sid)
+        await manager.start_session(sid, action="restart")
+        assert actions == ["restart"]
 
     @pytest.mark.asyncio
     async def test_metadata_setter_emits_metadata_change_not_state_change(

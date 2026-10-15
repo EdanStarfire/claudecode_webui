@@ -187,6 +187,44 @@ describe('polling store', () => {
     pollingStore.stopUIPolling()
   }
 
+  // Issue #2184: same shape as runStateChangeSequence, but for processing_change
+  // events — the backend no longer emits state_change for is_processing-only
+  // transitions (AC1), so the task_complete notify trigger now rides this stream.
+  async function runProcessingChangeSequence(sessionId, stateOverridesList) {
+    apiMock.get.mockResolvedValue({ messages: [], total_count: 0, has_more: false })
+
+    const { usePollingStore } = await import('@/stores/polling')
+    const pollingStore = usePollingStore()
+
+    let callCount = 0
+    vi.spyOn(global, 'fetch').mockImplementation((_url, opts) => {
+      callCount++
+      if (callCount === 1) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            ui: {
+              events: stateOverridesList.map(overrides => ({
+                type: 'processing_change',
+                data: {
+                  session_id: sessionId,
+                  session: makeSession({ session_id: sessionId, ...overrides })
+                }
+              })),
+              next_cursor: 1
+            },
+            sessions: {},
+          })
+        })
+      }
+      return hangingAbortAwareFetch(_url, opts)
+    })
+
+    pollingStore.startUIPolling()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    pollingStore.stopUIPolling()
+  }
+
   it('error state reload clears cache and cursor before calling loadMessages (#1515)', async () => {
     const { useMessageStore } = await import('@/stores/message')
     const { useSessionStore } = await import('@/stores/session')
@@ -281,13 +319,31 @@ describe('polling store', () => {
 
     sessionStore.sessions.set('sess-t', makeSession({ session_id: 'sess-t', state: 'active', is_processing: true }))
 
-    await runStateChangeSequence('sess-t', [
+    await runProcessingChangeSequence('sess-t', [
       { state: 'active', is_processing: false },
       { state: 'active', is_processing: false }
     ])
 
     const taskCompleteCalls = notify.mock.calls.filter(call => call[0] === 'task_complete')
     expect(taskCompleteCalls).toHaveLength(1)
+  })
+
+  // Issue #2184 (AC1 regression fix): the dominant real-world case — a turn
+  // completes without any SessionState change at all — must still fire
+  // task_complete. Before this fix, only state_change's handler checked
+  // is_processing, and the backend no longer emits state_change for this case.
+  it('notifies task_complete via processing_change with no accompanying state_change (#2184)', async () => {
+    const { useSessionStore } = await import('@/stores/session')
+    const { notify } = await import('@/composables/useNotifications')
+    const sessionStore = useSessionStore()
+
+    sessionStore.sessions.set('sess-pc', makeSession({ session_id: 'sess-pc', state: 'active', is_processing: true }))
+
+    await runProcessingChangeSequence('sess-pc', [
+      { state: 'active', is_processing: false }
+    ])
+
+    expect(notify).toHaveBeenCalledWith('task_complete', expect.objectContaining({ sessionId: 'sess-pc' }))
   })
 })
 

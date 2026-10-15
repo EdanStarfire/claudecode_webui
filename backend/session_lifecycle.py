@@ -54,6 +54,10 @@ class LifecycleEvent(Enum):
     TERMINATE_REQUESTED = "terminate_requested"  # not-TERMINATED -> TERMINATING
     TERMINATED = "terminated"                    # TERMINATING -> TERMINATED
     ERROR_OCCURRED = "error_occurred"            # any -> ERROR
+    TURN_STARTED = "turn_started"                # processing: False -> True
+    TURN_ENDED = "turn_ended"                    # processing: True -> False
+    RECOVERY_REQUESTED = "recovery_requested"    # any -> TERMINATED (unguarded)
+    BOOT_NORMALIZED = "boot_normalized"          # RUNNABLE_STATES -> CREATED
 
 
 def transition(
@@ -106,7 +110,43 @@ def transition(
         # land from any state, including mid-start or mid-terminate.
         return SessionState.ERROR
 
+    if event is LifecycleEvent.RECOVERY_REQUESTED:
+        # Unguarded like ERROR_OCCURRED: force any state back to TERMINATED in a single
+        # hop (no TERMINATING flash) so a restart/reset/auto-resume can immediately
+        # re-start from a STARTABLE state without losing claude_code_session_id.
+        return SessionState.TERMINATED
+
+    if event is LifecycleEvent.BOOT_NORMALIZED:
+        if current_state in RUNNABLE_STATES:
+            return SessionState.CREATED
+        return current_state
+
     return current_state
+
+
+def transition_processing(current_processing: bool, event: LifecycleEvent) -> bool:
+    """Compute the resulting ``is_processing`` value for ``event``.
+
+    Parallel to ``transition()`` rather than folded into its return type, so adding
+    processing-state events doesn't change ``transition()``'s signature for every
+    existing caller. An event with no effect on processing state returns
+    ``current_processing`` unchanged.
+    """
+    if event is LifecycleEvent.TURN_STARTED:
+        return True
+
+    if event in (
+        LifecycleEvent.TURN_ENDED,
+        LifecycleEvent.ERROR_OCCURRED,
+        LifecycleEvent.RECOVERY_REQUESTED,
+        LifecycleEvent.TERMINATED,
+        # Issue #2184: boot always resets is_processing to False — no SDK is running
+        # yet to be mid-turn, regardless of what the persisted snapshot says.
+        LifecycleEvent.BOOT_NORMALIZED,
+    ):
+        return False
+
+    return current_processing
 
 
 def is_startable(state: SessionState) -> bool:
@@ -135,3 +175,13 @@ def is_interruptible(state: SessionState) -> bool:
     decision denies that session's own pending permission(s) and returns it to ACTIVE.
     """
     return state in (SessionState.ACTIVE, SessionState.PAUSED)
+
+
+def is_live(state: SessionState) -> bool:
+    """True if the session has an actively-running SDK instance (ACTIVE or STARTING)."""
+    return state in RUNNABLE_STATES
+
+
+def is_not_terminated(state: SessionState) -> bool:
+    """True if the session has not reached the terminal TERMINATED state."""
+    return state is not SessionState.TERMINATED

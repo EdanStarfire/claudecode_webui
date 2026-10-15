@@ -132,6 +132,15 @@
       ],
       "required_keys_by_queue": {}
     },
+    "processing_change": {
+      "queues": [
+        "ui"
+      ],
+      "required_keys": [
+        "data"
+      ],
+      "required_keys_by_queue": {}
+    },
     "project_deleted": {
       "queues": [
         "ui"

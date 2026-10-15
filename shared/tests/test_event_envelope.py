@@ -31,6 +31,10 @@ SAMPLE_EVENTS_BY_TYPE = {
         "type": "session_metadata_updated",
         "data": {"session_id": "s1"},
     },
+    "processing_change": {
+        "type": "processing_change",
+        "data": {"session_id": "s1"},
+    },
     "server_restarting": {"type": "server_restarting", "message": "restarting"},
     "mcp_oauth_complete": {"type": "mcp_oauth_complete", "server_id": "srv1"},
     "secret_oauth_complete": {"type": "secret_oauth_complete", "flow_id": "f1", "success": True},

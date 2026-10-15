@@ -12,7 +12,7 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Optional
 
-from backend.session_manager import SessionState
+from backend.session_lifecycle import is_live, is_not_terminated
 from shared.logging_config import get_logger
 
 legion_logger = get_logger('legion', 'LEGION_COORDINATOR')
@@ -542,7 +542,7 @@ class LegionCoordinator:
         all_sessions = await self.session_manager.list_sessions()
         sessions = [s for s in all_sessions if s.project_id == legion_id]
         # Skip sessions already in TERMINATED state — they need no action
-        sessions = [s for s in sessions if s.state != SessionState.TERMINATED]
+        sessions = [s for s in sessions if is_not_terminated(s.state)]
 
         # Issue #2159 (stage 6c): snapshot is_processing BEFORE terminating — a
         # session mid-task when halted needs a catch-up message on resume, not a
@@ -621,7 +621,7 @@ class LegionCoordinator:
                 # Gone entirely — nothing to resume, just drop the stale entry below.
                 resolved_ids.append(session_id)
                 continue
-            if session_info.state in (SessionState.ACTIVE, SessionState.STARTING):
+            if is_live(session_info.state):
                 # Already brought back some other way (e.g. started individually) —
                 # just clear the now-stale snapshot entry.
                 resolved_ids.append(session_id)
