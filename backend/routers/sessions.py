@@ -480,6 +480,16 @@ def build_router(webui) -> APIRouter:
         success = await webui.coordinator.send_message(
             session_id, request.message, metadata=request.metadata
         )
+        # Issue #1572: a manual user send means the user has already taken over —
+        # cancel any pending auto-resume so it doesn't deliver a duplicate "continue"
+        # nudge later. Deliberately scoped to this REST-driven send path only: this
+        # same session_coordinator.send_message() is also the delivery primitive for
+        # queue_processor/comm_router/MCP-tool sends, which must NOT cancel it (a
+        # queued/cron/comm delivery isn't the user taking over).
+        if success and webui.coordinator.legion_system:
+            await webui.coordinator.legion_system.scheduler_service.cancel_auto_resume_schedule(
+                session_id
+            )
         return {"success": success}
 
     @router.get("/api/sessions/{session_id}/messages")

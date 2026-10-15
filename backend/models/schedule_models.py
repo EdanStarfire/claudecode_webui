@@ -61,7 +61,10 @@ class Schedule:
     session_config: dict | None = None  # Stored session configuration for ephemeral schedules
     ephemeral_agent_id: str | None = None  # Fixed agent session ID for ephemeral schedules
     # Script schedule support (issue #1356)
-    schedule_type: str = "prompt"            # "prompt" | "script"
+    # Issue #1572: "auto_resume" is a third, internally-created-only value — a
+    # one-time, self-deleting (repeat_count=1) schedule that resumes a session
+    # after a usage/rate limit. Never created via the create_schedule REST endpoint.
+    schedule_type: str = "prompt"            # "prompt" | "script" | "auto_resume"
     script_command: str | None = None        # required when schedule_type == "script"
     script_timeout_seconds: int = 60         # wall-clock kill timer for script runs
     last_stdout: str | None = None           # most recent run's stdout (capped)

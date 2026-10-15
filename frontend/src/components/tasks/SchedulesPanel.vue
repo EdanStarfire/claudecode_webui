@@ -63,6 +63,27 @@
             </div>
           </template>
 
+          <!-- Auto-resume pending (issue #1572): cancel-only, no cron/run/edit controls -->
+          <template v-else-if="isAutoResume(s)">
+            <div class="row-content">
+              <div class="row-line1">
+                <span class="auto-resume-badge">⏳ Auto-resume pending</span>
+              </div>
+              <div class="row-line2">
+                <span class="cron-text">
+                  {{ s.next_run ? `Fires at ${formatFireTime(s.next_run)}` : 'Fires soon' }}
+                </span>
+              </div>
+            </div>
+            <div class="row-actions">
+              <button
+                class="action-btn delete-btn"
+                title="Cancel auto-resume"
+                @click.stop="startDelete(s)"
+              >✕</button>
+            </div>
+          </template>
+
           <!-- Normal state -->
           <template v-else>
             <div class="row-content">
@@ -193,6 +214,14 @@ function statusTitle(s) {
 
 function isEphemeral(schedule) {
   return !!schedule.session_config || !!schedule.ephemeral_agent_id
+}
+
+function isAutoResume(schedule) {
+  return schedule.schedule_type === 'auto_resume'
+}
+
+function formatFireTime(ts) {
+  return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
 function repeatChipTitle(schedule) {
@@ -455,6 +484,18 @@ async function executeDelete(s) {
   border: 1px solid var(--bs-border-color);
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+/* ── Auto-resume badge (issue #1572) ────────────────────────── */
+.auto-resume-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(56, 189, 248, 0.14);
+  color: #38bdf8;
+  white-space: nowrap;
 }
 
 /* ── Cron + next run ────────────────────────────────────────── */

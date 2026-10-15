@@ -2,7 +2,7 @@
 
 import asyncio
 import tempfile
-from datetime import UTC
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -4665,3 +4665,204 @@ class TestIssue2165ResolveOrphanedEphemeralSession:
 
         other_info = await coordinator.session_manager.get_session_info(other_session_id)
         assert other_info.state == SessionState.PAUSED
+
+
+class TestIssue1572AutoResumeDetection:
+    """_maybe_schedule_auto_resume (called from _create_error_callback's critical-error
+    branch) must schedule an auto-resume only for rate-limit-shaped ERROR transitions —
+    gated on a structured ResultError api_error_status == 429, or the account-wide
+    _rate_limits_state (issue #899) currently holding a 'rejected' entry — and must
+    stay a no-op for every other critical failure (decision #1)."""
+
+    def _mock_legion_system(self, coordinator):
+        mock_scheduler = AsyncMock()
+        mock_scheduler.upsert_auto_resume_schedule = AsyncMock()
+        mock_legion = MagicMock()
+        mock_legion.scheduler_service = mock_scheduler
+        coordinator.legion_system = mock_legion
+        return mock_scheduler
+
+    @pytest.mark.asyncio
+    async def test_structured_429_schedules_auto_resume_with_fallback_fire_at(
+        self, temp_coordinator, sample_session_config
+    ):
+        from claude_agent_sdk import ResultError
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        mock_scheduler = self._mock_legion_system(coordinator)
+
+        before = datetime.now(UTC).timestamp()
+        result_error = ResultError(
+            "Claude Code returned an error result: rate limited",
+            data={"api_error_status": 429},
+        )
+        error_cb = coordinator._create_error_callback(session_id)
+        await error_cb("immediate_cli_failure", result_error)
+        after = datetime.now(UTC).timestamp()
+
+        mock_scheduler.upsert_auto_resume_schedule.assert_awaited_once()
+        _, kwargs = mock_scheduler.upsert_auto_resume_schedule.call_args
+        assert kwargs["session_id"] == session_id
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert kwargs["legion_id"] == session_info.project_id
+        assert kwargs["session_name"] == session_info.name
+        # AC4 fallback: no fresh resets_at known -> ~1 hour out from "now"
+        assert before + 3600 <= kwargs["fire_at"] <= after + 3600
+
+    @pytest.mark.asyncio
+    async def test_rejected_rate_limit_state_schedules_precise_fire_at(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Even without a structured 429 on the error itself, an account-wide
+        'rejected' entry in _rate_limits_state (issue #899) is enough to gate in,
+        and its resets_at drives the precise fire_at (+5 minutes)."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        mock_scheduler = self._mock_legion_system(coordinator)
+
+        resets_at_ts = datetime.now(UTC).timestamp() + 1800  # 30 minutes out
+        resets_at_iso = datetime.fromtimestamp(resets_at_ts, tz=UTC).isoformat()
+        coordinator._rate_limits_state["five_hour"] = {
+            "status": "rejected",
+            "resets_at": resets_at_iso,
+            "used_percentage": 100.0,
+        }
+
+        error_cb = coordinator._create_error_callback(session_id)
+        await error_cb("immediate_cli_failure", RuntimeError("Command failed with exit code 1"))
+
+        mock_scheduler.upsert_auto_resume_schedule.assert_awaited_once()
+        _, kwargs = mock_scheduler.upsert_auto_resume_schedule.call_args
+        assert kwargs["session_id"] == session_id
+        expected_fire_at = resets_at_ts + 300
+        assert abs(kwargs["fire_at"] - expected_fire_at) < 1.0
+
+    @pytest.mark.asyncio
+    async def test_non_rate_limit_error_does_not_schedule_auto_resume(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Decision #1: a critical ERROR transition with no 429 and no account-wide
+        rejection (e.g. a container crash, auth failure) must not create a schedule."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        mock_scheduler = self._mock_legion_system(coordinator)
+
+        error_cb = coordinator._create_error_callback(session_id)
+        await error_cb("immediate_cli_failure", RuntimeError("Command failed with exit code 1"))
+
+        mock_scheduler.upsert_auto_resume_schedule.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_result_error_non_429_without_rejected_state_does_not_schedule(
+        self, temp_coordinator, sample_session_config
+    ):
+        from claude_agent_sdk import ResultError
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        mock_scheduler = self._mock_legion_system(coordinator)
+
+        result_error = ResultError(
+            "Claude Code returned an error result: internal server error",
+            data={"api_error_status": 500},
+        )
+        error_cb = coordinator._create_error_callback(session_id)
+        await error_cb("immediate_cli_failure", result_error)
+
+        mock_scheduler.upsert_auto_resume_schedule.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_legion_system_is_safe_noop(
+        self, temp_coordinator, sample_session_config
+    ):
+        """If legion_system isn't wired up (e.g. a stripped-down test coordinator),
+        a rate-limit-shaped ERROR must not raise — it just can't schedule anything."""
+        from claude_agent_sdk import ResultError
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        coordinator.legion_system = None
+
+        result_error = ResultError("rate limited", data={"api_error_status": 429})
+        error_cb = coordinator._create_error_callback(session_id)
+        await error_cb("immediate_cli_failure", result_error)  # must not raise
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.state == SessionState.ERROR
+
+
+class TestIssue1572AutoResumeEndToEnd:
+    """Implementation Step 5: the full simulated loop against a real (not mocked)
+    SchedulerService/LegionSystem — usage-limit error -> schedule created -> fires
+    -> session resumed (same claude_code_session_id preserved) -> schedule gone.
+    Fires the schedule directly rather than waiting on a real 5-minute timer, and
+    patches only SessionCoordinator.start_session (no real SDK subprocess), per the
+    plan's testing-strategy guidance."""
+
+    @pytest.mark.asyncio
+    async def test_full_auto_resume_loop(self, temp_coordinator, sample_session_config):
+        from claude_agent_sdk import ResultError
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager.update_claude_code_session_id(session_id, "ccsid-preserved")
+
+        # 1. Usage-limit-shaped critical error mid-task
+        result_error = ResultError("rate limited", data={"api_error_status": 429})
+        error_cb = coordinator._create_error_callback(session_id)
+        await error_cb("immediate_cli_failure", result_error)
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.state == SessionState.ERROR
+
+        # 2. Schedule appears
+        scheduler = coordinator.legion_system.scheduler_service
+        schedules = await scheduler.list_schedules(
+            legion_id=session_info.project_id, minion_id=session_id
+        )
+        auto_resume_schedules = [s for s in schedules if s.schedule_type == "auto_resume"]
+        assert len(auto_resume_schedules) == 1
+        schedule = auto_resume_schedules[0]
+        assert schedule.repeat_count == 1
+        assert schedule.fire_count == 0
+
+        # 3. Fire it directly (stand-in for a near-future fire_at / real tick) —
+        # patch only start_session so no real SDK subprocess is needed.
+        async def _fake_start(sid, *_args, **_kwargs):
+            await coordinator.session_manager.update_session_state(sid, SessionState.ACTIVE)
+            return True
+
+        try:
+            with patch.object(coordinator, "start_session", AsyncMock(side_effect=_fake_start)) as mock_start:
+                await scheduler._fire_auto_resume_schedule(schedule, datetime.now(UTC).timestamp())
+
+            mock_start.assert_awaited_once()
+
+            # 4. Session resumed, same claude_code_session_id preserved — issue #1019's
+            # ERROR -> TERMINATED unstick, not reset_session()'s destructive clearing.
+            resumed_info = await coordinator.session_manager.get_session_info(session_id)
+            assert resumed_info.state == SessionState.ACTIVE
+            assert resumed_info.claude_code_session_id == "ccsid-preserved"
+
+            # 5. Schedule self-deleted (repeat_count=1)
+            remaining = await scheduler.get_schedule(schedule.schedule_id)
+            assert remaining is None
+
+            # 6. The neutral "please continue" nudge was actually queued for delivery
+            queue_items = coordinator.queue_manager.get_queue(session_id)
+            assert any(
+                item.metadata and item.metadata.get("auto_resume") is True
+                for item in queue_items
+            ), "expected the auto-resume nudge to be enqueued"
+        finally:
+            # enqueue_message() above started a real queue-processor background task
+            # for this session (no mock SDK backs it) — stop it rather than leaving
+            # it to run its ~10s no-SDK-found retry/fail cycle after the test ends.
+            coordinator.queue_processor.stop(session_id)

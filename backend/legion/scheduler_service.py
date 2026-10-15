@@ -162,6 +162,8 @@ class SchedulerService:
                 self._inflight_scripts_by_session.setdefault(target_id, set()).add(schedule.schedule_id)
                 t = asyncio.create_task(self._fire_script_with_cleanup(schedule, target_id, now))
                 t.add_done_callback(task_done_log_exception)
+            elif schedule.schedule_type == "auto_resume":
+                await self._fire_auto_resume_schedule(schedule, now)
             else:
                 await self._fire_schedule(schedule, now)
 
@@ -300,6 +302,16 @@ class SchedulerService:
         if not schedule:
             raise ValueError(f"Schedule {schedule_id} not found")
 
+        # Issue #1572: auto_resume schedules are internally-created-only — editing
+        # cron_expression here would recalculate next_run from the inert placeholder
+        # cron via get_next_run() below, silently discarding the real one-time
+        # fire_at it depends on (same hazard _load_schedules() guards against on
+        # boot reload). Reject the whole edit rather than allow-listing individual
+        # safe fields, since nothing about this schedule type is meant to be
+        # user-editable.
+        if schedule.schedule_type == "auto_resume":
+            raise ValueError("Auto-resume schedules cannot be edited — cancel (delete) instead")
+
         if "cron_expression" in fields:
             if not validate_cron_expression(fields["cron_expression"]):
                 raise ValueError(f"Invalid cron expression: {fields['cron_expression']}")
@@ -412,6 +424,86 @@ class SchedulerService:
             )
         return deleted
 
+    # ── Auto-Resume (issue #1572) ──
+
+    def _find_auto_resume_schedule(self, session_id: str) -> Schedule | None:
+        return next(
+            (
+                s for s in self._schedules.values()
+                if s.minion_id == session_id and s.schedule_type == "auto_resume"
+            ),
+            None,
+        )
+
+    async def upsert_auto_resume_schedule(
+        self,
+        legion_id: str,
+        session_id: str,
+        session_name: str | None,
+        fire_at: float,
+    ) -> Schedule:
+        """Create, or bump the fire time of, the one pending auto-resume schedule
+        for a session.
+
+        Identity is `(minion_id=session_id, schedule_type="auto_resume")` — at most
+        one exists per session at a time. A second rate-limit hit before the first
+        one fires bumps `next_run` to the new (later) expiry instead of creating a
+        duplicate. Bypasses update_schedule()'s allowed-fields whitelist since
+        `next_run` is scheduler-internal state, not a user-editable field.
+        """
+        existing = self._find_auto_resume_schedule(session_id)
+        if existing is not None:
+            existing.next_run = fire_at
+            existing.updated_at = datetime.now(UTC).timestamp()
+            await self._persist_schedules(existing.legion_id)
+            await self._broadcast_schedule_event(existing.legion_id, existing)
+            legion_logger.info(
+                f"Auto-resume schedule {existing.schedule_id} for session {session_id} "
+                f"bumped to fire_at={fire_at}"
+            )
+            return existing
+
+        schedule = Schedule(
+            schedule_id=str(uuid.uuid4()),
+            legion_id=legion_id,
+            minion_id=session_id,
+            minion_name=session_name,
+            name="Auto-resume after rate limit",
+            # Inert placeholder — never consulted for firing decisions. next_run is
+            # set directly below, and repeat_count=1 deletes the schedule right
+            # after its one fire, so the cron engine never runs against this.
+            cron_expression="0 0 * * *",
+            prompt="",
+            status=ScheduleStatus.ACTIVE,
+            next_run=fire_at,
+            schedule_type="auto_resume",
+            repeat_count=1,
+        )
+        self._schedules[schedule.schedule_id] = schedule
+        await self._persist_schedules(legion_id)
+        await self._broadcast_schedule_event(legion_id, schedule)
+        legion_logger.info(
+            f"Auto-resume schedule {schedule.schedule_id} created for session "
+            f"{session_id}, fire_at={fire_at}"
+        )
+        return schedule
+
+    async def cancel_auto_resume_schedule(self, session_id: str) -> bool:
+        """Delete the pending auto-resume schedule for a session, if any.
+
+        No-op if none exists. Scoped to the manual-user-send call site only (issue
+        #1572 decision #4) — other delivery paths must not call this.
+        """
+        existing = self._find_auto_resume_schedule(session_id)
+        if existing is None:
+            return False
+        await self.delete_schedule(existing.schedule_id)
+        legion_logger.info(
+            f"Auto-resume schedule {existing.schedule_id} for session {session_id} "
+            "cancelled (manual user send)"
+        )
+        return True
+
     async def get_schedule_history(
         self,
         legion_id: str,
@@ -484,6 +576,8 @@ class SchedulerService:
                 self._fire_script_with_cleanup(schedule, target_id, now, trigger="manual")
             )
             t.add_done_callback(task_done_log_exception)
+        elif schedule.schedule_type == "auto_resume":
+            await self._fire_auto_resume_schedule(schedule, now, trigger="manual")
         else:
             await self._fire_schedule(schedule, now, trigger="manual")
 
@@ -597,6 +691,150 @@ class SchedulerService:
         await self._broadcast_schedule_event(schedule.legion_id, schedule)
 
         # Auto-delete when repeat_count reached (issue #1538)
+        if schedule.repeat_count is not None and schedule.fire_count >= schedule.repeat_count:
+            try:
+                await self.delete_schedule(schedule.schedule_id)
+            except ValueError:
+                pass  # already deleted
+
+    async def _fire_auto_resume_schedule(self, schedule: Schedule, now: float, trigger: str = "cron"):
+        """Fire a one-time auto-resume schedule: unstick an ERROR'd session, resume it,
+        and nudge it to continue (issue #1572).
+
+        Issue #1019 pattern: an ERROR session has no SDK left to disconnect, so bump
+        ERROR -> TERMINATED directly via update_session_state() — skipping
+        reset_session()'s destructive history/claude_code_session_id clearing — so
+        start_session() resumes the same underlying Claude conversation via the
+        preserved claude_code_session_id.
+
+        Issue #1918/#2159 guard: PAUSED (mid-permission-wait) must never be
+        force-restarted. Unlike the ephemeral-schedule guard (which defers to the
+        next *cron* cycle), this defers to the next scheduler tick (~30s) without
+        consuming a fire — fire_count is only incremented once we've actually
+        committed to firing (ACTIVE or auto-startable), mirroring how
+        _fire_ephemeral_schedule's own eligibility check precedes its fire_count
+        increment.
+        """
+        session_id = schedule.minion_id
+        session_manager = self.system.session_coordinator.session_manager
+        session_info = await session_manager.get_session_info(session_id)
+
+        if session_info is None:
+            # Edge case: session deleted before the timer fired — nothing to resume.
+            schedule.fire_count += 1
+            await self._persist_schedules(schedule.legion_id)
+            execution = ScheduleExecution(
+                execution_id=str(uuid.uuid4()),
+                schedule_id=schedule.schedule_id,
+                scheduled_time=schedule.next_run or now,
+                actual_time=now,
+                status="skipped",
+                minion_state="unknown",
+                error_message="Session no longer exists",
+                trigger=trigger,
+            )
+            schedule.last_run = now
+            schedule.last_status = "skipped"
+            schedule.execution_count += 1
+            schedule.updated_at = datetime.now(UTC).timestamp()
+            await self._persist_schedules(schedule.legion_id)
+            await self._record_execution(schedule, execution)
+            await self._broadcast_execution_event(schedule.legion_id, execution)
+            await self._broadcast_schedule_event(schedule.legion_id, schedule)
+            legion_logger.warning(
+                f"Auto-resume schedule {schedule.schedule_id}: session {session_id} "
+                "no longer exists — discarding"
+            )
+            try:
+                await self.delete_schedule(schedule.schedule_id)
+            except ValueError:
+                pass  # already deleted
+            return
+
+        if session_info.state == SessionState.ERROR:
+            await session_manager.update_session_state(session_id, SessionState.TERMINATED)
+            session_info = await session_manager.get_session_info(session_id)
+
+        if not (session_info.state == SessionState.ACTIVE or is_auto_startable(session_info.state)):
+            # PAUSED (mid-permission-wait) or an in-flight STARTING/TERMINATING —
+            # don't force anything. Defer to the next tick; deferred indefinitely is
+            # the correct behavior if the session stays stuck, not a failure.
+            legion_logger.debug(
+                f"Deferring auto-resume schedule {schedule.schedule_id} — "
+                f"session {session_id} in state {session_info.state.value}"
+            )
+            schedule.next_run = now + TICK_INTERVAL
+            schedule.updated_at = datetime.now(UTC).timestamp()
+            await self._persist_schedules(schedule.legion_id)
+            return
+
+        legion_logger.info(
+            f"Firing auto-resume schedule {schedule.schedule_id} for session {session_id}"
+        )
+
+        # Increment fire_count only once committed to firing (issue #1538 bookkeeping) —
+        # so a run of PAUSED defers above never consumes the repeat_count=1 budget.
+        schedule.fire_count += 1
+        await self._persist_schedules(schedule.legion_id)
+
+        execution = ScheduleExecution(
+            execution_id=str(uuid.uuid4()),
+            schedule_id=schedule.schedule_id,
+            scheduled_time=schedule.next_run or now,
+            actual_time=now,
+            status="queued",
+            minion_state=session_info.state.value,
+            trigger=trigger,
+        )
+
+        try:
+            if session_info.state != SessionState.ACTIVE:
+                started = await self._ensure_session_active(session_id)
+                if not started:
+                    raise RuntimeError(f"Could not start session {session_id}")
+
+            result = await self.system.session_coordinator.enqueue_message(
+                session_id=session_id,
+                content="Please continue where you left off.",
+                reset_session=False,
+                metadata={
+                    "source": trigger,
+                    "schedule_id": schedule.schedule_id,
+                    "auto_resume": True,
+                    "trigger_time": now,
+                },
+            )
+
+            execution.queue_id = result.get("queue_id")
+            execution.status = "queued"
+            execution.minion_state = "active"
+
+            schedule.last_run = now
+            schedule.last_status = "queued"
+            schedule.execution_count += 1
+            schedule.failure_count = 0
+
+            legion_logger.info(
+                f"Auto-resume schedule {schedule.schedule_id} fired — "
+                f"session {session_id} resumed"
+            )
+
+        except Exception as e:
+            legion_logger.error(f"Auto-resume schedule {schedule.schedule_id} fire failed: {e}")
+            execution.status = "failed"
+            execution.error_message = str(e)
+            schedule.last_status = "failed"
+            schedule.failure_count += 1
+
+        schedule.updated_at = datetime.now(UTC).timestamp()
+        await self._persist_schedules(schedule.legion_id)
+        await self._record_execution(schedule, execution)
+        await self._broadcast_execution_event(schedule.legion_id, execution)
+        await self._broadcast_schedule_event(schedule.legion_id, schedule)
+
+        # Auto-delete when repeat_count reached (issue #1538) — always true here since
+        # repeat_count=1 and fire_count was just incremented above: a one-time schedule
+        # "runs once, and disappears" regardless of whether the fire itself succeeded.
         if schedule.repeat_count is not None and schedule.fire_count >= schedule.repeat_count:
             try:
                 await self.delete_schedule(schedule.schedule_id)
@@ -1391,8 +1629,12 @@ class SchedulerService:
                 if had_cancelled:
                     migrated += 1
 
-                # Recalculate next_run for active schedules (skip missed windows)
-                if schedule.status == ScheduleStatus.ACTIVE:
+                # Recalculate next_run for active schedules (skip missed windows) —
+                # except auto_resume (issue #1572): its next_run is a one-time absolute
+                # fire_at timestamp, not cron-derived, so recalculating it from the
+                # inert placeholder cron_expression would silently discard the real
+                # fire time across every backend restart.
+                if schedule.status == ScheduleStatus.ACTIVE and schedule.schedule_type != "auto_resume":
                     schedule.next_run = get_next_run(schedule.cron_expression)
 
             if migrated:
