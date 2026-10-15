@@ -64,6 +64,22 @@ export const useScheduleStore = defineStore('schedule', () => {
   }
 
   /**
+   * The pending auto-resume schedule for a session, if any (issue #2190). Same
+   * independent-signal pattern as RateLimitBadge — driven entirely by existing
+   * schedule-store data, keyed off schedule_type/minion_id rather than
+   * SessionState (Option B: the session stays truthfully ACTIVE while held).
+   */
+  function getAutoResumeSchedule(sessionId) {
+    for (const schedules of schedulesByLegion.value.values()) {
+      const found = schedules.find(
+        s => s.schedule_type === 'auto_resume' && s.minion_id === sessionId
+      )
+      if (found) return found
+    }
+    return null
+  }
+
+  /**
    * All schedules across all legions, sorted by legion name then schedule name
    */
   const allSchedules = computed(() => {
@@ -365,6 +381,7 @@ export const useScheduleStore = defineStore('schedule', () => {
     getScheduleCount,
     isRunning,
     getSchedule,
+    getAutoResumeSchedule,
     allSchedules,
     // Actions
     loadSchedules,

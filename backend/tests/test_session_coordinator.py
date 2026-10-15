@@ -4866,3 +4866,383 @@ class TestIssue1572AutoResumeEndToEnd:
             # for this session (no mock SDK backs it) — stop it rather than leaving
             # it to run its ~10s no-SDK-found retry/fail cycle after the test ends.
             coordinator.queue_processor.stop(session_id)
+
+
+class TestIssue2190RateLimitResetTimeParser:
+    """Issue #2190 AC2: parse_rate_limit_reset_time() must never raise — any
+    parsing/timezone failure degrades silently to None (the caller's own
+    fallback), never breaking detection."""
+
+    def test_format_match_resolves_same_day_when_still_ahead(self):
+        from backend.timestamp_utils import parse_rate_limit_reset_time
+
+        reference_ts = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC).timestamp()
+        result = parse_rate_limit_reset_time(
+            "You've hit your session limit · resets 6:10am (UTC)", reference_ts
+        )
+        expected = datetime(2026, 1, 1, 6, 10, 0, tzinfo=UTC).timestamp()
+        assert result == pytest.approx(expected)
+
+    def test_rolls_forward_one_day_when_time_already_passed(self):
+        from backend.timestamp_utils import parse_rate_limit_reset_time
+
+        reference_ts = datetime(2026, 1, 1, 23, 50, 0, tzinfo=UTC).timestamp()
+        result = parse_rate_limit_reset_time("resets 6:10am (UTC)", reference_ts)
+        expected = datetime(2026, 1, 2, 6, 10, 0, tzinfo=UTC).timestamp()
+        assert result == pytest.approx(expected)
+
+    def test_unknown_timezone_returns_none_not_raises(self):
+        from backend.timestamp_utils import parse_rate_limit_reset_time
+
+        result = parse_rate_limit_reset_time(
+            "resets 6:10am (NotARealZone)", datetime.now(UTC).timestamp()
+        )
+        assert result is None
+
+    def test_malformed_text_returns_none(self):
+        from backend.timestamp_utils import parse_rate_limit_reset_time
+
+        result = parse_rate_limit_reset_time(
+            "some unrelated assistant text with no reset info", datetime.now(UTC).timestamp()
+        )
+        assert result is None
+
+
+class TestIssue2190OrdinaryResultDetection:
+    """Issue #2190 AC1: the real production usage-limit signal is an ordinary
+    ResultMessage (no exception, no ERROR transition) carrying is_error +
+    api_error_status == 429, delivered through _create_message_callback's normal
+    'result' branch — _create_error_callback's critical-error branch
+    (_maybe_schedule_auto_resume) never sees this signal shape. Mirrors
+    TestIssue1572AutoResumeDetection's style for the new detection hook."""
+
+    def _mock_legion_system(self, coordinator):
+        mock_scheduler = AsyncMock()
+        mock_scheduler.upsert_auto_resume_schedule = AsyncMock()
+        mock_legion = MagicMock()
+        mock_legion.scheduler_service = mock_scheduler
+        coordinator.legion_system = mock_legion
+        return mock_scheduler
+
+    @pytest.mark.asyncio
+    async def test_real_nested_metadata_shape_is_detected_not_just_flat_dicts(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Regression lock: a real SDK-origin message_callback invocation receives
+        MessageRecord.to_dict() — is_error/api_error_status/model nested under
+        message_data['metadata'], not flat at the top level (confirmed against a
+        real raw-fixture replay). _create_message_callback's own
+        message_processor.process_message() re-dispatches this already-canonical
+        dict through message_parser.py's flat-shape-oriented handlers a second
+        time, which cannot recover those fields from parsed_message.metadata —
+        detection must read message_data's own nested metadata instead (see
+        _nested_metadata()). Every other test in this class uses a flat dict for
+        simplicity; this one proves the fix also works against the shape
+        production actually delivers."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+        mock_scheduler = self._mock_legion_system(coordinator)
+
+        callback = coordinator._create_message_callback(session_id)
+        reference_dt = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+        await callback({
+            "type": "assistant",
+            "timestamp": reference_dt.timestamp(),
+            "session_id": session_id,
+            "message_id": "msg-1",
+            "content": "You've hit your session limit · resets 6:10am (UTC)",
+            "metadata": {"model": "<synthetic>"},
+        })
+        await callback({
+            "type": "result",
+            "timestamp": reference_dt.timestamp() + 1,
+            "session_id": session_id,
+            "message_id": "msg-2",
+            "content": "Conversation success",
+            "metadata": {"is_error": True, "api_error_status": 429, "subtype": "success"},
+        })
+
+        mock_scheduler.upsert_auto_resume_schedule.assert_awaited_once()
+        _, kwargs = mock_scheduler.upsert_auto_resume_schedule.call_args
+        assert kwargs["fire_at_source"] == "synthetic_text"
+        expected = datetime(2026, 1, 1, 6, 10, 0, tzinfo=UTC).timestamp() + 300
+        assert abs(kwargs["fire_at"] - expected) < 1.0
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.queue_paused is True
+        assert session_info.state == SessionState.ACTIVE
+
+    @pytest.mark.asyncio
+    async def test_structured_429_result_without_synthetic_text_uses_fallback(
+        self, temp_coordinator, sample_session_config
+    ):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+        mock_scheduler = self._mock_legion_system(coordinator)
+
+        callback = coordinator._create_message_callback(session_id)
+        before = datetime.now(UTC).timestamp()
+        await callback({
+            "type": "result",
+            "content": "",
+            "session_id": session_id,
+            "timestamp": before,
+            "is_error": True,
+            "api_error_status": 429,
+        })
+        after = datetime.now(UTC).timestamp()
+
+        mock_scheduler.upsert_auto_resume_schedule.assert_awaited_once()
+        _, kwargs = mock_scheduler.upsert_auto_resume_schedule.call_args
+        assert kwargs["session_id"] == session_id
+        assert kwargs["fire_at_source"] == "fallback"
+        assert before + 3600 <= kwargs["fire_at"] <= after + 3600
+
+        # Option B: the session stays genuinely ACTIVE — no ERROR transition — and
+        # the queue is held via pause_queue() instead.
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.state == SessionState.ACTIVE
+        assert session_info.queue_paused is True
+
+    @pytest.mark.asyncio
+    async def test_synthetic_text_before_result_resolves_precise_fire_at(
+        self, temp_coordinator, sample_session_config
+    ):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+        mock_scheduler = self._mock_legion_system(coordinator)
+
+        callback = coordinator._create_message_callback(session_id)
+        reference_dt = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+        await callback({
+            "type": "assistant",
+            "content": "You've hit your session limit · resets 6:10am (UTC)",
+            "model": "<synthetic>",
+            "session_id": session_id,
+            "timestamp": reference_dt.timestamp(),
+        })
+        await callback({
+            "type": "result",
+            "content": "",
+            "session_id": session_id,
+            "timestamp": reference_dt.timestamp() + 1,
+            "is_error": True,
+            "api_error_status": 429,
+        })
+
+        mock_scheduler.upsert_auto_resume_schedule.assert_awaited_once()
+        _, kwargs = mock_scheduler.upsert_auto_resume_schedule.call_args
+        assert kwargs["fire_at_source"] == "synthetic_text"
+        expected = datetime(2026, 1, 1, 6, 10, 0, tzinfo=UTC).timestamp() + 300
+        assert abs(kwargs["fire_at"] - expected) < 1.0
+
+    @pytest.mark.asyncio
+    async def test_rejected_rate_limit_state_wins_over_synthetic_text(
+        self, temp_coordinator, sample_session_config
+    ):
+        """AC2's priority order: a 'rejected' _rate_limits_state entry wins over a
+        parsed synthetic-text reset time, even when both are present on the same
+        detection."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+        mock_scheduler = self._mock_legion_system(coordinator)
+
+        resets_at_ts = datetime.now(UTC).timestamp() + 1800
+        resets_at_iso = datetime.fromtimestamp(resets_at_ts, tz=UTC).isoformat()
+        coordinator._rate_limits_state["five_hour"] = {
+            "status": "rejected",
+            "resets_at": resets_at_iso,
+            "used_percentage": 100.0,
+        }
+
+        callback = coordinator._create_message_callback(session_id)
+        now_ts = datetime.now(UTC).timestamp()
+        await callback({
+            "type": "assistant",
+            "content": "You've hit your session limit · resets 6:10am (UTC)",
+            "model": "<synthetic>",
+            "session_id": session_id,
+            "timestamp": now_ts,
+        })
+        await callback({
+            "type": "result",
+            "content": "",
+            "session_id": session_id,
+            "timestamp": now_ts + 1,
+            "is_error": True,
+            "api_error_status": 429,
+        })
+
+        mock_scheduler.upsert_auto_resume_schedule.assert_awaited_once()
+        _, kwargs = mock_scheduler.upsert_auto_resume_schedule.call_args
+        assert kwargs["fire_at_source"] == "rate_limit_state"
+        expected_fire_at = resets_at_ts + 300
+        assert abs(kwargs["fire_at"] - expected_fire_at) < 1.0
+
+    @pytest.mark.asyncio
+    async def test_non_matching_is_error_result_does_not_schedule(
+        self, temp_coordinator, sample_session_config
+    ):
+        """T2: a non-429 is_error result (e.g. a 500) must not schedule an
+        auto-resume — only a logged WARNING diagnostic."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+        mock_scheduler = self._mock_legion_system(coordinator)
+
+        callback = coordinator._create_message_callback(session_id)
+        await callback({
+            "type": "result",
+            "content": "",
+            "session_id": session_id,
+            "timestamp": datetime.now(UTC).timestamp(),
+            "is_error": True,
+            "api_error_status": 500,
+        })
+
+        mock_scheduler.upsert_auto_resume_schedule.assert_not_awaited()
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.queue_paused is False
+
+    @pytest.mark.asyncio
+    async def test_no_legion_system_is_safe_noop(
+        self, temp_coordinator, sample_session_config
+    ):
+        """If legion_system isn't wired up, a 429 result must not raise — it just
+        can't schedule anything, and the session stays ACTIVE either way."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+        coordinator.legion_system = None
+
+        callback = coordinator._create_message_callback(session_id)
+        await callback({
+            "type": "result",
+            "content": "",
+            "session_id": session_id,
+            "timestamp": datetime.now(UTC).timestamp(),
+            "is_error": True,
+            "api_error_status": 429,
+        })  # must not raise
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.state == SessionState.ACTIVE
+
+    @pytest.mark.asyncio
+    async def test_queue_not_paused_when_schedule_creation_fails(
+        self, temp_coordinator, sample_session_config
+    ):
+        """code-review follow-up: pause_queue(True) must happen only AFTER the
+        schedule is confirmed created, not before. If it ran first and schedule
+        creation then failed (session deleted mid-flight, scheduler/storage
+        error), the queue would be paused forever with nothing left able to
+        unpause it — no schedule to fire, and cancel_auto_resume_schedule() would
+        find nothing to cancel either."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+        mock_scheduler = self._mock_legion_system(coordinator)
+        mock_scheduler.upsert_auto_resume_schedule.side_effect = RuntimeError("storage down")
+
+        callback = coordinator._create_message_callback(session_id)
+        await callback({
+            "type": "result",
+            "content": "",
+            "session_id": session_id,
+            "timestamp": datetime.now(UTC).timestamp(),
+            "is_error": True,
+            "api_error_status": 429,
+        })  # must not raise — caught and logged
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.queue_paused is False, (
+            "a failed schedule creation must not leave the queue paused with no "
+            "schedule left to ever unpause it"
+        )
+
+    @pytest.mark.asyncio
+    async def test_stale_synthetic_text_does_not_leak_into_unrelated_later_result(
+        self, temp_coordinator, sample_session_config
+    ):
+        """code-review follow-up: a stashed synthetic notice is only ever paired
+        with the ONE result immediately following it. If that result turns out to
+        be a non-matching is_error (or no error at all), the stash must still be
+        discarded — not left cached for a later, unrelated 429 detection to
+        mistakenly consult as tier-2 input."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+        mock_scheduler = self._mock_legion_system(coordinator)
+
+        callback = coordinator._create_message_callback(session_id)
+        now_ts = datetime.now(UTC).timestamp()
+
+        # Synthetic text precedes a non-matching (500) result — must be discarded,
+        # not left cached.
+        await callback({
+            "type": "assistant",
+            "content": "You've hit your session limit · resets 6:10am (UTC)",
+            "model": "<synthetic>",
+            "session_id": session_id,
+            "timestamp": now_ts,
+        })
+        await callback({
+            "type": "result",
+            "content": "",
+            "session_id": session_id,
+            "timestamp": now_ts + 1,
+            "is_error": True,
+            "api_error_status": 500,
+        })
+        mock_scheduler.upsert_auto_resume_schedule.assert_not_awaited()
+        assert session_id not in coordinator._last_synthetic_text_by_session
+
+        # A later, genuinely unrelated 429 result (no synthetic text of its own)
+        # must fall back — not resolve a fire_at from the discarded stale entry.
+        await callback({
+            "type": "result",
+            "content": "",
+            "session_id": session_id,
+            "timestamp": now_ts + 100,
+            "is_error": True,
+            "api_error_status": 429,
+        })
+        mock_scheduler.upsert_auto_resume_schedule.assert_awaited_once()
+        _, kwargs = mock_scheduler.upsert_auto_resume_schedule.call_args
+        assert kwargs["fire_at_source"] == "fallback"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_detection_does_not_duplicate_schedule(
+        self, temp_coordinator, sample_session_config
+    ):
+        """UC2: detection firing twice in quick succession for the same session
+        (e.g. a second 429 result arriving before the first schedule fires) must
+        collapse to exactly one schedule — upsert_auto_resume_schedule's own
+        identity rule (minion_id, schedule_type='auto_resume'), exercised here
+        against the real (not mocked) scheduler_service."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+
+        callback = coordinator._create_message_callback(session_id)
+        for _ in range(2):
+            await callback({
+                "type": "result",
+                "content": "",
+                "session_id": session_id,
+                "timestamp": datetime.now(UTC).timestamp(),
+                "is_error": True,
+                "api_error_status": 429,
+            })
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        scheduler = coordinator.legion_system.scheduler_service
+        schedules = await scheduler.list_schedules(
+            legion_id=session_info.project_id, minion_id=session_id
+        )
+        auto_resume_schedules = [s for s in schedules if s.schedule_type == "auto_resume"]
+        assert len(auto_resume_schedules) == 1

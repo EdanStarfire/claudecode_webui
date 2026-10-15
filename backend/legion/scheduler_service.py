@@ -441,6 +441,7 @@ class SchedulerService:
         session_id: str,
         session_name: str | None,
         fire_at: float,
+        fire_at_source: str | None = None,
     ) -> Schedule:
         """Create, or bump the fire time of, the one pending auto-resume schedule
         for a session.
@@ -450,10 +451,14 @@ class SchedulerService:
         one fires bumps `next_run` to the new (later) expiry instead of creating a
         duplicate. Bypasses update_schedule()'s allowed-fields whitelist since
         `next_run` is scheduler-internal state, not a user-editable field.
+
+        `fire_at_source` records which tier of the fire_at resolver produced this
+        expiry (issue #2190, AC2) — purely informational, not consulted for firing.
         """
         existing = self._find_auto_resume_schedule(session_id)
         if existing is not None:
             existing.next_run = fire_at
+            existing.fire_at_source = fire_at_source
             existing.updated_at = datetime.now(UTC).timestamp()
             await self._persist_schedules(existing.legion_id)
             await self._broadcast_schedule_event(existing.legion_id, existing)
@@ -478,6 +483,7 @@ class SchedulerService:
             next_run=fire_at,
             schedule_type="auto_resume",
             repeat_count=1,
+            fire_at_source=fire_at_source,
         )
         self._schedules[schedule.schedule_id] = schedule
         await self._persist_schedules(legion_id)
@@ -771,6 +777,14 @@ class SchedulerService:
         legion_logger.info(
             f"Firing auto-resume schedule {schedule.schedule_id} for session {session_id}"
         )
+
+        # Issue #2190: lift the queue-hold set at detection time (Option B — the
+        # ordinary-result 429 path pauses the queue without an ERROR transition, so
+        # recover_session() below never touches queue_paused). Unconditional once
+        # we're committed to firing, covering both the ERROR-recovery branch above
+        # and the already-ACTIVE direct-nudge branch, which is now the common case
+        # for this detection path.
+        await self.system.session_coordinator.pause_queue(session_id, False)
 
         # Increment fire_count only once committed to firing (issue #1538 bookkeeping) —
         # so a run of PAUSED defers above never consumes the repeat_count=1 budget.
