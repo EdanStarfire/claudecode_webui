@@ -30,12 +30,15 @@ class QueueProcessor:
       1. Peek next pending item
       2. If paused → sleep, continue
       3. If session ERROR → STOP (user must intervene)
-      4. Wrap the item into a Comm and hand it to
-         coordinator.delivery_gate.deliver(wait_for_idle=True) — auto-start,
-         reset, the min_wait_seconds delay, the send itself, and the
-         min_idle_seconds post-send wait all live there now (issue #2189
-         coordinator-split PR 10; see delivery_gate.py)
-      5. mark_sent/mark_failed + broadcast based on the DeliveryResult
+      4. Wrap the item into a Comm, call coordinator.delivery_gate's
+         prepare_for_send() (auto-start/reset/min_wait_seconds delay),
+         send_queued() (the actual send), then wait_until_idle()
+         (min_idle_seconds post-send wait) — issue #2189 coordinator-split
+         PR 10; see delivery_gate.py. Split into 3 calls rather than one
+         atomic deliver() so mark_sent/broadcast("sent") below can fire
+         immediately after send_queued() succeeds, BEFORE wait_until_idle()
+         — matching pre-PR timing (mark_sent fired before the idle-wait).
+      5. mark_sent/mark_failed + broadcast based on each step's DeliveryResult
     """
 
     def __init__(self, coordinator: "SessionCoordinator"):
@@ -248,6 +251,10 @@ class QueueProcessor:
                 # dance now lives in DeliveryGate — see delivery_gate.py for the
                 # verbatim-ported AUTO_START_STATES/_wait_for_active/_wait_for_idle
                 # mechanics (issue #2159's PAUSED-unbounded-wait nuance included).
+                # Split into 3 calls (not one atomic deliver()) so mark_sent/
+                # broadcast("sent") below can fire at the same point relative to
+                # the actual SDK send as pre-PR: immediately after send_queued()
+                # succeeds, BEFORE the post-send idle-wait — not after it.
                 comm = Comm(
                     comm_id=item.queue_id,
                     from_user=True,
@@ -257,29 +264,28 @@ class QueueProcessor:
                     interrupt_priority=InterruptPriority.NONE,
                     metadata=item.metadata or {},
                 )
-                result = await self._coordinator.delivery_gate.deliver(
-                    comm,
-                    wait_for_idle=True,
-                    reset_first=item.reset_session,
-                    inject_timestamp=item.inject_timestamp,
-                )
 
-                session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
-                if not result.success:
+                prepared = await self._coordinator.delivery_gate.prepare_for_send(
+                    comm, reset_first=item.reset_session
+                )
+                if not prepared.success:
                     # error=None is DeliveryGate's signal for the one pre-PR
                     # asymmetry it preserves verbatim (post-reset wait timeout):
                     # stop for now without permanently failing the item.
-                    if result.error:
-                        queue_proc_logger.error(
-                            f"Queue item {item.queue_id} failed for session {session_id}: {result.error}"
-                        )
-                        if session_dir:
-                            await self._coordinator.queue_manager.mark_failed(
-                                session_id, session_dir, item.queue_id, result.error
-                            )
-                            await self._broadcast("failed", session_id, item)
+                    if prepared.error:
+                        await self._mark_item_failed(session_id, item, prepared.error)
                     break
 
+                sent = await self._coordinator.delivery_gate.send_queued(
+                    comm, inject_timestamp=item.inject_timestamp
+                )
+                if not sent.success:
+                    await self._mark_item_failed(session_id, item, sent.error)
+                    break
+
+                # Mark as sent immediately — the message has been delivered to
+                # the SDK. Must happen here, before wait_until_idle(), not after.
+                session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
                 if session_dir:
                     await self._coordinator.queue_manager.mark_sent(
                         session_id, session_dir, item.queue_id
@@ -287,6 +293,11 @@ class QueueProcessor:
                     await self._broadcast("sent", session_id, item)
 
                 queue_proc_logger.info(f"Queue item {item.queue_id} sent to session {session_id}")
+
+                idle_result = await self._coordinator.delivery_gate.wait_until_idle(comm)
+                if not idle_result.success:
+                    await self._mark_item_failed(session_id, item, idle_result.error)
+                    break
 
         except asyncio.CancelledError:
             queue_proc_logger.info(f"Queue processor cancelled for session {session_id}")
@@ -299,6 +310,20 @@ class QueueProcessor:
     # =========================================================================
     # Helpers
     # =========================================================================
+
+    async def _mark_item_failed(self, session_id: str, item: Any, error: str) -> None:
+        """Mark a queue item failed and broadcast — shared by every failure
+        branch of the prepare_for_send()/send_queued()/wait_until_idle() split.
+        """
+        queue_proc_logger.error(
+            f"Queue item {item.queue_id} failed for session {session_id}: {error}"
+        )
+        session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
+        if session_dir:
+            await self._coordinator.queue_manager.mark_failed(
+                session_id, session_dir, item.queue_id, error
+            )
+            await self._broadcast("failed", session_id, item)
 
     async def _broadcast(self, action: str, session_id: str, item: Any) -> None:
         """Broadcast a queue update if callback is set."""

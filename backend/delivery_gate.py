@@ -72,6 +72,15 @@ class DeliveryGate:
     change, not just an internal-mechanics detail. ensure_ready() lets
     comm_router.py run the gate first, unconditionally, exactly as before,
     then decide whether to call send() afterward based on interrupt priority.
+
+    The wait_for_idle=True mechanics are similarly split into three primitives
+    — prepare_for_send(), send_queued(), wait_until_idle() — rather than only
+    through deliver(), for the analogous reason: pre-PR, queue_processor.py's
+    mark_sent()/broadcast("sent") fired immediately after send_message()
+    succeeded, BEFORE the post-send min_idle_seconds busy-wait. queue_processor.py
+    calls these three separately so its own mark_sent/broadcast bookkeeping can
+    sit between send_queued() and wait_until_idle(), at the same point relative
+    to the actual SDK send as before.
     """
 
     def __init__(self, coordinator: "SessionCoordinator"):
@@ -87,9 +96,13 @@ class DeliveryGate:
         readiness_timeout: float | None = None,
     ) -> DeliveryResult:
         if wait_for_idle:
-            return await self._deliver_with_busy_wait(
-                comm, reset_first=reset_first, inject_timestamp=inject_timestamp
-            )
+            prepared = await self.prepare_for_send(comm, reset_first=reset_first)
+            if not prepared.success:
+                return prepared
+            sent = await self.send_queued(comm, inject_timestamp=inject_timestamp)
+            if not sent.success:
+                return sent
+            return await self.wait_until_idle(comm)
         ready = await self.ensure_ready(comm, readiness_timeout=readiness_timeout)
         if not ready.success:
             return ready
@@ -213,15 +226,29 @@ class DeliveryGate:
 
     # =========================================================================
     # wait_for_idle=True — ported verbatim from queue_processor.py::_process_loop
+    #
+    # Split into prepare_for_send() / send_queued() / wait_until_idle() rather
+    # than one atomic step, for the same reason the wait_for_idle=False branch
+    # is split into ensure_ready()/send(): pre-PR, queue_processor.py called
+    # mark_sent()/broadcast("sent") immediately after send_message() succeeded
+    # ("Mark as sent immediately — the message has been delivered to the SDK"),
+    # BEFORE the post-send min_idle_seconds busy-wait. Bundling send+idle-wait
+    # into one atomic deliver() call would force that bookkeeping to wait for
+    # the full idle-wait too — a real, user-visible delay to the UI's "sent"
+    # status (by min_idle_seconds, default 10s) on every queued message, not
+    # just an internal-mechanics detail.
     # =========================================================================
 
-    async def _deliver_with_busy_wait(
+    async def prepare_for_send(
         self,
         comm: Comm,
         *,
-        reset_first: bool,
-        inject_timestamp: bool,
+        reset_first: bool = False,
     ) -> DeliveryResult:
+        """AUTO_START_STATES-gated auto-start + optional reset + the
+        min_wait_seconds delay + pause re-check — everything up to but not
+        including the actual send. Call send_queued() after this succeeds.
+        """
         coordinator = self._coordinator
         session_id = comm.to_minion_id
 
@@ -292,19 +319,37 @@ class DeliveryGate:
 
             break
 
-        # Send the message
+        return DeliveryResult(success=True)
+
+    async def send_queued(self, comm: Comm, *, inject_timestamp: bool = True) -> DeliveryResult:
+        """Send comm.content to the SDK — queue_processor.py's calling
+        convention (positional session_id/content, no metadata param), kept
+        distinct from send()'s keyword/metadata convention per-branch, not
+        unified. Call after prepare_for_send() succeeds.
+        """
+        session_id = comm.to_minion_id
         gate_logger.info(
             f"Sending queued message to session {session_id}: {comm.content[:80]}..."
         )
-        send_result = await coordinator.send_message(
+        send_result = await self._coordinator.send_message(
             session_id, comm.content, inject_timestamp=inject_timestamp
         )
         if not send_result:
             gate_logger.error(f"Failed to send message to session {session_id}")
             return DeliveryResult(success=False, error="Failed to send message")
 
-        # Wait for SDK to finish processing before picking up next item
+        return DeliveryResult(success=True)
+
+    async def wait_until_idle(self, comm: Comm) -> DeliveryResult:
+        """Post-send min_idle_seconds busy-wait. Call after the caller has
+        already done its own mark_sent/broadcast("sent") bookkeeping — this
+        step must not gate that (see class docstring).
+        """
+        session_id = comm.to_minion_id
+        session_info = await self._coordinator.session_manager.get_session_info(session_id)
+        queue_config = getattr(session_info, 'queue_config', None) or {} if session_info else {}
         min_idle = queue_config.get("min_idle_seconds", DEFAULT_MIN_IDLE_SECONDS)
+
         completed = await self._wait_for_idle(session_id, min_idle)
         if not completed:
             return DeliveryResult(

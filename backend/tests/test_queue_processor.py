@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from backend.delivery_gate import DeliveryGate
+from backend.delivery_gate import DeliveryGate, DeliveryResult
 from backend.queue_manager import QueueManager
 from backend.queue_processor import QueueProcessor
 from backend.session_manager import SessionInfo, SessionState
@@ -295,6 +295,54 @@ class TestQueueProcessorBroadcast:
             assert callback.called
             calls = [c for c in callback.call_args_list if c[0][1] == "sent"]
             assert len(calls) >= 1
+
+    @pytest.mark.asyncio
+    async def test_mark_sent_fires_before_idle_wait_completes(self):
+        """Regression test (issue #2189 review): pre-PR, mark_sent()/
+        broadcast("sent") fired immediately after send_message() succeeded,
+        BEFORE the post-send min_idle_seconds busy-wait — not after it. Pins
+        this by making wait_until_idle() block indefinitely and asserting
+        mark_sent/broadcast("sent") already happened while it's still pending."""
+        with tempfile.TemporaryDirectory() as tmp:
+            sdir = Path(tmp)
+            info = _make_session_info(
+                state=SessionState.ACTIVE,
+                is_processing=False,
+                queue_config={"min_wait_seconds": 0, "min_idle_seconds": 0},
+            )
+            coord = _make_coordinator(info, sdir)
+            proc = QueueProcessor(coord)
+
+            callback = AsyncMock()
+            proc.set_broadcast_callback(callback)
+
+            await coord.queue_manager.enqueue("s1", sdir, "deliver me", reset_session=False)
+
+            still_waiting = asyncio.Event()
+
+            async def block_forever(comm):
+                still_waiting.set()
+                await asyncio.Event().wait()  # never set — blocks until cancelled
+                return DeliveryResult(success=True)
+
+            with patch.object(coord.delivery_gate, "wait_until_idle", AsyncMock(side_effect=block_forever)):
+                proc.ensure_running("s1")
+                for _ in range(50):
+                    await asyncio.sleep(0)
+                    if still_waiting.is_set():
+                        break
+
+                # wait_until_idle() is confirmed still pending (it just set the
+                # event and is now blocked on its own never-set Event) —
+                # mark_sent/broadcast("sent") must already have fired by now.
+                coord.send_message.assert_called_once()
+                sent_calls = [c for c in callback.call_args_list if c[0][1] == "sent"]
+                assert len(sent_calls) == 1
+
+                items = coord.queue_manager.get_queue("s1")
+                assert items[0].status == "sent"
+
+                proc.stop("s1")
 
 
 class TestQueueProcessorPausedState:
