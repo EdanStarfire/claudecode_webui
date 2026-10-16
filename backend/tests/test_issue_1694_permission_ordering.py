@@ -246,7 +246,7 @@ async def test_message_emitted_barrier_cleaned_up_on_terminate(tmp_path):
             "end_turn",
             new_callable=AsyncMock,
         ),
-        patch.object(coord, "mark_session_tools_interrupted"),
+        patch.object(coord._tool_call_tracker, "mark_session_tools_interrupted"),
         patch.object(
             coord.session_manager,
             "terminate_session",
