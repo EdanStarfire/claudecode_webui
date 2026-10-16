@@ -242,6 +242,14 @@ class ProjectManager:
 
         return sorted(projects, key=sort_key)
 
+    async def find_project_for_session(self, session_id: str) -> ProjectInfo | None:
+        """Find the project that contains a given session"""
+        projects = await self.list_projects()
+        for project in projects:
+            if session_id in project.session_ids:
+                return project
+        return None
+
     async def update_project(
         self,
         project_id: str,

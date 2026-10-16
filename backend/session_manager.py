@@ -988,6 +988,67 @@ class SessionManager:
 
         return sorted(sessions, key=sort_key)
 
+    async def get_all_descendants(self, session_id: str) -> list[dict]:
+        """
+        Get all descendant sessions (children, grandchildren, etc.) of a session.
+
+        Returns a list of session info dicts for all descendants, or empty list
+        if the session has no children or doesn't exist.
+        """
+        descendants = []
+
+        session_info = await self.get_session_info(session_id)
+        if not session_info:
+            return descendants
+
+        # Check if session has any children - any session with child_minion_ids
+        # can have descendants, regardless of is_minion/is_overseer flags
+        if not session_info.child_minion_ids:
+            return descendants
+
+        # Process each child
+        for child_id in session_info.child_minion_ids:
+            child_info = await self.get_session_info(child_id)
+            if child_info:
+                descendants.append({
+                    "session_id": child_id,
+                    "name": child_info.name,
+                    "role": child_info.role,
+                    "state": child_info.state.value if hasattr(child_info.state, 'value') else str(child_info.state),
+                    "parent_id": session_id
+                })
+                # Recursively get grandchildren
+                grandchildren = await self.get_all_descendants(child_id)
+                descendants.extend(grandchildren)
+
+        return descendants
+
+    async def get_descendants(self, session_id: str, limit: int = 50, offset: int = 0) -> dict:
+        """
+        Get descendant sessions of a session, paginated.
+
+        Returns paginated dict with descendants, total, limit, offset, has_more.
+        """
+        all_descendants = await self.get_all_descendants(session_id)
+        total = len(all_descendants)
+        sliced = all_descendants[offset : offset + limit]
+        return {
+            "descendants": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+        }
+
+    async def count_descendants(self, session_id: str) -> int:
+        """
+        Count total number of descendants (children, grandchildren, etc.).
+
+        Returns count of all descendant sessions.
+        """
+        descendants = await self.get_all_descendants(session_id)
+        return len(descendants)
+
     async def get_sessions_by_ids(self, session_ids: list[str]) -> list[SessionInfo]:
         """Get sessions by IDs in the order provided"""
         sessions = []
