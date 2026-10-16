@@ -16,6 +16,8 @@ from backend.docker_utils import (
     classify_docker_output,
     cleanup_session_tmp,
     detect_docker_bridge_gateway,
+    get_proxy_blocked_log,
+    get_proxy_status,
     get_session_tmp_dir,
     get_wrapper_script_path,
     resolve_docker_cli_path,
@@ -376,3 +378,69 @@ class TestWrapperScriptFileMountFlags:
         assert condition_line is not None, "file-mount scan condition not found in wrapper script"
         assert "--append-system-prompt-file" in condition_line
         assert "--settings" in condition_line
+
+
+# ---------------------------------------------------------------------------
+# get_proxy_status / get_proxy_blocked_log (moved from ApplicationService,
+# issue #2189 AC5)
+# ---------------------------------------------------------------------------
+
+
+class TestGetProxyStatus:
+    def test_disabled_proxy_returns_empty_status(self, tmp_path):
+        session = MagicMock()
+        session.config = {"docker_proxy_enabled": False}
+
+        result = get_proxy_status(session, tmp_path)
+
+        assert result == {
+            "proxy_enabled": False,
+            "effective_domains": [],
+            "active_credentials": [],
+            "sidecar_running": False,
+        }
+
+    def test_enabled_proxy_returns_domains_and_credentials(self, tmp_path):
+        session = MagicMock()
+        session.config = {
+            "docker_proxy_enabled": True,
+            "docker_proxy_allowlist_domains": ["example.com"],
+            "assigned_secrets": ["my-secret"],
+        }
+
+        result = get_proxy_status(session, tmp_path)
+
+        assert result["proxy_enabled"] is True
+        assert "example.com" in result["effective_domains"]
+        assert result["active_credentials"] == ["my-secret"]
+        assert result["sidecar_running"] is False
+
+
+class TestGetProxyBlockedLog:
+    def test_missing_log_file_returns_empty_entries(self, tmp_path):
+        result = get_proxy_blocked_log("session-1", tmp_path)
+        assert result == {"entries": []}
+
+    def test_returns_only_blocked_entries_most_recent_first(self, tmp_path):
+        log_dir = tmp_path / "sessions" / "session-1" / "docker_claude_data" / "proxy"
+        log_dir.mkdir(parents=True)
+        log_path = log_dir / "access.log"
+        log_path.write_text(
+            '{"domain": "a.com", "allowed": true}\n'
+            '{"domain": "b.com", "allowed": false}\n'
+            '{"domain": "c.com", "allowed": false}\n'
+        )
+
+        result = get_proxy_blocked_log("session-1", tmp_path)
+
+        assert [e["domain"] for e in result["entries"]] == ["c.com", "b.com"]
+
+    def test_limit_caps_entry_count(self, tmp_path):
+        log_dir = tmp_path / "sessions" / "session-1" / "docker_claude_data" / "proxy"
+        log_dir.mkdir(parents=True)
+        log_path = log_dir / "access.log"
+        log_path.write_text("\n".join(f'{{"domain": "{i}.com", "allowed": false}}' for i in range(5)))
+
+        result = get_proxy_blocked_log("session-1", tmp_path, limit=2)
+
+        assert len(result["entries"]) == 2

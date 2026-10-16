@@ -8,6 +8,7 @@ Issue #1052: prepare_session_ssh() — SSH key tmpfs delivery for proxy-mode ses
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -592,3 +593,59 @@ def cleanup_session_tmp(session_id: str, sessions_dir: Path) -> None:
             logger.info(f"Cleaned up /tmp for session {session_id}")
     except Exception:
         logger.exception(f"Failed to clean up /tmp for session {session_id}")
+
+
+def get_proxy_status(session, data_dir: Path) -> dict:
+    """Return effective allowlist + active credential names + proxy state for a session."""
+    proxy_enabled = session.config.get("docker_proxy_enabled", False)
+    if not proxy_enabled:
+        return {"proxy_enabled": False, "effective_domains": [], "active_credentials": [], "sidecar_running": False}
+
+    # Build effective domains: static defaults + session config
+    effective_domains: list[str] = []
+    static_allowlist_path = Path("backend/docker/proxy/allowlist.json")
+    if static_allowlist_path.exists():
+        try:
+            static = json.loads(static_allowlist_path.read_text())
+            effective_domains.extend(static.get("domains", []))
+        except Exception:
+            pass
+    extra_domains = session.config.get("docker_proxy_allowlist_domains") or []
+    all_domains = sorted(set(effective_domains + extra_domains))
+
+    active_secrets = session.config.get("assigned_secrets") or []
+
+    return {
+        "proxy_enabled": True,
+        "effective_domains": all_domains,
+        "active_credentials": active_secrets,
+        "sidecar_running": False,  # Sidecar runtime state not tracked server-side
+    }
+
+
+def get_proxy_blocked_log(session_id: str, data_dir: Path, limit: int = 50) -> dict:
+    """Return recent blocked connections from the sidecar access log."""
+    # Access log is written to data/sessions/{id}/docker_claude_data/proxy/access.log
+    session_dir = data_dir / "sessions" / session_id
+    log_path = session_dir / "docker_claude_data" / "proxy" / "access.log"
+    if not log_path.exists():
+        return {"entries": []}
+
+    blocked = []
+    try:
+        lines = log_path.read_text().splitlines()
+        for line in reversed(lines):
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+                if not entry.get("allowed", True):
+                    blocked.append(entry)
+                    if len(blocked) >= limit:
+                        break
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    return {"entries": blocked}

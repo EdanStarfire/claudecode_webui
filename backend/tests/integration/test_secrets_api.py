@@ -36,7 +36,7 @@ def mock_keyring():
         patch("backend.credential_vault.set_secret_value", side_effect=_set),
         patch("backend.credential_vault.get_secret_value", side_effect=_get),
         patch("backend.credential_vault.delete_secret_value", side_effect=_del),
-        # backend.application_service._refresh_secret_impl() imports directly from
+        # backend.secrets_service._refresh_secret_impl() imports directly from
         # backend.secrets_keyring (not backend.credential_vault) — patch both call
         # sites so a mocked oauth2 refresh round-trip reads/writes the same store.
         patch("backend.secrets_keyring.set_secret_value", side_effect=_set),

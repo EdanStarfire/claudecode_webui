@@ -21,6 +21,8 @@ from backend.credential_vault import SecretsVault
 from backend.mcp_config_manager import McpServerConfig, McpServerType
 from backend.models.secret_record import SecretRecord, SecretType
 from backend.oauth_manager import FernetTokenStore, OAuthFlowManager
+from backend.oauth_secret_bundle_manager import OAuthSecretBundleManager
+from backend.secrets_service import SecretsService
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -111,6 +113,12 @@ def _make_service(tmp_path: Path, mock_config: McpServerConfig | None, store: Fe
         vault = SecretsVault(tmp_path)
 
     coordinator.credential_vault = vault
+    coordinator.oauth_secret_bundle_manager = OAuthSecretBundleManager(
+        credential_vault=vault,
+        oauth_manager=coordinator.oauth_manager,
+        mcp_config_manager=coordinator.mcp_config_manager,
+        vault_refresh_manager=coordinator.vault_refresh_manager,
+    )
     return ApplicationService(coordinator)
 
 
@@ -621,7 +629,7 @@ async def test_issue_1381_import_idempotent_after_disconnect_and_reauth(
 class _FakeKeyring:
     """In-memory stand-in for the OS keyring shared across every call site.
 
-    `credential_vault.py` and `application_service._refresh_secret_impl` each
+    `credential_vault.py` and `secrets_service._refresh_secret_impl` each
     import `get_secret_value`/`set_secret_value` independently (the latter via a
     function-local import), so both must be patched onto the same backing dict
     for a value written during import to be readable during refresh.
@@ -685,6 +693,20 @@ async def test_issue_1867_import_as_secret_full_chain_confidential_client(tmp_pa
     with _patched_keyring(fake_keyring):
         vault = SecretsVault(tmp_path)
         coordinator.credential_vault = vault
+        coordinator.secrets_service = SecretsService(
+            credential_vault=vault,
+            vault_refresh_manager=None,
+            session_manager=MagicMock(),
+            template_manager=MagicMock(),
+            profile_manager=MagicMock(),
+            mcp_config_manager=coordinator.mcp_config_manager,
+        )
+        coordinator.oauth_secret_bundle_manager = OAuthSecretBundleManager(
+            credential_vault=vault,
+            oauth_manager=oauth_manager,
+            mcp_config_manager=coordinator.mcp_config_manager,
+            vault_refresh_manager=coordinator.vault_refresh_manager,
+        )
 
         # Real vault secret backing oauth_client_secret="${secret:test-google-secret}"
         now = datetime.now(UTC)
@@ -910,6 +932,12 @@ def _make_service_with_fake_keyring(
     with _patched_keyring(fake):
         vault = SecretsVault(tmp_path)
     coordinator.credential_vault = vault
+    coordinator.oauth_secret_bundle_manager = OAuthSecretBundleManager(
+        credential_vault=vault,
+        oauth_manager=coordinator.oauth_manager,
+        mcp_config_manager=coordinator.mcp_config_manager,
+        vault_refresh_manager=coordinator.vault_refresh_manager,
+    )
     return ApplicationService(coordinator)
 
 

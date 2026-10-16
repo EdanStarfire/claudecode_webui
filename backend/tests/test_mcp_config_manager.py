@@ -412,3 +412,80 @@ async def test_update_rejects_new_conflict_with_another_config(manager):
     )
     with pytest.raises(ValueError, match="already used"):
         await manager.update_config(cfg_b.id, oauth_custom_callback_path="/callback")
+
+
+# ---------------------------------------------------------------------------
+# export_configs / import_configs (moved from ApplicationService, issue #2189 AC5)
+# ---------------------------------------------------------------------------
+
+
+async def test_export_configs_returns_all_when_no_ids(manager):
+    await manager.create_config(name="s1", server_type=McpServerType.STDIO, command="npx")
+    await manager.create_config(name="s2", server_type=McpServerType.STDIO, command="npx")
+
+    exported = await manager.export_configs()
+
+    assert {c.name for c in exported} == {"s1", "s2"}
+
+
+async def test_export_configs_filters_by_ids(manager):
+    c1 = await manager.create_config(name="s1", server_type=McpServerType.STDIO, command="npx")
+    await manager.create_config(name="s2", server_type=McpServerType.STDIO, command="npx")
+
+    exported = await manager.export_configs(ids=[c1.id])
+
+    assert [c.id for c in exported] == [c1.id]
+
+
+async def test_import_configs_dry_run_returns_preview_without_creating(manager):
+    """Verifies list_configs is used (not configs.values()) for import."""
+    result = await manager.import_configs(
+        servers={"myserver": {"type": "stdio", "command": "npx"}},
+        dry_run=True,
+    )
+
+    assert result["dry_run"] is True
+    assert result["summary"]["create"] == 1
+    assert len(result["imported"]) == 0  # dry_run → nothing imported
+    assert await manager.list_configs() == []
+
+
+async def test_import_configs_executes_when_not_dry_run(manager):
+    result = await manager.import_configs(
+        servers={"myserver": {"type": "stdio", "command": "npx"}},
+        dry_run=False,
+    )
+
+    assert len(result["imported"]) == 1
+    configs = await manager.list_configs()
+    assert [c.name for c in configs] == ["myserver"]
+
+
+async def test_import_configs_updates_existing_by_name(manager):
+    existing = await manager.create_config(
+        name="myserver", server_type=McpServerType.STDIO, command="old-cmd"
+    )
+
+    result = await manager.import_configs(
+        servers={"myserver": {"type": "stdio", "command": "new-cmd"}},
+        dry_run=False,
+    )
+
+    assert result["summary"]["update"] == 1
+    updated = await manager.get_config(existing.id)
+    assert updated.command == "new-cmd"
+
+
+async def test_import_configs_skips_invalid_entries(manager):
+    result = await manager.import_configs(
+        servers={
+            "": {"type": "stdio", "command": "npx"},
+            "bad-type": {"type": "not-a-type"},
+            "missing-command": {"type": "stdio"},
+            "missing-url": {"type": "sse"},
+        },
+        dry_run=True,
+    )
+
+    assert result["summary"]["skip"] == 4
+    assert all(p["action"] == "skip" for p in result["preview"])
