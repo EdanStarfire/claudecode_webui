@@ -448,7 +448,10 @@ class TestResetCleanupHelpers:
         """_rotate_proxy_logs() truncates each proxy log to empty bytes."""
         from unittest.mock import Mock
 
-        from backend.session_coordinator import SessionCoordinator
+        # Issue #2189: _rotate_proxy_logs's real implementation now lives on
+        # SessionLauncher (SessionCoordinator just delegates to it), so the
+        # unbound-method binding targets SessionLauncher directly.
+        from backend.session_launcher import SessionLauncher
 
         sessions_dir = tmp_data / "sessions"
         session_id = "sess-plog"
@@ -457,12 +460,12 @@ class TestResetCleanupHelpers:
         for name in ("access.log", "dns.log", "socks5.log", "dropped.log"):
             (proxy_dir / name).write_text("data")
 
-        coord = Mock(spec=SessionCoordinator)
-        coord.session_manager = Mock()
-        coord.session_manager.sessions_dir = sessions_dir
-        coord._rotate_proxy_logs = SessionCoordinator._rotate_proxy_logs.__get__(coord)
+        launcher = Mock(spec=SessionLauncher)
+        launcher.session_manager = Mock()
+        launcher.session_manager.sessions_dir = sessions_dir
+        launcher._rotate_proxy_logs = SessionLauncher._rotate_proxy_logs.__get__(launcher)
 
-        await coord._rotate_proxy_logs(session_id)
+        await launcher._rotate_proxy_logs(session_id)
 
         for name in ("access.log", "dns.log", "socks5.log", "dropped.log"):
             assert (proxy_dir / name).read_bytes() == b""
@@ -472,7 +475,8 @@ class TestResetCleanupHelpers:
         """_clear_docker_claude_data keeps proxy/ and removes others."""
         from unittest.mock import Mock
 
-        from backend.session_coordinator import SessionCoordinator
+        # Issue #2189: real implementation now lives on SessionLauncher.
+        from backend.session_launcher import SessionLauncher
 
         sessions_dir = tmp_data / "sessions"
         session_id = "sess-docker"
@@ -481,12 +485,12 @@ class TestResetCleanupHelpers:
             (docker_dir / sub).mkdir(parents=True)
             (docker_dir / sub / "f.txt").write_text("data")
 
-        coord = Mock(spec=SessionCoordinator)
-        coord.session_manager = Mock()
-        coord.session_manager.sessions_dir = sessions_dir
-        coord._clear_docker_claude_data = SessionCoordinator._clear_docker_claude_data.__get__(coord)
+        launcher = Mock(spec=SessionLauncher)
+        launcher.session_manager = Mock()
+        launcher.session_manager.sessions_dir = sessions_dir
+        launcher._clear_docker_claude_data = SessionLauncher._clear_docker_claude_data.__get__(launcher)
 
-        await coord._clear_docker_claude_data(session_id, keep_subdirs={"proxy"})
+        await launcher._clear_docker_claude_data(session_id, keep_subdirs={"proxy"})
 
         assert (docker_dir / "proxy").exists()
         assert not (docker_dir / "projects").exists()
@@ -498,7 +502,8 @@ class TestResetCleanupHelpers:
         """_clear_session_tmp removes the tmp/ directory."""
         from unittest.mock import Mock
 
-        from backend.session_coordinator import SessionCoordinator
+        # Issue #2189: real implementation now lives on SessionLauncher.
+        from backend.session_launcher import SessionLauncher
 
         sessions_dir = tmp_data / "sessions"
         session_id = "sess-tmp"
@@ -506,10 +511,10 @@ class TestResetCleanupHelpers:
         tmp_dir.mkdir(parents=True)
         (tmp_dir / "a.txt").write_text("temp")
 
-        coord = Mock(spec=SessionCoordinator)
-        coord.session_manager = Mock()
-        coord.session_manager.sessions_dir = sessions_dir
-        coord._clear_session_tmp = SessionCoordinator._clear_session_tmp.__get__(coord)
+        launcher = Mock(spec=SessionLauncher)
+        launcher.session_manager = Mock()
+        launcher.session_manager.sessions_dir = sessions_dir
+        launcher._clear_session_tmp = SessionLauncher._clear_session_tmp.__get__(launcher)
 
-        await coord._clear_session_tmp(session_id)
+        await launcher._clear_session_tmp(session_id)
         assert not tmp_dir.exists()

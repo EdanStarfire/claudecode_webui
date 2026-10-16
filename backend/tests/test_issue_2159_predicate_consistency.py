@@ -129,6 +129,10 @@ ALLOWLIST: dict[str, set[str]] = {
         # set_permission_mode/set_model/add_directory live-update guards: only ACTIVE
         # sessions get a live SDK call; every other state persists to disk instead.
         "if session_info.state != SessionState.ACTIVE:",
+    },
+    # Issue #2189 (coordinator-split PR 1): restart_session()/reset_session() moved
+    # to SessionLauncher verbatim — these two entries moved with them.
+    "backend/session_launcher.py": {
         # restart_session(): the method's own centralized ACTIVE-only restart gate
         # (restarting a live turn is a different predicate than deliverability).
         "if not session_info or session_info.state != SessionState.ACTIVE:",
