@@ -192,7 +192,7 @@ async def test_issue_2109_canonicalization_failure_does_not_suppress_live_delive
         coord, webui, storage_manager = _wire_coordinator_to_webui(tmp_path, session_id)
 
         with patch(
-            "backend.session_coordinator._message_dict_to_record",
+            "backend.message_pipeline._message_dict_to_record",
             side_effect=RuntimeError("boom"),
         ):
             await coord._send_client_launched_message(session_id)
