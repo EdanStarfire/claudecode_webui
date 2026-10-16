@@ -338,7 +338,7 @@ async def test_issue_858_event_cleaned_up_on_terminate():
                 "end_turn",
                 new_callable=AsyncMock,
             ),
-            patch.object(coord, "mark_session_tools_interrupted"),
+            patch.object(coord._tool_call_tracker, "mark_session_tools_interrupted"),
             patch.object(
                 coord.session_manager,
                 "terminate_session",

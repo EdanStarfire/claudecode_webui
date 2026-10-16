@@ -28,7 +28,6 @@ from .models.messages import (
     MessageRecord,
     PermissionInfo,
     ToolCall,
-    ToolDisplayInfo,
     ToolState,
 )
 from .models.permission_mode import PermissionMode
@@ -49,6 +48,7 @@ from .task_registry import TaskLegRegistry
 from .task_utils import task_done_log_exception
 from .timestamp_injection import maybe_inject_timestamp
 from .timestamp_utils import get_unix_timestamp
+from .tool_call_tracker import ToolCallTracker
 
 # Get specialized logger for coordinator actions
 coord_logger = get_logger('coordinator', category='COORDINATOR')
@@ -749,6 +749,16 @@ class SessionCoordinator:
         async def _on_rate_limits_dispatch(rate_limit_info):
             return await self._message_pipeline.on_rate_limits(rate_limit_info)
 
+        # Issue #2189 (coordinator-split PR 3): the ToolCall lifecycle tracking
+        # cluster (creation, permission request/response, running/result/input
+        # updates, interruption, snapshot application) lives on ToolCallTracker
+        # now. Constructed BEFORE both message_pipeline_callbacks and
+        # launcher_callbacks below, since both bundles retarget a field to it.
+        # Unlike SessionLauncher/MessagePipeline, this is the terminal content
+        # extraction — nothing it calls is still stranded on the coordinator —
+        # so no Callbacks dataclass is needed here.
+        self._tool_call_tracker = ToolCallTracker(coordinator=self)
+
         # Issue #2189 (coordinator-split PR 2): the message-pipeline cluster
         # (SDK message/error/stderr/phase callback factories, auto-resume
         # scheduling, lifecycle system-message senders) lives on MessagePipeline
@@ -759,8 +769,9 @@ class SessionCoordinator:
             # reason PR 1 used one for this exact method on LauncherCallbacks —
             # defers the `self.X` attribute lookup to call time so a test that
             # patches `coordinator.mark_session_tools_interrupted` post-construction
-            # is still seen.
-            mark_session_tools_interrupted=lambda session_id: self.mark_session_tools_interrupted(session_id),
+            # is still seen. Retargeted (PR 3) to the tracker now that
+            # mark_session_tools_interrupted lives there.
+            mark_session_tools_interrupted=lambda session_id: self._tool_call_tracker.mark_session_tools_interrupted(session_id),
         )
         self._message_pipeline = MessagePipeline(
             coordinator=self,
@@ -772,7 +783,11 @@ class SessionCoordinator:
             create_error_callback=self._message_pipeline.create_error_callback,
             create_stderr_callback=self._message_pipeline.create_stderr_callback,
             create_phase_callback=self._message_pipeline.create_phase_callback,
-            create_auto_approval_callback=self._create_auto_approval_callback,
+            # Retargeted (PR 3): _create_auto_approval_callback now lives on
+            # ToolCallTracker. Already a plain bound-method capture (not
+            # reassigned/patched on the coordinator post-construction anywhere
+            # in the test suite), so no lambda wrapper is needed here.
+            create_auto_approval_callback=self._tool_call_tracker._create_auto_approval_callback,
             on_rate_limits=_on_rate_limits_dispatch,
             transition_to_error=self._message_pipeline.transition_to_error,
             send_session_failure_message=self._message_pipeline.send_session_failure_message,
@@ -784,7 +799,10 @@ class SessionCoordinator:
             # existing tests do `patch.object(coordinator, "mark_session_tools_interrupted")`
             # AFTER construction, which a pre-captured bound method would never see.
             # A lambda defers the `self.X` attribute lookup to call time instead.
-            mark_session_tools_interrupted=lambda session_id: self.mark_session_tools_interrupted(session_id),
+            # Retargeted (PR 3) to the tracker now that mark_session_tools_interrupted
+            # lives there — the test patch sites were updated accordingly
+            # (patch.object(coord._tool_call_tracker, "mark_session_tools_interrupted")).
+            mark_session_tools_interrupted=lambda session_id: self._tool_call_tracker.mark_session_tools_interrupted(session_id),
             notify_session_reset=self._notify_session_reset,
         )
         self._session_launcher = SessionLauncher(
@@ -2893,42 +2911,18 @@ class SessionCoordinator:
             except Exception:
                 logger.exception("Error in session deleted callback")
 
-    # ============================================================
-    # Issue #494: ToolCallUpdate Storage
-    # ============================================================
-
+    # Issue #2189 (coordinator-split PR 3): moved to ToolCallTracker. One-line
+    # delegates, preserving every externally-facing name exactly — called by
+    # web_server.py/permission_service.py/task_utils.py and others.
     def _schedule_tool_call_update_storage(
         self,
         session_id: str,
         tool_call: ToolCall,
         triggering_message: dict[str, Any] | None = None,
     ) -> None:
-        """
-        Snapshot and schedule storage of a ToolCallUpdate entry (Issue #494).
-
-        The MessageRecord is built eagerly (synchronously) to capture the
-        current tool_call state before the object is mutated by subsequent
-        lifecycle transitions.  The actual I/O is deferred via ensure_future.
-        """
-        storage = self._storage_managers.get(session_id)
-        if not storage:
-            coord_logger.warning(
-                f"No storage manager for session {session_id}, skipping ToolCallUpdate"
-            )
-            return
-        try:
-            stored_dict = MessageRecord.from_tool_call(
-                tool_call, triggering_message
-            ).to_dict()
-        except Exception:
-            coord_logger.exception(
-                f"Failed to build ToolCallUpdate for {tool_call.tool_use_id}"
-            )
-            return
-        task = asyncio.ensure_future(
-            self._write_tool_call_update(storage, stored_dict, tool_call.tool_use_id)
+        return self._tool_call_tracker._schedule_tool_call_update_storage(
+            session_id, tool_call, triggering_message
         )
-        task.add_done_callback(task_done_log_exception)
 
     async def _write_tool_call_update(
         self,
@@ -2936,58 +2930,12 @@ class SessionCoordinator:
         stored_dict: dict[str, Any],
         tool_use_id: str,
     ) -> None:
-        """Write a pre-built ToolCallUpdate dict to storage (Issue #494)."""
-        try:
-            await storage.append_message(stored_dict)
-        except Exception:
-            coord_logger.exception(
-                f"Failed to store ToolCallUpdate for {tool_use_id}"
-            )
-
-    # ============================================================
-    # Issue #707: Auto-Approval Callback
-    # ============================================================
+        return await self._tool_call_tracker._write_tool_call_update(
+            storage, stored_dict, tool_use_id
+        )
 
     def _create_auto_approval_callback(self, session_id: str) -> Callable:
-        """
-        Create a callback that can_use_tool calls when it auto-approves a tool.
-
-        The ToolCall already exists (created from the AssistantMessage tool_use block
-        before can_use_tool fires), so we find it by tool_use_id via the existing O(1)
-        get_tool_call_by_id() lookup, set the reason, store a new ToolCallUpdate, and
-        broadcast via the existing tool_call broadcast mechanism.
-        """
-        def callback(
-            tool_name: str, input_params: dict[str, Any], reason: str, tool_use_id: str | None
-        ) -> None:
-            # Auto-approval fires before any permission request exists (it short-circuits
-            # _can_use_tool_callback before the branch that mints a request_id), so there is
-            # no request_id to fall back to here — tool_use_id is the only linkage (#2126).
-            tool_call = self.get_tool_call_by_id(session_id, tool_use_id) if tool_use_id else None
-            if (
-                tool_call is None
-                or tool_call.auto_approved_reason is not None
-                or tool_call.status != ToolState.PENDING
-            ):
-                return
-            tool_call.auto_approved_reason = reason
-            coord_logger.info(
-                f"[707] Auto-approved {tool_call.tool_use_id} ({tool_name}): {reason}"
-            )
-            # Store a new ToolCallUpdate with the reason attached
-            self._schedule_tool_call_update_storage(session_id, tool_call)
-            # Broadcast via existing tool_call broadcast mechanism
-            tool_call_data = MessageRecord.from_tool_call(tool_call).to_dict()
-            for cb in self._tool_call_broadcast_callbacks:
-                try:
-                    cb(session_id, tool_call_data)
-                except Exception:
-                    coord_logger.exception("Error in auto-approval broadcast callback")
-        return callback
-
-    # ============================================================
-    # Issue #324: Unified ToolCall Lifecycle Management
-    # ============================================================
+        return self._tool_call_tracker._create_auto_approval_callback(session_id)
 
     def create_tool_call(
         self,
@@ -2999,49 +2947,15 @@ class SessionCoordinator:
         parent_tool_use_id: str | None = None,
         turn_id: str | None = None,
     ) -> ToolCall:
-        """
-        Create a new ToolCall when tool_use is detected (Issue #324).
-
-        Called when an AssistantMessage contains a tool_use block.
-        Returns the created ToolCall for WebSocket broadcast.
-        """
-        import time
-
-        tool_call = ToolCall(
-            tool_use_id=tool_use_id,
-            session_id=session_id,
-            name=name,
-            input=input_params,
-            status=ToolState.PENDING,
-            created_at=time.time(),
+        return self._tool_call_tracker.create_tool_call(
+            session_id,
+            tool_use_id,
+            name,
+            input_params,
             requires_permission=requires_permission,
             parent_tool_use_id=parent_tool_use_id,
             turn_id=turn_id,
-            display=ToolDisplayInfo(
-                state=ToolState.PENDING,
-                visible=True,
-                collapsed=False,
-                style="default",
-            ),
         )
-
-        # Track in active tool calls
-        if session_id not in self._active_tool_calls:
-            self._active_tool_calls[session_id] = {}
-        self._active_tool_calls[session_id][tool_use_id] = tool_call
-
-        # Issue #858: Notify any permission callbacks waiting for this tool call.
-        if session_id in self._tool_call_events:
-            self._tool_call_events[session_id].set()
-
-        coord_logger.debug(
-            f"Created ToolCall {tool_use_id} for {name} in session {session_id}"
-        )
-
-        # Issue #494: Store PENDING ToolCallUpdate
-        self._schedule_tool_call_update_storage(session_id, tool_call)
-
-        return tool_call
 
     def update_tool_call_permission_request(
         self,
@@ -3051,35 +2965,9 @@ class SessionCoordinator:
         request_id: str | None = None,
         triggering_message: dict[str, Any] | None = None,
     ) -> ToolCall | None:
-        """
-        Update ToolCall to awaiting_permission status (Issue #324).
-
-        Called when a permission request is received for a tool.
-        Returns updated ToolCall for WebSocket broadcast, or None if not found.
-        """
-        tool_call = self._get_active_tool_call(session_id, tool_use_id)
-        if not tool_call:
-            coord_logger.warning(
-                f"ToolCall {tool_use_id} not found for permission request in session {session_id}"
-            )
-            return None
-
-        tool_call.status = ToolState.AWAITING_PERMISSION
-        tool_call.requires_permission = True
-        tool_call.permission = permission_info
-        tool_call.request_id = request_id
-        if tool_call.display:
-            tool_call.display.state = ToolState.AWAITING_PERMISSION
-            tool_call.display.style = "warning"
-
-        coord_logger.debug(
-            f"Updated ToolCall {tool_use_id} to awaiting_permission in session {session_id}"
+        return self._tool_call_tracker.update_tool_call_permission_request(
+            session_id, tool_use_id, permission_info, request_id, triggering_message
         )
-
-        # Issue #494: Store AWAITING_PERMISSION ToolCallUpdate
-        self._schedule_tool_call_update_storage(session_id, tool_call, triggering_message)
-
-        return tool_call
 
     def update_tool_call_permission_response(
         self,
@@ -3089,89 +2977,16 @@ class SessionCoordinator:
         triggering_message: dict[str, Any] | None = None,
         applied_updates: list[dict[str, Any]] | None = None,
     ) -> ToolCall | None:
-        """
-        Update ToolCall after permission response (Issue #324).
-
-        Called when user grants or denies permission.
-        Returns updated ToolCall for WebSocket broadcast, or None if not found.
-        """
-        import time
-
-        tool_call = self._get_active_tool_call(session_id, tool_use_id)
-        if not tool_call:
-            coord_logger.warning(
-                f"ToolCall {tool_use_id} not found for permission response in session {session_id}"
-            )
-            return None
-
-        tool_call.permission_granted = granted
-        tool_call.permission_response_at = time.time()
-        if applied_updates:
-            tool_call.applied_updates = applied_updates
-
-        if granted:
-            tool_call.status = ToolState.RUNNING
-            tool_call.started_at = time.time()
-            if tool_call.display:
-                tool_call.display.state = ToolState.RUNNING
-                tool_call.display.style = "default"
-        else:
-            tool_call.status = ToolState.DENIED
-            tool_call.completed_at = time.time()
-            if tool_call.display:
-                tool_call.display.state = ToolState.DENIED
-                tool_call.display.style = "error"
-            # Remove from active (denied tools are terminal)
-            self._remove_active_tool_call(session_id, tool_use_id)
-
-            # Issue #1131: Record DENIED outcome for error-rate watchdog
-            if self._watchdog is not None:
-                self._watchdog.record_tool_outcome(session_id, tool_use_id, "denied")
-
-        coord_logger.debug(
-            f"Updated ToolCall {tool_use_id} permission_granted={granted} in session {session_id}"
+        return self._tool_call_tracker.update_tool_call_permission_response(
+            session_id, tool_use_id, granted, triggering_message, applied_updates
         )
-
-        # Issue #494: Store RUNNING or DENIED ToolCallUpdate
-        self._schedule_tool_call_update_storage(session_id, tool_call, triggering_message)
-
-        return tool_call
 
     def update_tool_call_running(
         self,
         session_id: str,
         tool_use_id: str,
     ) -> ToolCall | None:
-        """
-        Update ToolCall to running status (Issue #324).
-
-        Called when a tool starts executing (for tools that don't require permission).
-        Returns updated ToolCall for WebSocket broadcast, or None if not found.
-        """
-        import time
-
-        tool_call = self._get_active_tool_call(session_id, tool_use_id)
-        if not tool_call:
-            # Tool may not exist yet if tool_use and execution happen quickly
-            coord_logger.debug(
-                f"ToolCall {tool_use_id} not found for running update in session {session_id}"
-            )
-            return None
-
-        tool_call.status = ToolState.RUNNING
-        tool_call.started_at = time.time()
-        if tool_call.display:
-            tool_call.display.state = ToolState.RUNNING
-            tool_call.display.style = "default"
-
-        coord_logger.debug(
-            f"Updated ToolCall {tool_use_id} to running in session {session_id}"
-        )
-
-        # Issue #494: Store RUNNING ToolCallUpdate
-        self._schedule_tool_call_update_storage(session_id, tool_call)
-
-        return tool_call
+        return self._tool_call_tracker.update_tool_call_running(session_id, tool_use_id)
 
     def update_tool_call_result(
         self,
@@ -3182,56 +2997,14 @@ class SessionCoordinator:
         triggering_message: dict[str, Any] | None = None,
         sender_attachments: list[dict] | None = None,
     ) -> ToolCall | None:
-        """
-        Update ToolCall with result (Issue #324).
-
-        Called when a tool_result is received.
-        Returns updated ToolCall for WebSocket broadcast, or None if not found.
-        """
-        import time
-
-        tool_call = self._get_active_tool_call(session_id, tool_use_id)
-        if not tool_call:
-            coord_logger.warning(
-                f"ToolCall {tool_use_id} not found for result in session {session_id}"
-            )
-            return None
-
-        tool_call.completed_at = time.time()
-        tool_call.result = result
-
-        if is_error:
-            tool_call.status = ToolState.FAILED
-            tool_call.error = str(result) if result else "Tool execution failed"
-            if tool_call.display:
-                tool_call.display.state = ToolState.FAILED
-                tool_call.display.style = "error"
-        else:
-            tool_call.status = ToolState.COMPLETED
-            if tool_call.display:
-                tool_call.display.state = ToolState.COMPLETED
-                tool_call.display.style = "success"
-
-        # Issue #1593: Attach sender attachment resource IDs for send_comm chips
-        if sender_attachments is not None:
-            tool_call.sender_attachments = sender_attachments
-
-        # Remove from active (completed/failed tools are terminal)
-        self._remove_active_tool_call(session_id, tool_use_id)
-
-        coord_logger.debug(
-            f"Updated ToolCall {tool_use_id} to {'failed' if is_error else 'completed'} in session {session_id}"
+        return self._tool_call_tracker.update_tool_call_result(
+            session_id,
+            tool_use_id,
+            result,
+            is_error=is_error,
+            triggering_message=triggering_message,
+            sender_attachments=sender_attachments,
         )
-
-        # Issue #494: Store COMPLETED or FAILED ToolCallUpdate
-        self._schedule_tool_call_update_storage(session_id, tool_call, triggering_message)
-
-        # Issue #1131: Record terminal tool outcome for error-rate watchdog
-        if self._watchdog is not None:
-            outcome = "failed" if is_error else "completed"
-            self._watchdog.record_tool_outcome(session_id, tool_use_id, outcome)
-
-        return tool_call
 
     def update_tool_call_input(
         self,
@@ -3239,32 +3012,7 @@ class SessionCoordinator:
         tool_use_id: str,
         input_params: dict[str, Any],
     ) -> ToolCall | None:
-        """
-        Fill in the real input on a ToolCall created early, at content_block_start
-        (Issue #2109, AC2). Returns the updated ToolCall, or None if no pending
-        record exists yet for this tool_use_id (the non-streaming/fallback caller
-        should create one fresh instead).
-        """
-        tool_call = self._get_active_tool_call(session_id, tool_use_id)
-        if not tool_call:
-            return None
-
-        tool_call.input = input_params
-
-        # Issue #858: the legacy signature-matching permission fallback hashes
-        # tool_call.input — it just changed from {} to the real input, so any
-        # waiter blocked on this event needs to re-check now, exactly like
-        # create_tool_call() already does for a brand-new ToolCall.
-        if session_id in self._tool_call_events:
-            self._tool_call_events[session_id].set()
-
-        coord_logger.debug(
-            f"Filled in input for ToolCall {tool_use_id} in session {session_id}"
-        )
-
-        self._schedule_tool_call_update_storage(session_id, tool_call)
-
-        return tool_call
+        return self._tool_call_tracker.update_tool_call_input(session_id, tool_use_id, input_params)
 
     def _parse_send_comm_sender_attachments(
         self,
@@ -3278,53 +3026,10 @@ class SessionCoordinator:
         return _extract_send_comm_sender_attachments(result_content)
 
     def mark_session_tools_interrupted(self, session_id: str) -> list[ToolCall]:
-        """
-        Mark all active tools for a session as interrupted (Issue #324).
-
-        Called when session is terminated or interrupted.
-        Stores INTERRUPTED ToolCallUpdate entries and broadcasts via WebSocket.
-        Returns list of interrupted ToolCalls.
-        """
-        import time
-
-        interrupted = []
-        session_tools = self._active_tool_calls.get(session_id, {})
-
-        for _tool_use_id, tool_call in list(session_tools.items()):
-            tool_call.status = ToolState.INTERRUPTED
-            tool_call.completed_at = time.time()
-            if tool_call.display:
-                tool_call.display.state = ToolState.INTERRUPTED
-                tool_call.display.style = "orphaned"
-            interrupted.append(tool_call)
-
-            # Issue #494: Store INTERRUPTED ToolCallUpdate for each tool
-            self._schedule_tool_call_update_storage(session_id, tool_call)
-
-        # Clear active tools for session
-        if session_id in self._active_tool_calls:
-            self._active_tool_calls[session_id].clear()
-
-        if interrupted:
-            coord_logger.info(
-                f"Marked {len(interrupted)} tools as interrupted for session {session_id}"
-            )
-            # Issue #520: Broadcast interrupted tool_call messages via WebSocket
-            for tool_call in interrupted:
-                tool_call_data = MessageRecord.from_tool_call(tool_call).to_dict()
-                for cb in self._tool_call_broadcast_callbacks:
-                    try:
-                        cb(session_id, tool_call_data)
-                    except Exception:
-                        logger.exception("Error in tool_call broadcast callback")
-
-        return interrupted
+        return self._tool_call_tracker.mark_session_tools_interrupted(session_id)
 
     def get_tool_call_event(self, session_id: str) -> asyncio.Event:
-        """Return (creating if necessary) the per-session tool-call notification event."""
-        if session_id not in self._tool_call_events:
-            self._tool_call_events[session_id] = asyncio.Event()
-        return self._tool_call_events[session_id]
+        return self._tool_call_tracker.get_tool_call_event(session_id)
 
     # Issue #2189 (coordinator-split PR 2): moved to MessagePipeline. One-line
     # delegates, preserving these 3 externally-facing names exactly — called by
@@ -3339,57 +3044,19 @@ class SessionCoordinator:
         return self._message_pipeline.get_message_emitted_event(session_id)
 
     def get_tool_call_by_id(self, session_id: str, tool_use_id: str) -> ToolCall | None:
-        """O(1) lookup of an active tool call by its tool_use_id (Issue #953)."""
-        return self._active_tool_calls.get(session_id, {}).get(tool_use_id)
+        return self._tool_call_tracker.get_tool_call_by_id(session_id, tool_use_id)
 
     def _get_active_tool_call(self, session_id: str, tool_use_id: str) -> ToolCall | None:
-        """Get a specific active tool call."""
-        session_tools = self._active_tool_calls.get(session_id, {})
-        return session_tools.get(tool_use_id)
+        return self._tool_call_tracker._get_active_tool_call(session_id, tool_use_id)
 
     def apply_tool_call_snapshot(self, session_id: str, tool_call: ToolCall) -> ToolCall:
-        """Issue #2109 (AC11): replay-only — installs an already-complete ToolCall
-        snapshot (e.g. a regenerated fixture's reconstructed pending/awaiting_permission/
-        running|denied record) as the session's tracked state for that tool_use_id
-        verbatim, rather than deriving a transition from partial fields. Used by
-        BackendApp._emit_tool_call_updates()'s flat `tool_call` replay-mirror branch.
-
-        A terminal snapshot (denied/completed/failed/interrupted) is removed from
-        active tracking and recorded on the watchdog — mirroring every other
-        terminal-state transition method (update_tool_call_permission_response's
-        deny path, update_tool_call_result's completed/failed path) — so it can't
-        linger in _active_tool_calls and later get silently clobbered back to
-        INTERRUPTED by a mark_session_tools_interrupted() bulk sweep.
-        """
-        if session_id not in self._active_tool_calls:
-            self._active_tool_calls[session_id] = {}
-        self._active_tool_calls[session_id][tool_call.tool_use_id] = tool_call
-
-        if tool_call.status in (
-            ToolState.DENIED, ToolState.COMPLETED, ToolState.FAILED, ToolState.INTERRUPTED,
-        ):
-            self._remove_active_tool_call(session_id, tool_call.tool_use_id)
-            if tool_call.status != ToolState.INTERRUPTED and self._watchdog is not None:
-                self._watchdog.record_tool_outcome(session_id, tool_call.tool_use_id, tool_call.status.value)
-
-        return tool_call
+        return self._tool_call_tracker.apply_tool_call_snapshot(session_id, tool_call)
 
     def _remove_active_tool_call(self, session_id: str, tool_use_id: str) -> None:
-        """Remove a tool call from active tracking."""
-        session_tools = self._active_tool_calls.get(session_id, {})
-        if tool_use_id in session_tools:
-            del session_tools[tool_use_id]
+        return self._tool_call_tracker._remove_active_tool_call(session_id, tool_use_id)
 
     def get_tool_call_by_request_id(self, session_id: str, request_id: str) -> ToolCall | None:
-        """Lookup of an active tool call awaiting permission by its request_id
-        (Issue #2109, AC6). Scoped to AWAITING_PERMISSION so a duplicate/replayed
-        permission_response sharing a stale request_id can't re-resolve a tool call
-        that already moved on to running/denied — request_id is never cleared off
-        the ToolCall once set, so an unscoped match would still find it."""
-        for tool_call in self._active_tool_calls.get(session_id, {}).values():
-            if tool_call.request_id == request_id and tool_call.status == ToolState.AWAITING_PERMISSION:
-                return tool_call
-        return None
+        return self._tool_call_tracker.get_tool_call_by_request_id(session_id, request_id)
 
     # Issue #2189 (coordinator-split PR 2): moved to MessagePipeline.
     async def _store_processed_message(self, session_id: str, message_data: dict[str, Any]):

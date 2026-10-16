@@ -20,10 +20,18 @@ from backend.models.messages import ToolState
 
 def test_auto_approval_callback_has_no_name_based_matching():
     """AC1: no `tool_call.name ==` (or equivalent name-based) comparison remains
-    in the auto-approval callback's source."""
-    from backend.session_coordinator import SessionCoordinator
+    in the auto-approval callback's source.
 
-    source = inspect.getsource(SessionCoordinator._create_auto_approval_callback)
+    Issue #2189 (coordinator-split PR 3): _create_auto_approval_callback's real
+    body now lives on ToolCallTracker — SessionCoordinator keeps only a one-line
+    delegate. Asserting against the delegate's source would trivially pass
+    without exercising any real logic, silently erasing this regression test's
+    coverage with no visible failure signal. Retargeted to the class that
+    actually owns the logic under test.
+    """
+    from backend.tool_call_tracker import ToolCallTracker
+
+    source = inspect.getsource(ToolCallTracker._create_auto_approval_callback)
     assert "tool_call.name ==" not in source
     assert ".name == tool_name" not in source
 
