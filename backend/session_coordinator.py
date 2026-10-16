@@ -19,6 +19,7 @@ from shared.logging_config import get_logger
 from .archive_coordinator import ArchiveCoordinator
 from .claude_sdk import ClaudeSDK, ResultError
 from .data_storage import DataStorageManager
+from .delivery_gate import DeliveryGate
 from .hooks.pretooluse_handler import InternalPermissionHandler
 from .litellm_proxy_manager import make_model_alias
 from .message_parser import MessageParser, MessageProcessor
@@ -539,6 +540,9 @@ class SessionCoordinator:
         # Issue #500: Message queue system
         self.queue_manager = QueueManager()
         self.queue_processor = QueueProcessor(self)
+
+        # Issue #2189 (coordinator-split PR 10): consolidated delivery gate
+        self.delivery_gate = DeliveryGate(self)
 
         # Issue #1125: Per-session token usage analytics (injected by web_server via set_analytics_store)
         self.analytics_store = None

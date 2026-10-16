@@ -71,14 +71,18 @@ _COMPARISON_PATTERNS = [
 # (cheap to catch) or silently exempts something it shouldn't.
 ALLOWLIST: dict[str, set[str]] = {
     "backend/legion/comm_router.py": {
-        # Auto-start guard: only kick off SDK readiness-wait for a minion still
-        # mid-boot — not a deliverability check (STARTING isn't deliverable).
-        "if target_minion.state == SessionState.STARTING:",
         # _send_system_error_comm: deliberately ACTIVE-only (not is_deliverable()) —
         # a PAUSED target just gets its error comm persisted for next start instead
         # of injected into its live stream, same conservative posture as "don't
         # trigger auto-start to avoid loops" a few lines above.
         "if target_minion and target_minion.state == SessionState.ACTIVE:",
+    },
+    # Issue #2189 (coordinator-split PR 10): comm_router.py's STARTING-only
+    # readiness-wait guard moved here verbatim as part of delivery_gate.deliver()'s
+    # wait_for_idle=False branch — still an auto-start guard (STARTING isn't
+    # deliverable), not a deliverability check duplicate.
+    "backend/delivery_gate.py": {
+        "if target_minion.state == SessionState.STARTING:",
     },
     # Pinned exemption (see TestT2PredicateConsistency.
     # test_restart_session_deliberately_not_is_deliverable below): restarting a live
@@ -222,7 +226,9 @@ class TestT2PredicateConsistency:
         "module_path,import_name",
         [
             ("backend.routers.sessions", "is_deliverable"),
-            ("backend.legion.comm_router", "is_deliverable"),
+            # Issue #2189 (coordinator-split PR 10): comm_router.py's is_deliverable
+            # check moved into delivery_gate.py's wait_for_idle=False branch.
+            ("backend.delivery_gate", "is_deliverable"),
             # legion_coordinator.resume_all() no longer scans is_deliverable sessions
             # project-wide (stage 6c) — it resumes exactly the persisted fleet
             # snapshot, so this predicate import moved out of that module entirely.

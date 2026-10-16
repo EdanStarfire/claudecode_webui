@@ -23,7 +23,6 @@ from backend.models.legion_models import (
     CommType,
     InterruptPriority,
 )
-from backend.session_lifecycle import is_deliverable
 from backend.session_manager import SessionState
 from shared.logging_config import get_logger
 
@@ -291,6 +290,17 @@ class CommRouter:
         Attachments (if any) must already be delivered via _deliver_attachments()
         before this is called — this only formats comm.attachments for display.
 
+        Issue #2189 (coordinator-split PR 10): the auto-start/readiness-wait gate
+        lives in delivery_gate.py now (DeliveryGate.ensure_ready()) — see that
+        module. It still runs here FIRST and unconditionally, before formatting
+        and before interrupt-priority is checked, exactly as pre-PR: a HALT/PIVOT
+        comm to a dormant target must still force it through the same gate a
+        NORMAL comm would (HALT: auto-started then immediately interrupted;
+        PIVOT: gated, then interrupted, then sent) — calling the gate only AFTER
+        the interrupt-priority branch would be a real behavior change, not just
+        an internal-mechanics detail. HALT/PIVOT interrupt-priority handling and
+        the comm-timeline formatting below are otherwise unchanged.
+
         Args:
             comm: Comm with to_minion_id set
 
@@ -298,105 +308,18 @@ class CommRouter:
             bool: True if sent successfully
         """
         try:
-            # Check target minion state
-            target_minion = await self.system.session_port.session_manager.get_session_info(comm.to_minion_id)
-            if not target_minion:
-                legion_logger.error(f"Target minion {comm.to_minion_id} not found")
-                # Send error comm back to sender
+            gate_result = await self.system.session_port.delivery_gate.ensure_ready(comm)
+            if not gate_result.success:
+                legion_logger.error(
+                    f"Failed to deliver comm {comm.comm_id} to minion {comm.to_minion_id}: {gate_result.error}"
+                )
                 if comm.from_minion_id:
                     await self._send_system_error_comm(
                         to_minion_id=comm.from_minion_id,
-                        error_message="Failed to deliver message: Target minion not found",
+                        error_message=f"Failed to deliver message: {gate_result.error}",
                         original_comm_id=comm.comm_id
                     )
                 return False
-
-            # Auto-start minion if not active
-            if target_minion.state == SessionState.STARTING:
-                # Session is starting but SDK may not be ready yet — wait for readiness
-                legion_logger.info(
-                    f"Target minion {comm.to_minion_id} is STARTING - waiting for SDK readiness"
-                )
-                ready = await self.system.session_port.wait_for_session_ready(
-                    comm.to_minion_id, timeout=60.0
-                )
-                if not ready:
-                    legion_logger.error(
-                        f"Minion {comm.to_minion_id} did not become ready within timeout"
-                    )
-                    if comm.from_minion_id:
-                        await self._send_system_error_comm(
-                            to_minion_id=comm.from_minion_id,
-                            error_message="Failed to deliver message: Minion did not become ready within 60 seconds",
-                            original_comm_id=comm.comm_id
-                        )
-                    return False
-            elif not is_deliverable(target_minion.state):
-                legion_logger.info(f"Target minion {comm.to_minion_id} is in {target_minion.state} state - auto-starting")
-
-                # Register WebSocket message callback before starting
-                # This ensures messages from the auto-started minion broadcast to WebSocket clients
-                if self.system.message_callback_registrar:
-                    self.system.message_callback_registrar(comm.to_minion_id)
-                    legion_logger.info(f"Registered WebSocket message callback for auto-started minion {comm.to_minion_id}")
-                else:
-                    legion_logger.warning(f"No message callback registrar available for auto-start of {comm.to_minion_id}")
-
-                # Start the session with permission callback
-                # Create permission callback using factory (same pattern as user-created minions)
-                permission_callback = None
-                if self.system.permission_callback_factory:
-                    permission_callback = self.system.permission_callback_factory(comm.to_minion_id)
-                    legion_logger.info(f"Created permission callback for auto-started minion {comm.to_minion_id}")
-                else:
-                    legion_logger.warning(f"No permission callback factory available for auto-start of {comm.to_minion_id}")
-
-                success = await self.system.session_port.start_session(
-                    session_id=comm.to_minion_id,
-                    permission_callback=permission_callback
-                )
-
-                if not success:
-                    reason = None
-                    try:
-                        failed_info = await self.system.session_port.session_manager.get_session_info(
-                            comm.to_minion_id
-                        )
-                        reason = failed_info.error_message if failed_info else None
-                    except Exception:
-                        legion_logger.exception(
-                            f"Failed to retrieve failure reason for minion {comm.to_minion_id}"
-                        )
-
-                    detail = reason or f"state: {target_minion.state}"
-                    legion_logger.error(
-                        f"Failed to auto-start minion {comm.to_minion_id}: {detail}"
-                    )
-                    # Send error comm back to sender
-                    if comm.from_minion_id:
-                        comm.metadata["delivery_failure_reason"] = reason
-                        await self._send_system_error_comm(
-                            to_minion_id=comm.from_minion_id,
-                            error_message=f"Failed to deliver message: Could not auto-start target minion ({detail})",
-                            original_comm_id=comm.comm_id
-                        )
-                    return False
-
-                # Wait for session to become ready (event-based, no polling)
-                ready = await self.system.session_port.wait_for_session_ready(
-                    comm.to_minion_id, timeout=30.0
-                )
-                if not ready:
-                    session_info = await self.system.session_port.session_manager.get_session_info(comm.to_minion_id)
-                    legion_logger.warning(f"Minion {comm.to_minion_id} did not become ready within 30s - sending error to sender")
-                    if comm.from_minion_id:
-                        await self._send_system_error_comm(
-                            to_minion_id=comm.from_minion_id,
-                            error_message=f"Failed to deliver message: Target minion did not start within 30 seconds (state: {session_info.state if session_info else 'unknown'})",
-                            original_comm_id=comm.comm_id
-                        )
-                    return False
-                legion_logger.info(f"Minion {comm.to_minion_id} is now ready")
 
             # Get sender name for formatting
             # Use "Minion #user" to signal that replies should use send_comm MCP tool
@@ -509,22 +432,32 @@ class CommRouter:
                     legion_logger.warning(f"Failed to interrupt session {comm.to_minion_id}: {e}")
                 # Fall through to send_message below
 
-            # Send message to target minion via SessionCoordinator (PIVOT and NORMAL)
+            # Send to target minion via DeliveryGate (PIVOT and NORMAL). The gate
+            # already ran above, unconditionally, before this interrupt-priority
+            # branch — send() only needs the SDK-formatted content/metadata, so
+            # swap them in for the call and restore the caller's originals right
+            # after (send() never touches delivery_failure_reason, unlike
+            # ensure_ready(), so no restore special-case is needed for that key
+            # here — callers that inspect the Comm post-return, e.g. the REST
+            # POST /api/legions/{id}/comms response, see what they passed in).
             # Issue #1779: inter-agent comms aren't "user messages" — skip timestamp injection.
-            success = await self.system.session_port.send_message(
-                session_id=comm.to_minion_id,
-                message=formatted_message,
-                metadata=comm_metadata,
-                inject_timestamp=False,
+            original_content = comm.content
+            original_metadata = comm.metadata
+            comm.content = formatted_message
+            comm.metadata = comm_metadata
+            result = await self.system.session_port.delivery_gate.send(
+                comm, inject_timestamp=False
             )
-            if not success:
+            comm.content = original_content
+            comm.metadata = original_metadata
+            if not result.success:
                 legion_logger.error(
-                    f"Failed to deliver comm {comm.comm_id} to minion {comm.to_minion_id} - send_message returned False"
+                    f"Failed to deliver comm {comm.comm_id} to minion {comm.to_minion_id}: {result.error}"
                 )
                 if comm.from_minion_id:
                     await self._send_system_error_comm(
                         to_minion_id=comm.from_minion_id,
-                        error_message="Failed to deliver message: SDK rejected the message",
+                        error_message=f"Failed to deliver message: {result.error}",
                         original_comm_id=comm.comm_id
                     )
                 return False

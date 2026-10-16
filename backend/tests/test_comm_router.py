@@ -8,8 +8,9 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from backend.delivery_gate import DeliveryGate
 from backend.legion_system import LegionSystem
-from backend.models.legion_models import Comm, CommType
+from backend.models.legion_models import Comm, CommType, InterruptPriority
 
 
 @pytest.fixture
@@ -30,6 +31,11 @@ def legion_system():
     mock_session_coordinator.session_manager.get_session_info = AsyncMock(return_value=default_minion)
     mock_session_coordinator.start_session = AsyncMock()
     mock_session_coordinator.data_dir = Path("/tmp/test")
+    # Issue #2189 (coordinator-split PR 10): _send_to_minion now calls through
+    # delivery_gate.deliver(), which internally calls back out to this same
+    # mock coordinator's send_message/start_session/session_manager — a real
+    # DeliveryGate bound to the mock keeps those the exercised mocked seams.
+    mock_session_coordinator.delivery_gate = DeliveryGate(mock_session_coordinator)
 
     system = LegionSystem(
         session_port=mock_session_coordinator,
@@ -430,6 +436,37 @@ class TestCommRouter:
         assert comm_meta["content"] == "No summary provided for this one."
 
     @pytest.mark.asyncio
+    async def test_issue_2189_comm_content_and_metadata_unchanged_after_send(self, comm_router):
+        """Regression test: _send_to_minion builds an SDK-formatted message/metadata
+        for delivery_gate.deliver() internally, but must restore the caller's
+        original comm.content/comm.metadata afterward — a caller that inspects the
+        same Comm post-return (e.g. POST /api/legions/{id}/comms's REST response,
+        which returns comm.to_dict() after route_comm()) must see what it passed
+        in, not the internal SDK-formatted display text."""
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_user=True,
+            to_minion_id="test-minion-123",
+            summary="short summary",
+            content="original unformatted content",
+            comm_type=CommType.TASK,
+            metadata={"caller_key": "caller_value"},
+        )
+
+        result = await comm_router._send_to_minion(comm)
+        assert result is True
+
+        # The SDK must still have received the formatted version...
+        send_message_mock = comm_router.system.session_port.send_message
+        sent_message = send_message_mock.call_args.kwargs.get("message")
+        assert sent_message != "original unformatted content"
+        assert "original unformatted content" in sent_message
+
+        # ...but the comm object itself must be untouched for other callers.
+        assert comm.content == "original unformatted content"
+        assert comm.metadata == {"caller_key": "caller_value"}
+
+    @pytest.mark.asyncio
     async def test_issue_1730_route_comm_persists_non_null_resource_id(self, comm_router, tmp_path):
         """Regression test: route_comm() delivers attachments (resolving
         resource_id) before persisting the Comm, so timeline.jsonl carries the
@@ -717,6 +754,95 @@ class TestAutoStartFailureReason:
             error_message="Failed to deliver message: SDK rejected the message",
             original_comm_id=comm.comm_id,
         )
+
+
+class TestHaltPivotRunGateBeforeInterrupt:
+    """Issue #2189 (coordinator-split PR 10) regression: pre-PR, the auto-start/
+    readiness-wait gate ran unconditionally for every comm BEFORE interrupt-priority
+    (HALT/PIVOT) was even checked — a HALT comm to a dormant target still forced it
+    through the gate (auto-started, then immediately interrupted); a PIVOT comm ran
+    the gate, then interrupted, then sent. An earlier version of this port called
+    the gate only as part of the post-interrupt send step, which meant HALT skipped
+    the gate entirely (deliver() was never reached) and PIVOT ran it AFTER the
+    interrupt instead of before — a real behavior change caught in review, not just
+    an internal-mechanics nuance. These tests pin the gate running first, via
+    start_session() happening before interrupt_session()."""
+
+    def _make_dormant_minion(self, state):
+        from backend.session_manager import SessionInfo
+
+        mock = Mock(spec=SessionInfo)
+        mock.session_id = "test-minion-123"
+        mock.name = "TestMinion"
+        mock.project_id = "test-legion-456"
+        mock.state = state
+        mock.error_message = None
+        return mock
+
+    def _wire_call_order_tracking(self, comm_router, call_order):
+        from backend.session_manager import SessionState
+
+        sm = comm_router.system.session_port.session_manager
+        sm.get_session_info = AsyncMock(return_value=self._make_dormant_minion(SessionState.CREATED))
+        comm_router.system.session_port.wait_for_session_ready = AsyncMock(return_value=True)
+
+        async def record_start_session(**kwargs):
+            call_order.append("start_session")
+            return True
+
+        async def record_interrupt(session_id):
+            call_order.append("interrupt_session")
+            return True
+
+        async def record_send_message(**kwargs):
+            call_order.append("send_message")
+            return True
+
+        comm_router.system.session_port.start_session = AsyncMock(side_effect=record_start_session)
+        comm_router.system.session_port.interrupt_session = AsyncMock(side_effect=record_interrupt)
+        comm_router.system.session_port.send_message = AsyncMock(side_effect=record_send_message)
+
+    @pytest.mark.asyncio
+    async def test_halt_to_dormant_target_runs_gate_before_interrupt(self, comm_router):
+        """HALT never sends, but must still auto-start the dormant target before
+        interrupting it — exactly as pre-PR."""
+        call_order = []
+        self._wire_call_order_tracking(comm_router, call_order)
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="sender-minion",
+            to_minion_id="test-minion-123",
+            content="halt now",
+            comm_type=CommType.TASK,
+            interrupt_priority=InterruptPriority.HALT,
+        )
+
+        result = await comm_router._send_to_minion(comm)
+
+        assert result is True
+        assert call_order == ["start_session", "interrupt_session"]
+
+    @pytest.mark.asyncio
+    async def test_pivot_to_dormant_target_runs_gate_before_interrupt(self, comm_router):
+        """PIVOT must auto-start the dormant target, THEN interrupt, THEN send —
+        not interrupt first and gate/send afterward."""
+        call_order = []
+        self._wire_call_order_tracking(comm_router, call_order)
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="sender-minion",
+            to_minion_id="test-minion-123",
+            content="pivot now",
+            comm_type=CommType.TASK,
+            interrupt_priority=InterruptPriority.PIVOT,
+        )
+
+        result = await comm_router._send_to_minion(comm)
+
+        assert result is True
+        assert call_order == ["start_session", "interrupt_session", "send_message"]
 
 
 class TestPausedTargetDeliversWithoutForceStart:
