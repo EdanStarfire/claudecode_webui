@@ -17,7 +17,7 @@ def build_router(webui) -> APIRouter:
         db = getattr(webui, "analytics_db", None)
         if db is None or not db._initialized:
             return None
-        sm = webui.coordinator.session_manager
+        sm = webui.service.get_session_manager()
         return AuditQueryService(db, sm)
 
     def _unavailable():

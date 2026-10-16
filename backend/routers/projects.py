@@ -35,7 +35,7 @@ def build_router(webui) -> APIRouter:
             working_directory=request.working_directory,
             max_concurrent_minions=max_minions,
         )
-        webui._broadcast_project_updated(project)
+        webui.service.broadcast_project_updated(project)
         return {"project": project}
 
     @router.get("/api/projects")
@@ -78,7 +78,7 @@ def build_router(webui) -> APIRouter:
         if not result:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        webui._broadcast_project_updated(result)
+        webui.service.broadcast_project_updated(result)
 
         return {"success": True}
 
@@ -94,14 +94,14 @@ def build_router(webui) -> APIRouter:
         for session_id in project_result.get("sessions", []):
             sid = session_id if isinstance(session_id, str) else session_id.get("session_id")
             if sid:
-                await webui.coordinator.delete_session(sid)
+                await webui.service.delete_session_only(sid)
 
         # Delete the project
         del_result = await webui.service.delete_project(project_id)
         if not del_result.get("success"):
             raise HTTPException(status_code=500, detail="Failed to delete project")
 
-        webui._broadcast_project_deleted(project_id)
+        webui.service.broadcast_project_deleted(project_id)
 
         return {"success": True}
 
@@ -113,7 +113,7 @@ def build_router(webui) -> APIRouter:
         if not result:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        webui._broadcast_project_updated(result)
+        webui.service.broadcast_project_updated(result)
 
         return {"success": True, "is_expanded": result.get("is_expanded")}
 
@@ -125,7 +125,7 @@ def build_router(webui) -> APIRouter:
         if not result:
             raise HTTPException(status_code=400, detail="Failed to reorder sessions")
 
-        webui._broadcast_project_updated(result)
+        webui.service.broadcast_project_updated(result)
 
         return {"success": True}
 
@@ -144,7 +144,7 @@ def build_router(webui) -> APIRouter:
         if not result:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        webui._broadcast_project_updated(result)
+        webui.service.broadcast_project_updated(result)
 
         return {"success": True, "project": result}
 
@@ -159,7 +159,7 @@ def build_router(webui) -> APIRouter:
         if not result:
             raise HTTPException(status_code=400, detail="Failed to reorder kanban groups")
 
-        webui._broadcast_project_updated(result)
+        webui.service.broadcast_project_updated(result)
 
         return {"success": True}
 
@@ -171,7 +171,7 @@ def build_router(webui) -> APIRouter:
         if not result:
             raise HTTPException(status_code=404, detail="Project or kanban group not found")
 
-        webui._broadcast_project_updated(result)
+        webui.service.broadcast_project_updated(result)
 
         return {"success": True}
 
@@ -183,7 +183,7 @@ def build_router(webui) -> APIRouter:
         if not result:
             raise HTTPException(status_code=404, detail="Project or kanban group not found")
 
-        webui._broadcast_project_updated(result)
+        webui.service.broadcast_project_updated(result)
 
         return {"success": True}
 
@@ -199,7 +199,7 @@ def build_router(webui) -> APIRouter:
         if not result:
             raise HTTPException(status_code=404, detail="Project or kanban group not found")
 
-        webui._broadcast_project_updated(result)
+        webui.service.broadcast_project_updated(result)
 
         return {"success": True}
 

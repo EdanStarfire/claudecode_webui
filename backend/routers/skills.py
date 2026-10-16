@@ -16,7 +16,7 @@ def build_router(webui) -> APIRouter:
         config = load_config(webui.config_file) if webui.config_file else load_config()
         if not config.features.skill_sync_enabled:
             raise HTTPException(status_code=409, detail="Skill syncing is disabled")
-        result = await webui.skill_manager.sync()
+        result = await webui.service.sync_skills()
         return {"status": "synced", **result}
 
     @router.get("/api/skills/status")
@@ -27,7 +27,7 @@ def build_router(webui) -> APIRouter:
         config = load_config(webui.config_file) if webui.config_file else load_config()
         return {
             "sync_enabled": config.features.skill_sync_enabled,
-            "last_sync_time": webui.skill_manager.last_sync_time,
+            "last_sync_time": webui.service.get_skill_last_sync_time(),
         }
 
     return router

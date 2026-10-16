@@ -36,7 +36,7 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=404, detail="Session not found")
 
         # Initialize file upload manager if not already done
-        file_manager = FileUploadManager(webui.coordinator.data_dir / "sessions")
+        file_manager = FileUploadManager(webui.service.get_data_dir() / "sessions")
 
         # Read file content
         file_content = await file.read()
@@ -54,12 +54,12 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=400, detail=e.message) from e
 
         # Register path for auto-approve (via session coordinator)
-        await webui.coordinator.register_uploaded_file(session_id, file_info.stored_path)
+        await webui.service.register_uploaded_file(session_id, file_info.stored_path)
 
         # Issue #404: Auto-register all uploaded files to resource gallery
         resource_meta = None
         try:
-            resource_meta = await webui.coordinator.register_uploaded_resource(
+            resource_meta = await webui.service.register_uploaded_resource(
                 session_id=session_id,
                 file_path=file_info.stored_path,
                 title=file_info.original_name,
@@ -93,7 +93,7 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
 
-        file_manager = FileUploadManager(webui.coordinator.data_dir / "sessions")
+        file_manager = FileUploadManager(webui.service.get_data_dir() / "sessions")
         all_files = await file_manager.list_files(session_id)
         all_dicts = [f.to_dict() for f in all_files]
         total = len(all_dicts)
@@ -114,13 +114,13 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
 
-        file_manager = FileUploadManager(webui.coordinator.data_dir / "sessions")
+        file_manager = FileUploadManager(webui.service.get_data_dir() / "sessions")
 
         # Get file info before deleting (to unregister path)
         file_info = await file_manager.get_file_info(session_id, file_id)
         if file_info:
             # Unregister from auto-approve
-            await webui.coordinator.unregister_uploaded_file(session_id, file_info.stored_path)
+            await webui.service.unregister_uploaded_file(session_id, file_info.stored_path)
 
         success = await file_manager.delete_file(session_id, file_id)
         if not success:
@@ -142,7 +142,7 @@ def build_router(webui) -> APIRouter:
         """Get resource metadata for a session, paginated with optional filter/sort"""
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
-        return await webui.coordinator.get_session_resources(
+        return await webui.service.get_session_resources(
             session_id,
             limit=limit,
             offset=offset,
@@ -156,13 +156,13 @@ def build_router(webui) -> APIRouter:
     async def get_session_resource(session_id: str, resource_id: str, request: Request):
         """Get raw file data for a specific resource"""
         # Get resource metadata to determine content type
-        resource_meta = await webui.coordinator.get_session_resource_by_id(session_id, resource_id)
+        resource_meta = await webui.service.get_session_resource_by_id(session_id, resource_id)
 
         if not resource_meta:
             raise HTTPException(status_code=404, detail="Resource not found")
 
         # Get resource bytes
-        resource_bytes = await webui.coordinator.get_session_resource_file(session_id, resource_id)
+        resource_bytes = await webui.service.get_session_resource_file(session_id, resource_id)
         if not resource_bytes:
             raise HTTPException(status_code=404, detail="Resource file not found")
 
@@ -183,13 +183,13 @@ def build_router(webui) -> APIRouter:
     async def download_session_resource(session_id: str, resource_id: str, request: Request):
         """Download a resource file"""
         # Get resource metadata
-        resource_meta = await webui.coordinator.get_session_resource_by_id(session_id, resource_id)
+        resource_meta = await webui.service.get_session_resource_by_id(session_id, resource_id)
 
         if not resource_meta:
             raise HTTPException(status_code=404, detail="Resource not found")
 
         # Get resource bytes
-        resource_bytes = await webui.coordinator.get_session_resource_file(session_id, resource_id)
+        resource_bytes = await webui.service.get_session_resource_file(session_id, resource_id)
         if not resource_bytes:
             raise HTTPException(status_code=404, detail="Resource file not found")
 
@@ -217,7 +217,7 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
 
-        tmp_dir = os.path.realpath(webui.coordinator.data_dir / "sessions" / session_id / "tmp")
+        tmp_dir = os.path.realpath(webui.service.get_data_dir() / "sessions" / session_id / "tmp")
         requested = os.path.realpath(os.path.join(tmp_dir, path))
 
         # Security: canonical path must remain within session tmp dir
@@ -242,21 +242,22 @@ def build_router(webui) -> APIRouter:
         """Return all agent-registered links for a session."""
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
-        return {"links": await webui.coordinator.get_session_links(session_id)}
+        return {"links": await webui.service.get_session_links(session_id)}
 
     # Issue #423: Remove resource from session display (soft-remove)
     @router.delete("/api/sessions/{session_id}/resources/{resource_id}")
     @handle_exceptions("remove session resource")
     async def remove_session_resource(session_id: str, resource_id: str):
         """Soft-remove a resource from the session display (file is preserved)"""
-        success = await webui.coordinator.remove_session_resource(session_id, resource_id)
+        success = await webui.service.remove_session_resource(session_id, resource_id)
         if not success:
             raise HTTPException(status_code=404, detail="Resource not found or removal failed")
 
         # Append removal to session poll queue
-        if session_id in webui.session_queues:
+        queue = webui.service.get_session_queue(session_id)
+        if queue is not None:
             emit(
-                webui.session_queues[session_id], QUEUE_SESSION, "resource_removed",
+                queue, QUEUE_SESSION, "resource_removed",
                 {"resource_id": resource_id},
                 scope=session_id,
             )

@@ -19,7 +19,7 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=404, detail="Project not found")
 
         # Call LegionCoordinator.emergency_halt_all() (no-op if no minions)
-        result = await webui.coordinator.legion_system.legion_coordinator.emergency_halt_all(legion_id)
+        result = await webui.service.emergency_halt_all(legion_id)
 
         return {
             "success": True,
@@ -37,7 +37,7 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=404, detail="Project not found")
 
         # Call LegionCoordinator.resume_all() (no-op if no minions)
-        result = await webui.coordinator.legion_system.legion_coordinator.resume_all(legion_id)
+        result = await webui.service.resume_all_minions(legion_id)
 
         return {
             "success": True,
@@ -60,7 +60,7 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.validate_project_exists(legion_id):
             raise HTTPException(status_code=404, detail="Project not found")
 
-        snapshot = await webui.coordinator.project_manager.get_fleet_snapshot(legion_id)
+        snapshot = await webui.service.get_fleet_snapshot(legion_id)
         if snapshot is None:
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -75,7 +75,7 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.validate_project_exists(legion_id):
             raise HTTPException(status_code=404, detail="Project not found")
 
-        project = await webui.coordinator.project_manager.record_fleet_stopped(
+        project = await webui.service.record_fleet_stopped(
             legion_id, request.session_ids, request.processing_session_ids
         )
         if project is None:
@@ -95,7 +95,7 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.validate_project_exists(legion_id):
             raise HTTPException(status_code=404, detail="Project not found")
 
-        project = await webui.coordinator.project_manager.clear_fleet_stopped(
+        project = await webui.service.clear_fleet_stopped(
             legion_id, request.session_ids
         )
         if project is None:

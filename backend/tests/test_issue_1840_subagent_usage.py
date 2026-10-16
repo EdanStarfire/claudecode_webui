@@ -421,8 +421,12 @@ class TestIssue1840UsageEndpointExposesTtlTiers:
         await db.initialize()
         store = AnalyticsStore(db)
 
+        from backend.application_service import ApplicationService
+
+        coordinator = MagicMock()
+        coordinator.analytics_store = store
         webui = MagicMock()
-        webui.coordinator.analytics_store = store
+        webui.service = ApplicationService(coordinator)
         webui.config_file = tmp_path / "nonexistent_config.json"
 
         app = FastAPI()

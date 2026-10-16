@@ -37,7 +37,7 @@ def build_router(webui) -> APIRouter:
         state = await webui.service.get_session_state(session_id)
         if state is None:
             raise HTTPException(status_code=404, detail="Session not found")
-        result = await webui.coordinator.interrupt_session(session_id)
+        result = await webui.service.interrupt_session(session_id)
         return {"success": bool(result)}
 
     @router.post("/api/sessions/{session_id}/permission/{request_id}")
@@ -46,7 +46,7 @@ def build_router(webui) -> APIRouter:
         session_id: str, request_id: str, request: PermissionResponseRequest
     ):
         """Respond to a pending permission request via REST."""
-        if request_id not in webui.permission_service.pending_permissions:
+        if not webui.service.has_pending_permission(request_id):
             raise HTTPException(status_code=404, detail="No pending permission with that ID")
         if request.decision == "allow":
             response = {"behavior": "allow"}
@@ -65,7 +65,7 @@ def build_router(webui) -> APIRouter:
                 }
             else:
                 response = {"behavior": "deny", "message": "User denied permission"}
-        resolved = webui.permission_service.resolve(request_id, response)
+        resolved = webui.service.resolve_permission(request_id, response)
         if not resolved:
             raise HTTPException(status_code=409, detail="Permission already resolved")
         return {"success": True}
@@ -84,7 +84,7 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=400, detail="log_type must be 'http', 'dns', or 'socks5'")
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
-        return await webui.coordinator.get_proxy_logs(session_id, log_type=log_type, limit=limit)
+        return await webui.service.get_proxy_logs(session_id, log_type=log_type, limit=limit)
 
     # ==================== PERMISSION MODE ENDPOINT ====================
 
@@ -95,7 +95,7 @@ def build_router(webui) -> APIRouter:
         if request.mode not in PermissionMode._value2member_map_:
             raise HTTPException(status_code=400, detail=f"Invalid permission mode: {request.mode}")
 
-        success = await webui.coordinator.set_permission_mode(session_id, request.mode)
+        success = await webui.service.set_permission_mode(session_id, request.mode)
         if not success:
             raise HTTPException(status_code=400, detail="Failed to set permission mode")
         return {"success": success, "mode": request.mode}
@@ -106,7 +106,7 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("set model", value_error_status=400)
     async def set_model(session_id: str, request: ModelRequest):
         """Set the model for a session, live-switching if active (no restart required)"""
-        success = await webui.coordinator.set_model(session_id, request.model)
+        success = await webui.service.set_model(session_id, request.model)
         if not success:
             raise HTTPException(status_code=400, detail="Failed to set model")
         return {"success": success, "model": request.model}
@@ -117,7 +117,7 @@ def build_router(webui) -> APIRouter:
         """Register a new working directory on an active session, live (issue #1675)."""
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
-        result = await webui.coordinator.add_directory(session_id, request.directory)
+        result = await webui.service.add_directory(session_id, request.directory)
         return {"success": True, **result}
 
     @router.get("/api/sessions/{session_id}/mcp-status")
@@ -126,7 +126,7 @@ def build_router(webui) -> APIRouter:
         """Get MCP server status for a session"""
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
-        result = await webui.coordinator.get_mcp_status(session_id)
+        result = await webui.service.get_mcp_status(session_id)
         return result
 
     @router.post("/api/sessions/{session_id}/mcp-toggle")
@@ -136,7 +136,7 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
         try:
-            await webui.coordinator.toggle_mcp_server(
+            await webui.service.toggle_mcp_server(
                 session_id, request.name, request.enabled
             )
         except Exception as e:
@@ -150,7 +150,7 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
         try:
-            await webui.coordinator.reconnect_mcp_server(session_id, request.name)
+            await webui.service.reconnect_mcp_server(session_id, request.name)
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return {"success": True, "name": request.name}
@@ -172,17 +172,7 @@ def build_router(webui) -> APIRouter:
         if state != SessionState.ACTIVE:
             raise HTTPException(status_code=409, detail="Session is not active")
 
-        # Clear any existing callbacks to prevent duplicates, then register fresh one
-        webui.coordinator.clear_message_callbacks(session_id)
-        webui.coordinator.add_message_callback(
-            session_id,
-            webui._create_message_callback(session_id)
-        )
-
-        success = await webui.coordinator.restart_session(
-            session_id,
-            permission_callback=webui.permission_service.create_permission_callback(session_id),
-        )
+        success = await webui.service.restart_session_with_fresh_callback(session_id)
         return {"success": success}
 
     @router.post("/api/sessions/{session_id}/reset")
@@ -192,24 +182,14 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
 
-        # Fix 6: parity with /restart — clear and re-register message callback
-        webui.coordinator.clear_message_callbacks(session_id)
-        webui.coordinator.add_message_callback(
-            session_id,
-            webui._create_message_callback(session_id)
-        )
-
-        success = await webui.coordinator.reset_session(
-            session_id,
-            permission_callback=webui.permission_service.create_permission_callback(session_id),
-        )
+        success = await webui.service.reset_session_with_fresh_callback(session_id)
         return {"success": success}
 
     @router.delete("/api/sessions/{session_id}/history")
     @handle_exceptions("erase session history")
     async def erase_session_history(session_id: str):
         """Erase distilled history files for a session."""
-        success = await webui.coordinator.erase_history(session_id)
+        success = await webui.service.erase_session_history(session_id)
         return {"success": success}
 
     @router.post("/api/sessions/{session_id}/disconnect")

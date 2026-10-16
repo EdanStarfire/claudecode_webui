@@ -36,14 +36,41 @@ from src.tests.simulation.fault_harness import BrowserClient, FakeFrontend, wait
 
 
 class _StandinService:
+    """Duck-typed stand-in for the real `ApplicationService` — just enough
+    surface for `backend.routers.poll.build_router()` to run against (issue
+    #2189 router-boundary: poll.py reaches queues only through `webui.service`
+    now, never `webui.ui_queue`/`webui.session_queues` directly). Reads/writes
+    through the same `webui.session_queues` dict the test functions below
+    append test events to directly, so both sides stay in sync.
+    """
+
+    def __init__(self, webui: "_StandinWebUI") -> None:
+        self._webui = webui
+
     async def get_session_exists(self, session_id: str) -> bool:
         return True
+
+    def get_ui_queue(self) -> EventQueue:
+        return self._webui.ui_queue
+
+    def get_session_queue(self, session_id: str) -> EventQueue | None:
+        return self._webui.session_queues.get(session_id)
+
+    def get_or_create_session_queue(self, session_id: str) -> EventQueue:
+        queue = self._webui.session_queues.get(session_id)
+        if queue is None:
+            queue = EventQueue(on_append=self._webui._queue_append_hook(session_id))
+            self._webui.session_queues[session_id] = queue
+        return queue
+
+    async def mark_session_viewed(self, session_id: str) -> None:
+        pass
 
 
 class _StandinWebUI:
     """Duck-typed stand-in for the real `BackendApp` — just enough surface
     for `backend.routers.poll.build_router()` to run against (`.ui_queue`,
-    `.session_queues`, `._queue_append_hook()`, `.service.get_session_exists()`).
+    `.session_queues`, `._queue_append_hook()`, `.service`).
     `.coordinator` is deliberately omitted: `poll_session()`'s
     `mark_viewed()` call is wrapped in a broad try/except in the real router,
     so a missing attribute there is silently logged, not raised.
@@ -52,7 +79,7 @@ class _StandinWebUI:
     def __init__(self, session_id: str) -> None:
         self.ui_queue = EventQueue()
         self.session_queues: dict[str, EventQueue] = {session_id: EventQueue()}
-        self.service = _StandinService()
+        self.service = _StandinService(self)
 
     def _queue_append_hook(self, session_id: str):
         return lambda event: None

@@ -19,7 +19,7 @@ def build_router(webui) -> APIRouter:
         """List archives for a session within a project, paginated."""
         if not await webui.service.validate_project_exists(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
-        return await webui.coordinator.get_archives(session_id, limit=limit, offset=offset)
+        return await webui.service.get_archives(session_id, limit=limit, offset=offset)
 
     @router.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/messages")
     @handle_exceptions("get archive messages")
@@ -30,7 +30,7 @@ def build_router(webui) -> APIRouter:
         """Get paginated messages from an archive."""
         if not await webui.service.validate_project_exists(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
-        result = await webui.coordinator.get_archive_messages(
+        result = await webui.service.get_archive_messages(
             session_id, archive_id, offset=offset, limit=limit
         )
         return result
@@ -41,7 +41,7 @@ def build_router(webui) -> APIRouter:
         """Get archive state and disposal metadata."""
         if not await webui.service.validate_project_exists(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
-        result = await webui.coordinator.get_archive_state(session_id, archive_id)
+        result = await webui.service.get_archive_state(session_id, archive_id)
         if result is None:
             raise HTTPException(status_code=404, detail="Archive not found")
         return result
@@ -63,7 +63,7 @@ def build_router(webui) -> APIRouter:
         """List resource metadata from an archive, paginated with optional filter/sort."""
         if not await webui.service.validate_project_exists(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
-        return await webui.coordinator.get_archive_resources(
+        return await webui.service.get_archive_resources(
             session_id,
             archive_id,
             limit=limit,
@@ -85,13 +85,13 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.validate_project_exists(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
 
-        resource_meta = await webui.coordinator.get_archive_resource_by_id(
+        resource_meta = await webui.service.get_archive_resource_by_id(
             session_id, archive_id, resource_id
         )
         if not resource_meta:
             raise HTTPException(status_code=404, detail="Resource not found")
 
-        resource_bytes = await webui.coordinator.get_archive_resource_file(
+        resource_bytes = await webui.service.get_archive_resource_file(
             session_id, archive_id, resource_id
         )
         if not resource_bytes:
@@ -120,19 +120,19 @@ def build_router(webui) -> APIRouter:
         """List deleted agents with archives for a project, paginated."""
         if not await webui.service.validate_project_exists(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
-        return await webui.coordinator.list_project_deleted_agents(project_id, limit=limit, offset=offset)
+        return await webui.service.list_project_deleted_agents(project_id, limit=limit, offset=offset)
 
     @router.delete("/api/sessions/{session_id}/archives")
     @handle_exceptions("erase session archives")
     async def erase_session_archives(session_id: str):
         """Erase archive data for a session."""
-        success = await webui.coordinator.erase_archives(session_id)
+        success = await webui.service.erase_archives(session_id)
         return {"success": success}
 
     @router.get("/api/sessions/{session_id}/history-archives-status")
     @handle_exceptions("get history archives status")
     async def get_history_archives_status(session_id: str):
         """Check if history and/or archives exist for a session."""
-        return await webui.coordinator.check_history_archives(session_id)
+        return await webui.service.check_history_archives(session_id)
 
     return router

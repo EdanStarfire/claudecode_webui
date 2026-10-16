@@ -20,7 +20,7 @@ def build_router(webui) -> APIRouter:
     async def get_legion_timeline(legion_id: str, limit: int = 100, offset: int = 0):
         """Get Comms for legion timeline (all communications in the legion)"""
         # Read all comms from the main legion timeline
-        legion_dir = webui.coordinator.data_dir / "legions" / legion_id
+        legion_dir = webui.service.get_data_dir() / "legions" / legion_id
         if not legion_dir.exists():
             return {
                 "comms": [],
@@ -87,13 +87,10 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.validate_project_exists(legion_id):
             raise HTTPException(status_code=404, detail="Project not found")
 
-        # Get legion coordinator
-        legion_coord = webui.coordinator.legion_system.legion_coordinator
-        if not legion_coord:
-            raise HTTPException(status_code=500, detail="Legion coordinator not available")
-
         # Assemble hierarchy (returns empty children if no minions)
-        hierarchy = await legion_coord.assemble_minion_hierarchy(legion_id)
+        hierarchy = await webui.service.assemble_minion_hierarchy(legion_id)
+        if hierarchy is None:
+            raise HTTPException(status_code=500, detail="Legion coordinator not available")
 
         return hierarchy
 
@@ -103,7 +100,7 @@ def build_router(webui) -> APIRouter:
         """Send a Comm in the legion"""
         from backend.models.legion_models import Comm, CommType
 
-        legion = await webui.coordinator.legion_system.legion_coordinator.get_legion(legion_id)
+        legion = await webui.service.get_legion(legion_id)
         if not legion:
             raise HTTPException(status_code=404, detail="Legion not found")
 
@@ -124,7 +121,7 @@ def build_router(webui) -> APIRouter:
         )
 
         # Route the comm
-        success = await webui.coordinator.legion_system.comm_router.route_comm(comm)
+        success = await webui.service.route_comm(comm)
 
         if success:
             return {"comm": comm.to_dict(), "success": True}
@@ -149,7 +146,7 @@ def build_router(webui) -> APIRouter:
 
         # Create minion via OverseerController
         config = request.model_copy(update={"working_directory": str(working_dir)})
-        minion_id = await webui.coordinator.legion_system.overseer_controller.create_minion_for_user(
+        minion_id = await webui.service.create_minion_for_user(
             legion_id=legion_id,
             name=request.name,
             config=config,
@@ -173,7 +170,7 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.validate_project_exists(legion_id):
             raise HTTPException(status_code=404, detail="Project not found")
 
-        result = await webui.coordinator.legion_system.overseer_controller.reparent_minion(
+        result = await webui.service.reparent_minion(
             subject_id=minion_id,
             new_parent_id=request.new_parent_id,
             caller_id=None,

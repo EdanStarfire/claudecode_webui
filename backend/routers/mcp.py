@@ -30,7 +30,7 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("create MCP config", value_error_status=400)
     async def create_mcp_config(request: McpConfigCreateRequest):
         """Create a new global MCP server configuration"""
-        if request.oauth_custom_callback_path and webui.oauth_callback_path_conflicts_with_app_route(
+        if request.oauth_custom_callback_path and webui.service.oauth_callback_path_conflicts_with_app_route(
             request.oauth_custom_callback_path
         ):
             raise HTTPException(
@@ -58,8 +58,8 @@ def build_router(webui) -> APIRouter:
             oauth_custom_callback_port=request.oauth_custom_callback_port,
         )
         # Issue #1789: wire the custom callback route/listener synchronously with the write.
-        config_obj = await webui.coordinator.mcp_config_manager.get_config(result["id"])
-        await webui._sync_oauth_callback_for_config(config_obj)
+        config_obj = await webui.service.get_mcp_config_object(result["id"])
+        await webui.service.sync_oauth_callback_for_config(config_obj)
         return result
 
     @router.post("/api/mcp-configs/export")
@@ -120,7 +120,7 @@ def build_router(webui) -> APIRouter:
         sparse_update_kwargs = {}
         if "oauth_custom_callback_path" in request.model_fields_set:
             sparse_update_kwargs["oauth_custom_callback_path"] = request.oauth_custom_callback_path
-            if request.oauth_custom_callback_path and webui.oauth_callback_path_conflicts_with_app_route(
+            if request.oauth_custom_callback_path and webui.service.oauth_callback_path_conflicts_with_app_route(
                 request.oauth_custom_callback_path
             ):
                 raise HTTPException(
@@ -157,9 +157,9 @@ def build_router(webui) -> APIRouter:
         )
         # Issue #1789: wire the custom callback route/listener synchronously with the write
         # (covers enable/disable too, since that's just enabled=False via this same endpoint).
-        config_obj = await webui.coordinator.mcp_config_manager.get_config(config_id)
+        config_obj = await webui.service.get_mcp_config_object(config_id)
         if config_obj is not None:
-            await webui._sync_oauth_callback_for_config(config_obj)
+            await webui.service.sync_oauth_callback_for_config(config_obj)
         return result
 
     @router.delete("/api/mcp-configs/{config_id}")
@@ -169,7 +169,7 @@ def build_router(webui) -> APIRouter:
         success = await webui.service.delete_mcp_config(config_id)
         if not success:
             raise HTTPException(status_code=404, detail="MCP config not found")
-        await webui._remove_oauth_callback_for_config(config_id)
+        await webui.service.remove_oauth_callback_for_config(config_id)
         return {"deleted": True}
 
     # ========== MCP OAuth Endpoints (issue #813) ==========
@@ -185,11 +185,8 @@ def build_router(webui) -> APIRouter:
         Shares its parsing/rendering logic with per-config custom callback routes/listeners
         (issue #1789) via render_oauth_callback().
         """
-        return await render_oauth_callback(
-            request,
-            webui.coordinator.oauth_callback_listener_manager.complete_and_broadcast,
-            webui.coordinator.oauth_callback_listener_manager.denied_and_broadcast,
-        )
+        complete_flow, denied = webui.service.get_oauth_callback_handlers()
+        return await render_oauth_callback(request, complete_flow, denied)
 
     @router.post("/api/mcp-configs/{config_id}/oauth/initiate")
     @handle_exceptions("initiate MCP OAuth", value_error_status=400)

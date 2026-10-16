@@ -13,7 +13,7 @@ def _make_app():
 
     webui = MagicMock()
     webui.service.get_session_exists = AsyncMock(return_value=True)
-    webui.coordinator.add_directory = AsyncMock()
+    webui.service.add_directory = AsyncMock()
 
     app = FastAPI()
     app.include_router(build_router(webui))
@@ -23,7 +23,7 @@ def _make_app():
 @pytest.mark.asyncio
 async def test_add_directory_success():
     app, webui = _make_app()
-    webui.coordinator.add_directory.return_value = {"directory": "/test/project/subdir"}
+    webui.service.add_directory.return_value = {"directory": "/test/project/subdir"}
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.post(
@@ -34,13 +34,13 @@ async def test_add_directory_success():
     body = resp.json()
     assert body["success"] is True
     assert body["directory"] == "/test/project/subdir"
-    webui.coordinator.add_directory.assert_called_once_with("sess-1", "/test/project/subdir")
+    webui.service.add_directory.assert_called_once_with("sess-1", "/test/project/subdir")
 
 
 @pytest.mark.asyncio
 async def test_add_directory_docker_session_returns_400():
     app, webui = _make_app()
-    webui.coordinator.add_directory.side_effect = ValueError(
+    webui.service.add_directory.side_effect = ValueError(
         "Adding directories to a running Docker session requires a restart"
     )
 
@@ -56,7 +56,7 @@ async def test_add_directory_docker_session_returns_400():
 @pytest.mark.asyncio
 async def test_add_directory_invalid_path_returns_400():
     app, webui = _make_app()
-    webui.coordinator.add_directory.side_effect = ValueError(
+    webui.service.add_directory.side_effect = ValueError(
         "Directory must be a subdirectory of the session's working directory or an already-registered directory: /elsewhere"
     )
 
@@ -80,4 +80,4 @@ async def test_add_directory_session_not_found_returns_404():
         )
 
     assert resp.status_code == 404
-    webui.coordinator.add_directory.assert_not_called()
+    webui.service.add_directory.assert_not_called()

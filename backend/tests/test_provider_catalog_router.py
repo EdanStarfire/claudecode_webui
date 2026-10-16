@@ -73,9 +73,13 @@ def _make_webui(
     catalog_mgr: MagicMock | None = None,
     pending_changes: bool = False,
 ) -> MagicMock:
+    from backend.application_service import ApplicationService
+
+    coordinator = MagicMock()
+    coordinator.litellm_proxy_manager = proxy_mgr or _make_proxy_mgr()
+    coordinator.provider_catalog_manager = catalog_mgr or _make_catalog_mgr(pending_changes=pending_changes)
     webui = MagicMock()
-    webui.litellm_proxy_manager = proxy_mgr or _make_proxy_mgr()
-    webui.provider_catalog_manager = catalog_mgr or _make_catalog_mgr(pending_changes=pending_changes)
+    webui.service = ApplicationService(coordinator)
     return webui
 
 

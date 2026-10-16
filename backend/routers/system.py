@@ -5,7 +5,6 @@ import logging
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -35,9 +34,9 @@ async def _restart_to_target(webui, project_root: Path, payload: "RestartRequest
     project_root_str = str(project_root)
 
     # Defense in depth: the frontend also blocks this, but the server must not trust the client.
-    # _run_git_command returns None on any command failure (not just "clean") — treat that as
+    # run_git_command returns None on any command failure (not just "clean") — treat that as
     # unsafe-to-proceed rather than silently equating it with a clean tree.
-    status = await webui._run_git_command(["git", "status", "--porcelain"], project_root_str)
+    status = await webui.service.run_git_command(["git", "status", "--porcelain"], project_root_str)
     if status is None:
         raise HTTPException(
             status_code=500, detail="Could not determine git status; aborting for safety."
@@ -60,14 +59,14 @@ async def _restart_to_target(webui, project_root: Path, payload: "RestartRequest
     except (TimeoutError, OSError):
         pass  # tolerate fetch failure, matching git-status's existing behavior
 
-    current_branch = await webui._run_git_command(
+    current_branch = await webui.service.run_git_command(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"], project_root_str
     )
     branch = payload.branch or current_branch
     if not branch:
         raise HTTPException(status_code=500, detail="Could not resolve current branch")
 
-    local_ref_check = await webui._run_git_command(
+    local_ref_check = await webui.service.run_git_command(
         ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], project_root_str
     )
     if local_ref_check:
@@ -87,7 +86,7 @@ async def _restart_to_target(webui, project_root: Path, payload: "RestartRequest
 
     # Re-check right before the destructive reset to shrink the TOCTOU window opened by
     # the fetch/checkout above.
-    pre_reset_status = await webui._run_git_command(
+    pre_reset_status = await webui.service.run_git_command(
         ["git", "status", "--porcelain"], project_root_str
     )
     if pre_reset_status is None:
@@ -110,7 +109,7 @@ async def _restart_to_target(webui, project_root: Path, payload: "RestartRequest
             status_code=500, detail=f"git reset failed: {reset_result.stderr.strip()}"
         )
 
-    short_hash = await webui._run_git_command(
+    short_hash = await webui.service.run_git_command(
         ["git", "rev-parse", "--short", "HEAD"], project_root_str
     )
     return f"Switched to {branch} @ {short_hash or reset_target}"
@@ -142,7 +141,7 @@ async def _do_restart(webui) -> None:
     await asyncio.sleep(0.5)
     logger.info("Executing os.execv restart...")
     try:
-        await webui.coordinator.cleanup()
+        await webui.service.cleanup_coordinator()
     except Exception as e:
         logger.warning(f"Cleanup error during restart: {e}")
     os.execv(sys.executable, [sys.executable, "-m", "backend.main"] + sys.argv[1:])
@@ -172,16 +171,16 @@ def build_router(webui) -> APIRouter:
         """Return current git branch, last commit, remote commit info, and dirty state."""
         project_root = str(Path(__file__).parent.parent.parent)
 
-        branch = await webui._run_git_command(
+        branch = await webui.service.run_git_command(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"], project_root
         )
-        commit_hash = await webui._run_git_command(
+        commit_hash = await webui.service.run_git_command(
             ["git", "log", "-1", "--format=%H"], project_root
         )
-        commit_message = await webui._run_git_command(
+        commit_message = await webui.service.run_git_command(
             ["git", "log", "-1", "--format=%s"], project_root
         )
-        status = await webui._run_git_command(
+        status = await webui.service.run_git_command(
             ["git", "status", "--porcelain"], project_root
         )
 
@@ -196,7 +195,7 @@ def build_router(webui) -> APIRouter:
         if branch and branch != "HEAD":
             # Try the tracking branch for the current local branch
             candidate = f"origin/{branch}"
-            ref_exists = await webui._run_git_command(
+            ref_exists = await webui.service.run_git_command(
                 ["git", "rev-parse", "--verify", candidate], project_root
             )
             if ref_exists:
@@ -204,7 +203,7 @@ def build_router(webui) -> APIRouter:
 
         if not remote_branch:
             # Detached HEAD, no remote tracking, or unknown — try origin/HEAD
-            origin_head = await webui._run_git_command(
+            origin_head = await webui.service.run_git_command(
                 ["git", "rev-parse", "--abbrev-ref", "origin/HEAD"], project_root
             )
             if origin_head:
@@ -212,7 +211,7 @@ def build_router(webui) -> APIRouter:
             else:
                 # Fall back to origin/main, then origin/master
                 for fallback in ["origin/main", "origin/master"]:
-                    ref_check = await webui._run_git_command(
+                    ref_check = await webui.service.run_git_command(
                         ["git", "rev-parse", "--verify", fallback], project_root
                     )
                     if ref_check:
@@ -235,16 +234,16 @@ def build_router(webui) -> APIRouter:
                 remote_fetch_failed = True
 
             # Read remote commit info (works even if fetch failed, using stale refs)
-            r_hash = await webui._run_git_command(
+            r_hash = await webui.service.run_git_command(
                 ["git", "log", "-1", "--format=%H", remote_branch], project_root
             )
-            r_msg = await webui._run_git_command(
+            r_msg = await webui.service.run_git_command(
                 ["git", "log", "-1", "--format=%s", remote_branch], project_root
             )
             if r_hash:
                 remote_commit_hash = r_hash
                 remote_commit_message = r_msg or ""
-                behind = await webui._run_git_command(
+                behind = await webui.service.run_git_command(
                     ["git", "rev-list", "--count",
                      f"HEAD..{remote_branch}"], project_root
                 )
@@ -285,16 +284,16 @@ def build_router(webui) -> APIRouter:
         except (TimeoutError, OSError):
             remote_fetch_failed = True
 
-        current_branch = await webui._run_git_command(
+        current_branch = await webui.service.run_git_command(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"], project_root
         )
 
-        local_output = await webui._run_git_command(
+        local_output = await webui.service.run_git_command(
             ["git", "for-each-ref", "refs/heads", "--format=%(refname:short)"], project_root
         )
         local_branches = [line for line in (local_output or "").splitlines() if line]
 
-        remote_output = await webui._run_git_command(
+        remote_output = await webui.service.run_git_command(
             ["git", "for-each-ref", "refs/remotes/origin", "--format=%(refname:short)"],
             project_root,
         )
@@ -339,13 +338,13 @@ def build_router(webui) -> APIRouter:
         project_root = str(Path(__file__).parent.parent.parent)
 
         ref = None
-        local_ref_check = await webui._run_git_command(
+        local_ref_check = await webui.service.run_git_command(
             ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], project_root
         )
         if local_ref_check:
             ref = f"refs/heads/{branch}"
         else:
-            remote_ref_check = await webui._run_git_command(
+            remote_ref_check = await webui.service.run_git_command(
                 ["git", "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}"],
                 project_root,
             )
@@ -356,7 +355,7 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=404, detail=f"Branch not found: {branch}")
 
         # Fetch one extra row so we can tell "exactly 50 commits" apart from "more than 50 exist".
-        log_output = await webui._run_git_command(
+        log_output = await webui.service.run_git_command(
             ["git", "log", ref, "-n", "51", "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ad",
              "--date=iso-strict"],
             project_root,
@@ -391,14 +390,12 @@ def build_router(webui) -> APIRouter:
     async def restart_server(payload: RestartRequest | None = None):
         """Pull latest code (default) or switch to a specific branch/commit, then restart via os.execv."""
         # Rate limiting: 1 restart per 30 seconds
-        now = time.time()
-        if now - webui._last_restart_time < 30:
-            remaining = int(30 - (now - webui._last_restart_time))
+        remaining = webui.service.check_and_mark_restart_rate_limit()
+        if remaining is not None:
             raise HTTPException(
                 status_code=429,
                 detail=f"Rate limited. Try again in {remaining} seconds."
             )
-        webui._last_restart_time = now
 
         project_root = Path(__file__).parent.parent.parent
         has_custom_target = payload is not None and (payload.branch or payload.commit)
@@ -447,7 +444,7 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e)) from e
 
         # Append restart notice to UI poll queue
-        webui._broadcast_server_restarting(pull_output, sync_output)
+        webui.service.broadcast_server_restarting(pull_output, sync_output)
 
         # Schedule the actual restart after response is sent
         asyncio.get_event_loop().create_task(_do_restart(webui))

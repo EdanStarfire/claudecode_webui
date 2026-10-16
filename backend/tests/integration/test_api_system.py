@@ -167,7 +167,7 @@ class TestSystemStatus:
                 return log_output
             raise AssertionError(f"Unexpected _run_git_command call: {args}")
 
-        with patch.object(webui, "_run_git_command", AsyncMock(side_effect=run_git_command_side_effect)):
+        with patch.object(webui.service, "run_git_command", AsyncMock(side_effect=run_git_command_side_effect)):
             resp = await client.get("/api/system/git-commits", params={"branch": "main"})
         assert resp.status_code == 200
         body = resp.json()
@@ -190,7 +190,7 @@ class TestSystemStatus:
                 return log_output
             raise AssertionError(f"Unexpected _run_git_command call: {args}")
 
-        with patch.object(webui, "_run_git_command", AsyncMock(side_effect=run_git_command_side_effect)):
+        with patch.object(webui.service, "run_git_command", AsyncMock(side_effect=run_git_command_side_effect)):
             resp = await client.get("/api/system/git-commits", params={"branch": "main"})
         assert resp.status_code == 200
         body = resp.json()
@@ -218,7 +218,7 @@ class TestRestartCustomPath:
 
     def _patches(self, webui, run_git_command_side_effect, run_side_effect):
         return [
-            patch.object(webui, "_run_git_command", AsyncMock(side_effect=run_git_command_side_effect)),
+            patch.object(webui.service, "run_git_command", AsyncMock(side_effect=run_git_command_side_effect)),
             patch("backend.routers.system.subprocess.run", side_effect=run_side_effect),
             patch("backend.routers.system.asyncio.create_subprocess_exec",
                   AsyncMock(return_value=_fake_async_proc())),

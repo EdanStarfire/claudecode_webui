@@ -27,11 +27,13 @@ def _make_webui(
     session: MagicMock | None = None,
     proxy_mgr: MagicMock | None = None,
 ) -> MagicMock:
+    from backend.application_service import ApplicationService
+
+    coordinator = MagicMock()
+    coordinator.session_manager.get_session_info = AsyncMock(return_value=session)
+    coordinator.litellm_proxy_manager = proxy_mgr
     webui = MagicMock()
-    webui.coordinator.session_manager.get_session_info = AsyncMock(
-        return_value=session
-    )
-    webui.litellm_proxy_manager = proxy_mgr
+    webui.service = ApplicationService(coordinator)
     return webui
 
 

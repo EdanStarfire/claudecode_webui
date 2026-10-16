@@ -17,16 +17,16 @@ def build_router(webui) -> APIRouter:
     @router.get("/api/provider-catalog")
     @handle_exceptions("list provider catalog entries")
     async def list_entries():
-        entries = await webui.provider_catalog_manager.list_entries()
+        entries = await webui.service.list_catalog_entries()
         return {
             "entries": entries,
-            "pending_changes": webui.provider_catalog_manager.pending_changes,
+            "pending_changes": webui.service.get_catalog_pending_changes(),
         }
 
     @router.post("/api/provider-catalog", status_code=201)
     @handle_exceptions("create provider catalog entry", value_error_status=400)
     async def create_entry(request: ProviderCatalogEntryRequest):
-        entry = await webui.provider_catalog_manager.create_entry(request.model_dump())
+        entry = await webui.service.create_catalog_entry(request.model_dump())
         return {"entry": entry}
 
     @router.put("/api/provider-catalog/{entry_id}")
@@ -35,7 +35,7 @@ def build_router(webui) -> APIRouter:
         body = request.model_dump()
         body["id"] = entry_id  # path wins over body for the id field
         try:
-            entry = await webui.provider_catalog_manager.update_entry(entry_id, body)
+            entry = await webui.service.update_catalog_entry(entry_id, body)
         except KeyError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
         return {"entry": entry}
@@ -44,7 +44,7 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("delete provider catalog entry")
     async def delete_entry(entry_id: str):
         try:
-            await webui.provider_catalog_manager.delete_entry(entry_id)
+            await webui.service.delete_catalog_entry(entry_id)
         except KeyError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
         return {"deleted": True}
@@ -54,24 +54,24 @@ def build_router(webui) -> APIRouter:
     async def restart_proxy():
         # pending_changes is only cleared on success; a rebuild failure leaves it
         # set so the admin can see the error via /status and retry.
-        await webui.litellm_proxy_manager.rebuild()
-        await webui.provider_catalog_manager.clear_pending_changes()
+        await webui.service.rebuild_litellm_proxy()
+        await webui.service.clear_catalog_pending_changes()
         return _status_payload(pending_changes=False)
 
     @router.get("/api/provider-catalog/status")
     @handle_exceptions("get provider catalog status")
     async def get_status():
-        return _status_payload(pending_changes=webui.provider_catalog_manager.pending_changes)
+        return _status_payload(pending_changes=webui.service.get_catalog_pending_changes())
 
     def _status_payload(*, pending_changes: bool) -> dict:
-        mgr = webui.litellm_proxy_manager
+        status = webui.service.get_litellm_proxy_runtime_status()
         return {
-            "running": mgr.is_running,
-            "port": mgr.port,
+            "running": status["running"],
+            "port": status["port"],
             "pending_changes": pending_changes,
-            "model_count": mgr.model_count,
-            "last_restart": mgr.last_restart.isoformat() if mgr.last_restart else None,
-            "last_error": mgr.last_error,
+            "model_count": status["model_count"],
+            "last_restart": status["last_restart"],
+            "last_error": status["last_error"],
         }
 
     return router
