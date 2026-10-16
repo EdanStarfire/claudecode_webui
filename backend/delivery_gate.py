@@ -58,6 +58,20 @@ class DeliveryGate:
 
     deliver() branches on wait_for_idle to pick which of the two readiness
     mechanisms above to run — see module docstring.
+
+    The wait_for_idle=False mechanics are also exposed as two split primitives,
+    ensure_ready() and send(), rather than only through deliver(). Pre-PR,
+    comm_router.py's auto-start/readiness-wait gate ran unconditionally for
+    every comm BEFORE its HALT/PIVOT interrupt-priority branching — a HALT
+    comm to a dormant target still forced it through the gate (auto-started,
+    then immediately interrupted); a PIVOT comm ran the gate, then interrupted,
+    then sent. Collapsing gate+send into one atomic deliver() call would force
+    comm_router.py to call it AFTER its interrupt-priority branch (since HALT
+    must skip the send but PIVOT/NORMAL must not), silently reordering the
+    gate to run after the interrupt instead of before it — a real behavior
+    change, not just an internal-mechanics detail. ensure_ready() lets
+    comm_router.py run the gate first, unconditionally, exactly as before,
+    then decide whether to call send() afterward based on interrupt priority.
     """
 
     def __init__(self, coordinator: "SessionCoordinator"):
@@ -76,21 +90,27 @@ class DeliveryGate:
             return await self._deliver_with_busy_wait(
                 comm, reset_first=reset_first, inject_timestamp=inject_timestamp
             )
-        return await self._deliver_with_readiness_wait(
-            comm, inject_timestamp=inject_timestamp, readiness_timeout=readiness_timeout
-        )
+        ready = await self.ensure_ready(comm, readiness_timeout=readiness_timeout)
+        if not ready.success:
+            return ready
+        return await self.send(comm, inject_timestamp=inject_timestamp)
 
     # =========================================================================
     # wait_for_idle=False — ported verbatim from comm_router.py::_send_to_minion
     # =========================================================================
 
-    async def _deliver_with_readiness_wait(
+    async def ensure_ready(
         self,
         comm: Comm,
         *,
-        inject_timestamp: bool,
-        readiness_timeout: float | None,
+        readiness_timeout: float | None = None,
     ) -> DeliveryResult:
+        """Target-check + STARTING-wait / auto-start-via-is_deliverable() gate.
+
+        No send — call send() separately once this succeeds. Call this
+        unconditionally, before any interrupt-priority branching (see class
+        docstring for why).
+        """
         coordinator = self._coordinator
         session_id = comm.to_minion_id
 
@@ -173,15 +193,19 @@ class DeliveryGate:
                 )
             gate_logger.info(f"Minion {session_id} is now ready")
 
-        success = await coordinator.send_message(
-            session_id=session_id,
+        return DeliveryResult(success=True)
+
+    async def send(self, comm: Comm, *, inject_timestamp: bool = True) -> DeliveryResult:
+        """Send comm.content/comm.metadata to the SDK. Call after ensure_ready() succeeds."""
+        success = await self._coordinator.send_message(
+            session_id=comm.to_minion_id,
             message=comm.content,
             metadata=comm.metadata,
             inject_timestamp=inject_timestamp,
         )
         if not success:
             gate_logger.error(
-                f"Failed to deliver comm {comm.comm_id} to minion {session_id} - send_message returned False"
+                f"Failed to deliver comm {comm.comm_id} to minion {comm.to_minion_id} - send_message returned False"
             )
             return DeliveryResult(success=False, error="SDK rejected the message")
 

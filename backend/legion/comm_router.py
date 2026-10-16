@@ -290,10 +290,16 @@ class CommRouter:
         Attachments (if any) must already be delivered via _deliver_attachments()
         before this is called — this only formats comm.attachments for display.
 
-        Issue #2189 (coordinator-split PR 10): the auto-start/readiness-wait/
-        send sequence lives in delivery_gate.deliver(wait_for_idle=False) now —
-        see delivery_gate.py. HALT/PIVOT interrupt-priority handling and the
-        comm-timeline formatting below are unchanged.
+        Issue #2189 (coordinator-split PR 10): the auto-start/readiness-wait gate
+        lives in delivery_gate.py now (DeliveryGate.ensure_ready()) — see that
+        module. It still runs here FIRST and unconditionally, before formatting
+        and before interrupt-priority is checked, exactly as pre-PR: a HALT/PIVOT
+        comm to a dormant target must still force it through the same gate a
+        NORMAL comm would (HALT: auto-started then immediately interrupted;
+        PIVOT: gated, then interrupted, then sent) — calling the gate only AFTER
+        the interrupt-priority branch would be a real behavior change, not just
+        an internal-mechanics detail. HALT/PIVOT interrupt-priority handling and
+        the comm-timeline formatting below are otherwise unchanged.
 
         Args:
             comm: Comm with to_minion_id set
@@ -302,6 +308,19 @@ class CommRouter:
             bool: True if sent successfully
         """
         try:
+            gate_result = await self.system.session_port.delivery_gate.ensure_ready(comm)
+            if not gate_result.success:
+                legion_logger.error(
+                    f"Failed to deliver comm {comm.comm_id} to minion {comm.to_minion_id}: {gate_result.error}"
+                )
+                if comm.from_minion_id:
+                    await self._send_system_error_comm(
+                        to_minion_id=comm.from_minion_id,
+                        error_message=f"Failed to deliver message: {gate_result.error}",
+                        original_comm_id=comm.comm_id
+                    )
+                return False
+
             # Get sender name for formatting
             # Use "Minion #user" to signal that replies should use send_comm MCP tool
             from_name = "Minion #user"
@@ -413,29 +432,24 @@ class CommRouter:
                     legion_logger.warning(f"Failed to interrupt session {comm.to_minion_id}: {e}")
                 # Fall through to send_message below
 
-            # Deliver to target minion via DeliveryGate (PIVOT and NORMAL).
+            # Send to target minion via DeliveryGate (PIVOT and NORMAL). The gate
+            # already ran above, unconditionally, before this interrupt-priority
+            # branch — send() only needs the SDK-formatted content/metadata, so
+            # swap them in for the call and restore the caller's originals right
+            # after (send() never touches delivery_failure_reason, unlike
+            # ensure_ready(), so no restore special-case is needed for that key
+            # here — callers that inspect the Comm post-return, e.g. the REST
+            # POST /api/legions/{id}/comms response, see what they passed in).
             # Issue #1779: inter-agent comms aren't "user messages" — skip timestamp injection.
-            # deliver() only needs the SDK-formatted content/metadata to perform the
-            # actual send — restore the caller's original comm.content/comm.metadata
-            # afterward so callers that inspect the Comm post-return (e.g. the REST
-            # POST /api/legions/{id}/comms response) still see what they passed in,
-            # not the internal display-formatted text. delivery_gate may stamp
-            # delivery_failure_reason onto comm.metadata on an auto-start failure
-            # (issue #1839) — that key is preserved across the restore since
-            # legion_mcp_tools.py's send_comm reads it from this same comm afterward.
             original_content = comm.content
             original_metadata = comm.metadata
             comm.content = formatted_message
             comm.metadata = comm_metadata
-            result = await self.system.session_port.delivery_gate.deliver(
-                comm, wait_for_idle=False, inject_timestamp=False
+            result = await self.system.session_port.delivery_gate.send(
+                comm, inject_timestamp=False
             )
-            has_failure_reason = "delivery_failure_reason" in comm_metadata
-            delivery_failure_reason = comm_metadata.get("delivery_failure_reason")
             comm.content = original_content
             comm.metadata = original_metadata
-            if has_failure_reason:
-                comm.metadata["delivery_failure_reason"] = delivery_failure_reason
             if not result.success:
                 legion_logger.error(
                     f"Failed to deliver comm {comm.comm_id} to minion {comm.to_minion_id}: {result.error}"
