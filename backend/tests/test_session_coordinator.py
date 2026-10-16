@@ -2553,7 +2553,7 @@ class TestIssue1402ListSessionsEffectiveConfig:
         # _build_effective_config_payload catches the exception and returns (None, None),
         # so list_sessions must still return all sessions with effective_config=None for the
         # template-linked one.
-        with patch("backend.session_coordinator.resolve_effective_config", side_effect=RuntimeError("simulated")):
+        with patch("backend.session_query.resolve_effective_config", side_effect=RuntimeError("simulated")):
             result = await coordinator.list_sessions()
 
         assert result["total"] == 2
