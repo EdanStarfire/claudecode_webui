@@ -345,7 +345,7 @@ async def test_issue_858_event_cleaned_up_on_terminate():
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch("backend.session_coordinator.cleanup_session_tmp"),
+            patch("backend.session_launcher.cleanup_session_tmp"),
             patch.object(coord, "_notify_state_change", new_callable=AsyncMock),
         ):
             await coord.terminate_session(session_id)

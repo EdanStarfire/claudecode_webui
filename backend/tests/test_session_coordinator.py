@@ -294,7 +294,10 @@ class TestSessionCoordinator:
         broadcast_callback = Mock()
         coordinator.add_tool_call_broadcast_callback(broadcast_callback)
 
-        with patch.object(coordinator, 'start_session', AsyncMock(return_value=True)):
+        # Issue #2189: restart_session's internal self-call to start_session now
+        # resolves on SessionLauncher (both moved there together), so the patch
+        # target follows the code rather than the coordinator's delegate.
+        with patch.object(coordinator._session_launcher, 'start_session', AsyncMock(return_value=True)):
             success = await coordinator.restart_session(session_id)
 
         assert success is True
@@ -1020,8 +1023,11 @@ class TestSessionCoordinator:
         # No active SDK (as happens with errored sessions)
         assert session_id not in coordinator._active_sdks
 
-        # Mock start_session to succeed without actually launching SDK
-        with patch.object(coordinator, "start_session", return_value=True) as mock_start:
+        # Mock start_session to succeed without actually launching SDK.
+        # Issue #2189: reset_session's internal self-call to start_session now
+        # resolves on SessionLauncher (both moved there together), so the patch
+        # target follows the code rather than the coordinator's delegate.
+        with patch.object(coordinator._session_launcher, "start_session", return_value=True) as mock_start:
             success = await coordinator.reset_session(session_id)
 
         assert success is True
