@@ -356,6 +356,22 @@ class QueueManager:
         items = self._queues.get(session_id, [])
         return sorted(items, key=lambda x: x.position)
 
+    def get_queue_page(self, session_id: str, limit: int = 100, offset: int = 0) -> dict:
+        """Get queue items for a session, paginated, most recent first."""
+        all_items = [item.to_dict() for item in self.get_queue(session_id)]
+        all_items.reverse()  # Most recent (highest position) first
+        total = len(all_items)
+        pending_count = sum(1 for i in all_items if i.get("status") == "pending")
+        sliced = all_items[offset : offset + limit]
+        return {
+            "items": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+            "pending_count": pending_count,
+        }
+
     def get_pending(self, session_id: str) -> list[QueueItem]:
         """Get pending items sorted by position (FIFO)."""
         return [i for i in self.get_queue(session_id) if i.status == "pending"]

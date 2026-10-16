@@ -884,6 +884,52 @@ class TestConfigDictUpdates:
         assert session.config.get("model") == "claude-opus-4-5"
         assert session.config.get("sandbox_enabled") is True
 
+    async def test_update_queue_config_merges_persists_and_notifies(self, temp_session_manager):
+        """update_queue_config merges into session.queue_config (not config), persists, and notifies.
+
+        Issue #2189 PR 8: this is a rewrite (not a verbatim move) of the coordinator's old
+        read-via-get_session_info-then-generic-update_session body, matching the sibling
+        update_X methods' lock/persist/notify shape instead. Confirms behavior equivalence.
+        """
+        manager = temp_session_manager
+        session_id = str(uuid.uuid4())
+        await manager.create_session(session_id, config=SessionConfig())
+
+        metadata_changes = []
+
+        async def _capture_change(sid):
+            metadata_changes.append(sid)
+
+        manager.add_metadata_change_callback(_capture_change)
+
+        result = await manager.update_queue_config(session_id, {"max_queue_size": 50})
+        assert result is True
+
+        session = await manager.get_session_info(session_id)
+        assert session.queue_config == {"max_queue_size": 50}
+        assert "queue_config" not in session.config  # not a CONFIG_FIELD
+
+        # Merge semantics (not replace): a second call merges onto the existing dict
+        result2 = await manager.update_queue_config(session_id, {"min_wait_seconds": 5})
+        assert result2 is True
+        session = await manager.get_session_info(session_id)
+        assert session.queue_config == {"max_queue_size": 50, "min_wait_seconds": 5}
+
+        # Persisted shape survives reload
+        data_dir = manager.sessions_dir.parent
+        manager2 = SessionManager(data_dir)
+        await manager2.initialize()
+        reloaded = await manager2.get_session_info(session_id)
+        assert reloaded.queue_config == {"max_queue_size": 50, "min_wait_seconds": 5}
+
+        # Notification fired for both calls
+        assert metadata_changes.count(session_id) == 2
+
+    async def test_update_queue_config_missing_session_returns_false(self, temp_session_manager):
+        manager = temp_session_manager
+        result = await manager.update_queue_config("nonexistent-session-id", {"max_queue_size": 50})
+        assert result is False
+
 
 # --- Issue #1059 / #1230: Session config storage tests ---
 

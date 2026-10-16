@@ -1360,6 +1360,31 @@ class SessionManager:
                 )
                 return False
 
+    async def update_queue_config(self, session_id: str, config: dict) -> bool:
+        """Update session's queue configuration (merged into existing config dict).
+
+        Issue #500: Persist per-session queue tuning (max_queue_size, min_wait_seconds,
+        min_idle_seconds, default_reset_session).
+        """
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                current = session.queue_config or {}
+                current.update(config)
+                session.queue_config = current
+                session.updated_at = datetime.now(UTC)
+                await self._persist_session_state(session_id)
+                await self._notify_metadata_change_callbacks(session_id)
+                session_logger.info(f"Updated session {session_id} queue config")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to update session {session_id} queue config: {e}")
+                return False
+
     async def update_latest_message(
         self,
         session_id: str,
