@@ -9,11 +9,33 @@ import asyncio
 import json
 import logging
 import re
+import shutil
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from backend.config_manager import load_config
+from backend.config_resolution import (
+    _MCP_INHERITABLE_FIELDS,
+    CONFIG_FIELDS,
+    _mcp_field_equal,
+    resolve_template_config,
+)
+from backend.credential_vault import CredentialVault
+from backend.hook_config_manager import HookConfigManager
+from backend.legion_system import LegionSystem
+from backend.mcp.links_mcp_tools import LinksMCPTools
+from backend.mcp.oneshot_connection import McpOneshotConnector
+from backend.mcp.resource_mcp_tools import ResourceMCPTools
+from backend.mcp.shared_connection_manager import SharedMcpConnectionManager
+from backend.mcp_config_manager import McpConfigManager
+from backend.oauth_callback_listener_manager import OAuthCallbackListenerManager
+from backend.oauth_manager import OAuthFlowManager
+from backend.profile_manager import ProfileManager
+from backend.provider_catalog import ProviderCatalogStore
+from backend.template_manager import TemplateManager
 from shared.logging_config import get_logger
 
 from .archive_coordinator import ArchiveCoordinator
@@ -31,10 +53,13 @@ from .models.messages import (
 )
 from .models.permission_mode import PermissionMode
 from .oauth_refresh_manager import OAuthRefreshManager
+from .oauth_secret_bundle_manager import OAuthSecretBundleManager
 from .project_manager import ProjectInfo, ProjectManager
 from .queue_manager import QueueManager
 from .queue_processor import QueueProcessor
-from .session_config import SessionConfig
+from .routers._models import _validate_new_additional_directory
+from .secrets_service import SecretsService
+from .session_config import DEFAULTS, SessionConfig
 from .session_launcher import (
     STARTUP_ATTACH_TIMEOUT_SECONDS,  # noqa: F401 — re-exported; test_session_coordinator.py imports it from here
     LauncherCallbacks,
@@ -49,6 +74,7 @@ from .task_registry import TaskLegRegistry
 from .timestamp_injection import maybe_inject_timestamp
 from .timestamp_utils import get_unix_timestamp
 from .tool_call_tracker import ToolCallTracker
+from .vault_refresh_manager import VaultRefreshManager
 
 # Get specialized logger for coordinator actions
 coord_logger = get_logger('coordinator', category='COORDINATOR')
@@ -187,14 +213,13 @@ def _render_inject_file(placeholder: str, fmt: str, key_path: str | None) -> str
     keys = key_path.split(".")
 
     if fmt == "json":
-        import json as _json
         obj: dict = {}
         cur = obj
         for key in keys[:-1]:
             cur[key] = {}
             cur = cur[key]
         cur[keys[-1]] = placeholder
-        return _json.dumps(obj, indent=2)
+        return json.dumps(obj, indent=2)
 
     if fmt == "yaml":
         # Minimal YAML without external dependencies.
@@ -355,32 +380,25 @@ class SessionCoordinator:
         self.message_processor = MessageProcessor(self.message_parser)
 
         # Credential vault for proxy credential management (issue #1053)
-        from backend.credential_vault import CredentialVault
         self.credential_vault = CredentialVault(self.data_dir)
 
         # Template manager for minion templates (issue #2184: construct-if-not-given,
         # same convention as session_manager above).
-        from backend.template_manager import TemplateManager
         self.template_manager = template_manager or TemplateManager(self.data_dir)
 
         # Profile manager for composable session config profiles (issue #1062)
-        from backend.profile_manager import ProfileManager
         self.profile_manager = ProfileManager(self.data_dir)
 
         # MCP config manager for global MCP server configurations (issue #676)
-        from backend.mcp_config_manager import McpConfigManager
         self.mcp_config_manager = McpConfigManager(self.data_dir)
 
         # Hook config manager for global hook configurations (issue #1629)
-        from backend.hook_config_manager import HookConfigManager
         self.hook_config_manager = HookConfigManager(self.data_dir)
 
         # Provider catalog store — data/providers.json (issue #1465)
-        from backend.provider_catalog import ProviderCatalogStore
         self.provider_catalog_store = ProviderCatalogStore(self.data_dir)
 
         # OAuth 2.1 flow manager for MCP servers (issue #813)
-        from backend.oauth_manager import OAuthFlowManager
         self.oauth_manager = OAuthFlowManager(self.data_dir)
 
         # Active SDK instances
@@ -397,7 +415,6 @@ class SessionCoordinator:
         # Issue #1484: shared-connection MCP manager for opt-in passthrough configs.
         # Receives credential_vault so ${secret:...} refs in shared configs are resolved
         # to plaintext inline (no Docker proxy sidecar in the shared-connection egress path).
-        from backend.mcp.shared_connection_manager import SharedMcpConnectionManager
         self.shared_mcp_manager = SharedMcpConnectionManager(
             self.oauth_manager, self.oauth_refresh_manager, self.credential_vault,
         )
@@ -410,25 +427,21 @@ class SessionCoordinator:
         # Issue #1800: one-shot connection lifecycle for non-shared MCP configs'
         # "Test connection" affordance. Independent of shared_mcp_manager — see
         # src/mcp/oneshot_connection.py module docstring for why.
-        from backend.mcp.oneshot_connection import McpOneshotConnector
         self.mcp_oneshot_connector = McpOneshotConnector(self.oauth_manager, self.credential_vault)
 
         # Issue #1789: custom OAuth callback path/port listeners for Shared MCP servers.
         # Broadcast callback (UI notification) is injected later via set_broadcast_callback,
         # same pattern as oauth_refresh_manager below.
-        from backend.oauth_callback_listener_manager import OAuthCallbackListenerManager
         self.oauth_callback_listener_manager = OAuthCallbackListenerManager(
             self.oauth_manager, host=self.host,
         )
 
         # Issue #1387: Proactive vault OAuth2 secret refresh
-        from .vault_refresh_manager import VaultRefreshManager
         self.vault_refresh_manager = VaultRefreshManager(self.credential_vault)
 
         # Secrets Vault CRUD + session-scoped resolution (issue #2189 AC5,
         # router-boundary PR B) — constructed last among its 6 collaborators
         # (vault_refresh_manager, constructed just above, is the latest of the six).
-        from .secrets_service import SecretsService
         self.secrets_service = SecretsService(
             self.credential_vault,
             self.vault_refresh_manager,
@@ -441,7 +454,6 @@ class SessionCoordinator:
         # OAuth 2.1 token/secret-bundle management (issue #2189 AC5, router-boundary
         # PR B) — all 4 collaborators (credential_vault, oauth_manager,
         # mcp_config_manager, vault_refresh_manager) already exist by this point.
-        from .oauth_secret_bundle_manager import OAuthSecretBundleManager
         self.oauth_secret_bundle_manager = OAuthSecretBundleManager(
             self.credential_vault,
             self.oauth_manager,
@@ -524,8 +536,6 @@ class SessionCoordinator:
         self._message_callback_registrar: Callable[[str], None] | None = None
 
         # Initialize Legion multi-agent system
-        from backend.config_manager import load_config
-        from backend.legion_system import LegionSystem
         # Create a dummy storage manager for now (legion will create its own per-legion storage)
         dummy_storage = DataStorageManager(self.data_dir / "legion_temp")
         _app_config = load_config()
@@ -579,7 +589,6 @@ class SessionCoordinator:
 
         # Issue #404: Resource MCP tools for displaying resources in task panel
         # Callback for broadcasting resource_registered events will be set by web_server
-        from backend.mcp.resource_mcp_tools import ResourceMCPTools
         self.resource_mcp_tools = ResourceMCPTools(
             session_coordinator=self,
             broadcast_callback=self._broadcast_resource_registered
@@ -587,7 +596,6 @@ class SessionCoordinator:
 
         # Issue #1530: Links MCP tools for registering persistent named links
         # Callback for broadcasting link_registered events will be set by web_server
-        from backend.mcp.links_mcp_tools import LinksMCPTools
         self.links_mcp_tools = LinksMCPTools(
             session_coordinator=self,
             broadcast_callback=self._broadcast_link_registered
@@ -1195,7 +1203,6 @@ class SessionCoordinator:
         Returns:
             The new session_id
         """
-        import uuid
         session_id = str(uuid.uuid4())
 
         # Issue #498 Phase 1 bugfix: create_session() takes a single bundled
@@ -1401,7 +1408,6 @@ class SessionCoordinator:
                 minion_dir = self.data_dir / "legions" / legion_id / "minions" / session_id
                 if minion_dir.exists():
                     try:
-                        import shutil
                         shutil.rmtree(minion_dir)
                         coord_logger.info(f"Deleted Legion minion directory: {minion_dir}")
                     except Exception:
@@ -1786,8 +1792,6 @@ class SessionCoordinator:
         rejection (Docker guard, path validation, CLI-side error) so the REST layer
         can surface a clear 400.
         """
-        from .routers._models import _validate_new_additional_directory
-
         session_info = await self.session_manager.get_session_info(session_id)
         if not session_info:
             raise ValueError(f"Session {session_id} not found")
@@ -2403,6 +2407,10 @@ class SessionCoordinator:
 
     async def _check_sdk_generated_name(self, session_id: str) -> None:
         """Check if SDK has generated a session title and store it (issue #904)."""
+        # Deferred import: NOT a circular-import break (confirmed during issue #2189
+        # PR 11's AC6 cleanup) — it's an optional/version-guarded SDK API. Older
+        # claude_agent_sdk versions may lack get_session_info entirely, so this stays
+        # import-time-optional rather than a hard top-level dependency.
         try:
             from claude_agent_sdk import get_session_info as sdk_get_session_info
         except ImportError:
@@ -2585,8 +2593,6 @@ class SessionCoordinator:
         if not config.template_id:
             return
         try:
-            from backend.config_resolution import CONFIG_FIELDS, resolve_template_config
-            from backend.session_config import DEFAULTS
 
             template = await self.template_manager.get_template(config.template_id)
             template_values = (
@@ -2624,12 +2630,6 @@ class SessionCoordinator:
         if not session_info.template_id:
             return False
         try:
-            from backend.config_resolution import (
-                _MCP_INHERITABLE_FIELDS,
-                _mcp_field_equal,
-                resolve_template_config,
-            )
-
             template = await self.template_manager.get_template(session_info.template_id)
             if template is None:
                 return False

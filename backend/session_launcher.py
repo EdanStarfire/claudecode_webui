@@ -17,6 +17,7 @@ import os
 import re
 import secrets
 import shutil
+import time as _time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -24,8 +25,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
-from backend.docker_utils import cleanup_session_tmp, get_session_tmp_dir
+from backend.config_manager import load_config as load_app_config
+from backend.docker_utils import (
+    cleanup_session_tmp,
+    get_session_tmp_dir,
+    prepare_session_ssh,
+)
+from backend.legion.archive_manager import SnapshotContext
 from backend.legion.minion_system_prompts import get_legion_guide_only
+from backend.mcp.proxy_server_factory import build_proxy_server
+from backend.mcp.shared_connection_manager import _describe_open_failure
+from backend.models.archive_models import DisposalMetadata
+from backend.template_variables import build_variables, resolve_path, resolve_path_list
 from shared.logging_config import get_logger
 
 from .claude_sdk import ClaudeSDK
@@ -205,9 +216,6 @@ class SessionLauncher:
         """
         # Issue #1484: route shared-connection configs through the in-process proxy.
         if getattr(mcp_cfg, "shared_connection", False):
-            from backend.mcp.proxy_server_factory import build_proxy_server
-            from backend.mcp.shared_connection_manager import _describe_open_failure
-
             reason: str | None = None
             try:
                 # Shielded: a timeout here abandons only our own wait, not the
@@ -224,8 +232,6 @@ class SessionLauncher:
             except Exception as exc:
                 reason = _describe_open_failure(exc)
             return build_proxy_server(mcp_cfg, self.shared_mcp_manager), reason
-
-        import time as _time
 
         config = mcp_cfg.to_sdk_config()
         # Issue #1425: detect ${secret:...} placeholder in Authorization header before OAuth injection.
@@ -480,7 +486,6 @@ class SessionLauncher:
 
             # Issue #917: Resolve template variables in path-typed CONFIG_FIELDS.
             # Apply to effective_config (single source of truth for CONFIG_FIELDS).
-            from backend.template_variables import build_variables, resolve_path, resolve_path_list
             _tv = build_variables(session_id, session_dir, session_info.working_directory)
             _ec_path_updates: dict[str, Any] = {}
             if effective_config.auto_memory_directory:
@@ -671,7 +676,6 @@ class SessionLauncher:
             )
             docker_env_vars = {}
             if effective_config.docker_enabled and not effective_config.cli_path:
-                from backend.docker_utils import get_session_tmp_dir, resolve_docker_cli_path
                 # Persistent data dir for Claude session transcripts (enables --resume).
                 # Nested inside session_dir so Claude CLI internals and WebUI session data
                 # are created, backed up, and cleaned up together.
@@ -703,7 +707,13 @@ class SessionLauncher:
                 # Issue #759: Mount synced skills into Docker container (read-only)
                 # Mount the real skills dir (not the symlink dir) to avoid broken
                 # symlinks inside the container.
+                # Deferred import: NOT a circular-import break (confirmed during issue
+                # #2189 PR 11's AC6 cleanup) — kept late because
+                # test_session_coordinator.py patches backend.skill_manager.
+                # NEW_GLOBAL_SKILLS_DIR directly, which only takes effect if this name
+                # is looked up fresh per call rather than bound once at module import.
                 from backend.skill_manager import NEW_GLOBAL_SKILLS_DIR
+
                 docker_home = effective_config.docker_home_directory or "/home/claude"
                 if NEW_GLOBAL_SKILLS_DIR.exists():
                     extra_mounts.append(
@@ -782,7 +792,6 @@ class SessionLauncher:
                         #            never reach the agent; proxy wipes the file after ssh-add).
                         # shared_dir → both containers at /run/ssh (socket created by proxy
                         #              ssh-agent; agent uses socket, not key file).
-                        from backend.docker_utils import prepare_session_ssh  # noqa: PLC0415
                         _ssh_key_dir = tmp_dir / "ssh-key"
                         _ssh_shared_dir = tmp_dir / "ssh-shared"
                         try:
@@ -831,6 +840,14 @@ class SessionLauncher:
                         _seen_proxy_paths.add(_container_path)
                         _deduped_proxy_mounts.append(_mount)
                 proxy_extra_mounts = _deduped_proxy_mounts
+
+                # Deferred import: NOT a circular-import break (confirmed during issue
+                # #2189 PR 11's AC6 cleanup) — kept late because
+                # test_session_coordinator.py/test_proxy_lifecycle_1050.py patch
+                # backend.docker_utils.resolve_docker_cli_path directly, which only
+                # takes effect if this name is looked up fresh per call rather than
+                # bound once at module import.
+                from backend.docker_utils import resolve_docker_cli_path
 
                 effective_cli_path, docker_env_vars = resolve_docker_cli_path(
                     docker_image=effective_config.docker_image,
@@ -981,7 +998,6 @@ class SessionLauncher:
                 coord_logger.debug(f"Custom auto-memory directory for session {session_id}: {custom_memory_dir}")
 
             # Issue #707: Build PreToolUse handler for internal tool access control
-            from backend.config_manager import load_config as load_app_config
             permission_handler = self._build_permission_handler(
                 session_dir, effective_config.history_distillation_enabled, effective_config.auto_memory_mode,
                 skill_creating_enabled=effective_config.skill_creating_enabled,
@@ -1518,9 +1534,6 @@ class SessionLauncher:
         Returns True on success, False on failure (logged, never raised).
         """
         try:
-            from backend.legion.archive_manager import SnapshotContext
-            from backend.models.archive_models import DisposalMetadata
-
             session_info = await self.session_manager.get_session_info(session_id)
             session_dir = self.session_manager.sessions_dir / session_id
             # Use microsecond-precision timestamp for cross-path consistency
@@ -1582,6 +1595,14 @@ class SessionLauncher:
             if _eff_for_archive.history_distillation_enabled:
                 archived_messages = archive_dir / "messages.jsonl"
                 if archived_messages.exists():
+                    # Deferred import: kept late for consistency with
+                    # archive_coordinator.py's _distill_compaction, which must keep
+                    # this import late so test_session_coordinator.py's
+                    # test_issue_1628_distill_compaction_registers_resource can patch
+                    # backend.history_distiller.distill_session_history. No test
+                    # currently patches it for this call site specifically, but a
+                    # future one reasonably could expect the same mockability from
+                    # the same function name.
                     from backend.history_distiller import distill_session_history
 
                     history_output = session_dir / "history" / f"{timestamp}.md"
@@ -1677,6 +1698,5 @@ class SessionLauncher:
 
     def _resolve_default_proxy_image(self) -> str:
         """Return the app-config default proxy image name (issue #1050)."""
-        from backend.config_manager import load_config as load_app_config
         app_config = load_app_config()
         return app_config.proxy.proxy_image

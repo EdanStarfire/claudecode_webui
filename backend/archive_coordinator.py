@@ -291,6 +291,12 @@ class ArchiveCoordinator:
         slice window, writes a temp jsonl for that slice, calls distill_session_history,
         then registers the result as a session resource so the frontend can display it.
         """
+        # Deferred import: NOT a circular-import break (confirmed during issue #2189
+        # PR 11's AC6 cleanup) — kept late because test_session_coordinator.py's
+        # test_issue_1628_distill_compaction_registers_resource patches
+        # backend.history_distiller.distill_session_history directly, which only
+        # takes effect if this name is looked up fresh per call rather than bound
+        # once at module import.
         from backend.history_distiller import distill_session_history
 
         session_dir = self.session_manager.sessions_dir / session_id

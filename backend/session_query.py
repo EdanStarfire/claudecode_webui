@@ -103,6 +103,12 @@ class SessionQuery:
             sdk_session_info = None
             if session_info.claude_code_session_id:
                 try:
+                    # Deferred import: NOT a circular-import break (confirmed during
+                    # issue #2189 PR 11's AC6 cleanup) — it's an optional/version-
+                    # guarded SDK API. Older claude_agent_sdk versions may lack
+                    # get_session_info entirely; the surrounding except clause relies
+                    # on the lookup happening here so a missing symbol degrades this
+                    # one augmentation instead of failing module import.
                     from claude_agent_sdk import get_session_info as sdk_get_session_info
                     result = await asyncio.to_thread(
                         sdk_get_session_info,
