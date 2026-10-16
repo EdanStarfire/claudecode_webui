@@ -33,10 +33,12 @@ import asyncio
 import json
 import logging
 import re
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from backend.mcp.resource_mcp_tools import ResourceMCPTools
 from shared.logging_config import get_logger
 
 from .data_storage import DataStorageManager
@@ -133,8 +135,6 @@ def _group_resources_by_filename(resources: list[dict]) -> list[dict]:
 
 def _tail_read_lines(path: "Path", limit: int) -> list[str]:
     """Read the last `limit` lines from a file efficiently using a deque."""
-    from collections import deque
-
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             return list(deque(f, maxlen=limit))
@@ -602,7 +602,6 @@ class SessionResources:
                 break
 
         if resource_id:
-            from backend.mcp.resource_mcp_tools import ResourceMCPTools
             is_image = any(
                 file_path.lower().endswith(ext)
                 for ext in ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.tiff', '.tif')
