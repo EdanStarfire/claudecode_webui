@@ -2,7 +2,7 @@
 
 import pytest
 
-from backend.session_coordinator import _group_resources_by_filename
+from backend.session_resources import _group_resources_by_filename
 
 
 def test_empty_list():

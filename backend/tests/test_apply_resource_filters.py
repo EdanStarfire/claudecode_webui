@@ -2,7 +2,7 @@
 
 import pytest
 
-from backend.session_coordinator import _apply_resource_filters
+from backend.session_resources import _apply_resource_filters
 
 
 # Fixture data

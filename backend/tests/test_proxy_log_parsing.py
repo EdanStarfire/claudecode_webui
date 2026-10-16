@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from backend.session_coordinator import _count_file_lines, _tail_read_lines
+from backend.session_resources import SessionResources, _count_file_lines, _tail_read_lines
 
 # ==================== _tail_read_lines ====================
 
@@ -78,7 +78,8 @@ class TestHttpLogParsing:
 
         coord = SessionCoordinator.__new__(SessionCoordinator)
         coord.data_dir = tmp_path
-        coord.logger = MagicMock()
+        coord._session_resources = SessionResources(coordinator=coord)
+        coord._session_resources.logger = MagicMock()
         return coord
 
     @pytest.fixture
@@ -160,7 +161,8 @@ class TestDnsLogParsing:
 
         coord = SessionCoordinator.__new__(SessionCoordinator)
         coord.data_dir = tmp_path
-        coord.logger = MagicMock()
+        coord._session_resources = SessionResources(coordinator=coord)
+        coord._session_resources.logger = MagicMock()
         return coord
 
     @pytest.fixture
@@ -236,7 +238,8 @@ class TestSocks5LogParsing:
 
         coord = SessionCoordinator.__new__(SessionCoordinator)
         coord.data_dir = tmp_path
-        coord.logger = MagicMock()
+        coord._session_resources = SessionResources(coordinator=coord)
+        coord._session_resources.logger = MagicMock()
         return coord
 
     @pytest.fixture
