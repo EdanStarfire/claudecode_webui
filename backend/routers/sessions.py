@@ -7,10 +7,9 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 
 from shared.event_envelope import PROCESS_EPOCH
-from shared.event_queue import EventQueue
 from shared.exception_handlers import handle_exceptions
 
-from ..fixture_export import FixtureExportError, export_fixture
+from ..fixture_export import FixtureExportError
 from ..session_lifecycle import is_deliverable
 from ._models import (
     FixtureExportRequest,
@@ -33,7 +32,7 @@ async def _validate_recording_config(webui, session_id: str, config: dict) -> No
     """
     if not config.get("recording_enabled"):
         return
-    if not webui.coordinator.session_recording_enabled:
+    if not webui.service.get_session_recording_enabled():
         raise HTTPException(
             status_code=400,
             detail="Session recording is disabled on this instance. Restart the "
@@ -42,7 +41,7 @@ async def _validate_recording_config(webui, session_id: str, config: dict) -> No
         )
     effective_docker_enabled = config.get("docker_enabled")
     if effective_docker_enabled is None:
-        current_info = await webui.coordinator.session_manager.get_session_info(session_id)
+        current_info = await webui.service.get_session_object(session_id)
         effective_docker_enabled = bool(
             current_info.config.get("docker_enabled")
         ) if current_info else False
@@ -78,23 +77,23 @@ def build_router(webui) -> APIRouter:
         )
 
         config = request.model_copy(update={"additional_directories": validated_dirs})
-        session_id = await webui.coordinator.create_session(
+        session_id = await webui.service.create_session(
             session_id=session_id,
             project_id=request.project_id,
             config=config,
             name=request.name,
             role=request.role,
             capabilities=request.capabilities,
-            permission_callback=webui.permission_service.create_permission_callback(session_id),
+            permission_callback=webui.service.create_permission_callback(session_id),
         )
 
         # Create event queue for this new session
-        webui.session_queues[session_id] = EventQueue(on_append=webui._queue_append_hook(session_id))
+        webui.service.get_or_create_session_queue(session_id)
 
         # Broadcast session creation to all UI clients
-        session_info_dict = await webui.coordinator.get_session_info(session_id)
+        session_info_dict = await webui.service.get_session_info(session_id)
         if session_info_dict:
-            webui._broadcast_state_change(
+            webui.service.broadcast_state_change(
                 session_id,
                 session_info_dict.get("session", session_info_dict),
                 datetime.now().isoformat()
@@ -105,7 +104,7 @@ def build_router(webui) -> APIRouter:
             await webui.service.get_project(request.project_id) if request.project_id else None
         )
         if project_dict:
-            webui._broadcast_project_updated(
+            webui.service.broadcast_project_updated(
                 {k: v for k, v in project_dict.items() if k != "sessions"}
             )
 
@@ -115,13 +114,13 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("list sessions")
     async def list_sessions(limit: int = 500, offset: int = 0):
         """List all sessions"""
-        return await webui.coordinator.list_sessions(limit=limit, offset=offset)
+        return await webui.service.list_sessions(limit=limit, offset=offset)
 
     @router.get("/api/sessions/{session_id}")
     @handle_exceptions("get session info")
     async def get_session_info(session_id: str):
         """Get session information"""
-        info = await webui.coordinator.get_session_info(session_id)
+        info = await webui.service.get_session_info(session_id)
         if not info:
             raise HTTPException(status_code=404, detail="Session not found")
 
@@ -136,7 +135,7 @@ def build_router(webui) -> APIRouter:
     async def get_session_usage(session_id: str):
         """Return aggregated token usage and estimated cost for a session (issue #1125)."""
         from ..config_manager import PricingConfig, compute_cost, load_config
-        aggregate = await webui.coordinator.analytics_store.get_session_usage(session_id)
+        aggregate = await webui.service.get_session_usage_aggregate(session_id)
         if aggregate is None:
             raise HTTPException(status_code=404, detail="No usage data for this session")
 
@@ -173,7 +172,7 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("get session descendants")
     async def get_session_descendants(session_id: str, limit: int = 50, offset: int = 0):
         """Get all descendant sessions (children, grandchildren, etc.) of a session"""
-        result = await webui.coordinator.get_descendants(session_id, limit=limit, offset=offset)
+        result = await webui.service.get_descendants(session_id, limit=limit, offset=offset)
         result["session_id"] = session_id
         return result
 
@@ -184,17 +183,7 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
 
-        # Clear any existing callbacks to prevent duplicates, then register fresh one
-        webui.coordinator.clear_message_callbacks(session_id)
-        webui.coordinator.add_message_callback(
-            session_id,
-            webui._create_message_callback(session_id)
-        )
-
-        success = await webui.coordinator.start_session(
-            session_id,
-            permission_callback=webui.permission_service.create_permission_callback(session_id),
-        )
+        success = await webui.service.start_session_with_fresh_callback(session_id)
         return {"success": success}
 
     @router.post("/api/sessions/{session_id}/mark-unread")
@@ -204,7 +193,7 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
 
-        success = await webui.coordinator.session_manager.mark_unread(session_id)
+        success = await webui.service.mark_session_unread(session_id)
         return {"success": success}
 
     @router.post("/api/sessions/{session_id}/mark-read")
@@ -214,7 +203,7 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
 
-        success = await webui.coordinator.session_manager.mark_read(session_id)
+        success = await webui.service.mark_session_read(session_id)
         return {"success": success}
 
     @router.post("/api/sessions/{session_id}/terminate")
@@ -225,9 +214,9 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=404, detail="Session not found")
 
         # Clean up any pending permissions for this session
-        webui._cleanup_pending_permissions_for_session(session_id)
+        webui.service.cleanup_pending_permissions_for_session(session_id)
 
-        success = await webui.coordinator.terminate_session(session_id)
+        success = await webui.service.terminate_session_only(session_id)
         return {"success": success}
 
     @router.post("/api/sessions/{session_id}/export-fixture")
@@ -241,7 +230,7 @@ def build_router(webui) -> APIRouter:
         with {success: false, missing_markers: [...]} — the UI renders that inline
         as the failure panel rather than treating it as a request error.
         """
-        if not webui.coordinator.session_recording_enabled:
+        if not webui.service.get_session_recording_enabled():
             raise HTTPException(
                 status_code=403,
                 detail="Session recording is disabled on this instance. Restart the Backend "
@@ -252,7 +241,7 @@ def build_router(webui) -> APIRouter:
 
         name = request.name or session_id
         try:
-            result = await export_fixture(webui.coordinator, session_id, name)
+            result = await webui.service.export_session_fixture(session_id, name)
         except FixtureExportError as e:
             return {"success": False, "missing_markers": e.missing_markers}
         return result.to_dict()
@@ -261,7 +250,7 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("update session name")
     async def update_session_name(session_id: str, request: SessionNameUpdateRequest):
         """Update session name"""
-        success = await webui.coordinator.update_session_name(session_id, request.name)
+        success = await webui.service.update_session_name(session_id, request.name)
         if not success:
             raise HTTPException(status_code=404, detail="Session not found")
         return {"success": success}
@@ -416,7 +405,7 @@ def build_router(webui) -> APIRouter:
         if not success:
             raise HTTPException(status_code=500, detail="Failed to update session")
 
-        session_info = await webui.coordinator.session_manager.get_session_info(session_id)
+        session_info = await webui.service.get_session_object(session_id)
         if session_info is None:
             # Session was concurrently deleted between the update above and this lookup;
             # the update itself already succeeded against the (now-gone) session.
@@ -428,7 +417,7 @@ def build_router(webui) -> APIRouter:
     async def delete_session(session_id: str):
         """Delete a session and all its data (including cascaded child sessions)"""
         # Clean up any pending permissions for this session
-        webui._cleanup_pending_permissions_for_session(session_id)
+        webui.service.cleanup_pending_permissions_for_session(session_id)
 
         # Delete the session; service handles project state tracking
         result = await webui.service.delete_session(session_id)
@@ -438,22 +427,22 @@ def build_router(webui) -> APIRouter:
         deleted_ids = result.get("deleted_session_ids", [])
 
         # Clean up event queues and pending permissions for cascaded child sessions
-        webui.session_queues.pop(session_id, None)
+        webui.service.drop_session_queue(session_id)
         for deleted_id in deleted_ids:
             if deleted_id != session_id:
-                webui._cleanup_pending_permissions_for_session(deleted_id)
-                webui.session_queues.pop(deleted_id, None)
+                webui.service.cleanup_pending_permissions_for_session(deleted_id)
+                webui.service.drop_session_queue(deleted_id)
 
         # Broadcast project state changes
         project_id = result.get("project_id")
         if project_id:
             if result.get("project_deleted"):
-                webui._broadcast_project_deleted(project_id)
+                webui.service.broadcast_project_deleted(project_id)
                 logger.info(f"Appended project_deleted for auto-deleted project {project_id}")
             else:
                 updated_project = result.get("updated_project")
                 if updated_project:
-                    webui._broadcast_project_updated(updated_project)
+                    webui.service.broadcast_project_updated(updated_project)
                     logger.debug(
                         f"Appended project_updated for project {project_id} after session deletion"
                     )
@@ -477,7 +466,7 @@ def build_router(webui) -> APIRouter:
         # ordinary busy/is_processing session already queues a message today.
         if not is_deliverable(state):
             raise HTTPException(status_code=409, detail="Session is not active")
-        success = await webui.coordinator.send_message(
+        success = await webui.service.send_message(
             session_id, request.message, metadata=request.metadata
         )
         # Issue #1572: a manual user send means the user has already taken over —
@@ -486,16 +475,14 @@ def build_router(webui) -> APIRouter:
         # same session_coordinator.send_message() is also the delivery primitive for
         # queue_processor/comm_router/MCP-tool sends, which must NOT cancel it (a
         # queued/cron/comm delivery isn't the user taking over).
-        if success and webui.coordinator.legion_system:
-            cancelled = await webui.coordinator.legion_system.scheduler_service.cancel_auto_resume_schedule(
-                session_id
-            )
+        if success:
+            cancelled = await webui.service.cancel_auto_resume_schedule(session_id)
             # Issue #2190: only unpause when a pending auto-resume actually existed and
             # was cancelled — never unconditionally, or this would silently clear a
             # queue pause the user set manually for unrelated reasons (which has no
             # pending auto_resume schedule to cancel here).
             if cancelled:
-                await webui.coordinator.pause_queue(session_id, False)
+                await webui.service.pause_queue(session_id, False)
         return {"success": success}
 
     @router.get("/api/sessions/{session_id}/messages")
@@ -504,12 +491,12 @@ def build_router(webui) -> APIRouter:
         """Get messages from a session with pagination metadata"""
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
-        result = await webui.coordinator.get_session_messages(
+        result = await webui.service.get_session_messages(
             session_id, limit=limit, offset=offset
         )
         # Issue #1000: Include event queue cursor so frontend poll starts
         # exactly where REST left off, preventing duplicate message replay.
-        queue = webui.session_queues.get(session_id)
+        queue = webui.service.get_session_queue(session_id)
         if queue:
             result["event_cursor"] = queue.current_cursor
         # Epic #1990 stage 5a: which Backend-process generation produced event_cursor —
@@ -524,6 +511,6 @@ def build_router(webui) -> APIRouter:
         """Snapshot of background-agent (Task) leg history, for reload/reconnect (issue #1746)."""
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
-        return await webui.coordinator.get_background_agents(session_id)
+        return await webui.service.get_background_agents(session_id)
 
     return router

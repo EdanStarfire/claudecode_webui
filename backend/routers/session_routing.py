@@ -33,16 +33,7 @@ def build_router(webui) -> APIRouter:
         Authentication: Authorization: Bearer {session_token} (per-session token).
         Global AuthMiddleware is bypassed via the /routing EXEMPT_SUFFIXES entry.
         """
-        proxy_mgr = webui.litellm_proxy_manager
-        routing = proxy_mgr.get_session_routing(session_id)
-        if routing is None:
-            return _EMPTY_ROUTING
-
-        return {
-            "hostname_rewrites": proxy_mgr.build_hostname_rewrites(),
-            "virtual_key": routing["virtual_key"],
-            "model_map": routing.get("model_map", {}),
-            "default_model": routing.get("default_model"),
-        }
+        routing = webui.service.get_litellm_session_routing(session_id)
+        return routing if routing is not None else _EMPTY_ROUTING
 
     return router

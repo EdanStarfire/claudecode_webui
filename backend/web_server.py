@@ -27,7 +27,6 @@ from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddle
 from shared.event_emitter import emit
 from shared.event_envelope import QUEUE_AUDIT, QUEUE_SESSION, QUEUE_UI
 from shared.event_queue import EventQueue
-from shared.git_restart import run_git_command
 from shared.gzip_request_middleware import GZipRequestMiddleware
 
 from .analytics.audit_writer import AuditWriter
@@ -141,12 +140,15 @@ class BackendApp:
         from .config_manager import load_config as _load_cfg
         from .session_watchdog import SessionWatchdogService
         _cfg = _load_cfg(config_file) if config_file else _load_cfg()
-        self.ui_queue = EventQueue()
+        # Issue #2189 (router-boundary PR A): ui_queue's single source of truth lives on
+        # coordinator (self.ui_queue below is a property forwarding to it) — constructed
+        # as a plain local here since self.coordinator doesn't exist yet at this point.
+        _ui_queue = EventQueue()
         self._watchdog = SessionWatchdogService(
             session_manager=session_manager,
             template_manager=template_manager,
             app_config=_cfg,
-            ui_queue=self.ui_queue,
+            ui_queue=_ui_queue,
         )
 
         # Issue #1998: dev-only raw SDK traffic capture, structurally unavailable unless the
@@ -160,6 +162,7 @@ class BackendApp:
             session_manager=session_manager,
             template_manager=template_manager,
         )
+        self.coordinator.ui_queue = _ui_queue
         self.service = ApplicationService(self.coordinator)
         self.config_file = config_file
         # Issue #1789: track config_id -> path for dynamic (path-only, no custom port) OAuth
@@ -178,7 +181,12 @@ class BackendApp:
                 )
             )
         self.skill_manager = SkillManager()
+        self.coordinator.skill_manager = self.skill_manager
         self.session_queues: dict[str, EventQueue] = {}
+        # Issue #2189 (router-boundary PR A): dual-home the same dict/queue object onto
+        # coordinator so ApplicationService can reach them — mutations from either name
+        # stay in sync, exactly like the existing litellm_proxy_manager back-reference.
+        self.coordinator.session_queues = self.session_queues
 
         # Inject ui_queue into LegionSystem so legion components can append events directly
         self.coordinator.legion_system.ui_queue = self.ui_queue
@@ -200,6 +208,7 @@ class BackendApp:
             _litellm_port = _persisted_litellm_port
         else:
             _litellm_port = allocate_free_port()
+        self.coordinator.provider_catalog_manager = self.provider_catalog_manager
         self.litellm_proxy_manager = LiteLLMProxyManager(
             self.provider_catalog_manager,
             self.coordinator.credential_vault,
@@ -232,8 +241,27 @@ class BackendApp:
         # invoked it.
         self.coordinator.set_permission_service(self.permission_service)
 
-        # Rate limiting for restart endpoint (issue #434)
-        self._last_restart_time: float = 0
+        # Issue #2189 (router-boundary PR A): expose plain-method clusters as bound-method
+        # attributes on coordinator — same shape as the callback wiring below (e.g.
+        # set_rate_limit_broadcast_callback) — so ApplicationService has one place to reach
+        # each from, without coordinator needing to understand what's inside them.
+        self.coordinator.broadcast_project_updated = self._broadcast_project_updated
+        self.coordinator.broadcast_project_deleted = self._broadcast_project_deleted
+        self.coordinator.broadcast_queue_update = self._broadcast_queue_update
+        self.coordinator.broadcast_state_change = self._broadcast_state_change
+        self.coordinator.broadcast_server_restarting = self._broadcast_server_restarting
+        self.coordinator.queue_append_hook = self._queue_append_hook
+        self.coordinator.create_message_callback = self._create_message_callback
+        # OAuth-callback-route-sync cluster — app-routing state, not session domain state;
+        # coordinator holds these as opaque callables, same as it already holds
+        # permission_service as an opaque object (see Risks in the approved plan).
+        self.coordinator.oauth_callback_path_conflicts_with_app_route = (
+            self.oauth_callback_path_conflicts_with_app_route
+        )
+        self.coordinator.sync_standalone_oauth_callback = self.sync_standalone_oauth_callback
+        self.coordinator._sync_oauth_callback_for_config = self._sync_oauth_callback_for_config
+        self.coordinator.remove_standalone_oauth_callback = self.remove_standalone_oauth_callback
+        self.coordinator._remove_oauth_callback_for_config = self._remove_oauth_callback_for_config
 
         # Setup routes
         self._setup_routes()
@@ -338,6 +366,18 @@ class BackendApp:
             r.path for r in self.app.router.routes if getattr(r, "path", None)
         )
 
+    @property
+    def ui_queue(self) -> EventQueue:
+        """Issue #2189 (router-boundary PR A): coordinator.ui_queue is the single
+        source of truth — this property keeps self.ui_queue (used throughout this
+        class's own broadcast helpers) in sync even if the queue instance itself
+        is ever replaced wholesale, not just mutated."""
+        return self.coordinator.ui_queue
+
+    @ui_queue.setter
+    def ui_queue(self, value: EventQueue) -> None:
+        self.coordinator.ui_queue = value
+
     def _queue_append_hook(self, session_id: str):
         """Issue #1998: EventQueue.on_append hook for a session's queue.
 
@@ -375,7 +415,7 @@ class BackendApp:
 
             async def _broadcast_session_added():
                 try:
-                    session = await self.service._get_session_object(session_id)
+                    session = await self.service.get_session_object(session_id)
                     if session and session.project_id:
                         project_dict = await self.service.get_project(session.project_id)
                         if project_dict:
@@ -1361,12 +1401,6 @@ class BackendApp:
     async def _on_session_deleted(self, session_id: str):
         """Issue #1986: Broadcast session_deleted so every open tab removes the session."""
         self._broadcast_session_deleted(session_id)
-
-    async def _run_git_command(
-        self, args: list[str], cwd: str, allow_nonzero: bool = False
-    ) -> str | None:
-        """Run a git command via asyncio.create_subprocess_exec and return stdout, or None on error."""
-        return await run_git_command(args, cwd, allow_nonzero)
 
     async def cleanup(self):
         """Cleanup resources"""

@@ -18,7 +18,7 @@ from httpx import ASGITransport, AsyncClient
 def _make_webui(session_exists: bool, mark_unread_result: bool) -> MagicMock:
     webui = MagicMock()
     webui.service.get_session_exists = AsyncMock(return_value=session_exists)
-    webui.coordinator.session_manager.mark_unread = AsyncMock(return_value=mark_unread_result)
+    webui.service.mark_session_unread = AsyncMock(return_value=mark_unread_result)
     return webui
 
 
@@ -40,7 +40,7 @@ async def test_mark_unread_session_with_completion_returns_success():
         resp = await client.post("/api/sessions/sess-123/mark-unread")
     assert resp.status_code == 200
     assert resp.json() == {"success": True}
-    webui.coordinator.session_manager.mark_unread.assert_awaited_once_with("sess-123")
+    webui.service.mark_session_unread.assert_awaited_once_with("sess-123")
 
 
 @pytest.mark.asyncio
@@ -60,4 +60,4 @@ async def test_mark_unread_missing_session_returns_404():
     async with await _client(webui) as client:
         resp = await client.post("/api/sessions/nonexistent/mark-unread")
     assert resp.status_code == 404
-    webui.coordinator.session_manager.mark_unread.assert_not_awaited()
+    webui.service.mark_session_unread.assert_not_awaited()

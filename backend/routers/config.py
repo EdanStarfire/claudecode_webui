@@ -31,7 +31,7 @@ def build_router(webui) -> APIRouter:
         # startup via --enable-session-recording). Frontend's merged-config read
         # already spreads this response, so no relay-side plumbing is needed.
         result["capabilities"] = {
-            "session_recording_available": webui.coordinator.session_recording_enabled,
+            "session_recording_available": webui.service.get_session_recording_enabled(),
         }
         return {"config": result}
 
@@ -159,9 +159,9 @@ def build_router(webui) -> APIRouter:
         # Side effects for skill sync toggle
         new_sync = config.features.skill_sync_enabled
         if old_sync and not new_sync:
-            await webui.skill_manager.cleanup_symlinks()
+            await webui.service.cleanup_skill_symlinks()
         elif not old_sync and new_sync:
-            await webui.skill_manager.sync()
+            await webui.service.sync_skills()
 
         from ..config_manager import default_pricing_rates
         result = config.to_dict()

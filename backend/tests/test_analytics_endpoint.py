@@ -58,12 +58,17 @@ async def app_and_db(tmp_path):
     db = AnalyticsDB(tmp_path / "analytics.db")
     await db.initialize()
 
+    from backend.application_service import ApplicationService
+
     sm = MagicMock()
     sm.get_session_info = AsyncMock(return_value=None)  # all sessions appear as "(deleted)" by default
 
+    coordinator = MagicMock()
+    coordinator.session_manager = sm
+
     webui = MagicMock()
     webui.analytics_db = db
-    webui.coordinator.session_manager = sm
+    webui.service = ApplicationService(coordinator)
 
     app = FastAPI()
     app.include_router(build_router(webui))

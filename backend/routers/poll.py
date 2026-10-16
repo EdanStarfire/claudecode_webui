@@ -45,30 +45,29 @@ def build_router(webui) -> APIRouter:
 
         streams: dict[str, tuple[EventQueue, int]] = {}
         if request.ui is not None:
-            streams["ui"] = (webui.ui_queue, request.ui.since)
+            streams["ui"] = (webui.service.get_ui_queue(), request.ui.since)
 
         valid_session_ids: list[str] = []
         for session_id, query in request.sessions.items():
-            if session_id not in webui.session_queues:
+            queue = webui.service.get_session_queue(session_id)
+            if queue is None:
                 if not await webui.service.get_session_exists(session_id):
                     # Unknown/deleted session: omit it from this response rather
                     # than failing the whole multiplexed request over one stale
                     # subscription entry — the UI stream's own session_deleted
                     # event is what tells the browser to drop it.
                     continue
-                webui.session_queues[session_id] = EventQueue(
-                    on_append=webui._queue_append_hook(session_id)
-                )
+                queue = webui.service.get_or_create_session_queue(session_id)
             # Issue #1598: mark session viewed at poll START, not poll END —
             # recording the timestamp here ensures any completion event arriving
             # during multiplex_poll() is timestamped AFTER last_viewed_at and
             # correctly surfaces as unread once the user navigates away.
             try:
-                await webui.coordinator.session_manager.mark_viewed(session_id)
+                await webui.service.mark_session_viewed(session_id)
             except Exception:
                 _polling_logger.exception("mark_viewed failed for session %s", session_id)
             valid_session_ids.append(session_id)
-            streams[session_id] = (webui.session_queues[session_id], query.since)
+            streams[session_id] = (queue, query.since)
 
         results = await multiplex_poll(streams, timeout=effective_timeout)
 
@@ -111,16 +110,17 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("poll cursor")
     async def get_poll_cursor():
         """Return current UI event queue cursor position for client initialization."""
-        return {"cursor": webui.ui_queue.current_cursor}
+        return {"cursor": webui.service.get_ui_queue().current_cursor}
 
     @router.get("/api/poll/session/{session_id}/cursor")
     @handle_exceptions("poll session cursor")
     async def get_session_poll_cursor(session_id: str):
         """Return current session event queue cursor position for client initialization."""
-        if session_id not in webui.session_queues:
+        queue = webui.service.get_session_queue(session_id)
+        if queue is None:
             if not await webui.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
             return {"cursor": 0}  # session exists but queue not yet initialized
-        return {"cursor": webui.session_queues[session_id].current_cursor}
+        return {"cursor": queue.current_cursor}
 
     return router

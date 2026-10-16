@@ -11,6 +11,9 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from shared.event_queue import EventQueue
+from shared.git_restart import run_git_command as _run_git_command_impl
+
 from .secret_usage import compute_secret_usage, empty_usage
 from .slug_utils import slugify_secret
 
@@ -66,14 +69,27 @@ class ApplicationService:
 
     def __init__(self, coordinator: SessionCoordinator) -> None:
         self.coordinator = coordinator
+        # Issue #2189 (router-boundary PR A, cluster 7): relocated from BackendApp —
+        # pure request-rate-limiting state for /api/system/restart, unrelated to
+        # session/domain state, so coordinator has no reason to know about it.
+        self._last_restart_time: float = 0
 
     # =========================================================================
     # Internal helpers
     # =========================================================================
 
-    async def _get_session_object(self, session_id: str):
+    async def get_session_object(self, session_id: str):
         """Return raw SessionInfo object for attribute access."""
         return await self.coordinator.session_manager.get_session_info(session_id)
+
+    def get_session_recording_enabled(self) -> bool:
+        return self.coordinator.session_recording_enabled
+
+    def get_session_manager(self):
+        """Return the SessionManager instance (issue #2189 router-boundary PR A) —
+        some callers (e.g. AuditQueryService, analytics row enrichment) need the
+        manager object itself rather than one specific method."""
+        return self.coordinator.session_manager
 
     # =========================================================================
     # Projects
@@ -182,6 +198,29 @@ class ApplicationService:
         return project is not None
 
     # =========================================================================
+    # Fleet control (issue #2159 stage 6c; relocated to service in #2189 PR A)
+    # =========================================================================
+
+    async def emergency_halt_all(self, legion_id: str) -> dict:
+        return await self.coordinator.legion_system.legion_coordinator.emergency_halt_all(legion_id)
+
+    async def resume_all_minions(self, legion_id: str) -> dict:
+        return await self.coordinator.legion_system.legion_coordinator.resume_all(legion_id)
+
+    async def get_fleet_snapshot(self, legion_id: str) -> dict | None:
+        return await self.coordinator.project_manager.get_fleet_snapshot(legion_id)
+
+    async def record_fleet_stopped(
+        self, legion_id: str, session_ids: list[str], processing_session_ids: list[str]
+    ):
+        return await self.coordinator.project_manager.record_fleet_stopped(
+            legion_id, session_ids, processing_session_ids
+        )
+
+    async def clear_fleet_stopped(self, legion_id: str, session_ids: list[str]):
+        return await self.coordinator.project_manager.clear_fleet_stopped(legion_id, session_ids)
+
+    # =========================================================================
     # Sessions
     # =========================================================================
 
@@ -190,6 +229,85 @@ class ApplicationService:
         return await self.coordinator.start_session(
             session_id, permission_callback=permission_callback
         )
+
+    async def start_session_with_fresh_callback(self, session_id: str) -> bool:
+        """Same clear+add-fresh-message-callback sequence as restart/reset's
+        _with_fresh_callback siblings (issue #2189) — distinct from start_session()
+        above, which only clears and doesn't re-register, since that's what the
+        /start router endpoint has always done inline."""
+        self.register_fresh_message_callback(session_id)
+        return await self.coordinator.start_session(
+            session_id,
+            permission_callback=self.create_permission_callback(session_id),
+        )
+
+    async def create_session(
+        self,
+        session_id: str,
+        project_id: str | None,
+        config: Any,
+        name: str | None,
+        role: Any,
+        capabilities: Any,
+        permission_callback: Any,
+    ) -> str:
+        return await self.coordinator.create_session(
+            session_id=session_id,
+            project_id=project_id,
+            config=config,
+            name=name,
+            role=role,
+            capabilities=capabilities,
+            permission_callback=permission_callback,
+        )
+
+    async def list_sessions(self, limit: int = 500, offset: int = 0) -> dict:
+        return await self.coordinator.list_sessions(limit=limit, offset=offset)
+
+    async def get_session_info(self, session_id: str) -> dict | None:
+        return await self.coordinator.get_session_info(session_id)
+
+    async def get_session_usage_aggregate(self, session_id: str) -> dict | None:
+        return await self.coordinator.analytics_store.get_session_usage(session_id)
+
+    async def get_descendants(self, session_id: str, limit: int = 50, offset: int = 0) -> dict:
+        return await self.coordinator.get_descendants(session_id, limit=limit, offset=offset)
+
+    async def mark_session_unread(self, session_id: str) -> bool:
+        return await self.coordinator.session_manager.mark_unread(session_id)
+
+    async def mark_session_read(self, session_id: str) -> bool:
+        return await self.coordinator.session_manager.mark_read(session_id)
+
+    def cleanup_pending_permissions_for_session(self, session_id: str) -> None:
+        """Issue #2189: skips BackendApp._cleanup_pending_permissions_for_session
+        entirely since that method was already a 1-line forward to this."""
+        self.coordinator.permission_service.cleanup_pending_for_session(session_id)
+
+    async def export_session_fixture(self, session_id: str, name: str):
+        from .fixture_export import export_fixture
+        return await export_fixture(self.coordinator, session_id, name)
+
+    async def update_session_name(self, session_id: str, name: str) -> bool:
+        return await self.coordinator.update_session_name(session_id, name)
+
+    async def send_message(self, session_id: str, message: str, metadata: dict | None = None) -> bool:
+        return await self.coordinator.send_message(session_id, message, metadata=metadata)
+
+    async def cancel_auto_resume_schedule(self, session_id: str) -> bool:
+        """False (no-op) when Legion isn't active for this instance — mirrors the
+        router's own `if webui.coordinator.legion_system:` guard."""
+        if not self.coordinator.legion_system:
+            return False
+        return await self.coordinator.legion_system.scheduler_service.cancel_auto_resume_schedule(
+            session_id
+        )
+
+    async def get_session_messages(self, session_id: str, limit: int | None = 50, offset: int = 0) -> dict:
+        return await self.coordinator.get_session_messages(session_id, limit=limit, offset=offset)
+
+    async def get_background_agents(self, session_id: str) -> dict:
+        return await self.coordinator.get_background_agents(session_id)
 
     async def restart_session(self, session_id: str, permission_callback: Any) -> bool:
         self.coordinator.clear_message_callbacks(session_id)
@@ -200,6 +318,13 @@ class ApplicationService:
     async def disconnect_session(self, session_id: str) -> dict:
         success = await self.coordinator.disconnect_sdk(session_id)
         return {"success": success}
+
+    async def delete_session_only(self, session_id: str, archive_reason: str = "user_deleted") -> dict:
+        """Thin forward to coordinator.delete_session() with none of
+        delete_session()'s extra project-lookup enrichment — used when the
+        caller (e.g. delete_project()'s session cleanup loop, or a schedule
+        deleting its own ephemeral agent) doesn't need the enriched fields."""
+        return await self.coordinator.delete_session(session_id, archive_reason=archive_reason)
 
     async def delete_session(self, session_id: str) -> dict:
         project = await self.coordinator.find_project_for_session(session_id)
@@ -217,6 +342,12 @@ class ApplicationService:
         session = await self.coordinator.session_manager.get_session_info(session_id)
         if not session:
             return False
+        return await self.coordinator.terminate_session(session_id)
+
+    async def terminate_session_only(self, session_id: str) -> bool:
+        """Thin forward with no existence pre-check — used by callers (e.g. the
+        /terminate router) that already did their own get_session_exists() check,
+        so this avoids paying for a second lookup on top of that one."""
         return await self.coordinator.terminate_session(session_id)
 
     async def reset_session(self, session_id: str, permission_callback: Any) -> bool:
@@ -254,6 +385,99 @@ class ApplicationService:
             return False
         return await self.coordinator.set_permission_mode(session_id, mode)
 
+    async def set_permission_mode(self, session_id: str, mode: str) -> bool:
+        """Thin forward with no existence pre-check — coordinator.set_permission_mode()
+        already does its own session lookup internally, so this avoids the
+        /permission-mode router (which never pre-checked existence) paying for
+        a redundant extra lookup on top of that."""
+        return await self.coordinator.set_permission_mode(session_id, mode)
+
+    async def interrupt_session(self, session_id: str) -> bool:
+        return await self.coordinator.interrupt_session(session_id)
+
+    def has_pending_permission(self, request_id: str) -> bool:
+        return request_id in self.coordinator.permission_service.pending_permissions
+
+    def resolve_permission(self, request_id: str, response: dict) -> bool:
+        return self.coordinator.permission_service.resolve(request_id, response)
+
+    def create_permission_callback(self, session_id: str):
+        return self.coordinator.permission_service.create_permission_callback(session_id)
+
+    async def get_proxy_logs(self, session_id: str, log_type: str = "http", limit: int = 200) -> dict:
+        return await self.coordinator.get_proxy_logs(session_id, log_type=log_type, limit=limit)
+
+    async def set_model(self, session_id: str, model: str) -> bool:
+        return await self.coordinator.set_model(session_id, model)
+
+    async def add_directory(self, session_id: str, directory: str) -> dict:
+        return await self.coordinator.add_directory(session_id, directory)
+
+    async def get_mcp_status(self, session_id: str) -> dict:
+        return await self.coordinator.get_mcp_status(session_id)
+
+    async def toggle_mcp_server(self, session_id: str, name: str, enabled: bool) -> None:
+        await self.coordinator.toggle_mcp_server(session_id, name, enabled)
+
+    async def reconnect_mcp_server(self, session_id: str, name: str) -> None:
+        await self.coordinator.reconnect_mcp_server(session_id, name)
+
+    def register_fresh_message_callback(self, session_id: str) -> None:
+        """Clear any existing message callbacks and register a fresh one — the same
+        clear+add sequence restart/reset do before actually restarting/resetting, so
+        a stale callback from a prior connection can't linger (issue #2189: kept as
+        its own step rather than folded silently into restart/reset, to match the
+        two call sites that need it)."""
+        self.coordinator.clear_message_callbacks(session_id)
+        self.coordinator.add_message_callback(
+            session_id, self.coordinator.create_message_callback(session_id)
+        )
+
+    async def restart_session_with_fresh_callback(self, session_id: str) -> bool:
+        self.register_fresh_message_callback(session_id)
+        return await self.coordinator.restart_session(
+            session_id,
+            permission_callback=self.create_permission_callback(session_id),
+        )
+
+    async def reset_session_with_fresh_callback(self, session_id: str) -> bool:
+        self.register_fresh_message_callback(session_id)
+        return await self.coordinator.reset_session(
+            session_id,
+            permission_callback=self.create_permission_callback(session_id),
+        )
+
+    async def erase_session_history(self, session_id: str) -> bool:
+        return await self.coordinator.erase_history(session_id)
+
+    # =========================================================================
+    # System / git / restart (issue #2189 router-boundary PR A)
+    # =========================================================================
+
+    async def run_git_command(
+        self, args: list[str], cwd: str, allow_nonzero: bool = False
+    ) -> str | None:
+        """Run a git command and return stdout, or None on error. Cluster 4 of the
+        approved plan: the real logic was never on BackendApp/coordinator to begin
+        with (BackendApp._run_git_command was already a 1-line forward to this same
+        shared helper), so this skips both entirely."""
+        return await _run_git_command_impl(args, cwd, allow_nonzero)
+
+    def check_and_mark_restart_rate_limit(self) -> int | None:
+        """Returns remaining-seconds if a restart was requested within the last 30s
+        (reject), or None if this request is allowed (and marks the new timestamp)."""
+        now = time.time()
+        if now - self._last_restart_time < 30:
+            return int(30 - (now - self._last_restart_time))
+        self._last_restart_time = now
+        return None
+
+    def broadcast_server_restarting(self, pull_output: str, sync_output: str) -> None:
+        self.coordinator.broadcast_server_restarting(pull_output, sync_output)
+
+    async def cleanup_coordinator(self) -> None:
+        await self.coordinator.cleanup()
+
     # =========================================================================
     # Diff helpers
     # =========================================================================
@@ -273,6 +497,234 @@ class ApplicationService:
         return str(self.coordinator.data_dir / "sessions" / session_id / "messages.jsonl")
 
     # =========================================================================
+    # Archives (issue #2189 router-boundary PR A)
+    # =========================================================================
+
+    async def get_archives(self, session_id: str, limit: int = 50, offset: int = 0) -> dict:
+        return await self.coordinator.get_archives(session_id, limit=limit, offset=offset)
+
+    async def get_archive_messages(
+        self, session_id: str, archive_id: str, offset: int = 0, limit: int | None = 50
+    ) -> dict:
+        return await self.coordinator.get_archive_messages(
+            session_id, archive_id, offset=offset, limit=limit
+        )
+
+    async def get_archive_state(self, session_id: str, archive_id: str) -> dict | None:
+        return await self.coordinator.get_archive_state(session_id, archive_id)
+
+    async def get_archive_resources(
+        self,
+        session_id: str,
+        archive_id: str,
+        limit: int = 50,
+        offset: int = 0,
+        search: str | None = None,
+        format_filter: str | None = None,
+        sort: str = "newest",
+    ) -> dict:
+        return await self.coordinator.get_archive_resources(
+            session_id, archive_id, limit=limit, offset=offset,
+            search=search, format_filter=format_filter, sort=sort,
+        )
+
+    async def get_archive_resource_by_id(
+        self, session_id: str, archive_id: str, resource_id: str
+    ) -> dict | None:
+        return await self.coordinator.get_archive_resource_by_id(session_id, archive_id, resource_id)
+
+    async def get_archive_resource_file(
+        self, session_id: str, archive_id: str, resource_id: str
+    ) -> bytes | None:
+        return await self.coordinator.get_archive_resource_file(session_id, archive_id, resource_id)
+
+    async def list_project_deleted_agents(
+        self, project_id: str, limit: int = 50, offset: int = 0
+    ) -> dict:
+        return await self.coordinator.list_project_deleted_agents(project_id, limit=limit, offset=offset)
+
+    async def erase_archives(self, session_id: str) -> bool:
+        return await self.coordinator.erase_archives(session_id)
+
+    async def check_history_archives(self, session_id: str) -> dict:
+        return await self.coordinator.check_history_archives(session_id)
+
+    # =========================================================================
+    # Files / resources (issue #2189 router-boundary PR A)
+    # =========================================================================
+
+    async def register_uploaded_file(self, session_id: str, stored_path: str) -> None:
+        await self.coordinator.register_uploaded_file(session_id, stored_path)
+
+    async def register_uploaded_resource(
+        self, session_id: str, file_path: str, title: str, description: str
+    ) -> dict | None:
+        return await self.coordinator.register_uploaded_resource(
+            session_id=session_id, file_path=file_path, title=title, description=description,
+        )
+
+    async def unregister_uploaded_file(self, session_id: str, stored_path: str) -> None:
+        await self.coordinator.unregister_uploaded_file(session_id, stored_path)
+
+    async def get_session_resources(
+        self,
+        session_id: str,
+        limit: int = 50,
+        offset: int = 0,
+        search: str | None = None,
+        format_filter: str | None = None,
+        sort: str = "newest",
+    ) -> dict:
+        return await self.coordinator.get_session_resources(
+            session_id, limit=limit, offset=offset,
+            search=search, format_filter=format_filter, sort=sort,
+        )
+
+    async def get_session_resource_by_id(self, session_id: str, resource_id: str) -> dict | None:
+        return await self.coordinator.get_session_resource_by_id(session_id, resource_id)
+
+    async def get_session_resource_file(self, session_id: str, resource_id: str) -> bytes | None:
+        return await self.coordinator.get_session_resource_file(session_id, resource_id)
+
+    async def get_session_links(self, session_id: str) -> list:
+        return await self.coordinator.get_session_links(session_id)
+
+    async def remove_session_resource(self, session_id: str, resource_id: str) -> bool:
+        return await self.coordinator.remove_session_resource(session_id, resource_id)
+
+    # =========================================================================
+    # Queues / poll (issue #2189 router-boundary PR A)
+    # =========================================================================
+
+    def get_ui_queue(self) -> EventQueue:
+        return self.coordinator.ui_queue
+
+    def get_session_queue(self, session_id: str) -> EventQueue | None:
+        return self.coordinator.session_queues.get(session_id)
+
+    def get_or_create_session_queue(self, session_id: str) -> EventQueue:
+        queue = self.coordinator.session_queues.get(session_id)
+        if queue is None:
+            queue = EventQueue(on_append=self.coordinator.queue_append_hook(session_id))
+            self.coordinator.session_queues[session_id] = queue
+        return queue
+
+    def drop_session_queue(self, session_id: str) -> None:
+        self.coordinator.session_queues.pop(session_id, None)
+
+    async def mark_session_viewed(self, session_id: str) -> None:
+        await self.coordinator.session_manager.mark_viewed(session_id)
+
+    # =========================================================================
+    # Provider catalog (issue #2189 router-boundary PR A)
+    # =========================================================================
+
+    async def list_catalog_entries(self) -> list:
+        return await self.coordinator.provider_catalog_manager.list_entries()
+
+    def get_catalog_pending_changes(self) -> bool:
+        return self.coordinator.provider_catalog_manager.pending_changes
+
+    async def create_catalog_entry(self, data: dict) -> dict:
+        return await self.coordinator.provider_catalog_manager.create_entry(data)
+
+    async def update_catalog_entry(self, entry_id: str, body: dict) -> dict:
+        return await self.coordinator.provider_catalog_manager.update_entry(entry_id, body)
+
+    async def delete_catalog_entry(self, entry_id: str) -> None:
+        await self.coordinator.provider_catalog_manager.delete_entry(entry_id)
+
+    async def rebuild_litellm_proxy(self) -> None:
+        await self.coordinator.litellm_proxy_manager.rebuild()
+
+    async def clear_catalog_pending_changes(self) -> None:
+        await self.coordinator.provider_catalog_manager.clear_pending_changes()
+
+    def get_litellm_session_routing(self, session_id: str) -> dict | None:
+        """Return LiteLLM routing config for a session's proxy sidecar, or None if
+        no catalog is selected for that session."""
+        mgr = self.coordinator.litellm_proxy_manager
+        routing = mgr.get_session_routing(session_id)
+        if routing is None:
+            return None
+        return {
+            "hostname_rewrites": mgr.build_hostname_rewrites(),
+            "virtual_key": routing["virtual_key"],
+            "model_map": routing.get("model_map", {}),
+            "default_model": routing.get("default_model"),
+        }
+
+    def get_litellm_proxy_runtime_status(self) -> dict:
+        mgr = self.coordinator.litellm_proxy_manager
+        return {
+            "running": mgr.is_running,
+            "port": mgr.port,
+            "model_count": mgr.model_count,
+            "last_restart": mgr.last_restart.isoformat() if mgr.last_restart else None,
+            "last_error": mgr.last_error,
+        }
+
+    # =========================================================================
+    # Skills (issue #2189 router-boundary PR A)
+    # =========================================================================
+
+    async def sync_skills(self) -> dict:
+        return await self.coordinator.skill_manager.sync()
+
+    def get_skill_last_sync_time(self):
+        return self.coordinator.skill_manager.last_sync_time
+
+    async def cleanup_skill_symlinks(self) -> None:
+        await self.coordinator.skill_manager.cleanup_symlinks()
+
+    # =========================================================================
+    # Queue (issue #2189 router-boundary PR A)
+    # =========================================================================
+
+    async def enqueue_message(
+        self, session_id: str, content: str, reset_session: bool | None, metadata: dict | None
+    ) -> dict:
+        return await self.coordinator.enqueue_message(
+            session_id=session_id, content=content,
+            reset_session=reset_session, metadata=metadata,
+        )
+
+    async def get_queue(self, session_id: str, limit: int = 100, offset: int = 0) -> dict:
+        return await self.coordinator.get_queue(session_id, limit=limit, offset=offset)
+
+    async def clear_queue_history(self, session_id: str) -> int:
+        return await self.coordinator.clear_queue_history(session_id)
+
+    async def cancel_queue_item(self, session_id: str, queue_id: str) -> dict | None:
+        return await self.coordinator.cancel_queue_item(session_id, queue_id)
+
+    async def requeue_item(self, session_id: str, queue_id: str) -> dict | None:
+        return await self.coordinator.requeue_item(session_id, queue_id)
+
+    async def clear_queue(self, session_id: str) -> int:
+        return await self.coordinator.clear_queue(session_id)
+
+    async def pause_queue(self, session_id: str, paused: bool) -> bool:
+        return await self.coordinator.pause_queue(session_id, paused)
+
+    async def update_queue_config(self, session_id: str, data: dict) -> bool:
+        return await self.coordinator.update_queue_config(session_id, data)
+
+    async def broadcast_queue_update(self, session_id: str, action: str, item: dict) -> None:
+        await self.coordinator.broadcast_queue_update(session_id, action, item)
+
+    def broadcast_project_updated(self, project: dict) -> None:
+        self.coordinator.broadcast_project_updated(project)
+
+    def broadcast_project_deleted(self, project_id: str) -> None:
+        self.coordinator.broadcast_project_deleted(project_id)
+
+    def broadcast_state_change(
+        self, session_id: str, session_dict: dict, timestamp: str | None = None
+    ) -> None:
+        self.coordinator.broadcast_state_change(session_id, session_dict, timestamp)
+
+    # =========================================================================
     # Legion
     # =========================================================================
 
@@ -288,6 +740,46 @@ class ApplicationService:
         """Return session name for a minion, or None if not found."""
         session = await self.coordinator.session_manager.get_session_info(minion_id)
         return session.name if session else None
+
+    def get_data_dir(self):
+        """Return the Backend's data_dir Path (issue #2189 router-boundary PR A)."""
+        return self.coordinator.data_dir
+
+    async def assemble_minion_hierarchy(self, legion_id: str) -> dict | None:
+        legion_coord = self.coordinator.legion_system.legion_coordinator
+        if not legion_coord:
+            return None
+        return await legion_coord.assemble_minion_hierarchy(legion_id)
+
+    async def get_legion(self, legion_id: str):
+        return await self.coordinator.legion_system.legion_coordinator.get_legion(legion_id)
+
+    async def route_comm(self, comm) -> bool:
+        return await self.coordinator.legion_system.comm_router.route_comm(comm)
+
+    async def create_minion_for_user(
+        self, legion_id: str, name: str, config, role: str, capabilities: list[str] | None
+    ) -> str:
+        return await self.coordinator.legion_system.overseer_controller.create_minion_for_user(
+            legion_id=legion_id, name=name, config=config, role=role, capabilities=capabilities,
+        )
+
+    async def reparent_minion(self, subject_id: str, new_parent_id: str, caller_id: str | None = None) -> dict:
+        return await self.coordinator.legion_system.overseer_controller.reparent_minion(
+            subject_id=subject_id, new_parent_id=new_parent_id, caller_id=caller_id,
+        )
+
+    def get_scheduler_service(self):
+        """Return the SchedulerService instance (issue #2189 router-boundary PR A) —
+        routers need the object itself for its varied schedule CRUD/history API."""
+        return self.coordinator.legion_system.scheduler_service
+
+    async def create_ephemeral_session(
+        self, session_config, schedule_name: str, project_id: str
+    ) -> str:
+        return await self.coordinator.create_ephemeral_session(
+            session_config=session_config, schedule_name=schedule_name, project_id=project_id,
+        )
 
     # =========================================================================
     # MCP Configs
@@ -1677,6 +2169,46 @@ class ApplicationService:
             "active_credentials": active_secrets,
             "sidecar_running": False,  # Sidecar runtime state not tracked server-side
         }
+
+    def schedule_secret_refresh(self, name: str) -> None:
+        self.coordinator.vault_refresh_manager.schedule_secret(name)
+
+    def unschedule_secret_refresh(self, name: str) -> None:
+        self.coordinator.vault_refresh_manager.unschedule_secret(name)
+
+    # =========================================================================
+    # OAuth-callback-route-sync (issue #2189 router-boundary PR A)
+    # =========================================================================
+
+    def oauth_callback_path_conflicts_with_app_route(self, path: str) -> bool:
+        return self.coordinator.oauth_callback_path_conflicts_with_app_route(path)
+
+    async def sync_standalone_oauth_callback(
+        self, flow_id: str, custom_callback_path: str | None, custom_callback_port: int | None
+    ) -> None:
+        await self.coordinator.sync_standalone_oauth_callback(
+            flow_id, custom_callback_path, custom_callback_port
+        )
+
+    async def remove_standalone_oauth_callback(self, flow_id: str) -> None:
+        await self.coordinator.remove_standalone_oauth_callback(flow_id)
+
+    async def get_mcp_config_object(self, config_id: str):
+        """Return the raw McpConfig object (not the .to_dict() form) — needed by
+        callers that must pass it to sync_oauth_callback_for_config()."""
+        return await self.coordinator.mcp_config_manager.get_config(config_id)
+
+    async def sync_oauth_callback_for_config(self, config) -> None:
+        await self.coordinator._sync_oauth_callback_for_config(config)
+
+    async def remove_oauth_callback_for_config(self, config_id: str) -> None:
+        await self.coordinator._remove_oauth_callback_for_config(config_id)
+
+    def get_oauth_callback_handlers(self):
+        """Return (complete_and_broadcast, denied_and_broadcast) for the shared
+        /oauth/callback route's render_oauth_callback() call."""
+        mgr = self.coordinator.oauth_callback_listener_manager
+        return mgr.complete_and_broadcast, mgr.denied_and_broadcast
 
     async def get_proxy_blocked_log(self, session_id: str, limit: int = 50) -> dict:
         """Return recent blocked connections from the sidecar access log."""

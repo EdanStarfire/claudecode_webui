@@ -36,7 +36,7 @@ def build_router(webui) -> APIRouter:
                     detail=f"Invalid status: {status}. Use active or paused",
                 ) from None
 
-        svc = webui.coordinator.legion_system.scheduler_service
+        svc = webui.service.get_scheduler_service()
         all_schedules = await svc.list_schedules(
             legion_id=legion_id, minion_id=minion_id, status=status_filter
         )
@@ -83,7 +83,7 @@ def build_router(webui) -> APIRouter:
         elif request.session_config:
             # Ephemeral mode: create the persistent agent session up front
             ephemeral_agent_id = (
-                await webui.coordinator.create_ephemeral_session(
+                await webui.service.create_ephemeral_session(
                     session_config=request.session_config,
                     schedule_name=request.name,
                     project_id=legion_id,
@@ -95,7 +95,7 @@ def build_router(webui) -> APIRouter:
                 detail="Either minion_id or session_config is required",
             )
 
-        svc = webui.coordinator.legion_system.scheduler_service
+        svc = webui.service.get_scheduler_service()
         schedule = await svc.create_schedule(
             legion_id=legion_id,
             name=request.name,
@@ -119,7 +119,7 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("get schedule")
     async def get_schedule(legion_id: str, schedule_id: str):
         """Get a single schedule."""
-        svc = webui.coordinator.legion_system.scheduler_service
+        svc = webui.service.get_scheduler_service()
         schedule = await svc.get_schedule(schedule_id)
         if not schedule or schedule.legion_id != legion_id:
             raise HTTPException(status_code=404, detail="Schedule not found")
@@ -131,7 +131,7 @@ def build_router(webui) -> APIRouter:
         legion_id: str, schedule_id: str, request: ScheduleUpdateRequest
     ):
         """Update schedule fields."""
-        schedule = await webui.coordinator.legion_system.scheduler_service.get_schedule(
+        schedule = await webui.service.get_scheduler_service().get_schedule(
             schedule_id
         )
         if not schedule or schedule.legion_id != legion_id:
@@ -153,7 +153,7 @@ def build_router(webui) -> APIRouter:
             # Caller explicitly set repeat_count (possibly to null); include it
             fields["repeat_count"] = raw.get("repeat_count")  # may be None (unlimited)
 
-        svc = webui.coordinator.legion_system.scheduler_service
+        svc = webui.service.get_scheduler_service()
         try:
             updated = await svc.update_schedule(schedule_id, **fields)
         except _ScheduleAutoDeletedError as exc:
@@ -165,13 +165,13 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("pause schedule", value_error_status=400)
     async def pause_schedule(legion_id: str, schedule_id: str):
         """Pause an active schedule."""
-        schedule = await webui.coordinator.legion_system.scheduler_service.get_schedule(
+        schedule = await webui.service.get_scheduler_service().get_schedule(
             schedule_id
         )
         if not schedule or schedule.legion_id != legion_id:
             raise HTTPException(status_code=404, detail="Schedule not found")
 
-        svc = webui.coordinator.legion_system.scheduler_service
+        svc = webui.service.get_scheduler_service()
         updated = await svc.pause_schedule(schedule_id)
         return {"schedule": await svc.schedule_to_api_dict(updated)}
 
@@ -179,13 +179,13 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("resume schedule", value_error_status=400)
     async def resume_schedule(legion_id: str, schedule_id: str):
         """Resume a paused schedule."""
-        schedule = await webui.coordinator.legion_system.scheduler_service.get_schedule(
+        schedule = await webui.service.get_scheduler_service().get_schedule(
             schedule_id
         )
         if not schedule or schedule.legion_id != legion_id:
             raise HTTPException(status_code=404, detail="Schedule not found")
 
-        svc = webui.coordinator.legion_system.scheduler_service
+        svc = webui.service.get_scheduler_service()
         updated = await svc.resume_schedule(schedule_id)
         return {"schedule": await svc.schedule_to_api_dict(updated)}
 
@@ -193,14 +193,14 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("run schedule now", value_error_status=400)
     async def run_schedule_now(legion_id: str, schedule_id: str):
         """Manually trigger a schedule execution immediately."""
-        schedule = await webui.coordinator.legion_system.scheduler_service.get_schedule(
+        schedule = await webui.service.get_scheduler_service().get_schedule(
             schedule_id
         )
         if not schedule or schedule.legion_id != legion_id:
             raise HTTPException(status_code=404, detail="Schedule not found")
 
         try:
-            result = await webui.coordinator.legion_system.scheduler_service.run_now(
+            result = await webui.service.get_scheduler_service().run_now(
                 schedule_id
             )
         except RuntimeError as e:
@@ -213,7 +213,7 @@ def build_router(webui) -> APIRouter:
         legion_id: str, schedule_id: str, delete_agent: bool = False
     ):
         """Delete a schedule entirely. Optionally delete its ephemeral agent."""
-        schedule = await webui.coordinator.legion_system.scheduler_service.get_schedule(
+        schedule = await webui.service.get_scheduler_service().get_schedule(
             schedule_id
         )
         if not schedule or schedule.legion_id != legion_id:
@@ -222,7 +222,7 @@ def build_router(webui) -> APIRouter:
         # Optionally delete the ephemeral agent session
         if delete_agent and schedule.ephemeral_agent_id:
             try:
-                await webui.coordinator.delete_session(
+                await webui.service.delete_session_only(
                     schedule.ephemeral_agent_id,
                     archive_reason="schedule_deleted",
                 )
@@ -232,7 +232,7 @@ def build_router(webui) -> APIRouter:
                     f"{schedule.ephemeral_agent_id}: {e}"
                 )
 
-        await webui.coordinator.legion_system.scheduler_service.delete_schedule(
+        await webui.service.get_scheduler_service().delete_schedule(
             schedule_id
         )
         return {"success": True}
@@ -243,14 +243,14 @@ def build_router(webui) -> APIRouter:
         legion_id: str, schedule_id: str, limit: int = 50, offset: int = 0
     ):
         """Get execution history for a schedule."""
-        schedule = await webui.coordinator.legion_system.scheduler_service.get_schedule(
+        schedule = await webui.service.get_scheduler_service().get_schedule(
             schedule_id
         )
         if not schedule or schedule.legion_id != legion_id:
             raise HTTPException(status_code=404, detail="Schedule not found")
 
         executions = (
-            await webui.coordinator.legion_system.scheduler_service.get_schedule_history(
+            await webui.service.get_scheduler_service().get_schedule_history(
                 legion_id=legion_id,
                 schedule_id=schedule_id,
                 limit=limit,

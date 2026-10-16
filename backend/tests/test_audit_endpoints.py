@@ -41,7 +41,7 @@ async def app_with_audit(tmp_path):
     # minimal session manager mock
     sm = MagicMock()
     sm._active_sessions = {}
-    webui.coordinator.session_manager = sm
+    webui.service.get_session_manager = MagicMock(return_value=sm)
 
     app = FastAPI()
     app.include_router(build_router(webui))

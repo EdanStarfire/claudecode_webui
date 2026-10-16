@@ -23,30 +23,30 @@ def build_router(webui) -> APIRouter:
             return {"is_git_repo": False}
 
         # Check if it's a git repo
-        is_git = await webui._run_git_command(
+        is_git = await webui.service.run_git_command(
             ["git", "rev-parse", "--is-inside-work-tree"], cwd
         )
         if is_git is None:
             return {"is_git_repo": False}
 
         # Get current branch
-        branch = await webui._run_git_command(
+        branch = await webui.service.run_git_command(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd
         )
 
         # Find merge base with origin/main (fallback to origin/master)
-        merge_base = await webui._run_git_command(
+        merge_base = await webui.service.run_git_command(
             ["git", "merge-base", "HEAD", "origin/main"], cwd
         )
         if merge_base is None:
-            merge_base = await webui._run_git_command(
+            merge_base = await webui.service.run_git_command(
                 ["git", "merge-base", "HEAD", "origin/master"], cwd
             )
         # Track whether we're in local-only mode (no remote)
         is_local_only = merge_base is None
         if is_local_only:
             # No remote: use the empty tree as base so all commits/files are shown
-            empty_tree = await webui._run_git_command(
+            empty_tree = await webui.service.run_git_command(
                 ["git", "hash-object", "-t", "tree", "/dev/null"], cwd
             )
             if empty_tree:
@@ -58,12 +58,12 @@ def build_router(webui) -> APIRouter:
         # Get commit log since merge base
         if is_local_only:
             # Local-only: show all commits (--root includes initial commit)
-            log_output = await webui._run_git_command(
+            log_output = await webui.service.run_git_command(
                 ["git", "log", "--format=%H%n%h%n%s%n%an%n%aI%n---COMMIT_END---"],
                 cwd
             )
         else:
-            log_output = await webui._run_git_command(
+            log_output = await webui.service.run_git_command(
                 ["git", "log", f"{merge_base}..HEAD",
                  "--format=%H%n%h%n%s%n%an%n%aI%n---COMMIT_END---"],
                 cwd
@@ -75,7 +75,7 @@ def build_router(webui) -> APIRouter:
                 lines = raw.strip().split("\n")
                 if len(lines) >= 5:
                     # Get files for this commit
-                    commit_files_output = await webui._run_git_command(
+                    commit_files_output = await webui.service.run_git_command(
                         ["git", "diff-tree", "--no-commit-id", "--root",
                          "-r", "--name-only", lines[0]], cwd
                     )
@@ -93,7 +93,7 @@ def build_router(webui) -> APIRouter:
                     })
 
         # Detect uncommitted changes (staged + unstaged + untracked)
-        status_output = await webui._run_git_command(
+        status_output = await webui.service.run_git_command(
             ["git", "status", "--porcelain", "-u"], cwd
         )
         uncommitted_files = []
@@ -115,17 +115,17 @@ def build_router(webui) -> APIRouter:
         # Build synthetic uncommitted commit if dirty working tree
         if uncommitted_files or untracked_paths:
             # Tracked file stats: combined staged+unstaged vs HEAD
-            wip_numstat = await webui._run_git_command(
+            wip_numstat = await webui.service.run_git_command(
                 ["git", "diff", "--numstat", "HEAD"], cwd
             )
-            wip_name_status = await webui._run_git_command(
+            wip_name_status = await webui.service.run_git_command(
                 ["git", "diff", "--name-status", "HEAD"], cwd
             )
             # Also include staged new files (added but not in HEAD)
-            staged_numstat = await webui._run_git_command(
+            staged_numstat = await webui.service.run_git_command(
                 ["git", "diff", "--numstat", "--cached"], cwd
             )
-            staged_name_status = await webui._run_git_command(
+            staged_name_status = await webui.service.run_git_command(
                 ["git", "diff", "--name-status", "--cached"], cwd
             )
 
@@ -204,10 +204,10 @@ def build_router(webui) -> APIRouter:
             commits.insert(0, synthetic_commit)
 
         # Total stats: two-dot notation includes uncommitted changes
-        numstat_output = await webui._run_git_command(
+        numstat_output = await webui.service.run_git_command(
             ["git", "diff", "--numstat", merge_base], cwd
         )
-        name_status_output = await webui._run_git_command(
+        name_status_output = await webui.service.run_git_command(
             ["git", "diff", "--name-status", merge_base], cwd
         )
 
@@ -258,7 +258,7 @@ def build_router(webui) -> APIRouter:
         if untracked_paths:
             for upath in untracked_paths:
                 if upath not in files:
-                    ustat = await webui._run_git_command(
+                    ustat = await webui.service.run_git_command(
                         ["git", "diff", "--numstat", "--no-index",
                          "/dev/null", upath],
                         cwd, allow_nonzero=True
@@ -315,7 +315,7 @@ def build_router(webui) -> APIRouter:
 
         if ref and ref != "uncommitted":
             # Commit-specific diff: validate ref then diff against parent
-            verified = await webui._run_git_command(
+            verified = await webui.service.run_git_command(
                 ["git", "rev-parse", "--verify", ref], cwd
             )
             if verified is None:
@@ -325,22 +325,22 @@ def build_router(webui) -> APIRouter:
                 )
 
             # Check if this commit has a parent
-            parent = await webui._run_git_command(
+            parent = await webui.service.run_git_command(
                 ["git", "rev-parse", "--verify", f"{ref}~1"], cwd
             )
             if parent:
                 # Normal commit: diff against parent
-                diff_output = await webui._run_git_command(
+                diff_output = await webui.service.run_git_command(
                     ["git", "diff", f"{ref}~1", ref, "--", path], cwd
                 )
             else:
                 # Root commit: diff against empty tree
-                empty_tree = await webui._run_git_command(
+                empty_tree = await webui.service.run_git_command(
                     ["git", "hash-object", "-t", "tree", "/dev/null"], cwd
                 )
                 base = (empty_tree.strip() if empty_tree
                         else "4b825dc642cb6eb9a060e54bf899d15f7f09f993")
-                diff_output = await webui._run_git_command(
+                diff_output = await webui.service.run_git_command(
                     ["git", "diff", base, ref, "--", path], cwd
                 )
 
@@ -351,20 +351,20 @@ def build_router(webui) -> APIRouter:
             }
 
         # Find merge base for uncommitted / total views
-        merge_base = await webui._run_git_command(
+        merge_base = await webui.service.run_git_command(
             ["git", "merge-base", "HEAD", "origin/main"], cwd
         )
         if merge_base is None:
-            merge_base = await webui._run_git_command(
+            merge_base = await webui.service.run_git_command(
                 ["git", "merge-base", "HEAD", "origin/master"], cwd
             )
 
         if ref == "uncommitted":
             # Check if file is untracked
-            is_tracked = await webui._run_git_command(
+            is_tracked = await webui.service.run_git_command(
                 ["git", "ls-files", path], cwd
             )
-            status_check = await webui._run_git_command(
+            status_check = await webui.service.run_git_command(
                 ["git", "status", "--porcelain", "--", path], cwd
             )
             is_untracked = (
@@ -373,29 +373,29 @@ def build_router(webui) -> APIRouter:
 
             if is_untracked or not is_tracked:
                 # Untracked file: diff vs /dev/null
-                diff_output = await webui._run_git_command(
+                diff_output = await webui.service.run_git_command(
                     ["git", "diff", "--no-index", "/dev/null", path],
                     cwd, allow_nonzero=True
                 )
             else:
                 # Tracked file: diff against merge base, or HEAD if no remote
                 base = merge_base or "HEAD"
-                diff_output = await webui._run_git_command(
+                diff_output = await webui.service.run_git_command(
                     ["git", "diff", base, "--", path], cwd
                 )
         elif merge_base is not None:
             # Default: three-dot (committed changes only)
-            diff_output = await webui._run_git_command(
+            diff_output = await webui.service.run_git_command(
                 ["git", "diff", f"{merge_base}...HEAD", "--", path], cwd
             )
         else:
             # No remote: diff all changes from empty tree
-            empty_tree = await webui._run_git_command(
+            empty_tree = await webui.service.run_git_command(
                 ["git", "hash-object", "-t", "tree", "/dev/null"], cwd
             )
             base = (empty_tree.strip() if empty_tree
                     else "4b825dc642cb6eb9a060e54bf899d15f7f09f993")
-            diff_output = await webui._run_git_command(
+            diff_output = await webui.service.run_git_command(
                 ["git", "diff", base, "HEAD", "--", path], cwd
             )
 

@@ -40,7 +40,7 @@ def _build_session_token_auth(webui):
         if not token:
             raise HTTPException(status_code=401, detail="Empty Bearer token")
 
-        session = await webui.coordinator.session_manager.get_session_info(session_id)
+        session = await webui.service.get_session_object(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found")
 
@@ -83,7 +83,7 @@ def build_router(webui) -> APIRouter:
         )
         # Issue #1387: schedule background refresh if new secret is oauth2 with refresh config
         if result.get("type") == "oauth2" and result.get("refresh"):
-            webui.coordinator.vault_refresh_manager.schedule_secret(request.name)
+            webui.service.schedule_secret_refresh(request.name)
         return result
 
     @router.patch("/api/secrets/{name}")
@@ -106,7 +106,7 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=404, detail="Secret not found")
         # Issue #1387: reschedule refresh on update (refresh config may have changed)
         if result.get("type") == "oauth2" and result.get("refresh"):
-            webui.coordinator.vault_refresh_manager.schedule_secret(name)
+            webui.service.schedule_secret_refresh(name)
         return result
 
     @router.delete("/api/secrets/{name}")
@@ -117,7 +117,7 @@ def build_router(webui) -> APIRouter:
         if not deleted:
             raise HTTPException(status_code=404, detail="Secret not found")
         # Issue #1387: cancel any background refresh task for this secret
-        webui.coordinator.vault_refresh_manager.unschedule_secret(name)
+        webui.service.unschedule_secret_refresh(name)
         return {"deleted": True}
 
     @router.post("/api/secrets/{name}/refresh")
@@ -143,7 +143,7 @@ def build_router(webui) -> APIRouter:
         (backend/routers/mcp.py) before accepting oauth_custom_callback_path. Without
         this, _add_dynamic_oauth_route() would insert a route ahead of (and, on
         teardown, delete) the real one for the duration of the pending flow."""
-        if path and webui.oauth_callback_path_conflicts_with_app_route(path):
+        if path and webui.service.oauth_callback_path_conflicts_with_app_route(path):
             raise HTTPException(
                 status_code=400,
                 detail=f"custom_callback_path '{path}' conflicts with an existing application route",
@@ -181,7 +181,7 @@ def build_router(webui) -> APIRouter:
             msg = str(e)
             detail = msg[5:].strip() if msg.startswith("404:") else msg
             raise HTTPException(status_code=404, detail=detail) from e
-        await webui.sync_standalone_oauth_callback(
+        await webui.service.sync_standalone_oauth_callback(
             result["flow_id"], result.get("custom_callback_path"), result.get("custom_callback_port")
         )
         return {"auth_url": result["auth_url"], "flow_id": result["flow_id"]}
@@ -209,7 +209,7 @@ def build_router(webui) -> APIRouter:
             msg = str(e)
             detail = msg[5:].strip() if msg.startswith("404:") else msg
             raise HTTPException(status_code=404, detail=detail) from e
-        await webui.sync_standalone_oauth_callback(
+        await webui.service.sync_standalone_oauth_callback(
             result["flow_id"], result.get("custom_callback_path"), result.get("custom_callback_port")
         )
         return {"auth_url": result["auth_url"], "flow_id": result["flow_id"]}
@@ -221,7 +221,7 @@ def build_router(webui) -> APIRouter:
         completing it) — pops the pending flow and tears down any transient callback
         listener/route eagerly rather than waiting for TTL expiry."""
         cancelled = await webui.service.standalone_oauth_cancel(flow_id)
-        await webui.remove_standalone_oauth_callback(flow_id)
+        await webui.service.remove_standalone_oauth_callback(flow_id)
         return {"cancelled": cancelled}
 
     # ==================== RESOLVE ENDPOINT (per-session Bearer token) ====================
@@ -296,9 +296,10 @@ def build_router(webui) -> APIRouter:
         if spec is None or QUEUE_SESSION not in spec.queues:
             raise HTTPException(status_code=400, detail=f"Unregistered event type: {event_type!r}")
         event_data = body.get("data", {})
-        if session_id in webui.session_queues:
+        queue = webui.service.get_session_queue(session_id)
+        if queue is not None:
             emit(
-                webui.session_queues[session_id], QUEUE_SESSION, event_type,
+                queue, QUEUE_SESSION, event_type,
                 {
                     "data": event_data,
                     "timestamp": datetime.now(UTC).isoformat(),

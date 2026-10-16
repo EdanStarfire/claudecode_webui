@@ -19,8 +19,8 @@ def _make_app(tmp_path):
 
     webui = MagicMock()
     webui.config_file = config_file
-    webui.skill_manager.cleanup_symlinks = AsyncMock()
-    webui.skill_manager.sync = AsyncMock()
+    webui.service.cleanup_skill_symlinks = AsyncMock()
+    webui.service.sync_skills = AsyncMock()
 
     app = FastAPI()
     app.include_router(build_router(webui))

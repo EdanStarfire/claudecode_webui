@@ -44,7 +44,7 @@ def build_router(webui) -> APIRouter:
     async def _enrich_session_rows(rows: list[dict], webui) -> None:
         """Fill session_name, is_minion, parent_session_id from SessionManager."""
         try:
-            sm = webui.coordinator.session_manager
+            sm = webui.service.get_session_manager()
         except AttributeError:
             return
         for row in rows:
