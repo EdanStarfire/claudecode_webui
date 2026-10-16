@@ -18,7 +18,6 @@ from shared.logging_config import get_logger
 
 from .archive_coordinator import ArchiveCoordinator
 from .claude_sdk import ClaudeSDK, ResultError
-from .config_resolution import resolve_effective_config
 from .data_storage import DataStorageManager
 from .hooks.pretooluse_handler import InternalPermissionHandler
 from .litellm_proxy_manager import make_model_alias
@@ -44,6 +43,7 @@ from .session_launcher import (
 )
 from .session_lifecycle import is_interruptible
 from .session_manager import STOPPED_STATES, SessionManager, SessionState
+from .session_query import SessionQuery
 from .session_recorder import SessionRecorder
 from .session_resources import SessionResources
 from .task_registry import TaskLegRegistry
@@ -716,6 +716,12 @@ class SessionCoordinator:
         # No Callbacks bundle needed — nothing it calls is still stranded on
         # the coordinator.
         self._session_resources = SessionResources(coordinator=self)
+
+        # Issue #2189 (coordinator-split PR 6): session-info/listing response
+        # assembly (SDK status, message counts, effective config) and the
+        # task-leg-registry pair live on SessionQuery now. No Callbacks bundle
+        # needed — nothing it calls is still stranded on the coordinator.
+        self._session_query = SessionQuery(coordinator=self)
 
     # Issue #2189 (coordinator-split PR 1): _default_sdk_factory/_sdk_factory now
     # live on SessionLauncher. Re-exported here (same function object, and a
@@ -2098,190 +2104,22 @@ class SessionCoordinator:
     async def _clear_session_tmp(self, session_id: str) -> None:
         return await self._session_launcher._clear_session_tmp(session_id)
 
-    async def _build_effective_config_payload(
-        self, session_info
-    ) -> tuple[dict | None, dict | None]:
-        """Return (effective_config_dict, template_meta) for template-linked sessions.
-
-        Returns (None, None) for standalone sessions or on resolution failure.
-        """
-        if not session_info.template_id:
-            return None, None
-        try:
-            eff = await resolve_effective_config(
-                session_info, self.template_manager, self.profile_manager
-            )
-            effective_config_dict = eff.model_dump()
-            tmpl = await self.template_manager.get_template(session_info.template_id)
-            template_meta = None
-            if tmpl:
-                template_meta = {
-                    "template_id": tmpl.template_id,
-                    "name": tmpl.name,
-                    "profile_ids": tmpl.profile_ids or {},
-                }
-            return effective_config_dict, template_meta
-        except Exception:
-            logger.warning(
-                f"Failed to build effective_config for session {session_info.session_id}"
-            )
-            return None, None
-
     async def get_session_info(self, session_id: str) -> dict[str, Any] | None:
-        """Get comprehensive session information"""
-        try:
-            # Get session info from manager
-            session_info = await self.session_manager.get_session_info(session_id)
-            if not session_info:
-                return None
-
-            # Get SDK status
-            sdk_info = {}
-            sdk = self._active_sdks.get(session_id)
-            if sdk:
-                sdk_info = sdk.get_info()
-                sdk_info.update({
-                    "queue_size": sdk.get_queue_size(),
-                })
-
-            # Get storage stats
-            storage_info = {}
-            storage = self._storage_managers.get(session_id)
-            if storage:
-                storage_info = {
-                    "message_count": await storage.get_message_count()
-                }
-
-            # Augment with SDK session metadata if claude_code_session_id is available
-            sdk_session_info = None
-            if session_info.claude_code_session_id:
-                try:
-                    from claude_agent_sdk import get_session_info as sdk_get_session_info
-                    result = await asyncio.to_thread(
-                        sdk_get_session_info,
-                        session_info.claude_code_session_id,
-                        session_info.working_directory,
-                    )
-                    if result:
-                        sdk_session_info = {
-                            "summary": result.summary,
-                            "custom_title": result.custom_title,
-                            "git_branch": result.git_branch,
-                            "first_prompt": result.first_prompt,
-                            "tag": result.tag,
-                            "created_at": str(result.created_at) if result.created_at else None,
-                            "last_modified": str(result.last_modified) if result.last_modified else None,
-                        }
-                except Exception:
-                    logger.warning(f"SDK get_session_info failed for {session_id}")
-
-            effective_config_dict, template_meta = await self._build_effective_config_payload(
-                session_info
-            )
-
-            return {
-                "session": session_info.to_dict(),
-                "sdk": sdk_info,
-                "storage": storage_info,
-                "sdk_session_info": sdk_session_info,
-                "effective_config": effective_config_dict,
-                "template": template_meta,
-            }
-
-        except Exception:
-            logger.exception(f"Failed to get session info for {session_id}")
-            return None
+        return await self._session_query.get_session_info(session_id)
 
     async def list_sessions(self, limit: int = 500, offset: int = 0) -> dict[str, Any]:
-        """List all sessions with their current status, paginated."""
-        try:
-            sessions = await self.session_manager.list_sessions()
-            all_sessions = []
-            for session_info in sessions:
-                entry = session_info.to_dict()
-                if session_info.template_id:
-                    eff, _tmpl = await self._build_effective_config_payload(session_info)
-                    entry["effective_config"] = eff
-                all_sessions.append(entry)
-            total = len(all_sessions)
-            sliced = all_sessions[offset : offset + limit]
-            return {
-                "sessions": sliced,
-                "total": total,
-                "limit": limit,
-                "offset": offset,
-                "has_more": offset + len(sliced) < total,
-            }
-        except Exception:
-            logger.exception("Failed to list sessions")
-            return {"sessions": [], "total": 0, "limit": limit, "offset": offset, "has_more": False}
-
-    @staticmethod
-    def _extract_agent_name(description: str | None) -> str:
-        """Extract agent name from task description (e.g., 'alpha: You are...' -> 'alpha')."""
-        if not description:
-            return ""
-        colon_idx = description.find(":")
-        if 0 < colon_idx < 50:
-            return description[:colon_idx].strip()
-        return description[:40] + "..." if len(description) > 40 else description
-
-    # Issue #1676: CLI phrasing for background subagent Notification hook messages.
-    _AGENT_NOTIFICATION_MESSAGE_SUFFIXES = (
-        " needs your input",
-        " finished",
-        " failed",
-    )
-
-    @staticmethod
-    def _parse_agent_notification_label(message: str | None) -> str | None:
-        """Best-effort label parse from a Notification hook's free-text message (issue #1676).
-
-        Isolated here as a single edit point if the CLI's message phrasing changes.
-        """
-        if not message:
-            return None
-        for suffix in SessionCoordinator._AGENT_NOTIFICATION_MESSAGE_SUFFIXES:
-            if message.endswith(suffix):
-                return message[: -len(suffix)]
-        return None
-
+        return await self._session_query.list_sessions(limit, offset)
 
     # ==================== TASK LEG REGISTRY (Issue #1746) ====================
 
     async def _get_task_leg_registry(self, session_id: str) -> TaskLegRegistry:
-        """Get (lazily hydrating) the per-session TaskLegRegistry.
-
-        Hydration replays every stored Task lifecycle message once — so a
-        page refresh and a live-streamed session converge on identical
-        state. Only cached once a storage manager is available; if the
-        session hasn't been started yet in this process, an ephemeral empty
-        registry is returned so a later call (once storage exists) can
-        still hydrate properly.
-        """
-        registry = self._task_leg_registries.get(session_id)
-        if registry is not None:
-            return registry
-
-        registry = TaskLegRegistry()
-        storage = self._storage_managers.get(session_id)
-        if storage:
-            raw_messages = await storage.read_messages()
-            for raw_message in raw_messages:
-                if raw_message.get("type") != "system":
-                    continue
-                metadata = raw_message.get("metadata") or {}
-                subtype = metadata.get("subtype")
-                if subtype:
-                    registry.apply_frame(subtype, metadata, raw_message.get("timestamp"))
-            self._task_leg_registries[session_id] = registry
-
-        return registry
+        # Kept live on the coordinator (not just internal to SessionQuery):
+        # message_pipeline.py calls self._coordinator._get_task_leg_registry(session_id)
+        # directly, and test_task_registry.py pokes the same name.
+        return await self._session_query._get_task_leg_registry(session_id)
 
     async def get_background_agents(self, session_id: str) -> dict[str, Any]:
-        """Snapshot of background-agent (Task) leg history for reload/reconnect."""
-        registry = await self._get_task_leg_registry(session_id)
-        return {"session_id": session_id, "agents": registry.snapshot()}
+        return await self._session_query.get_background_agents(session_id)
 
     # ==================== ARCHIVE METHODS ====================
 
