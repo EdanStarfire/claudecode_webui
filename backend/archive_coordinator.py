@@ -15,14 +15,11 @@ work — every method here is already a thin adapter layer on top of those,
 unaffected by this move.
 
 Unlike SessionLauncher/MessagePipeline, this is a terminal content
-extraction for everything it calls except two module-level helper functions
-(`_group_resources_by_filename`/`_apply_resource_filters`) that stay on
-SessionCoordinator as a TEMPORARY delegate — PR 5 (`session_resources.py`)
-is their permanent home and will retarget this module's call site when it
-lands. No Callbacks dataclass is needed: that pending dependency, plus the
-handful of permanent coordinator methods this module calls
+extraction: `_group_resources_by_filename`/`_apply_resource_filters` are
+imported directly from `session_resources.py` (their permanent home, PR 5),
+and the handful of permanent coordinator methods this module calls
 (`_archive_session_for_reset`, `terminate_session`, `_notify_session_reset`,
-`register_uploaded_resource`), are all reached directly via
+`register_uploaded_resource`) are all reached directly via
 `self._coordinator.X`, same as SessionLauncher's "injected coordinator
 methods" passthroughs.
 """
@@ -38,6 +35,7 @@ from shared.logging_config import get_logger
 from .config_resolution import resolve_effective_config
 from .data_storage import DataStorageManager
 from .models.messages import LegacyMessageFormatError
+from .session_resources import _apply_resource_filters, _group_resources_by_filename
 from .task_utils import task_done_log_exception
 
 # Get specialized logger for coordinator actions (same category as the
@@ -70,16 +68,11 @@ class ArchiveCoordinator:
     _task_leg_registries = property(lambda self: self._coordinator._task_leg_registries)
 
     # Injected coordinator methods — never reimplemented here. All permanent
-    # (not pending extraction elsewhere), except the two resource-formatting
-    # helpers, which are a TEMPORARY delegate: PR 5 (session_resources.py)
-    # will permanently relocate them and retarget this property to wherever
-    # they land.
+    # (not pending extraction elsewhere).
     _archive_session_for_reset = property(lambda self: self._coordinator._archive_session_for_reset)
     terminate_session = property(lambda self: self._coordinator.terminate_session)
     _notify_session_reset = property(lambda self: self._coordinator._notify_session_reset)
     register_uploaded_resource = property(lambda self: self._coordinator.register_uploaded_resource)
-    _group_resources_by_filename = property(lambda self: self._coordinator._group_resources_by_filename)
-    _apply_resource_filters = property(lambda self: self._coordinator._apply_resource_filters)
 
     # ==================== ARCHIVE METHODS ====================
 
@@ -134,8 +127,8 @@ class ArchiveCoordinator:
             session_id, archive_id
         )
 
-        all_resources = self._group_resources_by_filename(all_resources)
-        all_resources = self._apply_resource_filters(all_resources, search, format_filter, sort)
+        all_resources = _group_resources_by_filename(all_resources)
+        all_resources = _apply_resource_filters(all_resources, search, format_filter, sort)
 
         total = len(all_resources)
         sliced = all_resources[offset : offset + limit]

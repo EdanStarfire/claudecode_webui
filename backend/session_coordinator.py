@@ -45,6 +45,7 @@ from .session_launcher import (
 from .session_lifecycle import is_interruptible
 from .session_manager import STOPPED_STATES, SessionManager, SessionState
 from .session_recorder import SessionRecorder
+from .session_resources import SessionResources
 from .task_registry import TaskLegRegistry
 from .timestamp_injection import maybe_inject_timestamp
 from .timestamp_utils import get_unix_timestamp
@@ -54,14 +55,6 @@ from .tool_call_tracker import ToolCallTracker
 coord_logger = get_logger('coordinator', category='COORDINATOR')
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)
-
-# Resource format groups for filtering
-_TEXT_RESOURCE_FORMATS = {
-    "py", "js", "ts", "json", "md", "txt", "yaml", "yml",
-    "toml", "cfg", "ini", "log", "csv", "xml", "html", "css",
-    "sh", "bash", "rs", "go", "java", "c", "cpp", "h", "rb",
-    "php", "sql", "r", "swift", "kt",
-}
 
 # Issue #1660: MCP config fields that the spawn path snapshots into session.config.
 # These are the only fields subject to stale-snapshot pruning.
@@ -79,81 +72,6 @@ def _mcp_field_equal(field: str, a, b) -> bool:
             return False
         return set(a or []) == set(b or [])
     return a == b
-
-
-def _apply_resource_filters(
-    resources: list[dict],
-    search: str | None,
-    format_filter: str | None,
-    sort: str,
-) -> list[dict]:
-    """Filter and sort a list of resource dicts. Returns a new list."""
-    result = list(resources)
-
-    if search:
-        q = search.lower()
-        result = [
-            r
-            for r in result
-            if q in (r.get("title") or "").lower() or q in (r.get("original_name") or "").lower()
-        ]
-
-    if format_filter:
-        if format_filter == "image":
-            result = [r for r in result if r.get("is_image")]
-        elif format_filter == "video":
-            result = [r for r in result if r.get("is_video")]
-        elif format_filter == "text":
-            result = [r for r in result if r.get("format") in _TEXT_RESOURCE_FORMATS]
-        else:
-            result = [r for r in result if r.get("format") == format_filter]
-
-    if sort == "newest":
-        result.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
-    elif sort == "oldest":
-        result.sort(key=lambda x: x.get("timestamp", 0))
-    elif sort == "name-asc":
-        result.sort(key=lambda x: (x.get("title") or x.get("original_name") or "").lower())
-    elif sort == "name-desc":
-        result.sort(
-            key=lambda x: (x.get("title") or x.get("original_name") or "").lower(),
-            reverse=True,
-        )
-
-    return result
-
-
-def _group_resources_by_filename(resources: list[dict]) -> list[dict]:
-    """Group resources into versions by original_name (case-insensitive).
-
-    Issue #1680: re-registering a resource under the same filename represents
-    an update, not a new independent entry. Groups by the full filename
-    (including extension) so "report.md" and "report.txt" stay separate.
-
-    Each returned item is the group's latest entry (by timestamp), augmented
-    with `version_count`. Groups with more than one entry also carry a
-    `versions` list (newest-first, each entry tagged with `version_number`,
-    oldest = 1). Single-entry groups pass through with only `version_count=1`.
-    """
-    groups: dict[str, list[dict]] = {}
-    for r in resources:
-        key = (r.get("original_name") or "").lower()
-        groups.setdefault(key, []).append(r)
-
-    result = []
-    for entries in groups.values():
-        ordered = sorted(entries, key=lambda x: x.get("timestamp", 0))
-        version_count = len(ordered)
-        versions = [dict(entry, version_number=i + 1) for i, entry in enumerate(ordered)]
-        versions.reverse()  # newest first
-
-        latest = dict(versions[0])
-        latest["version_count"] = version_count
-        if version_count > 1:
-            latest["versions"] = versions
-        result.append(latest)
-
-    return result
 
 
 def _normalize_result_usage(
@@ -273,26 +191,6 @@ def _accumulate_subagent_usage(
     # flat name (or "cache_creation_input_tokens"), not the TTL-tier split.
     accum["cache_write_tokens"] = accum.get("cache_write_tokens", 0) + cache_5m + cache_1h
     return accum
-
-
-def _tail_read_lines(path: "Path", limit: int) -> list[str]:
-    """Read the last `limit` lines from a file efficiently using a deque."""
-    from collections import deque
-
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            return list(deque(f, maxlen=limit))
-    except OSError:
-        return []
-
-
-def _count_file_lines(path: "Path") -> int:
-    """Count total lines in a file efficiently."""
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            return sum(1 for _ in f)
-    except OSError:
-        return 0
 
 
 def _render_inject_file(placeholder: str, fmt: str, key_path: str | None) -> str:
@@ -635,10 +533,6 @@ class SessionCoordinator:
         self._message_emitted_events: dict[str, asyncio.Event] = {}
         self._emitted_turn_ids: dict[str, set[str]] = {}
 
-        # Issue #403: Uploaded file paths per session for auto-approve Read permissions
-        # Maps session_id -> set of absolute file paths
-        self._uploaded_file_paths: dict[str, set[str]] = {}
-
         # Permission callback factory (injected by web_server)
         # Allows legion components to create permission callbacks on-demand
         self._permission_callback_factory: Callable[[str], Callable] | None = None
@@ -701,7 +595,6 @@ class SessionCoordinator:
         # Issue #404: Resource MCP tools for displaying resources in task panel
         # Callback for broadcasting resource_registered events will be set by web_server
         from backend.mcp.resource_mcp_tools import ResourceMCPTools
-        self._resource_broadcast_callback: Callable[[str, dict], None] | None = None
         # Callback for broadcasting queue_update events (enqueued) will be set by web_server
         self._enqueue_broadcast_callback: Callable[[str, str, dict], Any] | None = None
         self.resource_mcp_tools = ResourceMCPTools(
@@ -712,7 +605,6 @@ class SessionCoordinator:
         # Issue #1530: Links MCP tools for registering persistent named links
         # Callback for broadcasting link_registered events will be set by web_server
         from backend.mcp.links_mcp_tools import LinksMCPTools
-        self._link_broadcast_callback: Callable[[str, dict], None] | None = None
         self.links_mcp_tools = LinksMCPTools(
             session_coordinator=self,
             broadcast_callback=self._broadcast_link_registered
@@ -812,11 +704,18 @@ class SessionCoordinator:
 
         # Issue #2189 (coordinator-split PR 4): the archive-query block,
         # archive_and_clear_session, and the compaction/distillation pair
-        # live on ArchiveCoordinator now. No Callbacks bundle needed — its
-        # only coordinator-owned-but-not-yet-permanent dependency
-        # (_group_resources_by_filename/_apply_resource_filters) is reached
-        # directly via self._coordinator.X, same as the permanent ones.
+        # live on ArchiveCoordinator now. No Callbacks bundle needed — every
+        # coordinator dependency it calls is reached directly via
+        # self._coordinator.X (and, since PR 5, a direct import for the two
+        # resource-formatting helpers — see session_resources.py).
         self._archive_coordinator = ArchiveCoordinator(coordinator=self)
+
+        # Issue #2189 (coordinator-split PR 5): the module-level resource-
+        # formatting helpers, resource-gallery CRUD/broadcast, proxy-log
+        # reading, and uploaded-file tracking live on SessionResources now.
+        # No Callbacks bundle needed — nothing it calls is still stranded on
+        # the coordinator.
+        self._session_resources = SessionResources(coordinator=self)
 
     # Issue #2189 (coordinator-split PR 1): _default_sdk_factory/_sdk_factory now
     # live on SessionLauncher. Re-exported here (same function object, and a
@@ -828,17 +727,6 @@ class SessionCoordinator:
     # bound method (self inserted as the first positional arg), shifting every
     # argument by one position.
     _default_sdk_factory = staticmethod(SessionLauncher._default_sdk_factory)
-
-    # Issue #2189 (coordinator-split PR 4): `_group_resources_by_filename`/
-    # `_apply_resource_filters` are module-level functions (defined above,
-    # unchanged) used by both this coordinator's own get_session_resources
-    # and ArchiveCoordinator's get_archive_resources. Bound here as
-    # staticmethods so ArchiveCoordinator can reach them via
-    # `self._coordinator.X` — a TEMPORARY arrangement; PR 5
-    # (session_resources.py) is their permanent home and will retarget
-    # ArchiveCoordinator's call site when it permanently relocates them.
-    _group_resources_by_filename = staticmethod(_group_resources_by_filename)
-    _apply_resource_filters = staticmethod(_apply_resource_filters)
 
     @property
     def _sdk_factory(self):
@@ -1364,216 +1252,21 @@ class SessionCoordinator:
         format_filter: str | None = None,
         sort: str = "newest",
     ) -> dict:
-        """
-        Get resource metadata for a session, paginated with optional filter/sort.
-
-        Issue #404: Used by REST endpoint to list session resources.
-        Issue #972: Added server-side search, format_filter, and sort params.
-
-        Args:
-            session_id: Session ID
-            limit: Maximum number of resources to return
-            offset: Number of resources to skip
-            search: Substring match on title or original_name (case-insensitive)
-            format_filter: "image", "text", or a specific extension (e.g. "pdf")
-            sort: "newest" | "oldest" | "name-asc" | "name-desc"
-
-        Returns:
-            Paginated dict with resources, total, limit, offset, has_more
-        """
-        storage_manager = self._storage_managers.get(session_id)
-        if not storage_manager:
-            # Try to get from session directory
-            session_dir = await self.session_manager.get_session_directory(session_id)
-            if session_dir:
-                storage_manager = DataStorageManager(session_dir)
-                await storage_manager.initialize()
-
-        all_resources: list[dict] = []
-        if storage_manager:
-            all_resources = await storage_manager.read_resources()
-
-        all_resources = _group_resources_by_filename(all_resources)
-        all_resources = _apply_resource_filters(all_resources, search, format_filter, sort)
-
-        total = len(all_resources)
-        sliced = all_resources[offset : offset + limit]
-        return {
-            "resources": sliced,
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-            "has_more": offset + len(sliced) < total,
-        }
+        return await self._session_resources.get_session_resources(
+            session_id, limit, offset, search, format_filter, sort
+        )
 
     async def get_session_resource_by_id(self, session_id: str, resource_id: str) -> dict | None:
-        """
-        Look up a single resource's metadata by ID against the raw (ungrouped) log.
-
-        Issue #1680: byte-serving endpoints must resolve the exact version
-        requested, not just the latest representative of its filename group.
-
-        Args:
-            session_id: Session ID
-            resource_id: Resource ID
-
-        Returns:
-            Resource metadata dict or None
-        """
-        storage_manager = self._storage_managers.get(session_id)
-        if not storage_manager:
-            session_dir = await self.session_manager.get_session_directory(session_id)
-            if session_dir:
-                storage_manager = DataStorageManager(session_dir)
-                await storage_manager.initialize()
-
-        if not storage_manager:
-            return None
-
-        all_resources = await storage_manager.read_resources()
-        return next((r for r in all_resources if r.get("resource_id") == resource_id), None)
+        return await self._session_resources.get_session_resource_by_id(session_id, resource_id)
 
     async def get_session_resource_file(self, session_id: str, resource_id: str) -> bytes | None:
-        """
-        Get raw file bytes for a specific resource.
-
-        Issue #404: Used by REST endpoint to serve resource files.
-
-        Args:
-            session_id: Session ID
-            resource_id: Resource ID
-
-        Returns:
-            Raw file bytes or None
-        """
-        storage_manager = self._storage_managers.get(session_id)
-        if not storage_manager:
-            session_dir = await self.session_manager.get_session_directory(session_id)
-            if session_dir:
-                storage_manager = DataStorageManager(session_dir)
-                await storage_manager.initialize()
-
-        if storage_manager:
-            return await storage_manager.get_resource_file(resource_id)
-
-        return None
+        return await self._session_resources.get_session_resource_file(session_id, resource_id)
 
     async def get_proxy_logs(self, session_id: str, log_type: str = "http", limit: int = 200) -> dict:
-        """
-        Get proxy log entries for a session.
-
-        Issue #1102: Reads access.log (HTTP) or dns.log (DNS) from the proxy sidecar
-        data directory and returns the last `limit` parsed entries.
-        Issue #1214: Also supports socks5.log for SOCKS5 connection entries.
-
-        Args:
-            session_id: Session ID
-            log_type: "http", "dns", or "socks5"
-            limit: Maximum number of entries to return (tail-read)
-
-        Returns:
-            dict with entries, total_lines, and log_type
-        """
-        session_dir = self.data_dir / "sessions" / session_id
-        if log_type == "http":
-            log_path = session_dir / "docker_claude_data" / "proxy" / "access.log"
-        elif log_type == "socks5":
-            log_path = session_dir / "docker_claude_data" / "proxy" / "socks5.log"
-        else:
-            log_path = session_dir / "docker_claude_data" / "proxy" / "dns.log"
-
-        if not log_path.exists():
-            return {"entries": [], "total_lines": 0, "log_type": log_type}
-
-        # Tail-read: read last `limit` lines efficiently
-        lines = _tail_read_lines(log_path, limit)
-        total_lines = _count_file_lines(log_path)
-
-        entries = []
-        if log_type == "http":
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    raw = json.loads(line)
-                    entries.append({
-                        "ts": raw.get("ts"),
-                        "host": raw.get("host"),
-                        "method": raw.get("method"),
-                        "path": raw.get("path"),
-                        "status": raw.get("status"),
-                        "allowed": raw.get("allowed"),
-                        "credential_used": raw.get("credential_used"),
-                        "scheme": raw.get("scheme"),
-                        "port": raw.get("port"),
-                        "bytes": raw.get("bytes"),
-                        "routed_via_litellm": raw.get("routed_via_litellm", False),
-                        "original_host": raw.get("original_host", raw.get("host")),
-                    })
-                except (json.JSONDecodeError, ValueError):
-                    self.logger.warning(f"Skipping malformed HTTP proxy log line in session {session_id}")
-        elif log_type == "socks5":
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    raw = json.loads(line)
-                    entries.append({
-                        "ts": raw.get("ts"),
-                        "host": raw.get("host"),
-                        "port": raw.get("port"),
-                        "allowed": raw.get("allowed"),
-                        "reason": raw.get("reason"),
-                    })
-                except (json.JSONDecodeError, ValueError):
-                    self.logger.warning(f"Skipping malformed SOCKS5 proxy log line in session {session_id}")
-        else:
-            # CoreDNS log format:
-            # [INFO] 10.0.0.2:54312 - 12345 "A IN api.github.com. udp 128 false 4096" NOERROR qr,rd,ra 73 0.023s
-            dns_pattern = re.compile(
-                r'\[INFO\].*?"(\w+) IN (\S+?)\. \w+ \d+ \w+ \d+"\s+(\w+)'
-            )
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                m = dns_pattern.search(line)
-                if m:
-                    entries.append({
-                        "query_type": m.group(1),
-                        "hostname": m.group(2),
-                        "result": m.group(3),
-                    })
-
-        return {"entries": entries, "total_lines": total_lines, "log_type": log_type}
+        return await self._session_resources.get_proxy_logs(session_id, log_type, limit)
 
     async def remove_session_resource(self, session_id: str, resource_id: str) -> bool:
-        """
-        Soft-remove a resource from the session display.
-
-        Issue #423: Appends a removal marker to resources.jsonl so the resource
-        is hidden from the gallery. The .bin file is NOT deleted.
-
-        Args:
-            session_id: Session ID
-            resource_id: Resource ID to remove from display
-
-        Returns:
-            True if removed successfully, False otherwise
-        """
-        storage_manager = self._storage_managers.get(session_id)
-        if not storage_manager:
-            session_dir = await self.session_manager.get_session_directory(session_id)
-            if session_dir:
-                storage_manager = DataStorageManager(session_dir)
-                await storage_manager.initialize()
-
-        if storage_manager:
-            return await storage_manager.remove_resource_from_display(resource_id)
-
-        return False
+        return await self._session_resources.remove_session_resource(session_id, resource_id)
 
     def set_permission_callback_factory(self, factory: Callable[[str], Callable]) -> None:
         """
@@ -1612,29 +1305,14 @@ class SessionCoordinator:
             coord_logger.info("Message callback registrar propagated to LegionSystem")
 
     def set_resource_broadcast_callback(self, callback: Callable[[str, dict], None]) -> None:
-        """
-        Set the callback for broadcasting resource_registered events to WebSocket.
-
-        Issue #404: Resource MCP tool integration.
-
-        Args:
-            callback: Async function(session_id, resource_metadata) for WebSocket broadcast
-        """
-        self._resource_broadcast_callback = callback
-        coord_logger.info("Resource broadcast callback registered in SessionCoordinator")
+        return self._session_resources.set_resource_broadcast_callback(callback)
 
     # Backward compatibility alias
     def set_image_broadcast_callback(self, callback: Callable[[str, dict], None]) -> None:
-        """Deprecated: Use set_resource_broadcast_callback instead."""
-        self.set_resource_broadcast_callback(callback)
+        return self._session_resources.set_image_broadcast_callback(callback)
 
     def set_link_broadcast_callback(self, callback: Callable[[str, dict], None]) -> None:
-        """Set the callback for broadcasting link_registered events to the session poll queue.
-
-        Issue #1530: Called by web_server after coordinator is initialised.
-        """
-        self._link_broadcast_callback = callback
-        coord_logger.info("Link broadcast callback registered in SessionCoordinator")
+        return self._session_resources.set_link_broadcast_callback(callback)
 
     def set_enqueue_broadcast_callback(self, callback: Callable[[str, str, dict], Any]) -> None:
         """Set the callback for broadcasting queue_update (enqueued) events."""
@@ -1642,47 +1320,13 @@ class SessionCoordinator:
         coord_logger.info("Enqueue broadcast callback registered in SessionCoordinator")
 
     async def _broadcast_resource_registered(self, session_id: str, resource_metadata: dict) -> None:
-        """
-        Broadcast resource_registered event via the injected callback.
-
-        Issue #404: Called by ResourceMCPTools when a resource is registered.
-
-        Args:
-            session_id: Session that registered the resource
-            resource_metadata: Resource metadata dict (resource_id, title, is_image, etc.)
-        """
-        if self._resource_broadcast_callback:
-            try:
-                if asyncio.iscoroutinefunction(self._resource_broadcast_callback):
-                    await self._resource_broadcast_callback(session_id, resource_metadata)
-                else:
-                    self._resource_broadcast_callback(session_id, resource_metadata)
-            except Exception:
-                logger.exception(f"Failed to broadcast resource_registered for {session_id}")
+        return await self._session_resources._broadcast_resource_registered(session_id, resource_metadata)
 
     async def _broadcast_link_registered(self, session_id: str, link: dict) -> None:
-        """Broadcast link_registered event via the injected callback.
-
-        Issue #1530: Called by LinksMCPTools when a link is registered or updated.
-        """
-        if self._link_broadcast_callback:
-            try:
-                if asyncio.iscoroutinefunction(self._link_broadcast_callback):
-                    await self._link_broadcast_callback(session_id, link)
-                else:
-                    self._link_broadcast_callback(session_id, link)
-            except Exception:
-                logger.exception(f"Failed to broadcast link_registered for {session_id}")
+        return await self._session_resources._broadcast_link_registered(session_id, link)
 
     async def get_session_links(self, session_id: str) -> list[dict]:
-        """Return the list of agent-registered links for a session.
-
-        Issue #1530: Used by the REST endpoint GET /api/sessions/{id}/links.
-        """
-        session_info = await self.session_manager.get_session_info(session_id)
-        if not session_info:
-            return []
-        return session_info.links or []
+        return await self._session_resources.get_session_links(session_id)
 
     # Issue #2189 (coordinator-split PR 1): session launch moved to
     # SessionLauncher — one-line delegate.
@@ -3270,75 +2914,19 @@ class SessionCoordinator:
     # ==================== FILE UPLOAD TRACKING (Issue #403) ====================
 
     async def register_uploaded_file(self, session_id: str, file_path: str) -> None:
-        """
-        Register an uploaded file path for auto-approve Read permissions.
-
-        When a user uploads a file, the path is registered so that subsequent
-        Read tool requests for that path can be auto-approved without prompting.
-
-        Args:
-            session_id: Session ID that owns the file
-            file_path: Absolute path to the uploaded file
-        """
-        if session_id not in self._uploaded_file_paths:
-            self._uploaded_file_paths[session_id] = set()
-        self._uploaded_file_paths[session_id].add(file_path)
-        coord_logger.debug(f"Registered uploaded file for session {session_id}: {file_path}")
+        return await self._session_resources.register_uploaded_file(session_id, file_path)
 
     async def unregister_uploaded_file(self, session_id: str, file_path: str) -> None:
-        """
-        Unregister an uploaded file path from auto-approve tracking.
-
-        Called when a file is deleted by the user.
-
-        Args:
-            session_id: Session ID that owns the file
-            file_path: Absolute path to the uploaded file
-        """
-        if session_id in self._uploaded_file_paths:
-            self._uploaded_file_paths[session_id].discard(file_path)
-            coord_logger.debug(f"Unregistered uploaded file for session {session_id}: {file_path}")
+        return await self._session_resources.unregister_uploaded_file(session_id, file_path)
 
     def is_uploaded_file(self, session_id: str, file_path: str) -> bool:
-        """
-        Check if a file path is an uploaded file for a session.
-
-        Used by permission callbacks to auto-approve Read requests for
-        user-uploaded files.
-
-        Args:
-            session_id: Session ID to check
-            file_path: Absolute path to check
-
-        Returns:
-            True if the file was uploaded by the user for this session
-        """
-        return file_path in self._uploaded_file_paths.get(session_id, set())
+        return self._session_resources.is_uploaded_file(session_id, file_path)
 
     def get_uploaded_files(self, session_id: str) -> set[str]:
-        """
-        Get all uploaded file paths for a session.
-
-        Args:
-            session_id: Session ID
-
-        Returns:
-            Set of absolute file paths uploaded to this session
-        """
-        return self._uploaded_file_paths.get(session_id, set()).copy()
+        return self._session_resources.get_uploaded_files(session_id)
 
     def clear_uploaded_files(self, session_id: str) -> None:
-        """
-        Clear all uploaded file tracking for a session.
-
-        Called when a session is deleted or reset.
-
-        Args:
-            session_id: Session ID to clear
-        """
-        if session_id in self._uploaded_file_paths:
-            del self._uploaded_file_paths[session_id]
-            coord_logger.debug(f"Cleared uploaded files tracking for session {session_id}")
+        return self._session_resources.clear_uploaded_files(session_id)
 
     # ==================== COMPACTION-TIME DISTILLATION (Issue #1628) ====================
 
@@ -3357,63 +2945,9 @@ class SessionCoordinator:
         title: str | None = None,
         description: str | None = None
     ) -> dict | None:
-        """
-        Register an uploaded file to the resource gallery.
-
-        When a user uploads a file through the attachment system,
-        this automatically adds it to the task panel resource gallery.
-
-        Args:
-            session_id: Session ID that owns the resource
-            file_path: Absolute path to the uploaded file
-            title: Title for the resource (required — the underlying MCP handler
-                rejects an empty title, issue #1912)
-            description: Optional description
-
-        Returns:
-            Dict with resource_id and markdown URL, or None if registration failed
-        """
-        if not self.resource_mcp_tools:
-            coord_logger.warning("Resource MCP tools not available")
-            return None
-
-        # Build args matching the MCP tool interface
-        args = {
-            "file_path": file_path,
-            "title": title or "",
-            "description": description or ""
-        }
-
-        # Use the MCP tool's internal handler directly
-        result = await self.resource_mcp_tools._handle_register_resource(session_id, args)
-
-        if result.get("is_error"):
-            error_text = result.get("content", [{}])[0].get("text", "Unknown error")
-            raise ValueError(f"Failed to register resource: {error_text}")
-
-        coord_logger.info(f"Registered uploaded resource to gallery for session {session_id}: {title}")
-
-        # Extract resource_id from result text and build metadata for caller
-        result_text = result.get("content", [{}])[0].get("text", "")
-        resource_id = None
-        for line in result_text.splitlines():
-            if line.startswith("- ID: "):
-                resource_id = line[len("- ID: "):].strip()
-                break
-
-        if resource_id:
-            from backend.mcp.resource_mcp_tools import ResourceMCPTools
-            is_image = any(
-                file_path.lower().endswith(ext)
-                for ext in ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.tiff', '.tif')
-            )
-            return {
-                "resource_id": resource_id,
-                "markdown": ResourceMCPTools._get_resource_url(
-                    session_id, resource_id, title or "", is_image
-                ),
-            }
-        return None
+        return await self._session_resources.register_uploaded_resource(
+            session_id, file_path, title, description
+        )
 
     # Backward compatibility alias
     async def register_uploaded_image(
@@ -3423,8 +2957,9 @@ class SessionCoordinator:
         title: str | None = None,
         description: str | None = None
     ) -> None:
-        """Deprecated: Use register_uploaded_resource instead."""
-        await self.register_uploaded_resource(session_id, file_path, title, description)
+        return await self._session_resources.register_uploaded_image(
+            session_id, file_path, title, description
+        )
 
     async def cleanup(self):
         """Cleanup all resources"""
