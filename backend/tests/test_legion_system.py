@@ -16,13 +16,13 @@ def test_legion_system_initialization():
 
     # Create LegionSystem
     system = LegionSystem(
-        session_coordinator=mock_session_coordinator,
+        session_port=mock_session_coordinator,
         data_storage_manager=mock_data_storage,
         template_manager=mock_template_manager
     )
 
     # Verify infrastructure was injected
-    assert system.session_coordinator == mock_session_coordinator
+    assert system.session_port == mock_session_coordinator
     assert system.data_storage_manager == mock_data_storage
 
     # Verify all Legion components were created
@@ -37,7 +37,7 @@ def test_legion_components_have_system_reference():
     """Test that all components have reference to LegionSystem."""
     # Create LegionSystem with mocks
     system = LegionSystem(
-        session_coordinator=Mock(),
+        session_port=Mock(),
         data_storage_manager=Mock(),
         template_manager=Mock()
     )
@@ -53,7 +53,7 @@ def test_legion_components_have_system_reference():
 def test_legion_coordinator_has_capability_registry():
     """Test that LegionCoordinator initializes capability registry."""
     system = LegionSystem(
-        session_coordinator=Mock(),
+        session_port=Mock(),
         data_storage_manager=Mock(),
         template_manager=Mock()
     )
@@ -66,7 +66,7 @@ def test_legion_coordinator_has_capability_registry():
 def test_legion_coordinator_has_state_dicts():
     """Test that LegionCoordinator initializes state dictionaries."""
     system = LegionSystem(
-        session_coordinator=Mock(),
+        session_port=Mock(),
         data_storage_manager=Mock(),
         template_manager=Mock()
     )

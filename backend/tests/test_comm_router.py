@@ -32,7 +32,7 @@ def legion_system():
     mock_session_coordinator.data_dir = Path("/tmp/test")
 
     system = LegionSystem(
-        session_coordinator=mock_session_coordinator,
+        session_port=mock_session_coordinator,
         data_storage_manager=Mock(),
         template_manager=Mock()
     )
@@ -90,7 +90,7 @@ class TestVisibleMinions:
             "child-id": child,
         }
 
-        sm = comm_router.system.session_coordinator.session_manager
+        sm = comm_router.system.session_port.session_manager
         sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
 
         visible = await comm_router.get_visible_minions("child-id")
@@ -126,7 +126,7 @@ class TestVisibleMinions:
             "child-id": child,
         }
 
-        sm = comm_router.system.session_coordinator.session_manager
+        sm = comm_router.system.session_port.session_manager
         sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
 
         visible = await comm_router.get_visible_minions("grandparent-id")
@@ -174,7 +174,7 @@ class TestVisibleMinions:
             "leaf-b-id": leaf_b,
         }
 
-        sm = comm_router.system.session_coordinator.session_manager
+        sm = comm_router.system.session_port.session_manager
         sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
 
         visible = await comm_router.get_visible_minions("leaf-a-id")
@@ -215,7 +215,7 @@ class TestVisibleMinions:
             "sibling-b-id": sibling_b,
         }
 
-        sm = comm_router.system.session_coordinator.session_manager
+        sm = comm_router.system.session_port.session_manager
         sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
 
         visible = await comm_router.get_visible_minions("sibling-a-id")
@@ -227,7 +227,7 @@ class TestVisibleMinions:
     @pytest.mark.asyncio
     async def test_visible_minions_nonexistent_caller(self, comm_router):
         """Non-existent caller should return empty list."""
-        sm = comm_router.system.session_coordinator.session_manager
+        sm = comm_router.system.session_port.session_manager
         sm.get_session_info = AsyncMock(return_value=None)
 
         visible = await comm_router.get_visible_minions("nonexistent-id")
@@ -321,17 +321,17 @@ class TestCommRouter:
         """Regression test: _send_to_minion must include attachment metadata in comm_metadata
         so the frontend can render attachment chips on received comms."""
         # Point data_dir to tmp_path so attachment directory creation succeeds
-        comm_router.system.session_coordinator.data_dir = tmp_path
+        comm_router.system.session_port.data_dir = tmp_path
 
         # Create a real source file for the attachment delivery code to copy
         source_file = tmp_path / "report.txt"
         source_file.write_bytes(b"test file content")
 
         # Mock async session methods called during attachment delivery
-        comm_router.system.session_coordinator.register_uploaded_resource = AsyncMock(
+        comm_router.system.session_port.register_uploaded_resource = AsyncMock(
             return_value={"resource_id": "res-abc123"}
         )
-        comm_router.system.session_coordinator.register_uploaded_file = AsyncMock()
+        comm_router.system.session_port.register_uploaded_file = AsyncMock()
 
         comm = Comm(
             comm_id=str(uuid.uuid4()),
@@ -355,7 +355,7 @@ class TestCommRouter:
         assert result is True
 
         # Verify send_message was called with metadata containing attachments
-        send_message_mock = comm_router.system.session_coordinator.send_message
+        send_message_mock = comm_router.system.session_port.send_message
         send_message_mock.assert_called_once()
         call_kwargs = send_message_mock.call_args
         metadata = call_kwargs.kwargs.get("metadata")
@@ -385,7 +385,7 @@ class TestCommRouter:
         result = await comm_router._send_to_minion(comm)
         assert result is True
 
-        send_message_mock = comm_router.system.session_coordinator.send_message
+        send_message_mock = comm_router.system.session_port.send_message
         send_message_mock.assert_called_once()
         call_kwargs = send_message_mock.call_args.kwargs
 
@@ -423,7 +423,7 @@ class TestCommRouter:
         result = await comm_router._send_to_minion(comm)
         assert result is True
 
-        send_message_mock = comm_router.system.session_coordinator.send_message
+        send_message_mock = comm_router.system.session_port.send_message
         call_kwargs = send_message_mock.call_args.kwargs
         comm_meta = call_kwargs["metadata"]["comm"]
         assert comm_meta["summary"] == ""
@@ -436,15 +436,15 @@ class TestCommRouter:
         correct resource_id from the start instead of a null placeholder that
         gets mutated in place afterward (append-only log, so the persisted
         record previously stayed null forever)."""
-        comm_router.system.session_coordinator.data_dir = tmp_path
+        comm_router.system.session_port.data_dir = tmp_path
 
         source_file = tmp_path / "notes.txt"
         source_file.write_bytes(b"attachment contents")
 
-        comm_router.system.session_coordinator.register_uploaded_resource = AsyncMock(
+        comm_router.system.session_port.register_uploaded_resource = AsyncMock(
             return_value={"resource_id": "res-persisted-1"}
         )
-        comm_router.system.session_coordinator.register_uploaded_file = AsyncMock()
+        comm_router.system.session_port.register_uploaded_file = AsyncMock()
 
         comm = Comm(
             comm_id=str(uuid.uuid4()),
@@ -482,12 +482,12 @@ class TestCommRouter:
         otherwise a comm to a missing/disposed minion would silently create
         orphaned files/resources under a session directory that was never
         wired into session_manager."""
-        comm_router.system.session_coordinator.data_dir = tmp_path
-        comm_router.system.session_coordinator.session_manager.get_session_info = AsyncMock(
+        comm_router.system.session_port.data_dir = tmp_path
+        comm_router.system.session_port.session_manager.get_session_info = AsyncMock(
             return_value=None
         )
         register_resource_mock = AsyncMock(return_value={"resource_id": "should-not-be-called"})
-        comm_router.system.session_coordinator.register_uploaded_resource = register_resource_mock
+        comm_router.system.session_port.register_uploaded_resource = register_resource_mock
 
         source_file = tmp_path / "notes.txt"
         source_file.write_bytes(b"attachment contents")
@@ -538,13 +538,13 @@ class TestAutoStartFailureReason:
         SessionInfo is included in both the error Comm and the log line."""
         from backend.session_manager import SessionState
 
-        sm = comm_router.system.session_coordinator.session_manager
+        sm = comm_router.system.session_port.session_manager
         initial_minion = self._make_minion(SessionState.CREATED)
         failed_minion = self._make_minion(
             SessionState.ERROR, error_message="Docker sandbox unavailable: image not found"
         )
         sm.get_session_info = AsyncMock(side_effect=[initial_minion, failed_minion])
-        comm_router.system.session_coordinator.start_session = AsyncMock(return_value=False)
+        comm_router.system.session_port.start_session = AsyncMock(return_value=False)
 
         comm = Comm(
             comm_id=str(uuid.uuid4()),
@@ -574,13 +574,13 @@ class TestAutoStartFailureReason:
         error_message via the re-fetch."""
         from backend.session_manager import SessionState
 
-        sm = comm_router.system.session_coordinator.session_manager
+        sm = comm_router.system.session_port.session_manager
         initial_minion = self._make_minion(SessionState.CREATED)
         failed_minion = self._make_minion(
             SessionState.ERROR, error_message="Previous failure: connection refused"
         )
         sm.get_session_info = AsyncMock(side_effect=[initial_minion, failed_minion])
-        comm_router.system.session_coordinator.start_session = AsyncMock(return_value=False)
+        comm_router.system.session_port.start_session = AsyncMock(return_value=False)
 
         comm = Comm(
             comm_id=str(uuid.uuid4()),
@@ -603,10 +603,10 @@ class TestAutoStartFailureReason:
         re-fetch — falls back to the existing state-based text, no exception."""
         from backend.session_manager import SessionState
 
-        sm = comm_router.system.session_coordinator.session_manager
+        sm = comm_router.system.session_port.session_manager
         initial_minion = self._make_minion(SessionState.CREATED)
         sm.get_session_info = AsyncMock(side_effect=[initial_minion, None])
-        comm_router.system.session_coordinator.start_session = AsyncMock(return_value=False)
+        comm_router.system.session_port.start_session = AsyncMock(return_value=False)
 
         comm = Comm(
             comm_id=str(uuid.uuid4()),
@@ -630,7 +630,7 @@ class TestAutoStartFailureReason:
         falls back to the existing state-based text, no exception escapes."""
         from backend.session_manager import SessionState
 
-        sm = comm_router.system.session_coordinator.session_manager
+        sm = comm_router.system.session_port.session_manager
         initial_minion = self._make_minion(SessionState.CREATED)
 
         async def raise_on_second_call(*_args, **_kwargs):
@@ -645,7 +645,7 @@ class TestAutoStartFailureReason:
             return await raise_on_second_call()
 
         sm.get_session_info = AsyncMock(side_effect=side_effect)
-        comm_router.system.session_coordinator.start_session = AsyncMock(return_value=False)
+        comm_router.system.session_port.start_session = AsyncMock(return_value=False)
 
         comm = Comm(
             comm_id=str(uuid.uuid4()),
@@ -667,7 +667,7 @@ class TestAutoStartFailureReason:
     async def test_target_not_found_message_unchanged(self, comm_router):
         """AC4 regression: target-not-found failure keeps its existing
         generic message, byte-for-byte, untouched by this change."""
-        sm = comm_router.system.session_coordinator.session_manager
+        sm = comm_router.system.session_port.session_manager
         sm.get_session_info = AsyncMock(return_value=None)
 
         comm = Comm(
@@ -695,10 +695,10 @@ class TestAutoStartFailureReason:
         path) keeps its existing generic message unchanged."""
         from backend.session_manager import SessionState
 
-        sm = comm_router.system.session_coordinator.session_manager
+        sm = comm_router.system.session_port.session_manager
         active_minion = self._make_minion(SessionState.ACTIVE)
         sm.get_session_info = AsyncMock(return_value=active_minion)
-        comm_router.system.session_coordinator.send_message = AsyncMock(return_value=False)
+        comm_router.system.session_port.send_message = AsyncMock(return_value=False)
 
         comm = Comm(
             comm_id=str(uuid.uuid4()),
@@ -732,10 +732,10 @@ class TestPausedTargetDeliversWithoutForceStart:
         from backend.session_manager import SessionState
 
         sample_minion.state = SessionState.PAUSED
-        sm = comm_router.system.session_coordinator.session_manager
+        sm = comm_router.system.session_port.session_manager
         sm.get_session_info = AsyncMock(return_value=sample_minion)
-        comm_router.system.session_coordinator.start_session = AsyncMock()
-        comm_router.system.session_coordinator.send_message = AsyncMock(return_value=True)
+        comm_router.system.session_port.start_session = AsyncMock()
+        comm_router.system.session_port.send_message = AsyncMock(return_value=True)
 
         comm = Comm(
             comm_id=str(uuid.uuid4()),
@@ -749,7 +749,7 @@ class TestPausedTargetDeliversWithoutForceStart:
             result = await comm_router._send_to_minion(comm)
 
         assert result is True
-        comm_router.system.session_coordinator.start_session.assert_not_awaited()
+        comm_router.system.session_port.start_session.assert_not_awaited()
         mock_error_comm.assert_not_called()
 
     @pytest.mark.asyncio
@@ -758,10 +758,10 @@ class TestPausedTargetDeliversWithoutForceStart:
         from backend.session_manager import SessionState
 
         sample_minion.state = SessionState.ACTIVE
-        sm = comm_router.system.session_coordinator.session_manager
+        sm = comm_router.system.session_port.session_manager
         sm.get_session_info = AsyncMock(return_value=sample_minion)
-        comm_router.system.session_coordinator.start_session = AsyncMock()
-        comm_router.system.session_coordinator.send_message = AsyncMock(return_value=True)
+        comm_router.system.session_port.start_session = AsyncMock()
+        comm_router.system.session_port.send_message = AsyncMock(return_value=True)
 
         comm = Comm(
             comm_id=str(uuid.uuid4()),
@@ -774,5 +774,5 @@ class TestPausedTargetDeliversWithoutForceStart:
         result = await comm_router._send_to_minion(comm)
 
         assert result is True
-        comm_router.system.session_coordinator.start_session.assert_not_awaited()
+        comm_router.system.session_port.start_session.assert_not_awaited()
         assert "delivery_failure_reason" not in comm.metadata

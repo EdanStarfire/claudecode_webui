@@ -49,7 +49,7 @@ def legion_system():
     mock_session_coordinator.data_dir = Path("/tmp/test")
 
     return LegionSystem(
-        session_coordinator=mock_session_coordinator,
+        session_port=mock_session_coordinator,
         data_storage_manager=Mock(),
         template_manager=Mock(),
     )
@@ -64,7 +64,7 @@ class TestIssue1779ResumeAllTimestampScoping:
     async def test_resume_all_skips_timestamp_injection(self, legion_system):
         await legion_system.legion_coordinator.resume_all("test-legion-456")
 
-        enqueue_mock = legion_system.session_coordinator.enqueue_message
+        enqueue_mock = legion_system.session_port.enqueue_message
         enqueue_mock.assert_called_once()
         args, kwargs = enqueue_mock.call_args
         assert args[0] == "test-minion-123"
@@ -106,7 +106,7 @@ class TestIssue2159ResumeAllUsesSnapshot:
         mock_session_coordinator.data_dir = Path("/tmp/test")
 
         system = LegionSystem(
-            session_coordinator=mock_session_coordinator,
+            session_port=mock_session_coordinator,
             data_storage_manager=Mock(),
             template_manager=Mock(),
         )
@@ -137,7 +137,7 @@ class TestIssue2159ResumeAllUsesSnapshot:
         mock_session_coordinator.data_dir = Path("/tmp/test")
 
         system = LegionSystem(
-            session_coordinator=mock_session_coordinator,
+            session_port=mock_session_coordinator,
             data_storage_manager=Mock(),
             template_manager=Mock(),
         )
@@ -165,7 +165,7 @@ class TestIssue2159ResumeAllUsesSnapshot:
         mock_session_coordinator.data_dir = Path("/tmp/test")
 
         system = LegionSystem(
-            session_coordinator=mock_session_coordinator,
+            session_port=mock_session_coordinator,
             data_storage_manager=Mock(),
             template_manager=Mock(),
         )
@@ -196,7 +196,7 @@ class TestIssue2159ResumeAllUsesSnapshot:
         mock_session_coordinator.data_dir = Path("/tmp/test")
 
         system = LegionSystem(
-            session_coordinator=mock_session_coordinator,
+            session_port=mock_session_coordinator,
             data_storage_manager=Mock(),
             template_manager=Mock(),
         )
@@ -247,7 +247,7 @@ class TestIssue1933EmergencyHaltAllConcurrency:
         mock_session_coordinator.data_dir = Path("/tmp/test")
 
         system = LegionSystem(
-            session_coordinator=mock_session_coordinator,
+            session_port=mock_session_coordinator,
             data_storage_manager=Mock(),
             template_manager=Mock(),
         )

@@ -51,12 +51,12 @@ class LegionCoordinator:
     @property
     def project_manager(self):
         """Access ProjectManager through SessionCoordinator."""
-        return self.system.session_coordinator.project_manager
+        return self.system.session_port.project_manager
 
     @property
     def session_manager(self):
         """Access SessionManager through SessionCoordinator."""
-        return self.system.session_coordinator.session_manager
+        return self.system.session_port.session_manager
 
     async def get_minion_info(self, minion_id: str) -> Optional['SessionInfo']:
         """
@@ -172,7 +172,7 @@ class LegionCoordinator:
         Args:
             legion_id: Legion UUID (same as project_id)
         """
-        base_path = self.system.session_coordinator.data_dir / "legions" / legion_id
+        base_path = self.system.session_port.data_dir / "legions" / legion_id
         base_path.mkdir(parents=True, exist_ok=True)
 
     async def assemble_minion_hierarchy(self, legion_id: str) -> dict:
@@ -283,7 +283,7 @@ class LegionCoordinator:
             }
         """
         # Path to timeline file
-        timeline_path = self.system.session_coordinator.data_dir / "legions" / legion_id / "timeline.jsonl"
+        timeline_path = self.system.session_port.data_dir / "legions" / legion_id / "timeline.jsonl"
 
         if not timeline_path.exists():
             return None
@@ -400,7 +400,7 @@ class LegionCoordinator:
             if normalized_capability not in minion.capabilities:
                 minion.capabilities.append(normalized_capability)
                 # Persist to state.json
-                await self.system.session_coordinator.session_manager._persist_session_state(minion_id)
+                await self.session_manager.update_session(minion_id)
 
     def unregister_minion_capabilities(self, minion_id: str) -> None:
         """
@@ -552,7 +552,7 @@ class LegionCoordinator:
 
         # Terminate all sessions in parallel
         terminate_tasks = [
-            self.system.session_coordinator.terminate_session(s.session_id)
+            self.system.session_port.terminate_session(s.session_id)
             for s in sessions
         ]
         results = await asyncio.gather(*terminate_tasks, return_exceptions=True)
@@ -632,7 +632,7 @@ class LegionCoordinator:
                     # history. inject_timestamp=False: this catch-up message is
                     # system-generated, not a user message (issue #1779) — same
                     # opt-out as comm_router.py's comms.
-                    await self.system.session_coordinator.enqueue_message(
+                    await self.system.session_port.enqueue_message(
                         session_id,
                         FLEET_RESUME_MESSAGE,
                         reset_session=False,
@@ -643,10 +643,10 @@ class LegionCoordinator:
                     # permission_callback is required for the resumed session to
                     # actually be able to request/respond to tool permissions.
                     perm_callback = None
-                    factory = self.system.session_coordinator._permission_callback_factory
+                    factory = self.system.permission_callback_factory
                     if factory:
                         perm_callback = factory(session_id)
-                    await self.system.session_coordinator.start_session(session_id, perm_callback)
+                    await self.system.session_port.start_session(session_id, perm_callback)
                 resolved_ids.append(session_id)
             except Exception as e:
                 failed_minions.append((session_id, str(e)))

@@ -28,8 +28,8 @@ if TYPE_CHECKING:
     from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
     from backend.legion.memory_manager import MemoryManager
     from backend.legion.overseer_controller import OverseerController
+    from backend.legion.ports import LegionCoordinatorPort
     from backend.legion.scheduler_service import SchedulerService
-    from backend.session_coordinator import SessionCoordinator
     from backend.template_manager import TemplateManager
 
 
@@ -42,7 +42,7 @@ class LegionSystem:
     Usage:
         # Create system with existing infrastructure
         legion_system = LegionSystem(
-            session_coordinator=session_coordinator,
+            session_port=session_coordinator,
             data_storage_manager=data_storage_manager
         )
         # All Legion components are automatically wired in __post_init__
@@ -53,7 +53,7 @@ class LegionSystem:
     """
 
     # Existing infrastructure (injected at creation)
-    session_coordinator: 'SessionCoordinator'
+    session_port: 'LegionCoordinatorPort'
     data_storage_manager: 'DataStorageManager'
     template_manager: 'TemplateManager'
     ui_queue: Any | None = None  # EventQueue (optional, for broadcasting project updates to poll clients)

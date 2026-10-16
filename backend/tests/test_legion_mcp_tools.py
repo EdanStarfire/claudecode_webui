@@ -20,7 +20,7 @@ async def _get_tools_by_name(server_config):
 def legion_system():
     """Create mock LegionSystem for testing."""
     return LegionSystem(
-        session_coordinator=Mock(),
+        session_port=Mock(),
         data_storage_manager=Mock(),
         template_manager=Mock()
     )
@@ -283,7 +283,7 @@ async def test_list_minions_includes_overseer_sessions():
 
     # Create mock system
     mock_system = MagicMock()
-    mock_system.session_coordinator = session_coordinator
+    mock_system.session_port = session_coordinator
     mock_system.legion_coordinator = legion_coordinator
     mock_system.comm_router = comm_router
 
@@ -357,7 +357,7 @@ async def test_get_minion_by_name_includes_overseer():
 
     # Create mock system
     mock_system = MagicMock()
-    mock_system.session_coordinator = session_coordinator
+    mock_system.session_port = session_coordinator
 
     # Create LegionCoordinator with mock system
     from backend.legion.legion_coordinator import LegionCoordinator
@@ -393,7 +393,7 @@ def _make_send_comm_system(session_id: str, docker_enabled: bool, data_dir):
     session_coordinator.register_uploaded_resource = AsyncMock(return_value=None)
 
     mock_system = MagicMock()
-    mock_system.session_coordinator = session_coordinator
+    mock_system.session_port = session_coordinator
     return mock_system
 
 
@@ -555,7 +555,7 @@ def _make_send_comm_system_with_router(session_id: str, data_dir, resource_ids):
     from unittest.mock import AsyncMock, MagicMock
 
     mock_system = _make_send_comm_system(session_id, docker_enabled=False, data_dir=data_dir)
-    mock_system.session_coordinator.register_uploaded_resource = AsyncMock(
+    mock_system.session_port.register_uploaded_resource = AsyncMock(
         side_effect=[{"resource_id": rid} for rid in resource_ids]
     )
     mock_system.comm_router = MagicMock()
@@ -801,7 +801,7 @@ def _make_queue_task_tools(enqueue_side_effect=None, enqueue_return=None):
         })
 
     mock_system = MagicMock()
-    mock_system.session_coordinator = coordinator
+    mock_system.session_port = coordinator
     return LegionMCPTools(mock_system), coordinator
 
 
@@ -935,7 +935,7 @@ def _make_create_schedule_tools(create_schedule_side_effect=None, create_schedul
         )
 
     mock_system = MagicMock()
-    mock_system.session_coordinator = session_coordinator
+    mock_system.session_port = session_coordinator
     mock_system.scheduler_service = scheduler_service
 
     return LegionMCPTools(mock_system), scheduler_service
@@ -1434,7 +1434,7 @@ async def test_issue_1433_reparent_extracts_descendants_from_dict():
     )
 
     mock_system = MagicMock()
-    mock_system.session_coordinator = session_coordinator
+    mock_system.session_port = session_coordinator
     mock_system.overseer_controller = overseer_controller
 
     mcp_tools = LegionMCPTools(mock_system)
@@ -1489,7 +1489,7 @@ async def test_issue_1581_reparent_with_large_subtree():
     )
 
     mock_system = MagicMock()
-    mock_system.session_coordinator = session_coordinator
+    mock_system.session_port = session_coordinator
     mock_system.overseer_controller = overseer_controller
 
     mcp_tools = LegionMCPTools(mock_system)
@@ -1570,7 +1570,7 @@ async def test_issue_1581_spawn_parent_name_large_subtree():
     template_manager.get_template_by_name = AsyncMock(return_value=template)
 
     mock_system = MagicMock()
-    mock_system.session_coordinator = session_coordinator
+    mock_system.session_port = session_coordinator
     mock_system.legion_coordinator = legion_coordinator
     mock_system.overseer_controller = overseer_controller
     mock_system.template_manager = template_manager
@@ -1631,7 +1631,7 @@ async def test_issue_1581_dispose_minion_large_subtree():
     overseer_controller.dispose_minion = AsyncMock(return_value={"descendants_count": 0})
 
     mock_system = MagicMock()
-    mock_system.session_coordinator = session_coordinator
+    mock_system.session_port = session_coordinator
     mock_system.overseer_controller = overseer_controller
 
     mcp_tools = LegionMCPTools(mock_system)
@@ -1700,7 +1700,7 @@ async def test_issue_1433_list_minions_includes_parent_field():
     comm_router.get_visible_minions = AsyncMock(return_value=["root-id", "child-id"])
 
     mock_system = MagicMock()
-    mock_system.session_coordinator = session_coordinator
+    mock_system.session_port = session_coordinator
     mock_system.legion_coordinator = legion_coordinator
     mock_system.comm_router = comm_router
 
@@ -1756,7 +1756,7 @@ async def test_issue_1433_list_minions_parent_unknown_fallback():
     comm_router.get_visible_minions = AsyncMock(return_value=["orphan-id"])
 
     mock_system = MagicMock()
-    mock_system.session_coordinator = session_coordinator
+    mock_system.session_port = session_coordinator
     mock_system.legion_coordinator = legion_coordinator
     mock_system.comm_router = comm_router
 
@@ -1792,7 +1792,7 @@ def _make_visible_minion_system(session, from_id):
     comm_router.get_visible_minions = AsyncMock(return_value=[from_id])
 
     mock_system = MagicMock()
-    mock_system.session_coordinator = session_coordinator
+    mock_system.session_port = session_coordinator
     mock_system.legion_coordinator = legion_coordinator
     mock_system.comm_router = comm_router
 
@@ -1952,7 +1952,7 @@ async def test_issue_1952_get_minion_info_shows_activity_field():
         legion_coordinator.get_minion_by_name_in_legion = AsyncMock(return_value=minion)
 
         mock_system = MagicMock()
-        mock_system.session_coordinator = session_coordinator
+        mock_system.session_port = session_coordinator
         mock_system.legion_coordinator = legion_coordinator
 
         mcp_tools = LegionMCPTools(mock_system)
@@ -2034,7 +2034,7 @@ async def test_issue_1817_list_schedules_shows_full_uuid():
     scheduler_service.list_schedules = AsyncMock(return_value=[schedule])
 
     mock_system = MagicMock()
-    mock_system.session_coordinator = session_coordinator
+    mock_system.session_port = session_coordinator
     mock_system.scheduler_service = scheduler_service
 
     tools = LegionMCPTools(mock_system)

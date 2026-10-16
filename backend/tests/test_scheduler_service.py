@@ -62,7 +62,7 @@ def _make_system(enqueue_raises: Exception | None = None, data_dir: Path | None 
         coordinator.enqueue_message = AsyncMock(return_value=enqueue_result)
 
     system = MagicMock()
-    system.session_coordinator = coordinator
+    system.session_port = coordinator
     return system
 
 

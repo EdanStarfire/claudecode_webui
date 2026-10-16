@@ -529,7 +529,7 @@ class SessionCoordinator:
         dummy_storage = DataStorageManager(self.data_dir / "legion_temp")
         _app_config = load_config()
         self.legion_system = LegionSystem(
-            session_coordinator=self,
+            session_port=self,
             data_storage_manager=dummy_storage,
             template_manager=self.template_manager,
             default_max_minions=_app_config.legion.max_concurrent_minions,

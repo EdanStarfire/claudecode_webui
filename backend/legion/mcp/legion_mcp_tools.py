@@ -619,7 +619,7 @@ class LegionMCPTools:
             to_minion_id = None  # User doesn't have a minion_id, only use to_user flag
         else:
             # Get sender's legion to scope lookup
-            sender_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+            sender_session = await self.system.session_port.session_manager.get_session_info(from_minion_id)
             if not sender_session:
                 return self._err("Error: Unable to find sender session")
 
@@ -646,7 +646,7 @@ class LegionMCPTools:
                 visible_ids = await self.system.comm_router.get_visible_minions(from_minion_id)
                 visible_names = []
                 for vid in visible_ids:
-                    vs = await self.system.session_coordinator.session_manager.get_session_info(vid)
+                    vs = await self.system.session_port.session_manager.get_session_info(vid)
                     if vs:
                         visible_names.append(vs.name or vid[:8])
                 reachable = ", ".join(visible_names) if visible_names else "none"
@@ -669,14 +669,14 @@ class LegionMCPTools:
 
         # Look up sender minion name (for historical display)
         from_minion_name = None
-        from_minion_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+        from_minion_session = await self.system.session_port.session_manager.get_session_info(from_minion_id)
         if from_minion_session:
             from_minion_name = from_minion_session.name
 
         # Look up recipient minion name if applicable (for historical display)
         to_minion_name_captured = None
         if to_minion_id:
-            to_minion_session = await self.system.session_coordinator.session_manager.get_session_info(to_minion_id)
+            to_minion_session = await self.system.session_port.session_manager.get_session_info(to_minion_id)
             if to_minion_session:
                 to_minion_name_captured = to_minion_session.name
 
@@ -709,7 +709,7 @@ class LegionMCPTools:
             for fpath_str in file_paths:
                 # Issue #824: Translate /tmp/ paths for Docker sessions
                 fpath_str = await translate_docker_tmp_path(
-                    fpath_str, from_minion_id, self.system.session_coordinator
+                    fpath_str, from_minion_id, self.system.session_port
                 )
                 fpath = Path(fpath_str)
                 # Validate existence
@@ -741,7 +741,7 @@ class LegionMCPTools:
                     "session_id": None,
                 }
                 # Register in sender's session for outbound preview (issue #949)
-                sender_resource = await self.system.session_coordinator.register_uploaded_resource(
+                sender_resource = await self.system.session_port.register_uploaded_resource(
                     session_id=from_minion_id,
                     file_path=str(fpath),
                     title=fpath.name,
@@ -841,7 +841,7 @@ class LegionMCPTools:
         parent_name_param = args.get("parent_name", "").strip()
 
         # Get caller session to determine legion_id
-        caller_session = await self.system.session_coordinator.session_manager.get_session_info(parent_overseer_id)
+        caller_session = await self.system.session_port.session_manager.get_session_info(parent_overseer_id)
         if not caller_session:
             return self._err(f"Error: Parent overseer session {parent_overseer_id} not found")
 
@@ -865,7 +865,7 @@ class LegionMCPTools:
             if named_minion.session_id != parent_overseer_id:
                 descendant_ids = {
                     d["session_id"]
-                    for d in await self.system.session_coordinator.get_all_descendants(parent_overseer_id)
+                    for d in await self.system.session_port.get_all_descendants(parent_overseer_id)
                 }
 
                 if named_minion.session_id not in descendant_ids:
@@ -913,7 +913,7 @@ class LegionMCPTools:
 
             template_applied = template
 
-            profile_manager = getattr(self.system.session_coordinator, 'profile_manager', None)
+            profile_manager = getattr(self.system.session_port, 'profile_manager', None)
             resolved = await resolve_template_config(template, profile_manager)
 
             # Apply resolved values (enforced, no overrides)
@@ -1074,7 +1074,7 @@ class LegionMCPTools:
             child_minion_id = spawn_result["minion_id"]
 
             # Get slug for the newly created minion (issue #546)
-            child_session = await self.system.session_coordinator.session_manager.get_session_info(child_minion_id)
+            child_session = await self.system.session_port.session_manager.get_session_info(child_minion_id)
             child_slug = child_session.slug if child_session else name
 
             # Build success message with permission info
@@ -1160,7 +1160,7 @@ class LegionMCPTools:
         # If not a direct child, find the target's actual parent so
         # overseer_controller.dispose_minion() can enforce parent authority.
         try:
-            caller_session = await self.system.session_coordinator.session_manager.get_session_info(
+            caller_session = await self.system.session_port.session_manager.get_session_info(
                 parent_overseer_id
             )
             if not caller_session:
@@ -1173,7 +1173,7 @@ class LegionMCPTools:
 
             is_direct_child = False
             for cid in (caller_session.child_minion_ids or []):
-                s = await self.system.session_coordinator.session_manager.get_session_info(cid)
+                s = await self.system.session_port.session_manager.get_session_info(cid)
                 if s and s.slug == target_slug:
                     is_direct_child = True
                     break
@@ -1181,7 +1181,7 @@ class LegionMCPTools:
             if not is_direct_child:
                 # Search full descendant subtree for the target
                 target_desc = None
-                for d in await self.system.session_coordinator.get_all_descendants(parent_overseer_id):
+                for d in await self.system.session_port.get_all_descendants(parent_overseer_id):
                     d_slug = _slugify(d["name"])
                     if d_slug == target_slug:
                         target_desc = d
@@ -1269,14 +1269,14 @@ class LegionMCPTools:
             return self._err("Error: 'new_parent_name' parameter is required")
 
         try:
-            caller_session = await self.system.session_coordinator.session_manager.get_session_info(caller_id)
+            caller_session = await self.system.session_port.session_manager.get_session_info(caller_id)
             if not caller_session:
                 return self._err("Error: Caller session not found")
 
             subject_slug = _slugify(subject_name)
             new_parent_slug = _slugify(new_parent_name)
 
-            caller_descendants = await self.system.session_coordinator.get_all_descendants(caller_id)
+            caller_descendants = await self.system.session_port.get_all_descendants(caller_id)
 
             subject_id = None
             new_parent_id = None
@@ -1433,7 +1433,7 @@ class LegionMCPTools:
             if not from_minion_id:
                 return self._err("Error: Unable to determine caller minion ID")
 
-            caller_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+            caller_session = await self.system.session_port.session_manager.get_session_info(from_minion_id)
             if not caller_session:
                 return self._err("Error: Unable to find caller session")
 
@@ -1445,7 +1445,7 @@ class LegionMCPTools:
                 return self._err("Error: Caller is not part of a legion")
 
             # Scope to caller's immediate hierarchy group (issue #349: all sessions are minions)
-            session_manager = self.system.session_coordinator.session_manager
+            session_manager = self.system.session_port.session_manager
             visible_ids = await self.system.comm_router.get_visible_minions(from_minion_id)
             minions = []
             session_name_cache: dict[str, str] = {}
@@ -1536,7 +1536,7 @@ class LegionMCPTools:
         if not from_minion_id:
             return self._err("❌ Error: Unable to determine caller minion ID")
 
-        caller_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+        caller_session = await self.system.session_port.session_manager.get_session_info(from_minion_id)
         if not caller_session:
             return self._err("❌ Error: Unable to find caller session")
 
@@ -1597,7 +1597,7 @@ class LegionMCPTools:
                 # Resolve child names
                 child_names = []
                 for child_id in minion.child_minion_ids:
-                    child_session = await self.system.session_coordinator.session_manager.get_session_info(child_id)
+                    child_session = await self.system.session_port.session_manager.get_session_info(child_id)
                     if child_session:
                         child_names.append(child_session.name or child_id[:8])
                     else:
@@ -1612,7 +1612,7 @@ class LegionMCPTools:
         # Parent overseer
         if minion.parent_overseer_id:
             # Resolve parent name
-            parent_session = await self.system.session_coordinator.session_manager.get_session_info(minion.parent_overseer_id)
+            parent_session = await self.system.session_port.session_manager.get_session_info(minion.parent_overseer_id)
             parent_name = parent_session.name if parent_session else minion.parent_overseer_id[:8]
             profile_lines.append(f"**Parent Overseer:** {parent_name}")
 
@@ -1620,7 +1620,7 @@ class LegionMCPTools:
         if minion.project_id:
             # Resolve legion name
             try:
-                legion = await self.system.session_coordinator.project_manager.get_project(minion.project_id)
+                legion = await self.system.session_port.project_manager.get_project(minion.project_id)
                 legion_name = legion.name if legion else minion.project_id[:8]
             except Exception:
                 legion_name = minion.project_id[:8]
@@ -1759,7 +1759,7 @@ class LegionMCPTools:
             )
 
             # Get updated capability count
-            minion = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+            minion = await self.system.session_port.session_manager.get_session_info(from_minion_id)
             capability_count = len(minion.capabilities) if minion else 0
 
             # Format score for display
@@ -1802,7 +1802,7 @@ class LegionMCPTools:
             return self._err("Error: Unable to determine minion ID")
 
         # Get session info for the calling minion
-        session = await self.system.session_coordinator.session_manager.get_session_info(
+        session = await self.system.session_port.session_manager.get_session_info(
             from_minion_id
         )
         if not session:
@@ -1811,7 +1811,7 @@ class LegionMCPTools:
         # Resolve parent name if exists
         parent_name = None
         if session.parent_overseer_id:
-            parent_session = await self.system.session_coordinator.session_manager.get_session_info(
+            parent_session = await self.system.session_port.session_manager.get_session_info(
                 session.parent_overseer_id
             )
             if parent_session:
@@ -1820,7 +1820,7 @@ class LegionMCPTools:
         # Resolve child names
         child_names = []
         for child_id in session.child_minion_ids or []:
-            child_session = await self.system.session_coordinator.session_manager.get_session_info(
+            child_session = await self.system.session_port.session_manager.get_session_info(
                 child_id
             )
             if child_session:
@@ -1908,7 +1908,7 @@ class LegionMCPTools:
             script_timeout_seconds = 60
 
         # Get minion info for legion_id and name
-        session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+        session = await self.system.session_port.session_manager.get_session_info(from_minion_id)
         if not session:
             return self._err("Error: Could not find your session")
 
@@ -1992,7 +1992,7 @@ class LegionMCPTools:
         if not from_minion_id:
             return self._err("Error: Unable to determine minion ID")
 
-        session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+        session = await self.system.session_port.session_manager.get_session_info(from_minion_id)
         if not session or not session.project_id:
             return self._err("Error: Could not find your session/legion")
 
@@ -2237,7 +2237,7 @@ class LegionMCPTools:
             return self._err("Error: 'reason' parameter is required.")
 
         # Check session exists and is active
-        session_info = await self.system.session_coordinator.session_manager.get_session_info(
+        session_info = await self.system.session_port.session_manager.get_session_info(
             session_id
         )
         if not session_info:
@@ -2283,7 +2283,7 @@ class LegionMCPTools:
     async def _restart_monitor(self, session_id: str, restart_id: str, reason: str) -> None:
         """Background task that waits for session idle then triggers restart."""
         timestamp = datetime.now(UTC).isoformat()
-        coordinator = self.system.session_coordinator
+        coordinator = self.system.session_port
 
         try:
             # Poll is_processing every 2 seconds for up to 30 seconds
@@ -2384,7 +2384,7 @@ class LegionMCPTools:
             return self._err("Error: content is required")
 
         try:
-            item = await self.system.session_coordinator.enqueue_message(
+            item = await self.system.session_port.enqueue_message(
                 session_id=session_id,
                 content=content,
                 reset_session=reset_session,

@@ -80,9 +80,9 @@ def sample_minion_zero_score():
 def mock_legion_system(sample_minion_1, sample_minion_2, sample_minion_3, sample_minion_zero_score):
     """Create mock LegionSystem with session coordinator."""
     system = Mock()
-    system.session_coordinator = Mock()
-    system.session_coordinator.session_manager = Mock()
-    system.session_coordinator.session_manager._persist_session_state = AsyncMock()
+    system.session_port = Mock()
+    system.session_port.session_manager = Mock()
+    system.session_port.session_manager.update_session = AsyncMock()
 
     # Mock get_session_info to return sample minions
     async def mock_get_session_info(session_id):
@@ -94,7 +94,7 @@ def mock_legion_system(sample_minion_1, sample_minion_2, sample_minion_3, sample
         }
         return minion_map.get(session_id)
 
-    system.session_coordinator.session_manager.get_session_info = AsyncMock(side_effect=mock_get_session_info)
+    system.session_port.session_manager.get_session_info = AsyncMock(side_effect=mock_get_session_info)
 
     return system
 
@@ -106,7 +106,7 @@ def legion_coordinator(mock_legion_system):
 
     # Mock get_minion_info to delegate to session_manager (issue #349: all sessions are minions)
     async def mock_get_minion_info(minion_id):
-        return await mock_legion_system.session_coordinator.session_manager.get_session_info(minion_id)
+        return await mock_legion_system.session_port.session_manager.get_session_info(minion_id)
 
     coordinator.get_minion_info = AsyncMock(side_effect=mock_get_minion_info)
 

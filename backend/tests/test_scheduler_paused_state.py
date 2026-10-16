@@ -61,7 +61,7 @@ def _make_system(session_info=None, data_dir: Path | None = None):
     coordinator.data_dir = data_dir or Path("/nonexistent")
 
     system = MagicMock()
-    system.session_coordinator = coordinator
+    system.session_port = coordinator
     return system
 
 
@@ -107,8 +107,8 @@ async def test_fire_ephemeral_schedule_skips_when_paused():
 
     await svc._fire_ephemeral_schedule(schedule, 1000.0)
 
-    system.session_coordinator.start_session.assert_not_awaited()
-    system.session_coordinator.enqueue_message.assert_not_awaited()
+    system.session_port.start_session.assert_not_awaited()
+    system.session_port.enqueue_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -122,7 +122,7 @@ async def test_fire_ephemeral_schedule_skips_when_active_or_starting(state):
 
     await svc._fire_ephemeral_schedule(schedule, 1000.0)
 
-    system.session_coordinator.start_session.assert_not_awaited()
+    system.session_port.start_session.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -136,8 +136,8 @@ async def test_fire_ephemeral_schedule_starts_when_created_or_terminated(state, 
 
     await svc._fire_ephemeral_schedule(schedule, 1000.0)
 
-    system.session_coordinator.start_session.assert_awaited_once_with("agent-1")
-    system.session_coordinator.enqueue_message.assert_awaited_once()
+    system.session_port.start_session.assert_awaited_once_with("agent-1")
+    system.session_port.enqueue_message.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +157,7 @@ async def test_run_now_raises_when_paused():
     with pytest.raises(RuntimeError, match="currently active"):
         await svc.run_now(schedule.schedule_id)
 
-    system.session_coordinator.start_session.assert_not_awaited()
+    system.session_port.start_session.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -192,8 +192,8 @@ async def test_recover_orphaned_does_not_terminate_paused():
 
     await svc._recover_orphaned_ephemeral_sessions()
 
-    system.session_coordinator.archive_and_clear_session.assert_not_awaited()
-    system.session_coordinator.resolve_orphaned_ephemeral_session.assert_awaited_once_with(
+    system.session_port.archive_and_clear_session.assert_not_awaited()
+    system.session_port.resolve_orphaned_ephemeral_session.assert_awaited_once_with(
         "agent-1"
     )
     assert schedule.ephemeral_agent_id is None
@@ -215,7 +215,7 @@ async def test_recover_orphaned_does_not_touch_non_ephemeral_paused_session():
     }
 
     system = _make_system(session_info=ephemeral_info)
-    system.session_coordinator.session_manager.get_session_info = AsyncMock(
+    system.session_port.session_manager.get_session_info = AsyncMock(
         side_effect=lambda session_id: session_infos[session_id]
     )
     svc = _make_svc(system)
@@ -224,10 +224,10 @@ async def test_recover_orphaned_does_not_touch_non_ephemeral_paused_session():
 
     await svc._recover_orphaned_ephemeral_sessions()
 
-    system.session_coordinator.resolve_orphaned_ephemeral_session.assert_awaited_once_with(
+    system.session_port.resolve_orphaned_ephemeral_session.assert_awaited_once_with(
         "agent-1"
     )
-    system.session_coordinator.session_manager.get_session_info.assert_awaited_once_with(
+    system.session_port.session_manager.get_session_info.assert_awaited_once_with(
         "agent-1"
     )
 
@@ -244,7 +244,7 @@ async def test_recover_orphaned_terminates_active_or_starting(state):
 
     await svc._recover_orphaned_ephemeral_sessions()
 
-    system.session_coordinator.archive_and_clear_session.assert_awaited_once_with("agent-1")
+    system.session_port.archive_and_clear_session.assert_awaited_once_with("agent-1")
 
 
 # ---------------------------------------------------------------------------
@@ -275,12 +275,12 @@ async def test_e2e_paused_session_survives_schedule_fire_then_resumes(tmp_path):
 
     # Cron schedule fires while the session is paused — must not clobber state
     system = MagicMock()
-    system.session_coordinator = MagicMock()
-    system.session_coordinator.session_manager = session_manager
-    system.session_coordinator.start_session = AsyncMock(
+    system.session_port = MagicMock()
+    system.session_port.session_manager = session_manager
+    system.session_port.start_session = AsyncMock(
         side_effect=lambda sid: session_manager.start_session(sid)
     )
-    system.session_coordinator.enqueue_message = AsyncMock(return_value={"queue_id": "q-1"})
+    system.session_port.enqueue_message = AsyncMock(return_value={"queue_id": "q-1"})
 
     svc = _make_svc(system)
     schedule = _make_ephemeral_schedule(ephemeral_agent_id=agent_id)
@@ -289,7 +289,7 @@ async def test_e2e_paused_session_survives_schedule_fire_then_resumes(tmp_path):
 
     # Fix verified: still PAUSED, not clobbered into STARTING (the reported wedge)
     assert (await session_manager.get_session_info(agent_id)).state == SessionState.PAUSED
-    system.session_coordinator.start_session.assert_not_awaited()
+    system.session_port.start_session.assert_not_awaited()
 
     # User answers the permission prompt — session resumes normally
     resumed_ok = await session_manager.resolve_permission_closed(agent_id)
@@ -352,10 +352,10 @@ async def test_recover_orphaned_paused_survives_real_boot_reload(tmp_path):
         )
 
     system = MagicMock()
-    system.session_coordinator = MagicMock()
-    system.session_coordinator.session_manager = manager2
-    system.session_coordinator.archive_and_clear_session = AsyncMock(return_value=True)
-    system.session_coordinator.resolve_orphaned_ephemeral_session = AsyncMock(
+    system.session_port = MagicMock()
+    system.session_port.session_manager = manager2
+    system.session_port.archive_and_clear_session = AsyncMock(return_value=True)
+    system.session_port.resolve_orphaned_ephemeral_session = AsyncMock(
         side_effect=_resolve
     )
 
@@ -365,8 +365,8 @@ async def test_recover_orphaned_paused_survives_real_boot_reload(tmp_path):
 
     await svc._recover_orphaned_ephemeral_sessions()
 
-    system.session_coordinator.archive_and_clear_session.assert_not_awaited()
-    system.session_coordinator.resolve_orphaned_ephemeral_session.assert_awaited_once_with(
+    system.session_port.archive_and_clear_session.assert_not_awaited()
+    system.session_port.resolve_orphaned_ephemeral_session.assert_awaited_once_with(
         agent_id
     )
     assert (await manager2.get_session_info(agent_id)).state == SessionState.ERROR

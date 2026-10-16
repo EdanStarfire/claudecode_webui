@@ -28,7 +28,7 @@ def test_broadcast_ui_event_appends_to_queue():
 
     queue = EventQueue()
     system = LegionSystem(
-        session_coordinator=Mock(),
+        session_port=Mock(),
         data_storage_manager=Mock(),
         template_manager=Mock(),
         ui_queue=queue,
@@ -48,7 +48,7 @@ def test_broadcast_ui_event_safe_when_ui_queue_is_none():
     from backend.legion_system import LegionSystem
 
     system = LegionSystem(
-        session_coordinator=Mock(),
+        session_port=Mock(),
         data_storage_manager=Mock(),
         template_manager=Mock(),
         ui_queue=None,

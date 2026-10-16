@@ -39,10 +39,10 @@ def tmp_data():
 def mock_system(tmp_data):
     """Minimal mock LegionSystem."""
     system = Mock()
-    system.session_coordinator = Mock()
-    system.session_coordinator.session_manager = Mock()
-    system.session_coordinator.session_manager.data_dir = tmp_data
-    system.session_coordinator.session_manager.sessions_dir = tmp_data / "sessions"
+    system.session_port = Mock()
+    system.session_port.session_manager = Mock()
+    system.session_port.session_manager.data_dir = tmp_data
+    system.session_port.session_manager.sessions_dir = tmp_data / "sessions"
     return system, tmp_data
 
 

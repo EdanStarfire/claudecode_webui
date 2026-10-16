@@ -77,7 +77,7 @@ def mock_system():
     mock_session_coordinator.data_dir = "/tmp/test"
 
     system = LegionSystem(
-        session_coordinator=mock_session_coordinator,
+        session_port=mock_session_coordinator,
         data_storage_manager=Mock(),
         template_manager=Mock()
     )
@@ -104,7 +104,7 @@ class TestSpawnWithParentName:
         parent = _make_session("parent-id", "Parent", parent_id="gp-id")
 
         session_map = {"gp-id": grandparent, "parent-id": parent}
-        sm = mock_system.session_coordinator.session_manager
+        sm = mock_system.session_port.session_manager
         sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
 
         # get_minion_by_name_in_legion finds Parent
@@ -112,7 +112,7 @@ class TestSpawnWithParentName:
             return_value=parent
         )
 
-        mock_system.session_coordinator.get_all_descendants = AsyncMock(return_value=[
+        mock_system.session_port.get_all_descendants = AsyncMock(return_value=[
             {"session_id": "parent-id", "name": "Parent", "role": "worker",
              "state": "active", "parent_id": "gp-id"}
         ])
@@ -155,14 +155,14 @@ class TestSpawnWithParentName:
         unrelated = _make_session("unrelated-id", "Unrelated")
 
         session_map = {"caller-id": caller, "unrelated-id": unrelated}
-        sm = mock_system.session_coordinator.session_manager
+        sm = mock_system.session_port.session_manager
         sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
 
         mock_system.legion_coordinator.get_minion_by_name_in_legion = AsyncMock(
             return_value=unrelated
         )
         # Caller has no descendants
-        mock_system.session_coordinator.get_all_descendants = AsyncMock(return_value=[])
+        mock_system.session_port.get_all_descendants = AsyncMock(return_value=[])
 
         args = {
             "_parent_overseer_id": "caller-id",
@@ -185,7 +185,7 @@ class TestSpawnWithParentName:
         caller = _make_session("caller-id", "Caller")
 
         session_map = {"caller-id": caller}
-        sm = mock_system.session_coordinator.session_manager
+        sm = mock_system.session_port.session_manager
         sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
 
         child_session = _make_session("child-id", "Child", parent_id="caller-id")
@@ -221,7 +221,7 @@ class TestSpawnWithParentName:
         """
         caller = _make_session("caller-id", "Caller")
 
-        sm = mock_system.session_coordinator.session_manager
+        sm = mock_system.session_port.session_manager
         sm.get_session_info = AsyncMock(return_value=caller)
 
         mock_system.legion_coordinator.get_minion_by_name_in_legion = AsyncMock(
@@ -249,7 +249,7 @@ class TestSpawnWithParentName:
         caller = _make_session("caller-id", "Caller")
 
         session_map = {"caller-id": caller}
-        sm = mock_system.session_coordinator.session_manager
+        sm = mock_system.session_port.session_manager
         sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
 
         mock_system.legion_coordinator.get_minion_by_name_in_legion = AsyncMock(
@@ -305,10 +305,10 @@ class TestDisposeDescendant:
             "parent-id": parent,
             "child-id": child,
         }
-        sm = mock_system.session_coordinator.session_manager
+        sm = mock_system.session_port.session_manager
         sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
 
-        mock_system.session_coordinator.get_all_descendants = AsyncMock(return_value=[
+        mock_system.session_port.get_all_descendants = AsyncMock(return_value=[
             {"session_id": "parent-id", "name": "Parent", "role": "worker",
              "state": "active", "parent_id": "gp-id"},
             {"session_id": "child-id", "name": "Child", "role": "worker",
@@ -351,7 +351,7 @@ class TestDisposeDescendant:
         child = _make_session("child-id", "Child", parent_id="parent-id")
 
         session_map = {"parent-id": parent, "child-id": child}
-        sm = mock_system.session_coordinator.session_manager
+        sm = mock_system.session_port.session_manager
         sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
 
         mock_system.overseer_controller.dispose_minion = AsyncMock(
@@ -386,11 +386,11 @@ class TestDisposeDescendant:
         caller = _make_session("caller-id", "Caller", children=[])
 
         session_map = {"caller-id": caller}
-        sm = mock_system.session_coordinator.session_manager
+        sm = mock_system.session_port.session_manager
         sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
 
         # No descendants
-        mock_system.session_coordinator.get_all_descendants = AsyncMock(return_value=[])
+        mock_system.session_port.get_all_descendants = AsyncMock(return_value=[])
 
         args = {
             "_parent_overseer_id": "caller-id",
