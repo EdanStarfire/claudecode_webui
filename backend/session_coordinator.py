@@ -576,8 +576,6 @@ class SessionCoordinator:
         # Issue #404: Resource MCP tools for displaying resources in task panel
         # Callback for broadcasting resource_registered events will be set by web_server
         from backend.mcp.resource_mcp_tools import ResourceMCPTools
-        # Callback for broadcasting queue_update events (enqueued) will be set by web_server
-        self._enqueue_broadcast_callback: Callable[[str, str, dict], Any] | None = None
         self.resource_mcp_tools = ResourceMCPTools(
             session_coordinator=self,
             broadcast_callback=self._broadcast_resource_registered
@@ -895,20 +893,7 @@ class SessionCoordinator:
 
     async def _initialize_queues(self):
         """Load message queues for all existing sessions on startup."""
-        try:
-            sessions = await self.session_manager.list_sessions()
-            for session in sessions:
-                session_id = session.session_id
-                session_dir = await self.session_manager.get_session_directory(session_id)
-                if session_dir:
-                    await self.queue_manager.load_queue(session_id, session_dir)
-                    # Auto-start processor if there are pending items
-                    if self.queue_manager.get_pending_count(session_id) > 0:
-                        queue_paused = getattr(session, 'queue_paused', False)
-                        if not queue_paused:
-                            self.queue_processor.ensure_running(session_id)
-        except Exception:
-            logger.exception("Failed to initialize queues")
+        await self.queue_processor._initialize_queues()
 
     # =========================================================================
     # Message Queue Operations (Issue #500)
@@ -923,119 +908,38 @@ class SessionCoordinator:
         inject_timestamp: bool = True,
     ) -> dict:
         """Enqueue a message for a session. Returns the queue item dict."""
-        session_info = await self.session_manager.get_session_info(session_id)
-        if not session_info:
-            raise ValueError(f"Session {session_id} not found")
-
-        session_dir = await self.session_manager.get_session_directory(session_id)
-        if not session_dir:
-            raise ValueError(f"Session directory not found for {session_id}")
-
-        queue_config = getattr(session_info, 'queue_config', None) or {}
-        max_queue_size = queue_config.get("max_queue_size", 100)
-
-        # Use session default if not specified
-        if reset_session is None:
-            reset_session = queue_config.get("default_reset_session", True)
-
-        item = await self.queue_manager.enqueue(
-            session_id=session_id,
-            session_dir=session_dir,
-            content=content,
-            reset_session=reset_session,
-            metadata=metadata,
-            max_queue_size=max_queue_size,
-            inject_timestamp=inject_timestamp,
+        return await self.queue_processor.enqueue_message(
+            session_id, content, reset_session=reset_session,
+            metadata=metadata, inject_timestamp=inject_timestamp,
         )
-
-        # Start processor if not paused
-        queue_paused = getattr(session_info, 'queue_paused', False)
-        if not queue_paused:
-            self.queue_processor.ensure_running(session_id)
-
-        item_dict = item.to_dict()
-        if self._enqueue_broadcast_callback:
-            try:
-                if asyncio.iscoroutinefunction(self._enqueue_broadcast_callback):
-                    await self._enqueue_broadcast_callback(session_id, "enqueued", item_dict)
-                else:
-                    self._enqueue_broadcast_callback(session_id, "enqueued", item_dict)
-            except Exception:
-                logger.exception(f"Failed to broadcast queue enqueued for {session_id}")
-        return item_dict
 
     async def cancel_queue_item(self, session_id: str, queue_id: str) -> dict | None:
         """Cancel a pending queue item. Returns the item dict or None."""
-        session_dir = await self.session_manager.get_session_directory(session_id)
-        if not session_dir:
-            return None
-        item = await self.queue_manager.cancel(session_id, session_dir, queue_id)
-        return item.to_dict() if item else None
+        return await self.queue_processor.cancel_queue_item(session_id, queue_id)
 
     async def requeue_item(self, session_id: str, queue_id: str) -> dict | None:
         """Re-queue a sent/failed item at the front. Returns the new item dict."""
-        session_dir = await self.session_manager.get_session_directory(session_id)
-        if not session_dir:
-            return None
-        item = await self.queue_manager.requeue(session_id, session_dir, queue_id)
-        if item:
-            session_info = await self.session_manager.get_session_info(session_id)
-            queue_paused = getattr(session_info, 'queue_paused', False) if session_info else False
-            if not queue_paused:
-                self.queue_processor.ensure_running(session_id)
-        return item.to_dict() if item else None
+        return await self.queue_processor.requeue_item(session_id, queue_id)
 
     async def clear_queue(self, session_id: str) -> int:
         """Clear all pending queue items. Returns count of cancelled items."""
-        session_dir = await self.session_manager.get_session_directory(session_id)
-        if not session_dir:
-            return 0
-        return await self.queue_manager.clear_pending(session_id, session_dir)
+        return await self.queue_processor.clear_queue(session_id)
 
     async def clear_queue_history(self, session_id: str) -> int:
         """Remove terminal (sent/failed/cancelled) queue items. Returns count removed."""
-        session_dir = await self.session_manager.get_session_directory(session_id)
-        if not session_dir:
-            return 0
-        return await self.queue_manager.clear_history(session_id, session_dir)
+        return await self.queue_processor.clear_queue_history(session_id)
 
     async def get_queue(self, session_id: str, limit: int = 100, offset: int = 0) -> dict:
         """Get queue items for a session, paginated, most recent first."""
-        all_items = [item.to_dict() for item in self.queue_manager.get_queue(session_id)]
-        all_items.reverse()  # Most recent (highest position) first
-        total = len(all_items)
-        pending_count = sum(1 for i in all_items if i.get("status") == "pending")
-        sliced = all_items[offset : offset + limit]
-        return {
-            "items": sliced,
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-            "has_more": offset + len(sliced) < total,
-            "pending_count": pending_count,
-        }
+        return self.queue_manager.get_queue_page(session_id, limit=limit, offset=offset)
 
     async def pause_queue(self, session_id: str, paused: bool) -> bool:
         """Pause or resume the queue for a session."""
-        success = await self.session_manager.update_session(
-            session_id, queue_paused=paused
-        )
-        if success and not paused:
-            # Resume: start processor if there are pending items
-            if self.queue_manager.get_pending_count(session_id) > 0:
-                self.queue_processor.ensure_running(session_id)
-        return success
+        return await self.queue_processor.pause_queue(session_id, paused)
 
     async def update_queue_config(self, session_id: str, config: dict) -> bool:
         """Update queue configuration for a session."""
-        session_info = await self.session_manager.get_session_info(session_id)
-        if not session_info:
-            return False
-        current = getattr(session_info, 'queue_config', None) or {}
-        current.update(config)
-        return await self.session_manager.update_session(
-            session_id, queue_config=current
-        )
+        return await self.session_manager.update_queue_config(session_id, config)
 
     async def create_session(
         self,
@@ -1225,8 +1129,7 @@ class SessionCoordinator:
 
     def set_enqueue_broadcast_callback(self, callback: Callable[[str, str, dict], Any]) -> None:
         """Set the callback for broadcasting queue_update (enqueued) events."""
-        self._enqueue_broadcast_callback = callback
-        coord_logger.info("Enqueue broadcast callback registered in SessionCoordinator")
+        self.queue_processor.set_enqueue_broadcast_callback(callback)
 
     async def _broadcast_resource_registered(self, session_id: str, resource_metadata: dict) -> None:
         return await self._session_resources._broadcast_resource_registered(session_id, resource_metadata)

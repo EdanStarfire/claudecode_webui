@@ -209,6 +209,36 @@ class TestQueueManagerQuery:
         queue_manager.remove_session(sid)
         assert queue_manager.get_queue(sid) == []
 
+    @pytest.mark.asyncio
+    async def test_get_queue_page_paginates_most_recent_first(self, queue_manager, temp_session):
+        sid, sdir = temp_session
+        await queue_manager.enqueue(sid, sdir, "a")
+        await queue_manager.enqueue(sid, sdir, "b")
+        await queue_manager.enqueue(sid, sdir, "c")
+
+        page = queue_manager.get_queue_page(sid, limit=2, offset=0)
+        assert page["total"] == 3
+        assert page["pending_count"] == 3
+        assert page["limit"] == 2
+        assert page["offset"] == 0
+        assert page["has_more"] is True
+        assert [i["content"] for i in page["items"]] == ["c", "b"]
+
+        next_page = queue_manager.get_queue_page(sid, limit=2, offset=2)
+        assert next_page["has_more"] is False
+        assert [i["content"] for i in next_page["items"]] == ["a"]
+
+    def test_get_queue_page_empty_session(self, queue_manager):
+        page = queue_manager.get_queue_page("no-such-session")
+        assert page == {
+            "items": [],
+            "total": 0,
+            "limit": 100,
+            "offset": 0,
+            "has_more": False,
+            "pending_count": 0,
+        }
+
 
 class TestQueueManagerJSONLReplay:
     """JSONL persistence and replay-from-log."""
