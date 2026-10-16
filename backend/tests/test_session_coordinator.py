@@ -3627,7 +3627,7 @@ class TestIssue1837StderrCallbackClassification:
         session_id = "test-stderr-session"
         mock_message_callback = AsyncMock()
 
-        with patch.object(coordinator, "_create_message_callback", return_value=mock_message_callback):
+        with patch.object(coordinator._message_pipeline, "create_message_callback", return_value=mock_message_callback):
             stderr_callback = coordinator._create_stderr_callback(session_id)
             await stderr_callback("#17 DONE 6.9s")
 
@@ -3639,7 +3639,7 @@ class TestIssue1837StderrCallbackClassification:
         session_id = "test-stderr-session"
         mock_message_callback = AsyncMock()
 
-        with patch.object(coordinator, "_create_message_callback", return_value=mock_message_callback):
+        with patch.object(coordinator._message_pipeline, "create_message_callback", return_value=mock_message_callback):
             stderr_callback = coordinator._create_stderr_callback(session_id)
             await stderr_callback("Container exited with code 137")
 
@@ -3656,7 +3656,7 @@ class TestIssue1837StderrCallbackClassification:
         session_id = "test-stderr-session"
         mock_message_callback = AsyncMock()
 
-        with patch.object(coordinator, "_create_message_callback", return_value=mock_message_callback):
+        with patch.object(coordinator._message_pipeline, "create_message_callback", return_value=mock_message_callback):
             stderr_callback = coordinator._create_stderr_callback(session_id)
             await stderr_callback("#5 [2/8] RUN pip install -r requirements.txt")
 
