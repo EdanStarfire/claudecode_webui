@@ -30,13 +30,13 @@ def _make_session(session_id: str, state: SessionState) -> Mock:
 def _make_system(sessions: list) -> Mock:
     """Build a minimal LegionSystem mock that returns the given sessions."""
     system = Mock()
-    system.session_coordinator = Mock()
-    system.session_coordinator.session_manager = Mock()
-    system.session_coordinator.session_manager.list_sessions = AsyncMock(return_value=sessions)
-    system.session_coordinator.terminate_session = AsyncMock(return_value=True)
+    system.session_port = Mock()
+    system.session_port.session_manager = Mock()
+    system.session_port.session_manager.list_sessions = AsyncMock(return_value=sessions)
+    system.session_port.terminate_session = AsyncMock(return_value=True)
     # Issue #2159 (stage 6c): emergency_halt_all() now persists the halted set.
-    system.session_coordinator.project_manager = Mock()
-    system.session_coordinator.project_manager.record_fleet_stopped = AsyncMock(return_value=Mock())
+    system.session_port.project_manager = Mock()
+    system.session_port.project_manager.record_fleet_stopped = AsyncMock(return_value=Mock())
     return system
 
 
@@ -80,7 +80,7 @@ async def test_issue_1620_all_terminated_returns_empty():
     assert result["stopped_session_ids"] == []
     assert result["failed_sessions"] == []
     # terminate_session must not have been called at all
-    system.session_coordinator.terminate_session.assert_not_called()
+    system.session_port.terminate_session.assert_not_called()
 
 
 @pytest.mark.asyncio

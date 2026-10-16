@@ -14,15 +14,15 @@ from backend.session_manager import SessionState
 def legion_system():
     """Create mock LegionSystem for testing."""
     system = LegionSystem(
-        session_coordinator=Mock(),
+        session_port=Mock(),
         data_storage_manager=Mock(),
         template_manager=Mock(),
     )
     # Set up session_coordinator mocks
-    system.session_coordinator.session_manager = AsyncMock()
-    system.session_coordinator.restart_session = AsyncMock(return_value=True)
-    system.session_coordinator.enqueue_message = AsyncMock()
-    system.session_coordinator.send_message = AsyncMock(return_value=True)
+    system.session_port.session_manager = AsyncMock()
+    system.session_port.restart_session = AsyncMock(return_value=True)
+    system.session_port.enqueue_message = AsyncMock()
+    system.session_port.send_message = AsyncMock(return_value=True)
     return system
 
 
@@ -44,7 +44,7 @@ def _make_session_info(state=SessionState.ACTIVE, is_processing=True):
 async def test_issue_680_restart_returns_correct_format(mcp_tools):
     """Tool returns success with restart instructions."""
     session_info = _make_session_info(state=SessionState.ACTIVE)
-    mcp_tools.system.session_coordinator.session_manager.get_session_info = AsyncMock(
+    mcp_tools.system.session_port.session_manager.get_session_info = AsyncMock(
         return_value=session_info
     )
 
@@ -80,7 +80,7 @@ async def test_issue_1912_restart_requires_reason(mcp_tools):
 @pytest.mark.asyncio
 async def test_issue_680_restart_session_not_found(mcp_tools):
     """Tool returns error when session doesn't exist."""
-    mcp_tools.system.session_coordinator.session_manager.get_session_info = AsyncMock(
+    mcp_tools.system.session_port.session_manager.get_session_info = AsyncMock(
         return_value=None
     )
 
@@ -97,7 +97,7 @@ async def test_issue_680_restart_session_not_found(mcp_tools):
 async def test_issue_680_restart_session_not_active(mcp_tools):
     """Tool returns error when session is not active."""
     session_info = _make_session_info(state=SessionState.TERMINATED)
-    mcp_tools.system.session_coordinator.session_manager.get_session_info = AsyncMock(
+    mcp_tools.system.session_port.session_manager.get_session_info = AsyncMock(
         return_value=session_info
     )
 
@@ -114,7 +114,7 @@ async def test_issue_680_restart_session_not_active(mcp_tools):
 async def test_issue_680_duplicate_restart_prevention(mcp_tools):
     """Second restart call returns error while first is pending."""
     session_info = _make_session_info(state=SessionState.ACTIVE)
-    mcp_tools.system.session_coordinator.session_manager.get_session_info = AsyncMock(
+    mcp_tools.system.session_port.session_manager.get_session_info = AsyncMock(
         return_value=session_info
     )
 
@@ -140,7 +140,7 @@ async def test_issue_680_duplicate_restart_prevention(mcp_tools):
 @pytest.mark.asyncio
 async def test_issue_680_monitor_detects_idle_and_restarts(mcp_tools):
     """Monitor detects idle session and triggers restart."""
-    coordinator = mcp_tools.system.session_coordinator
+    coordinator = mcp_tools.system.session_port
 
     # Session becomes idle on first check
     idle_info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
@@ -180,7 +180,7 @@ async def test_issue_680_monitor_detects_idle_and_restarts(mcp_tools):
 @pytest.mark.asyncio
 async def test_issue_680_monitor_timeout_sends_failure(mcp_tools):
     """Monitor sends failure message after 30s timeout."""
-    coordinator = mcp_tools.system.session_coordinator
+    coordinator = mcp_tools.system.session_port
 
     # Session stays processing for all checks
     busy_info = _make_session_info(state=SessionState.ACTIVE, is_processing=True)
@@ -209,7 +209,7 @@ async def test_issue_680_monitor_timeout_sends_failure(mcp_tools):
 @pytest.mark.asyncio
 async def test_issue_680_monitor_session_disappears(mcp_tools):
     """Monitor exits gracefully if session disappears."""
-    coordinator = mcp_tools.system.session_coordinator
+    coordinator = mcp_tools.system.session_port
     coordinator.session_manager.get_session_info = AsyncMock(return_value=None)
 
     mcp_tools._pending_restarts.add("session-1")
@@ -227,7 +227,7 @@ async def test_issue_680_monitor_session_disappears(mcp_tools):
 @pytest.mark.asyncio
 async def test_issue_680_continuation_message_no_reason(mcp_tools):
     """Continuation message omits reason when empty."""
-    coordinator = mcp_tools.system.session_coordinator
+    coordinator = mcp_tools.system.session_port
 
     idle_info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
     coordinator.session_manager.get_session_info = AsyncMock(return_value=idle_info)

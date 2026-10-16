@@ -149,9 +149,9 @@ def coordinator_with_archive():
     (data_dir / "archives" / "minions").mkdir(parents=True)
 
     system = Mock()
-    system.session_coordinator = Mock()
-    system.session_coordinator.session_manager = Mock()
-    system.session_coordinator.session_manager.data_dir = data_dir
+    system.session_port = Mock()
+    system.session_port.session_manager = Mock()
+    system.session_port.session_manager.data_dir = data_dir
     archive_manager = ArchiveManager(system)
 
     coord = SessionCoordinator(data_dir=data_dir)

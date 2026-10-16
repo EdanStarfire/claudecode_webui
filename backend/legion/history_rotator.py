@@ -108,7 +108,7 @@ class HistoryRotator:
                 legion_logger.exception("HistoryRotator loop error: %s", e)
 
     async def _periodic_rotation(self) -> None:
-        data_dir = self.system.session_coordinator.data_dir
+        data_dir = self.system.session_port.data_dir
         legions_dir = data_dir / "legions"
         if not legions_dir.exists():
             return
@@ -140,7 +140,7 @@ class HistoryRotator:
         """
         from backend.models.schedule_models import ScheduleExecution
 
-        data_dir = self.system.session_coordinator.data_dir
+        data_dir = self.system.session_port.data_dir
         legion_dir = data_dir / "legions" / legion_id
         history_file = legion_dir / "schedule_history.jsonl"
 

@@ -62,7 +62,7 @@ def _make_system(tmp_path: Path):
     coordinator = MagicMock()
     coordinator.data_dir = tmp_path
     system = MagicMock()
-    system.session_coordinator = coordinator
+    system.session_port = coordinator
     # history_rotator not yet attached — tests set it explicitly when needed
     system.history_rotator = None
     return system

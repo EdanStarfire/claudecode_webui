@@ -518,7 +518,7 @@ class SchedulerService:
         offset: int = 0,
     ) -> list[ScheduleExecution]:
         """Read execution history from schedule_history.jsonl."""
-        data_dir = self.system.session_coordinator.data_dir
+        data_dir = self.system.session_port.data_dir
         history_file = data_dir / "legions" / legion_id / "schedule_history.jsonl"
         if not history_file.exists():
             return []
@@ -561,7 +561,7 @@ class SchedulerService:
         # For ephemeral schedules, check if agent is currently active
         if schedule.session_config is not None and schedule.ephemeral_agent_id:
             session_info = (
-                await self.system.session_coordinator.session_manager.get_session_info(
+                await self.system.session_port.session_manager.get_session_info(
                     schedule.ephemeral_agent_id
                 )
             )
@@ -619,7 +619,7 @@ class SchedulerService:
         minion_state = "unknown"
         try:
             session_info = (
-                await self.system.session_coordinator.session_manager.get_session_info(
+                await self.system.session_port.session_manager.get_session_info(
                     schedule.minion_id
                 )
             )
@@ -644,7 +644,7 @@ class SchedulerService:
         )
 
         try:
-            result = await self.system.session_coordinator.enqueue_message(
+            result = await self.system.session_port.enqueue_message(
                 session_id=schedule.minion_id,
                 content=formatted_prompt,
                 reset_session=schedule.reset_session,
@@ -722,7 +722,7 @@ class SchedulerService:
         increment.
         """
         session_id = schedule.minion_id
-        session_manager = self.system.session_coordinator.session_manager
+        session_manager = self.system.session_port.session_manager
         session_info = await session_manager.get_session_info(session_id)
 
         if session_info is None:
@@ -784,7 +784,7 @@ class SchedulerService:
         # we're committed to firing, covering both the ERROR-recovery branch above
         # and the already-ACTIVE direct-nudge branch, which is now the common case
         # for this detection path.
-        await self.system.session_coordinator.pause_queue(session_id, False)
+        await self.system.session_port.pause_queue(session_id, False)
 
         # Increment fire_count only once committed to firing (issue #1538 bookkeeping) —
         # so a run of PAUSED defers above never consumes the repeat_count=1 budget.
@@ -807,7 +807,7 @@ class SchedulerService:
                 if not started:
                     raise RuntimeError(f"Could not start session {session_id}")
 
-            result = await self.system.session_coordinator.enqueue_message(
+            result = await self.system.session_port.enqueue_message(
                 session_id=session_id,
                 content="Please continue where you left off.",
                 reset_session=False,
@@ -873,7 +873,7 @@ class SchedulerService:
 
         # Check agent session state
         session_info = (
-            await self.system.session_coordinator.session_manager.get_session_info(
+            await self.system.session_port.session_manager.get_session_info(
                 agent_id
             )
         )
@@ -884,7 +884,7 @@ class SchedulerService:
                 f"Ephemeral agent {agent_id} for schedule {schedule.schedule_id} not found — recreating"
             )
             try:
-                agent_id = await self.system.session_coordinator.create_ephemeral_session(
+                agent_id = await self.system.session_port.create_ephemeral_session(
                     session_config=schedule.session_config,
                     schedule_name=schedule.name,
                     project_id=schedule.legion_id,
@@ -895,7 +895,7 @@ class SchedulerService:
                 legion_logger.error(f"Failed to recreate ephemeral agent: {e}")
                 return
             session_info = (
-                await self.system.session_coordinator.session_manager.get_session_info(
+                await self.system.session_port.session_manager.get_session_info(
                     agent_id
                 )
             )
@@ -933,14 +933,14 @@ class SchedulerService:
 
         try:
             # Start the terminated/created agent session
-            await self.system.session_coordinator.start_session(agent_id)
+            await self.system.session_port.start_session(agent_id)
 
             # Enqueue the scheduled prompt
             formatted_prompt = (
                 f"**[Scheduled Task: {schedule.name}]**\n\n"
                 f"{schedule.prompt}"
             )
-            result = await self.system.session_coordinator.enqueue_message(
+            result = await self.system.session_port.enqueue_message(
                 session_id=agent_id,
                 content=formatted_prompt,
                 reset_session=False,
@@ -1011,7 +1011,7 @@ class SchedulerService:
     async def _migrate_ephemeral_schedule(self, schedule: Schedule) -> str | None:
         """Migrate old-format ephemeral schedule by creating a persistent agent."""
         try:
-            agent_id = await self.system.session_coordinator.create_ephemeral_session(
+            agent_id = await self.system.session_port.create_ephemeral_session(
                 session_config=schedule.session_config,
                 schedule_name=schedule.name,
                 project_id=schedule.legion_id,
@@ -1056,7 +1056,7 @@ class SchedulerService:
 
                 # Check session state
                 session_info = (
-                    await self.system.session_coordinator.session_manager.get_session_info(
+                    await self.system.session_port.session_manager.get_session_info(
                         session_id
                     )
                 )
@@ -1078,9 +1078,9 @@ class SchedulerService:
 
                 # Also check queue for pending items
                 try:
-                    session_dir = await self.system.session_coordinator.session_manager.get_session_directory(session_id)
+                    session_dir = await self.system.session_port.session_manager.get_session_directory(session_id)
                     if session_dir:
-                        queue_items = await self.system.session_coordinator.queue_manager.get_queue(
+                        queue_items = await self.system.session_port.queue_manager.get_queue(
                             session_id, session_dir
                         )
                         pending_items = [
@@ -1123,7 +1123,7 @@ class SchedulerService:
 
         # Archive on completion: archive data, clear messages, terminate
         try:
-            await self.system.session_coordinator.archive_and_clear_session(session_id)
+            await self.system.session_port.archive_and_clear_session(session_id)
         except Exception as e:
             legion_logger.error(
                 f"Failed to archive ephemeral session {session_id}: {e}"
@@ -1149,7 +1149,7 @@ class SchedulerService:
         session mid-permission-wait (discarding the in-flight turn) instead of simply
         waiting for the permission decision like the poll loop already does.
         """
-        session_info = await self.system.session_coordinator.session_manager.get_session_info(session_id)
+        session_info = await self.system.session_port.session_manager.get_session_info(session_id)
         if not session_info:
             return False
         if session_info.state == SessionState.ERROR:
@@ -1158,7 +1158,7 @@ class SchedulerService:
             return True
 
         if is_auto_startable(session_info.state):
-            started = await self.system.session_coordinator.start_session(session_id)
+            started = await self.system.session_port.start_session(session_id)
             if not started:
                 return False
         elif not is_deliverable(session_info.state):
@@ -1170,7 +1170,7 @@ class SchedulerService:
 
         deadline = asyncio.get_event_loop().time() + timeout
         while asyncio.get_event_loop().time() < deadline:
-            info = await self.system.session_coordinator.session_manager.get_session_info(session_id)
+            info = await self.system.session_port.session_manager.get_session_info(session_id)
             if info and info.state == SessionState.ACTIVE:
                 return True
             if info and info.state == SessionState.ERROR:
@@ -1211,7 +1211,7 @@ class SchedulerService:
         }
 
         # Build session_data_path on host for writing
-        data_dir = self.system.session_coordinator.data_dir
+        data_dir = self.system.session_port.data_dir
         session_dir = data_dir / "sessions" / session_info.session_id
         if session_dir.exists():
             tmp_dir = session_dir / "tmp"
@@ -1291,10 +1291,10 @@ class SchedulerService:
             if not ok:
                 raise RuntimeError(f"Could not start session {target_id}")
 
-            session_info = await self.system.session_coordinator.session_manager.get_session_info(target_id)
+            session_info = await self.system.session_port.session_manager.get_session_info(target_id)
             execution.minion_state = session_info.state.value
 
-            sc = self.system.session_coordinator
+            sc = self.system.session_port
             effective_config = await resolve_effective_config(
                 session_info, sc.template_manager, sc.profile_manager,
             )
@@ -1385,7 +1385,7 @@ class SchedulerService:
                 # Always enqueue immediately — no pre-enqueue wait.
                 # Cross-schedule serialization is on the dequeue side via
                 # queue_processor._wait_for_idle + has_inflight_scripts (§6.3).
-                result = await self.system.session_coordinator.enqueue_message(
+                result = await self.system.session_port.enqueue_message(
                     session_id=target_id,
                     content=formatted,
                     reset_session=schedule.reset_session,
@@ -1455,7 +1455,7 @@ class SchedulerService:
     # ── Metrics (issue #1372) ──
 
     def _metrics_file(self, legion_id: str):
-        data_dir = self.system.session_coordinator.data_dir
+        data_dir = self.system.session_port.data_dir
         return data_dir / "legions" / legion_id / "schedule_metrics.json"
 
     async def _load_metrics(self, legion_id: str) -> dict[str, ScheduleMetrics]:
@@ -1525,7 +1525,7 @@ class SchedulerService:
             await self._load_metrics(legion_id)
             return
 
-        data_dir = self.system.session_coordinator.data_dir
+        data_dir = self.system.session_port.data_dir
         history_file = data_dir / "legions" / legion_id / "schedule_history.jsonl"
         if not history_file.exists():
             self._metrics_cache.setdefault(legion_id, {})
@@ -1608,7 +1608,7 @@ class SchedulerService:
 
     async def _persist_schedules(self, legion_id: str):
         """Write all schedules for a legion to schedules.json."""
-        data_dir = self.system.session_coordinator.data_dir
+        data_dir = self.system.session_port.data_dir
         legion_dir = data_dir / "legions" / legion_id
         legion_dir.mkdir(parents=True, exist_ok=True)
         schedules_file = legion_dir / "schedules.json"
@@ -1625,7 +1625,7 @@ class SchedulerService:
 
     async def _load_schedules(self, legion_id: str):
         """Load schedules for a specific legion from disk."""
-        data_dir = self.system.session_coordinator.data_dir
+        data_dir = self.system.session_port.data_dir
         schedules_file = data_dir / "legions" / legion_id / "schedules.json"
 
         if not schedules_file.exists():
@@ -1665,7 +1665,7 @@ class SchedulerService:
 
     async def load_all_schedules(self):
         """Load schedules from all legions on startup."""
-        data_dir = self.system.session_coordinator.data_dir
+        data_dir = self.system.session_port.data_dir
         legions_dir = data_dir / "legions"
         if not legions_dir.exists():
             return
@@ -1706,7 +1706,7 @@ class SchedulerService:
 
             agent_id = schedule.ephemeral_agent_id
             session_info = (
-                await self.system.session_coordinator.session_manager.get_session_info(
+                await self.system.session_port.session_manager.get_session_info(
                     agent_id
                 )
             )
@@ -1731,7 +1731,7 @@ class SchedulerService:
                     f"Resolving orphaned PAUSED ephemeral agent {agent_id} "
                     f"for schedule {schedule.schedule_id} to ERROR"
                 )
-                await self.system.session_coordinator.resolve_orphaned_ephemeral_session(
+                await self.system.session_port.resolve_orphaned_ephemeral_session(
                     agent_id
                 )
                 schedule.ephemeral_agent_id = None
@@ -1745,7 +1745,7 @@ class SchedulerService:
                     f"for schedule {schedule.schedule_id}"
                 )
                 try:
-                    await self.system.session_coordinator.archive_and_clear_session(agent_id)
+                    await self.system.session_port.archive_and_clear_session(agent_id)
                 except Exception as e:
                     legion_logger.error(
                         f"Failed to clean up orphaned agent {agent_id}: {e}"
@@ -1768,7 +1768,7 @@ class SchedulerService:
 
         Acquires the per-legion HistoryRotator lock to prevent write-during-rotation races.
         """
-        data_dir = self.system.session_coordinator.data_dir
+        data_dir = self.system.session_port.data_dir
         legion_dir = data_dir / "legions" / legion_id
         legion_dir.mkdir(parents=True, exist_ok=True)
         history_file = legion_dir / "schedule_history.jsonl"

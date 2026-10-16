@@ -64,7 +64,7 @@ def _make_system(session_info=None, start_session_result: bool = True, enqueue_r
     coordinator.data_dir = Path("/nonexistent")
 
     system = MagicMock()
-    system.session_coordinator = coordinator
+    system.session_port = coordinator
     return system
 
 
@@ -220,7 +220,7 @@ async def test_fire_error_session_unsticks_via_terminated_then_starts():
     # recover_session() (ERROR -> TERMINATED, issue #2184) doesn't mutate
     # session_info as a side effect on this mock, so the refetch after it must
     # be told to see the new state explicitly.
-    system.session_coordinator.session_manager.get_session_info = AsyncMock(
+    system.session_port.session_manager.get_session_info = AsyncMock(
         side_effect=[error_info, terminated_info]
     )
     svc = _make_svc(system)
@@ -230,12 +230,12 @@ async def test_fire_error_session_unsticks_via_terminated_then_starts():
 
     await svc._fire_auto_resume_schedule(schedule, 1000.0)
 
-    system.session_coordinator.session_manager.recover_session.assert_awaited_once_with(
+    system.session_port.session_manager.recover_session.assert_awaited_once_with(
         "sess-1"
     )
     svc._ensure_session_active.assert_awaited_once_with("sess-1")
-    system.session_coordinator.enqueue_message.assert_awaited_once()
-    _, kwargs = system.session_coordinator.enqueue_message.call_args
+    system.session_port.enqueue_message.assert_awaited_once()
+    _, kwargs = system.session_port.enqueue_message.call_args
     assert kwargs["session_id"] == "sess-1"
     assert kwargs["content"] == "Please continue where you left off."
     assert kwargs["reset_session"] is False
@@ -256,9 +256,9 @@ async def test_fire_active_session_skips_start_goes_straight_to_enqueue():
 
     await svc._fire_auto_resume_schedule(schedule, 1000.0)
 
-    system.session_coordinator.session_manager.recover_session.assert_not_awaited()
+    system.session_port.session_manager.recover_session.assert_not_awaited()
     svc._ensure_session_active.assert_not_awaited()
-    system.session_coordinator.enqueue_message.assert_awaited_once()
+    system.session_port.enqueue_message.assert_awaited_once()
     assert schedule.schedule_id not in svc._schedules
 
 
@@ -272,8 +272,8 @@ async def test_fire_paused_session_defers_without_consuming_fire_count():
 
     await svc._fire_auto_resume_schedule(schedule, 1000.0)
 
-    system.session_coordinator.start_session.assert_not_awaited()
-    system.session_coordinator.enqueue_message.assert_not_awaited()
+    system.session_port.start_session.assert_not_awaited()
+    system.session_port.enqueue_message.assert_not_awaited()
     assert schedule.fire_count == 0, "PAUSED defer must not consume the repeat_count=1 budget"
     assert schedule.schedule_id in svc._schedules, "must not self-delete while deferring"
     assert schedule.next_run > 1000.0, "next_run bumped ahead to re-check on a later tick"
@@ -293,8 +293,8 @@ async def test_fire_in_transition_session_defers_without_consuming_fire_count(st
 
     await svc._fire_auto_resume_schedule(schedule, 1000.0)
 
-    system.session_coordinator.start_session.assert_not_awaited()
-    system.session_coordinator.enqueue_message.assert_not_awaited()
+    system.session_port.start_session.assert_not_awaited()
+    system.session_port.enqueue_message.assert_not_awaited()
     assert schedule.fire_count == 0
     assert schedule.schedule_id in svc._schedules
 
@@ -308,7 +308,7 @@ async def test_fire_session_deleted_before_timer_discards_and_self_deletes():
 
     await svc._fire_auto_resume_schedule(schedule, 1000.0)
 
-    system.session_coordinator.enqueue_message.assert_not_awaited()
+    system.session_port.enqueue_message.assert_not_awaited()
     assert schedule.fire_count == 1
     assert schedule.schedule_id not in svc._schedules
 
@@ -324,7 +324,7 @@ async def test_fire_start_failure_marks_failed_and_still_self_deletes():
 
     await svc._fire_auto_resume_schedule(schedule, 1000.0)
 
-    system.session_coordinator.enqueue_message.assert_not_awaited()
+    system.session_port.enqueue_message.assert_not_awaited()
     assert schedule.fire_count == 1
     assert schedule.schedule_id not in svc._schedules
 
@@ -342,7 +342,7 @@ async def test_fire_unpauses_queue_for_error_recovery_branch():
     error_info = _make_session_info(state=SessionState.ERROR)
     terminated_info = _make_session_info(state=SessionState.TERMINATED)
     system = _make_system(session_info=error_info)
-    system.session_coordinator.session_manager.get_session_info = AsyncMock(
+    system.session_port.session_manager.get_session_info = AsyncMock(
         side_effect=[error_info, terminated_info]
     )
     svc = _make_svc(system)
@@ -352,7 +352,7 @@ async def test_fire_unpauses_queue_for_error_recovery_branch():
 
     await svc._fire_auto_resume_schedule(schedule, 1000.0)
 
-    system.session_coordinator.pause_queue.assert_awaited_once_with("sess-1", False)
+    system.session_port.pause_queue.assert_awaited_once_with("sess-1", False)
 
 
 @pytest.mark.asyncio
@@ -368,7 +368,7 @@ async def test_fire_unpauses_queue_for_already_active_direct_nudge_branch():
 
     await svc._fire_auto_resume_schedule(schedule, 1000.0)
 
-    system.session_coordinator.pause_queue.assert_awaited_once_with("sess-1", False)
+    system.session_port.pause_queue.assert_awaited_once_with("sess-1", False)
 
 
 @pytest.mark.asyncio
@@ -383,7 +383,7 @@ async def test_fire_deferred_for_paused_session_does_not_unpause_queue():
 
     await svc._fire_auto_resume_schedule(schedule, 1000.0)
 
-    system.session_coordinator.pause_queue.assert_not_awaited()
+    system.session_port.pause_queue.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -416,7 +416,7 @@ async def test_fire_at_source_round_trips_through_persistence(tmp_path):
     """fire_at_source must survive a backend restart (fresh SchedulerService
     reloading from the same on-disk schedules.json), same as next_run."""
     system = _make_system()
-    system.session_coordinator.data_dir = tmp_path
+    system.session_port.data_dir = tmp_path
     svc = SchedulerService(system)
 
     schedule = await svc.upsert_auto_resume_schedule(
@@ -450,7 +450,7 @@ async def test_tick_dispatches_due_auto_resume_schedule():
 
     await svc._tick()
 
-    system.session_coordinator.enqueue_message.assert_awaited_once()
+    system.session_port.enqueue_message.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -463,7 +463,7 @@ async def test_tick_skips_not_yet_due_auto_resume_schedule():
 
     await svc._tick()
 
-    system.session_coordinator.enqueue_message.assert_not_awaited()
+    system.session_port.enqueue_message.assert_not_awaited()
     assert schedule.schedule_id in svc._schedules
 
 
@@ -478,7 +478,7 @@ async def test_run_now_dispatches_auto_resume_schedule_bypassing_next_run():
     result = await svc.run_now(schedule.schedule_id)
 
     assert result["status"] == "queued"
-    system.session_coordinator.enqueue_message.assert_awaited_once()
+    system.session_port.enqueue_message.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -500,7 +500,7 @@ async def test_tick_fires_multiple_auto_resume_schedules_independently_same_fire
     coordinator.pause_queue = AsyncMock(return_value=True)
     coordinator.data_dir = Path("/nonexistent")
     system = MagicMock()
-    system.session_coordinator = coordinator
+    system.session_port = coordinator
 
     svc = _make_svc(system)
     s1 = _make_auto_resume_schedule(schedule_id="ar-1", minion_id="sess-1", next_run=500.0)
@@ -529,7 +529,7 @@ async def test_load_schedules_preserves_auto_resume_next_run_across_restart(tmp_
     inert placeholder, so without an explicit exclusion this would silently
     discard the real fire time on every boot."""
     system = _make_system()
-    system.session_coordinator.data_dir = tmp_path
+    system.session_port.data_dir = tmp_path
     svc = SchedulerService(system)
 
     fire_at = 1234567890.0

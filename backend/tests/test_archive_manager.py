@@ -26,10 +26,10 @@ def mock_system():
     temp_path = Path(temp_dir)
 
     # Mock session_coordinator.session_manager
-    system.session_coordinator = Mock()
-    system.session_coordinator.session_manager = Mock()
-    system.session_coordinator.session_manager.data_dir = temp_path
-    system.session_coordinator.session_manager.sessions_dir = temp_path / "sessions"
+    system.session_port = Mock()
+    system.session_port.session_manager = Mock()
+    system.session_port.session_manager.data_dir = temp_path
+    system.session_port.session_manager.sessions_dir = temp_path / "sessions"
 
     return system, temp_path
 
@@ -160,7 +160,7 @@ class TestArchiveManager:
         state_file.write_text('{"state": "active"}')
 
         # Mock get_session_info
-        system.session_coordinator.session_manager.get_session_info = AsyncMock(
+        system.session_port.session_manager.get_session_info = AsyncMock(
             return_value=sample_session_info
         )
 
@@ -204,7 +204,7 @@ class TestArchiveManager:
         system, temp_path = mock_system
 
         # Mock get_session_info returning None
-        system.session_coordinator.session_manager.get_session_info = AsyncMock(
+        system.session_port.session_manager.get_session_info = AsyncMock(
             return_value=None
         )
 
@@ -229,7 +229,7 @@ class TestArchiveManager:
         session_dir = temp_path / "sessions" / sample_session_info.session_id
         session_dir.mkdir(parents=True)
 
-        system.session_coordinator.session_manager.get_session_info = AsyncMock(
+        system.session_port.session_manager.get_session_info = AsyncMock(
             return_value=sample_session_info
         )
 
@@ -268,7 +268,7 @@ class TestArchiveManager:
         session_dir.mkdir(parents=True)
         (session_dir / "messages.jsonl").write_text('{"test": true}\n')
 
-        system.session_coordinator.session_manager.get_session_info = AsyncMock(
+        system.session_port.session_manager.get_session_info = AsyncMock(
             return_value=sample_session_info
         )
 
@@ -449,7 +449,7 @@ class TestArchiveManagerInLegionSystem:
         from backend.legion_system import LegionSystem
 
         system = LegionSystem(
-            session_coordinator=Mock(),
+            session_port=Mock(),
             data_storage_manager=Mock(),
             template_manager=Mock()
         )

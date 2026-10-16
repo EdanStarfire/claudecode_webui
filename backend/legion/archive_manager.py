@@ -82,7 +82,7 @@ class ArchiveManager:
     def archives_dir(self) -> Path:
         """Get the archives directory, creating if needed."""
         if self._archives_dir is None:
-            data_dir = self.system.session_coordinator.session_manager.data_dir
+            data_dir = self.system.session_port.session_manager.data_dir
             self._archives_dir = data_dir / "archives" / "minions"
             self._archives_dir.mkdir(parents=True, exist_ok=True)
         return self._archives_dir
@@ -199,7 +199,7 @@ class ArchiveManager:
     def _copy_legion_schedules(
         self, legion_id: str, archive_dir: Path, archived: list[str]
     ) -> None:
-        data_dir = self.system.session_coordinator.session_manager.data_dir
+        data_dir = self.system.session_port.session_manager.data_dir
         legion_dir = data_dir / "legions" / legion_id
         for fname in ("schedules.json", "schedule_history.jsonl", "schedule_metrics.json"):
             src = legion_dir / fname
@@ -238,7 +238,7 @@ class ArchiveManager:
         """
         try:
             # Get minion session info
-            session_info = await self.system.session_coordinator.session_manager.get_session_info(
+            session_info = await self.system.session_port.session_manager.get_session_info(
                 minion_id
             )
             if not session_info:
@@ -256,7 +256,7 @@ class ArchiveManager:
             archive_dir.mkdir(parents=True, exist_ok=True)
 
             # Get source session directory
-            session_dir = self.system.session_coordinator.session_manager.sessions_dir / minion_id
+            session_dir = self.system.session_port.session_manager.sessions_dir / minion_id
 
             # Build snapshot context from session config
             cfg = session_info.config or {}
@@ -731,7 +731,7 @@ class ArchiveManager:
         # But include ephemeral sessions (they persist but should appear here)
         active_session_ids = set()
         ephemeral_session_ids = set()
-        session_manager = self.system.session_coordinator.session_manager
+        session_manager = self.system.session_port.session_manager
         sessions_dir = session_manager.sessions_dir
         if sessions_dir.exists():
             for session_dir in sessions_dir.iterdir():
@@ -806,7 +806,7 @@ class ArchiveManager:
 
     async def erase_history(self, session_id: str) -> bool:
         """Delete all distilled history .md files for a session."""
-        sessions_dir = self.system.session_coordinator.session_manager.sessions_dir
+        sessions_dir = self.system.session_port.session_manager.sessions_dir
         history_dir = sessions_dir / session_id / "history"
         if not history_dir.exists():
             return False
@@ -833,7 +833,7 @@ class ArchiveManager:
 
     async def check_history_archives_exist(self, session_id: str) -> dict:
         """Check if history and/or archives exist for a session."""
-        sessions_dir = self.system.session_coordinator.session_manager.sessions_dir
+        sessions_dir = self.system.session_port.session_manager.sessions_dir
         history_dir = sessions_dir / session_id / "history"
         has_history = history_dir.exists() and any(history_dir.glob("*.md"))
 

@@ -66,7 +66,7 @@ class CommRouter:
         Returns:
             List of visible minion session IDs
         """
-        session_manager = self.system.session_coordinator.session_manager
+        session_manager = self.system.session_port.session_manager
         caller = await session_manager.get_session_info(caller_id)
         if not caller:
             return []
@@ -223,13 +223,13 @@ class CommRouter:
         # disposed minion would write files and register orphaned resources
         # under a session directory that isn't wired into session_manager,
         # before _send_to_minion() catches the missing target and errors out.
-        target_minion = await self.system.session_coordinator.session_manager.get_session_info(comm.to_minion_id)
+        target_minion = await self.system.session_port.session_manager.get_session_info(comm.to_minion_id)
         if not target_minion:
             legion_logger.warning(f"Skipping attachment delivery: target minion {comm.to_minion_id} not found")
             return
 
         attachment_data = attachment_data or {}
-        data_dir = self.system.session_coordinator.data_dir
+        data_dir = self.system.session_port.data_dir
         attachments_dir = data_dir / "sessions" / comm.to_minion_id / "attachments"
         attachments_dir.mkdir(parents=True, exist_ok=True)
 
@@ -259,7 +259,7 @@ class CommRouter:
                 dest_path.write_bytes(file_bytes)
 
                 # Register as resource in recipient session (for UI gallery)
-                resource_result = await self.system.session_coordinator.register_uploaded_resource(
+                resource_result = await self.system.session_port.register_uploaded_resource(
                     session_id=comm.to_minion_id,
                     file_path=str(dest_path),
                     title=att["name"],
@@ -267,7 +267,7 @@ class CommRouter:
                 )
 
                 # Register for auto-approve Read
-                await self.system.session_coordinator.register_uploaded_file(
+                await self.system.session_port.register_uploaded_file(
                     session_id=comm.to_minion_id,
                     file_path=str(dest_path)
                 )
@@ -299,7 +299,7 @@ class CommRouter:
         """
         try:
             # Check target minion state
-            target_minion = await self.system.session_coordinator.session_manager.get_session_info(comm.to_minion_id)
+            target_minion = await self.system.session_port.session_manager.get_session_info(comm.to_minion_id)
             if not target_minion:
                 legion_logger.error(f"Target minion {comm.to_minion_id} not found")
                 # Send error comm back to sender
@@ -317,7 +317,7 @@ class CommRouter:
                 legion_logger.info(
                     f"Target minion {comm.to_minion_id} is STARTING - waiting for SDK readiness"
                 )
-                ready = await self.system.session_coordinator.wait_for_session_ready(
+                ready = await self.system.session_port.wait_for_session_ready(
                     comm.to_minion_id, timeout=60.0
                 )
                 if not ready:
@@ -351,7 +351,7 @@ class CommRouter:
                 else:
                     legion_logger.warning(f"No permission callback factory available for auto-start of {comm.to_minion_id}")
 
-                success = await self.system.session_coordinator.start_session(
+                success = await self.system.session_port.start_session(
                     session_id=comm.to_minion_id,
                     permission_callback=permission_callback
                 )
@@ -359,7 +359,7 @@ class CommRouter:
                 if not success:
                     reason = None
                     try:
-                        failed_info = await self.system.session_coordinator.session_manager.get_session_info(
+                        failed_info = await self.system.session_port.session_manager.get_session_info(
                             comm.to_minion_id
                         )
                         reason = failed_info.error_message if failed_info else None
@@ -383,11 +383,11 @@ class CommRouter:
                     return False
 
                 # Wait for session to become ready (event-based, no polling)
-                ready = await self.system.session_coordinator.wait_for_session_ready(
+                ready = await self.system.session_port.wait_for_session_ready(
                     comm.to_minion_id, timeout=30.0
                 )
                 if not ready:
-                    session_info = await self.system.session_coordinator.session_manager.get_session_info(comm.to_minion_id)
+                    session_info = await self.system.session_port.session_manager.get_session_info(comm.to_minion_id)
                     legion_logger.warning(f"Minion {comm.to_minion_id} did not become ready within 30s - sending error to sender")
                     if comm.from_minion_id:
                         await self._send_system_error_comm(
@@ -486,7 +486,7 @@ class CommRouter:
                 # above for user inspection.
                 legion_logger.info(f"Comm {comm.comm_id} has HALT priority - interrupting {comm.to_minion_id} (message not delivered to SDK)")
                 try:
-                    interrupted = await self.system.session_coordinator.interrupt_session(comm.to_minion_id)
+                    interrupted = await self.system.session_port.interrupt_session(comm.to_minion_id)
                     if interrupted:
                         legion_logger.debug(f"Successfully interrupted session {comm.to_minion_id}")
                     else:
@@ -500,7 +500,7 @@ class CommRouter:
                 # PIVOT: interrupt first to stop current work, then deliver new direction.
                 legion_logger.info(f"Comm {comm.comm_id} has PIVOT priority - interrupting then sending to {comm.to_minion_id}")
                 try:
-                    interrupted = await self.system.session_coordinator.interrupt_session(comm.to_minion_id)
+                    interrupted = await self.system.session_port.interrupt_session(comm.to_minion_id)
                     if interrupted:
                         legion_logger.debug(f"Successfully interrupted session {comm.to_minion_id}")
                     else:
@@ -511,7 +511,7 @@ class CommRouter:
 
             # Send message to target minion via SessionCoordinator (PIVOT and NORMAL)
             # Issue #1779: inter-agent comms aren't "user messages" — skip timestamp injection.
-            success = await self.system.session_coordinator.send_message(
+            success = await self.system.session_port.send_message(
                 session_id=comm.to_minion_id,
                 message=formatted_message,
                 metadata=comm_metadata,
@@ -592,11 +592,11 @@ class CommRouter:
             formatted_message = f"**🚨 System Error:**\n\n{error_message}\n\n_(Original comm ID: {original_comm_id})_"
 
             # Send to minion (but don't trigger auto-start to avoid loops)
-            target_minion = await self.system.session_coordinator.session_manager.get_session_info(to_minion_id)
+            target_minion = await self.system.session_port.session_manager.get_session_info(to_minion_id)
 
             if target_minion and target_minion.state == SessionState.ACTIVE:
                 # Issue #1779: system error comms aren't "user messages" — skip timestamp injection.
-                await self.system.session_coordinator.send_message(
+                await self.system.session_port.send_message(
                     session_id=to_minion_id,
                     message=formatted_message,
                     inject_timestamp=False,
@@ -700,7 +700,7 @@ class CommRouter:
             comm: Comm to append
         """
         # Get data_dir from SessionCoordinator
-        data_dir = self.system.session_coordinator.data_dir
+        data_dir = self.system.session_port.data_dir
 
         # Construct path: {data_dir}/legions/{legion_id}/timeline.jsonl
         legion_dir = data_dir / "legions" / legion_id

@@ -109,7 +109,7 @@ def _build_system(session_map):
     comm_router.route_comm = AsyncMock(return_value=True)
 
     system = Mock()
-    system.session_coordinator = coord
+    system.session_port = coord
     system.comm_router = comm_router
     system.broadcast_ui_event = Mock()
 

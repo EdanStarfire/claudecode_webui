@@ -61,7 +61,7 @@ class OverseerController:
             ValueError: If name is not unique or project doesn't exist or is at capacity or invalid permission mode
         """
         # Validate project exists (all projects support minions - issue #313)
-        project = await self.system.session_coordinator.project_manager.get_project(legion_id)
+        project = await self.system.session_port.project_manager.get_project(legion_id)
         if not project:
             raise ValueError(f"Project {legion_id} not found")
 
@@ -71,7 +71,7 @@ class OverseerController:
 
         # Check minion limit (max 20 concurrent minions per legion)
         # Issue #349: All sessions are minions
-        existing_sessions = await self.system.session_coordinator.session_manager.list_sessions()
+        existing_sessions = await self.system.session_port.session_manager.list_sessions()
         legion_minions = [s for s in existing_sessions if self._belongs_to_legion(s, legion_id)]
 
         default_max = self.system.default_max_minions
@@ -90,7 +90,7 @@ class OverseerController:
         minion_id = str(uuid.uuid4())
 
         # Create session via SessionCoordinator
-        await self.system.session_coordinator.create_session(
+        await self.system.session_port.create_session(
             session_id=minion_id,
             project_id=legion_id,
             config=config,
@@ -150,7 +150,7 @@ class OverseerController:
         from backend.models.legion_models import Comm, CommType, InterruptPriority
 
         # 1. Get parent minion session
-        parent_session = await self.system.session_coordinator.session_manager.get_session_info(parent_overseer_id)
+        parent_session = await self.system.session_port.session_manager.get_session_info(parent_overseer_id)
         if not parent_session:
             raise ValueError(f"Parent overseer {parent_overseer_id} not found")
 
@@ -161,12 +161,12 @@ class OverseerController:
 
         # 2. Get project (all projects support minions - issue #313)
         legion_id = parent_session.project_id
-        project = await self.system.session_coordinator.project_manager.get_project(legion_id)
+        project = await self.system.session_port.project_manager.get_project(legion_id)
         if not project:
             raise ValueError(f"Project {legion_id} not found")
 
         # 3. Validate name uniqueness within legion (issue #349: all sessions are minions)
-        existing_sessions = await self.system.session_coordinator.session_manager.list_sessions()
+        existing_sessions = await self.system.session_port.session_manager.list_sessions()
         legion_minions = [s for s in existing_sessions if self._belongs_to_legion(s, legion_id)]
 
         new_slug = slugify_name(name)
@@ -188,7 +188,7 @@ class OverseerController:
         overseer_level = (parent_session.overseer_level or 0) + 1
 
         # 7. Create child session via SessionCoordinator
-        await self.system.session_coordinator.create_session(
+        await self.system.session_port.create_session(
             session_id=child_minion_id,
             project_id=legion_id,
             config=config,
@@ -202,7 +202,7 @@ class OverseerController:
 
         # 8. Update parent: mark as overseer, add child to child_minion_ids
         if not parent_session.is_overseer:
-            await self.system.session_coordinator.session_manager.update_session(
+            await self.system.session_port.session_manager.update_session(
                 parent_overseer_id,
                 is_overseer=True
             )
@@ -210,7 +210,7 @@ class OverseerController:
         # Add child to parent's child_minion_ids list
         parent_children = list(parent_session.child_minion_ids or [])
         parent_children.append(child_minion_id)
-        await self.system.session_coordinator.session_manager.update_session(
+        await self.system.session_port.session_manager.update_session(
             parent_overseer_id,
             child_minion_ids=parent_children
         )
@@ -259,13 +259,13 @@ class OverseerController:
         else:
             legion_logger.warning(f"No permission callback factory available for minion {child_minion_id} - permissions will not work!")
 
-        await self.system.session_coordinator.start_session(
+        await self.system.session_port.start_session(
             child_minion_id,
             permission_callback=permission_callback
         )
 
         # 14. Broadcast project update to UI poll queue (new session added)
-        project = await self.system.session_coordinator.project_manager.get_project(legion_id)
+        project = await self.system.session_port.project_manager.get_project(legion_id)
         if project:
             self.system.broadcast_ui_event({
                 "type": "project_updated",
@@ -306,7 +306,7 @@ class OverseerController:
         from backend.models.legion_models import Comm, CommType, InterruptPriority
 
         # 1. Get parent session
-        parent_session = await self.system.session_coordinator.session_manager.get_session_info(parent_overseer_id)
+        parent_session = await self.system.session_port.session_manager.get_session_info(parent_overseer_id)
         if not parent_session:
             raise ValueError(f"Parent overseer {parent_overseer_id} not found")
 
@@ -316,7 +316,7 @@ class OverseerController:
         target_slug = slugify_name(child_minion_name)
 
         for child_id in (parent_session.child_minion_ids or []):
-            session = await self.system.session_coordinator.session_manager.get_session_info(child_id)
+            session = await self.system.session_port.session_manager.get_session_info(child_id)
             if session and session.slug == target_slug:
                 child_session = session
                 child_minion_id = child_id
@@ -326,7 +326,7 @@ class OverseerController:
             # Get slugs of actual children for helpful error message
             child_slugs = []
             for cid in (parent_session.child_minion_ids or []):
-                s = await self.system.session_coordinator.session_manager.get_session_info(cid)
+                s = await self.system.session_port.session_manager.get_session_info(cid)
                 if s:
                     child_slugs.append(s.slug or s.name)
 
@@ -341,7 +341,7 @@ class OverseerController:
         descendants_disposed = 0
         if child_session.child_minion_ids:
             for grandchild_id in list(child_session.child_minion_ids):
-                grandchild = await self.system.session_coordinator.session_manager.get_session_info(grandchild_id)
+                grandchild = await self.system.session_port.session_manager.get_session_info(grandchild_id)
                 if grandchild:
                     result = await self.dispose_minion(
                         child_minion_id, grandchild.name, delete_after_archive=delete_after_archive
@@ -363,7 +363,7 @@ class OverseerController:
             legion_logger.warning(f"Failed to delete schedules for minion {child_minion_id}: {e}")
 
         # 6. Terminate SDK session
-        await self.system.session_coordinator.terminate_session(child_minion_id)
+        await self.system.session_port.terminate_session(child_minion_id)
 
         # 7. Conditional cleanup based on delete_after_archive
         # Note: Archival is handled by delete_session for hard deletes (Issue #236)
@@ -375,14 +375,14 @@ class OverseerController:
             parent_children = list(parent_session.child_minion_ids or [])
             if child_minion_id in parent_children:
                 parent_children.remove(child_minion_id)
-                await self.system.session_coordinator.session_manager.update_session(
+                await self.system.session_port.session_manager.update_session(
                     parent_overseer_id,
                     child_minion_ids=parent_children
                 )
 
             # If parent has no more children, mark as no longer overseer
             if not parent_children:
-                await self.system.session_coordinator.session_manager.update_session(
+                await self.system.session_port.session_manager.update_session(
                     parent_overseer_id,
                     is_overseer=False
                 )
@@ -394,7 +394,7 @@ class OverseerController:
 
             # 7c. Delete the session completely (delete_session handles archival)
             try:
-                await self.system.session_coordinator.delete_session(
+                await self.system.session_port.delete_session(
                     child_minion_id, archive_reason="parent_initiated"
                 )
                 deleted = True
@@ -427,7 +427,7 @@ class OverseerController:
 
         # 9. Broadcast project update to UI poll queue (session state changed or removed)
         legion_id = parent_session.project_id
-        project = await self.system.session_coordinator.project_manager.get_project(legion_id)
+        project = await self.system.session_port.project_manager.get_project(legion_id)
         if project:
             self.system.broadcast_ui_event({
                 "type": "project_updated",
@@ -449,11 +449,11 @@ class OverseerController:
 
     async def _recompute_levels(self, session_id: str, level: int, children: list[str]) -> None:
         """Set overseer_level for session_id and all descendants (DFS)."""
-        await self.system.session_coordinator.session_manager.update_session(
+        await self.system.session_port.session_manager.update_session(
             session_id, overseer_level=level
         )
         for child_id in children:
-            child = await self.system.session_coordinator.session_manager.get_session_info(child_id)
+            child = await self.system.session_port.session_manager.get_session_info(child_id)
             if child:
                 await self._recompute_levels(child_id, level + 1, child.child_minion_ids or [])
 
@@ -483,7 +483,7 @@ class OverseerController:
         if subject_id == new_parent_id:
             raise ValueError("Cannot reparent a minion to itself")
 
-        subject = await self.system.session_coordinator.session_manager.get_session_info(subject_id)
+        subject = await self.system.session_port.session_manager.get_session_info(subject_id)
         if not subject:
             raise ValueError(f"Subject minion {subject_id} not found")
 
@@ -500,7 +500,7 @@ class OverseerController:
             }
 
         if new_parent_id is not None:
-            new_parent = await self.system.session_coordinator.session_manager.get_session_info(new_parent_id)
+            new_parent = await self.system.session_port.session_manager.get_session_info(new_parent_id)
             if not new_parent:
                 raise ValueError(f"New parent minion {new_parent_id} not found")
             if new_parent.project_id != legion_id:
@@ -508,7 +508,7 @@ class OverseerController:
 
         subject_descendant_ids = {
             d["session_id"]
-            for d in await self.system.session_coordinator.get_all_descendants(subject_id)
+            for d in await self.system.session_port.get_all_descendants(subject_id)
         }
         if new_parent_id is not None and new_parent_id in subject_descendant_ids:
             raise ValueError(
@@ -516,13 +516,13 @@ class OverseerController:
             )
 
         if caller_id is not None:
-            caller = await self.system.session_coordinator.session_manager.get_session_info(caller_id)
+            caller = await self.system.session_port.session_manager.get_session_info(caller_id)
             if not caller:
                 raise ValueError(f"Caller {caller_id} not found")
 
             caller_descendant_ids = {
                 d["session_id"]
-                for d in await self.system.session_coordinator.get_all_descendants(caller_id)
+                for d in await self.system.session_port.get_all_descendants(caller_id)
             }
 
             # Subject must be in caller's descendant closure
@@ -541,7 +541,7 @@ class OverseerController:
 
             # New parent must be caller itself or one of caller's descendants
             if new_parent_id != caller_id and new_parent_id not in caller_descendant_ids:
-                np = await self.system.session_coordinator.session_manager.get_session_info(new_parent_id)
+                np = await self.system.session_port.session_manager.get_session_info(new_parent_id)
                 np_name = np.name if np else new_parent_id
                 raise ValueError(
                     f"Authority violation: the new parent must be yourself or one of your descendants. "
@@ -555,39 +555,39 @@ class OverseerController:
         # so the lock window stays as narrow as possible.
         async with self._reparent_lock:
             if old_parent_id:
-                old_parent = await self.system.session_coordinator.session_manager.get_session_info(old_parent_id)
+                old_parent = await self.system.session_port.session_manager.get_session_info(old_parent_id)
                 if old_parent:
                     old_parent_children = list(old_parent.child_minion_ids or [])
                     if subject_id in old_parent_children:
                         old_parent_children.remove(subject_id)
-                        await self.system.session_coordinator.session_manager.update_session(
+                        await self.system.session_port.session_manager.update_session(
                             old_parent_id, child_minion_ids=old_parent_children
                         )
                     if not old_parent_children:
-                        await self.system.session_coordinator.session_manager.update_session(
+                        await self.system.session_port.session_manager.update_session(
                             old_parent_id, is_overseer=False
                         )
 
             if new_parent_id:
-                fresh_new_parent = await self.system.session_coordinator.session_manager.get_session_info(new_parent_id)
+                fresh_new_parent = await self.system.session_port.session_manager.get_session_info(new_parent_id)
                 if fresh_new_parent:
                     new_parent_children = list(fresh_new_parent.child_minion_ids or [])
                     if subject_id not in new_parent_children:
                         new_parent_children.append(subject_id)
-                        await self.system.session_coordinator.session_manager.update_session(
+                        await self.system.session_port.session_manager.update_session(
                             new_parent_id, child_minion_ids=new_parent_children
                         )
                     if not fresh_new_parent.is_overseer:
-                        await self.system.session_coordinator.session_manager.update_session(
+                        await self.system.session_port.session_manager.update_session(
                             new_parent_id, is_overseer=True
                         )
 
-            await self.system.session_coordinator.session_manager.update_session(
+            await self.system.session_port.session_manager.update_session(
                 subject_id, parent_overseer_id=new_parent_id
             )
 
             if new_parent_id:
-                np_session = await self.system.session_coordinator.session_manager.get_session_info(new_parent_id)
+                np_session = await self.system.session_port.session_manager.get_session_info(new_parent_id)
                 new_level = (np_session.overseer_level if np_session else 0) + 1
             else:
                 new_level = 0
@@ -598,7 +598,7 @@ class OverseerController:
         from_minion_id = None
         from_user = True
         if caller_id is not None:
-            caller_session = await self.system.session_coordinator.session_manager.get_session_info(caller_id)
+            caller_session = await self.system.session_port.session_manager.get_session_info(caller_id)
             if caller_session:
                 caller_name = caller_session.name
             from_minion_id = caller_id
@@ -606,13 +606,13 @@ class OverseerController:
 
         old_parent_name = "root"
         if old_parent_id:
-            op_session = await self.system.session_coordinator.session_manager.get_session_info(old_parent_id)
+            op_session = await self.system.session_port.session_manager.get_session_info(old_parent_id)
             if op_session:
                 old_parent_name = op_session.name
 
         new_parent_label = "root"
         if new_parent_id:
-            np_session = await self.system.session_coordinator.session_manager.get_session_info(new_parent_id)
+            np_session = await self.system.session_port.session_manager.get_session_info(new_parent_id)
             if np_session:
                 new_parent_label = np_session.name
 
@@ -639,7 +639,7 @@ class OverseerController:
         )
         await self.system.comm_router.route_comm(reparent_comm)
 
-        project = await self.system.session_coordinator.project_manager.get_project(legion_id)
+        project = await self.system.session_port.project_manager.get_project(legion_id)
         if project:
             self.system.broadcast_ui_event({
                 "type": "project_updated",

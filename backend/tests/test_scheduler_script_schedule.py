@@ -74,7 +74,7 @@ def _make_system(session_info=None, data_dir: Path | None = None, enqueue_result
     coordinator.credential_vault.resolve_secrets_for_assignment = AsyncMock(return_value=[])
 
     system = MagicMock()
-    system.session_coordinator = coordinator
+    system.session_port = coordinator
     return system
 
 
@@ -136,8 +136,8 @@ async def test_script_with_stdout_delivers_message(tmp_session_dir):
 
     assert schedule.last_status == "delivered"
     assert schedule.last_exit_code == 0
-    system.session_coordinator.enqueue_message.assert_awaited_once()
-    call_kwargs = system.session_coordinator.enqueue_message.call_args.kwargs
+    system.session_port.enqueue_message.assert_awaited_once()
+    call_kwargs = system.session_port.enqueue_message.call_args.kwargs
     assert "CI is red" in call_kwargs["content"]
     assert call_kwargs["metadata"]["script_filtered"] is True
 
@@ -162,7 +162,7 @@ async def test_script_with_empty_stdout_discards(tmp_session_dir):
         await svc._fire_script_schedule(schedule, 1000.0)
 
     assert schedule.last_status == "discarded"
-    system.session_coordinator.enqueue_message.assert_not_awaited()
+    system.session_port.enqueue_message.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +186,7 @@ async def test_script_nonzero_exit_records_error(tmp_session_dir):
 
     assert schedule.last_status == "error"
     assert schedule.last_exit_code == 1
-    system.session_coordinator.enqueue_message.assert_not_awaited()
+    system.session_port.enqueue_message.assert_not_awaited()
     execution = svc._append_execution.call_args.args[1]
     assert "code 1" in execution.error_message
 
@@ -286,13 +286,13 @@ async def test_auto_start_session_when_terminated(tmp_session_dir):
         return active_info
 
     system = _make_system(data_dir=tmp_session_dir)
-    system.session_coordinator.session_manager.get_session_info = AsyncMock(side_effect=_get_info)
+    system.session_port.session_manager.get_session_info = AsyncMock(side_effect=_get_info)
     svc = SchedulerService(system)
 
     result = await svc._ensure_session_active("sess-1", timeout=5.0)
 
     assert result is True
-    system.session_coordinator.start_session.assert_awaited_once_with("sess-1")
+    system.session_port.start_session.assert_awaited_once_with("sess-1")
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +304,7 @@ async def test_auto_start_session_when_terminated(tmp_session_dir):
 async def test_auto_start_failure_recorded_as_error(tmp_session_dir):
     error_info = _make_session_info(state=SessionState.ERROR)
     system = _make_system(data_dir=tmp_session_dir)
-    system.session_coordinator.session_manager.get_session_info = AsyncMock(return_value=error_info)
+    system.session_port.session_manager.get_session_info = AsyncMock(return_value=error_info)
     svc = SchedulerService(system)
     svc._persist_schedules = AsyncMock()
     svc._append_execution = AsyncMock()
@@ -316,7 +316,7 @@ async def test_auto_start_failure_recorded_as_error(tmp_session_dir):
     await svc._fire_script_schedule(schedule, 1000.0)
 
     assert schedule.last_status == "error"
-    system.session_coordinator.enqueue_message.assert_not_awaited()
+    system.session_port.enqueue_message.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -444,7 +444,7 @@ async def test_script_always_enqueues_immediately_no_pre_wait(tmp_session_dir):
         enqueued.append(kwargs)
         return {"queue_id": "q-1"}
 
-    system.session_coordinator.enqueue_message = AsyncMock(side_effect=_fast_enqueue)
+    system.session_port.enqueue_message = AsyncMock(side_effect=_fast_enqueue)
 
     with patch("backend.legion.scheduler_service.run_command_on_host", new=AsyncMock(return_value=(0, "output\n", "", False))):
         await svc._fire_script_schedule(schedule, 1000.0)
@@ -771,7 +771,7 @@ def _make_system_with_vault(
 ):
     """Build a system mock that includes template_manager, profile_manager, credential_vault."""
     system = _make_system(session_info=session_info, data_dir=data_dir, enqueue_result=enqueue_result)
-    sc = system.session_coordinator
+    sc = system.session_port
     sc.template_manager = MagicMock()
     sc.profile_manager = MagicMock()
     sc.credential_vault = MagicMock()
@@ -969,7 +969,7 @@ async def test_post_rotation_vault_value_reflected_at_fire_time(tmp_session_dir)
     # Issue #1425: placeholder, not plaintext rotated value.
     assert passed_env["API_KEY"] == "CC_SECRET_api_key_eeff0033"
     assert "rotated_value_999" not in str(passed_env)
-    system.session_coordinator.credential_vault.resolve_secrets_for_assignment.assert_awaited_once()
+    system.session_port.credential_vault.resolve_secrets_for_assignment.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -1249,4 +1249,4 @@ async def test_issue_1425_b5_no_assigned_secrets_no_placeholder_lookup(tmp_sessi
 
     mock_exec.assert_awaited_once()
     assert schedule.last_status == "delivered"
-    system.session_coordinator.credential_vault.resolve_secrets_for_assignment.assert_not_awaited()
+    system.session_port.credential_vault.resolve_secrets_for_assignment.assert_not_awaited()
