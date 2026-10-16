@@ -187,3 +187,21 @@ async def resolve_template_config(
             config_data[k] = v
 
     return config_data
+
+
+# Issue #1660: MCP config fields that the spawn path snapshots into session.config.
+# These are the only fields subject to stale-snapshot pruning.
+_MCP_INHERITABLE_FIELDS = ("mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config")
+
+
+def _mcp_field_equal(field: str, a, b) -> bool:
+    """Compare an MCP config field value, treating mcp_server_ids order-insensitively.
+
+    None and [] are treated as distinct: None means "inherit from chain", [] means
+    "explicitly no servers". Only a list-vs-list comparison uses set equality.
+    """
+    if field == "mcp_server_ids":
+        if (a is None) != (b is None):
+            return False
+        return set(a or []) == set(b or [])
+    return a == b
