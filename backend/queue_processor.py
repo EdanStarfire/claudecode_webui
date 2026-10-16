@@ -12,18 +12,14 @@ from typing import TYPE_CHECKING, Any
 
 from shared.logging_config import get_logger
 
-from .session_lifecycle import is_active, is_errored, is_paused
-from .session_manager import AUTO_START_STATES
+from .models.legion_models import Comm, CommType, InterruptPriority
+from .session_lifecycle import is_errored
 
 if TYPE_CHECKING:
     from .session_coordinator import SessionCoordinator
 
 queue_proc_logger = get_logger('queue_processor', category='QUEUE')
 logger = logging.getLogger(__name__)
-
-# Default timing configuration
-DEFAULT_MIN_WAIT_SECONDS = 10
-DEFAULT_MIN_IDLE_SECONDS = 10
 
 
 class QueueProcessor:
@@ -34,13 +30,12 @@ class QueueProcessor:
       1. Peek next pending item
       2. If paused → sleep, continue
       3. If session ERROR → STOP (user must intervene)
-      4. If session CREATED/TERMINATED → auto-start
-      5. Wait for ACTIVE state
-      6. If reset_session → coordinator.reset_session()
-      7. Wait min_wait_seconds after session active
-      8. Send message via coordinator.send_message()
-      9. Poll is_processing (no timeout, supports indefinite waits)
-      10. After idle for min_idle_seconds → mark sent, next item
+      4. Wrap the item into a Comm and hand it to
+         coordinator.delivery_gate.deliver(wait_for_idle=True) — auto-start,
+         reset, the min_wait_seconds delay, the send itself, and the
+         min_idle_seconds post-send wait all live there now (issue #2189
+         coordinator-split PR 10; see delivery_gate.py)
+      5. mark_sent/mark_failed + broadcast based on the DeliveryResult
     """
 
     def __init__(self, coordinator: "SessionCoordinator"):
@@ -215,25 +210,6 @@ class QueueProcessor:
         return task is not None and not task.done()
 
     # =========================================================================
-    # Callback wiring
-    # =========================================================================
-
-    def _ensure_message_callback(self, session_id: str) -> None:
-        """Ensure WebSocket message callback is registered for a session.
-
-        When the queue processor auto-starts or resets a session, it bypasses
-        the web_server REST endpoint that normally registers the WebSocket
-        broadcast callback. This method uses the registrar injected by
-        web_server to wire the callback so messages are streamed to the UI.
-        """
-        registrar = self._coordinator._message_callback_registrar
-        if registrar:
-            registrar(session_id)
-            queue_proc_logger.info(f"Registered WebSocket message callback for session {session_id}")
-        else:
-            queue_proc_logger.warning(f"No message callback registrar available for session {session_id}")
-
-    # =========================================================================
     # Main processing loop
     # =========================================================================
 
@@ -254,7 +230,6 @@ class QueueProcessor:
                     queue_proc_logger.warning(f"Session {session_id} not found, stopping processor")
                     break
 
-                queue_config = getattr(session_info, 'queue_config', None) or {}
                 queue_paused = getattr(session_info, 'queue_paused', False)
 
                 if queue_paused:
@@ -269,104 +244,42 @@ class QueueProcessor:
                     )
                     break
 
-                # Issue #2159 (UC1): ACTIVE sends now (skip the wait below entirely).
-                # CREATED/TERMINATED auto-start first. Every other non-ACTIVE state —
-                # including a just-auto-started session and an in-flight STARTING/
-                # TERMINATING found already in progress — keeps the original bounded
-                # 120s wait, EXCEPT PAUSED (mid-permission-wait), which waits with NO
-                # timeout: a permission decision can take as long as the user takes,
-                # the same "overnight wait" philosophy _wait_for_idle() below already
-                # uses. PAUSED used to fall into the same bounded wait as everything
-                # else and simply fail after 120s.
-                if not is_active(session_info.state):
-                    if session_info.state in AUTO_START_STATES:
-                        queue_proc_logger.info(f"Auto-starting session {session_id} for queue processing")
-                        # Register WebSocket message callback so messages are broadcast to frontend
-                        self._ensure_message_callback(session_id)
-                        # Get permission callback from factory if available
-                        perm_callback = None
-                        if self._coordinator._permission_callback_factory:
-                            perm_callback = self._coordinator._permission_callback_factory(session_id)
-                        success = await self._coordinator.start_session(session_id, perm_callback)
-                        if not success:
-                            queue_proc_logger.error(f"Failed to auto-start session {session_id}")
-                            session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
-                            if session_dir:
-                                await self._coordinator.queue_manager.mark_failed(
-                                    session_id, session_dir, item.queue_id,
-                                    "Failed to auto-start session"
-                                )
-                                await self._broadcast("failed", session_id, item)
-                            break
-
-                    wait_timeout = None if is_paused(session_info.state) else 120
-                    if not await self._wait_for_active(session_id, timeout=wait_timeout):
-                        queue_proc_logger.error(f"Session {session_id} did not become active")
-                        session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
-                        if session_dir:
-                            await self._coordinator.queue_manager.mark_failed(
-                                session_id, session_dir, item.queue_id,
-                                "Session did not become active"
-                            )
-                            await self._broadcast("failed", session_id, item)
-                        break
-
-                # Reset session if requested
-                if item.reset_session:
-                    queue_proc_logger.info(f"Resetting session {session_id} before queue item {item.queue_id}")
-                    # Register WebSocket message callback so messages are broadcast to frontend
-                    self._ensure_message_callback(session_id)
-                    perm_callback = None
-                    if self._coordinator._permission_callback_factory:
-                        perm_callback = self._coordinator._permission_callback_factory(session_id)
-                    success = await self._coordinator.reset_session(session_id, perm_callback, _from_queue_processor=True)
-                    if not success:
-                        queue_proc_logger.error(f"Failed to reset session {session_id}")
-                        session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
-                        if session_dir:
-                            await self._coordinator.queue_manager.mark_failed(
-                                session_id, session_dir, item.queue_id,
-                                "Failed to reset session"
-                            )
-                            await self._broadcast("failed", session_id, item)
-                        break
-
-                    # Wait for session active again after reset
-                    if not await self._wait_for_active(session_id):
-                        queue_proc_logger.error(f"Session {session_id} not active after reset")
-                        break
-
-                # Wait min_wait_seconds before sending
-                min_wait = queue_config.get("min_wait_seconds", DEFAULT_MIN_WAIT_SECONDS)
-                queue_proc_logger.debug(f"Waiting {min_wait}s before sending to session {session_id}")
-                await asyncio.sleep(min_wait)
-
-                # Re-check pause before sending
-                session_info = await self._coordinator.session_manager.get_session_info(session_id)
-                if session_info and getattr(session_info, 'queue_paused', False):
-                    continue
-
-                # Send the message
-                queue_proc_logger.info(
-                    f"Sending queued message {item.queue_id} to session {session_id}: "
-                    f"{item.content[:80]}..."
+                # Issue #2189 (coordinator-split PR 10): auto-start/wait/send/busy-wait
+                # dance now lives in DeliveryGate — see delivery_gate.py for the
+                # verbatim-ported AUTO_START_STATES/_wait_for_active/_wait_for_idle
+                # mechanics (issue #2159's PAUSED-unbounded-wait nuance included).
+                comm = Comm(
+                    comm_id=item.queue_id,
+                    from_user=True,
+                    to_minion_id=session_id,
+                    content=item.content,
+                    comm_type=CommType.SYSTEM,
+                    interrupt_priority=InterruptPriority.NONE,
+                    metadata=item.metadata or {},
                 )
-                send_result = await self._coordinator.send_message(
-                    session_id, item.content, inject_timestamp=item.inject_timestamp
+                result = await self._coordinator.delivery_gate.deliver(
+                    comm,
+                    wait_for_idle=True,
+                    reset_first=item.reset_session,
+                    inject_timestamp=item.inject_timestamp,
                 )
-                if not send_result:
-                    queue_proc_logger.error(f"Failed to send queue item {item.queue_id}")
-                    session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
-                    if session_dir:
-                        await self._coordinator.queue_manager.mark_failed(
-                            session_id, session_dir, item.queue_id,
-                            "Failed to send message"
+
+                session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
+                if not result.success:
+                    # error=None is DeliveryGate's signal for the one pre-PR
+                    # asymmetry it preserves verbatim (post-reset wait timeout):
+                    # stop for now without permanently failing the item.
+                    if result.error:
+                        queue_proc_logger.error(
+                            f"Queue item {item.queue_id} failed for session {session_id}: {result.error}"
                         )
-                        await self._broadcast("failed", session_id, item)
+                        if session_dir:
+                            await self._coordinator.queue_manager.mark_failed(
+                                session_id, session_dir, item.queue_id, result.error
+                            )
+                            await self._broadcast("failed", session_id, item)
                     break
 
-                # Mark as sent immediately — the message has been delivered to the SDK
-                session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
                 if session_dir:
                     await self._coordinator.queue_manager.mark_sent(
                         session_id, session_dir, item.queue_id
@@ -374,14 +287,6 @@ class QueueProcessor:
                     await self._broadcast("sent", session_id, item)
 
                 queue_proc_logger.info(f"Queue item {item.queue_id} sent to session {session_id}")
-
-                # Wait for SDK to finish processing before picking up next item
-                min_idle = queue_config.get("min_idle_seconds", DEFAULT_MIN_IDLE_SECONDS)
-                completed = await self._wait_for_idle(session_id, item.queue_id, min_idle)
-
-                if not completed:
-                    # Session entered error state during processing
-                    break
 
         except asyncio.CancelledError:
             queue_proc_logger.info(f"Queue processor cancelled for session {session_id}")
@@ -394,87 +299,6 @@ class QueueProcessor:
     # =========================================================================
     # Helpers
     # =========================================================================
-
-    async def _wait_for_active(self, session_id: str, timeout: float | None = 120) -> bool:
-        """Wait for a session to reach ACTIVE state. Returns False on error/timeout.
-
-        timeout=None waits indefinitely — used for a session already PAUSED on a
-        permission decision (issue #2159/UC1), which can take as long as the user
-        takes, not a bounded SDK-startup wait.
-        """
-        elapsed = 0.0
-        while timeout is None or elapsed < timeout:
-            info = await self._coordinator.session_manager.get_session_info(session_id)
-            if not info:
-                return False
-            if is_active(info.state):
-                return True
-            if is_errored(info.state):
-                return False
-            await asyncio.sleep(1)
-            elapsed += 1
-        return False
-
-    async def _wait_for_idle(
-        self, session_id: str, queue_id: str, min_idle_seconds: float
-    ) -> bool:
-        """
-        Wait for the session to be idle for min_idle_seconds after message delivery.
-
-        Returns True if idle reached, False if session errored.
-        No timeout — supports indefinite waits (e.g., overnight permission waits).
-        """
-        idle_start: float | None = None
-
-        while True:
-            info = await self._coordinator.session_manager.get_session_info(session_id)
-            if not info:
-                return False
-
-            # Session entered error state — mark item failed and stop
-            if is_errored(info.state):
-                session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
-                if session_dir:
-                    await self._coordinator.queue_manager.mark_failed(
-                        session_id, session_dir, queue_id,
-                        "Session entered error state during processing"
-                    )
-                    item = self._coordinator.queue_manager._find_item(session_id, queue_id)
-                    if item:
-                        await self._broadcast("failed", session_id, item)
-                return False
-
-            # Pause does NOT affect idle detection — once a message has been
-            # sent to the SDK, we must complete its idle cycle before the
-            # next item is picked up.  Pause only prevents the next item
-            # from being picked up (checked at the top of the main loop).
-
-            # Treat in-flight script schedules the same as is_processing: do not
-            # advance to the next queue item while a script that may be about to
-            # enqueue is still running. Reaches into legion_system.scheduler_service
-            # (the only back-pointer from coordinator → scheduler).
-            scheduler = (
-                self._coordinator.legion_system.scheduler_service
-                if self._coordinator.legion_system is not None
-                else None
-            )
-            scripts_inflight = (
-                scheduler.has_inflight_scripts(session_id) if scheduler is not None else False
-            )
-
-            if info.is_processing or scripts_inflight:
-                # Still busy — reset idle timer.
-                idle_start = None
-            else:
-                # Not processing — start/continue idle timer
-                if idle_start is None:
-                    idle_start = asyncio.get_event_loop().time()
-
-                elapsed_idle = asyncio.get_event_loop().time() - idle_start
-                if elapsed_idle >= min_idle_seconds:
-                    return True
-
-            await asyncio.sleep(1)
 
     async def _broadcast(self, action: str, session_id: str, item: Any) -> None:
         """Broadcast a queue update if callback is set."""

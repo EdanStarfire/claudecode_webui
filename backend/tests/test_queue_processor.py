@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from backend.delivery_gate import DeliveryGate
 from backend.queue_manager import QueueManager
 from backend.queue_processor import QueueProcessor
 from backend.session_manager import SessionInfo, SessionState
@@ -40,6 +41,18 @@ def _make_coordinator(session_info, session_dir):
     coord.reset_session = AsyncMock(return_value=True)
     coord._permission_callback_factory = None
     coord.queue_manager = QueueManager()
+    # Single-agent coordinator: no Legion wiring, so _wait_for_idle's
+    # scripts-inflight check must see None, not an auto-generated truthy
+    # MagicMock (which would make has_inflight_scripts() always "truthy"
+    # and idle-wait never complete — latent even before this PR, but newly
+    # load-bearing now that mark_sent/broadcast("sent") wait for the full
+    # DeliveryResult instead of firing immediately after send_message()).
+    coord.legion_system = None
+    # Issue #2189 (coordinator-split PR 10): _process_loop now calls through
+    # delivery_gate.deliver(), which internally calls back out to this same
+    # mock coordinator's send_message/start_session/session_manager — a real
+    # DeliveryGate bound to the mock keeps those the exercised mocked seams.
+    coord.delivery_gate = DeliveryGate(coord)
     return coord
 
 
@@ -165,13 +178,18 @@ class TestQueueProcessorDelivery:
     async def test_auto_starts_terminated_session(self):
         with tempfile.TemporaryDirectory() as tmp:
             sdir = Path(tmp)
-            # First call returns TERMINATED, subsequent calls return ACTIVE
+            # First two calls return TERMINATED, subsequent calls return ACTIVE.
+            # Issue #2189 (coordinator-split PR 10): _process_loop's own
+            # pause/is_errored precheck fetch is now a separate get_session_info()
+            # call from delivery_gate.deliver()'s own internal fetch that drives
+            # the actual auto-start decision — two calls see the pre-auto-start
+            # TERMINATED state before start_session() flips it to ACTIVE.
             call_count = 0
 
             async def dynamic_info(sid):
                 nonlocal call_count
                 call_count += 1
-                if call_count <= 1:
+                if call_count <= 2:
                     return _make_session_info(
                         state=SessionState.TERMINATED,
                         queue_config={"min_wait_seconds": 0, "min_idle_seconds": 0},
@@ -196,6 +214,38 @@ class TestQueueProcessorDelivery:
             proc.stop("s1")
 
             coord.start_session.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_reset_then_wait_timeout_does_not_mark_item_failed(self):
+        """Regression test (issue #2189): a verbatim pre-PR asymmetry — when
+        reset_session() succeeds but the session doesn't become active again
+        within the post-reset wait, the item is left pending for the next run,
+        NOT permanently marked failed. Every other delivery failure in this
+        path DOES mark_failed; only this one doesn't."""
+        with tempfile.TemporaryDirectory() as tmp:
+            sdir = Path(tmp)
+            info = _make_session_info(
+                state=SessionState.ACTIVE,
+                is_processing=False,
+                queue_config={"min_wait_seconds": 0, "min_idle_seconds": 0},
+            )
+            coord = _make_coordinator(info, sdir)
+            proc = QueueProcessor(coord)
+            await coord.queue_manager.enqueue("s1", sdir, "reset msg", reset_session=True)
+
+            with patch.object(coord.delivery_gate, "_wait_for_active", AsyncMock(return_value=False)):
+                proc.ensure_running("s1")
+                for _ in range(50):
+                    await asyncio.sleep(0)
+                    if not proc.is_running("s1"):
+                        break
+                proc.stop("s1")
+
+            coord.reset_session.assert_called_once()
+            coord.send_message.assert_not_called()
+            items = coord.queue_manager.get_queue("s1")
+            assert len(items) == 1
+            assert items[0].status == "pending"
 
     @pytest.mark.asyncio
     async def test_reset_session_called_when_flag_true(self):
@@ -261,7 +311,9 @@ class TestQueueProcessorPausedState:
             proc = QueueProcessor(coord)
             await coord.queue_manager.enqueue("s1", sdir, "paused mid-permission msg")
 
-            with patch("backend.queue_processor.asyncio.sleep", new=AsyncMock()):
+            # Issue #2189 (coordinator-split PR 10): the unbounded _wait_for_active
+            # poll this exercises now lives in delivery_gate.py, not queue_processor.py.
+            with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock()):
                 proc.ensure_running("s1")
                 for _ in range(50):
                     await asyncio.sleep(0)
@@ -291,7 +343,7 @@ class TestQueueProcessorWaitTimeoutByState:
             proc = QueueProcessor(coord)
             await coord.queue_manager.enqueue("s1", sdir, "msg")
 
-            with patch.object(proc, "_wait_for_active", AsyncMock(return_value=False)) as wait_mock:
+            with patch.object(coord.delivery_gate, "_wait_for_active", AsyncMock(return_value=False)) as wait_mock:
                 proc.ensure_running("s1")
                 for _ in range(50):
                     await asyncio.sleep(0)
@@ -311,7 +363,7 @@ class TestQueueProcessorWaitTimeoutByState:
             proc = QueueProcessor(coord)
             await coord.queue_manager.enqueue("s1", sdir, "msg")
 
-            with patch.object(proc, "_wait_for_active", AsyncMock(return_value=False)) as wait_mock:
+            with patch.object(coord.delivery_gate, "_wait_for_active", AsyncMock(return_value=False)) as wait_mock:
                 proc.ensure_running("s1")
                 for _ in range(50):
                     await asyncio.sleep(0)
@@ -331,7 +383,7 @@ class TestQueueProcessorWaitTimeoutByState:
             proc = QueueProcessor(coord)
             await coord.queue_manager.enqueue("s1", sdir, "msg")
 
-            with patch.object(proc, "_wait_for_active", AsyncMock(return_value=False)) as wait_mock:
+            with patch.object(coord.delivery_gate, "_wait_for_active", AsyncMock(return_value=False)) as wait_mock:
                 proc.ensure_running("s1")
                 for _ in range(50):
                     await asyncio.sleep(0)

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from backend.delivery_gate import DeliveryGate
 from backend.legion_system import LegionSystem
 from backend.models.legion_models import Comm, CommType
 
@@ -30,6 +31,11 @@ def legion_system():
     mock_session_coordinator.session_manager.get_session_info = AsyncMock(return_value=default_minion)
     mock_session_coordinator.start_session = AsyncMock()
     mock_session_coordinator.data_dir = Path("/tmp/test")
+    # Issue #2189 (coordinator-split PR 10): _send_to_minion now calls through
+    # delivery_gate.deliver(), which internally calls back out to this same
+    # mock coordinator's send_message/start_session/session_manager — a real
+    # DeliveryGate bound to the mock keeps those the exercised mocked seams.
+    mock_session_coordinator.delivery_gate = DeliveryGate(mock_session_coordinator)
 
     system = LegionSystem(
         session_port=mock_session_coordinator,
@@ -428,6 +434,37 @@ class TestCommRouter:
         comm_meta = call_kwargs["metadata"]["comm"]
         assert comm_meta["summary"] == ""
         assert comm_meta["content"] == "No summary provided for this one."
+
+    @pytest.mark.asyncio
+    async def test_issue_2189_comm_content_and_metadata_unchanged_after_send(self, comm_router):
+        """Regression test: _send_to_minion builds an SDK-formatted message/metadata
+        for delivery_gate.deliver() internally, but must restore the caller's
+        original comm.content/comm.metadata afterward — a caller that inspects the
+        same Comm post-return (e.g. POST /api/legions/{id}/comms's REST response,
+        which returns comm.to_dict() after route_comm()) must see what it passed
+        in, not the internal SDK-formatted display text."""
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_user=True,
+            to_minion_id="test-minion-123",
+            summary="short summary",
+            content="original unformatted content",
+            comm_type=CommType.TASK,
+            metadata={"caller_key": "caller_value"},
+        )
+
+        result = await comm_router._send_to_minion(comm)
+        assert result is True
+
+        # The SDK must still have received the formatted version...
+        send_message_mock = comm_router.system.session_port.send_message
+        sent_message = send_message_mock.call_args.kwargs.get("message")
+        assert sent_message != "original unformatted content"
+        assert "original unformatted content" in sent_message
+
+        # ...but the comm object itself must be untouched for other callers.
+        assert comm.content == "original unformatted content"
+        assert comm.metadata == {"caller_key": "caller_value"}
 
     @pytest.mark.asyncio
     async def test_issue_1730_route_comm_persists_non_null_resource_id(self, comm_router, tmp_path):

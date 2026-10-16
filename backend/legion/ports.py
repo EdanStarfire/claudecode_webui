@@ -14,7 +14,7 @@ two-port split would mean nearly every file needs both ports anyway.
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from backend.credential_vault import CredentialVault
 from backend.profile_manager import ProfileManager
@@ -23,6 +23,9 @@ from backend.queue_manager import QueueItem
 from backend.session_config import SessionConfig
 from backend.session_manager import SessionInfo
 from backend.template_manager import TemplateManager
+
+if TYPE_CHECKING:
+    from backend.delivery_gate import DeliveryGate
 
 
 class SessionManagerPort(Protocol):
@@ -68,9 +71,9 @@ class QueueManagerPort(Protocol):
 class LegionCoordinatorPort(Protocol):
     """Narrow view of SessionCoordinator used by Legion components.
 
-    Covers data_dir, template_manager, profile_manager, credential_vault, the 3
-    sub-manager ports, and the async verbs Legion calls directly on the
-    coordinator.
+    Covers data_dir, template_manager, profile_manager, credential_vault,
+    delivery_gate, the 3 sub-manager ports, and the async verbs Legion calls
+    directly on the coordinator.
     """
 
     data_dir: Path
@@ -80,6 +83,7 @@ class LegionCoordinatorPort(Protocol):
     session_manager: SessionManagerPort
     project_manager: ProjectManagerPort
     queue_manager: QueueManagerPort
+    delivery_gate: "DeliveryGate"
 
     async def enqueue_message(
         self,

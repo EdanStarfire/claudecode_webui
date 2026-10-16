@@ -460,8 +460,15 @@ async def test_script_always_enqueues_immediately_no_pre_wait(tmp_session_dir):
 
 @pytest.mark.asyncio
 async def test_queue_processor_idle_wait_pauses_while_scripts_inflight():
-    """_wait_for_idle must not return True while has_inflight_scripts is True."""
-    from backend.queue_processor import QueueProcessor
+    """_wait_for_idle must not return True while has_inflight_scripts is True.
+
+    Issue #2189 (coordinator-split PR 10): _wait_for_idle moved from
+    QueueProcessor to DeliveryGate, and dropped its queue_id parameter (the
+    mark_failed/broadcast bookkeeping it used to do on error moved out to
+    queue_processor.py's _process_loop, which now decides that based on the
+    DeliveryResult DeliveryGate returns).
+    """
+    from backend.delivery_gate import DeliveryGate
 
     coordinator = MagicMock()
     coordinator.session_manager = MagicMock()
@@ -484,9 +491,9 @@ async def test_queue_processor_idle_wait_pauses_while_scripts_inflight():
     session_info = _make_session_info(is_processing=False)
     coordinator.session_manager.get_session_info = AsyncMock(return_value=session_info)
 
-    proc = QueueProcessor(coordinator)
+    gate = DeliveryGate(coordinator)
 
-    completed = await proc._wait_for_idle("sess-1", "q-1", min_idle_seconds=0.0)
+    completed = await gate._wait_for_idle("sess-1", min_idle_seconds=0.0)
 
     assert completed is True
     # must have polled at least 3 times (twice inflight, once clear+idle)
@@ -501,7 +508,7 @@ async def test_queue_processor_idle_wait_pauses_while_scripts_inflight():
 @pytest.mark.asyncio
 async def test_queue_processor_idle_wait_resumes_after_scripts_complete():
     """Once has_inflight_scripts returns False, idle timer starts and _wait_for_idle returns."""
-    from backend.queue_processor import QueueProcessor
+    from backend.delivery_gate import DeliveryGate
 
     coordinator = MagicMock()
     scheduler = MagicMock()
@@ -514,8 +521,8 @@ async def test_queue_processor_idle_wait_resumes_after_scripts_complete():
     session_info = _make_session_info(is_processing=False)
     coordinator.session_manager.get_session_info = AsyncMock(return_value=session_info)
 
-    proc = QueueProcessor(coordinator)
-    completed = await proc._wait_for_idle("sess-1", "q-1", min_idle_seconds=0.0)
+    gate = DeliveryGate(coordinator)
+    completed = await gate._wait_for_idle("sess-1", min_idle_seconds=0.0)
 
     assert completed is True
 
@@ -528,7 +535,7 @@ async def test_queue_processor_idle_wait_resumes_after_scripts_complete():
 @pytest.mark.asyncio
 async def test_queue_processor_unaffected_when_legion_system_is_none():
     """Single-agent installs (no legion_system) must behave exactly as before."""
-    from backend.queue_processor import QueueProcessor
+    from backend.delivery_gate import DeliveryGate
 
     coordinator = MagicMock()
     coordinator.legion_system = None
@@ -536,8 +543,8 @@ async def test_queue_processor_unaffected_when_legion_system_is_none():
     session_info = _make_session_info(is_processing=False)
     coordinator.session_manager.get_session_info = AsyncMock(return_value=session_info)
 
-    proc = QueueProcessor(coordinator)
-    completed = await proc._wait_for_idle("sess-1", "q-1", min_idle_seconds=0.0)
+    gate = DeliveryGate(coordinator)
+    completed = await gate._wait_for_idle("sess-1", min_idle_seconds=0.0)
 
     assert completed is True
 
