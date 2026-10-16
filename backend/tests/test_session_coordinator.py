@@ -2713,7 +2713,7 @@ class TestIssue1628CompactBoundaryDistillation:
         with patch.object(
             coordinator.session_manager, 'get_session_info', new_callable=AsyncMock, return_value=mock_session_info
         ), patch(
-            'backend.session_coordinator.resolve_effective_config',
+            'backend.archive_coordinator.resolve_effective_config',
             new_callable=AsyncMock,
             return_value=mock_eff,
         ), patch(
@@ -2741,7 +2741,7 @@ class TestIssue1628CompactBoundaryDistillation:
         with patch.object(
             coordinator.session_manager, 'get_session_info', new_callable=AsyncMock, return_value=mock_session_info
         ), patch(
-            'backend.session_coordinator.resolve_effective_config',
+            'backend.archive_coordinator.resolve_effective_config',
             new_callable=AsyncMock,
             return_value=mock_eff,
         ), patch(
