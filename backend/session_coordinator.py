@@ -563,6 +563,30 @@ class SessionCoordinator:
         from .vault_refresh_manager import VaultRefreshManager
         self.vault_refresh_manager = VaultRefreshManager(self.credential_vault)
 
+        # Secrets Vault CRUD + session-scoped resolution (issue #2189 AC5,
+        # router-boundary PR B) — constructed last among its 6 collaborators
+        # (vault_refresh_manager, constructed just above, is the latest of the six).
+        from .secrets_service import SecretsService
+        self.secrets_service = SecretsService(
+            self.credential_vault,
+            self.vault_refresh_manager,
+            self.session_manager,
+            self.template_manager,
+            self.profile_manager,
+            self.mcp_config_manager,
+        )
+
+        # OAuth 2.1 token/secret-bundle management (issue #2189 AC5, router-boundary
+        # PR B) — all 4 collaborators (credential_vault, oauth_manager,
+        # mcp_config_manager, vault_refresh_manager) already exist by this point.
+        from .oauth_secret_bundle_manager import OAuthSecretBundleManager
+        self.oauth_secret_bundle_manager = OAuthSecretBundleManager(
+            self.credential_vault,
+            self.oauth_manager,
+            self.mcp_config_manager,
+            self.vault_refresh_manager,
+        )
+
         # Event callbacks
         self._message_callbacks: dict[str, list[Callable]] = {}
         self._error_callbacks: dict[str, list[Callable]] = {}

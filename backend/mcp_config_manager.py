@@ -313,6 +313,112 @@ class McpConfigManager:
         """List all configs."""
         return list(self.configs.values())
 
+    async def export_configs(self, ids: list[str] | None = None) -> list:
+        configs = await self.list_configs()
+        if ids is not None:
+            id_set = set(ids)
+            configs = [c for c in configs if c.id in id_set]
+        return configs
+
+    async def import_configs(self, servers: dict, dry_run: bool) -> dict:
+        existing_configs = await self.list_configs()  # FIX: was manager.configs.values()
+        existing_by_name = {c.name: c for c in existing_configs}
+
+        preview = []
+        imported = []
+
+        for name, server_data in servers.items():
+            name = name.strip()
+            if not name:
+                preview.append({"name": "", "action": "skip", "reason": "Missing name"})
+                continue
+
+            server_type_raw = server_data.get("type", "stdio")
+            try:
+                server_type = McpServerType(server_type_raw)
+            except ValueError:
+                preview.append(
+                    {"name": name, "action": "skip", "reason": f"Invalid type: {server_type_raw}"}
+                )
+                continue
+
+            if server_type == McpServerType.STDIO and not server_data.get("command"):
+                preview.append(
+                    {"name": name, "action": "skip", "reason": "Missing command for stdio server"}
+                )
+                continue
+
+            if server_type in (McpServerType.SSE, McpServerType.HTTP) and not server_data.get("url"):
+                preview.append(
+                    {
+                        "name": name,
+                        "action": "skip",
+                        "reason": f"Missing url for {server_type} server",
+                    }
+                )
+                continue
+
+            existing = existing_by_name.get(name)
+            action = "update" if existing else "create"
+            entry: dict = {
+                "name": name,
+                "action": action,
+                "config": dict(server_data),
+            }
+            if existing:
+                entry["existing_id"] = existing.id
+
+            if not dry_run:
+                try:
+                    oauth_data = server_data.get("oauth") or {}
+                    oauth_client_id = oauth_data.get("clientId")
+                    oauth_callback_port = oauth_data.get("callbackPort")
+                    if action == "create":
+                        config = await self.create_config(
+                            name=name,
+                            server_type=server_type,
+                            command=server_data.get("command"),
+                            args=server_data.get("args") or [],
+                            env=server_data.get("env") or {},
+                            url=server_data.get("url"),
+                            headers=server_data.get("headers") or {},
+                            enabled=server_data.get("enabled", True),
+                            oauth_client_id=oauth_client_id,
+                            oauth_callback_port=oauth_callback_port,
+                        )
+                    else:
+                        config = await self.update_config(
+                            config_id=existing.id,
+                            name=name,
+                            server_type=server_type,
+                            command=server_data.get("command"),
+                            args=server_data.get("args") or [],
+                            env=server_data.get("env") or {},
+                            url=server_data.get("url"),
+                            headers=server_data.get("headers") or {},
+                            enabled=server_data.get("enabled", True),
+                            oauth_client_id=oauth_client_id,
+                            oauth_callback_port=oauth_callback_port,
+                        )
+                    entry["result"] = config.to_dict()
+                    imported.append(config.to_dict())
+                except Exception as e:
+                    entry["action"] = "skip"
+                    entry["reason"] = str(e)
+
+            preview.append(entry)
+
+        create_count = sum(1 for p in preview if p["action"] == "create")
+        update_count = sum(1 for p in preview if p["action"] == "update")
+        skip_count = sum(1 for p in preview if p["action"] == "skip")
+
+        return {
+            "dry_run": dry_run,
+            "preview": preview,
+            "summary": {"create": create_count, "update": update_count, "skip": skip_count},
+            "imported": imported,
+        }
+
     async def update_config(
         self,
         config_id: str,

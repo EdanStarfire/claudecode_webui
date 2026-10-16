@@ -371,34 +371,30 @@ async def test_get_mcp_config_returns_none_when_not_found(service, mock_coordina
 
 
 @pytest.mark.asyncio
-async def test_import_mcp_configs_dry_run_returns_preview(service, mock_coordinator):
-    """Verifies list_configs is used (not configs.values()) for import."""
-    mock_coordinator.mcp_config_manager.list_configs.return_value = []
+async def test_import_mcp_configs_delegates_to_mcp_config_manager(service, mock_coordinator):
+    """Issue #2189 AC5: real import logic moved to McpConfigManager.import_configs;
+    ApplicationService.import_mcp_configs is now a thin delegate."""
+    mock_coordinator.mcp_config_manager.import_configs = AsyncMock(return_value={"dry_run": True})
 
     result = await service.import_mcp_configs(
         servers={"myserver": {"type": "stdio", "command": "npx"}},
         dry_run=True,
     )
 
-    mock_coordinator.mcp_config_manager.list_configs.assert_called_once()
-    assert result["dry_run"] is True
-    assert result["summary"]["create"] == 1
-    assert len(result["imported"]) == 0  # dry_run → nothing imported
+    mock_coordinator.mcp_config_manager.import_configs.assert_called_once_with(
+        {"myserver": {"type": "stdio", "command": "npx"}}, True
+    )
+    assert result == {"dry_run": True}
 
 
 @pytest.mark.asyncio
-async def test_import_mcp_configs_executes_when_not_dry_run(service, mock_coordinator):
-    mock_coordinator.mcp_config_manager.list_configs.return_value = []
-    created_config = _make_config("new1", "myserver")
-    mock_coordinator.mcp_config_manager.create_config.return_value = created_config
+async def test_export_mcp_configs_delegates_to_mcp_config_manager(service, mock_coordinator):
+    mock_coordinator.mcp_config_manager.export_configs = AsyncMock(return_value=["cfg"])
 
-    result = await service.import_mcp_configs(
-        servers={"myserver": {"type": "stdio", "command": "npx"}},
-        dry_run=False,
-    )
+    result = await service.export_mcp_configs(ids=["c1"])
 
-    mock_coordinator.mcp_config_manager.create_config.assert_called_once()
-    assert len(result["imported"]) == 1
+    mock_coordinator.mcp_config_manager.export_configs.assert_called_once_with(["c1"])
+    assert result == ["cfg"]
 
 
 @pytest.mark.asyncio
@@ -621,42 +617,57 @@ async def test_test_connect_mcp_config_failed_propagates_stage(service, mock_coo
 
 
 @pytest.mark.asyncio
-async def test_oauth_complete_flow_returns_server_id(service, mock_coordinator):
-    mock_coordinator.oauth_manager.complete_flow.return_value = "server-123"
+async def test_oauth_complete_flow_delegates_to_oauth_secret_bundle_manager(service, mock_coordinator):
+    mock_coordinator.oauth_secret_bundle_manager = MagicMock()
+    mock_coordinator.oauth_secret_bundle_manager.oauth_complete_flow = AsyncMock(
+        return_value="server-123"
+    )
 
     result = await service.oauth_complete_flow("state-abc", "code-xyz")
 
     assert result == "server-123"
-    mock_coordinator.oauth_manager.complete_flow.assert_called_once_with("state-abc", "code-xyz")
+    mock_coordinator.oauth_secret_bundle_manager.oauth_complete_flow.assert_called_once_with(
+        "state-abc", "code-xyz"
+    )
 
 
 @pytest.mark.asyncio
-async def test_oauth_initiate_flow_returns_none_when_config_not_found(service, mock_coordinator):
-    mock_coordinator.mcp_config_manager.get_config.return_value = None
+async def test_oauth_initiate_flow_delegates_to_oauth_secret_bundle_manager(service, mock_coordinator):
+    mock_coordinator.oauth_secret_bundle_manager = MagicMock()
+    mock_coordinator.oauth_secret_bundle_manager.oauth_initiate_flow = AsyncMock(return_value=None)
 
     result = await service.oauth_initiate_flow("nonexistent", "http://srv", "http://cb", "App")
 
     assert result is None
-    mock_coordinator.oauth_manager.start_flow.assert_not_called()
+    mock_coordinator.oauth_secret_bundle_manager.oauth_initiate_flow.assert_called_once_with(
+        "nonexistent", "http://srv", "http://cb", "App"
+    )
 
 
 @pytest.mark.asyncio
-async def test_oauth_disconnect_returns_false_when_config_not_found(service, mock_coordinator):
-    mock_coordinator.mcp_config_manager.get_config.return_value = None
+async def test_oauth_disconnect_delegates_to_oauth_secret_bundle_manager(service, mock_coordinator):
+    mock_coordinator.oauth_secret_bundle_manager = MagicMock()
+    mock_coordinator.oauth_secret_bundle_manager.oauth_disconnect = AsyncMock(return_value=False)
 
     result = await service.oauth_disconnect("nonexistent")
 
     assert result is False
-    mock_coordinator.oauth_manager.disconnect.assert_not_called()
+    mock_coordinator.oauth_secret_bundle_manager.oauth_disconnect.assert_called_once_with(
+        "nonexistent"
+    )
 
 
 @pytest.mark.asyncio
-async def test_oauth_get_status_returns_none_when_config_not_found(service, mock_coordinator):
-    mock_coordinator.mcp_config_manager.get_config.return_value = None
+async def test_oauth_get_status_delegates_to_oauth_secret_bundle_manager(service, mock_coordinator):
+    mock_coordinator.oauth_secret_bundle_manager = MagicMock()
+    mock_coordinator.oauth_secret_bundle_manager.oauth_get_status = AsyncMock(return_value=None)
 
     result = await service.oauth_get_status("nonexistent")
 
     assert result is None
+    mock_coordinator.oauth_secret_bundle_manager.oauth_get_status.assert_called_once_with(
+        "nonexistent"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -695,157 +706,129 @@ async def test_create_template_returns_dict(service, mock_coordinator):
 
 
 # ---------------------------------------------------------------------------
-# Secrets / Issue #1219
+# Secrets Vault delegation (issue #2189 AC5: real logic moved to SecretsService;
+# see test_secrets_service.py for behavior coverage with fake collaborators).
 # ---------------------------------------------------------------------------
 
 
-def _make_session_with_secrets(assigned_secrets=None, secret_placeholders=None):
-    s = MagicMock()
-    s.config = {"assigned_secrets": assigned_secrets} if assigned_secrets is not None else {}
-    s.secret_placeholders = secret_placeholders
-    return s
+@pytest.mark.asyncio
+async def test_list_secrets_delegates_to_secrets_service(service, mock_coordinator):
+    mock_coordinator.secrets_service = MagicMock()
+    mock_coordinator.secrets_service.list_secrets = AsyncMock(return_value={"secrets": []})
+
+    result = await service.list_secrets()
+
+    mock_coordinator.secrets_service.list_secrets.assert_called_once_with()
+    assert result == {"secrets": []}
 
 
 @pytest.mark.asyncio
-async def test_issue_1219_resolves_from_placeholder_when_assigned_empty(service, mock_coordinator):
-    session = _make_session_with_secrets(
-        assigned_secrets=None,
-        secret_placeholders={"CC_SECRET_tok_abc": "claudecode_token"},
-    )
-    mock_coordinator.session_manager.get_session_info.return_value = session
-    mock_coordinator.credential_vault = MagicMock()
-    mock_coordinator.credential_vault.list_secrets = AsyncMock(return_value=[])
-    mock_coordinator.credential_vault.resolve_secrets_for_assignment = AsyncMock(
-        return_value=[{"name": "claudecode_token", "value": "tok123"}]
+async def test_create_secret_delegates_to_secrets_service(service, mock_coordinator):
+    mock_coordinator.secrets_service = MagicMock()
+    mock_coordinator.secrets_service.create_secret = AsyncMock(return_value={"name": "s1"})
+
+    result = await service.create_secret(
+        name="s1", secret_type="generic", target_hosts=["h"], value="v"
     )
 
-    # Verify production read path returns the expected names before the async call
-    assert service._resolve_writeable_secret_names(session) == ["claudecode_token"]
-
-    result = await service.resolve_secrets_for_session("s1")
-
-    mock_coordinator.credential_vault.resolve_secrets_for_assignment.assert_called_once_with(
-        ["claudecode_token"]
+    mock_coordinator.secrets_service.create_secret.assert_called_once_with(
+        name="s1",
+        secret_type="generic",
+        target_hosts=["h"],
+        value="v",
+        inject_env=None,
+        inject_file=None,
+        scrub=None,
+        username=None,
+        injection=None,
+        refresh=None,
     )
-    assert any(s["name"] == "claudecode_token" for s in result["secrets"])
+    assert result == {"name": "s1"}
 
 
 @pytest.mark.asyncio
-async def test_issue_1219_no_duplicates_when_both_assigned_and_placeholder_set(service, mock_coordinator):
-    session = _make_session_with_secrets(
-        assigned_secrets=["claudecode_token"],
-        secret_placeholders={"CC_SECRET_tok_abc": "claudecode_token"},
+async def test_update_secret_delegates_to_secrets_service(service, mock_coordinator):
+    mock_coordinator.secrets_service = MagicMock()
+    mock_coordinator.secrets_service.update_secret = AsyncMock(return_value={"name": "s1"})
+
+    result = await service.update_secret(name="s1", value="new")
+
+    mock_coordinator.secrets_service.update_secret.assert_called_once_with(
+        name="s1",
+        secret_type=None,
+        target_hosts=None,
+        value="new",
+        inject_env=None,
+        inject_file=None,
+        scrub=None,
+        username=None,
+        injection=None,
+        refresh=None,
     )
-    mock_coordinator.session_manager.get_session_info.return_value = session
-    mock_coordinator.credential_vault = MagicMock()
-    mock_coordinator.credential_vault.list_secrets = AsyncMock(return_value=[])
-    mock_coordinator.credential_vault.resolve_secrets_for_assignment = AsyncMock(
-        return_value=[{"name": "claudecode_token", "value": "tok123"}]
-    )
-
-    await service.resolve_secrets_for_session("s1")
-
-    names_passed = mock_coordinator.credential_vault.resolve_secrets_for_assignment.call_args[0][0]
-    assert names_passed.count("claudecode_token") == 1
-
-
-# ---------------------------------------------------------------------------
-# Secrets / Issue #1241 — proxy write-back fix for template-linked sessions
-# ---------------------------------------------------------------------------
-
-
-def _make_session_post_1230(assigned_secrets=None, secret_placeholders=None):
-    s = MagicMock()
-    s.config = {"assigned_secrets": assigned_secrets} if assigned_secrets is not None else {}
-    s.secret_placeholders = secret_placeholders or {}
-    return s
+    assert result == {"name": "s1"}
 
 
 @pytest.mark.asyncio
-async def test_issue_1241_patch_template_derived_secret_succeeds(service, mock_coordinator):
-    session = _make_session_post_1230(
-        assigned_secrets=None,
-        secret_placeholders={"CC_SECRET_x": "claudecode_token"},
-    )
-    mock_coordinator.session_manager.get_session_info.return_value = session
-    mock_coordinator.credential_vault = MagicMock()
-    mock_coordinator.credential_vault.list_secrets = AsyncMock(return_value=[])
-    service.update_secret = AsyncMock(return_value={"name": "claudecode_token"})
+async def test_delete_secret_delegates_to_secrets_service(service, mock_coordinator):
+    mock_coordinator.secrets_service = MagicMock()
+    mock_coordinator.secrets_service.delete_secret = AsyncMock(return_value=True)
 
-    result = await service.update_secret_for_session("s1", "claudecode_token", value="new_tok")
+    result = await service.delete_secret("s1")
 
-    service.update_secret.assert_called_once_with(name="claudecode_token", value="new_tok")
-    assert result == {"name": "claudecode_token"}
+    mock_coordinator.secrets_service.delete_secret.assert_called_once_with("s1")
+    assert result is True
 
 
 @pytest.mark.asyncio
-async def test_issue_1241_patch_profile_derived_secret_succeeds(service, mock_coordinator):
-    # Profile-derived names flow through secret_placeholders identically to template-derived ones.
-    session = _make_session_post_1230(
-        assigned_secrets=None,
-        secret_placeholders={"CC_SECRET_profile": "profile_token"},
-    )
-    mock_coordinator.session_manager.get_session_info.return_value = session
-    mock_coordinator.credential_vault = MagicMock()
-    mock_coordinator.credential_vault.list_secrets = AsyncMock(return_value=[])
-    service.update_secret = AsyncMock(return_value={"name": "profile_token"})
+async def test_refresh_secret_delegates_to_secrets_service(service, mock_coordinator):
+    mock_coordinator.secrets_service = MagicMock()
+    mock_coordinator.secrets_service.refresh_secret = AsyncMock(return_value={"name": "s1"})
 
-    result = await service.update_secret_for_session("s1", "profile_token", value="refreshed")
+    result = await service.refresh_secret("s1")
 
-    service.update_secret.assert_called_once_with(name="profile_token", value="refreshed")
-    assert result == {"name": "profile_token"}
+    mock_coordinator.secrets_service.refresh_secret.assert_called_once_with("s1")
+    assert result == {"name": "s1"}
 
 
 @pytest.mark.asyncio
-async def test_issue_1241_patch_unrelated_secret_rejected(service, mock_coordinator):
-    session = _make_session_post_1230(
-        assigned_secrets=None,
-        secret_placeholders={"CC_SECRET_x": "claudecode_token"},
+async def test_resolve_secrets_for_session_delegates_to_secrets_service(service, mock_coordinator):
+    mock_coordinator.secrets_service = MagicMock()
+    mock_coordinator.secrets_service.resolve_secrets_for_session = AsyncMock(
+        return_value={"secrets": []}
     )
-    mock_coordinator.session_manager.get_session_info.return_value = session
-    mock_coordinator.credential_vault = MagicMock()
-    mock_coordinator.credential_vault.list_secrets = AsyncMock(return_value=[])
 
-    with pytest.raises(PermissionError):
-        await service.update_secret_for_session("s1", "some_other_secret")
+    result = await service.resolve_secrets_for_session("sess1")
+
+    mock_coordinator.secrets_service.resolve_secrets_for_session.assert_called_once_with("sess1")
+    assert result == {"secrets": []}
 
 
 @pytest.mark.asyncio
-async def test_issue_1241_patch_transitive_sibling_succeeds(service, mock_coordinator):
-    session = _make_session_post_1230(
-        assigned_secrets=None,
-        secret_placeholders={"CC_SECRET_tok": "oauth_token"},
+async def test_update_secret_for_session_delegates_to_secrets_service(service, mock_coordinator):
+    mock_coordinator.secrets_service = MagicMock()
+    mock_coordinator.secrets_service.update_secret_for_session = AsyncMock(
+        return_value={"name": "s1"}
     )
-    mock_coordinator.session_manager.get_session_info.return_value = session
-    mock_coordinator.credential_vault = MagicMock()
-    mock_coordinator.credential_vault.list_secrets = AsyncMock(
-        return_value=[
-            {
-                "name": "oauth_token",
-                "refresh": {"refresh_token_secret_name": "oauth_refresh"},
-            }
-        ]
+
+    result = await service.update_secret_for_session("sess1", "s1", value="v")
+
+    mock_coordinator.secrets_service.update_secret_for_session.assert_called_once_with(
+        "sess1", "s1", value="v"
     )
-    service.update_secret = AsyncMock(return_value={"name": "oauth_refresh"})
-
-    result = await service.update_secret_for_session("s1", "oauth_refresh", value="new_refresh")
-
-    service.update_secret.assert_called_once_with(name="oauth_refresh", value="new_refresh")
-    assert result == {"name": "oauth_refresh"}
+    assert result == {"name": "s1"}
 
 
-@pytest.mark.asyncio
-async def test_issue_1241_patch_session_overridden_secret_succeeds(service, mock_coordinator):
-    session = _make_session_post_1230(
-        assigned_secrets=["my_secret"],
-        secret_placeholders=None,
-    )
-    mock_coordinator.session_manager.get_session_info.return_value = session
-    mock_coordinator.credential_vault = MagicMock()
-    mock_coordinator.credential_vault.list_secrets = AsyncMock(return_value=[])
-    service.update_secret = AsyncMock(return_value={"name": "my_secret"})
+def test_schedule_secret_refresh_delegates_to_secrets_service(service, mock_coordinator):
+    mock_coordinator.secrets_service = MagicMock()
 
-    result = await service.update_secret_for_session("s1", "my_secret", value="direct_val")
+    service.schedule_secret_refresh("s1")
 
-    service.update_secret.assert_called_once_with(name="my_secret", value="direct_val")
-    assert result == {"name": "my_secret"}
+    mock_coordinator.secrets_service.schedule_secret_refresh.assert_called_once_with("s1")
+
+
+def test_unschedule_secret_refresh_delegates_to_secrets_service(service, mock_coordinator):
+    mock_coordinator.secrets_service = MagicMock()
+
+    service.unschedule_secret_refresh("s1")
+
+    mock_coordinator.secrets_service.unschedule_secret_refresh.assert_called_once_with("s1")

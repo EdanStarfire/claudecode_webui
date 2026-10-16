@@ -6,16 +6,13 @@ coordinator attributes directly.
 """
 from __future__ import annotations
 
-import asyncio
 import time
-from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from shared.event_queue import EventQueue
 from shared.git_restart import run_git_command as _run_git_command_impl
 
-from .secret_usage import compute_secret_usage, empty_usage
-from .slug_utils import slugify_secret
+from . import docker_utils
 
 if TYPE_CHECKING:
     from backend.session_coordinator import SessionCoordinator
@@ -27,36 +24,6 @@ class NoRefreshTokenError(Exception):
     an oauth2 secret without a refresh token can't support proactive background
     refresh, so surfacing this distinctly (instead of a generic failure) lets the UI
     explain why and what to try (e.g. requesting an offline-access scope)."""
-
-
-def _compute_secret_health(refresh: dict | None) -> str:
-    """Issue #1387: Derive token health state from refresh metadata.
-
-    Returns one of: "valid", "expiring_soon", "expired", "refresh_failed".
-    """
-    if not refresh:
-        return "valid"
-
-    if refresh.get("last_refresh_error"):
-        return "refresh_failed"
-
-    expires_at_str = refresh.get("expires_at")
-    if not expires_at_str:
-        return "valid"
-
-    try:
-        expires_at = datetime.fromisoformat(expires_at_str)
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=UTC)
-        buffer = int(refresh.get("buffer_seconds", 300))
-        now = datetime.now(tz=UTC)
-        if now >= expires_at:
-            return "expired"
-        if now >= expires_at - timedelta(seconds=buffer):
-            return "expiring_soon"
-        return "valid"
-    except Exception:
-        return "valid"
 
 
 class ApplicationService:
@@ -843,113 +810,10 @@ class ApplicationService:
         return proxy.port if proxy is not None else None
 
     async def export_mcp_configs(self, ids: list[str] | None = None) -> list:
-        configs = await self.coordinator.mcp_config_manager.list_configs()
-        if ids is not None:
-            id_set = set(ids)
-            configs = [c for c in configs if c.id in id_set]
-        return configs
+        return await self.coordinator.mcp_config_manager.export_configs(ids)
 
     async def import_mcp_configs(self, servers: dict, dry_run: bool) -> dict:
-        from backend.mcp_config_manager import McpServerType
-
-        manager = self.coordinator.mcp_config_manager
-        existing_configs = await manager.list_configs()  # FIX: was manager.configs.values()
-        existing_by_name = {c.name: c for c in existing_configs}
-
-        preview = []
-        imported = []
-
-        for name, server_data in servers.items():
-            name = name.strip()
-            if not name:
-                preview.append({"name": "", "action": "skip", "reason": "Missing name"})
-                continue
-
-            server_type_raw = server_data.get("type", "stdio")
-            try:
-                server_type = McpServerType(server_type_raw)
-            except ValueError:
-                preview.append(
-                    {"name": name, "action": "skip", "reason": f"Invalid type: {server_type_raw}"}
-                )
-                continue
-
-            if server_type == McpServerType.STDIO and not server_data.get("command"):
-                preview.append(
-                    {"name": name, "action": "skip", "reason": "Missing command for stdio server"}
-                )
-                continue
-
-            if server_type in (McpServerType.SSE, McpServerType.HTTP) and not server_data.get("url"):
-                preview.append(
-                    {
-                        "name": name,
-                        "action": "skip",
-                        "reason": f"Missing url for {server_type} server",
-                    }
-                )
-                continue
-
-            existing = existing_by_name.get(name)
-            action = "update" if existing else "create"
-            entry: dict = {
-                "name": name,
-                "action": action,
-                "config": dict(server_data),
-            }
-            if existing:
-                entry["existing_id"] = existing.id
-
-            if not dry_run:
-                try:
-                    oauth_data = server_data.get("oauth") or {}
-                    oauth_client_id = oauth_data.get("clientId")
-                    oauth_callback_port = oauth_data.get("callbackPort")
-                    if action == "create":
-                        config = await manager.create_config(
-                            name=name,
-                            server_type=server_type,
-                            command=server_data.get("command"),
-                            args=server_data.get("args") or [],
-                            env=server_data.get("env") or {},
-                            url=server_data.get("url"),
-                            headers=server_data.get("headers") or {},
-                            enabled=server_data.get("enabled", True),
-                            oauth_client_id=oauth_client_id,
-                            oauth_callback_port=oauth_callback_port,
-                        )
-                    else:
-                        config = await manager.update_config(
-                            config_id=existing.id,
-                            name=name,
-                            server_type=server_type,
-                            command=server_data.get("command"),
-                            args=server_data.get("args") or [],
-                            env=server_data.get("env") or {},
-                            url=server_data.get("url"),
-                            headers=server_data.get("headers") or {},
-                            enabled=server_data.get("enabled", True),
-                            oauth_client_id=oauth_client_id,
-                            oauth_callback_port=oauth_callback_port,
-                        )
-                    entry["result"] = config.to_dict()
-                    imported.append(config.to_dict())
-                except Exception as e:
-                    entry["action"] = "skip"
-                    entry["reason"] = str(e)
-
-            preview.append(entry)
-
-        create_count = sum(1 for p in preview if p["action"] == "create")
-        update_count = sum(1 for p in preview if p["action"] == "update")
-        skip_count = sum(1 for p in preview if p["action"] == "skip")
-
-        return {
-            "dry_run": dry_run,
-            "preview": preview,
-            "summary": {"create": create_count, "update": update_count, "skip": skip_count},
-            "imported": imported,
-        }
+        return await self.coordinator.mcp_config_manager.import_configs(servers, dry_run)
 
     async def get_mcp_config(self, config_id: str) -> dict | None:
         config = await self.coordinator.mcp_config_manager.get_config(config_id)
@@ -1091,7 +955,7 @@ class ApplicationService:
     # =========================================================================
 
     async def oauth_complete_flow(self, state: str, code: str) -> str:
-        return await self.coordinator.oauth_manager.complete_flow(state, code)
+        return await self.coordinator.oauth_secret_bundle_manager.oauth_complete_flow(state, code)
 
     async def oauth_initiate_flow(
         self,
@@ -1100,408 +964,25 @@ class ApplicationService:
         redirect_uri: str,
         client_name: str,
     ) -> str | None:
-        from .mcp.secret_resolver import resolve_secret_refs_in_str
-
-        config = await self.coordinator.mcp_config_manager.get_config(config_id)
-        if not config:
-            return None
-        client_secret = None
-        if config.oauth_client_secret:
-            client_secret = await resolve_secret_refs_in_str(
-                config.oauth_client_secret, self.coordinator.credential_vault
-            )
-        return await self.coordinator.oauth_manager.start_flow(
-            server_id=config_id,
-            server_url=server_url,
-            redirect_uri=redirect_uri,
-            client_name=client_name,
-            pre_registered_client_id=config.oauth_client_id or None,
-            client_secret=client_secret,
+        return await self.coordinator.oauth_secret_bundle_manager.oauth_initiate_flow(
+            config_id, server_url, redirect_uri, client_name
         )
 
     async def oauth_disconnect(self, config_id: str) -> bool:
-        config = await self.coordinator.mcp_config_manager.get_config(config_id)
-        if not config:
-            return False
-        await self.coordinator.oauth_manager.disconnect(config_id)
-        return True
+        return await self.coordinator.oauth_secret_bundle_manager.oauth_disconnect(config_id)
 
     async def oauth_get_status(self, config_id: str) -> dict | None:
-        config = await self.coordinator.mcp_config_manager.get_config(config_id)
-        if not config:
-            return None
-        token = await self.coordinator.oauth_manager.get_stored_token(config_id)
-        if token is None:
-            return {"status": "unauthenticated", "expires_at": None, "has_refresh_token": False}
-
-        store = self.coordinator.oauth_manager.get_token_store(config_id)
-        expiry = await store.get_token_expiry()
-        now = time.time()
-        # Issue #976: Distinguish expiring_soon (within 5 min) from fully authenticated
-        if expiry is not None and expiry < now:
-            status = "expired"
-        elif expiry is not None and expiry < (now + 300):
-            status = "expiring_soon"
-        else:
-            status = "authenticated"
-        return {
-            "status": status,
-            "expires_at": expiry,
-            "has_refresh_token": bool(token.refresh_token),
-        }
+        return await self.coordinator.oauth_secret_bundle_manager.oauth_get_status(config_id)
 
     async def import_oauth_as_secret(
         self, config_id: str, base_name: str, replace: bool = False
     ) -> dict:
-        """Import stored OAuth 2.1 tokens as proxy-injectable vault secrets.
-
-        Creates up to 3 vault secrets (primary oauth2, refresh, client_secret) and
-        updates the MCP config's Authorization header to ${secret:<base_name>}.
-
-        When replace=True (Reconnect flow): updates existing records in-place after
-        verifying sibling ownership. Skips the 409 collision pre-check.
-
-        Raises:
-            ValueError: 400 — invalid base_name, STDIO config, or missing token_url.
-            LookupError: 404 — config not found or no stored tokens.
-            KeyError: 409 — vault name collision (replace=False) or sibling ownership
-                           guard failure (replace=True).
-        """
-        import re
-        from datetime import UTC, datetime
-        from urllib.parse import urlparse
-
-        from .models.secret_record import RefreshSpec, ScrubSpec
-
-        base_name_re = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
-        if not base_name_re.match(base_name):
-            raise ValueError(
-                "base_name must match ^[a-z0-9][a-z0-9_-]{0,62}$"
-            )
-
-        config = await self.coordinator.mcp_config_manager.get_config(config_id)
-        if not config:
-            raise LookupError("404: MCP configuration not found")
-
-        if not config.url:
-            raise ValueError("Cannot import OAuth tokens from STDIO MCP server")
-
-        store = self.coordinator.oauth_manager.get_token_store(config_id)
-        tokens = await store.get_tokens()
-        if tokens is None:
-            raise LookupError("404: No OAuth tokens stored for this MCP server")
-
-        expiry_ts = await store.get_token_expiry()
-        client_info = await store.get_client_info()
-        token_url = store.get_token_endpoint()
-        if not token_url:
-            raise ValueError("OAuth token endpoint not recorded; re-authenticate to refresh it")
-
-        vault = self.coordinator.credential_vault
-
-        # Determine sibling secret names
-        refresh_token_name = f"{base_name}_refresh" if tokens.refresh_token else None
-        client_secret_value = client_info.client_secret if client_info else None
-        client_secret_name = f"{base_name}_client_secret" if client_secret_value else None
-        client_secret_reused = False
-        if client_secret_value:
-            from .mcp.secret_resolver import find_secret_ref_names
-
-            ref_names = find_secret_ref_names(config.oauth_client_secret)
-            if ref_names and len(ref_names) == 1 and (
-                config.oauth_client_secret.strip() == f"${{secret:{ref_names[0]}}}"
-            ):
-                existing_secret = await vault.get_secret(ref_names[0])
-                if existing_secret is None:
-                    raise LookupError(
-                        f"404: Referenced client secret '{ref_names[0]}' no longer exists in vault"
-                    )
-                client_secret_name = ref_names[0]
-                client_secret_reused = True
-
-        now = datetime.now(UTC)
-        # Issue #1871: .hostname (not .netloc) — target_hosts validation rejects a
-        # port component, so an MCP server URL with an explicit non-standard port
-        # would otherwise fail SecretRecord.validate() below with a confusing error.
-        host = urlparse(config.url).hostname or urlparse(config.url).netloc
-        token_path = urlparse(token_url).path
-        client_id = (client_info.client_id if client_info else None) or config.oauth_client_id or ""
-        expires_at_dt = datetime.fromtimestamp(expiry_ts, tz=UTC) if expiry_ts else None
-
-        scrub = ScrubSpec(
-            url_path=token_path,
-            matcher_jsonpath="$.access_token",
-            update_on_change=True,
+        return await self.coordinator.oauth_secret_bundle_manager.import_oauth_as_secret(
+            config_id, base_name, replace
         )
-
-        refresh_spec = None
-        if tokens.refresh_token and refresh_token_name:
-            refresh_spec = RefreshSpec(
-                token_url=token_url,
-                client_id=client_id,
-                refresh_token_secret_name=refresh_token_name,
-                client_secret_secret_name=client_secret_name,
-                expires_at=expires_at_dt,
-                buffer_seconds=300,
-            )
-
-        expires_at_iso = expires_at_dt.isoformat() if expires_at_dt else None
-
-        if replace:
-            return await self._replace_oauth_secret_bundle(
-                vault=vault,
-                base_name=base_name,
-                refresh_token_name=refresh_token_name,
-                client_secret_name=client_secret_name,
-                tokens=tokens,
-                client_secret_value=client_secret_value,
-                refresh_spec=refresh_spec,
-                scrub=scrub,
-                host=host,
-                now=now,
-                expires_at_iso=expires_at_iso,
-            )
-
-        # Pre-check vault collisions (replace=False only). A reused reference's
-        # existing presence in the vault is expected, not a collision.
-        collision_candidates = [base_name, refresh_token_name]
-        if not client_secret_reused:
-            collision_candidates.append(client_secret_name)
-        for name in filter(None, collision_candidates):
-            existing = await vault.get_secret(name)
-            if existing is not None:
-                raise KeyError(f"409: Secret '{name}' already exists; choose a different base_name")
-
-        created = await self._create_oauth_secret_bundle(
-            vault=vault,
-            base_name=base_name,
-            refresh_token_name=refresh_token_name,
-            client_secret_name=client_secret_name,
-            access_token=tokens.access_token,
-            refresh_token=tokens.refresh_token,
-            client_secret_value=client_secret_value,
-            refresh_spec=refresh_spec,
-            scrub=scrub,
-            host=host,
-            now=now,
-            client_secret_reused=client_secret_reused,
-        )
-
-        # Update MCP config headers — rollback all secrets if this fails
-        try:
-            new_headers = {**(config.headers or {}), "Authorization": f"${{secret:{base_name}}}"}
-            await self.coordinator.mcp_config_manager.update_config(config_id, headers=new_headers)
-        except Exception:
-            for n in created:
-                await vault.delete_secret(n)
-            raise
-
-        # Issue #1387: schedule background refresh for the new oauth2 secret
-        self.coordinator.vault_refresh_manager.schedule_secret(base_name)
-
-        return {
-            "secrets_created": created,
-            "header_injected": f"Authorization: ${{secret:{base_name}}}",
-            "expires_at": expires_at_iso,
-            "auto_refresh_enabled": refresh_spec is not None,
-        }
-
-    async def _create_oauth_secret_bundle(
-        self,
-        *,
-        vault,
-        base_name: str,
-        refresh_token_name: str | None,
-        client_secret_name: str | None,
-        access_token: str,
-        refresh_token: str | None,
-        client_secret_value: str | None,
-        refresh_spec,
-        scrub,
-        host: str,
-        now,
-        client_secret_reused: bool = False,
-    ) -> list[str]:
-        """Create up to 3 vault secrets (refresh-token sibling, client-secret sibling,
-        primary oauth2 record) with rollback-on-failure. Returns the list of created
-        secret names, siblings first then primary — the order the caller needs to roll
-        back in if a later step (e.g. updating an MCP config header) also fails.
-
-        Extracted from import_oauth_as_secret() (issue #1871) so the standalone
-        vault-secret guided-authorization flow can create the same shape of bundle
-        without going through any MCP config at all.
-
-        When `client_secret_reused` is True, `client_secret_name` refers to a secret
-        that already exists (a `${secret:NAME}` reference in `config.oauth_client_secret`,
-        issue #2005) — its value is overwritten in place if it drifted from the freshly
-        observed one, but it is never appended to `created`: this method's own rollback
-        deletes everything in `created` on failure, and a secret this call didn't create
-        must never be deleted by that rollback.
-        """
-        from .models.secret_record import SecretRecord, SecretType
-
-        created: list[str] = []
-        try:
-            if refresh_token_name and refresh_token:
-                refresh_record = SecretRecord(
-                    name=refresh_token_name,
-                    type=SecretType.GENERIC,
-                    target_hosts=[host],
-                    created_at=now,
-                    updated_at=now,
-                )
-                await vault.create_secret(refresh_record, refresh_token)
-                created.append(refresh_token_name)
-
-            if client_secret_name and client_secret_value:
-                if client_secret_reused:
-                    resolved = await vault.resolve_secrets_for_assignment([client_secret_name])
-                    current_value = resolved[0]["value"] if resolved else None
-                    if current_value != client_secret_value:
-                        existing_meta = await vault.get_secret(client_secret_name)
-                        if existing_meta is None:
-                            # Deleted concurrently between the earlier existence
-                            # check and here — fail closed rather than crash on
-                            # SecretRecord.from_dict(None) (Decision 1).
-                            raise LookupError(
-                                f"404: Referenced client secret '{client_secret_name}' "
-                                "no longer exists in vault"
-                            )
-                        cs_record = SecretRecord.from_dict(
-                            {**existing_meta, "updated_at": now.isoformat()}
-                        )
-                        await vault.update_secret(client_secret_name, cs_record, client_secret_value)
-                else:
-                    cs_record = SecretRecord(
-                        name=client_secret_name,
-                        type=SecretType.GENERIC,
-                        target_hosts=[host],
-                        created_at=now,
-                        updated_at=now,
-                    )
-                    await vault.create_secret(cs_record, client_secret_value)
-                    created.append(client_secret_name)
-
-            primary_record = SecretRecord(
-                name=base_name,
-                type=SecretType.OAUTH2,
-                target_hosts=[host],
-                scrub=scrub,
-                refresh=refresh_spec,
-                created_at=now,
-                updated_at=now,
-            )
-            await vault.create_secret(primary_record, access_token)
-            created.append(base_name)
-        except Exception:
-            for n in created:
-                await vault.delete_secret(n)
-            raise
-        return created
-
-    async def _replace_oauth_secret_bundle(
-        self,
-        *,
-        vault,
-        base_name: str,
-        refresh_token_name: str | None,
-        client_secret_name: str | None,
-        tokens,
-        client_secret_value: str | None,
-        refresh_spec,
-        scrub,
-        host: str,
-        now,
-        expires_at_iso: str | None,
-    ) -> dict:
-        """Replace existing vault oauth2 secret bundle in-place (Reconnect flow).
-
-        Enforces sibling ownership guard: refuses to replace if the existing primary
-        record's refresh metadata doesn't point to the expected sibling names.
-        """
-        from .models.secret_record import SecretRecord
-
-        # Verify primary record exists
-        primary_meta = await vault.get_secret(base_name)
-        if primary_meta is None:
-            raise LookupError(f"404: Primary secret '{base_name}' not found for replace")
-
-        # Sibling ownership guard
-        existing_refresh = primary_meta.get("refresh") or {}
-        if refresh_token_name:
-            expected = existing_refresh.get("refresh_token_secret_name")
-            if expected and expected != refresh_token_name:
-                raise KeyError(
-                    f"409: Sibling ownership guard: refresh sibling '{expected}' "
-                    f"doesn't match expected '{refresh_token_name}'"
-                )
-        if client_secret_name:
-            expected_cs = existing_refresh.get("client_secret_secret_name")
-            if expected_cs and expected_cs != client_secret_name:
-                raise KeyError(
-                    f"409: Sibling ownership guard: client_secret sibling '{expected_cs}' "
-                    f"doesn't match expected '{client_secret_name}'"
-                )
-
-        updated: list[str] = []
-
-        # Update refresh token sibling value
-        if refresh_token_name and tokens.refresh_token:
-            rt_meta = await vault.get_secret(refresh_token_name)
-            if rt_meta:
-                rt_record = SecretRecord.from_dict({**rt_meta, "updated_at": now.isoformat()})
-                await vault.update_secret(refresh_token_name, rt_record, tokens.refresh_token)
-                updated.append(refresh_token_name)
-
-        # Update client_secret sibling value
-        if client_secret_name and client_secret_value:
-            cs_meta = await vault.get_secret(client_secret_name)
-            if cs_meta:
-                cs_record = SecretRecord.from_dict({**cs_meta, "updated_at": now.isoformat()})
-                await vault.update_secret(client_secret_name, cs_record, client_secret_value)
-                updated.append(client_secret_name)
-
-        # Update primary record: new access_token value + reset refresh metadata
-        primary_record = SecretRecord.from_dict({**primary_meta, "updated_at": now.isoformat()})
-        if primary_record.refresh and refresh_spec:
-            # Issue #1871: standalone Reconnect leaves token_url/client_id/
-            # authorization_endpoint editable (not locked to their original values),
-            # so refresh these from the fresh refresh_spec too, not just expires_at.
-            # No-op for MCP's reconnect path, which always recomputes identical values.
-            primary_record.refresh.token_url = refresh_spec.token_url
-            primary_record.refresh.client_id = refresh_spec.client_id
-            primary_record.refresh.client_secret_secret_name = refresh_spec.client_secret_secret_name
-            primary_record.refresh.authorization_endpoint = refresh_spec.authorization_endpoint
-            primary_record.refresh.expires_at = refresh_spec.expires_at
-            primary_record.refresh.last_refresh_at = None
-            primary_record.refresh.last_refresh_status = None
-            primary_record.refresh.last_refresh_error = None
-        elif refresh_spec:
-            primary_record.refresh = refresh_spec
-        await vault.update_secret(base_name, primary_record, tokens.access_token)
-        updated.append(base_name)
-
-        # Reschedule background refresh with fresh expiry
-        self.coordinator.vault_refresh_manager.schedule_secret(base_name)
-
-        return {
-            "secrets_updated": updated,
-            "header_injected": f"Authorization: ${{secret:{base_name}}}",
-            "expires_at": expires_at_iso,
-            "auto_refresh_enabled": refresh_spec is not None,
-        }
 
     # =========================================================================
     # Standalone OAuth2 vault secrets — guided authorization flow (issue #1871)
-    #
-    # Unlike import_oauth_as_secret() above (which reads tokens already obtained via
-    # an MCP server's OAuth connection), these methods run their own OAuth flow from
-    # scratch against caller-supplied endpoints, with no MCP config involved at all.
-    # Tokens are exchanged via OAuthFlowManager.start_flow_with_endpoints()/
-    # complete_flow(persist=False) — persist=False is load-bearing: it means
-    # FernetTokenStore (MCP-exclusive) is never touched, and tokens land only in the
-    # vault/keyring via the same _create_oauth_secret_bundle()/_replace_oauth_secret_
-    # bundle() helpers import_oauth_as_secret() uses.
     # =========================================================================
 
     async def standalone_oauth_initiate(
@@ -1516,58 +997,17 @@ class ApplicationService:
         custom_callback_path: str | None = None,
         custom_callback_port: int | None = None,
     ) -> dict:
-        """Start a guided-authorization flow for a brand-new standalone oauth2 secret.
-
-        Nothing is written to the vault here — only on standalone_oauth_complete().
-        Pre-checks base_name (+ its derived refresh-token sibling name) don't already
-        collide with an existing secret, so the user gets an immediate error instead
-        of completing a whole provider consent flow only to fail at the end.
-
-        Raises:
-            ValueError: 400 — invalid base_name.
-            KeyError: 409 — base_name or its refresh sibling already exists.
-            LookupError: 404 — client_secret_secret_name doesn't resolve to a secret.
-        """
-        import re
-
-        base_name_re = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
-        if not base_name_re.match(base_name):
-            raise ValueError("base_name must match ^[a-z0-9][a-z0-9_-]{0,62}$")
-
-        vault = self.coordinator.credential_vault
-        refresh_token_name = f"{base_name}_refresh"
-        for name in (base_name, refresh_token_name):
-            if await vault.get_secret(name) is not None:
-                raise KeyError(f"409: Secret '{name}' already exists; choose a different base_name")
-
-        client_secret_value = None
-        if client_secret_secret_name:
-            client_secret_value = await self._resolve_sibling_secret_value(client_secret_secret_name)
-
-        context = {
-            "flow_type": "standalone_secret",
-            "base_name": base_name,
-            "client_secret_secret_name": client_secret_secret_name,
-            "authorization_endpoint": authorization_endpoint,
-            "token_endpoint": token_endpoint,
-            "client_id": client_id,
-        }
-        auth_url, state = await self.coordinator.oauth_manager.start_flow_with_endpoints(
-            authorization_endpoint=authorization_endpoint,
-            token_endpoint=token_endpoint,
-            client_id=client_id,
-            redirect_uri=redirect_uri,
-            client_secret=client_secret_value,
+        return await self.coordinator.oauth_secret_bundle_manager.standalone_oauth_initiate(
+            base_name,
+            authorization_endpoint,
+            token_endpoint,
+            client_id,
+            redirect_uri,
+            client_secret_secret_name=client_secret_secret_name,
             scopes=scopes,
-            persist=False,
-            context=context,
+            custom_callback_path=custom_callback_path,
+            custom_callback_port=custom_callback_port,
         )
-        return {
-            "auth_url": auth_url,
-            "flow_id": state,
-            "custom_callback_path": custom_callback_path,
-            "custom_callback_port": custom_callback_port,
-        }
 
     async def standalone_oauth_reconnect_initiate(
         self,
@@ -1581,213 +1021,25 @@ class ApplicationService:
         custom_callback_path: str | None = None,
         custom_callback_port: int | None = None,
     ) -> dict:
-        """Start Reconnect for an existing guided-flow oauth2 secret.
-
-        Only secrets that were themselves created via the guided flow (i.e. have
-        refresh.authorization_endpoint set) are eligible — a manually paste-in
-        secret can never gain a Reconnect action; delete-and-recreate is the only
-        route onto the guided flow (locked in during mockup review).
-
-        Raises:
-            LookupError: 404 — secret_name not found, or client_secret_secret_name
-                doesn't resolve to a secret.
-            ValueError: 400 — secret is not oauth2, or was not created via the
-                guided flow.
-        """
-        vault = self.coordinator.credential_vault
-        existing = await vault.get_secret(secret_name)
-        if existing is None:
-            raise LookupError(f"404: Secret '{secret_name}' not found")
-        if existing.get("type") != "oauth2":
-            raise ValueError(f"Secret '{secret_name}' is not an oauth2 secret")
-        if not (existing.get("refresh") or {}).get("authorization_endpoint"):
-            raise ValueError(
-                f"Secret '{secret_name}' was not created via the guided authorization "
-                "flow and cannot be reconnected; delete and recreate it instead"
-            )
-
-        client_secret_value = None
-        if client_secret_secret_name:
-            client_secret_value = await self._resolve_sibling_secret_value(client_secret_secret_name)
-
-        context = {
-            "flow_type": "standalone_reconnect",
-            "base_name": secret_name,
-            "client_secret_secret_name": client_secret_secret_name,
-            "authorization_endpoint": authorization_endpoint,
-            "token_endpoint": token_endpoint,
-            "client_id": client_id,
-        }
-        auth_url, state = await self.coordinator.oauth_manager.start_flow_with_endpoints(
-            authorization_endpoint=authorization_endpoint,
-            token_endpoint=token_endpoint,
-            client_id=client_id,
-            redirect_uri=redirect_uri,
-            client_secret=client_secret_value,
+        return await self.coordinator.oauth_secret_bundle_manager.standalone_oauth_reconnect_initiate(
+            secret_name,
+            authorization_endpoint,
+            token_endpoint,
+            client_id,
+            redirect_uri,
+            client_secret_secret_name=client_secret_secret_name,
             scopes=scopes,
-            persist=False,
-            context=context,
+            custom_callback_path=custom_callback_path,
+            custom_callback_port=custom_callback_port,
         )
-        return {
-            "auth_url": auth_url,
-            "flow_id": state,
-            "custom_callback_path": custom_callback_path,
-            "custom_callback_port": custom_callback_port,
-        }
 
     async def standalone_oauth_complete(self, state: str, code: str) -> dict:
-        """Complete a standalone guided-authorization flow (new secret or Reconnect).
-
-        Exchanges the code for tokens with persist=False (never touches
-        FernetTokenStore), then builds/replaces the vault secret bundle via the same
-        helpers import_oauth_as_secret() uses.
-
-        Raises:
-            NoRefreshTokenError: the provider didn't issue a refresh_token — no
-                secret is created/modified in this case.
-            KeyError: 409 — (new-secret path only) base_name or its refresh sibling
-                was created by something else during the flow's lifetime.
-            LookupError: 404 — (reconnect path only) the target secret vanished
-                during the flow's lifetime.
-        """
-        from datetime import UTC, datetime
-        from urllib.parse import urlparse
-
-        from .models.secret_record import RefreshSpec, ScrubSpec
-
-        token, context = await self.coordinator.oauth_manager.complete_flow(
-            state, code, persist=False
+        return await self.coordinator.oauth_secret_bundle_manager.standalone_oauth_complete(
+            state, code
         )
-
-        if not token.refresh_token:
-            raise NoRefreshTokenError(
-                "Authorization succeeded, but the provider did not issue a refresh "
-                "token. A secret without a refresh token cannot support proactive "
-                "refresh, so nothing was saved. Some providers only issue a refresh "
-                "token when offline access is explicitly requested — try adding an "
-                "offline-access scope, or check the provider's settings, then retry."
-            )
-
-        flow_type = context.get("flow_type")
-        base_name = context["base_name"]
-        client_secret_secret_name = context.get("client_secret_secret_name")
-        token_endpoint = context["token_endpoint"]
-        authorization_endpoint = context.get("authorization_endpoint")
-        client_id = context["client_id"]
-
-        vault = self.coordinator.credential_vault
-        now = datetime.now(UTC)
-        # .hostname (not .netloc): target_hosts validation rejects a port component,
-        # and guided-flow providers commonly run on a non-standard port (self-hosted,
-        # enterprise, local dev) — found via manual E2E testing against a local stub.
-        host = urlparse(token_endpoint).hostname or urlparse(token_endpoint).netloc
-        token_path = urlparse(token_endpoint).path
-        refresh_token_name = f"{base_name}_refresh"
-
-        scrub = ScrubSpec(
-            url_path=token_path,
-            matcher_jsonpath="$.access_token",
-            update_on_change=True,
-        )
-
-        expires_at_dt = None
-        if token.expires_in:
-            from mcp.shared.auth_utils import calculate_token_expiry
-            expiry_ts = calculate_token_expiry(token.expires_in)
-            if expiry_ts:
-                expires_at_dt = datetime.fromtimestamp(expiry_ts, tz=UTC)
-        expires_at_iso = expires_at_dt.isoformat() if expires_at_dt else None
-
-        refresh_spec = RefreshSpec(
-            token_url=token_endpoint,
-            client_id=client_id,
-            refresh_token_secret_name=refresh_token_name,
-            client_secret_secret_name=client_secret_secret_name,
-            authorization_endpoint=authorization_endpoint,
-            expires_at=expires_at_dt,
-            buffer_seconds=300,
-        )
-
-        # Note: client_secret_name/client_secret_value are always None below — unlike
-        # import_oauth_as_secret()'s MCP path (which creates a *fresh* client-secret
-        # sibling from FernetTokenStore's client_info), a standalone flow's client
-        # secret is always a *reference* to an already-existing vault secret (created
-        # separately via the frontend's inline "+ New secret" affordance, per the
-        # mockup's locked-in decision #1). Neither creating nor overwriting someone
-        # else's already-existing secret value is ever correct here — only
-        # refresh_spec.client_secret_secret_name records the reference.
-        if flow_type == "standalone_reconnect":
-            result = await self._replace_oauth_secret_bundle(
-                vault=vault,
-                base_name=base_name,
-                refresh_token_name=refresh_token_name,
-                client_secret_name=None,
-                tokens=token,
-                client_secret_value=None,
-                refresh_spec=refresh_spec,
-                scrub=scrub,
-                host=host,
-                now=now,
-                expires_at_iso=expires_at_iso,
-            )
-        else:
-            for name in (base_name, refresh_token_name):
-                if await vault.get_secret(name) is not None:
-                    raise KeyError(
-                        f"409: Secret '{name}' already exists; choose a different base_name"
-                    )
-            created = await self._create_oauth_secret_bundle(
-                vault=vault,
-                base_name=base_name,
-                refresh_token_name=refresh_token_name,
-                client_secret_name=None,
-                access_token=token.access_token,
-                refresh_token=token.refresh_token,
-                client_secret_value=None,
-                refresh_spec=refresh_spec,
-                scrub=scrub,
-                host=host,
-                now=now,
-            )
-            self.coordinator.vault_refresh_manager.schedule_secret(base_name)
-            result = {
-                "secrets_created": created,
-                "expires_at": expires_at_iso,
-                "auto_refresh_enabled": True,
-            }
-
-        result["flow_id"] = state
-        result["base_name"] = base_name
-        return result
 
     async def standalone_oauth_cancel(self, flow_id: str) -> bool:
-        """Cancel a pending standalone OAuth flow (user closed the panel before the
-        popup completed). Pops the pending flow if present — the caller is
-        responsible for tearing down any transient callback listener/route, since
-        that's route-wiring state this service layer has no access to.
-
-        Returns True if a pending flow was found and cancelled, False if it had
-        already completed or already expired.
-        """
-        context = await self.coordinator.oauth_manager.cancel_pending(flow_id)
-        return context is not None
-
-    async def _resolve_sibling_secret_value(self, secret_name: str) -> str:
-        """Resolve a plain (non-${secret:}-syntax) sibling secret reference to its
-        plaintext value — the same lookup-by-name pattern client_secret_secret_name
-        and refresh_token_secret_name already use elsewhere in this file.
-
-        Raises LookupError if the name doesn't resolve to an existing secret.
-        """
-        from .secrets_keyring import get_secret_value
-
-        vault = self.coordinator.credential_vault
-        if await vault.get_secret(secret_name) is None:
-            raise LookupError(f"404: Secret '{secret_name}' not found")
-        value = get_secret_value(secret_name)
-        if value is None:
-            raise LookupError(f"404: Secret '{secret_name}' not found")
-        return value
+        return await self.coordinator.oauth_secret_bundle_manager.standalone_oauth_cancel(flow_id)
 
     # =========================================================================
     # Templates
@@ -1870,23 +1122,7 @@ class ApplicationService:
     # =========================================================================
 
     async def list_secrets(self) -> dict:
-        """List all secret metadata. Never includes secret values."""
-        secrets = await self.coordinator.credential_vault.list_secrets()
-        # Issue #1387: enrich OAUTH2 secrets with a computed health field
-        for s in secrets:
-            if s.get("type") == "oauth2":
-                s["health"] = _compute_secret_health(s.get("refresh"))
-        # Issue #1772: enrich each secret with a usage breakdown
-        sessions, templates, profiles, mcp_configs = await asyncio.gather(
-            self.coordinator.session_manager.list_sessions(),
-            self.coordinator.template_manager.list_templates(),
-            self.coordinator.profile_manager.list_profiles(area="isolation"),
-            self.coordinator.mcp_config_manager.list_configs(),
-        )
-        usage_map = compute_secret_usage(secrets, sessions, templates, profiles, mcp_configs)
-        for s in secrets:
-            s["usage"] = usage_map.get(slugify_secret(s["name"]), empty_usage())
-        return {"secrets": secrets}
+        return await self.coordinator.secrets_service.list_secrets()
 
     async def create_secret(
         self,
@@ -1901,37 +1137,18 @@ class ApplicationService:
         injection: dict | None = None,
         refresh: dict | None = None,
     ) -> dict:
-        """Create a new secret. Returns metadata only (value not in response)."""
-        from datetime import UTC, datetime
-
-        from .models.secret_record import (
-            InjectFileSpec,
-            InjectionSpec,
-            RefreshSpec,
-            ScrubSpec,
-            SecretRecord,
-            SecretType,
-        )
-
-        now = datetime.now(UTC)
-        inj_file = InjectFileSpec.from_dict(inject_file) if inject_file else None
-        scrub_spec = ScrubSpec.from_dict(scrub) if scrub else None
-        injection_spec = InjectionSpec.from_dict(injection) if injection else None
-        refresh_spec = RefreshSpec.from_dict(refresh) if refresh else None
-        record = SecretRecord(
+        return await self.coordinator.secrets_service.create_secret(
             name=name,
-            type=SecretType(secret_type),
+            secret_type=secret_type,
             target_hosts=target_hosts,
+            value=value,
             inject_env=inject_env,
-            inject_file=inj_file,
-            scrub=scrub_spec,
+            inject_file=inject_file,
+            scrub=scrub,
             username=username,
-            injection=injection_spec,
-            refresh=refresh_spec,
-            created_at=now,
-            updated_at=now,
+            injection=injection,
+            refresh=refresh,
         )
-        return await self.coordinator.credential_vault.create_secret(record, value)
 
     async def update_secret(
         self,
@@ -1946,235 +1163,47 @@ class ApplicationService:
         injection: dict | None = None,
         refresh: dict | None = None,
     ) -> dict | None:
-        """Update secret metadata and/or value. Returns updated metadata or None if not found."""
-        from datetime import UTC, datetime
-
-        from .models.secret_record import (
-            InjectFileSpec,
-            InjectionSpec,
-            RefreshSpec,
-            ScrubSpec,
-            SecretRecord,
-            SecretType,
+        return await self.coordinator.secrets_service.update_secret(
+            name=name,
+            secret_type=secret_type,
+            target_hosts=target_hosts,
+            value=value,
+            inject_env=inject_env,
+            inject_file=inject_file,
+            scrub=scrub,
+            username=username,
+            injection=injection,
+            refresh=refresh,
         )
-
-        existing = await self.coordinator.credential_vault.get_secret(name)
-        if existing is None:
-            return None
-
-        now = datetime.now(UTC)
-        inj_file = None
-        if inject_file is not None:
-            inj_file = InjectFileSpec.from_dict(inject_file)
-        elif existing.get("inject_file"):
-            inj_file = InjectFileSpec.from_dict(existing["inject_file"])
-
-        scrub_spec = None
-        if scrub is not None:
-            scrub_spec = ScrubSpec.from_dict(scrub)
-        elif existing.get("scrub"):
-            scrub_spec = ScrubSpec.from_dict(existing["scrub"])
-
-        injection_spec = None
-        if injection is not None:
-            injection_spec = InjectionSpec.from_dict(injection)
-        elif existing.get("injection"):
-            injection_spec = InjectionSpec.from_dict(existing["injection"])
-
-        refresh_spec = None
-        if refresh is not None:
-            refresh_spec = RefreshSpec.from_dict(refresh)
-        elif existing.get("refresh"):
-            refresh_spec = RefreshSpec.from_dict(existing["refresh"])
-
-        record = SecretRecord(
-            name=existing.get("name", name),
-            type=SecretType(secret_type or existing.get("type", "generic")),
-            target_hosts=target_hosts if target_hosts is not None else existing.get("target_hosts", []),
-            inject_env=inject_env if inject_env is not None else existing.get("inject_env"),
-            inject_file=inj_file,
-            scrub=scrub_spec,
-            username=username if username is not None else existing.get("username"),
-            injection=injection_spec,
-            refresh=refresh_spec,
-            created_at=datetime.fromisoformat(existing["created_at"]),
-            updated_at=now,
-        )
-        return await self.coordinator.credential_vault.update_secret(name, record, value)
 
     async def delete_secret(self, name: str) -> bool:
-        """Delete a secret by name."""
-        return await self.coordinator.credential_vault.delete_secret(name)
+        return await self.coordinator.secrets_service.delete_secret(name)
 
     async def refresh_secret(self, name: str) -> dict | None:
-        """Manually trigger an OAuth2 token refresh for an oauth2-typed secret.
-
-        Fetches the current refresh_token and client_secret sibling values from the
-        keyring, POSTs to token_url, writes the new access_token (and rotated
-        refresh_token if present) back to the keyring, and updates expires_at.
-        Returns updated metadata, or None if the secret does not exist / is not oauth2.
-        Raises RuntimeError on refresh failure.
-
-        Issue #1387: Acquires the VaultRefreshManager per-secret lock to prevent
-        concurrent refresh races with the background task.
-        """
-        # Issue #1387: acquire per-secret lock to deduplicate concurrent refreshes
-        mgr = getattr(self.coordinator, "vault_refresh_manager", None)
-        if mgr:
-            lock = mgr.get_lock(name)
-            async with lock:
-                return await self._refresh_secret_impl(name)
-        return await self._refresh_secret_impl(name)
-
-    async def _refresh_secret_impl(self, name: str) -> dict | None:
-        """Core refresh logic — caller must hold per-secret lock if dedup is needed."""
-        from .models.secret_record import SecretType
-        from .secret_types.oauth2 import OAuth2Handler
-        from .secrets_keyring import get_secret_value, set_secret_value
-
-        meta = await self.coordinator.credential_vault.get_secret(name)
-        if meta is None or meta.get("type") != SecretType.OAUTH2.value:
-            return None
-
-        record = dict(meta)
-        record["value"] = get_secret_value(name) or ""
-
-        async def _get_sibling(sibling_name: str) -> str:
-            return get_secret_value(sibling_name) or ""
-
-        handler = OAuth2Handler()
-        updates = await handler.refresh(record, _get_sibling)
-
-        new_value = updates.get("value")
-        if new_value:
-            set_secret_value(name, new_value)
-
-        new_refresh_token = updates.get("refresh", {}).get("_new_refresh_token")
-        new_refresh_name = (record.get("refresh") or {}).get("refresh_token_secret_name")
-        if new_refresh_token and new_refresh_name:
-            set_secret_value(new_refresh_name, new_refresh_token)
-
-        refresh_updates = updates.get("refresh") or {}
-        refresh_updates.pop("_new_refresh_token", None)
-
-        return await self.update_secret(
-            name=name,
-            refresh=refresh_updates or None,
-            value=None,
-        )
-
-    def _resolve_writeable_secret_names(self, session) -> list[str]:
-        """Names the proxy can both resolve and write back for this session.
-
-        Source order (deduped, preserves first occurrence):
-          1. session.config["assigned_secrets"] — direct session-level overrides
-          2. session.secret_placeholders.values() — template/profile-derived names captured at start_session()
-        """
-        names: list[str] = list(session.config.get("assigned_secrets") or [])
-        for name in (session.secret_placeholders or {}).values():
-            if name not in names:
-                names.append(name)
-        return names
+        return await self.coordinator.secrets_service.refresh_secret(name)
 
     async def resolve_secrets_for_session(self, session_id: str) -> dict:
-        """Return resolved secrets (including values) for a session's assigned_secrets list.
-
-        Issue #1134: attaches placeholder from session.secret_placeholders; also
-        walks transitive references (refresh_token_secret_name, client_secret_secret_name)
-        so the proxy has everything it needs for OAuth2 refresh without extra requests.
-        """
-        session = await self.coordinator.session_manager.get_session_info(session_id)
-        if session is None:
-            return {"secrets": []}
-
-        assigned = self._resolve_writeable_secret_names(session)
-
-        # Collect transitive names (sibling refresh-token and client-secret records).
-        all_names: list[str] = list(assigned)
-        for secret in await self.coordinator.credential_vault.list_secrets():
-            if secret.get("name") in assigned:
-                refresh = secret.get("refresh") or {}
-                for key in ("refresh_token_secret_name", "client_secret_secret_name"):
-                    sibling = refresh.get(key)
-                    if sibling and sibling not in all_names:
-                        all_names.append(sibling)
-
-        secrets = await self.coordinator.credential_vault.resolve_secrets_for_assignment(all_names)
-
-        # Attach placeholder from session map (may be empty for sessions started before #1134).
-        placeholder_map = session.secret_placeholders or {}
-        reverse_map = {v: k for k, v in placeholder_map.items()}
-        for s in secrets:
-            name = s.get("name", "")
-            s["placeholder"] = reverse_map.get(name)
-
-        return {"secrets": secrets}
+        return await self.coordinator.secrets_service.resolve_secrets_for_session(session_id)
 
     async def update_secret_for_session(
         self, session_id: str, secret_name: str, **kwargs
     ) -> dict | None:
-        """Update a secret, scoped to names in session.assigned_secrets (+ transitive siblings).
-
-        Used by the proxy sidecar to write back refreshed token values.
-        Returns None if session not found; raises PermissionError if name is out-of-scope.
-        """
-        session = await self.coordinator.session_manager.get_session_info(session_id)
-        if session is None:
-            return None
-        assigned = self._resolve_writeable_secret_names(session)
-        allowed: set[str] = set(assigned)
-        # Also allow transitive sibling records referenced by assigned refresh specs.
-        for secret in await self.coordinator.credential_vault.list_secrets():
-            if secret.get("name") in assigned:
-                refresh = secret.get("refresh") or {}
-                for key in ("refresh_token_secret_name", "client_secret_secret_name"):
-                    sibling = refresh.get(key)
-                    if sibling:
-                        allowed.add(sibling)
-        if secret_name not in allowed:
-            raise PermissionError(
-                f"Secret '{secret_name}' is not in session {session_id}'s assigned_secrets"
-            )
-        return await self.update_secret(name=secret_name, **kwargs)
+        return await self.coordinator.secrets_service.update_secret_for_session(
+            session_id, secret_name, **kwargs
+        )
 
     async def get_proxy_status(self, session_id: str) -> dict:
         """Return effective allowlist + active credential names + proxy state for a session."""
         session = await self.coordinator.session_manager.get_session_info(session_id)
         if session is None:
             return {"proxy_enabled": False, "effective_domains": [], "active_credentials": [], "sidecar_running": False}
-
-        proxy_enabled = session.config.get("docker_proxy_enabled", False)
-        if not proxy_enabled:
-            return {"proxy_enabled": False, "effective_domains": [], "active_credentials": [], "sidecar_running": False}
-
-        # Build effective domains: static defaults + session config
-        effective_domains: list[str] = []
-        import json as _json
-        from pathlib import Path as _Path
-        static_allowlist_path = _Path("backend/docker/proxy/allowlist.json")
-        if static_allowlist_path.exists():
-            try:
-                static = _json.loads(static_allowlist_path.read_text())
-                effective_domains.extend(static.get("domains", []))
-            except Exception:
-                pass
-        extra_domains = session.config.get("docker_proxy_allowlist_domains") or []
-        all_domains = sorted(set(effective_domains + extra_domains))
-
-        active_secrets = session.config.get("assigned_secrets") or []
-
-        return {
-            "proxy_enabled": True,
-            "effective_domains": all_domains,
-            "active_credentials": active_secrets,
-            "sidecar_running": False,  # Sidecar runtime state not tracked server-side
-        }
+        return docker_utils.get_proxy_status(session, self.coordinator.data_dir)
 
     def schedule_secret_refresh(self, name: str) -> None:
-        self.coordinator.vault_refresh_manager.schedule_secret(name)
+        self.coordinator.secrets_service.schedule_secret_refresh(name)
 
     def unschedule_secret_refresh(self, name: str) -> None:
-        self.coordinator.vault_refresh_manager.unschedule_secret(name)
+        self.coordinator.secrets_service.unschedule_secret_refresh(name)
 
     # =========================================================================
     # OAuth-callback-route-sync (issue #2189 router-boundary PR A)
@@ -2212,33 +1241,7 @@ class ApplicationService:
 
     async def get_proxy_blocked_log(self, session_id: str, limit: int = 50) -> dict:
         """Return recent blocked connections from the sidecar access log."""
-        import json as _json
-
         session = await self.coordinator.session_manager.get_session_info(session_id)
         if session is None:
             return {"entries": []}
-
-        # Access log is written to data/sessions/{id}/docker_claude_data/proxy/access.log
-        session_dir = self.coordinator.data_dir / "sessions" / session_id
-        log_path = session_dir / "docker_claude_data" / "proxy" / "access.log"
-        if not log_path.exists():
-            return {"entries": []}
-
-        blocked = []
-        try:
-            lines = log_path.read_text().splitlines()
-            for line in reversed(lines):
-                if not line.strip():
-                    continue
-                try:
-                    entry = _json.loads(line)
-                    if not entry.get("allowed", True):
-                        blocked.append(entry)
-                        if len(blocked) >= limit:
-                            break
-                except Exception:
-                    continue
-        except Exception:
-            pass
-
-        return {"entries": blocked}
+        return docker_utils.get_proxy_blocked_log(session_id, self.coordinator.data_dir, limit)

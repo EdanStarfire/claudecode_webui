@@ -23,6 +23,7 @@ from backend.application_service import ApplicationService, NoRefreshTokenError
 from backend.credential_vault import SecretsVault
 from backend.models.secret_record import RefreshSpec, SecretRecord, SecretType
 from backend.oauth_manager import OAuthFlowManager
+from backend.oauth_secret_bundle_manager import OAuthSecretBundleManager
 
 _AUTHZ_ENDPOINT = "https://provider.example.com/oauth/authorize"
 _TOKEN_ENDPOINT = "https://provider.example.com/oauth/token"
@@ -65,6 +66,12 @@ def _make_service(tmp_path: Path):
     coordinator.oauth_manager = oauth_manager
     vault = SecretsVault(tmp_path)
     coordinator.credential_vault = vault
+    coordinator.oauth_secret_bundle_manager = OAuthSecretBundleManager(
+        credential_vault=vault,
+        oauth_manager=oauth_manager,
+        mcp_config_manager=coordinator.mcp_config_manager,
+        vault_refresh_manager=coordinator.vault_refresh_manager,
+    )
     service = ApplicationService(coordinator)
     return service, oauth_manager, vault
 
