@@ -1909,7 +1909,7 @@ button:focus {
     width: 32px;
     height: 32px;
     padding: 0;
-    background: rgba(255, 255, 255, 0.95);
+    background: var(--bs-secondary-bg);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
@@ -1918,8 +1918,8 @@ button:focus {
     align-items: center;
     gap: 6px;
     padding: 6px 10px;
-    background: rgba(255, 255, 255, 0.95);
-    border: 1px solid #dee2e6;
+    background: var(--bs-secondary-bg);
+    border: 1px solid var(--bs-border-color);
     border-radius: 20px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
@@ -1930,7 +1930,7 @@ button:focus {
 
 .message-search-count {
     font-size: 0.8rem;
-    color: #6c757d;
+    color: var(--bs-secondary-color);
     white-space: nowrap;
 }
 
@@ -1942,7 +1942,7 @@ button:focus {
 
 mark.message-search-highlight {
     background-color: #ffe066;
-    color: inherit;
+    color: #212529;
     border-radius: 2px;
     padding: 0 1px;
 }
