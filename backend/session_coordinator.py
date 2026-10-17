@@ -1363,11 +1363,10 @@ class SessionCoordinator:
 
             # Step 1.65: Terminate SDK and update state BEFORE archive (Issue #236)
             # This ensures archive captures final "terminated" state (same pattern as dispose_minion)
-            sdk = self._active_sdks.get(session_id)
-            if sdk:
-                await sdk.terminate()
-                del self._active_sdks[session_id]
-                await asyncio.sleep(0.2)  # Give SDK time to fully close
+            # Give SDK time to fully close
+            await self._session_launcher.teardown_active_sdk(
+                session_id, graceful=False, settle_seconds=0.2, settle_before_delete=False
+            )
 
             # Update session state to terminated (so archive captures correct final_state)
             if session_info and session_info.state != SessionState.TERMINATED:

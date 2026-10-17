@@ -18,7 +18,7 @@ import re
 import secrets
 import shutil
 import time as _time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1231,10 +1231,7 @@ class SessionLauncher:
             self._callbacks.mark_session_tools_interrupted(session_id)
 
             # Terminate SDK first
-            sdk = self._active_sdks.get(session_id)
-            if sdk:
-                await sdk.terminate()
-                del self._active_sdks[session_id]
+            await self.teardown_active_sdk(session_id, graceful=False)
 
             _litellm_proxy_manager = self.litellm_proxy_manager
             if _litellm_proxy_manager is not None:
@@ -1316,6 +1313,59 @@ class SessionLauncher:
             return success
         return True  # Already disconnected
 
+    async def teardown_active_sdk(
+        self,
+        session_id: str,
+        *,
+        graceful: bool,
+        settle_seconds: float = 0.0,
+        settle_before_delete: bool = False,
+        warn_on_disconnect_failure: bool = False,
+        after_op: Callable[[], Awaitable[None]] | None = None,
+    ) -> bool:
+        """Tear down the active SDK instance for a session, if any.
+
+        Consolidates the "get sdk -> terminate/disconnect -> settle sleep -> remove
+        from _active_sdks" shape shared by terminate_session/restart_session/
+        reset_session/delete_session (issue #2197). Callers differ along 3 real,
+        pre-existing axes that are preserved via parameters rather than unified:
+          - graceful=True uses sdk.disconnect() (restart/reset); graceful=False uses
+            sdk.terminate() (terminate_session/delete_session).
+          - settle_before_delete controls whether the settle sleep happens before or
+            after the dict entry is removed (restart/reset sleep-then-delete;
+            delete_session deletes-then-sleeps).
+          - warn_on_disconnect_failure only applies when graceful=True — terminate()
+            has no result to check, so this is silently ignored when graceful=False.
+          - after_op (if given) runs immediately after the terminate/disconnect call,
+            before the settle sleep — used by restart_session and reset_session to run
+            recover_session() in the exact same slot it occupies today.
+
+        Returns True if an active SDK was found and torn down, False if none was active.
+        """
+        sdk = self._active_sdks.get(session_id)
+        if not sdk:
+            return False
+
+        if graceful:
+            disconnect_result = await sdk.disconnect()
+            if warn_on_disconnect_failure and not disconnect_result:
+                logger.warning(f"SDK disconnect returned False for session {session_id}")
+        else:
+            await sdk.terminate()
+
+        if after_op is not None:
+            await after_op()
+
+        if settle_seconds and settle_before_delete:
+            await asyncio.sleep(settle_seconds)
+
+        del self._active_sdks[session_id]
+
+        if settle_seconds and not settle_before_delete:
+            await asyncio.sleep(settle_seconds)
+
+        return True
+
     async def restart_session(self, session_id: str, permission_callback: Callable | None = None) -> bool:
         """
         Restart a session by disconnecting SDK and resuming with same session ID.
@@ -1347,26 +1397,23 @@ class SessionLauncher:
             self._callbacks.mark_session_tools_interrupted(session_id)
 
             # Get current SDK if it exists
-            sdk = self._active_sdks.get(session_id)
-            if sdk:
-                # Disconnect existing SDK gracefully
+            if session_id in self._active_sdks:
                 coord_logger.debug(f"Disconnecting existing SDK for session {session_id}")
-                disconnect_result = await sdk.disconnect()
-                if not disconnect_result:
-                    logger.warning(f"SDK disconnect returned False for session {session_id}")
-
-                # Update session state to TERMINATED after disconnect
-                await self.session_manager.recover_session(session_id)
-
-                # Wait for cleanup — Docker --rm needs time to remove crashed containers
-                # before a new container can be started (issue #781)
-                await asyncio.sleep(1.0)
-
-                # Remove old SDK reference
-                del self._active_sdks[session_id]
             else:
-                # No active SDK - restart will act like a fresh start
                 coord_logger.debug(f"No existing SDK for session {session_id}, will create new one")
+
+            # Wait for cleanup — Docker --rm needs time to remove crashed containers
+            # before a new container can be started (issue #781)
+            had_sdk = await self.teardown_active_sdk(
+                session_id,
+                graceful=True,
+                settle_seconds=1.0,
+                settle_before_delete=True,
+                warn_on_disconnect_failure=True,
+                after_op=lambda: self.session_manager.recover_session(session_id),
+            )
+            if not had_sdk:
+                # No active SDK - restart will act like a fresh start.
                 # Ensure session state is TERMINATED before starting
                 await self.session_manager.recover_session(session_id)
 
@@ -1433,12 +1480,13 @@ class SessionLauncher:
                 self._watchdog.reset_session(session_id)
 
             # Get current SDK and disconnect
-            sdk = self._active_sdks.get(session_id)
-            if sdk:
-                await sdk.disconnect()
-                await self.session_manager.recover_session(session_id)
-                await asyncio.sleep(0.5)
-                del self._active_sdks[session_id]
+            await self.teardown_active_sdk(
+                session_id,
+                graceful=True,
+                settle_seconds=0.5,
+                settle_before_delete=True,
+                after_op=lambda: self.session_manager.recover_session(session_id),
+            )
 
             # Issue #1019: If session is in ERROR state (no active SDK to disconnect),
             # transition to TERMINATED so start_session() will accept it.
