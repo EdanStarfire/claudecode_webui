@@ -1660,14 +1660,24 @@ class SessionLauncher:
 
             # Issue #1059: Use resolve_effective_config (via the shared shell) to
             # support template-linked sessions.
-            await schedule_history_distillation(
-                session_info,
-                self.template_manager,
-                self.profile_manager,
-                task_coro_factory=_distillation_coro_factory,
-                debug_log_message=f"Launched history distillation for session {session_id}",
-                launch_check=archived_messages.exists,
-            )
+            # Issue #2216: session_info may be None (e.g. session removed from
+            # SessionManager mid-reset) — resolve_effective_config() requires a non-None
+            # session_info, and a failure here must not flip the already-succeeded
+            # snapshot/metadata work above into a reported archive failure.
+            if session_info is not None:
+                try:
+                    await schedule_history_distillation(
+                        session_info,
+                        self.template_manager,
+                        self.profile_manager,
+                        task_coro_factory=_distillation_coro_factory,
+                        debug_log_message=f"Launched history distillation for session {session_id}",
+                        launch_check=archived_messages.exists,
+                    )
+                except Exception as e:
+                    coord_logger.warning(
+                        f"Failed to schedule history distillation for session {session_id}: {e}"
+                    )
 
             coord_logger.info(f"Archived session {session_id} to {archive_dir}")
             return True

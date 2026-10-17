@@ -2731,6 +2731,12 @@ class TestIssue1628CompactBoundaryDistillation:
         boundary_ts = 1700010000.0
         parsed_msg = self._make_parsed_message('compact_boundary', timestamp=boundary_ts)
 
+        # Issue #2217: _handle_compact_boundary now gates on messages.jsonl
+        # existing (launch_check), so it must genuinely be present here.
+        session_dir = coordinator.session_manager.sessions_dir / session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+        (session_dir / "messages.jsonl").touch()
+
         mock_eff = MagicMock()
         mock_eff.history_distillation_enabled = True
 
@@ -2754,6 +2760,36 @@ class TestIssue1628CompactBoundaryDistillation:
             assert 'distill_compaction' in coro_arg.__qualname__
             coro_arg.close()  # clean up unawaited coroutine
             mock_task.add_done_callback.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_issue_2217_distillation_missing_messages_file_no_task(self, temp_coordinator):
+        """Enabled but no messages.jsonl present for the session (nothing to
+        distill) -> no task scheduled. Mirrors the reset path's existing
+        pre-launch existence check (issue #2217 fold-in via launch_check)."""
+        coordinator = temp_coordinator
+
+        session_id = "test-compact-missing-file"
+        boundary_ts = 1700010000.0
+        parsed_msg = self._make_parsed_message('compact_boundary', timestamp=boundary_ts)
+
+        mock_eff = MagicMock()
+        mock_eff.history_distillation_enabled = True
+
+        mock_session_info = MagicMock()
+
+        # Note: do not create a real session dir -- messages_file.exists()
+        # must genuinely be False for this test to exercise launch_check.
+        with patch.object(
+            coordinator.session_manager, 'get_session_info', new_callable=AsyncMock, return_value=mock_session_info
+        ), patch(
+            'backend.distillation_trigger.resolve_effective_config',
+            new_callable=AsyncMock,
+            return_value=mock_eff,
+        ), patch(
+            'asyncio.create_task',
+        ) as mock_create_task:
+            await coordinator._handle_compact_boundary(session_id, parsed_msg)
+            mock_create_task.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_issue_1628_handler_exception_does_not_propagate(self, temp_coordinator):
@@ -2921,7 +2957,12 @@ class TestIssue2201ResetDistillation:
     """Characterization tests for _archive_session_for_reset's distillation
     sub-block (issue #2201) — pins the reset path's current behavior (including
     its divergences from the compaction path) before the shared-shell dedup
-    refactor, so the refactor is provably a zero-behavior-change move."""
+    refactor, so the refactor is provably a zero-behavior-change move.
+
+    Issue #2216 fixed one of those pinned divergences: a None session_info no
+    longer flips an already-succeeded archive into a reported failure (see
+    test_issue_2216_reset_distillation_none_session_info_archive_still_succeeds
+    below)."""
 
     async def _make_session(self, coordinator, config=None):
         import uuid
@@ -3000,27 +3041,29 @@ class TestIssue2201ResetDistillation:
             mock_create_task.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_issue_2201_reset_distillation_none_session_info_reports_archive_failure(
+    async def test_issue_2216_reset_distillation_none_session_info_archive_still_succeeds(
         self, temp_coordinator
     ):
         """A None session_info (e.g. a session removed from the manager mid-reset)
-        makes resolve_effective_config raise AttributeError, which propagates up
-        through _archive_session_for_reset's single outer try/except and reports
-        total failure (False) -- even though the real archive work (snapshot +
-        disposal metadata) already completed successfully. Intentionally pins this
-        known divergence-driven bug (#1+#3 interaction); the fix is a separate
-        follow-up issue, not this one."""
+        must not flip the already-succeeded archive work (snapshot + disposal
+        metadata) into a reported failure. Issue #2216: the distillation call is
+        now guarded by `if session_info is not None`, so resolve_effective_config
+        is never reached and no AttributeError can leak into the outer
+        try/except. Distillation is skipped (not fatal) -- verified by asserting
+        asyncio.create_task was never called, so the skip was real and not a
+        silently-swallowed attempt."""
         coordinator = temp_coordinator
-        session_id = "nonexistent-session-for-2201"
+        session_id = "nonexistent-session-for-2216"
 
         with patch.object(
             coordinator.session_manager,
             'get_session_info',
             new_callable=AsyncMock,
             return_value=None,
-        ):
+        ), patch('asyncio.create_task') as mock_create_task:
             result = await coordinator._archive_session_for_reset(session_id)
-            assert result is False
+            assert result is True
+            mock_create_task.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
