@@ -1,19 +1,23 @@
 """
 DeliveryGate - Consolidated message-delivery readiness gating (issue #2189,
-coordinator-split PR 10; groundwork for #2193).
+coordinator-split PR 10; unified gate added in issue #2193 PR 3).
 
-Before this module existed, two independent "wait before delivering a
-message" gates lived in two different files:
+Originally, two independent "wait before delivering a message" gates lived
+in two different files:
 
 - comm_router.py's STARTING-only readiness wait / auto-start-via-
   is_deliverable() dance (SDK-event-driven, via wait_for_session_ready()).
 - queue_processor.py's AUTO_START_STATES-gated auto-start + state-poll
   busy-wait, followed by a post-send idle busy-wait.
 
-Both now live here, as two deliberately separate branches of one entry
-point (deliver()). They are NOT unified: each branch preserves its own
-auto-start predicate and its own readiness mechanism verbatim. Unifying
-them would be a behavior change outside this PR's scope.
+Those two mechanisms still live here, verbatim, as ensure_ready()/send() and
+prepare_for_send()/send_queued()/wait_until_idle() — comm_router.py and
+queue_processor.py keep calling them exactly as before. Issue #2193 PR3 adds
+a third, new mechanism alongside them: deliver(), a single unified entry
+point implementing AC3 (one readiness/busy gate pair) and AC4 (full ordering
+semantics over the PR2 pending-set). Nothing in production calls deliver()
+yet — comm_router.py/queue_processor.py cut over in PR5/PR6. See
+test_delivery_gate.py for the ordering-matrix derivation this implements.
 """
 
 import asyncio
@@ -22,11 +26,12 @@ from typing import TYPE_CHECKING
 
 from shared.logging_config import get_logger
 
-from .models.legion_models import Comm
+from .models.legion_models import Comm, DeliveryPolicy, SenderType
 from .session_lifecycle import (
     AUTO_START_STATES,
     SessionState,
     is_active,
+    is_auto_startable,
     is_deliverable,
     is_errored,
     is_paused,
@@ -40,6 +45,10 @@ gate_logger = get_logger('delivery_gate', category='DELIVERY_GATE')
 # Default timing configuration (verbatim from queue_processor.py).
 DEFAULT_MIN_WAIT_SECONDS = 10
 DEFAULT_MIN_IDLE_SECONDS = 10
+
+# Issue #2193 (PR 3): unified gate (deliver()) settle/timeout constants.
+READINESS_SETTLE_SECONDS = 5.0
+UNIFIED_READINESS_TIMEOUT_SECONDS = 120.0
 
 
 @dataclass
@@ -56,57 +65,340 @@ class DeliveryResult:
 class DeliveryGate:
     """Single entry point for delivering a Comm to a minion's SDK session.
 
-    deliver() branches on wait_for_idle to pick which of the two readiness
-    mechanisms above to run — see module docstring.
+    Three mechanisms coexist here (issue #2193 PR3):
 
-    The wait_for_idle=False mechanics are also exposed as two split primitives,
-    ensure_ready() and send(), rather than only through deliver(). Pre-PR,
-    comm_router.py's auto-start/readiness-wait gate ran unconditionally for
-    every comm BEFORE its HALT/PIVOT interrupt-priority branching — a HALT
-    comm to a dormant target still forced it through the gate (auto-started,
-    then immediately interrupted); a PIVOT comm ran the gate, then interrupted,
-    then sent. Collapsing gate+send into one atomic deliver() call would force
-    comm_router.py to call it AFTER its interrupt-priority branch (since HALT
-    must skip the send but PIVOT/NORMAL must not), silently reordering the
-    gate to run after the interrupt instead of before it — a real behavior
-    change, not just an internal-mechanics detail. ensure_ready() lets
-    comm_router.py run the gate first, unconditionally, exactly as before,
-    then decide whether to call send() afterward based on interrupt priority.
+    - ensure_ready() + send(): comm_router.py's existing mechanism, untouched.
+    - prepare_for_send() + send_queued() + wait_until_idle(): queue_processor.py's
+      existing mechanism, untouched.
+    - deliver(): the new unified AC3/AC4 mechanism below, with no production
+      callers yet. It always enqueues into coordinator.pending_store first
+      (including IMMEDIATE/HALT/PIVOT items), then branches on comm.delivery.
 
-    The wait_for_idle=True mechanics are similarly split into three primitives
-    — prepare_for_send(), send_queued(), wait_until_idle() — rather than only
-    through deliver(), for the analogous reason: pre-PR, queue_processor.py's
-    mark_sent()/broadcast("sent") fired immediately after send_message()
-    succeeded, BEFORE the post-send min_idle_seconds busy-wait. queue_processor.py
-    calls these three separately so its own mark_sent/broadcast bookkeeping can
-    sit between send_queued() and wait_until_idle(), at the same point relative
-    to the actual SDK send as before.
+    The two existing mechanisms are kept split into primitives rather than
+    folded into one atomic call for reasons specific to each caller's own
+    bookkeeping ordering — see the "wait_for_idle=False"/"wait_for_idle=True"
+    section comments below for the detailed rationale (unchanged from
+    issue #2189).
     """
 
     def __init__(self, coordinator: "SessionCoordinator"):
         self._coordinator = coordinator
+        # Issue #2193 (PR 3): unified gate (deliver()) state.
+        self._dispatch_locks: dict[str, asyncio.Lock] = {}
+        self._readiness_deadlines: dict[str, float] = {}
+        self._when_idle_tasks: dict[str, asyncio.Task] = {}
 
-    async def deliver(
-        self,
-        comm: Comm,
-        *,
-        wait_for_idle: bool,
-        reset_first: bool = False,
-        inject_timestamp: bool = True,
-        readiness_timeout: float | None = None,
-    ) -> DeliveryResult:
-        if wait_for_idle:
-            prepared = await self.prepare_for_send(comm, reset_first=reset_first)
-            if not prepared.success:
-                return prepared
-            sent = await self.send_queued(comm, inject_timestamp=inject_timestamp)
-            if not sent.success:
-                return sent
-            return await self.wait_until_idle(comm)
-        ready = await self.ensure_ready(comm, readiness_timeout=readiness_timeout)
+    # =========================================================================
+    # Issue #2193 (PR 3) — unified gate: deliver() and its helpers
+    # =========================================================================
+
+    async def deliver(self, comm: Comm) -> DeliveryResult:
+        """Unified entry point (issue #2193 AC3/AC4). Not yet called by any
+        production code — comm_router.py and queue_processor.py keep using
+        their existing methods until PR5/PR6 cut their call sites over.
+        Exercised directly by test_delivery_gate.py.
+
+        Every comm — including IMMEDIATE/HALT/PIVOT ones — is enqueued into
+        the pending store first, fixing its FIFO position at arrival time
+        regardless of which gate it takes afterward. See
+        test_delivery_gate.py's TestOrderingMatrix for the ordering-matrix
+        derivation this guarantees.
+
+        comm.reset_first is not consulted here, same deliberate deferral as
+        comm.auto_start (see _ensure_session_ready's AC8 note) — no producer
+        sets it meaningfully yet. prepare_for_send() keeps honoring it for
+        queue_processor.py's existing callers.
+        """
+        coordinator = self._coordinator
+        session_id = comm.to_minion_id
+
+        session_dir = await coordinator.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return DeliveryResult(success=False, error="Session directory not found")
+
+        try:
+            await coordinator.pending_store.enqueue(session_id, session_dir, comm)
+        except ValueError as e:
+            return DeliveryResult(success=False, error=str(e))
+
+        if comm.delivery == DeliveryPolicy.WHEN_IDLE:
+            self.ensure_when_idle_running(session_id)
+            return DeliveryResult(success=True)  # fire-and-forget, same contract enqueue_message() has today
+
+        ready = await self._ensure_session_ready(comm)
         if not ready.success:
+            await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, ready.error)
             return ready
-        return await self.send(comm, inject_timestamp=inject_timestamp)
+
+        if comm.delivery == DeliveryPolicy.HALT:
+            interrupted = await self._interrupt(session_id)
+            # AC10 lists exactly 4 statuses (pending/delivered/failed/cancelled) — none
+            # literally means "interrupted, never sent." "delivered" here means the gate
+            # fully processed this entry and performed its intended action (the interrupt)
+            # successfully. Not "cancelled" — that's reserved for AC5's distinct meaning
+            # (an unrelated pending item flushed BECAUSE of someone else's pivot/halt).
+            # HALT has no later step to fall back on, so (unlike PIVOT below) the ledger
+            # status must reflect the interrupt's own outcome, not an assumed success.
+            if interrupted:
+                await coordinator.pending_store.mark_delivered(session_id, session_dir, comm.comm_id)
+                return DeliveryResult(success=True)
+            await coordinator.pending_store.mark_failed(
+                session_id, session_dir, comm.comm_id, "interrupt_session did not succeed"
+            )
+            return DeliveryResult(success=False, error="interrupt_session did not succeed")
+
+        if comm.delivery == DeliveryPolicy.PIVOT:
+            # Swallowed deliberately (via _interrupt()) — PIVOT's ledger entry is decided
+            # by the send below, which is the actually-observable completed action; an
+            # interrupt that no-ops (e.g. nothing was running) must not block the send.
+            await self._interrupt(session_id)
+            # fall through to the same dispatch as IMMEDIATE
+
+        lock = self._get_dispatch_lock(session_id)
+        try:
+            async with lock:
+                result = await self.send(comm, inject_timestamp=self._should_inject_timestamp(comm))
+        except Exception as e:
+            # Without this, an exception from send_message() (vs. its documented False
+            # return) would propagate out of deliver() and leave this entry stuck at
+            # status="pending" forever — the item was already enqueued above, so there's
+            # no path back to a terminal state without catching it here.
+            gate_logger.exception(f"Unexpected error sending comm {comm.comm_id} to {session_id}")
+            await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, str(e))
+            return DeliveryResult(success=False, error=str(e))
+        if not result.success:
+            await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, result.error)
+            return result
+        await coordinator.pending_store.mark_delivered(session_id, session_dir, comm.comm_id)
+        return DeliveryResult(success=True)
+
+    async def _ensure_session_ready(
+        self, comm: Comm, *, timeout: float = UNIFIED_READINESS_TIMEOUT_SECONDS,
+    ) -> DeliveryResult:
+        """Unified auto-start + wait-for-ready + shared settle barrier (AC3).
+
+        Standardizes on the event-based wait_for_session_ready() (comm_router.py's
+        mechanism) instead of prepare_for_send()'s poll-based _wait_for_active() —
+        strictly better (faster, more precise) with no downside, so the unified
+        gate uses it for every target. One shared timeout (120s) regardless of
+        caller.
+
+        AC8 note (deliberate, not an oversight): auto-starts unconditionally
+        whenever the session is dormant, exactly like both of today's
+        predecessors. Does NOT consult comm.auto_start — no producer sets it
+        meaningfully yet (PR1's default is False), so gating on it here would
+        regress every existing immediate send to a dormant target. PR5 is where
+        AC8's conditional "fails unless auto_start is set" enforcement lands,
+        once send_comm's migration can set a real default.
+        """
+        coordinator = self._coordinator
+        session_id = comm.to_minion_id
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        if not session_info:
+            return DeliveryResult(success=False, error="Target minion not found")
+
+        if is_errored(session_info.state):
+            # Unified behavior change (flagged, confirmed): comm_router's current
+            # ensure_ready() would auto-restart an ERRORED target (ERROR isn't in
+            # is_deliverable(), so it falls into the auto-start branch) — an
+            # apparent accident of is_deliverable()'s boolean shape, not a
+            # designed behavior. prepare_for_send() already fails fast on ERROR.
+            # The unified gate standardizes on the fail-fast behavior, requiring
+            # explicit user recovery.
+            return DeliveryResult(success=False, error="Target minion is in ERROR state")
+
+        waited = False
+        if is_auto_startable(session_info.state):  # CREATED, TERMINATED
+            self._ensure_message_callback(session_id)
+            permission_callback = None
+            if coordinator._permission_callback_factory:
+                permission_callback = coordinator._permission_callback_factory(session_id)
+            started = await coordinator.start_session(session_id, permission_callback)
+            if not started:
+                return DeliveryResult(success=False, error="Could not auto-start target minion")
+            waited = True
+        elif not is_deliverable(session_info.state):  # STARTING, TERMINATING
+            waited = True
+        # else: ACTIVE or PAUSED already (is_deliverable) — nothing to wait for,
+        # matching ensure_ready()'s existing, test-validated treatment of PAUSED
+        # as already-fine (TestPausedTargetDeliversWithoutForceStart), not
+        # prepare_for_send()'s treatment (which only accepts is_active() and
+        # would send a PAUSED session through an unbounded wait). Unifying on
+        # ensure_ready()'s reading here specifically.
+
+        if waited:
+            ready = await coordinator.wait_for_session_ready(session_id, timeout=timeout)
+            if not ready:
+                return DeliveryResult(success=False, error="Target minion did not become ready in time")
+            self._readiness_deadlines[session_id] = (
+                asyncio.get_event_loop().time() + READINESS_SETTLE_SECONDS
+            )
+
+        # The settle deadline is anchored to a start/reset event, not re-armed by
+        # every arrival (AC3: "after a session start or reset"). A comm reaching
+        # this method while the session was already ready skips straight through
+        # (no `waited`, no new deadline) and only respects a still-open window
+        # left by an earlier caller's start.
+        deadline = self._readiness_deadlines.get(session_id)
+        if deadline is not None:
+            now = asyncio.get_event_loop().time()
+            if now < deadline:
+                await asyncio.sleep(deadline - now)
+
+        return DeliveryResult(success=True)
+
+    async def _wait_for_busy_clear(self, session_id: str) -> bool:
+        """Busy gate for a when_idle item with no settle (AC3) — the moment
+        is_processing clears, return True. Distinct from _wait_for_idle()'s
+        continuous-idle-window semantics, which stays reserved for
+        SenderType.SCHEDULE's post-send settle option (AC3)."""
+        while True:
+            info = await self._coordinator.session_manager.get_session_info(session_id)
+            if not info:
+                return False
+            if is_errored(info.state):
+                return False
+            if not info.is_processing:
+                return True
+            await asyncio.sleep(1)
+
+    def _get_dispatch_lock(self, session_id: str) -> asyncio.Lock:
+        """Serializes actual send() calls per session so concurrent immediate
+        dispatches (and the background when_idle loop) never interleave."""
+        lock = self._dispatch_locks.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._dispatch_locks[session_id] = lock
+        return lock
+
+    async def _interrupt(self, session_id: str) -> bool:
+        """Consolidates the try/except+log pattern comm_router.py's HALT/PIVOT
+        branches each duplicate today — for this gate's own internal reuse
+        only; comm_router.py itself is untouched in this PR. Returns whether
+        the interrupt actually succeeded, for HALT's own ledger-accuracy use
+        (see deliver()) — PIVOT's caller ignores the return value, since a
+        no-op interrupt there must not block the send that follows."""
+        try:
+            interrupted = await self._coordinator.interrupt_session(session_id)
+            if not interrupted:
+                gate_logger.warning(f"interrupt_session returned False for session {session_id}")
+            return interrupted
+        except Exception as e:
+            gate_logger.warning(f"Failed to interrupt session {session_id}: {e}")
+            return False
+
+    @staticmethod
+    def _should_inject_timestamp(comm: Comm) -> bool:
+        """Issue #1779's existing rule ("user messages get timestamp injection,
+        inter-agent/system messages don't"), re-expressed on sender_type instead
+        of the old from_user check. SCHEDULE is included because today's
+        schedule-fired prompts are constructed with from_user=True by
+        queue_processor.py's Comm wrapper and so already get injection by
+        default — this preserves that observed behavior under the new
+        discriminator, for PR6 to confirm/keep when it migrates the scheduler
+        for real."""
+        return comm.sender_type in (SenderType.USER, SenderType.SCHEDULE)
+
+    def ensure_when_idle_running(self, session_id: str) -> None:
+        """Starts the per-session background when_idle drain loop if not
+        already running — idempotent, mirrors QueueProcessor.ensure_running()."""
+        task = self._when_idle_tasks.get(session_id)
+        if task and not task.done():
+            return
+        self._when_idle_tasks[session_id] = asyncio.create_task(
+            self._run_when_idle_loop(session_id), name=f"delivery-gate-when-idle-{session_id}",
+        )
+
+    def stop_when_idle(self, session_id: str) -> None:
+        task = self._when_idle_tasks.pop(session_id, None)
+        if task and not task.done():
+            task.cancel()
+
+    def is_when_idle_running(self, session_id: str) -> bool:
+        task = self._when_idle_tasks.get(session_id)
+        return task is not None and not task.done()
+
+    async def _run_when_idle_loop(self, session_id: str) -> None:
+        """Per-session background drain of WHEN_IDLE pending items (AC3/AC4).
+        Generalizes queue_processor._process_loop()'s busy-wait mechanics onto
+        pending_store — but queue_processor.py itself is not rewired onto this
+        in this PR; this loop has no real callers until PR5/PR6 wire deliver()
+        into production."""
+        coordinator = self._coordinator
+        # Identifies this task so the finally block below doesn't evict a *newer*
+        # task that ensure_when_idle_running() may have already started for this
+        # session_id by the time this one is cancelled and unwinding (stop_when_idle()
+        # pops+cancels, but cancellation delivery isn't instantaneous).
+        current_task = asyncio.current_task()
+        gate_logger.info(f"when_idle drain loop started for session {session_id}")
+        try:
+            while True:
+                session_dir = await coordinator.session_manager.get_session_directory(session_id)
+                if not session_dir:
+                    break
+                when_idle_pending = [
+                    item for item in coordinator.pending_store.get_pending(session_id)
+                    if item.comm.delivery == DeliveryPolicy.WHEN_IDLE
+                ]
+                if not when_idle_pending:
+                    break
+                item = when_idle_pending[0]  # lowest position = earliest arrival
+                comm = item.comm
+
+                ready = await self._ensure_session_ready(comm)
+                if not ready.success:
+                    await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, ready.error)
+                    continue
+
+                is_schedule = comm.sender_type == SenderType.SCHEDULE
+                if is_schedule:
+                    queue_config = await self._queue_config_for(session_id)
+                    await asyncio.sleep(queue_config.get("min_wait_seconds", DEFAULT_MIN_WAIT_SECONDS))
+
+                if not await self._wait_for_busy_clear(session_id):
+                    await coordinator.pending_store.mark_failed(
+                        session_id, session_dir, comm.comm_id, "Session entered error state"
+                    )
+                    continue
+
+                lock = self._get_dispatch_lock(session_id)
+                try:
+                    async with lock:
+                        result = await self.send(comm, inject_timestamp=self._should_inject_timestamp(comm))
+                except Exception as e:
+                    # Same reasoning as deliver()'s inline dispatch: an exception here
+                    # (vs. send()'s documented False return) would otherwise leave this
+                    # entry stuck at status="pending" and the loop stuck retrying it
+                    # forever (it's still the head of when_idle_pending next iteration).
+                    gate_logger.exception(f"Unexpected error sending comm {comm.comm_id} to {session_id}")
+                    await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, str(e))
+                    continue
+                if not result.success:
+                    await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, result.error)
+                    continue
+                await coordinator.pending_store.mark_delivered(session_id, session_dir, comm.comm_id)
+
+                if is_schedule:
+                    queue_config = await self._queue_config_for(session_id)
+                    min_idle = queue_config.get("min_idle_seconds", DEFAULT_MIN_IDLE_SECONDS)
+                    if not await self._wait_for_idle(session_id, min_idle):
+                        # _wait_for_idle() returning False means the session errored
+                        # mid-settle, after a successful send -- nothing left to mark
+                        # failed (the item already delivered); just stop this
+                        # session's loop, mirroring queue_processor._process_loop()'s
+                        # same break.
+                        break
+        except asyncio.CancelledError:
+            gate_logger.info(f"when_idle drain loop cancelled for session {session_id}")
+        finally:
+            if self._when_idle_tasks.get(session_id) is current_task:
+                self._when_idle_tasks.pop(session_id, None)
+            gate_logger.info(f"when_idle drain loop exited for session {session_id}")
+
+    async def _queue_config_for(self, session_id: str) -> dict:
+        info = await self._coordinator.session_manager.get_session_info(session_id)
+        return (getattr(info, 'queue_config', None) or {}) if info else {}
 
     # =========================================================================
     # wait_for_idle=False — ported verbatim from comm_router.py::_send_to_minion
