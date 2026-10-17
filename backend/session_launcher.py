@@ -42,13 +42,13 @@ from shared.logging_config import get_logger
 from .claude_sdk import ClaudeSDK
 from .config_resolution import resolve_effective_config
 from .data_storage import DataStorageManager
+from .distillation_trigger import schedule_history_distillation
 from .hooks.pretooluse_handler import InternalPermissionHandler
 from .litellm_proxy_manager import make_model_alias
 from .mcp_config_manager import McpServerType
 from .oauth_refresh_manager import OAuthRefreshManager
 from .session_manager import SessionState
 from .session_recorder import SessionRecorder
-from .task_utils import task_done_log_exception
 
 if TYPE_CHECKING:
     from .models.messages import ToolCall
@@ -1636,30 +1636,36 @@ class SessionLauncher:
 
             # Fire-and-forget distillation — writes to live history/ (decision #5).
             # Uses the archived copy of messages.jsonl so the live file can be truncated.
-            # Issue #1059: Use resolve_effective_config to support template-linked sessions.
-            _eff_for_archive = await resolve_effective_config(
-                session_info, self.template_manager, self.profile_manager
-            )
-            if _eff_for_archive.history_distillation_enabled:
-                archived_messages = archive_dir / "messages.jsonl"
-                if archived_messages.exists():
-                    # Deferred import: kept late for consistency with
-                    # archive_coordinator.py's _distill_compaction, which must keep
-                    # this import late so test_session_coordinator.py's
-                    # test_issue_1628_distill_compaction_registers_resource can patch
-                    # backend.history_distiller.distill_session_history. No test
-                    # currently patches it for this call site specifically, but a
-                    # future one reasonably could expect the same mockability from
-                    # the same function name.
-                    from backend.history_distiller import distill_session_history
+            archived_messages = archive_dir / "messages.jsonl"
+            history_output = session_dir / "history" / f"{timestamp}.md"
 
-                    history_output = session_dir / "history" / f"{timestamp}.md"
-                    archive_ts = datetime.now(UTC).isoformat()
-                    t = asyncio.create_task(
-                        distill_session_history(archived_messages, history_output, session_id, archive_ts)
-                    )
-                    t.add_done_callback(task_done_log_exception)
-                    coord_logger.debug(f"Launched history distillation for session {session_id}")
+            def _distillation_coro_factory():
+                # Deferred import: kept late for consistency with
+                # archive_coordinator.py's _distill_compaction, which must keep
+                # this import late so test_session_coordinator.py's
+                # test_issue_1628_distill_compaction_registers_resource can patch
+                # backend.history_distiller.distill_session_history. No test
+                # currently patches it for this call site specifically, but a
+                # future one reasonably could expect the same mockability from
+                # the same function name.
+                from backend.history_distiller import distill_session_history
+
+                # archive_ts captured here, not eagerly above, so it's taken at
+                # the same point as pre-refactor: right before task creation,
+                # not before the awaited resolve_effective_config() call.
+                archive_ts = datetime.now(UTC).isoformat()
+                return distill_session_history(archived_messages, history_output, session_id, archive_ts)
+
+            # Issue #1059: Use resolve_effective_config (via the shared shell) to
+            # support template-linked sessions.
+            await schedule_history_distillation(
+                session_info,
+                self.template_manager,
+                self.profile_manager,
+                task_coro_factory=_distillation_coro_factory,
+                debug_log_message=f"Launched history distillation for session {session_id}",
+                launch_check=archived_messages.exists,
+            )
 
             coord_logger.info(f"Archived session {session_id} to {archive_dir}")
             return True

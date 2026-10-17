@@ -24,7 +24,6 @@ and the handful of permanent coordinator methods this module calls
 methods" passthroughs.
 """
 
-import asyncio
 import json
 import logging
 from datetime import UTC, datetime
@@ -32,11 +31,10 @@ from typing import Any
 
 from shared.logging_config import get_logger
 
-from .config_resolution import resolve_effective_config
 from .data_storage import DataStorageManager
+from .distillation_trigger import schedule_history_distillation
 from .models.messages import LegacyMessageFormatError
 from .session_resources import _apply_resource_filters, _group_resources_by_filename
-from .task_utils import task_done_log_exception
 
 # Get specialized logger for coordinator actions (same category as the
 # coordinator's own coord_logger — this is still "coordinator actions" from
@@ -268,16 +266,16 @@ class ArchiveCoordinator:
             session_info = await self.session_manager.get_session_info(session_id)
             if session_info is None:
                 return
-            eff = await resolve_effective_config(
-                session_info, self.template_manager, self.profile_manager
-            )
-            if not eff.history_distillation_enabled:
-                return
             boundary_ts = parsed_message.timestamp
-            t = asyncio.create_task(self._distill_compaction(session_id, boundary_ts))
-            t.add_done_callback(task_done_log_exception)
-            coord_logger.debug(
-                f"Launched compaction-time distillation for session {session_id} at ts={boundary_ts}"
+            await schedule_history_distillation(
+                session_info,
+                self.template_manager,
+                self.profile_manager,
+                task_coro_factory=lambda: self._distill_compaction(session_id, boundary_ts),
+                debug_log_message=(
+                    f"Launched compaction-time distillation for session {session_id} "
+                    f"at ts={boundary_ts}"
+                ),
             )
         except Exception:
             logger.exception(

@@ -2713,7 +2713,7 @@ class TestIssue1628CompactBoundaryDistillation:
         with patch.object(
             coordinator.session_manager, 'get_session_info', new_callable=AsyncMock, return_value=mock_session_info
         ), patch(
-            'backend.archive_coordinator.resolve_effective_config',
+            'backend.distillation_trigger.resolve_effective_config',
             new_callable=AsyncMock,
             return_value=mock_eff,
         ), patch(
@@ -2741,7 +2741,7 @@ class TestIssue1628CompactBoundaryDistillation:
         with patch.object(
             coordinator.session_manager, 'get_session_info', new_callable=AsyncMock, return_value=mock_session_info
         ), patch(
-            'backend.archive_coordinator.resolve_effective_config',
+            'backend.distillation_trigger.resolve_effective_config',
             new_callable=AsyncMock,
             return_value=mock_eff,
         ), patch(
@@ -2915,6 +2915,112 @@ class TestIssue1628CompactBoundaryDistillation:
 
         with pytest.raises(LegacyMessageFormatError, match=session_id):
             await coordinator.get_session_messages(session_id)
+
+
+class TestIssue2201ResetDistillation:
+    """Characterization tests for _archive_session_for_reset's distillation
+    sub-block (issue #2201) — pins the reset path's current behavior (including
+    its divergences from the compaction path) before the shared-shell dedup
+    refactor, so the refactor is provably a zero-behavior-change move."""
+
+    async def _make_session(self, coordinator, config=None):
+        import uuid
+
+        from backend.session_config import SessionConfig
+        project = await coordinator.project_manager.create_project(
+            name="Test Project", working_directory="/tmp"
+        )
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=config if config is not None else SessionConfig(),
+        )
+        return session_id
+
+    @pytest.mark.asyncio
+    async def test_issue_2201_reset_distillation_disabled_no_task(self, temp_coordinator):
+        """history_distillation_enabled=False -> no distillation task is scheduled,
+        but the archive itself still succeeds."""
+        from backend.session_config import SessionConfig
+        coordinator = temp_coordinator
+
+        session_id = await self._make_session(
+            coordinator, config=SessionConfig(history_distillation_enabled=False)
+        )
+
+        with patch('asyncio.create_task') as mock_create_task:
+            result = await coordinator._archive_session_for_reset(session_id)
+            assert result is True
+            mock_create_task.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_issue_2201_reset_distillation_enabled_schedules_task(self, temp_coordinator):
+        """Enabled + an archived messages.jsonl present -> a distill_session_history
+        task is scheduled and the debug log fires."""
+        import json as _json
+        coordinator = temp_coordinator
+
+        session_id = await self._make_session(coordinator)
+        session_dir = coordinator.session_manager.sessions_dir / session_id
+        messages_file = session_dir / "messages.jsonl"
+        with open(messages_file, "w") as f:
+            f.write(_json.dumps({"type": "user", "content": "hi", "timestamp": 1.0}) + "\n")
+
+        mock_task = MagicMock()
+        mock_task.add_done_callback = MagicMock()
+
+        with patch('asyncio.create_task', return_value=mock_task) as mock_create_task:
+            result = await coordinator._archive_session_for_reset(session_id)
+            assert result is True
+            mock_create_task.assert_called_once()
+            coro_arg = mock_create_task.call_args[0][0]
+            assert 'distill_session_history' in coro_arg.__qualname__
+            coro_arg.close()  # clean up unawaited coroutine
+            mock_task.add_done_callback.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_issue_2201_reset_distillation_missing_archived_file_no_task(
+        self, temp_coordinator
+    ):
+        """Enabled but no archived messages.jsonl (nothing to distill) -> no task
+        scheduled. Pins the reset path's existence-check-before-launch behavior,
+        which the compaction path does not have."""
+        coordinator = temp_coordinator
+
+        session_id = await self._make_session(coordinator)
+        # create_session() leaves an empty messages.jsonl in place; remove it so
+        # the archived copy genuinely doesn't exist.
+        session_dir = coordinator.session_manager.sessions_dir / session_id
+        (session_dir / "messages.jsonl").unlink(missing_ok=True)
+
+        with patch('asyncio.create_task') as mock_create_task:
+            result = await coordinator._archive_session_for_reset(session_id)
+            assert result is True
+            mock_create_task.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_issue_2201_reset_distillation_none_session_info_reports_archive_failure(
+        self, temp_coordinator
+    ):
+        """A None session_info (e.g. a session removed from the manager mid-reset)
+        makes resolve_effective_config raise AttributeError, which propagates up
+        through _archive_session_for_reset's single outer try/except and reports
+        total failure (False) -- even though the real archive work (snapshot +
+        disposal metadata) already completed successfully. Intentionally pins this
+        known divergence-driven bug (#1+#3 interaction); the fix is a separate
+        follow-up issue, not this one."""
+        coordinator = temp_coordinator
+        session_id = "nonexistent-session-for-2201"
+
+        with patch.object(
+            coordinator.session_manager,
+            'get_session_info',
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            result = await coordinator._archive_session_for_reset(session_id)
+            assert result is False
 
 
 # ---------------------------------------------------------------------------
