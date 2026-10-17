@@ -54,6 +54,7 @@ from .models.messages import (
 from .models.permission_mode import PermissionMode
 from .oauth_refresh_manager import OAuthRefreshManager
 from .oauth_secret_bundle_manager import OAuthSecretBundleManager
+from .pending_store import PendingStore
 from .project_manager import ProjectInfo, ProjectManager
 from .queue_manager import QueueManager
 from .queue_processor import QueueProcessor
@@ -550,6 +551,9 @@ class SessionCoordinator:
         # Issue #500: Message queue system
         self.queue_manager = QueueManager()
         self.queue_processor = QueueProcessor(self)
+
+        # Issue #2193 (PR 3): pure instantiation, no load() call yet — nothing reaches deliver().
+        self.pending_store = PendingStore()
 
         # Issue #2189 (coordinator-split PR 10): consolidated delivery gate
         self.delivery_gate = DeliveryGate(self)

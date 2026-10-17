@@ -40,7 +40,9 @@ DELEGATE_CEILING = 10
 # smoothing over an unrelated refactor.
 ALLOWLIST: dict[str, int] = {
     # --- Construction ---
-    "__init__": 375,
+    # Bumped 375->378 (issue #2193 PR 3): added self.pending_store = PendingStore(),
+    # pure instantiation alongside the existing queue_manager/delivery_gate wiring.
+    "__init__": 378,
     # --- Orchestration ---
     "initialize": 69,
     "cleanup": 23,
