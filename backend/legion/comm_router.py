@@ -121,6 +121,33 @@ class CommRouter:
             return True
         return recipient_id in await self.get_visible_minions(sender_id)
 
+    async def is_ancestor(self, candidate_id: str, descendant_id: str) -> bool:
+        """True if candidate_id is an ancestor (parent, grandparent, ...) of descendant_id.
+        Generalizes get_visible_minions()'s add_ancestors() walk into a direct membership
+        check (issue #2193 AC7), rather than full-hierarchy visibility."""
+        session_manager = self.system.session_port.session_manager
+        visited: set[str] = set()
+        current_id = descendant_id
+        while True:
+            session = await session_manager.get_session_info(current_id)
+            if not session or not session.parent_overseer_id:
+                return False
+            if session.parent_overseer_id == candidate_id:
+                return True
+            if session.parent_overseer_id in visited:
+                return False  # cycle guard
+            visited.add(session.parent_overseer_id)
+            current_id = session.parent_overseer_id
+
+    async def is_authorized_sender(self, comm: Comm) -> bool:
+        """True if comm's sender may HALT/PIVOT comm.to_minion_id, or implicitly resume a
+        paused session (issue #2193 AC6/AC7): the user, or an ancestor of the recipient."""
+        if comm.from_user:
+            return True
+        if not comm.from_minion_id:
+            return False
+        return await self.is_ancestor(comm.from_minion_id, comm.to_minion_id)
+
     def set_comm_broadcast_callback(self, callback):
         """
         Set callback for broadcasting new comms to WebSocket clients.

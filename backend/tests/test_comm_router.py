@@ -240,6 +240,176 @@ class TestVisibleMinions:
         assert visible == []
 
 
+class TestAuthorityHelpers:
+    """Issue #2193 AC7 — is_ancestor()/is_authorized_sender()."""
+
+    @pytest.mark.asyncio
+    async def test_is_ancestor_true_for_direct_parent(self, comm_router):
+        from backend.session_manager import SessionInfo
+
+        parent = Mock(spec=SessionInfo)
+        parent.parent_overseer_id = None
+        child = Mock(spec=SessionInfo)
+        child.parent_overseer_id = "parent-id"
+
+        session_map = {"parent-id": parent, "child-id": child}
+        sm = comm_router.system.session_port.session_manager
+        sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
+
+        assert await comm_router.is_ancestor("parent-id", "child-id") is True
+
+    @pytest.mark.asyncio
+    async def test_is_ancestor_true_for_grandparent_multi_hop(self, comm_router):
+        from backend.session_manager import SessionInfo
+
+        grandparent = Mock(spec=SessionInfo)
+        grandparent.parent_overseer_id = None
+        parent = Mock(spec=SessionInfo)
+        parent.parent_overseer_id = "grandparent-id"
+        child = Mock(spec=SessionInfo)
+        child.parent_overseer_id = "parent-id"
+
+        session_map = {
+            "grandparent-id": grandparent,
+            "parent-id": parent,
+            "child-id": child,
+        }
+        sm = comm_router.system.session_port.session_manager
+        sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
+
+        assert await comm_router.is_ancestor("grandparent-id", "child-id") is True
+
+    @pytest.mark.asyncio
+    async def test_is_ancestor_false_for_sibling(self, comm_router):
+        from backend.session_manager import SessionInfo
+
+        parent = Mock(spec=SessionInfo)
+        parent.parent_overseer_id = None
+        sibling_a = Mock(spec=SessionInfo)
+        sibling_a.parent_overseer_id = "parent-id"
+        sibling_b = Mock(spec=SessionInfo)
+        sibling_b.parent_overseer_id = "parent-id"
+
+        session_map = {
+            "parent-id": parent,
+            "sibling-a-id": sibling_a,
+            "sibling-b-id": sibling_b,
+        }
+        sm = comm_router.system.session_port.session_manager
+        sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
+
+        assert await comm_router.is_ancestor("sibling-a-id", "sibling-b-id") is False
+
+    @pytest.mark.asyncio
+    async def test_is_ancestor_false_for_unrelated_minion(self, comm_router):
+        from backend.session_manager import SessionInfo
+
+        unrelated = Mock(spec=SessionInfo)
+        unrelated.parent_overseer_id = None
+
+        sm = comm_router.system.session_port.session_manager
+        sm.get_session_info = AsyncMock(return_value=unrelated)
+
+        assert await comm_router.is_ancestor("candidate-id", "unrelated-id") is False
+
+    @pytest.mark.asyncio
+    async def test_is_ancestor_false_with_cycle_guard(self, comm_router):
+        """Defensive: a corrupted parent_overseer_id cycle must terminate, not loop
+        forever (mirrors test_overseer_reparent.py's cycle-guard test style)."""
+        from backend.session_manager import SessionInfo
+
+        a = Mock(spec=SessionInfo)
+        a.parent_overseer_id = "b-id"
+        b = Mock(spec=SessionInfo)
+        b.parent_overseer_id = "a-id"  # a <-> b cycle
+
+        session_map = {"a-id": a, "b-id": b}
+        sm = comm_router.system.session_port.session_manager
+        sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
+
+        assert await comm_router.is_ancestor("unrelated-id", "a-id") is False
+
+    @pytest.mark.asyncio
+    async def test_is_authorized_sender_true_for_user_regardless_of_hierarchy(self, comm_router):
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_user=True,
+            to_minion_id="some-minion",
+            content="halt",
+            delivery=DeliveryPolicy.HALT,
+        )
+        assert await comm_router.is_authorized_sender(comm) is True
+
+    @pytest.mark.asyncio
+    async def test_is_authorized_sender_true_for_ancestor(self, comm_router):
+        from backend.session_manager import SessionInfo
+
+        parent = Mock(spec=SessionInfo)
+        parent.parent_overseer_id = None
+        child = Mock(spec=SessionInfo)
+        child.parent_overseer_id = "parent-id"
+
+        session_map = {"parent-id": parent, "child-id": child}
+        sm = comm_router.system.session_port.session_manager
+        sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="parent-id",
+            to_minion_id="child-id",
+            content="pivot",
+            delivery=DeliveryPolicy.PIVOT,
+        )
+        assert await comm_router.is_authorized_sender(comm) is True
+
+    @pytest.mark.asyncio
+    async def test_is_authorized_sender_false_for_sibling(self, comm_router):
+        from backend.session_manager import SessionInfo
+
+        parent = Mock(spec=SessionInfo)
+        parent.parent_overseer_id = None
+        sibling_a = Mock(spec=SessionInfo)
+        sibling_a.parent_overseer_id = "parent-id"
+        sibling_b = Mock(spec=SessionInfo)
+        sibling_b.parent_overseer_id = "parent-id"
+
+        session_map = {
+            "parent-id": parent,
+            "sibling-a-id": sibling_a,
+            "sibling-b-id": sibling_b,
+        }
+        sm = comm_router.system.session_port.session_manager
+        sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="sibling-a-id",
+            to_minion_id="sibling-b-id",
+            content="halt",
+            delivery=DeliveryPolicy.HALT,
+        )
+        assert await comm_router.is_authorized_sender(comm) is False
+
+    @pytest.mark.asyncio
+    async def test_is_authorized_sender_false_for_unrelated_minion(self, comm_router):
+        from backend.session_manager import SessionInfo
+
+        unrelated = Mock(spec=SessionInfo)
+        unrelated.parent_overseer_id = None
+
+        sm = comm_router.system.session_port.session_manager
+        sm.get_session_info = AsyncMock(return_value=unrelated)
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="unrelated-sender-id",
+            to_minion_id="unrelated-target-id",
+            content="pivot",
+            delivery=DeliveryPolicy.PIVOT,
+        )
+        assert await comm_router.is_authorized_sender(comm) is False
+
+
 class TestCommRouter:
     """Test cases for CommRouter class."""
 

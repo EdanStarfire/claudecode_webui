@@ -223,9 +223,12 @@ class PendingStore:
         return item
 
     async def mark_delivered(self, session_id: str, session_dir: Path, comm_id: str) -> PendingItem | None:
-        """Mark a pending item as delivered."""
+        """Mark a pending item as delivered. Guarded to pending-only (issue #2193 PR4):
+        a concurrent sender-scoped flush may have already cancelled this entry between
+        dispatch picking it up and this call — must not resurrect a cancelled entry
+        into a terminal delivery status."""
         item = self._find_item(session_id, comm_id)
-        if not item:
+        if not item or item.status != "pending":
             return None
 
         item.status = "delivered"
@@ -243,9 +246,10 @@ class PendingStore:
     async def mark_failed(
         self, session_id: str, session_dir: Path, comm_id: str, error: str
     ) -> PendingItem | None:
-        """Mark a pending item as failed."""
+        """Mark a pending item as failed. Guarded to pending-only (issue #2193 PR4) —
+        see mark_delivered() for why."""
         item = self._find_item(session_id, comm_id)
-        if not item:
+        if not item or item.status != "pending":
             return None
 
         item.status = "failed"
@@ -358,6 +362,11 @@ class PendingStore:
             if item.comm.comm_id == comm_id:
                 return item
         return None
+
+    def get_item(self, session_id: str, comm_id: str) -> PendingItem | None:
+        """Public lookup by comm_id (issue #2193 PR4 — the gate's post-lock race-check
+        before dispatch needs this; _find_item() stays private/internal)."""
+        return self._find_item(session_id, comm_id)
 
     # =========================================================================
     # Cleanup
