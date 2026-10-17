@@ -770,6 +770,24 @@ class LegionMCPTools:
             visible_to_user=True
         )
 
+        # Issue #2193 AC7 (live retrofit, PR4): HALT/PIVOT requires the sender to be
+        # the user or an ancestor of the recipient. Enforced here, at the tool layer —
+        # send_comm is the only live producer of HALT/PIVOT comms today. Scoped to
+        # minion-to-minion only (not sending_to_user): AC7's authority concept is
+        # about one minion's standing over another (to_minion_id); a message to the
+        # user has to_minion_id=None, which would otherwise make is_ancestor() look
+        # up a None session and unconditionally deny every minion's HALT/PIVOT to the
+        # user — a real regression caught in review, not the sibling-abuse case AC7
+        # targets.
+        if not sending_to_user and comm.delivery in (DeliveryPolicy.HALT, DeliveryPolicy.PIVOT):
+            if not await self.system.comm_router.is_authorized_sender(comm):
+                return self._err(
+                    f"Error: {interrupt_priority_str.upper()} requires you to be the user or "
+                    f"an ancestor of '{to_minion_name}'. Siblings and unrelated minions cannot "
+                    f"{interrupt_priority_str} each other — ask a shared ancestor to relay, or "
+                    "send a normal task/question instead."
+                )
+
         # Route the comm (pass file data as parameter, not stashed on Comm)
         try:
             success = await self.system.comm_router.route_comm(

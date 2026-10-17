@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from backend.delivery_gate import DeliveryGate
-from backend.models.legion_models import Comm, DeliveryPolicy, SenderType
+from backend.models.legion_models import Comm, CommType, DeliveryPolicy, SenderType
 from backend.pending_store import PendingStore
 from backend.session_manager import SessionInfo, SessionState
 
@@ -35,6 +35,7 @@ def _make_session_info(
     state=SessionState.ACTIVE,
     is_processing=False,
     queue_config=None,
+    queue_paused=False,
 ):
     """Build a minimal SessionInfo-like object for tests."""
     info = MagicMock(spec=SessionInfo)
@@ -43,6 +44,10 @@ def _make_session_info(
     info.is_processing = is_processing
     info.queue_config = queue_config
     info.error_message = None
+    # Issue #2193 PR4: explicit, not left to spec's auto-mock default (which is a
+    # truthy MagicMock) — AC6's queue_paused gate must see a real False here, or
+    # every existing PR3 test would spuriously hit the "queues instead" branch.
+    info.queue_paused = queue_paused
     return info
 
 
@@ -52,13 +57,18 @@ def _make_coordinator(session_info, session_dir):
     coord.session_manager = AsyncMock()
     coord.session_manager.get_session_info = AsyncMock(return_value=session_info)
     coord.session_manager.get_session_directory = AsyncMock(return_value=session_dir)
+    coord.session_manager.update_session = AsyncMock(return_value=True)
     coord.send_message = AsyncMock(return_value=True)
     coord.start_session = AsyncMock(return_value=True)
     coord.interrupt_session = AsyncMock(return_value=True)
     coord.wait_for_session_ready = AsyncMock(return_value=True)
     coord._permission_callback_factory = None
     coord._message_callback_registrar = None
-    coord.legion_system = None
+    # Issue #2193 PR4 (AC7): authorized by default so every existing PR3 test (which
+    # doesn't care about authority) keeps passing unchanged; individual PR4 tests
+    # override to return_value=False where needed.
+    coord.legion_system = MagicMock()
+    coord.legion_system.comm_router = AsyncMock(is_authorized_sender=AsyncMock(return_value=True))
     coord.pending_store = PendingStore()
     return coord
 
@@ -513,3 +523,397 @@ class TestInjectTimestampScoping:
             kwargs["from_minion_id"] = "sender-x"
         comm = make_comm("s1", sender_type=sender_type, **kwargs)
         assert DeliveryGate._should_inject_timestamp(comm) == expected
+
+
+class TestSenderScopedFlush:
+    """Issue #2193 AC5 — sender-scoped pivot/halt flush."""
+
+    @pytest.mark.asyncio
+    async def test_pivot_cancels_only_same_sender_pending_items(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        a1 = make_comm(
+            "s1", content="a1", delivery=DeliveryPolicy.WHEN_IDLE,
+            from_user=False, from_minion_id="sender-a",
+        )
+        a2 = make_comm(
+            "s1", content="a2", delivery=DeliveryPolicy.WHEN_IDLE,
+            from_user=False, from_minion_id="sender-a",
+        )
+        b1 = make_comm(
+            "s1", content="b1", delivery=DeliveryPolicy.WHEN_IDLE,
+            from_user=False, from_minion_id="sender-b",
+        )
+        await coord.pending_store.enqueue("s1", tmp_path, a1)
+        await coord.pending_store.enqueue("s1", tmp_path, a2)
+        await coord.pending_store.enqueue("s1", tmp_path, b1)
+
+        pivot = make_comm(
+            "s1", content="pivot now", delivery=DeliveryPolicy.PIVOT,
+            from_user=False, from_minion_id="sender-a",
+        )
+
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            result = await gate.deliver(pivot)
+
+        assert result.success is True
+        assert _status_of(coord, "s1", a1.comm_id) == "cancelled"
+        assert _status_of(coord, "s1", a2.comm_id) == "cancelled"
+        assert _status_of(coord, "s1", b1.comm_id) == "pending"
+        assert _status_of(coord, "s1", pivot.comm_id) == "delivered"
+
+    @pytest.mark.asyncio
+    async def test_flush_sender_racing_when_idle_dispatch_has_single_terminal_outcome(self, tmp_path):
+        """Issue #2193 PR4 race fix: an item already popped off when_idle_pending and
+        sitting in the busy-wait must not be resurrected into 'delivered' by a
+        concurrent flush_sender() that cancels it first — the post-lock re-check in
+        _run_when_idle_loop must skip the send entirely once that happens."""
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=True)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        item_comm = make_comm(
+            "s1", content="late item", delivery=DeliveryPolicy.WHEN_IDLE,
+            from_user=False, from_minion_id="race-sender",
+        )
+        await coord.pending_store.enqueue("s1", tmp_path, item_comm)
+
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            gate.ensure_when_idle_running("s1")
+
+            # Let the loop pick up item_comm and park in the busy-wait (is_processing=True).
+            for _ in range(20):
+                await asyncio.sleep(0)
+            assert _status_of(coord, "s1", item_comm.comm_id) == "pending"
+            coord.send_message.assert_not_called()
+
+            # A concurrent HALT/PIVOT's flush_sender() for the same sender wins the
+            # race while the when_idle dispatch is still stuck pre-lock.
+            trigger = make_comm(
+                "s1", content="pivot now", delivery=DeliveryPolicy.PIVOT,
+                from_user=False, from_minion_id="race-sender",
+            )
+            cancelled = await gate.flush_sender("s1", trigger)
+            assert len(cancelled) == 1
+            assert _status_of(coord, "s1", item_comm.comm_id) == "cancelled"
+
+            # Now let the busy-wait clear and the loop reach the lock's re-check.
+            info.is_processing = False
+            for _ in range(50):
+                await asyncio.sleep(0)
+
+        # Exactly one terminal outcome, no flip back to "delivered", and the send
+        # that would have resurrected it never happened.
+        assert _status_of(coord, "s1", item_comm.comm_id) == "cancelled"
+        coord.send_message.assert_not_called()
+        gate.stop_when_idle("s1")
+
+
+class TestPivotStaleNote:
+    """Issue #2193 AC5 — "queued before the pivot, by whom" note."""
+
+    @pytest.mark.asyncio
+    async def test_stale_item_dispatch_carries_note_not_persisted_to_ledger(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
+        coord = _make_coordinator(info, tmp_path)
+
+        captured_messages = []
+
+        async def fake_send_message(session_id, message, metadata=None, inject_timestamp=True):
+            captured_messages.append(message)
+            return True
+
+        coord.send_message = AsyncMock(side_effect=fake_send_message)
+        gate = DeliveryGate(coord)
+
+        stale = make_comm(
+            "s1", content="original content", delivery=DeliveryPolicy.WHEN_IDLE,
+            from_user=False, from_minion_id="late-sender",
+        )
+        await coord.pending_store.enqueue("s1", tmp_path, stale)
+
+        pivot = make_comm(
+            "s1", content="pivot message", delivery=DeliveryPolicy.PIVOT,
+            from_user=False, from_minion_id="other-sender", from_minion_name="OtherSender",
+        )
+
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            pivot_result = await gate.deliver(pivot)
+            assert pivot_result.success is True
+
+            gate.ensure_when_idle_running("s1")
+            for _ in range(50):
+                await asyncio.sleep(0)
+                if len(captured_messages) >= 2:
+                    break
+
+        assert len(captured_messages) == 2
+        assert captured_messages[0] == "pivot message"  # no self-referential note
+        assert "original content" in captured_messages[1]
+        assert "queued before a pivot from OtherSender" in captured_messages[1]
+
+        # The ledger's persisted copy must stay the original, un-annotated content.
+        ledger_item = coord.pending_store.get_item("s1", stale.comm_id)
+        assert ledger_item.comm.content == "original content"
+        assert ledger_item.status == "delivered"
+        gate.stop_when_idle("s1")
+
+    @pytest.mark.asyncio
+    async def test_failed_pivot_send_does_not_stamp_last_pivot(self, tmp_path):
+        """Found during review: _last_pivot must only be stamped after the pivot's
+        own send has actually succeeded — a failed PIVOT send must not poison a
+        later WHEN_IDLE item's dispatch with a note about a pivot that never took
+        effect."""
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
+        coord = _make_coordinator(info, tmp_path)
+
+        captured_messages = []
+
+        async def fake_send_message(session_id, message, metadata=None, inject_timestamp=True):
+            # Fail only the pivot's own content; succeed for everything else.
+            if message == "pivot message":
+                return False
+            captured_messages.append(message)
+            return True
+
+        coord.send_message = AsyncMock(side_effect=fake_send_message)
+        gate = DeliveryGate(coord)
+
+        other = make_comm(
+            "s1", content="other item", delivery=DeliveryPolicy.WHEN_IDLE,
+            from_user=False, from_minion_id="late-sender",
+        )
+        await coord.pending_store.enqueue("s1", tmp_path, other)
+
+        pivot = make_comm(
+            "s1", content="pivot message", delivery=DeliveryPolicy.PIVOT,
+            from_user=False, from_minion_id="other-sender", from_minion_name="OtherSender",
+        )
+
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            pivot_result = await gate.deliver(pivot)
+            assert pivot_result.success is False
+
+            gate.ensure_when_idle_running("s1")
+            for _ in range(50):
+                await asyncio.sleep(0)
+                if captured_messages:
+                    break
+
+        assert captured_messages == ["other item"]  # no stale-pivot note appended
+        gate.stop_when_idle("s1")
+
+
+class TestAuthorityGate:
+    """Issue #2193 AC7 — gate-level HALT/PIVOT authority (inert until PR5 wires the
+    gate into production; test_legion_mcp_tools.py covers the live tool-layer path)."""
+
+    @pytest.mark.asyncio
+    async def test_halt_without_authority_fails_without_interrupting(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE)
+        coord = _make_coordinator(info, tmp_path)
+        coord.legion_system.comm_router.is_authorized_sender = AsyncMock(return_value=False)
+        gate = DeliveryGate(coord)
+
+        # from_user=False/from_minion_id set: _is_authorized() always returns True
+        # for from_user=True (the user is always authorized), so an "unauthorized
+        # sender" case must be a minion sender, not the make_comm default.
+        comm = make_comm(
+            "s1", content="halt now", delivery=DeliveryPolicy.HALT,
+            from_user=False, from_minion_id="sibling-a",
+        )
+        result = await gate.deliver(comm)
+
+        assert result.success is False
+        assert "authority" in result.error.lower()
+        coord.interrupt_session.assert_not_called()
+        coord.send_message.assert_not_called()
+        assert _status_of(coord, "s1", comm.comm_id) == "failed"
+
+    @pytest.mark.asyncio
+    async def test_pivot_without_authority_fails_without_interrupting_or_sending(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE)
+        coord = _make_coordinator(info, tmp_path)
+        coord.legion_system.comm_router.is_authorized_sender = AsyncMock(return_value=False)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm(
+            "s1", content="pivot now", delivery=DeliveryPolicy.PIVOT,
+            from_user=False, from_minion_id="sibling-a",
+        )
+        result = await gate.deliver(comm)
+
+        assert result.success is False
+        assert "authority" in result.error.lower()
+        coord.interrupt_session.assert_not_called()
+        coord.send_message.assert_not_called()
+        assert _status_of(coord, "s1", comm.comm_id) == "failed"
+
+    @pytest.mark.asyncio
+    async def test_user_sent_halt_succeeds_even_without_legion_system(self, tmp_path):
+        """Found during review: _is_authorized() must check comm.from_user before
+        the legion_system=None guard — the user is always authorized regardless of
+        whether a CommRouter is attached, per is_authorized_sender()'s own rule."""
+        info = _make_session_info(state=SessionState.ACTIVE)
+        coord = _make_coordinator(info, tmp_path)
+        coord.legion_system = None
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", content="halt now", delivery=DeliveryPolicy.HALT, from_user=True)
+        result = await gate.deliver(comm)
+
+        assert result.success is True
+        coord.interrupt_session.assert_awaited_once()
+
+
+class TestQueuePausedGate:
+    """Issue #2193 AC6 — up-front queue_paused gate."""
+
+    @staticmethod
+    def _wire_stateful_update_session(coord, info):
+        async def fake_update_session(session_id, **kwargs):
+            if "queue_paused" in kwargs:
+                info.queue_paused = kwargs["queue_paused"]
+            return True
+        coord.session_manager.update_session = AsyncMock(side_effect=fake_update_session)
+
+    @pytest.mark.asyncio
+    async def test_paused_session_queues_immediate_comm_without_sending(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False, queue_paused=True)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", content="hi", delivery=DeliveryPolicy.IMMEDIATE)
+        result = await gate.deliver(comm)
+
+        assert result.success is True
+        coord.send_message.assert_not_called()
+        assert _status_of(coord, "s1", comm.comm_id) == "pending"
+        assert info.queue_paused is True
+
+    @pytest.mark.asyncio
+    async def test_authorized_task_while_paused_clears_pause_and_delivers(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False, queue_paused=True)
+        coord = _make_coordinator(info, tmp_path)
+        self._wire_stateful_update_session(coord, info)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm(
+            "s1", content="hi", delivery=DeliveryPolicy.IMMEDIATE, comm_type=CommType.TASK,
+        )
+        result = await gate.deliver(comm)
+
+        assert result.success is True
+        coord.send_message.assert_awaited_once()
+        assert info.queue_paused is False
+        assert _status_of(coord, "s1", comm.comm_id) == "delivered"
+
+    @pytest.mark.asyncio
+    async def test_non_resume_trigger_type_while_paused_still_queues(self, tmp_path):
+        """REPORT is not an implicit-resume-trigger comm_type — stays queued even
+        from an authorized sender."""
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False, queue_paused=True)
+        coord = _make_coordinator(info, tmp_path)
+        self._wire_stateful_update_session(coord, info)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm(
+            "s1", content="hi", delivery=DeliveryPolicy.IMMEDIATE, comm_type=CommType.REPORT,
+        )
+        result = await gate.deliver(comm)
+
+        assert result.success is True
+        coord.send_message.assert_not_called()
+        assert info.queue_paused is True
+        assert _status_of(coord, "s1", comm.comm_id) == "pending"
+
+    @pytest.mark.asyncio
+    async def test_unauthorized_task_while_paused_still_queues(self, tmp_path):
+        """Authority applies to the implicit-resume trigger too, not just HALT/PIVOT."""
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False, queue_paused=True)
+        coord = _make_coordinator(info, tmp_path)
+        self._wire_stateful_update_session(coord, info)
+        coord.legion_system.comm_router.is_authorized_sender = AsyncMock(return_value=False)
+        gate = DeliveryGate(coord)
+
+        # from_user=False/from_minion_id set: _is_authorized() always returns True
+        # for from_user=True (the user is always authorized), so an "unauthorized
+        # sender" case must be a minion sender, not the make_comm default.
+        comm = make_comm(
+            "s1", content="hi", delivery=DeliveryPolicy.IMMEDIATE, comm_type=CommType.TASK,
+            from_user=False, from_minion_id="sibling-a",
+        )
+        result = await gate.deliver(comm)
+
+        assert result.success is True
+        coord.send_message.assert_not_called()
+        assert info.queue_paused is True
+        assert _status_of(coord, "s1", comm.comm_id) == "pending"
+
+    @pytest.mark.asyncio
+    async def test_successful_halt_sets_queue_paused(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False, queue_paused=False)
+        coord = _make_coordinator(info, tmp_path)
+        self._wire_stateful_update_session(coord, info)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", content="halt now", delivery=DeliveryPolicy.HALT)
+        result = await gate.deliver(comm)
+
+        assert result.success is True
+        assert info.queue_paused is True
+
+    @pytest.mark.asyncio
+    async def test_authorized_halt_with_non_resume_trigger_comm_type_still_takes_effect(self, tmp_path):
+        """Found during review: HALT/PIVOT must bypass the comm_type-based implicit-
+        resume check entirely — comm_type and the HALT/PIVOT delivery policy are
+        independent fields on the public send_comm tool, so an authorized HALT sent
+        with e.g. comm_type=REPORT must still interrupt, not silently queue."""
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False, queue_paused=True)
+        coord = _make_coordinator(info, tmp_path)
+        self._wire_stateful_update_session(coord, info)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm(
+            "s1", content="halt now", delivery=DeliveryPolicy.HALT, comm_type=CommType.REPORT,
+        )
+        result = await gate.deliver(comm)
+
+        assert result.success is True
+        coord.interrupt_session.assert_awaited_once()
+        assert info.queue_paused is True
+        assert _status_of(coord, "s1", comm.comm_id) == "delivered"
+
+    @pytest.mark.asyncio
+    async def test_when_idle_item_queued_while_paused_still_starts_drain_loop(self, tmp_path):
+        """Found during review: a WHEN_IDLE comm that stays queued because it isn't
+        an implicit-resume trigger must still start ensure_when_idle_running(), or
+        the item is orphaned forever (nothing else would ever start the loop for it)."""
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False, queue_paused=True)
+        coord = _make_coordinator(info, tmp_path)
+        self._wire_stateful_update_session(coord, info)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm(
+            "s1", content="hi", delivery=DeliveryPolicy.WHEN_IDLE, comm_type=CommType.REPORT,
+        )
+
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            result = await gate.deliver(comm)
+            assert result.success is True
+            assert gate.is_when_idle_running("s1")
+            assert _status_of(coord, "s1", comm.comm_id) == "pending"
+            coord.send_message.assert_not_called()
+
+            # Once the session unpauses, the already-running loop picks the item up.
+            info.queue_paused = False
+            for _ in range(50):
+                await asyncio.sleep(0)
+                if coord.send_message.await_count:
+                    break
+
+        coord.send_message.assert_awaited_once()
+        assert _status_of(coord, "s1", comm.comm_id) == "delivered"
+        gate.stop_when_idle("s1")

@@ -780,6 +780,172 @@ async def test_issue_1839_send_comm_generic_text_unchanged_without_reason(tmp_pa
     assert text == "Failed to send message to user"
 
 
+# ── AC7 live authority retrofit tests (Issue #2193 PR4) ──
+
+
+def _make_send_comm_authority_system(from_id: str, to_id: str, to_name: str, is_authorized: bool):
+    """Helper: build a mock system for a minion-to-minion send_comm_tool call that
+    reaches the AC7 authority check — validate_comm_target (visibility) already
+    passes, only is_authorized_sender is under test."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from_session = MagicMock()
+    from_session.project_id = "legion-authority"
+    from_session.name = "Sender"
+
+    to_session = MagicMock()
+    to_session.project_id = "legion-authority"
+    to_session.name = to_name
+
+    session_map = {from_id: from_session, to_id: to_session}
+
+    session_manager = MagicMock()
+    session_manager.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
+
+    session_coordinator = MagicMock()
+    session_coordinator.session_manager = session_manager
+
+    to_minion = MagicMock()
+    to_minion.session_id = to_id
+
+    legion_coordinator = MagicMock()
+    legion_coordinator.get_minion_by_name_in_legion = AsyncMock(return_value=to_minion)
+
+    comm_router = MagicMock()
+    comm_router.validate_comm_target = AsyncMock(return_value=True)
+    comm_router.is_authorized_sender = AsyncMock(return_value=is_authorized)
+    comm_router.route_comm = AsyncMock(return_value=True)
+
+    mock_system = MagicMock()
+    mock_system.session_port = session_coordinator
+    mock_system.legion_coordinator = legion_coordinator
+    mock_system.comm_router = comm_router
+    return mock_system
+
+
+@pytest.mark.asyncio
+async def test_send_comm_halt_from_sibling_rejected_without_routing():
+    """Issue #2193 AC7: a sibling (not the user or an ancestor) cannot HALT —
+    rejected with a clear error, route_comm never reached."""
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    mock_system = _make_send_comm_authority_system(
+        "sibling-a", "sibling-b", "SiblingB", is_authorized=False
+    )
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_send_comm({
+        "_from_minion_id": "sibling-a",
+        "to_minion_name": "SiblingB",
+        "content": "stop now",
+        "comm_type": "task",
+        "interrupt_priority": "halt",
+    })
+
+    assert result["is_error"] is True
+    text = result["content"][0]["text"]
+    assert "SiblingB" in text
+    assert "ancestor" in text.lower()
+    mock_system.comm_router.route_comm.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_send_comm_pivot_from_sibling_rejected_without_routing():
+    """Same rejection for PIVOT."""
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    mock_system = _make_send_comm_authority_system(
+        "sibling-a", "sibling-b", "SiblingB", is_authorized=False
+    )
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_send_comm({
+        "_from_minion_id": "sibling-a",
+        "to_minion_name": "SiblingB",
+        "content": "redirect now",
+        "comm_type": "task",
+        "interrupt_priority": "pivot",
+    })
+
+    assert result["is_error"] is True
+    text = result["content"][0]["text"]
+    assert "SiblingB" in text
+    assert "ancestor" in text.lower()
+    mock_system.comm_router.route_comm.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_send_comm_halt_from_ancestor_succeeds():
+    """An authorized sender's HALT proceeds to route_comm normally."""
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    mock_system = _make_send_comm_authority_system(
+        "ancestor-a", "descendant-b", "DescendantB", is_authorized=True
+    )
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_send_comm({
+        "_from_minion_id": "ancestor-a",
+        "to_minion_name": "DescendantB",
+        "content": "stop now",
+        "comm_type": "task",
+        "interrupt_priority": "halt",
+    })
+
+    assert result["is_error"] is False
+    mock_system.comm_router.route_comm.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_send_comm_plain_task_from_sibling_unaffected_by_authority_check():
+    """Regression: the new AC7 check only gates HALT/PIVOT — a plain comm_type
+    with no interrupt_priority must still succeed even between siblings."""
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    mock_system = _make_send_comm_authority_system(
+        "sibling-a", "sibling-b", "SiblingB", is_authorized=False
+    )
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_send_comm({
+        "_from_minion_id": "sibling-a",
+        "to_minion_name": "SiblingB",
+        "content": "fyi",
+        "comm_type": "task",
+    })
+
+    assert result["is_error"] is False
+    mock_system.comm_router.route_comm.assert_called_once()
+    # is_authorized_sender is never even consulted for a non-HALT/PIVOT send.
+    mock_system.comm_router.is_authorized_sender.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_send_comm_halt_to_user_succeeds_without_authority_check(tmp_path):
+    """Regression found during review: a HALT/PIVOT addressed to the user
+    (to_minion_name='user') must not be gated by AC7's authority check at all —
+    to_minion_id is None for a to-user send, which would otherwise make
+    is_ancestor() look up a None session and unconditionally deny every minion's
+    HALT/PIVOT to the user. AC7 targets minion-to-minion abuse, not messages to
+    the user."""
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    mock_system = _make_send_comm_system_with_router("any-minion", tmp_path, resource_ids=[])
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_send_comm({
+        "_from_minion_id": "any-minion",
+        "to_minion_name": "user",
+        "content": "stop now",
+        "comm_type": "task",
+        "interrupt_priority": "halt",
+    })
+
+    assert result["is_error"] is False
+    mock_system.comm_router.route_comm.assert_called_once()
+    mock_system.comm_router.is_authorized_sender.assert_not_called()
+
+
 # ── queue_task handler tests (Issue #1114) ──
 
 

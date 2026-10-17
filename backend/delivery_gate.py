@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 
 from shared.logging_config import get_logger
 
-from .models.legion_models import Comm, DeliveryPolicy, SenderType
+from .models.legion_models import Comm, CommType, DeliveryPolicy, SenderType
 from .session_lifecycle import (
     AUTO_START_STATES,
     SessionState,
@@ -36,8 +36,10 @@ from .session_lifecycle import (
     is_errored,
     is_paused,
 )
+from .timestamp_utils import get_unix_timestamp
 
 if TYPE_CHECKING:
+    from .pending_store import PendingItem
     from .session_coordinator import SessionCoordinator
 
 gate_logger = get_logger('delivery_gate', category='DELIVERY_GATE')
@@ -87,6 +89,9 @@ class DeliveryGate:
         self._dispatch_locks: dict[str, asyncio.Lock] = {}
         self._readiness_deadlines: dict[str, float] = {}
         self._when_idle_tasks: dict[str, asyncio.Task] = {}
+        # Issue #2193 (PR 4): AC5 "queued before the pivot, by whom" note.
+        # session_id -> (sender_label, pivoted_at)
+        self._last_pivot: dict[str, tuple[str, float]] = {}
 
     # =========================================================================
     # Issue #2193 (PR 3) — unified gate: deliver() and its helpers
@@ -121,6 +126,37 @@ class DeliveryGate:
         except ValueError as e:
             return DeliveryResult(success=False, error=str(e))
 
+        # Issue #2193 AC6: a paused session queues everything except an authorized
+        # implicit-resume trigger (TASK/QUESTION/PIVOT from the user or an ancestor).
+        # HALT/PIVOT deliveries bypass this gate entirely and fall through to their
+        # own dedicated authority check below — found during review: gating them
+        # here on comm_type (which a HALT/PIVOT need not set to TASK/QUESTION/PIVOT,
+        # since comm_type and the HALT/PIVOT delivery policy are independent fields
+        # on the public send_comm tool) would otherwise let an authorized HALT/PIVOT
+        # with e.g. comm_type=REPORT silently queue instead of taking effect.
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        if (
+            session_info
+            and getattr(session_info, 'queue_paused', False)
+            and comm.delivery not in (DeliveryPolicy.HALT, DeliveryPolicy.PIVOT)
+        ):
+            is_resume_trigger = comm.comm_type in (
+                CommType.TASK, CommType.QUESTION, CommType.PIVOT,
+            ) and await self._is_authorized(comm)
+            if is_resume_trigger:
+                await coordinator.session_manager.update_session(session_id, queue_paused=False)
+                # fall through — this comm proceeds normally below, including (for
+                # PIVOT) its own flush/interrupt/send.
+            else:
+                # Left pending: "queues instead" (AC6). A WHEN_IDLE item must still
+                # start its drain loop even though it stays queued here — the loop's
+                # own queue_paused check (below) makes it wait correctly rather than
+                # orphaning the item until some unrelated later arrival happens to
+                # reach the WHEN_IDLE branch below while unpaused (found during review).
+                if comm.delivery == DeliveryPolicy.WHEN_IDLE:
+                    self.ensure_when_idle_running(session_id)
+                return DeliveryResult(success=True)
+
         if comm.delivery == DeliveryPolicy.WHEN_IDLE:
             self.ensure_when_idle_running(session_id)
             return DeliveryResult(success=True)  # fire-and-forget, same contract enqueue_message() has today
@@ -131,6 +167,12 @@ class DeliveryGate:
             return ready
 
         if comm.delivery == DeliveryPolicy.HALT:
+            if not await self._is_authorized(comm):
+                await coordinator.pending_store.mark_failed(
+                    session_id, session_dir, comm.comm_id,
+                    "HALT requires the sender to be the user or an ancestor of the recipient",
+                )
+                return DeliveryResult(success=False, error="HALT requires sender authority")
             interrupted = await self._interrupt(session_id)
             # AC10 lists exactly 4 statuses (pending/delivered/failed/cancelled) — none
             # literally means "interrupted, never sent." "delivered" here means the gate
@@ -140,6 +182,8 @@ class DeliveryGate:
             # HALT has no later step to fall back on, so (unlike PIVOT below) the ledger
             # status must reflect the interrupt's own outcome, not an assumed success.
             if interrupted:
+                await coordinator.session_manager.update_session(session_id, queue_paused=True)
+                await self.flush_sender(session_id, comm)
                 await coordinator.pending_store.mark_delivered(session_id, session_dir, comm.comm_id)
                 return DeliveryResult(success=True)
             await coordinator.pending_store.mark_failed(
@@ -148,6 +192,13 @@ class DeliveryGate:
             return DeliveryResult(success=False, error="interrupt_session did not succeed")
 
         if comm.delivery == DeliveryPolicy.PIVOT:
+            if not await self._is_authorized(comm):
+                await coordinator.pending_store.mark_failed(
+                    session_id, session_dir, comm.comm_id,
+                    "PIVOT requires the sender to be the user or an ancestor of the recipient",
+                )
+                return DeliveryResult(success=False, error="PIVOT requires sender authority")
+            await self.flush_sender(session_id, comm)
             # Swallowed deliberately (via _interrupt()) — PIVOT's ledger entry is decided
             # by the send below, which is the actually-observable completed action; an
             # interrupt that no-ops (e.g. nothing was running) must not block the send.
@@ -155,22 +206,47 @@ class DeliveryGate:
             # fall through to the same dispatch as IMMEDIATE
 
         lock = self._get_dispatch_lock(session_id)
-        try:
-            async with lock:
+        async with lock:
+            # Post-lock re-check (issue #2193 PR4 race fix): a concurrent
+            # flush_sender() may have cancelled this entry while it waited on the
+            # readiness gate above. Whoever acquires the dispatch lock first wins.
+            # success=False here leaves the ledger at "cancelled" (set by that
+            # flush), not "failed" — a legitimate AC5 outcome, not an error.
+            current = coordinator.pending_store.get_item(session_id, comm.comm_id)
+            if current is None or current.status != "pending":
+                return DeliveryResult(success=False, error="Cancelled before dispatch")
+            original_content = comm.content
+            comm.content = self._maybe_annotate_stale(session_id, comm, current)
+            try:
                 result = await self.send(comm, inject_timestamp=self._should_inject_timestamp(comm))
-        except Exception as e:
-            # Without this, an exception from send_message() (vs. its documented False
-            # return) would propagate out of deliver() and leave this entry stuck at
-            # status="pending" forever — the item was already enqueued above, so there's
-            # no path back to a terminal state without catching it here.
-            gate_logger.exception(f"Unexpected error sending comm {comm.comm_id} to {session_id}")
-            await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, str(e))
-            return DeliveryResult(success=False, error=str(e))
-        if not result.success:
-            await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, result.error)
-            return result
-        await coordinator.pending_store.mark_delivered(session_id, session_dir, comm.comm_id)
-        return DeliveryResult(success=True)
+            except Exception as e:
+                # Without this, an exception from send_message() (vs. its documented False
+                # return) would propagate out of deliver() and leave this entry stuck at
+                # status="pending" forever — the item was already enqueued above, so there's
+                # no path back to a terminal state without catching it here.
+                gate_logger.exception(f"Unexpected error sending comm {comm.comm_id} to {session_id}")
+                comm.content = original_content
+                await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, str(e))
+                return DeliveryResult(success=False, error=str(e))
+            comm.content = original_content
+            # mark_failed/mark_delivered run while still holding the dispatch lock
+            # (issue #2193 PR4 race fix, strengthened during review): keeping them
+            # outside the lock left a narrow window where a concurrent flush_sender()
+            # could cancel this entry between the send above and the mark_* call —
+            # deliver() would then still report success=True/False from the send's
+            # own outcome while the ledger silently disagreed (stuck "cancelled").
+            if not result.success:
+                await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, result.error)
+                return result
+            if comm.delivery == DeliveryPolicy.PIVOT:
+                # Stamped only now, after a CONFIRMED successful send — not up in the
+                # PIVOT branch above — so this pivot's own entry never has to special-
+                # case-exclude itself from _maybe_annotate_stale()'s staleness check,
+                # and a failed PIVOT send never poisons later dispatches with a note
+                # about a pivot that never actually took effect (found during review).
+                self._last_pivot[session_id] = (self._sender_label(comm), get_unix_timestamp())
+            await coordinator.pending_store.mark_delivered(session_id, session_dir, comm.comm_id)
+            return DeliveryResult(success=True)
 
     async def _ensure_session_ready(
         self, comm: Comm, *, timeout: float = UNIFIED_READINESS_TIMEOUT_SECONDS,
@@ -288,6 +364,77 @@ class DeliveryGate:
             gate_logger.warning(f"Failed to interrupt session {session_id}: {e}")
             return False
 
+    async def flush_sender(self, session_id: str, trigger_comm: Comm) -> list["PendingItem"]:
+        """Cancel every still-pending item from the same sender as trigger_comm, to this
+        recipient, excluding trigger_comm's own just-enqueued entry (issue #2193 AC5).
+        Acquires the same per-session dispatch lock deliver()/_run_when_idle_loop use for
+        their send() calls, so a flush can never race a dispatch already in flight —
+        whoever gets the lock first decides the outcome (race fix above)."""
+        coordinator = self._coordinator
+        session_dir = await coordinator.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return []
+
+        cancelled: list[PendingItem] = []
+        lock = self._get_dispatch_lock(session_id)
+        async with lock:
+            for item in coordinator.pending_store.get_pending(session_id):
+                if item.comm.comm_id == trigger_comm.comm_id:
+                    continue
+                if not self._same_sender(item.comm, trigger_comm):
+                    continue
+                cancelled_item = await coordinator.pending_store.cancel(
+                    session_id, session_dir, item.comm.comm_id
+                )
+                if cancelled_item:
+                    cancelled.append(cancelled_item)
+        return cancelled
+
+    @staticmethod
+    def _same_sender(a: Comm, b: Comm) -> bool:
+        if a.from_user or b.from_user:
+            return a.from_user and b.from_user
+        if a.from_minion_id or b.from_minion_id:
+            return a.from_minion_id == b.from_minion_id
+        return a.sender_type == b.sender_type and a.sender_id == b.sender_id
+
+    @staticmethod
+    def _sender_label(comm: Comm) -> str:
+        if comm.from_user:
+            return "the user"
+        return comm.from_minion_name or comm.from_minion_id or "someone"
+
+    def _maybe_annotate_stale(self, session_id: str, comm: Comm, item: "PendingItem") -> str:
+        """Appends the AC5 staleness note to the content actually sent, without mutating
+        comm.content permanently — matches comm_router.py's existing swap-and-restore
+        convention for PIVOT/NORMAL dispatch (ported, not invented here).
+
+        `_last_pivot` is only stamped after a pivot's OWN dispatch has already
+        succeeded (see deliver()'s PIVOT branch) — so a pivot's own entry is never
+        compared against its own stamp here, and a failed pivot never stamps at all.
+        """
+        last_pivot = self._last_pivot.get(session_id)
+        if last_pivot and last_pivot[1] > item.created_at:
+            note = f"\n\n---\n_Note: this message was queued before a pivot from {last_pivot[0]}._"
+            return comm.content + note
+        return comm.content
+
+    async def _is_authorized(self, comm: Comm) -> bool:
+        """True if comm's sender may HALT/PIVOT its recipient, or implicitly resume a
+        paused session (issue #2193 AC6/AC7). The user is always authorized, checked
+        before the legion_system=None guard below — found during review: the naive
+        ordering silently denied a user-originated action whenever legion_system
+        happened to be unset, contradicting is_authorized_sender()'s own "the user
+        is always authorized" rule. Otherwise guards the non-Legion case the same
+        way _wait_for_idle() already guards legion_system being None for scheduler
+        access."""
+        if comm.from_user:
+            return True
+        legion_system = self._coordinator.legion_system
+        if legion_system is None:
+            return False
+        return await legion_system.comm_router.is_authorized_sender(comm)
+
     @staticmethod
     def _should_inject_timestamp(comm: Comm) -> bool:
         """Issue #1779's existing rule ("user messages get timestamp injection,
@@ -337,6 +484,10 @@ class DeliveryGate:
                 session_dir = await coordinator.session_manager.get_session_directory(session_id)
                 if not session_dir:
                     break
+                session_info = await coordinator.session_manager.get_session_info(session_id)
+                if session_info and getattr(session_info, 'queue_paused', False):
+                    await asyncio.sleep(1)
+                    continue
                 when_idle_pending = [
                     item for item in coordinator.pending_store.get_pending(session_id)
                     if item.comm.delivery == DeliveryPolicy.WHEN_IDLE
@@ -363,17 +514,28 @@ class DeliveryGate:
                     continue
 
                 lock = self._get_dispatch_lock(session_id)
-                try:
-                    async with lock:
+                async with lock:
+                    # Post-lock re-check (issue #2193 PR4 race fix): a concurrent
+                    # flush_sender() may have cancelled this entry while it sat
+                    # mid-wait above (busy-clear/schedule settle). Whoever acquires
+                    # the dispatch lock first wins.
+                    current = coordinator.pending_store.get_item(session_id, comm.comm_id)
+                    if current is None or current.status != "pending":
+                        continue
+                    original_content = comm.content
+                    comm.content = self._maybe_annotate_stale(session_id, comm, current)
+                    try:
                         result = await self.send(comm, inject_timestamp=self._should_inject_timestamp(comm))
-                except Exception as e:
-                    # Same reasoning as deliver()'s inline dispatch: an exception here
-                    # (vs. send()'s documented False return) would otherwise leave this
-                    # entry stuck at status="pending" and the loop stuck retrying it
-                    # forever (it's still the head of when_idle_pending next iteration).
-                    gate_logger.exception(f"Unexpected error sending comm {comm.comm_id} to {session_id}")
-                    await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, str(e))
-                    continue
+                    except Exception as e:
+                        # Same reasoning as deliver()'s inline dispatch: an exception here
+                        # (vs. send()'s documented False return) would otherwise leave this
+                        # entry stuck at status="pending" and the loop stuck retrying it
+                        # forever (it's still the head of when_idle_pending next iteration).
+                        gate_logger.exception(f"Unexpected error sending comm {comm.comm_id} to {session_id}")
+                        comm.content = original_content
+                        await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, str(e))
+                        continue
+                    comm.content = original_content
                 if not result.success:
                     await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, result.error)
                     continue

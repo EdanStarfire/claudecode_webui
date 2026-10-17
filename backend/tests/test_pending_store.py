@@ -181,6 +181,48 @@ class TestPendingStoreCRUD:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_mark_delivered_on_cancelled_item_returns_none_and_leaves_status(
+        self, pending_store, temp_session
+    ):
+        """Issue #2193 PR4 race fix: a concurrent flush_sender() may cancel an entry
+        between dispatch picking it up and this call — must not resurrect it."""
+        sid, sdir = temp_session
+        item = await pending_store.enqueue(sid, sdir, make_comm(sid))
+        await pending_store.cancel(sid, sdir, item.comm.comm_id)
+
+        result = await pending_store.mark_delivered(sid, sdir, item.comm.comm_id)
+
+        assert result is None
+        assert item.status == "cancelled"
+        assert item.delivered_at is None
+
+    @pytest.mark.asyncio
+    async def test_mark_failed_on_cancelled_item_returns_none_and_leaves_status(
+        self, pending_store, temp_session
+    ):
+        """Same guard as mark_delivered() — see issue #2193 PR4."""
+        sid, sdir = temp_session
+        item = await pending_store.enqueue(sid, sdir, make_comm(sid))
+        await pending_store.cancel(sid, sdir, item.comm.comm_id)
+
+        result = await pending_store.mark_failed(sid, sdir, item.comm.comm_id, "boom")
+
+        assert result is None
+        assert item.status == "cancelled"
+        assert item.error is None
+
+    def test_get_item_returns_item_by_comm_id(self, pending_store):
+        """get_item() is the public lookup the gate's race-check uses (issue #2193 PR4)."""
+        comm = make_comm("s1")
+        item = PendingItem(comm=comm, session_id="s1")
+        pending_store._pending["s1"] = [item]
+
+        assert pending_store.get_item("s1", comm.comm_id) is item
+
+    def test_get_item_returns_none_for_unknown_comm_id(self, pending_store):
+        assert pending_store.get_item("s1", "nonexistent") is None
+
+    @pytest.mark.asyncio
     async def test_clear_pending(self, pending_store, temp_session):
         sid, sdir = temp_session
         await pending_store.enqueue(sid, sdir, make_comm(sid, content="a"))
