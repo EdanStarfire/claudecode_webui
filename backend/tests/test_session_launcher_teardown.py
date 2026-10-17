@@ -1,15 +1,19 @@
-"""Regression tests for SessionLauncher.teardown_active_sdk() (issue #2197).
+"""Regression tests for SessionLauncher.teardown_active_sdk() (issue #2197, #2214).
 
 Covers the one shared helper that now consolidates the "get sdk ->
 terminate/disconnect -> settle sleep -> remove from _active_sdks" shape used by
 terminate_session/restart_session/reset_session (backend/session_launcher.py)
-and delete_session (backend/session_coordinator.py). The 3 real, pre-existing
-axes of variation across call sites (op choice, sleep-before-vs-after-delete
-ordering, disconnect-result-check/warning) are pinned here so a future change
-to the helper can't silently alter any one call site's behavior.
+and delete_session (backend/session_coordinator.py). Of the 3 axes #2197 found
+diverging across call sites, issue #2214 resolved 2: settle ordering is now
+unified on sleep-before-delete everywhere (delete_session's ordering flips;
+terminate_session gains a Docker-only settle it previously lacked), and the
+disconnect-result warning is removed entirely as redundant with disconnect()'s
+own exception logging. Only op choice (graceful=True -> disconnect(), restart/
+reset; graceful=False -> terminate(), terminate/delete) remains a real,
+intentional behavioral divergence across call sites, pinned here so a future
+change to the helper can't silently alter it.
 """
 
-import logging
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -108,7 +112,6 @@ class TestTeardownActiveSdkDirect:
                 session_id,
                 graceful=True,
                 settle_seconds=1.0,
-                settle_before_delete=True,
                 after_op=_after_op,
             )
 
@@ -116,7 +119,7 @@ class TestTeardownActiveSdkDirect:
         assert call_order == ["disconnect", "after_op", ("sleep", 1.0)]
 
     @pytest.mark.asyncio
-    async def test_settle_before_delete_true_sleeps_before_removal(self, temp_coordinator):
+    async def test_settle_sleeps_before_removal(self, temp_coordinator):
         coordinator = temp_coordinator
         session_id = "sess-settle-before"
         mock_sdk = AsyncMock()
@@ -132,33 +135,11 @@ class TestTeardownActiveSdkDirect:
                 ),
             )
             await coordinator._session_launcher.teardown_active_sdk(
-                session_id, graceful=True, settle_seconds=0.5, settle_before_delete=True
+                session_id, graceful=True, settle_seconds=0.5
             )
 
         assert session_id not in coordinator._active_sdks
         assert call_order == [("sleep", 0.5)]
-
-    @pytest.mark.asyncio
-    async def test_settle_before_delete_false_sleeps_after_removal(self, temp_coordinator):
-        coordinator = temp_coordinator
-        session_id = "sess-settle-after"
-        mock_sdk = AsyncMock()
-        coordinator._active_sdks[session_id] = mock_sdk
-
-        call_order = []
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(
-                SLEEP_TARGET,
-                _recording_sleep(
-                    call_order, coordinator=coordinator, session_id=session_id, expect_deleted=True
-                ),
-            )
-            await coordinator._session_launcher.teardown_active_sdk(
-                session_id, graceful=False, settle_seconds=0.2, settle_before_delete=False
-            )
-
-        assert session_id not in coordinator._active_sdks
-        assert call_order == [("sleep", 0.2)]
 
     @pytest.mark.asyncio
     async def test_graceful_true_calls_disconnect_not_terminate(self, temp_coordinator):
@@ -185,28 +166,9 @@ class TestTeardownActiveSdkDirect:
         mock_sdk.terminate.assert_called_once()
         mock_sdk.disconnect.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_warn_on_disconnect_failure_ignored_when_not_graceful(
-        self, temp_coordinator, caplog
-    ):
-        """terminate() has no result to check — warn_on_disconnect_failure must be a
-        silent no-op when graceful=False, even if somehow passed True."""
-        coordinator = temp_coordinator
-        session_id = "sess-warn-ignored"
-        mock_sdk = AsyncMock()
-        coordinator._active_sdks[session_id] = mock_sdk
-
-        with caplog.at_level(logging.WARNING, logger="backend.session_launcher"):
-            await coordinator._session_launcher.teardown_active_sdk(
-                session_id, graceful=False, warn_on_disconnect_failure=True
-            )
-
-        assert "disconnect returned False" not in caplog.text
-
-
 class TestTerminateSessionTeardown:
     @pytest.mark.asyncio
-    async def test_terminate_session_uses_terminate_with_no_sleep(
+    async def test_terminate_session_non_docker_uses_terminate_with_no_sleep(
         self, temp_coordinator, sample_session_config
     ):
         coordinator = temp_coordinator
@@ -217,10 +179,10 @@ class TestTerminateSessionTeardown:
 
         # SessionManager.terminate_session() has its own unrelated 0.1s placeholder
         # sleep (session_manager.py:810) — mocked out here so it can't be confused
-        # with teardown_active_sdk's own (absent, since settle_seconds defaults to
-        # 0.0 for this call site) settle sleep. asyncio.sleep is one shared module
-        # object, so any patch of it is process-global regardless of which file's
-        # `asyncio.sleep` spelling is used to install it.
+        # with teardown_active_sdk's own (absent for non-Docker sessions) settle
+        # sleep. asyncio.sleep is one shared module object, so any patch of it is
+        # process-global regardless of which file's `asyncio.sleep` spelling is
+        # used to install it.
         with pytest.MonkeyPatch.context() as mp:
             sleep_mock = AsyncMock()
             mp.setattr(SLEEP_TARGET, sleep_mock)
@@ -231,6 +193,37 @@ class TestTerminateSessionTeardown:
         mock_sdk.terminate.assert_called_once()
         mock_sdk.disconnect.assert_not_called()
         sleep_mock.assert_not_called()
+        assert session_id not in coordinator._active_sdks
+
+    @pytest.mark.asyncio
+    async def test_terminate_session_docker_enabled_sleeps_1_0_before_removal(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Issue #2214: Docker sessions get the #781 settle sleep on terminate too,
+        same as restart/reset already have — guards against an immediate
+        user-start racing a container still being removed by `docker --rm`."""
+        coordinator = temp_coordinator
+        sample_session_config["config"].docker_enabled = True
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        mock_sdk = AsyncMock()
+        coordinator._active_sdks[session_id] = mock_sdk
+
+        call_order = []
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                SLEEP_TARGET,
+                _recording_sleep(
+                    call_order, coordinator=coordinator, session_id=session_id, expect_deleted=False
+                ),
+            )
+            mp.setattr(coordinator.session_manager, "terminate_session", AsyncMock(return_value=True))
+            success = await coordinator.terminate_session(session_id)
+
+        assert success is True
+        mock_sdk.terminate.assert_called_once()
+        mock_sdk.disconnect.assert_not_called()
+        assert call_order == [("sleep", 1.0)]
         assert session_id not in coordinator._active_sdks
 
 
@@ -306,29 +299,6 @@ class TestRestartSessionTeardown:
 
         assert success is True
         assert call_order == ["disconnect", "recover_session", ("sleep", 1.0)]
-
-    @pytest.mark.asyncio
-    async def test_restart_session_warns_on_disconnect_failure(
-        self, temp_coordinator, sample_session_config, caplog
-    ):
-        coordinator = temp_coordinator
-        session_id = await coordinator.create_session(**sample_session_config)
-        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
-
-        mock_sdk = AsyncMock()
-        mock_sdk.disconnect.return_value = False
-        coordinator._active_sdks[session_id] = mock_sdk
-
-        with caplog.at_level(logging.WARNING, logger="backend.session_launcher"):
-            with pytest.MonkeyPatch.context() as mp:
-                mp.setattr(SLEEP_TARGET, AsyncMock())
-                mp.setattr(
-                    coordinator._session_launcher, "start_session", AsyncMock(return_value=True)
-                )
-                success = await coordinator.restart_session(session_id)
-
-        assert success is True
-        assert f"SDK disconnect returned False for session {session_id}" in caplog.text
 
     @pytest.mark.asyncio
     async def test_restart_session_no_active_sdk_still_calls_recover_session(
@@ -423,35 +393,9 @@ class TestResetSessionTeardown:
         assert success is True
         assert call_order == ["disconnect", "recover_session", ("sleep", 0.5)]
 
-    @pytest.mark.asyncio
-    async def test_reset_session_no_warning_on_disconnect_failure(
-        self, temp_coordinator, sample_session_config, caplog
-    ):
-        """Unlike restart_session, reset_session never checked the disconnect result
-        historically — warn_on_disconnect_failure must stay unset for this call site."""
-        coordinator = temp_coordinator
-        session_id = await coordinator.create_session(**sample_session_config)
-        coordinator.legion_system = None
-
-        mock_sdk = AsyncMock()
-        mock_sdk.disconnect.return_value = False
-        coordinator._active_sdks[session_id] = mock_sdk
-
-        with caplog.at_level(logging.WARNING, logger="backend.session_launcher"):
-            with pytest.MonkeyPatch.context() as mp:
-                mp.setattr(SLEEP_TARGET, AsyncMock())
-                mp.setattr(
-                    coordinator._session_launcher, "start_session", AsyncMock(return_value=True)
-                )
-                success = await coordinator.reset_session(session_id)
-
-        assert success is True
-        assert "disconnect returned False" not in caplog.text
-
-
 class TestDeleteSessionTeardown:
     @pytest.mark.asyncio
-    async def test_delete_session_terminates_and_deletes_before_sleep(
+    async def test_delete_session_terminates_and_sleeps_before_delete(
         self, temp_coordinator, sample_session_config
     ):
         coordinator = temp_coordinator
@@ -473,7 +417,7 @@ class TestDeleteSessionTeardown:
             mp.setattr(
                 SLEEP_TARGET,
                 _recording_sleep(
-                    call_order, coordinator=coordinator, session_id=session_id, expect_deleted=True
+                    call_order, coordinator=coordinator, session_id=session_id, expect_deleted=False
                 ),
             )
             mp.setattr(coordinator.session_manager, "terminate_session", AsyncMock(return_value=True))

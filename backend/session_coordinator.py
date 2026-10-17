@@ -1365,7 +1365,7 @@ class SessionCoordinator:
             # This ensures archive captures final "terminated" state (same pattern as dispose_minion)
             # Give SDK time to fully close
             await self._session_launcher.teardown_active_sdk(
-                session_id, graceful=False, settle_seconds=0.2, settle_before_delete=False
+                session_id, graceful=False, settle_seconds=0.2
             )
 
             # Update session state to terminated (so archive captures correct final_state)

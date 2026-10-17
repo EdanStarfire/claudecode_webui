@@ -1230,8 +1230,15 @@ class SessionLauncher:
             # Issue #520: Mark active ToolCalls as interrupted and store ToolCallUpdate entries
             self._callbacks.mark_session_tools_interrupted(session_id)
 
-            # Terminate SDK first
-            await self.teardown_active_sdk(session_id, graceful=False)
+            # Terminate SDK first. Issue #2214: Docker sessions get the same #781
+            # settle sleep restart/reset already have — an immediate user-start after
+            # terminate on a Docker session would otherwise race a container still
+            # being removed by `docker --rm`. Non-Docker sessions keep the fast path
+            # with no settle, since there's no container-removal latency to guard.
+            if _term_info and _term_info.config.get("docker_enabled"):
+                await self.teardown_active_sdk(session_id, graceful=False, settle_seconds=1.0)
+            else:
+                await self.teardown_active_sdk(session_id, graceful=False)
 
             _litellm_proxy_manager = self.litellm_proxy_manager
             if _litellm_proxy_manager is not None:
@@ -1319,23 +1326,26 @@ class SessionLauncher:
         *,
         graceful: bool,
         settle_seconds: float = 0.0,
-        settle_before_delete: bool = False,
-        warn_on_disconnect_failure: bool = False,
         after_op: Callable[[], Awaitable[None]] | None = None,
     ) -> bool:
         """Tear down the active SDK instance for a session, if any.
 
         Consolidates the "get sdk -> terminate/disconnect -> settle sleep -> remove
         from _active_sdks" shape shared by terminate_session/restart_session/
-        reset_session/delete_session (issue #2197). Callers differ along 3 real,
-        pre-existing axes that are preserved via parameters rather than unified:
-          - graceful=True uses sdk.disconnect() (restart/reset); graceful=False uses
-            sdk.terminate() (terminate_session/delete_session).
-          - settle_before_delete controls whether the settle sleep happens before or
-            after the dict entry is removed (restart/reset sleep-then-delete;
-            delete_session deletes-then-sleeps).
-          - warn_on_disconnect_failure only applies when graceful=True — terminate()
-            has no result to check, so this is silently ignored when graceful=False.
+        reset_session/delete_session (issue #2197). Of the 3 axes #2197 found
+        diverging across call sites, issue #2214's investigation resolved all 3:
+          - op choice (graceful=True -> sdk.disconnect(), restart/reset; graceful=False
+            -> sdk.terminate(), terminate_session/delete_session) is intentional and
+            stays a real parameter: disconnect() keeps the CLI session resumable,
+            which restart/reset need and terminate/delete don't.
+          - settle ordering is unified on sleep-before-delete everywhere: keeping the
+            _active_sdks entry during the settle sleep is what makes a concurrent
+            start/send see "already active" instead of racing a half-removed Docker
+            container (issue #781). There is no longer a settle_before_delete
+            parameter — the sleep always happens before the dict entry is removed.
+          - the disconnect-result warning is removed: disconnect() returns False only
+            from its own except branch, which already logs via logger.exception, so
+            the warning was a redundant second log line.
           - after_op (if given) runs immediately after the terminate/disconnect call,
             before the settle sleep — used by restart_session and reset_session to run
             recover_session() in the exact same slot it occupies today.
@@ -1347,22 +1357,17 @@ class SessionLauncher:
             return False
 
         if graceful:
-            disconnect_result = await sdk.disconnect()
-            if warn_on_disconnect_failure and not disconnect_result:
-                logger.warning(f"SDK disconnect returned False for session {session_id}")
+            await sdk.disconnect()
         else:
             await sdk.terminate()
 
         if after_op is not None:
             await after_op()
 
-        if settle_seconds and settle_before_delete:
+        if settle_seconds:
             await asyncio.sleep(settle_seconds)
 
         del self._active_sdks[session_id]
-
-        if settle_seconds and not settle_before_delete:
-            await asyncio.sleep(settle_seconds)
 
         return True
 
@@ -1408,8 +1413,6 @@ class SessionLauncher:
                 session_id,
                 graceful=True,
                 settle_seconds=1.0,
-                settle_before_delete=True,
-                warn_on_disconnect_failure=True,
                 after_op=lambda: self.session_manager.recover_session(session_id),
             )
             if not had_sdk:
@@ -1484,7 +1487,6 @@ class SessionLauncher:
                 session_id,
                 graceful=True,
                 settle_seconds=0.5,
-                settle_before_delete=True,
                 after_op=lambda: self.session_manager.recover_session(session_id),
             )
 
