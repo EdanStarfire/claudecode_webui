@@ -72,14 +72,11 @@ class TestHttpLogParsing:
     @pytest.fixture
     async def coordinator(self, tmp_path):
         """Create a minimal SessionCoordinator pointed at tmp_path."""
-        from unittest.mock import MagicMock
-
         from backend.session_coordinator import SessionCoordinator
 
         coord = SessionCoordinator.__new__(SessionCoordinator)
         coord.data_dir = tmp_path
         coord._session_resources = SessionResources(coordinator=coord)
-        coord._session_resources.logger = MagicMock()
         return coord
 
     @pytest.fixture
@@ -115,7 +112,7 @@ class TestHttpLogParsing:
         assert result["entries"][1]["allowed"] is False
 
     @pytest.mark.asyncio
-    async def test_malformed_json_lines_skipped(self, coordinator, proxy_dir, session_id):
+    async def test_malformed_json_lines_skipped(self, coordinator, proxy_dir, session_id, caplog):
         access_log = proxy_dir / "access.log"
         access_log.write_text(
             '{"ts": 1, "host": "ok.com", "method": "GET", "path": "/", "status": 200, "allowed": true, "credential_used": null, "scheme": "https", "port": 443, "bytes": 0}\n'
@@ -123,8 +120,13 @@ class TestHttpLogParsing:
             '{"ts": 2, "host": "ok2.com", "method": "GET", "path": "/x", "status": 200, "allowed": true, "credential_used": null, "scheme": "https", "port": 443, "bytes": 0}\n'
         )
 
-        result = await coordinator.get_proxy_logs(session_id, log_type="http", limit=200)
+        with caplog.at_level("WARNING"):
+            result = await coordinator.get_proxy_logs(session_id, log_type="http", limit=200)
         assert len(result["entries"]) == 2
+        assert any(
+            record.levelname == "WARNING" and "malformed HTTP proxy log line" in record.message
+            for record in caplog.records
+        )
 
     @pytest.mark.asyncio
     async def test_missing_log_file_returns_empty(self, coordinator, proxy_dir, session_id):
@@ -155,14 +157,11 @@ class TestHttpLogParsing:
 class TestDnsLogParsing:
     @pytest.fixture
     async def coordinator(self, tmp_path):
-        from unittest.mock import MagicMock
-
         from backend.session_coordinator import SessionCoordinator
 
         coord = SessionCoordinator.__new__(SessionCoordinator)
         coord.data_dir = tmp_path
         coord._session_resources = SessionResources(coordinator=coord)
-        coord._session_resources.logger = MagicMock()
         return coord
 
     @pytest.fixture
@@ -232,14 +231,11 @@ class TestDnsLogParsing:
 class TestSocks5LogParsing:
     @pytest.fixture
     async def coordinator(self, tmp_path):
-        from unittest.mock import MagicMock
-
         from backend.session_coordinator import SessionCoordinator
 
         coord = SessionCoordinator.__new__(SessionCoordinator)
         coord.data_dir = tmp_path
         coord._session_resources = SessionResources(coordinator=coord)
-        coord._session_resources.logger = MagicMock()
         return coord
 
     @pytest.fixture
@@ -284,7 +280,7 @@ class TestSocks5LogParsing:
         assert result == {"entries": [], "total_lines": 0, "log_type": "socks5"}
 
     @pytest.mark.asyncio
-    async def test_malformed_lines_skipped(self, coordinator, proxy_dir, session_id):
+    async def test_malformed_lines_skipped(self, coordinator, proxy_dir, session_id, caplog):
         socks5_log = proxy_dir / "socks5.log"
         socks5_log.write_text(
             '{"ts": "2026-04-30T12:34:56+0000", "host": "github.com", "port": 22, "allowed": true, "reason": "ok"}\n'
@@ -292,10 +288,15 @@ class TestSocks5LogParsing:
             '{"ts": "2026-04-30T12:35:00+0000", "host": "example.com", "port": 22, "allowed": false, "reason": "not_allowlisted"}\n'
         )
 
-        result = await coordinator.get_proxy_logs(session_id, log_type="socks5", limit=200)
+        with caplog.at_level("WARNING"):
+            result = await coordinator.get_proxy_logs(session_id, log_type="socks5", limit=200)
         assert len(result["entries"]) == 2
         assert result["entries"][0]["host"] == "github.com"
         assert result["entries"][1]["host"] == "example.com"
+        assert any(
+            record.levelname == "WARNING" and "malformed SOCKS5 proxy log line" in record.message
+            for record in caplog.records
+        )
 
     @pytest.mark.asyncio
     async def test_invalid_log_type_not_routed_to_socks5(self, coordinator, proxy_dir, session_id):
