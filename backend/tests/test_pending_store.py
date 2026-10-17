@@ -1,0 +1,397 @@
+"""Tests for PendingStore (issue #2193, AC10)."""
+
+import json
+import tempfile
+import uuid
+from pathlib import Path
+
+import pytest
+
+from backend.models.legion_models import Comm, CommType, DeliveryPolicy, SenderType
+from backend.pending_store import PendingItem, PendingStore
+
+
+def make_comm(session_id: str, *, comm_id: str | None = None, content: str = "hello", **overrides) -> Comm:
+    """Build a valid Comm addressed to `session_id` (from the user, unless overridden)."""
+    kwargs = {
+        "comm_id": comm_id or str(uuid.uuid4()),
+        "from_user": True,
+        "to_minion_id": session_id,
+        "content": content,
+    }
+    kwargs.update(overrides)
+    return Comm(**kwargs)
+
+
+@pytest.fixture
+def pending_store():
+    return PendingStore()
+
+
+@pytest.fixture
+def temp_session():
+    """Provide a temp directory simulating a session directory, plus a session_id."""
+    with tempfile.TemporaryDirectory() as tmp:
+        yield "test-session-001", Path(tmp)
+
+
+class TestPendingItem:
+    """PendingItem dataclass basics."""
+
+    def test_defaults(self):
+        comm = make_comm("s1")
+        item = PendingItem(comm=comm, session_id="s1")
+        assert item.status == "pending"
+        assert item.position == 0
+        assert item.created_at == 0.0
+        assert item.delivered_at is None
+        assert item.error is None
+        assert item.inject_timestamp is True
+
+    def test_to_dict_from_dict_roundtrip_fully_populated_comm(self):
+        comm = make_comm(
+            "s1",
+            from_user=False,
+            from_minion_id="minion-x",
+            from_minion_name="Minion X",
+            to_minion_name="Target",
+            summary="a summary",
+            content="full content",
+            comm_type=CommType.TASK,
+            delivery=DeliveryPolicy.WHEN_IDLE,
+            attachments=[
+                {
+                    "name": "file.txt",
+                    "size": 123,
+                    "mime_type": "text/plain",
+                    "resource_id": "res-1",
+                    "session_id": "s1",
+                }
+            ],
+            in_reply_to="comm-parent",
+            related_task_id="task-1",
+            metadata={"key": "value"},
+            visible_to_user=False,
+            timestamp=1700000000.0,
+            auto_start=True,
+            reset_first=True,
+            fire_at=1700000500.0,
+            sender_type=SenderType.MINION,
+            sender_id="minion-x",
+        )
+        item = PendingItem(
+            comm=comm,
+            session_id="s1",
+            status="pending",
+            position=2,
+            created_at=1700000001.0,
+            delivered_at=None,
+            error=None,
+            inject_timestamp=False,
+        )
+
+        d = item.to_dict()
+        assert d["comm"] == comm.to_dict()
+        assert d["session_id"] == "s1"
+        assert d["position"] == 2
+        assert d["inject_timestamp"] is False
+
+        restored = PendingItem.from_dict(d)
+        assert isinstance(restored.comm, Comm)
+        assert restored.comm == comm
+        assert restored.comm.attachments == comm.attachments
+        assert restored.comm.sender_type == SenderType.MINION
+        assert restored.comm.delivery == DeliveryPolicy.WHEN_IDLE
+        assert restored.session_id == item.session_id
+        assert restored.position == item.position
+        assert restored.created_at == item.created_at
+        assert restored.inject_timestamp == item.inject_timestamp
+
+    def test_from_dict_ignores_unknown_keys(self):
+        comm = make_comm("s1")
+        d = {"comm": comm.to_dict(), "session_id": "s1", "extra_field": True}
+        item = PendingItem.from_dict(d)
+        assert item.session_id == "s1"
+        assert not hasattr(item, "extra_field")
+
+
+class TestPendingStoreCRUD:
+    """Core CRUD operations."""
+
+    @pytest.mark.asyncio
+    async def test_enqueue_returns_item(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        comm = make_comm(sid, content="msg 1")
+        item = await pending_store.enqueue(sid, sdir, comm)
+        assert item.comm.content == "msg 1"
+        assert item.status == "pending"
+        assert item.position == 0
+
+    @pytest.mark.asyncio
+    async def test_enqueue_sequential_positions(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        i1 = await pending_store.enqueue(sid, sdir, make_comm(sid, content="first"))
+        i2 = await pending_store.enqueue(sid, sdir, make_comm(sid, content="second"))
+        assert i2.position > i1.position
+
+    @pytest.mark.asyncio
+    async def test_enqueue_respects_max_pending_size(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        await pending_store.enqueue(sid, sdir, make_comm(sid, content="a"), max_pending_size=2)
+        await pending_store.enqueue(sid, sdir, make_comm(sid, content="b"), max_pending_size=2)
+        with pytest.raises(ValueError, match="Pending store full"):
+            await pending_store.enqueue(sid, sdir, make_comm(sid, content="c"), max_pending_size=2)
+
+    @pytest.mark.asyncio
+    async def test_mark_delivered(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        item = await pending_store.enqueue(sid, sdir, make_comm(sid))
+        result = await pending_store.mark_delivered(sid, sdir, item.comm.comm_id)
+        assert result.status == "delivered"
+        assert result.delivered_at is not None
+
+    @pytest.mark.asyncio
+    async def test_mark_failed(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        item = await pending_store.enqueue(sid, sdir, make_comm(sid))
+        result = await pending_store.mark_failed(sid, sdir, item.comm.comm_id, "boom")
+        assert result.status == "failed"
+        assert result.error == "boom"
+
+    @pytest.mark.asyncio
+    async def test_cancel_pending_item(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        item = await pending_store.enqueue(sid, sdir, make_comm(sid, content="cancel me"))
+        result = await pending_store.cancel(sid, sdir, item.comm.comm_id)
+        assert result is not None
+        assert result.status == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_cancel_non_pending_returns_none(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        item = await pending_store.enqueue(sid, sdir, make_comm(sid))
+        await pending_store.mark_delivered(sid, sdir, item.comm.comm_id)
+        result = await pending_store.cancel(sid, sdir, item.comm.comm_id)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_cancel_unknown_returns_none(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        result = await pending_store.cancel(sid, sdir, "nonexistent")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_clear_pending(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        await pending_store.enqueue(sid, sdir, make_comm(sid, content="a"))
+        i2 = await pending_store.enqueue(sid, sdir, make_comm(sid, content="b"))
+        await pending_store.mark_delivered(sid, sdir, i2.comm.comm_id)
+        await pending_store.enqueue(sid, sdir, make_comm(sid, content="c"))
+
+        count = await pending_store.clear_pending(sid, sdir)
+        assert count == 2  # a and c, not b (already delivered)
+        assert len(pending_store.get_pending(sid)) == 0
+
+    @pytest.mark.asyncio
+    async def test_clear_history_removes_terminal_items_only(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        pending_item = await pending_store.enqueue(sid, sdir, make_comm(sid, content="pending"))
+        delivered_item = await pending_store.enqueue(sid, sdir, make_comm(sid, content="delivered"))
+        failed_item = await pending_store.enqueue(sid, sdir, make_comm(sid, content="failed"))
+        await pending_store.mark_delivered(sid, sdir, delivered_item.comm.comm_id)
+        await pending_store.mark_failed(sid, sdir, failed_item.comm.comm_id, "err")
+
+        count = await pending_store.clear_history(sid, sdir)
+
+        assert count == 2
+        remaining = pending_store.get_all(sid)
+        assert len(remaining) == 1
+        assert remaining[0].comm.comm_id == pending_item.comm.comm_id
+
+    @pytest.mark.asyncio
+    async def test_clear_history_empty_returns_zero(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        await pending_store.enqueue(sid, sdir, make_comm(sid, content="pending only"))
+        count = await pending_store.clear_history(sid, sdir)
+        assert count == 0
+
+
+class TestPendingStoreValidation:
+    """enqueue() routing guards."""
+
+    @pytest.mark.asyncio
+    async def test_enqueue_rejects_to_user_comm(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        comm = Comm(comm_id=str(uuid.uuid4()), from_user=True, to_user=True, content="for the user")
+        with pytest.raises(ValueError):
+            await pending_store.enqueue(sid, sdir, comm)
+
+    @pytest.mark.asyncio
+    async def test_enqueue_rejects_session_id_mismatch(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        comm = make_comm("some-other-session")
+        with pytest.raises(ValueError, match="does not match session_id"):
+            await pending_store.enqueue(sid, sdir, comm)
+
+    @pytest.mark.asyncio
+    async def test_enqueue_propagates_comm_validate_error(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        # Neither to_user nor to_minion_id set -> comm.validate() raises before our own guard.
+        comm = Comm(comm_id=str(uuid.uuid4()), from_user=True, content="nowhere")
+        with pytest.raises(ValueError, match="exactly one destination"):
+            await pending_store.enqueue(sid, sdir, comm)
+
+
+class TestPendingStorePersistence:
+    """JSONL persistence and replay-from-log, simulating a restart via two instances."""
+
+    @pytest.mark.asyncio
+    async def test_enqueue_writes_jsonl(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        await pending_store.enqueue(sid, sdir, make_comm(sid, content="hello"))
+
+        ledger_file = sdir / "pending.jsonl"
+        assert ledger_file.exists()
+        lines = ledger_file.read_text().strip().split('\n')
+        assert len(lines) == 1
+        entry = json.loads(lines[0])
+        assert entry["type"] == "enqueue"
+        assert entry["comm"]["content"] == "hello"
+
+    @pytest.mark.asyncio
+    async def test_replay_rebuilds_state_across_two_instances(self, temp_session):
+        sid, sdir = temp_session
+
+        # Phase 1: populate with one store instance (simulates pre-restart process)
+        store1 = PendingStore()
+        i1 = await store1.enqueue(sid, sdir, make_comm(sid, content="first"))
+        i2 = await store1.enqueue(sid, sdir, make_comm(sid, content="second"))
+        await store1.mark_delivered(sid, sdir, i1.comm.comm_id)
+        await store1.cancel(sid, sdir, i2.comm.comm_id)
+        i3 = await store1.enqueue(sid, sdir, make_comm(sid, content="third"))
+
+        # Phase 2: a brand-new store instance replays the on-disk log (simulates restart)
+        store2 = PendingStore()
+        items = await store2.load(sid, sdir)
+        assert len(items) == 3
+        by_id = {i.comm.comm_id: i for i in items}
+        assert by_id[i1.comm.comm_id].status == "delivered"
+        assert by_id[i1.comm.comm_id].comm.content == "first"
+        assert by_id[i2.comm.comm_id].status == "cancelled"
+        assert by_id[i3.comm.comm_id].status == "pending"
+        assert len(store2.get_pending(sid)) == 1
+
+    @pytest.mark.asyncio
+    async def test_replay_empty_file(self, temp_session):
+        sid, sdir = temp_session
+        store = PendingStore()
+        items = await store.load(sid, sdir)
+        assert items == []
+
+    @pytest.mark.asyncio
+    async def test_replay_malformed_line_skipped(self, temp_session):
+        sid, sdir = temp_session
+        comm = make_comm(sid, comm_id="comm-ok", content="ok")
+        ledger_file = sdir / "pending.jsonl"
+        good_entry = json.dumps({
+            "type": "enqueue",
+            "comm": comm.to_dict(),
+            "session_id": sid,
+            "position": 0,
+            "created_at": 0.0,
+        })
+        ledger_file.write_text(f"not json\n{good_entry}\n")
+
+        store = PendingStore()
+        items = await store.load(sid, sdir)
+        assert len(items) == 1
+        assert items[0].comm.comm_id == "comm-ok"
+
+    @pytest.mark.asyncio
+    async def test_replay_preserves_failed_error(self, temp_session):
+        sid, sdir = temp_session
+        store1 = PendingStore()
+        item = await store1.enqueue(sid, sdir, make_comm(sid))
+        await store1.mark_failed(sid, sdir, item.comm.comm_id, "test error")
+
+        store2 = PendingStore()
+        items = await store2.load(sid, sdir)
+        assert items[0].status == "failed"
+        assert items[0].error == "test error"
+
+    @pytest.mark.asyncio
+    async def test_clear_history_persists_across_reload(self, temp_session):
+        sid, sdir = temp_session
+        store1 = PendingStore()
+        pending_item = await store1.enqueue(sid, sdir, make_comm(sid, content="pending"))
+        delivered_item = await store1.enqueue(sid, sdir, make_comm(sid, content="delivered"))
+        await store1.mark_delivered(sid, sdir, delivered_item.comm.comm_id)
+        await store1.clear_history(sid, sdir)
+
+        store2 = PendingStore()
+        items = await store2.load(sid, sdir)
+        assert len(items) == 1
+        assert items[0].comm.comm_id == pending_item.comm.comm_id
+
+    @pytest.mark.asyncio
+    async def test_clear_history_then_new_terminal_items_persist(self, temp_session):
+        """Items added after clear must not be dropped on reload (boundary guard)."""
+        sid, sdir = temp_session
+        store1 = PendingStore()
+        old_item = await store1.enqueue(sid, sdir, make_comm(sid, content="old"))
+        await store1.mark_delivered(sid, sdir, old_item.comm.comm_id)
+        await store1.clear_history(sid, sdir)
+
+        new_item = await store1.enqueue(sid, sdir, make_comm(sid, content="new"))
+        await store1.mark_delivered(sid, sdir, new_item.comm.comm_id)
+
+        store2 = PendingStore()
+        items = await store2.load(sid, sdir)
+        comm_ids = {i.comm.comm_id for i in items}
+        assert new_item.comm.comm_id in comm_ids
+        assert old_item.comm.comm_id not in comm_ids
+
+
+class TestPendingStorePagination:
+    """get_page() contract parity with QueueManager.get_queue_page()."""
+
+    @pytest.mark.asyncio
+    async def test_get_page_paginates_most_recent_first(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        await pending_store.enqueue(sid, sdir, make_comm(sid, content="a"))
+        await pending_store.enqueue(sid, sdir, make_comm(sid, content="b"))
+        await pending_store.enqueue(sid, sdir, make_comm(sid, content="c"))
+
+        page = pending_store.get_page(sid, limit=2, offset=0)
+        assert page["total"] == 3
+        assert page["pending_count"] == 3
+        assert page["limit"] == 2
+        assert page["offset"] == 0
+        assert page["has_more"] is True
+        assert [i["comm"]["content"] for i in page["items"]] == ["c", "b"]
+
+        next_page = pending_store.get_page(sid, limit=2, offset=2)
+        assert next_page["has_more"] is False
+        assert [i["comm"]["content"] for i in next_page["items"]] == ["a"]
+
+    def test_get_page_empty_session(self, pending_store):
+        page = pending_store.get_page("no-such-session")
+        assert page == {
+            "items": [],
+            "total": 0,
+            "limit": 100,
+            "offset": 0,
+            "has_more": False,
+            "pending_count": 0,
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_page_pending_count_excludes_terminal(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        await pending_store.enqueue(sid, sdir, make_comm(sid, content="a"))
+        delivered = await pending_store.enqueue(sid, sdir, make_comm(sid, content="b"))
+        await pending_store.mark_delivered(sid, sdir, delivered.comm.comm_id)
+
+        page = pending_store.get_page(sid)
+        assert page["total"] == 2
+        assert page["pending_count"] == 1
