@@ -10,7 +10,7 @@ import pytest
 
 from backend.delivery_gate import DeliveryGate
 from backend.legion_system import LegionSystem
-from backend.models.legion_models import Comm, CommType, InterruptPriority
+from backend.models.legion_models import Comm, CommType, DeliveryPolicy
 
 
 @pytest.fixture
@@ -815,7 +815,7 @@ class TestHaltPivotRunGateBeforeInterrupt:
             to_minion_id="test-minion-123",
             content="halt now",
             comm_type=CommType.TASK,
-            interrupt_priority=InterruptPriority.HALT,
+            delivery=DeliveryPolicy.HALT,
         )
 
         result = await comm_router._send_to_minion(comm)
@@ -836,7 +836,7 @@ class TestHaltPivotRunGateBeforeInterrupt:
             to_minion_id="test-minion-123",
             content="pivot now",
             comm_type=CommType.TASK,
-            interrupt_priority=InterruptPriority.PIVOT,
+            delivery=DeliveryPolicy.PIVOT,
         )
 
         result = await comm_router._send_to_minion(comm)

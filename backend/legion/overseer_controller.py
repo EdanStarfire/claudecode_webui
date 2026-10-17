@@ -147,7 +147,7 @@ class OverseerController:
             ValueError: If parent doesn't exist, name duplicate, or legion at capacity
             PermissionError: If parent is not a valid overseer
         """
-        from backend.models.legion_models import Comm, CommType, InterruptPriority
+        from backend.models.legion_models import Comm, CommType, DeliveryPolicy
 
         # 1. Get parent minion session
         parent_session = await self.system.session_port.session_manager.get_session_info(parent_overseer_id)
@@ -237,7 +237,7 @@ class OverseerController:
             summary=f"Spawned {name}",
             content=f"**{parent_session.name}** spawned minion **{name}** ({role})",
             comm_type=CommType.SPAWN,
-            interrupt_priority=InterruptPriority.NONE,
+            delivery=DeliveryPolicy.IMMEDIATE,
             visible_to_user=True
         )
         await self.system.comm_router.route_comm(spawn_comm)
@@ -303,7 +303,7 @@ class OverseerController:
             ValueError: If child not found
             PermissionError: If caller is not parent of child
         """
-        from backend.models.legion_models import Comm, CommType, InterruptPriority
+        from backend.models.legion_models import Comm, CommType, DeliveryPolicy
 
         # 1. Get parent session
         parent_session = await self.system.session_port.session_manager.get_session_info(parent_overseer_id)
@@ -420,7 +420,7 @@ class OverseerController:
                 f" (and {descendants_disposed} descendants)" if descendants_disposed > 0 else ""
             ),
             comm_type=CommType.DISPOSE,
-            interrupt_priority=InterruptPriority.NONE,
+            delivery=DeliveryPolicy.IMMEDIATE,
             visible_to_user=True
         )
         await self.system.comm_router.route_comm(dispose_comm)
@@ -478,7 +478,7 @@ class OverseerController:
         Raises:
             ValueError: On self-reparent, cross-legion, cycle, or MCP authority violation
         """
-        from backend.models.legion_models import Comm, CommType, InterruptPriority
+        from backend.models.legion_models import Comm, CommType, DeliveryPolicy
 
         if subject_id == new_parent_id:
             raise ValueError("Cannot reparent a minion to itself")
@@ -634,7 +634,7 @@ class OverseerController:
                 f"from **{old_parent_name}** to **{new_parent_label}**{extra}"
             ),
             comm_type=CommType.REPARENT,
-            interrupt_priority=InterruptPriority.NONE,
+            delivery=DeliveryPolicy.IMMEDIATE,
             visible_to_user=True,
         )
         await self.system.comm_router.route_comm(reparent_comm)

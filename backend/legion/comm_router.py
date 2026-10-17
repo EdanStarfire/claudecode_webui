@@ -21,7 +21,7 @@ from backend.models.legion_models import (
     SYSTEM_MINION_NAME,
     Comm,
     CommType,
-    InterruptPriority,
+    DeliveryPolicy,
 )
 from backend.session_manager import SessionState
 from shared.logging_config import get_logger
@@ -401,7 +401,7 @@ class CommRouter:
                 ]
 
             # Handle interrupt priority (issue #748)
-            if comm.interrupt_priority == InterruptPriority.HALT:
+            if comm.delivery == DeliveryPolicy.HALT:
                 # HALT: interrupt only — do NOT deliver message to the SDK.
                 # Sending a message via client.query() creates a new conversation
                 # turn that the minion would process after the interrupt, defeating
@@ -419,7 +419,7 @@ class CommRouter:
                 legion_logger.info(f"HALT comm {comm.comm_id} from {from_name} - minion {comm.to_minion_id} interrupted")
                 return True
 
-            if comm.interrupt_priority == InterruptPriority.PIVOT:
+            if comm.delivery == DeliveryPolicy.PIVOT:
                 # PIVOT: interrupt first to stop current work, then deliver new direction.
                 legion_logger.info(f"Comm {comm.comm_id} has PIVOT priority - interrupting then sending to {comm.to_minion_id}")
                 try:
@@ -513,7 +513,7 @@ class CommRouter:
                 to_user=False,
                 content=error_message,
                 comm_type=CommType.SYSTEM,  # Use SYSTEM for system-generated messages
-                interrupt_priority=InterruptPriority.NONE,
+                delivery=DeliveryPolicy.IMMEDIATE,
                 in_reply_to=original_comm_id,  # Reference the failed comm
                 visible_to_user=True
             )
