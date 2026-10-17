@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from shared.logging_config import get_logger
 
-from .models.legion_models import Comm, CommType, InterruptPriority
+from .models.legion_models import Comm, CommType, DeliveryPolicy
 from .session_lifecycle import is_errored
 
 if TYPE_CHECKING:
@@ -261,7 +261,11 @@ class QueueProcessor:
                     to_minion_id=session_id,
                     content=item.content,
                     comm_type=CommType.SYSTEM,
-                    interrupt_priority=InterruptPriority.NONE,
+                    # Semantically correct label for a queue item (when-idle delivery);
+                    # nothing reads comm.delivery here yet — PR3 is where the gate starts
+                    # branching on it instead of calling prepare_for_send()/send_queued()/
+                    # wait_until_idle() directly and unconditionally as it does today.
+                    delivery=DeliveryPolicy.WHEN_IDLE,
                     metadata=item.metadata or {},
                 )
 

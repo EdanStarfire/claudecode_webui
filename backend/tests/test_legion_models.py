@@ -4,7 +4,8 @@ Tests for Legion data models.
 Tests the core data structures in src/models/legion_models.py:
 - Comm dataclass (validation, serialization)
 - CommType enum
-- InterruptPriority enum
+- DeliveryPolicy enum
+- SenderType enum
 - Constants (USER_MINION_ID, SYSTEM_MINION_ID, RESERVED_MINION_IDS)
 """
 
@@ -20,7 +21,9 @@ from backend.models.legion_models import (
     USER_MINION_ID,
     Comm,
     CommType,
-    InterruptPriority,
+    DeliveryPolicy,
+    SenderType,
+    default_delivery_for_type,
 )
 
 
@@ -49,26 +52,88 @@ class TestCommType:
         assert CommType("question") == CommType.QUESTION
 
 
-class TestInterruptPriority:
-    """Tests for InterruptPriority enum."""
+class TestDeliveryPolicy:
+    """Tests for DeliveryPolicy enum."""
 
     def test_all_values_exist(self):
-        """Verify all expected InterruptPriority values are defined."""
-        expected = {"NONE", "HALT", "PIVOT", "CRITICAL"}
-        actual = {ip.name for ip in InterruptPriority}
+        """Verify all expected DeliveryPolicy values are defined."""
+        expected = {"IMMEDIATE", "WHEN_IDLE", "PIVOT", "HALT"}
+        actual = {dp.name for dp in DeliveryPolicy}
         assert actual == expected
 
     def test_value_strings(self):
         """Verify enum values are lowercase strings."""
-        assert InterruptPriority.NONE.value == "none"
-        assert InterruptPriority.HALT.value == "halt"
-        assert InterruptPriority.PIVOT.value == "pivot"
-        assert InterruptPriority.CRITICAL.value == "critical"
+        assert DeliveryPolicy.IMMEDIATE.value == "immediate"
+        assert DeliveryPolicy.WHEN_IDLE.value == "when_idle"
+        assert DeliveryPolicy.PIVOT.value == "pivot"
+        assert DeliveryPolicy.HALT.value == "halt"
 
     def test_from_string(self):
-        """Test creating InterruptPriority from string value."""
-        assert InterruptPriority("none") == InterruptPriority.NONE
-        assert InterruptPriority("halt") == InterruptPriority.HALT
+        """Test creating DeliveryPolicy from string value."""
+        assert DeliveryPolicy("immediate") == DeliveryPolicy.IMMEDIATE
+        assert DeliveryPolicy("when_idle") == DeliveryPolicy.WHEN_IDLE
+        assert DeliveryPolicy("halt") == DeliveryPolicy.HALT
+        assert DeliveryPolicy("pivot") == DeliveryPolicy.PIVOT
+
+
+class TestSenderType:
+    """Tests for SenderType enum and Comm.__post_init__ inference."""
+
+    def test_all_values_exist(self):
+        """Verify all expected SenderType values are defined."""
+        expected = {"USER", "MINION", "SCHEDULE", "EXTERNAL", "SYSTEM"}
+        actual = {st.name for st in SenderType}
+        assert actual == expected
+
+    def test_infers_user(self):
+        """from_user=True infers SenderType.USER."""
+        comm = Comm(comm_id="test", from_user=True, to_minion_id="minion-123")
+        assert comm.sender_type == SenderType.USER
+
+    def test_infers_system(self):
+        """from_minion_id == SYSTEM_MINION_ID infers SenderType.SYSTEM."""
+        comm = Comm(comm_id="test", from_minion_id=SYSTEM_MINION_ID, to_user=True)
+        assert comm.sender_type == SenderType.SYSTEM
+
+    def test_infers_minion(self):
+        """Any other from_minion_id infers SenderType.MINION."""
+        comm = Comm(comm_id="test", from_minion_id="minion-123", to_user=True)
+        assert comm.sender_type == SenderType.MINION
+
+    def test_explicit_sender_type_not_overridden(self):
+        """An explicitly-supplied sender_type/sender_id passes through untouched."""
+        comm = Comm(
+            comm_id="test",
+            from_minion_id="minion-123",
+            to_user=True,
+            sender_type=SenderType.MINION,
+            sender_id="x",
+        )
+        assert comm.sender_type == SenderType.MINION
+        assert comm.sender_id == "x"
+
+
+class TestDefaultDeliveryForType:
+    """Tests for default_delivery_for_type() (issue #2193 AC2)."""
+
+    @pytest.mark.parametrize(
+        ("comm_type", "expected"),
+        [
+            (CommType.TASK, DeliveryPolicy.IMMEDIATE),
+            (CommType.QUESTION, DeliveryPolicy.IMMEDIATE),
+            (CommType.REPORT, DeliveryPolicy.WHEN_IDLE),
+            (CommType.INFO, DeliveryPolicy.WHEN_IDLE),
+            (CommType.HALT, DeliveryPolicy.HALT),
+            (CommType.PIVOT, DeliveryPolicy.PIVOT),
+            (CommType.THOUGHT, DeliveryPolicy.IMMEDIATE),
+            (CommType.SPAWN, DeliveryPolicy.IMMEDIATE),
+            (CommType.DISPOSE, DeliveryPolicy.IMMEDIATE),
+            (CommType.REPARENT, DeliveryPolicy.IMMEDIATE),
+            (CommType.SYSTEM, DeliveryPolicy.IMMEDIATE),
+        ],
+    )
+    def test_default_per_type(self, comm_type, expected):
+        assert default_delivery_for_type(comm_type) == expected
 
 
 class TestConstants:
@@ -184,7 +249,7 @@ class TestCommSerialization:
             summary="Test summary",
             content="Test content",
             comm_type=CommType.TASK,
-            interrupt_priority=InterruptPriority.NONE
+            delivery=DeliveryPolicy.IMMEDIATE
         )
 
         data = comm.to_dict()
@@ -197,7 +262,7 @@ class TestCommSerialization:
         assert data["summary"] == "Test summary"
         assert data["content"] == "Test content"
         assert data["comm_type"] == "task"
-        assert data["interrupt_priority"] == "none"
+        assert data["delivery"] == "immediate"
 
     def test_to_dict_all_fields(self):
         """Test to_dict includes all fields."""
@@ -210,7 +275,7 @@ class TestCommSerialization:
             summary="Summary",
             content="Content",
             comm_type=CommType.REPORT,
-            interrupt_priority=InterruptPriority.HALT,
+            delivery=DeliveryPolicy.HALT,
             in_reply_to="prev-comm-id",
             related_task_id="task-123",
             metadata={"key": "value"},
@@ -241,7 +306,7 @@ class TestCommSerialization:
             "summary": "Test",
             "content": "Content",
             "comm_type": "task",
-            "interrupt_priority": "none",
+            "delivery": "immediate",
             "in_reply_to": None,
             "related_task_id": None,
             "metadata": {},
@@ -255,7 +320,7 @@ class TestCommSerialization:
         assert comm.from_user is True
         assert comm.to_minion_id == "minion-123"
         assert comm.comm_type == CommType.TASK
-        assert comm.interrupt_priority == InterruptPriority.NONE
+        assert comm.delivery == DeliveryPolicy.IMMEDIATE
 
     def test_roundtrip_serialization(self):
         """Test that to_dict -> from_dict preserves all data."""
@@ -267,7 +332,7 @@ class TestCommSerialization:
             summary="Important report",
             content="Detailed content here",
             comm_type=CommType.REPORT,
-            interrupt_priority=InterruptPriority.HALT,
+            delivery=DeliveryPolicy.HALT,
             in_reply_to="prev-id",
             related_task_id="task-id",
             metadata={"foo": "bar", "count": 42},
@@ -285,7 +350,7 @@ class TestCommSerialization:
         assert restored.summary == original.summary
         assert restored.content == original.content
         assert restored.comm_type == original.comm_type
-        assert restored.interrupt_priority == original.interrupt_priority
+        assert restored.delivery == original.delivery
         assert restored.in_reply_to == original.in_reply_to
         assert restored.related_task_id == original.related_task_id
         assert restored.metadata == original.metadata
@@ -305,7 +370,7 @@ class TestCommSerialization:
             "summary": "",
             "content": "",
             "comm_type": "task",
-            "interrupt_priority": "none",
+            "delivery": "immediate",
             "in_reply_to": None,
             "related_task_id": None,
             "metadata": {},
@@ -329,7 +394,7 @@ class TestCommSerialization:
             "summary": "",
             "content": "",
             "comm_type": "task",
-            "interrupt_priority": "none",
+            "delivery": "immediate",
             "in_reply_to": None,
             "related_task_id": None,
             "metadata": {},
@@ -355,7 +420,7 @@ class TestCommSerialization:
             "summary": "",
             "content": "",
             "comm_type": "task",
-            "interrupt_priority": "none",
+            "delivery": "immediate",
             "in_reply_to": None,
             "related_task_id": None,
             "metadata": {},
@@ -383,7 +448,7 @@ class TestCommSerialization:
             "summary": "",
             "content": "",
             "comm_type": "task",
-            "interrupt_priority": "none",
+            "delivery": "immediate",
             "in_reply_to": None,
             "related_task_id": None,
             "metadata": {},
@@ -398,6 +463,38 @@ class TestCommSerialization:
         assert data["comm_type"] == original_type
         assert isinstance(data["comm_type"], str)
 
+    @pytest.mark.parametrize(
+        ("old_value", "expected"),
+        [
+            ("none", DeliveryPolicy.IMMEDIATE),
+            ("halt", DeliveryPolicy.HALT),
+            ("pivot", DeliveryPolicy.PIVOT),
+        ],
+    )
+    def test_from_dict_interrupt_priority_backward_compat(self, old_value, expected):
+        """Old persisted comms keyed on interrupt_priority (pre-#2193) still deserialize."""
+        data = {
+            "comm_id": "test",
+            "from_user": True,
+            "from_minion_id": None,
+            "from_minion_name": None,
+            "to_minion_id": "minion-1",
+            "to_user": False,
+            "to_minion_name": None,
+            "summary": "",
+            "content": "",
+            "comm_type": "task",
+            "interrupt_priority": old_value,
+            "in_reply_to": None,
+            "related_task_id": None,
+            "metadata": {},
+            "visible_to_user": True,
+            "timestamp": 1234567890.0,
+        }
+
+        comm = Comm.from_dict(data)
+        assert comm.delivery == expected
+
 
 class TestCommDefaults:
     """Tests for Comm default field values."""
@@ -407,10 +504,10 @@ class TestCommDefaults:
         comm = Comm(comm_id="test")
         assert comm.comm_type == CommType.SYSTEM
 
-    def test_default_interrupt_priority(self):
-        """Default interrupt_priority should be NONE."""
+    def test_default_delivery(self):
+        """Default delivery should be IMMEDIATE."""
         comm = Comm(comm_id="test")
-        assert comm.interrupt_priority == InterruptPriority.NONE
+        assert comm.delivery == DeliveryPolicy.IMMEDIATE
 
     def test_default_visible_to_user(self):
         """Default visible_to_user should be True."""

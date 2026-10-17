@@ -561,7 +561,7 @@ class LegionMCPTools:
         """
         import uuid
 
-        from backend.models.legion_models import Comm, CommType, InterruptPriority
+        from backend.models.legion_models import Comm, CommType, DeliveryPolicy
 
         # Get current minion context (from session_id in SDK context)
         # For now, we'll need to pass this through - placeholder
@@ -595,14 +595,14 @@ class LegionMCPTools:
         if interrupt_priority_str not in valid_priorities:
             return self._err(f"Error: Invalid interrupt_priority '{interrupt_priority_str}'. Valid values are: {', '.join(valid_priorities)}")
 
-        # Map to InterruptPriority enum
+        # Map to DeliveryPolicy enum
         priority_mapping = {
-            "none": InterruptPriority.NONE,
-            "halt": InterruptPriority.HALT,
-            "pivot": InterruptPriority.PIVOT
+            "none": DeliveryPolicy.IMMEDIATE,
+            "halt": DeliveryPolicy.HALT,
+            "pivot": DeliveryPolicy.PIVOT
         }
 
-        interrupt_priority = priority_mapping[interrupt_priority_str]
+        delivery = priority_mapping[interrupt_priority_str]
 
         # Look up target minion by name
         to_minion_name = args.get("to_minion_name")
@@ -765,7 +765,7 @@ class LegionMCPTools:
             summary=summary,
             content=content,
             comm_type=CommType(internal_comm_type),
-            interrupt_priority=interrupt_priority,  # Use validated priority
+            delivery=delivery,  # Use validated delivery policy
             attachments=attachment_metadata,
             visible_to_user=True
         )

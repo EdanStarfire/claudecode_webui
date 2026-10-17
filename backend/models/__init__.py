@@ -19,7 +19,8 @@ from backend.models.archive_models import (
 from backend.models.legion_models import (
     Comm,
     CommType,
-    InterruptPriority,
+    DeliveryPolicy,
+    SenderType,
 )
 from backend.models.memory_models import (
     MemoryEntry,
@@ -58,7 +59,8 @@ __all__ = [
     # Legion communication models
     "Comm",
     "CommType",
-    "InterruptPriority",
+    "DeliveryPolicy",
+    "SenderType",
     # Memory models
     "MemoryEntry",
     "MemoryType",
