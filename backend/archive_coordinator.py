@@ -267,6 +267,8 @@ class ArchiveCoordinator:
             if session_info is None:
                 return
             boundary_ts = parsed_message.timestamp
+            session_dir = self.session_manager.sessions_dir / session_id
+            messages_file = session_dir / "messages.jsonl"
             await schedule_history_distillation(
                 session_info,
                 self.template_manager,
@@ -276,6 +278,7 @@ class ArchiveCoordinator:
                     f"Launched compaction-time distillation for session {session_id} "
                     f"at ts={boundary_ts}"
                 ),
+                launch_check=messages_file.exists,
             )
         except Exception:
             logger.exception(
