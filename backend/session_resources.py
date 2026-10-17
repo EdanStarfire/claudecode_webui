@@ -20,13 +20,6 @@ Three fields are genuinely owned by this module, not live-property
 passthroughs (confirmed via exhaustive grep that nothing outside this
 cluster touches them directly): `_uploaded_file_paths`,
 `_resource_broadcast_callback`, `_link_broadcast_callback`.
-
-One pre-existing latent bug is preserved verbatim, not fixed:
-`get_proxy_logs` calls `self.logger.warning(...)` on two malformed-input
-branches, but neither SessionCoordinator nor this module ever actually sets
-`self.logger` (only the module-level `logger` exists) — a dormant
-AttributeError never hit because no current test feeds malformed proxy-log
-lines into those branches.
 """
 
 import asyncio
@@ -344,7 +337,7 @@ class SessionResources:
                         "original_host": raw.get("original_host", raw.get("host")),
                     })
                 except (json.JSONDecodeError, ValueError):
-                    self.logger.warning(f"Skipping malformed HTTP proxy log line in session {session_id}")
+                    logger.warning(f"Skipping malformed HTTP proxy log line in session {session_id}")
         elif log_type == "socks5":
             for line in lines:
                 line = line.strip()
@@ -360,7 +353,7 @@ class SessionResources:
                         "reason": raw.get("reason"),
                     })
                 except (json.JSONDecodeError, ValueError):
-                    self.logger.warning(f"Skipping malformed SOCKS5 proxy log line in session {session_id}")
+                    logger.warning(f"Skipping malformed SOCKS5 proxy log line in session {session_id}")
         else:
             # CoreDNS log format:
             # [INFO] 10.0.0.2:54312 - 12345 "A IN api.github.com. udp 128 false 4096" NOERROR qr,rd,ra 73 0.023s
