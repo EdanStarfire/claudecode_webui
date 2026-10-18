@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from backend.legion.scheduler_service import SchedulerService
+from backend.models.legion_models import SenderType
 from backend.models.schedule_models import (
     MAX_STREAM_BYTES,
     Schedule,
@@ -140,6 +141,9 @@ async def test_script_with_stdout_delivers_message(tmp_session_dir):
     call_kwargs = system.session_port.enqueue_message.call_args.kwargs
     assert "CI is red" in call_kwargs["content"]
     assert call_kwargs["metadata"]["script_filtered"] is True
+    # Issue #2193 PR6: identifies itself as SenderType.SCHEDULE so deliver()'s
+    # inject_timestamp override mechanism governs it, not the heuristic.
+    assert call_kwargs["sender_type"] == SenderType.SCHEDULE
 
 
 # ---------------------------------------------------------------------------

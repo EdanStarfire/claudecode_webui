@@ -46,6 +46,7 @@ from .hooks.pretooluse_handler import InternalPermissionHandler
 from .litellm_proxy_manager import make_model_alias
 from .message_parser import MessageParser, MessageProcessor
 from .message_pipeline import MessagePipeline, MessagePipelineCallbacks
+from .models.legion_models import Comm, CommType, DeliveryPolicy, SenderType
 from .models.messages import (
     LegacyMessageFormatError,
     PermissionInfo,
@@ -922,36 +923,101 @@ class SessionCoordinator:
         reset_session: bool | None = None,
         metadata: dict | None = None,
         inject_timestamp: bool = True,
+        sender_type: SenderType = SenderType.USER,
     ) -> dict:
-        """Enqueue a message for a session. Returns the queue item dict."""
-        return await self.queue_processor.enqueue_message(
-            session_id, content, reset_session=reset_session,
-            metadata=metadata, inject_timestamp=inject_timestamp,
+        """Enqueue a message for a session (issue #2193 PR6). sender_type defaults to
+        USER (the manual queue-message REST endpoint's producer identity) — scheduler
+        and resume_all() pass SCHEDULE/SYSTEM explicitly.
+
+        auto_start=True (matching routers/legion.py's and legion_mcp_tools.py's own
+        PR5 Comm construction): queue_processor.py's prepare_for_send() always
+        auto-started a dormant (CREATED/TERMINATED) target unconditionally — without
+        this, _ensure_session_ready()'s AC8 gate would fail every enqueue onto a
+        stopped session with "auto_start was not requested," a live regression from
+        today's behavior (confirmed via a scratch integration test during review).
+
+        Raises ValueError on a deliver() failure that never actually enqueued the
+        comm (e.g. a full pending store, mirroring queue_manager.enqueue()'s own
+        "Queue full" raise) — matches the old queue_processor.enqueue_message()
+        behavior of letting that ValueError propagate to routers/queue.py's
+        handle_exceptions(..., value_error_status=400), instead of silently
+        falling back to a position-less dict (found in review: that fallback
+        would otherwise 500 on routers/queue.py's unconditional item["position"]
+        read).
+        """
+        session_info = await self.session_manager.get_session_info(session_id)
+        if not session_info:
+            raise ValueError(f"Session {session_id} not found")
+        queue_config = getattr(session_info, 'queue_config', None) or {}
+        if reset_session is None:
+            reset_session = queue_config.get("default_reset_session", True)
+        max_queue_size = queue_config.get("max_queue_size", 100)
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_user=True,
+            sender_type=sender_type,  # explicit — overrides __post_init__'s from_user-based inference
+            to_minion_id=session_id,
+            content=content,
+            comm_type=CommType.SYSTEM,
+            delivery=DeliveryPolicy.WHEN_IDLE,
+            reset_first=reset_session,
+            auto_start=True,
+            metadata=metadata or {},
         )
+        result = await self.delivery_gate.deliver(
+            comm, inject_timestamp=inject_timestamp, max_pending_size=max_queue_size,
+        )
+        item = self.pending_store.get_item(session_id, comm.comm_id)
+        if item is None:
+            raise ValueError(result.error or "Failed to enqueue message")
+        return item.to_legacy_queue_dict()
 
     async def cancel_queue_item(self, session_id: str, queue_id: str) -> dict | None:
         """Cancel a pending queue item. Returns the item dict or None."""
-        return await self.queue_processor.cancel_queue_item(session_id, queue_id)
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return None
+        item = await self.pending_store.cancel(session_id, session_dir, queue_id)
+        return item.to_legacy_queue_dict() if item else None
 
     async def requeue_item(self, session_id: str, queue_id: str) -> dict | None:
         """Re-queue a sent/failed item at the front. Returns the new item dict."""
-        return await self.queue_processor.requeue_item(session_id, queue_id)
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return None
+        item = await self.pending_store.requeue(session_id, session_dir, queue_id)
+        return item.to_legacy_queue_dict() if item else None
 
     async def clear_queue(self, session_id: str) -> int:
         """Clear all pending queue items. Returns count of cancelled items."""
-        return await self.queue_processor.clear_queue(session_id)
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return 0
+        return await self.pending_store.clear_pending(session_id, session_dir)
 
     async def clear_queue_history(self, session_id: str) -> int:
         """Remove terminal (sent/failed/cancelled) queue items. Returns count removed."""
-        return await self.queue_processor.clear_queue_history(session_id)
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return 0
+        return await self.pending_store.clear_history(session_id, session_dir)
 
     async def get_queue(self, session_id: str, limit: int = 100, offset: int = 0) -> dict:
         """Get queue items for a session, paginated, most recent first."""
-        return self.queue_manager.get_queue_page(session_id, limit=limit, offset=offset)
+        return self.pending_store.get_page(session_id, limit=limit, offset=offset, legacy_shape=True)
 
     async def pause_queue(self, session_id: str, paused: bool) -> bool:
         """Pause or resume the queue for a session."""
-        return await self.queue_processor.pause_queue(session_id, paused)
+        success = await self.session_manager.update_session(session_id, queue_paused=paused)
+        if success and not paused:
+            when_idle_pending = any(
+                i.comm.delivery == DeliveryPolicy.WHEN_IDLE
+                for i in self.pending_store.get_pending(session_id)
+            )
+            if when_idle_pending:
+                self.delivery_gate.ensure_when_idle_running(session_id)
+        return success
 
     async def update_queue_config(self, session_id: str, config: dict) -> bool:
         """Update queue configuration for a session."""

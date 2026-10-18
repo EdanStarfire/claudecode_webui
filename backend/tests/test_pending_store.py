@@ -46,7 +46,9 @@ class TestPendingItem:
         assert item.created_at == 0.0
         assert item.delivered_at is None
         assert item.error is None
-        assert item.inject_timestamp is True
+        # Issue #2193 PR6: None ("no explicit preference, use the heuristic"),
+        # not an always-True default — nothing read this field before PR6.
+        assert item.inject_timestamp is None
         assert item.dispatch_content is None
         assert item.dispatch_metadata is None
 
@@ -482,3 +484,168 @@ class TestPendingStorePagination:
         page = pending_store.get_page(sid)
         assert page["total"] == 2
         assert page["pending_count"] == 1
+
+
+class TestToLegacyQueueDict:
+    """PendingItem.to_legacy_queue_dict() — the REST-view adapter (issue #2193 AC10),
+    confirmed field-by-field against routers/queue.py's consumers (queue.js,
+    QueueSection.vue)."""
+
+    def test_maps_every_field(self):
+        comm = make_comm("s1", content="hello", reset_first=True, metadata={"k": "v"})
+        item = PendingItem(
+            comm=comm, session_id="s1", status="pending", position=3,
+            created_at=111.0, delivered_at=None, error=None, inject_timestamp=False,
+        )
+        d = item.to_legacy_queue_dict()
+        assert d == {
+            "queue_id": comm.comm_id,
+            "session_id": "s1",
+            "content": "hello",
+            "reset_session": True,
+            "metadata": {"k": "v"},
+            "status": "pending",
+            "position": 3,
+            "created_at": 111.0,
+            "sent_at": None,
+            "error": None,
+            "inject_timestamp": False,
+        }
+
+    def test_delivered_status_renamed_to_sent(self):
+        comm = make_comm("s1")
+        item = PendingItem(
+            comm=comm, session_id="s1", status="delivered", delivered_at=222.0,
+        )
+        d = item.to_legacy_queue_dict()
+        assert d["status"] == "sent"
+        assert d["sent_at"] == 222.0
+
+    def test_failed_and_cancelled_status_pass_through_unchanged(self):
+        comm = make_comm("s1")
+        for status in ("failed", "cancelled"):
+            item = PendingItem(comm=comm, session_id="s1", status=status)
+            assert item.to_legacy_queue_dict()["status"] == status
+
+    def test_inject_timestamp_none_serializes_as_true(self):
+        """None (no explicit preference) must present as True in the legacy
+        shape — the historical default for anything that never expressed a
+        preference, matching pre-PR6 queue items' always-True field."""
+        comm = make_comm("s1")
+        item = PendingItem(comm=comm, session_id="s1", inject_timestamp=None)
+        assert item.to_legacy_queue_dict()["inject_timestamp"] is True
+
+    def test_inject_timestamp_explicit_false_preserved(self):
+        comm = make_comm("s1")
+        item = PendingItem(comm=comm, session_id="s1", inject_timestamp=False)
+        assert item.to_legacy_queue_dict()["inject_timestamp"] is False
+
+
+class TestGetPageLegacyShape:
+    """get_page(legacy_shape=True) (issue #2193 PR6/AC10)."""
+
+    @pytest.mark.asyncio
+    async def test_legacy_shape_items_are_flat(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        await pending_store.enqueue(sid, sdir, make_comm(sid, content="flat me"))
+
+        page = pending_store.get_page(sid, legacy_shape=True)
+        item = page["items"][0]
+        assert item["content"] == "flat me"
+        assert "comm" not in item
+
+    @pytest.mark.asyncio
+    async def test_legacy_shape_pagination_math_unchanged(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        for c in ("a", "b", "c"):
+            await pending_store.enqueue(sid, sdir, make_comm(sid, content=c))
+
+        legacy_page = pending_store.get_page(sid, limit=2, offset=0, legacy_shape=True)
+        default_page = pending_store.get_page(sid, limit=2, offset=0)
+        for key in ("total", "limit", "offset", "has_more", "pending_count"):
+            assert legacy_page[key] == default_page[key]
+        assert [i["content"] for i in legacy_page["items"]] == ["c", "b"]
+
+    def test_legacy_shape_defaults_to_false(self, pending_store):
+        """legacy_shape is opt-in — default behavior (nested comm shape) unchanged."""
+        page = pending_store.get_page("no-such-session")
+        assert page["items"] == []
+
+
+class TestRequeue:
+    """PendingStore.requeue() — new in issue #2193 PR6, a gap left by PR2 (no
+    analog existed before). Ports QueueManager.requeue()'s exact semantics."""
+
+    @pytest.mark.asyncio
+    async def test_requeue_delivered_item_creates_new_pending_entry_at_front(
+        self, pending_store, temp_session
+    ):
+        sid, sdir = temp_session
+        original = await pending_store.enqueue(sid, sdir, make_comm(sid, content="redo me"))
+        await pending_store.mark_delivered(sid, sdir, original.comm.comm_id)
+        other_pending = await pending_store.enqueue(sid, sdir, make_comm(sid, content="unrelated"))
+
+        new_item = await pending_store.requeue(sid, sdir, original.comm.comm_id)
+
+        assert new_item is not None
+        assert new_item.comm.comm_id != original.comm.comm_id
+        assert new_item.comm.content == "redo me"
+        assert new_item.status == "pending"
+        assert new_item.position < other_pending.position
+        # Original item's own history is untouched.
+        assert original.status == "delivered"
+
+    @pytest.mark.asyncio
+    async def test_requeue_failed_item_succeeds(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        original = await pending_store.enqueue(sid, sdir, make_comm(sid, content="retry me"))
+        await pending_store.mark_failed(sid, sdir, original.comm.comm_id, "boom")
+
+        new_item = await pending_store.requeue(sid, sdir, original.comm.comm_id)
+
+        assert new_item is not None
+        assert new_item.status == "pending"
+
+    @pytest.mark.asyncio
+    async def test_requeue_still_pending_item_returns_none(self, pending_store, temp_session):
+        """Matches QueueManager.requeue()'s guard — only delivered/failed items
+        may be requeued."""
+        sid, sdir = temp_session
+        item = await pending_store.enqueue(sid, sdir, make_comm(sid, content="still pending"))
+
+        result = await pending_store.requeue(sid, sdir, item.comm.comm_id)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_requeue_cancelled_item_returns_none(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        item = await pending_store.enqueue(sid, sdir, make_comm(sid, content="cancelled"))
+        await pending_store.cancel(sid, sdir, item.comm.comm_id)
+
+        result = await pending_store.requeue(sid, sdir, item.comm.comm_id)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_requeue_unknown_comm_id_returns_none(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        result = await pending_store.requeue(sid, sdir, "nonexistent")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_requeue_preserves_dispatch_overrides(self, pending_store, temp_session):
+        sid, sdir = temp_session
+        original = await pending_store.enqueue(
+            sid, sdir, make_comm(sid, content="raw"),
+            inject_timestamp=False,
+            dispatch_content="formatted",
+            dispatch_metadata={"k": "v"},
+        )
+        await pending_store.mark_failed(sid, sdir, original.comm.comm_id, "boom")
+
+        new_item = await pending_store.requeue(sid, sdir, original.comm.comm_id)
+
+        assert new_item.inject_timestamp is False
+        assert new_item.dispatch_content == "formatted"
+        assert new_item.dispatch_metadata == {"k": "v"}

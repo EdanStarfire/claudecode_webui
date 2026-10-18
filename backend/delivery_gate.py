@@ -106,6 +106,8 @@ class DeliveryGate:
         self, comm: Comm, *,
         dispatch_content: str | None = None,
         dispatch_metadata: dict | None = None,
+        inject_timestamp: bool | None = None,
+        max_pending_size: int = 100,
     ) -> DeliveryResult:
         """Unified entry point (issue #2193 AC3/AC4). Now the single production
         call site: comm_router.py's _send_to_minion() cuts over to this in PR5
@@ -127,10 +129,24 @@ class DeliveryGate:
         _run_when_idle_loop's own call stack, which has no access to this
         call's local arguments.
 
-        comm.reset_first is not consulted here, same deliberate deferral as
-        comm.auto_start (see _ensure_session_ready's AC8 note) — no producer
-        sets it meaningfully yet. prepare_for_send() keeps honoring it for
-        queue_processor.py's existing callers.
+        inject_timestamp (issue #2193 PR6): explicit override, same pattern as
+        dispatch_content/dispatch_metadata — persisted onto the PendingItem and
+        consulted in preference to _should_inject_timestamp()'s heuristic at
+        both dispatch sites below. None (default) means "no explicit
+        preference, use the heuristic." This is how session_coordinator.
+        enqueue_message() avoids the heuristic entirely for the manual
+        queue-message producer family (see _should_inject_timestamp()'s
+        docstring for the regression this fixes).
+
+        comm.reset_first IS consulted here as of PR6 (see
+        _ensure_session_ready()) — no longer the deferred AC8 no-op it was
+        through PR5.
+
+        max_pending_size (issue #2193 PR6): forwarded to pending_store.enqueue().
+        enqueue_message() reads its per-session queue_config["max_queue_size"]
+        and passes it through here — queue_processor.py's enqueue_message() did
+        the same against queue_manager.enqueue(); the default of 100 only
+        applies to a session with no configured override.
         """
         coordinator = self._coordinator
         session_id = comm.to_minion_id
@@ -143,6 +159,7 @@ class DeliveryGate:
             await coordinator.pending_store.enqueue(
                 session_id, session_dir, comm,
                 dispatch_content=dispatch_content, dispatch_metadata=dispatch_metadata,
+                inject_timestamp=inject_timestamp, max_pending_size=max_pending_size,
             )
         except ValueError as e:
             return self._fail(comm, str(e))
@@ -184,6 +201,11 @@ class DeliveryGate:
 
         ready = await self._ensure_session_ready(comm)
         if not ready.success:
+            if ready.error is None:
+                # Verbatim-preserved asymmetry (see _ensure_session_ready()'s
+                # reset_first wiring): a post-reset wait timeout leaves the
+                # item pending for a retry rather than marking it failed.
+                return DeliveryResult(success=False, error=None)
             await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, ready.error)
             return self._fail(comm, ready.error)
 
@@ -246,8 +268,12 @@ class DeliveryGate:
             if current.dispatch_metadata is not None:
                 comm.metadata = current.dispatch_metadata
             comm.content = self._maybe_annotate_stale(session_id, comm, current)
+            inject_ts = (
+                current.inject_timestamp if current.inject_timestamp is not None
+                else self._should_inject_timestamp(comm)
+            )
             try:
-                result = await self.send(comm, inject_timestamp=self._should_inject_timestamp(comm))
+                result = await self.send(comm, inject_timestamp=inject_ts)
             except Exception as e:
                 # Without this, an exception from send_message() (vs. its documented False
                 # return) would propagate out of deliver() and leave this entry stuck at
@@ -340,6 +366,27 @@ class DeliveryGate:
             ready = await coordinator.wait_for_session_ready(session_id, timeout=timeout)
             if not ready:
                 return DeliveryResult(success=False, error="Target minion did not become ready in time")
+            self._readiness_deadlines[session_id] = (
+                asyncio.get_event_loop().time() + READINESS_SETTLE_SECONDS
+            )
+
+        if comm.reset_first:
+            self._ensure_message_callback(session_id)
+            permission_callback = None
+            if coordinator._permission_callback_factory:
+                permission_callback = coordinator._permission_callback_factory(session_id)
+            reset_ok = await coordinator.reset_session(
+                session_id, permission_callback, _from_queue_processor=True
+            )
+            if not reset_ok:
+                return DeliveryResult(success=False, error="Failed to reset session")
+            reset_ready = await coordinator.wait_for_session_ready(session_id, timeout=timeout)
+            if not reset_ready:
+                # Verbatim-preserved asymmetry from prepare_for_send() — see
+                # DeliveryResult's own docstring. A transient post-reset timing
+                # hiccup, not a real failure: leave the item pending for a
+                # retry rather than permanently failing it.
+                return DeliveryResult(success=False, error=None)
             self._readiness_deadlines[session_id] = (
                 asyncio.get_event_loop().time() + READINESS_SETTLE_SECONDS
             )
@@ -557,6 +604,13 @@ class DeliveryGate:
 
                 ready = await self._ensure_session_ready(comm)
                 if not ready.success:
+                    if ready.error is None:
+                        # Leave pending; don't hot-loop — matches
+                        # prepare_for_send()'s break-either-way on a post-reset
+                        # wait timeout. Using `continue` here would re-attempt
+                        # this same reset-pending item immediately, with no
+                        # delay, forever.
+                        break
                     await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, ready.error)
                     self._fail(comm, ready.error)
                     continue
@@ -592,8 +646,12 @@ class DeliveryGate:
                     if current.dispatch_metadata is not None:
                         comm.metadata = current.dispatch_metadata
                     comm.content = self._maybe_annotate_stale(session_id, comm, current)
+                    inject_ts = (
+                        current.inject_timestamp if current.inject_timestamp is not None
+                        else self._should_inject_timestamp(comm)
+                    )
                     try:
-                        result = await self.send(comm, inject_timestamp=self._should_inject_timestamp(comm))
+                        result = await self.send(comm, inject_timestamp=inject_ts)
                     except Exception as e:
                         # Same reasoning as deliver()'s inline dispatch: an exception here
                         # (vs. send()'s documented False return) would otherwise leave this

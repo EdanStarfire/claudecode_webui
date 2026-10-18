@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from backend.legion_system import LegionSystem
+from backend.models.legion_models import SenderType
 
 
 def _make_project_manager(snapshot=None):
@@ -70,6 +71,12 @@ class TestIssue1779ResumeAllTimestampScoping:
         assert args[0] == "test-minion-123"
         assert kwargs["inject_timestamp"] is False
         assert kwargs["reset_session"] is False
+        # Issue #2193 PR6: resume_all() identifies itself as SenderType.SYSTEM so
+        # its explicit inject_timestamp=False is honored via deliver()'s new
+        # override rather than by coincidentally matching the heuristic (which
+        # would resolve SYSTEM to False anyway, but for the wrong reason before
+        # this PR — there was no override to honor it with).
+        assert kwargs["sender_type"] == SenderType.SYSTEM
 
 
 class TestIssue2159ResumeAllUsesSnapshot:

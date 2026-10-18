@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from backend.credential_vault import CredentialVault
+from backend.models.legion_models import SenderType
 from backend.profile_manager import ProfileManager
 from backend.project_manager import ProjectInfo
 from backend.queue_manager import QueueItem
@@ -92,6 +93,7 @@ class LegionCoordinatorPort(Protocol):
         reset_session: bool | None = None,
         metadata: dict | None = None,
         inject_timestamp: bool = True,
+        sender_type: SenderType = SenderType.USER,
     ) -> dict: ...
 
     async def start_session(

@@ -65,10 +65,18 @@ ALLOWLIST: dict[str, int] = {
     "set_permission_callback_factory": 17,
     "set_message_callback_registrar": 17,
     "update_session_name": 13,
-    "enqueue_message": 13,
+    # Bumped 13->56 (issue #2193 PR 6): enqueue_message() stopped delegating to
+    # queue_processor.py and now builds+delivers a Comm through pending_store/
+    # delivery_gate directly (the regression-fix site for the inject_timestamp
+    # heuristic — see delivery_gate.py's _should_inject_timestamp() docstring).
+    "enqueue_message": 56,
     "get_session_resources": 12,
     "get_mcp_status": 12,
     "get_archive_resources": 13,
+    # Added (issue #2193 PR 6): pause_queue() now re-starts delivery_gate's
+    # when_idle loop itself when unpausing a session with a WHEN_IDLE item
+    # pending, instead of delegating that decision to queue_processor.py.
+    "pause_queue": 11,
     "create_tool_call": 19,
     "update_tool_call_permission_request": 11,
     "update_tool_call_permission_response": 11,

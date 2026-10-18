@@ -12,6 +12,7 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Optional
 
+from backend.models.legion_models import SenderType
 from backend.session_lifecycle import is_live, is_not_terminated
 from shared.logging_config import get_logger
 
@@ -637,6 +638,7 @@ class LegionCoordinator:
                         FLEET_RESUME_MESSAGE,
                         reset_session=False,
                         inject_timestamp=False,
+                        sender_type=SenderType.SYSTEM,
                     )
                 else:
                     # Mirrors queue_processor.py's own auto-start call: a

@@ -29,6 +29,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from backend.legion.scheduler_service import SchedulerService
+from backend.models.legion_models import SenderType
 from backend.models.schedule_models import Schedule, ScheduleStatus, get_next_run
 from backend.session_manager import SessionInfo, SessionManager, SessionState
 
@@ -138,6 +139,12 @@ async def test_fire_ephemeral_schedule_starts_when_created_or_terminated(state, 
 
     system.session_port.start_session.assert_awaited_once_with("agent-1")
     system.session_port.enqueue_message.assert_awaited_once()
+    # Issue #2193 PR6: identifies itself as SenderType.SCHEDULE so deliver()'s
+    # inject_timestamp override mechanism governs it, not the heuristic.
+    assert (
+        system.session_port.enqueue_message.call_args.kwargs["sender_type"]
+        == SenderType.SCHEDULE
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ from backend.docker_utils import (
     run_command_in_container,
     run_command_on_host,
 )
+from backend.models.legion_models import SenderType
 from backend.models.schedule_models import (
     Schedule,
     ScheduleExecution,
@@ -654,6 +655,7 @@ class SchedulerService:
                     "schedule_name": schedule.name,
                     "trigger_time": now,
                 },
+                sender_type=SenderType.SCHEDULE,
             )
 
             # Capture queue_id from response
@@ -817,6 +819,7 @@ class SchedulerService:
                     "auto_resume": True,
                     "trigger_time": now,
                 },
+                sender_type=SenderType.SCHEDULE,
             )
 
             execution.queue_id = result.get("queue_id")
@@ -951,6 +954,7 @@ class SchedulerService:
                     "trigger_time": now,
                     "ephemeral": True,
                 },
+                sender_type=SenderType.SCHEDULE,
             )
 
             execution.queue_id = result.get("queue_id")
@@ -1396,6 +1400,7 @@ class SchedulerService:
                         "trigger_time": now,
                         "script_filtered": True,
                     },
+                    sender_type=SenderType.SCHEDULE,
                 )
                 execution.queue_id = result.get("queue_id")
                 execution.status = "delivered"
