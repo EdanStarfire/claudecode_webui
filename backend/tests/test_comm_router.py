@@ -1009,6 +1009,271 @@ class TestHaltPivotRunGateBeforeInterrupt:
         assert "authority" in error_message_arg.lower() or "ancestor" in error_message_arg.lower()
 
 
+class TestHaltPivotAuthorityBeforeSideEffects:
+    """Issue #2228: an unauthorized sibling's HALT/PIVOT must be rejected by
+    route_comm() itself, before _deliver_attachments()/_persist_comm() ever run —
+    restoring the pre-#2193-PR5 "zero side effects on rejection" behavior.
+    DeliveryGate._is_authorized() still blocks the actual interrupt/pivot action
+    (covered by test_delivery_gate.py); these tests cover the new, earlier
+    side-effect-prevention gate in route_comm()."""
+
+    @pytest.mark.asyncio
+    async def test_unauthorized_sibling_halt_rejected_with_no_side_effects_via_route_comm(self, comm_router):
+        from backend.session_manager import SessionInfo, SessionState
+
+        target = Mock(spec=SessionInfo)
+        target.session_id = "test-minion-123"
+        target.name = "TestMinion"
+        target.project_id = "test-legion-456"
+        target.state = SessionState.ACTIVE
+        target.queue_paused = False
+        target.parent_overseer_id = None  # not an ancestor of sender
+        comm_router.system.session_port.session_manager.get_session_info = AsyncMock(return_value=target)
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="sibling-sender",
+            to_minion_id="test-minion-123",
+            content="halt now",
+            comm_type=CommType.TASK,
+            delivery=DeliveryPolicy.HALT,
+        )
+
+        with (
+            patch.object(comm_router, "_deliver_attachments", new=AsyncMock()) as mock_deliver_attachments,
+            patch.object(comm_router, "_persist_comm", new=AsyncMock()) as mock_persist_comm,
+        ):
+            result = await comm_router.route_comm(comm)
+
+        assert result is False
+        mock_deliver_attachments.assert_not_called()
+        mock_persist_comm.assert_not_called()
+        assert "ancestor" in comm.metadata["delivery_failure_reason"]
+
+    @pytest.mark.asyncio
+    async def test_unauthorized_sibling_pivot_rejected_with_no_side_effects_via_route_comm(self, comm_router):
+        from backend.session_manager import SessionInfo, SessionState
+
+        target = Mock(spec=SessionInfo)
+        target.session_id = "test-minion-123"
+        target.name = "TestMinion"
+        target.project_id = "test-legion-456"
+        target.state = SessionState.ACTIVE
+        target.queue_paused = False
+        target.parent_overseer_id = None  # not an ancestor of sender
+        comm_router.system.session_port.session_manager.get_session_info = AsyncMock(return_value=target)
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="sibling-sender",
+            to_minion_id="test-minion-123",
+            content="pivot now",
+            comm_type=CommType.TASK,
+            delivery=DeliveryPolicy.PIVOT,
+        )
+
+        with (
+            patch.object(comm_router, "_deliver_attachments", new=AsyncMock()) as mock_deliver_attachments,
+            patch.object(comm_router, "_persist_comm", new=AsyncMock()) as mock_persist_comm,
+        ):
+            result = await comm_router.route_comm(comm)
+
+        assert result is False
+        mock_deliver_attachments.assert_not_called()
+        mock_persist_comm.assert_not_called()
+        assert "ancestor" in comm.metadata["delivery_failure_reason"]
+
+    @pytest.mark.asyncio
+    async def test_unauthorized_sibling_halt_with_attachment_does_not_write_or_register_resource(
+        self, comm_router, tmp_path
+    ):
+        """Routes through the REAL (non-mocked) _deliver_attachments()/_persist_comm() —
+        proves no file is written and no resource is registered, not just that mocked
+        methods weren't invoked."""
+        from backend.session_manager import SessionInfo, SessionState
+
+        comm_router.system.session_port.data_dir = tmp_path
+
+        target = Mock(spec=SessionInfo)
+        target.session_id = "test-minion-123"
+        target.name = "TestMinion"
+        target.project_id = "test-legion-456"
+        target.state = SessionState.ACTIVE
+        target.queue_paused = False
+        target.parent_overseer_id = None  # not an ancestor of sender
+        comm_router.system.session_port.session_manager.get_session_info = AsyncMock(return_value=target)
+
+        register_resource_mock = AsyncMock(return_value={"resource_id": "should-not-be-called"})
+        comm_router.system.session_port.register_uploaded_resource = register_resource_mock
+        comm_router.system.session_port.register_uploaded_file = AsyncMock()
+
+        source_file = tmp_path / "secret.txt"
+        source_file.write_bytes(b"attachment contents")
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="sibling-sender",
+            to_minion_id="test-minion-123",
+            content="halt now",
+            comm_type=CommType.TASK,
+            delivery=DeliveryPolicy.HALT,
+            attachments=[
+                {
+                    "name": "secret.txt",
+                    "size": 20,
+                    "mime_type": "text/plain",
+                    "source_path": str(source_file),
+                }
+            ],
+        )
+
+        result = await comm_router.route_comm(comm)
+
+        assert result is False
+        register_resource_mock.assert_not_called()
+        assert comm.attachments[0].get("resource_id") is None
+        assert not (tmp_path / "sessions" / "test-minion-123" / "attachments").exists(), (
+            "No attachment file should be written for a rejected unauthorized HALT"
+        )
+
+    @pytest.mark.asyncio
+    async def test_authorized_ancestor_halt_still_persists_and_delivers_attachment_in_order(
+        self, comm_router, tmp_path
+    ):
+        """Positive-control regression: an authorized ancestor's HALT must still reach
+        _deliver_attachments() before _persist_comm() (issue #1730's ordering guarantee,
+        untouched by this fix) and must still actually interrupt the target session."""
+        from backend.session_manager import SessionInfo, SessionState
+
+        comm_router.system.session_port.data_dir = tmp_path
+
+        parent = Mock(spec=SessionInfo)
+        parent.parent_overseer_id = None
+
+        child = Mock(spec=SessionInfo)
+        child.session_id = "test-minion-123"
+        child.name = "TestMinion"
+        child.project_id = "test-legion-456"
+        child.state = SessionState.ACTIVE
+        child.queue_paused = False
+        child.parent_overseer_id = "parent-id"
+
+        session_map = {"parent-id": parent, "test-minion-123": child}
+        sm = comm_router.system.session_port.session_manager
+        sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
+
+        comm_router.system.session_port.interrupt_session = AsyncMock(return_value=True)
+        comm_router.system.session_port.register_uploaded_resource = AsyncMock(
+            return_value={"resource_id": "res-authorized-1"}
+        )
+        comm_router.system.session_port.register_uploaded_file = AsyncMock()
+
+        source_file = tmp_path / "notes.txt"
+        source_file.write_bytes(b"attachment contents")
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="parent-id",
+            to_minion_id="test-minion-123",
+            content="halt now",
+            comm_type=CommType.TASK,
+            delivery=DeliveryPolicy.HALT,
+            attachments=[
+                {
+                    "name": "notes.txt",
+                    "size": 20,
+                    "mime_type": "text/plain",
+                    "source_path": str(source_file),
+                }
+            ],
+        )
+
+        call_order = []
+        original_deliver_attachments = comm_router._deliver_attachments
+        original_persist_comm = comm_router._persist_comm
+
+        async def tracked_deliver_attachments(*args, **kwargs):
+            call_order.append("deliver_attachments")
+            return await original_deliver_attachments(*args, **kwargs)
+
+        async def tracked_persist_comm(*args, **kwargs):
+            call_order.append("persist_comm")
+            return await original_persist_comm(*args, **kwargs)
+
+        with (
+            patch.object(comm_router, "_deliver_attachments", side_effect=tracked_deliver_attachments),
+            patch.object(comm_router, "_persist_comm", side_effect=tracked_persist_comm),
+        ):
+            result = await comm_router.route_comm(comm)
+
+        assert result is True
+        assert call_order == ["deliver_attachments", "persist_comm"]
+        assert comm.attachments[0]["resource_id"] == "res-authorized-1"
+        comm_router.system.session_port.interrupt_session.assert_awaited_once_with("test-minion-123")
+
+    @pytest.mark.asyncio
+    async def test_user_sent_halt_bypasses_new_early_exit(self, comm_router):
+        """from_user=True is always authorized (is_authorized_sender()'s own rule) —
+        confirms the new early-exit never rejects a user-originated HALT/PIVOT."""
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_user=True,
+            to_minion_id="test-minion-123",
+            content="halt now",
+            comm_type=CommType.TASK,
+            delivery=DeliveryPolicy.HALT,
+        )
+
+        with (
+            patch.object(comm_router, "_deliver_attachments", new=AsyncMock()) as mock_deliver_attachments,
+            patch.object(comm_router, "_persist_comm", new=AsyncMock()) as mock_persist_comm,
+            patch.object(comm_router, "_send_to_minion", new=AsyncMock(return_value=True)) as mock_send_to_minion,
+        ):
+            result = await comm_router.route_comm(comm)
+
+        assert result is True
+        mock_deliver_attachments.assert_called_once()
+        mock_persist_comm.assert_called_once()
+        mock_send_to_minion.assert_called_once()
+        assert "delivery_failure_reason" not in comm.metadata
+
+    @pytest.mark.asyncio
+    async def test_halt_to_nonexistent_target_not_misreported_as_unauthorized(self, comm_router):
+        """Review finding (issue #2228): is_ancestor()'s hierarchy walk starts from
+        comm.to_minion_id's own session info and returns False if that session is
+        missing — indistinguishable, from is_authorized_sender()'s return value
+        alone, from "no ancestor relationship." Production's deliver() never
+        confuses the two because it checks session_dir before its own authority
+        check; the new gate must preserve that ordering by falling through to the
+        existing missing-target handling instead of misreporting a disposal race
+        as an authority failure."""
+        comm_router.system.session_port.session_manager.get_session_info = AsyncMock(return_value=None)
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="ancestor-sender",
+            to_minion_id="disposed-minion",
+            content="halt now",
+            comm_type=CommType.TASK,
+            delivery=DeliveryPolicy.HALT,
+        )
+
+        with (
+            patch.object(comm_router, "_deliver_attachments", new=AsyncMock()) as mock_deliver_attachments,
+            patch.object(comm_router, "_persist_comm", new=AsyncMock()) as mock_persist_comm,
+            patch.object(comm_router, "_send_to_minion", new=AsyncMock(return_value=False)) as mock_send_to_minion,
+        ):
+            result = await comm_router.route_comm(comm)
+
+        assert result is False
+        mock_deliver_attachments.assert_called_once()
+        mock_persist_comm.assert_called_once()
+        mock_send_to_minion.assert_called_once()
+        assert comm.metadata.get("delivery_failure_reason") != (
+            "HALT requires the sender to be the user or an ancestor of the recipient"
+        )
+
+
 class TestPausedTargetDeliversWithoutForceStart:
     """Issue #1918 stopped comm delivery from force-starting a target minion PAUSED
     mid-permission-wait (e.g. AskUserQuestion) — that clobbers it into STARTING with

@@ -194,6 +194,43 @@ class CommRouter:
         # Validate comm has proper routing
         comm.validate()
 
+        # Issue #2228: reject an unauthorized sibling's HALT/PIVOT before any
+        # side effect fires. DeliveryGate._is_authorized() (backend/delivery_gate.py)
+        # already blocks the actual interrupt/pivot action, but only runs inside
+        # deliver(), itself only reached after _deliver_attachments()/_persist_comm()
+        # have already fired unconditionally. is_authorized_sender() is the exact
+        # helper _is_authorized() delegates to for minion senders — reused here as
+        # a second, earlier call site for side-effect prevention, not duplicated
+        # authority logic. HALT/PIVOT-to-user (to_minion_id=None) is never gated
+        # here, matching deliver()'s own scoping (it's never reached for to_user).
+        #
+        # Gated on the target session actually existing: is_ancestor()'s hierarchy
+        # walk starts from comm.to_minion_id's own session info and returns False
+        # if that session is missing — indistinguishable from "no ancestor
+        # relationship" from is_authorized_sender()'s own return value alone. In
+        # production, deliver() never confuses the two because it checks the
+        # session directory (session_dir) before ever reaching its own authority
+        # check. Checking existence here first preserves that same ordering: a
+        # missing target falls through to the existing, already-tested path
+        # (_deliver_attachments()'s own missing-target skip, then deliver()'s
+        # "Session directory not found") instead of being misreported as an
+        # authority failure.
+        if comm.delivery in (DeliveryPolicy.HALT, DeliveryPolicy.PIVOT) and comm.to_minion_id:
+            target_exists = await self.system.session_port.session_manager.get_session_info(
+                comm.to_minion_id
+            )
+            if target_exists and not await self.is_authorized_sender(comm):
+                if comm.delivery == DeliveryPolicy.HALT:
+                    reason = "HALT requires the sender to be the user or an ancestor of the recipient"
+                else:
+                    reason = "PIVOT requires the sender to be the user or an ancestor of the recipient"
+                comm.metadata["delivery_failure_reason"] = reason
+                legion_logger.warning(
+                    f"Rejected unauthorized {comm.delivery.value.upper()} from {comm.from_minion_id} "
+                    f"to {comm.to_minion_id}: {reason}"
+                )
+                return False
+
         # Deliver attachments before persisting (issue #1730) so timeline.jsonl
         # captures the resolved resource_id from the start, instead of null
         # placeholders mutated in place afterward.
