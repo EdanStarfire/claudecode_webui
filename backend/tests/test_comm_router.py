@@ -479,8 +479,12 @@ class TestCommRouter:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_persist_comm_from_minion(self, comm_router, sample_minion, legion_system):
-        """Test persisting Comm from minion writes to timeline."""
+    async def test_persist_comm_from_minion_no_longer_writes_timeline(
+        self, comm_router, sample_minion, legion_system
+    ):
+        """Issue #2193 PR6: timeline.jsonl writes were removed from _persist_comm()
+        (decided in PR1, executed here) — _append_to_timeline() must never be
+        called, for a minion-originated comm."""
         # Mock legion_coordinator.get_minion_info
         legion_system.legion_coordinator.get_minion_info = AsyncMock(return_value=sample_minion)
 
@@ -493,11 +497,13 @@ class TestCommRouter:
 
         with patch.object(comm_router, '_append_to_timeline', new=AsyncMock()) as mock_append_timeline:
             await comm_router._persist_comm(comm)
-            mock_append_timeline.assert_called_once()
+            mock_append_timeline.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_persist_comm_to_minion(self, comm_router, sample_minion, legion_system):
-        """Test persisting Comm to minion writes to timeline."""
+    async def test_persist_comm_to_minion_no_longer_writes_timeline(
+        self, comm_router, sample_minion, legion_system
+    ):
+        """Issue #2193 PR6: same as above, for a user-originated comm."""
         legion_system.legion_coordinator.get_minion_info = AsyncMock(return_value=sample_minion)
 
         comm = Comm(
@@ -509,7 +515,36 @@ class TestCommRouter:
 
         with patch.object(comm_router, '_append_to_timeline', new=AsyncMock()) as mock_append_timeline:
             await comm_router._persist_comm(comm)
-            mock_append_timeline.assert_called_once()
+            mock_append_timeline.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_persist_comm_still_broadcasts_notifies_and_audits(
+        self, comm_router, sample_minion, legion_system
+    ):
+        """Issue #2193 PR6: the timeline-write removal in _persist_comm() must be
+        surgical — the legion_id resolution above it, and the WebSocket broadcast,
+        UI notification, and audit-writer calls below it, all stay untouched."""
+        legion_system.legion_coordinator.get_minion_info = AsyncMock(return_value=sample_minion)
+        comm_router._comm_broadcast_callback = AsyncMock()
+        comm_router._ui_notification_callback = AsyncMock()
+        comm_router.audit_writer = Mock()
+        comm_router.audit_writer.on_comm = AsyncMock()
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_user=True,
+            to_minion_id=sample_minion.session_id,
+            content="Test message",
+            comm_type=CommType.TASK,
+        )
+
+        with patch.object(comm_router, '_append_to_timeline', new=AsyncMock()) as mock_append_timeline:
+            await comm_router._persist_comm(comm)
+
+        mock_append_timeline.assert_not_called()
+        comm_router._comm_broadcast_callback.assert_called_once()
+        comm_router._ui_notification_callback.assert_called_once()
+        comm_router.audit_writer.on_comm.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_issue_939_attachment_metadata_in_comm(self, comm_router, tmp_path):
@@ -658,10 +693,12 @@ class TestCommRouter:
     @pytest.mark.asyncio
     async def test_issue_1730_route_comm_persists_non_null_resource_id(self, comm_router, tmp_path):
         """Regression test: route_comm() delivers attachments (resolving
-        resource_id) before persisting the Comm, so timeline.jsonl carries the
-        correct resource_id from the start instead of a null placeholder that
-        gets mutated in place afterward (append-only log, so the persisted
-        record previously stayed null forever)."""
+        resource_id) before persisting the Comm, so the comm's own attachments
+        carry the correct resource_id from the start instead of a null
+        placeholder. (Issue #2193 PR6: timeline.jsonl itself is no longer
+        written by _persist_comm(), so this now asserts the resolution
+        directly on the comm object rather than on a persisted timeline
+        record.)"""
         comm_router.system.session_port.data_dir = tmp_path
 
         source_file = tmp_path / "notes.txt"
@@ -692,11 +729,9 @@ class TestCommRouter:
             result = await comm_router.route_comm(comm)
 
         assert result is True
-        mock_append_timeline.assert_called_once()
-        persisted_comm = mock_append_timeline.call_args.args[1]
-        assert persisted_comm.attachments[0]["resource_id"] == "res-persisted-1", (
-            "Comm persisted to timeline.jsonl must already carry the resolved "
-            "resource_id, not null"
+        mock_append_timeline.assert_not_called()
+        assert comm.attachments[0]["resource_id"] == "res-persisted-1", (
+            "Comm's attachments must already carry the resolved resource_id, not null"
         )
 
     @pytest.mark.asyncio

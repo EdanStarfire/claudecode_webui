@@ -1248,4 +1248,175 @@ class TestDispatchContentOverride:
         ledger_item = coord.pending_store.get_item("s1", stale.comm_id)
         assert ledger_item.comm.content == "raw stale content"
         gate.stop_when_idle("s1")
+
+
+class TestResetFirst:
+    """Issue #2193 PR6 — reset_first wiring in _ensure_session_ready(), finally
+    wired for real (AC1 had the field inert through PR5)."""
+
+    @pytest.mark.asyncio
+    async def test_reset_first_dormant_target_auto_starts_resets_and_dispatches(self, tmp_path):
+        """Full happy path: auto-starts, resets, re-waits, settles, dispatches."""
+        info = _make_session_info(state=SessionState.CREATED)
+        coord = _make_coordinator(info, tmp_path)
+        coord.reset_session = AsyncMock(return_value=True)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", delivery=DeliveryPolicy.IMMEDIATE, reset_first=True)
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            result = await gate.deliver(comm)
+
+        assert result.success is True
+        coord.start_session.assert_awaited_once()
+        coord.reset_session.assert_awaited_once()
+        # Same calling convention as prepare_for_send()'s existing reset call.
+        assert coord.reset_session.call_args.kwargs.get("_from_queue_processor") is True
+        coord.send_message.assert_awaited_once()
+        assert _status_of(coord, "s1", comm.comm_id) == "delivered"
+
+    @pytest.mark.asyncio
+    async def test_reset_failure_fails_normally(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE)
+        coord = _make_coordinator(info, tmp_path)
+        coord.reset_session = AsyncMock(return_value=False)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", delivery=DeliveryPolicy.IMMEDIATE, reset_first=True)
+        result = await gate.deliver(comm)
+
+        assert result.success is False
+        assert result.error == "Failed to reset session"
+        assert comm.metadata["delivery_failure_reason"] == "Failed to reset session"
+        assert _status_of(coord, "s1", comm.comm_id) == "failed"
+        coord.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reset_wait_timeout_leaves_item_pending_inline(self, tmp_path):
+        """Verbatim-preserved asymmetry: a post-reset wait timeout leaves the
+        ledger entry pending (not failed) — not a mark_failed-worthy error,
+        matching prepare_for_send()'s existing treatment of the same case."""
+        info = _make_session_info(state=SessionState.ACTIVE)
+        coord = _make_coordinator(info, tmp_path)
+        coord.reset_session = AsyncMock(return_value=True)
+        coord.wait_for_session_ready = AsyncMock(return_value=False)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", delivery=DeliveryPolicy.IMMEDIATE, reset_first=True)
+        result = await gate.deliver(comm)
+
+        assert result.success is False
+        assert result.error is None
+        assert _status_of(coord, "s1", comm.comm_id) == "pending"
+        coord.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reset_wait_timeout_when_idle_loop_breaks_not_continues(self, tmp_path):
+        """CRITICAL DETAIL: must `break`, not `continue` — continuing would
+        hot-loop re-attempting the same reset-pending item with no delay.
+        Proven by the loop task actually exiting (is_when_idle_running()
+        returns False afterward), not just that the item isn't marked failed."""
+        info = _make_session_info(state=SessionState.ACTIVE)
+        coord = _make_coordinator(info, tmp_path)
+        coord.reset_session = AsyncMock(return_value=True)
+        coord.wait_for_session_ready = AsyncMock(return_value=False)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", delivery=DeliveryPolicy.WHEN_IDLE, reset_first=True)
+
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            result = await gate.deliver(comm)
+            assert result.success is True  # fire-and-forget enqueue ack
+
+            # Deterministic: await the loop task itself with a short timeout,
+            # rather than polling N times — a `continue` regression here spins
+            # the loop hot with no real suspension between iterations, so a
+            # fixed poll count can spuriously "succeed" without ever actually
+            # observing the loop exit (confirmed while authoring this test: a
+            # `continue` in place of `break` made the loop spin thousands of
+            # iterations within a couple of seconds, not settle into a state
+            # a bounded poll loop reliably samples). wait_for() either returns
+            # once the task truly finishes, or raises — no ambiguity.
+            task = gate._when_idle_tasks.get("s1")
+            try:
+                await asyncio.wait_for(task, timeout=2.0)
+            except TimeoutError:
+                task.cancel()
+                pytest.fail(
+                    "when_idle loop did not exit after a reset-wait timeout — "
+                    "hot-looping instead of breaking"
+                )
+
+        assert gate.is_when_idle_running("s1") is False
+        assert _status_of(coord, "s1", comm.comm_id) == "pending"
+        coord.send_message.assert_not_called()
+
+
+class TestInjectTimestampOverride:
+    """Issue #2193 PR6 — deliver()'s explicit inject_timestamp override takes
+    precedence over _should_inject_timestamp()'s heuristic at both dispatch
+    sites. This is the mechanism enqueue_message() relies on (see
+    test_session_coordinator.py's TestIssue2193PR6EnqueueMessageMigration) to
+    avoid the heuristic entirely for the manual queue-message producer family."""
+
+    @pytest.mark.asyncio
+    async def test_inline_dispatch_override_wins_over_true_leaning_heuristic(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", delivery=DeliveryPolicy.IMMEDIATE, sender_type=SenderType.SCHEDULE)
+        result = await gate.deliver(comm, inject_timestamp=False)
+
+        assert result.success is True
+        assert coord.send_message.call_args.kwargs["inject_timestamp"] is False
+
+    @pytest.mark.asyncio
+    async def test_inline_dispatch_no_override_falls_back_to_heuristic(self, tmp_path):
+        """Regression guard: without an override, SCHEDULE still resolves True
+        via the heuristic (unchanged PR5 behavior) — confirms the override
+        test above is testing something real, not an always-False artifact."""
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", delivery=DeliveryPolicy.IMMEDIATE, sender_type=SenderType.SCHEDULE)
+        result = await gate.deliver(comm)
+
+        assert result.success is True
+        assert coord.send_message.call_args.kwargs["inject_timestamp"] is True
+
+    @pytest.mark.asyncio
+    async def test_when_idle_dispatch_override_wins_over_true_leaning_heuristic(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", delivery=DeliveryPolicy.WHEN_IDLE, sender_type=SenderType.SCHEDULE)
+
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            result = await gate.deliver(comm, inject_timestamp=False)
+            assert result.success is True  # fire-and-forget enqueue ack
+
+            for _ in range(50):
+                await asyncio.sleep(0)
+                if coord.send_message.called:
+                    break
+
+        coord.send_message.assert_called_once()
+        assert coord.send_message.call_args.kwargs["inject_timestamp"] is False
         gate.stop_when_idle("s1")
+
+    @pytest.mark.asyncio
+    async def test_explicit_true_override_also_wins_over_false_leaning_heuristic(self, tmp_path):
+        """Opposite direction: a USER-sender comm (heuristic -> False) with an
+        explicit True override — mirrors enqueue_message()'s actual
+        regression-fix scenario (sender_type=USER, inject_timestamp=True)."""
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", delivery=DeliveryPolicy.IMMEDIATE, sender_type=SenderType.USER)
+        result = await gate.deliver(comm, inject_timestamp=True)
+
+        assert result.success is True
+        assert coord.send_message.call_args.kwargs["inject_timestamp"] is True

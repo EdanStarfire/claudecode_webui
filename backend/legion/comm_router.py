@@ -553,10 +553,6 @@ class CommRouter:
                     if not to_minion_name:
                         to_minion_name = minion.name
 
-        # ALWAYS persist to main legion timeline (this was missing!)
-        if legion_id:
-            await self._append_to_timeline(legion_id, comm)
-
         # Broadcast comm to WebSocket clients watching this legion
         if legion_id and self._comm_broadcast_callback:
             try:

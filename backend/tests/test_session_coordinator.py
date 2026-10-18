@@ -3514,6 +3514,238 @@ class TestIssue1779TimestampInjection:
 
         mock_sdk.send_message.assert_called_once_with("inter-agent comm", metadata=None)
 
+
+class TestIssue2193PR6EnqueueMessageMigration:
+    """enqueue_message() was migrated off queue_processor.py onto delivery_gate/
+    pending_store directly (issue #2193 PR6). The single most important property
+    this migration must preserve: a manual queue-message call with no override
+    still gets inject_timestamp=True — today's historical default — DESPITE
+    sender_type=USER now mapping to False under
+    DeliveryGate._should_inject_timestamp()'s PR5 heuristic. enqueue_message()
+    must thread its own inject_timestamp through deliver()'s explicit override
+    rather than ever relying on that heuristic for this producer family."""
+
+    @staticmethod
+    async def _drain_when_idle(coordinator, session_id: str) -> None:
+        task = coordinator.delivery_gate._when_idle_tasks.get(session_id)
+        if task is not None:
+            await asyncio.wait_for(task, timeout=5)
+
+    @pytest.mark.asyncio
+    async def test_manual_enqueue_inject_timestamp_argument_is_true(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Same scenario as above, asserted directly against the inject_timestamp
+        argument coordinator.send_message() actually received — not an indirect
+        side effect — so this test fails loudly (not just differently) if the
+        regression this PR fixes ever comes back."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+
+        with patch.object(
+            coordinator, "send_message", AsyncMock(return_value=True)
+        ) as mock_send_message:
+            await coordinator.enqueue_message(
+                session_id, "manually queued message", reset_session=False
+            )
+            await self._drain_when_idle(coordinator, session_id)
+
+        mock_send_message.assert_called_once()
+        assert mock_send_message.call_args.kwargs["inject_timestamp"] is True
+
+    @pytest.mark.asyncio
+    async def test_manual_enqueue_respects_explicit_false_override(
+        self, temp_coordinator, sample_session_config
+    ):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+
+        with patch.object(
+            coordinator, "send_message", AsyncMock(return_value=True)
+        ) as mock_send_message:
+            await coordinator.enqueue_message(
+                session_id, "system nudge", reset_session=False, inject_timestamp=False
+            )
+            await self._drain_when_idle(coordinator, session_id)
+
+        mock_send_message.assert_called_once()
+        assert mock_send_message.call_args.kwargs["inject_timestamp"] is False
+
+    @pytest.mark.asyncio
+    async def test_enqueue_message_accepts_sender_type_override(
+        self, temp_coordinator, sample_session_config
+    ):
+        from backend.models.legion_models import SenderType
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+
+        with patch.object(
+            coordinator, "send_message", AsyncMock(return_value=True)
+        ):
+            item = await coordinator.enqueue_message(
+                session_id, "scheduled prompt", reset_session=False, sender_type=SenderType.SCHEDULE
+            )
+            await self._drain_when_idle(coordinator, session_id)
+
+        assert "queue_id" in item
+
+    @pytest.mark.asyncio
+    async def test_enqueue_message_respects_configured_max_queue_size(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Builder-review finding: queue_processor.py's enqueue_message() read
+        queue_config['max_queue_size'] and enforced it via queue_manager.enqueue();
+        the migrated version must do the same via deliver()'s max_pending_size,
+        not silently fall back to the method-default cap of 100."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager.update_session(session_id, queue_paused=True)
+        await coordinator.update_queue_config(session_id, {"max_queue_size": 1})
+
+        await coordinator.enqueue_message(session_id, "first", reset_session=False)
+        with pytest.raises(ValueError, match="Pending store full"):
+            await coordinator.enqueue_message(session_id, "second", reset_session=False)
+
+    @pytest.mark.asyncio
+    async def test_enqueue_message_raises_on_deliver_failure_instead_of_broken_dict(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Builder-review finding: a deliver() failure that never actually enqueues
+        the comm (e.g. a full pending store) must raise ValueError — matching the
+        old queue_manager.enqueue()-raises-directly behavior routers/queue.py's
+        handle_exceptions(..., value_error_status=400) depends on — rather than
+        falling back to a {"queue_id": ...} dict missing "position", which
+        routers/queue.py's handler unconditionally indexes (would 500 with a
+        KeyError instead of a clean 400)."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager.update_session(session_id, queue_paused=True)
+        await coordinator.update_queue_config(session_id, {"max_queue_size": 1})
+        await coordinator.enqueue_message(session_id, "first", reset_session=False)
+
+        with pytest.raises(ValueError):
+            await coordinator.enqueue_message(session_id, "second", reset_session=False)
+
+        # And the first item is still cleanly retrievable with a real "position".
+        result = await coordinator.get_queue(session_id)
+        assert "position" in result["items"][0]
+
+
+class TestIssue2193PR6QueueMethodsBackedByPendingStore:
+    """cancel_queue_item/requeue_item/clear_queue/clear_queue_history/get_queue/
+    pause_queue all re-pointed from queue_manager/queue_processor to
+    pending_store/delivery_gate (issue #2193 PR6) — same signatures, same
+    legacy-shaped return values as before."""
+
+    @pytest.mark.asyncio
+    async def test_get_queue_returns_legacy_shape(self, temp_coordinator, sample_session_config):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+
+        with patch.object(coordinator, "send_message", AsyncMock(return_value=True)):
+            await coordinator.enqueue_message(session_id, "hello", reset_session=False)
+            task = coordinator.delivery_gate._when_idle_tasks.get(session_id)
+            if task is not None:
+                await asyncio.wait_for(task, timeout=5)
+
+        result = await coordinator.get_queue(session_id)
+        assert result["items"]
+        item = result["items"][0]
+        assert item["content"] == "hello"
+        assert item["status"] == "sent"  # "delivered" -> "sent" legacy rename
+
+    @pytest.mark.asyncio
+    async def test_cancel_queue_item_returns_legacy_dict(self, temp_coordinator, sample_session_config):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager.update_session(session_id, queue_paused=True)
+
+        item = await coordinator.enqueue_message(session_id, "to cancel")
+        cancelled = await coordinator.cancel_queue_item(session_id, item["queue_id"])
+        # Session stays paused for the test's own lifetime — the when_idle loop
+        # it started would otherwise sleep-poll forever after this test returns.
+        coordinator.delivery_gate.stop_when_idle(session_id)
+
+        assert cancelled is not None
+        assert cancelled["status"] == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_requeue_item_creates_new_pending_entry(self, temp_coordinator, sample_session_config):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+
+        with patch.object(coordinator, "send_message", AsyncMock(return_value=True)):
+            item = await coordinator.enqueue_message(session_id, "will fail or deliver", reset_session=False)
+            task = coordinator.delivery_gate._when_idle_tasks.get(session_id)
+            if task is not None:
+                await asyncio.wait_for(task, timeout=5)
+
+        requeued = await coordinator.requeue_item(session_id, item["queue_id"])
+        assert requeued is not None
+        assert requeued["queue_id"] != item["queue_id"]
+        assert requeued["status"] == "pending"
+
+    @pytest.mark.asyncio
+    async def test_clear_queue_cancels_pending_items(self, temp_coordinator, sample_session_config):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager.update_session(session_id, queue_paused=True)
+
+        await coordinator.enqueue_message(session_id, "one")
+        await coordinator.enqueue_message(session_id, "two")
+
+        count = await coordinator.clear_queue(session_id)
+        coordinator.delivery_gate.stop_when_idle(session_id)
+        assert count == 2
+
+    @pytest.mark.asyncio
+    async def test_clear_queue_history_removes_terminal_items(
+        self, temp_coordinator, sample_session_config
+    ):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager.update_session(session_id, queue_paused=True)
+
+        item = await coordinator.enqueue_message(session_id, "to cancel then clear")
+        await coordinator.cancel_queue_item(session_id, item["queue_id"])
+
+        count = await coordinator.clear_queue_history(session_id)
+        coordinator.delivery_gate.stop_when_idle(session_id)
+        assert count == 1
+
+    @pytest.mark.asyncio
+    async def test_pause_queue_resume_restarts_when_idle_loop(
+        self, temp_coordinator, sample_session_config
+    ):
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+
+        await coordinator.pause_queue(session_id, True)
+        with patch.object(coordinator, "send_message", AsyncMock(return_value=True)):
+            await coordinator.enqueue_message(session_id, "queued while paused", reset_session=False)
+            assert coordinator.delivery_gate.is_when_idle_running(session_id)
+
+            resumed = await coordinator.pause_queue(session_id, False)
+            assert resumed is True
+            assert coordinator.delivery_gate.is_when_idle_running(session_id)
+
+            task = coordinator.delivery_gate._when_idle_tasks.get(session_id)
+            if task is not None:
+                await asyncio.wait_for(task, timeout=5)
+
+
 class TestCreateEphemeralSession:
     """Regression tests for issue #498 Phase 1: create_ephemeral_session's call into
     create_session() used to pass permission_mode/system_prompt/model/etc. as individual
@@ -5011,16 +5243,19 @@ class TestIssue1572AutoResumeEndToEnd:
             assert remaining is None
 
             # 6. The neutral "please continue" nudge was actually queued for delivery
-            queue_items = coordinator.queue_manager.get_queue(session_id)
+            # (issue #2193 PR6: enqueue_message() is now backed by pending_store, not
+            # the retired queue_manager).
+            pending_items = coordinator.pending_store.get_all(session_id)
             assert any(
-                item.metadata and item.metadata.get("auto_resume") is True
-                for item in queue_items
+                item.comm.metadata and item.comm.metadata.get("auto_resume") is True
+                for item in pending_items
             ), "expected the auto-resume nudge to be enqueued"
         finally:
-            # enqueue_message() above started a real queue-processor background task
-            # for this session (no mock SDK backs it) — stop it rather than leaving
-            # it to run its ~10s no-SDK-found retry/fail cycle after the test ends.
-            coordinator.queue_processor.stop(session_id)
+            # enqueue_message() above started a real delivery-gate when_idle
+            # background task for this session (no mock SDK backs it) — stop it
+            # rather than leaving it to run its no-SDK-found retry/fail cycle
+            # after the test ends.
+            coordinator.delivery_gate.stop_when_idle(session_id)
 
 
 class TestIssue2190RateLimitResetTimeParser:

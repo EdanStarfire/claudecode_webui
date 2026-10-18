@@ -29,6 +29,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from backend.legion.scheduler_service import SchedulerService
+from backend.models.legion_models import SenderType
 from backend.models.schedule_models import Schedule, ScheduleStatus
 from backend.session_manager import SessionState
 
@@ -242,6 +243,9 @@ async def test_fire_error_session_unsticks_via_terminated_then_starts():
     assert kwargs["metadata"]["auto_resume"] is True
     assert kwargs["metadata"]["schedule_id"] == schedule.schedule_id
     assert schedule.fire_count == 1
+    # Issue #2193 PR6: identifies itself as SenderType.SCHEDULE so deliver()'s
+    # inject_timestamp override mechanism governs it, not the heuristic.
+    assert kwargs["sender_type"] == SenderType.SCHEDULE
     assert schedule.schedule_id not in svc._schedules, "repeat_count=1 self-delete"
 
 

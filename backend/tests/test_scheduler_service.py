@@ -23,6 +23,7 @@ from backend.legion.scheduler_service import (
     SchedulerService,
     _ScheduleAutoDeletedError,
 )
+from backend.models.legion_models import SenderType
 from backend.models.schedule_models import Schedule, ScheduleStatus, get_next_run
 
 # ---------------------------------------------------------------------------
@@ -114,6 +115,22 @@ async def test_fire_increments_fire_count():
     await svc._fire_permanent_schedule(schedule, 1000.0)
 
     assert schedule.fire_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fire_permanent_schedule_identifies_as_schedule_sender():
+    """Issue #2193 PR6: _fire_permanent_schedule() must identify itself as
+    SenderType.SCHEDULE so deliver()'s inject_timestamp override mechanism
+    (not the heuristic) governs its timestamp behavior."""
+    svc = _make_svc()
+    schedule = _make_schedule()
+    svc._schedules[schedule.schedule_id] = schedule
+
+    await svc._fire_permanent_schedule(schedule, 1000.0)
+
+    enqueue_mock = svc.system.session_port.enqueue_message
+    enqueue_mock.assert_awaited_once()
+    assert enqueue_mock.call_args.kwargs["sender_type"] == SenderType.SCHEDULE
 
 
 # ---------------------------------------------------------------------------

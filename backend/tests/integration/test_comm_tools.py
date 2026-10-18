@@ -4,7 +4,6 @@ Integration tests for MCP communication tools.
 Tests: send_comm
 """
 
-import json
 
 import pytest
 
@@ -61,7 +60,10 @@ async def test_send_comm_to_active_minion(legion_test_env):
 
     Verifies:
     - Tool returns success
-    - Timeline JSONL contains comm
+    - Recipient's pending_store ledger contains the comm (issue #2193 PR6:
+      timeline.jsonl is no longer written by _persist_comm() — pending_store
+      is the real per-session ledger of record now, same mechanism AC10
+      exposes through routers/queue.py)
     - Recipient messages.jsonl contains formatted message
     """
     env = legion_test_env
@@ -106,20 +108,21 @@ async def test_send_comm_to_active_minion(legion_test_env):
     assert result["content"][0]["type"] == "text"
     assert result.get("is_error") is not True, f"Unexpected error: {result['content'][0]['text']}"
 
-    # SIDE EFFECT 1: Timeline JSONL contains comm
+    # SIDE EFFECT 1: timeline.jsonl is NOT written (issue #2193 PR6 — the
+    # timeline-write removal from _persist_comm() applies to every comm,
+    # including send_comm traffic, not just the new queue/schedule producers).
     timeline_file = data_dir / "legions" / legion_id / "timeline.jsonl"
-    assert timeline_file.exists(), "Timeline file should exist"
+    assert not timeline_file.exists(), "Timeline file should no longer be written"
 
-    with open(timeline_file) as f:
-        timeline_comms = [json.loads(line) for line in f]
-
-    assert len(timeline_comms) > 0, "Timeline should have at least one comm"
-    comm = timeline_comms[-1]  # Get last comm
-    assert comm["from_minion_id"] == sender.session_id
-    assert comm["to_minion_id"] == recipient.session_id
-    assert comm["summary"] == "Task assigned"
-    assert comm["content"] == "Please process data.csv"
-    assert comm["comm_type"] == "task"
+    # pending_store is the real per-session ledger of record now.
+    pending_items = env["session_coordinator"].pending_store.get_all(recipient.session_id)
+    assert len(pending_items) > 0, "Recipient's pending_store should have a record of the comm"
+    delivered = pending_items[-1]
+    assert delivered.comm.from_minion_id == sender.session_id
+    assert delivered.comm.to_minion_id == recipient.session_id
+    assert delivered.comm.summary == "Task assigned"
+    assert delivered.comm.content == "Please process data.csv"
+    assert delivered.comm.comm_type.value == "task"
 
     # SIDE EFFECT 2: Recipient SDK message queue injection
     # Note: SessionCoordinator.send_message() queues messages to the SDK.

@@ -11,8 +11,10 @@ Pure data layer: nothing in production wires this up yet. `QueueManager`/
 stage (issue #2193's staged rollout) cuts the REST endpoints over.
 """
 
+import copy
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,7 +40,11 @@ class PendingItem:
     created_at: float = 0.0
     delivered_at: float | None = None
     error: str | None = None
-    inject_timestamp: bool = True
+    # Issue #2193 (PR6): None means "no explicit preference, use
+    # DeliveryGate._should_inject_timestamp()'s heuristic at dispatch time" —
+    # changed from an always-True default since nothing read this field
+    # before PR6 (both dispatch sites always called the heuristic directly).
+    inject_timestamp: bool | None = None
     # Issue #2193 (PR5): what to actually send to the SDK, if different from
     # comm.content/comm.metadata (the ledger's raw, sender-facing record).
     # Persisted (not a transient deliver() argument) because WHEN_IDLE items
@@ -58,6 +64,27 @@ class PendingItem:
             "inject_timestamp": self.inject_timestamp,
             "dispatch_content": self.dispatch_content,
             "dispatch_metadata": self.dispatch_metadata,
+        }
+
+    def to_legacy_queue_dict(self) -> dict[str, Any]:
+        """Shapes this entry as a QueueItem-compatible flat dict (issue #2193 AC10) so
+        routers/queue.py's REST responses — and the frontend queue store that consumes
+        them — need zero changes. Confirmed against the actual frontend code (queue.js,
+        QueueSection.vue): it hardcodes status == 'sent' (not 'delivered') and reads
+        queue_id/content/metadata/sent_at/created_at all flat, with no awareness this
+        nested comm shape exists."""
+        return {
+            "queue_id": self.comm.comm_id,
+            "session_id": self.session_id,
+            "content": self.comm.content,
+            "reset_session": self.comm.reset_first,
+            "metadata": self.comm.metadata,
+            "status": "sent" if self.status == "delivered" else self.status,
+            "position": self.position,
+            "created_at": self.created_at,
+            "sent_at": self.delivered_at,
+            "error": self.error,
+            "inject_timestamp": self.inject_timestamp if self.inject_timestamp is not None else True,
         }
 
     @classmethod
@@ -191,7 +218,7 @@ class PendingStore:
         session_dir: Path,
         comm: Comm,
         *,
-        inject_timestamp: bool = True,
+        inject_timestamp: bool | None = None,
         max_pending_size: int = 100,
         dispatch_content: str | None = None,
         dispatch_metadata: dict | None = None,
@@ -298,6 +325,33 @@ class PendingStore:
         pending_logger.info(f"Cancelled {comm_id} for session {session_id}")
         return item
 
+    async def requeue(self, session_id: str, session_dir: Path, comm_id: str) -> PendingItem | None:
+        """Re-queue a delivered/failed item as a NEW pending entry (new comm_id) at the
+        front of the queue — mirrors QueueManager.requeue()'s exact semantics. The
+        original item is left unchanged in history."""
+        original = self._find_item(session_id, comm_id)
+        if not original or original.status not in ("delivered", "failed"):
+            return None
+
+        new_comm = copy.deepcopy(original.comm)
+        new_comm.comm_id = str(uuid.uuid4())
+
+        pending = [i for i in self._pending.get(session_id, []) if i.status == "pending"]
+        front_pos = min((i.position for i in pending), default=0) - 1
+
+        new_item = await self.enqueue(
+            session_id, session_dir, new_comm,
+            inject_timestamp=original.inject_timestamp,
+            dispatch_content=original.dispatch_content,
+            dispatch_metadata=original.dispatch_metadata,
+        )
+        new_item.position = front_pos
+        await self._append_entry(session_dir, {
+            "type": "status", "comm_id": new_item.comm.comm_id,
+            "status": "pending", "position": front_pos,
+        })
+        return new_item
+
     async def clear_pending(self, session_id: str, session_dir: Path) -> int:
         """Cancel all pending items. Returns count of cancelled items."""
         items = self._pending.get(session_id, [])
@@ -349,9 +403,17 @@ class PendingStore:
         items = self._pending.get(session_id, [])
         return sorted(items, key=lambda x: x.position)
 
-    def get_page(self, session_id: str, limit: int = 100, offset: int = 0) -> dict:
-        """Get ledger items for a session, paginated, most recent first."""
-        all_items = [item.to_dict() for item in self.get_all(session_id)]
+    def get_page(
+        self, session_id: str, limit: int = 100, offset: int = 0, *, legacy_shape: bool = False
+    ) -> dict:
+        """Get ledger items for a session, paginated, most recent first.
+
+        legacy_shape=True (issue #2193 PR6/AC10) serializes each item via
+        to_legacy_queue_dict() instead of to_dict(), for routers/queue.py's
+        REST responses.
+        """
+        serialize = PendingItem.to_legacy_queue_dict if legacy_shape else PendingItem.to_dict
+        all_items = [serialize(item) for item in self.get_all(session_id)]
         all_items.reverse()  # Most recent (highest position) first
         total = len(all_items)
         pending_count = sum(1 for i in all_items if i.get("status") == "pending")
