@@ -1420,3 +1420,236 @@ class TestInjectTimestampOverride:
 
         assert result.success is True
         assert coord.send_message.call_args.kwargs["inject_timestamp"] is True
+
+
+class TestEnsureSessionActive:
+    """Issue #2193 PR7 (AC13) — the new standalone, comm-independent
+    ensure_session_active(), folded in from scheduler_service.py's own poll loop."""
+
+    @pytest.mark.asyncio
+    async def test_dormant_auto_start_true_starts_and_waits(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("backend.delivery_gate.READINESS_SETTLE_SECONDS", 0.01)
+        info = _make_session_info(state=SessionState.CREATED)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        result = await gate.ensure_session_active("s1", auto_start=True)
+
+        assert result.success is True
+        coord.start_session.assert_awaited_once()
+        coord.wait_for_session_ready.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_dormant_auto_start_false_fails_without_starting(self, tmp_path):
+        """AC8, same as the comm-delivery path: a dormant target only auto-starts
+        if explicitly requested."""
+        info = _make_session_info(state=SessionState.CREATED)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        result = await gate.ensure_session_active("s1", auto_start=False)
+
+        assert result.success is False
+        assert "auto_start" in result.error
+        coord.start_session.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_error_state_fails_fast_without_starting(self, tmp_path):
+        info = _make_session_info(state=SessionState.ERROR)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        result = await gate.ensure_session_active("s1")
+
+        assert result.success is False
+        assert "ERROR" in result.error
+        coord.start_session.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_paused_returns_success_without_waiting(self, tmp_path):
+        info = _make_session_info(state=SessionState.PAUSED)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        result = await gate.ensure_session_active("s1")
+
+        assert result.success is True
+        coord.start_session.assert_not_called()
+        coord.wait_for_session_ready.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_active_returns_success_without_waiting(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        result = await gate.ensure_session_active("s1")
+
+        assert result.success is True
+        coord.start_session.assert_not_called()
+        coord.wait_for_session_ready.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_session_not_found_fails(self, tmp_path):
+        coord = _make_coordinator(None, tmp_path)
+        gate = DeliveryGate(coord)
+
+        result = await gate.ensure_session_active("missing")
+
+        assert result.success is False
+        assert "not found" in result.error
+
+    @pytest.mark.asyncio
+    async def test_successful_wait_stamps_deadline_shared_with_ensure_session_ready(
+        self, tmp_path, monkeypatch
+    ):
+        """Cross-caller settle-window-sharing (issue #2193 AC13): a successful wait
+        via ensure_session_active() stamps the same _readiness_deadlines entry
+        _ensure_session_ready() reads — a comm delivered shortly after a script-
+        triggered start inherits the same courtesy settle window, with no second
+        wait_for_session_ready() call."""
+        monkeypatch.setattr("backend.delivery_gate.READINESS_SETTLE_SECONDS", 10.0)
+        info = _make_session_info(state=SessionState.CREATED)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        result = await gate.ensure_session_active("s1", auto_start=True)
+        assert result.success is True
+        assert "s1" in gate._readiness_deadlines
+        coord.wait_for_session_ready.assert_awaited_once()
+
+        # Session is now active/deliverable; a subsequent _ensure_session_ready()
+        # call for the same session must see the already-stamped deadline and skip
+        # straight through to its own sleep-until-deadline branch — no new
+        # start_session/wait_for_session_ready call.
+        info.state = SessionState.ACTIVE
+        comm = make_comm("s1")
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)) as sleep_mock:
+            second_result = await gate._ensure_session_ready(comm)
+
+        assert second_result.success is True
+        coord.start_session.assert_awaited_once()  # only the first call's start
+        coord.wait_for_session_ready.assert_awaited_once()  # only the first call's wait
+        sleep_mock.assert_awaited()  # slept out the remaining settle window instead
+
+
+class TestWaitForNotProcessing:
+    """Issue #2193 PR7 (AC13) — the new standalone wait_for_not_processing(),
+    folded in from legion_mcp_tools.py's _restart_monitor poll loop. Deliberately
+    not a generalization of _wait_for_busy_clear(): this primitive must return
+    True for an ERRORED-but-not-processing session, which _wait_for_busy_clear()
+    would treat as a hard failure."""
+
+    @pytest.mark.asyncio
+    async def test_clears_immediately_when_already_not_processing(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        result = await gate.wait_for_not_processing("s1", timeout=5.0)
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_waits_then_clears(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=True)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        call_count = 0
+
+        async def _get_info(_session_id):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                return info
+            info.is_processing = False
+            return info
+
+        coord.session_manager.get_session_info = AsyncMock(side_effect=_get_info)
+
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            result = await gate.wait_for_not_processing("s1", timeout=5.0, poll_interval=0.01)
+
+        assert result is True
+        assert call_count >= 3
+
+    @pytest.mark.asyncio
+    async def test_times_out_while_still_processing(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=True)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            result = await gate.wait_for_not_processing("s1", timeout=0.03, poll_interval=0.01)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_session_disappears_mid_wait_returns_false(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=True)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+        coord.session_manager.get_session_info = AsyncMock(return_value=None)
+
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)) as sleep_mock:
+            result = await gate.wait_for_not_processing("s1", timeout=30.0, poll_interval=1.0)
+
+        assert result is False
+        # Fails fast on the very first check, not after waiting out the (here,
+        # deliberately large) timeout — found during review: a version of this
+        # primitive that only gave up at the deadline silently prolonged
+        # disappearance detection (and would hang forever for timeout=None).
+        sleep_mock.assert_not_awaited()
+        coord.session_manager.get_session_info.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_errored_but_not_processing_returns_true(self, tmp_path):
+        """The behavior that specifically motivated not reusing
+        _wait_for_busy_clear() here — ERROR is not treated as a hard failure."""
+        info = _make_session_info(state=SessionState.ERROR, is_processing=False)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        result = await gate.wait_for_not_processing("s1", timeout=5.0)
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_no_timeout_waits_indefinitely_until_cleared(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=True)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        call_count = 0
+
+        async def _get_info(_session_id):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                return info
+            info.is_processing = False
+            return info
+
+        coord.session_manager.get_session_info = AsyncMock(side_effect=_get_info)
+
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            result = await gate.wait_for_not_processing("s1", timeout=None, poll_interval=0.01)
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_no_timeout_disappeared_session_does_not_hang_forever(self, tmp_path):
+        """Regression guard: a timeout=None caller (an 'overnight wait' use case,
+        same philosophy as _wait_for_idle's PAUSED handling elsewhere in this
+        class) against a session that disappears must still resolve, not loop
+        forever — there is no deadline to fall back on for this caller, so the
+        disappeared-session fast-path is the only thing that can end the wait."""
+        coord = _make_coordinator(None, tmp_path)
+        gate = DeliveryGate(coord)
+
+        result = await asyncio.wait_for(
+            gate.wait_for_not_processing("s1", timeout=None, poll_interval=0.01), timeout=2.0
+        )
+
+        assert result is False
