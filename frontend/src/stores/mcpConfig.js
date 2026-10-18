@@ -196,10 +196,22 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
     return `${protocol}//${authority}${path}`
   }
 
+  /**
+   * Build the client-ID metadata document URL (draft-ietf-oauth-client-id-metadata-
+   * document), always the default origin — deliberately ignoring any custom callback
+   * port/path, since the hosted document is global/non-per-config (issue #2231).
+   */
+  function buildClientMetadataUrl() {
+    return `${window.location.protocol}//${window.location.host}/oauth/client-metadata.json`
+  }
+
   async function initiateOAuth(configId) {
     const config = getConfig(configId)
     const redirectUri = buildRedirectUri(config)
-    return await api.post(`/api/mcp-configs/${configId}/oauth/initiate`, { redirect_uri: redirectUri })
+    return await api.post(`/api/mcp-configs/${configId}/oauth/initiate`, {
+      redirect_uri: redirectUri,
+      client_metadata_url: buildClientMetadataUrl(),
+    })
   }
 
   async function disconnectOAuth(configId) {
@@ -252,6 +264,7 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
     importConfigs,
     fetchOAuthStatus,
     buildRedirectUri,
+    buildClientMetadataUrl,
     initiateOAuth,
     disconnectOAuth,
     importOAuthAsSecret,

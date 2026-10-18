@@ -640,7 +640,7 @@ async def test_oauth_initiate_flow_delegates_to_oauth_secret_bundle_manager(serv
 
     assert result is None
     mock_coordinator.oauth_secret_bundle_manager.oauth_initiate_flow.assert_called_once_with(
-        "nonexistent", "http://srv", "http://cb", "App"
+        "nonexistent", "http://srv", "http://cb", "App", client_metadata_url=None
     )
 
 

@@ -25,12 +25,15 @@ from mcp.client.auth.oauth2 import PKCEParameters
 from mcp.client.auth.utils import (
     build_oauth_authorization_server_metadata_discovery_urls,
     build_protected_resource_metadata_discovery_urls,
+    create_client_info_from_metadata_url,
     create_client_registration_request,
     create_oauth_metadata_request,
     handle_auth_metadata_response,
     handle_protected_resource_response,
     handle_registration_response,
     handle_token_response_scopes,
+    is_valid_client_metadata_url,
+    should_use_client_metadata_url,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
 from mcp.shared.auth_utils import calculate_token_expiry
@@ -229,6 +232,7 @@ class OAuthFlowManager:
         client_name: str = "Claude Code WebUI",
         pre_registered_client_id: str | None = None,
         client_secret: str | None = None,
+        client_metadata_url: str | None = None,
     ) -> str:
         """Initiate an OAuth 2.1 authorization code flow.
 
@@ -243,10 +247,19 @@ class OAuthFlowManager:
         The authorization request also adds access_type=offline + prompt=consent in this
         case, since Google never issues a refresh_token without them.
 
+        client_metadata_url (issue #2231): the URL of this app's own hosted OAuth
+        client-ID metadata document (draft-ietf-oauth-client-id-metadata-document). Used
+        as a third fallback, below pre_registered_client_id and DCR, for servers that
+        advertise client_id_metadata_document_supported=True but no registration_endpoint
+        (e.g. Home Assistant). Withheld (None) by the caller when unusable (a custom
+        OAuth callback path/port is configured for this server) — see
+        oauth_secret_bundle_manager.oauth_initiate_flow().
+
         Steps performed:
           1. Protected resource metadata discovery (RFC 9728)
           2. Authorization server metadata discovery (RFC 8414)
-          3. Dynamic Client Registration (RFC 7591) — skipped when pre_registered_client_id set
+          3. Dynamic Client Registration (RFC 7591) — skipped when pre_registered_client_id
+             set, or replaced by the client-ID metadata document fallback above
           4. PKCE parameter generation
           5. Authorization URL construction
           6. Pending state storage (includes token_endpoint + client_id for complete_flow)
@@ -255,8 +268,9 @@ class OAuthFlowManager:
         """
         debug_logger.debug(
             "start_flow: server_id=%s server_url=%s pre_registered_client_id=%s "
-            "confidential=%s",
+            "confidential=%s client_metadata_url=%s",
             server_id, server_url, pre_registered_client_id, bool(client_secret),
+            client_metadata_url,
         )
         self._sweep_expired_pending()
         async with httpx.AsyncClient() as http:
@@ -351,32 +365,82 @@ class OAuthFlowManager:
                 client_info = await store.get_client_info()
 
             if not client_info:
-                client_metadata = OAuthClientMetadata(
-                    redirect_uris=[redirect_uri],  # type: ignore[arg-type]
-                    client_name=client_name,
-                    grant_types=["authorization_code", "refresh_token"],
-                    response_types=["code"],
-                    token_endpoint_auth_method="none",
+                has_registration_endpoint = bool(
+                    oauth_metadata and oauth_metadata.registration_endpoint
                 )
-                reg_req = create_client_registration_request(
-                    oauth_metadata, client_metadata, auth_endpoint
-                )
-                try:
-                    reg_resp = await http.send(reg_req)
-                    client_info = await handle_registration_response(reg_resp)
-                    await store.set_client_info(client_info)
-                    debug_logger.info("DCR succeeded for MCP server %s", server_id)
-                except Exception as exc:
-                    debug_logger.warning(
-                        "DCR failed for MCP server %s (%s); no pre-registered client_id available",
-                        server_id,
-                        exc,
+                if (
+                    not has_registration_endpoint
+                    and should_use_client_metadata_url(oauth_metadata, client_metadata_url)
+                    and is_valid_client_metadata_url(client_metadata_url)
+                ):
+                    # Issue #2231: server supports CIMD but not DCR — use this app's
+                    # own hosted client-metadata document as the client_id instead of
+                    # attempting a blind (and for this class of server, doomed) DCR POST.
+                    client_info = create_client_info_from_metadata_url(
+                        client_metadata_url, redirect_uris=[redirect_uri],  # type: ignore[arg-type]
                     )
-                    raise RuntimeError(
-                        f"OAuth Dynamic Client Registration failed for MCP server {server_id!r} "
-                        f"and no oauth_client_id is configured. Set 'oauth_client_id' in the "
-                        f"MCP server config to use a pre-registered app."
-                    ) from exc
+                    await store.set_client_info(client_info)
+                    debug_logger.info(
+                        "OAuth: using client-ID metadata document for MCP server %s (%s)",
+                        server_id, client_metadata_url,
+                    )
+                else:
+                    client_metadata = OAuthClientMetadata(
+                        redirect_uris=[redirect_uri],  # type: ignore[arg-type]
+                        client_name=client_name,
+                        grant_types=["authorization_code", "refresh_token"],
+                        response_types=["code"],
+                        token_endpoint_auth_method="none",
+                    )
+                    reg_req = create_client_registration_request(
+                        oauth_metadata, client_metadata, auth_endpoint
+                    )
+                    try:
+                        reg_resp = await http.send(reg_req)
+                        client_info = await handle_registration_response(reg_resp)
+                        await store.set_client_info(client_info)
+                        debug_logger.info("DCR succeeded for MCP server %s", server_id)
+                    except Exception as exc:
+                        debug_logger.warning(
+                            "DCR failed for MCP server %s (%s); no pre-registered client_id available",
+                            server_id,
+                            exc,
+                        )
+                        if (
+                            not has_registration_endpoint
+                            and oauth_metadata
+                            and oauth_metadata.client_id_metadata_document_supported
+                        ):
+                            # Distinct failure mode (AC6): this server needs CIMD, not
+                            # DCR, and CIMD wasn't usable — name why specifically instead
+                            # of reusing the generic "set oauth_client_id manually"
+                            # message, which doesn't solve anything for this class of
+                            # server.
+                            if client_metadata_url is None:
+                                reason = (
+                                    "no usable client-ID metadata document URL was "
+                                    "available (a custom OAuth callback path/port is "
+                                    "configured for this server, which is incompatible "
+                                    "with the shared metadata document)"
+                                )
+                            else:
+                                reason = (
+                                    "this app's own origin is not HTTPS, which the "
+                                    "client-ID metadata document mechanism requires"
+                                )
+                            raise RuntimeError(
+                                f"MCP server {server_id!r} requires the OAuth Client ID "
+                                f"Metadata Document mechanism (draft-ietf-oauth-client-id-"
+                                f"metadata-document) rather than Dynamic Client Registration, "
+                                f"but {reason}. Remove any custom OAuth callback path/port "
+                                f"for this server, and ensure this app is served over HTTPS, "
+                                f"then retry."
+                            ) from exc
+                        raise RuntimeError(
+                            f"OAuth Dynamic Client Registration failed for MCP server {server_id!r} "
+                            f"and no oauth_client_id is configured. Set 'oauth_client_id' in the "
+                            f"MCP server config to use a pre-registered app."
+                        ) from exc
 
             client_id = client_info.client_id
 

@@ -447,6 +447,7 @@ class McpConfigUpdateRequest(BaseModel):
 
 class McpOAuthInitiateRequest(BaseModel):
     redirect_uri: str
+    client_metadata_url: str | None = None
 
 
 class McpOAuthImportAsSecretRequest(BaseModel):

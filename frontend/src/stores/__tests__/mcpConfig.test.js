@@ -87,7 +87,28 @@ describe('mcpConfig store — buildRedirectUri (issue #1789)', () => {
 
     expect(apiMock.post).toHaveBeenCalledWith('/api/mcp-configs/cfg-1/oauth/initiate', {
       redirect_uri: 'https://example.com:8765/callback',
+      client_metadata_url: 'https://example.com/oauth/client-metadata.json',
     })
+  })
+})
+
+describe('mcpConfig store — buildClientMetadataUrl (issue #2231)', () => {
+  async function getStore() {
+    const { useMcpConfigStore } = await import('@/stores/mcpConfig')
+    return useMcpConfigStore()
+  }
+
+  it('builds from the current origin, ignoring any custom callback port/path', async () => {
+    const store = await getStore()
+    expect(store.buildClientMetadataUrl()).toBe('https://example.com/oauth/client-metadata.json')
+  })
+
+  it('keeps the current host port (unlike buildRedirectUri, it takes no config argument)', async () => {
+    stubLocation({ hostname: 'example.com', port: '5789' })
+    const store = await getStore()
+    expect(store.buildClientMetadataUrl()).toBe(
+      'https://example.com:5789/oauth/client-metadata.json'
+    )
   })
 })
 
