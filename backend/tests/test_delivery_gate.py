@@ -19,12 +19,19 @@ from backend.session_manager import SessionInfo, SessionState
 
 
 def make_comm(session_id: str, *, comm_id: str | None = None, content: str = "hello", **overrides) -> Comm:
-    """Build a valid Comm addressed to `session_id` (from the user, unless overridden)."""
+    """Build a valid Comm addressed to `session_id` (from the user, unless overridden).
+
+    auto_start defaults True (issue #2193 PR5 AC8 fixture consequence): restores
+    every pre-AC8 test's effective historical behavior now that
+    _ensure_session_ready() actually gates auto-start on this field. The
+    explicit AC8 fail-fast test overrides auto_start=False itself.
+    """
     kwargs = {
         "comm_id": comm_id or str(uuid.uuid4()),
         "from_user": True,
         "to_minion_id": session_id,
         "content": content,
+        "auto_start": True,
     }
     kwargs.update(overrides)
     return Comm(**kwargs)
@@ -510,7 +517,14 @@ class TestInjectTimestampScoping:
     @pytest.mark.parametrize(
         "sender_type,expected",
         [
-            (SenderType.USER, True),
+            # USER is False, not True (issue #2193 PR5 bug fix, found in review):
+            # every comm reaching deliver() today flows through comm_router.py,
+            # i.e. "Legion inter-agent comms" per session_coordinator.send_message()'s
+            # docstring, which pass inject_timestamp=False unconditionally — the rule
+            # is scoped by subsystem (direct chat/queue vs. Legion routing), not by
+            # who authored the comm. A from_user=True Comm sent via
+            # POST /api/legions/{id}/comms is still Legion-routed traffic.
+            (SenderType.USER, False),
             (SenderType.SCHEDULE, True),
             (SenderType.MINION, False),
             (SenderType.SYSTEM, False),
@@ -523,6 +537,23 @@ class TestInjectTimestampScoping:
             kwargs["from_minion_id"] = "sender-x"
         comm = make_comm("s1", sender_type=sender_type, **kwargs)
         assert DeliveryGate._should_inject_timestamp(comm) == expected
+
+    @pytest.mark.asyncio
+    async def test_user_sent_comm_dispatched_through_deliver_skips_injection(self, tmp_path):
+        """Regression for the bug above, exercised through deliver() itself (not
+        just the static helper) — a from_user=True Comm routed through deliver()
+        (e.g. a user message to a minion via POST /api/legions/{id}/comms) must
+        reach send_message() with inject_timestamp=False, or the SDK-delivered
+        text desyncs from timeline.jsonl's pre-injection comm.content."""
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", content="hello from the user", delivery=DeliveryPolicy.IMMEDIATE, from_user=True)
+        result = await gate.deliver(comm)
+
+        assert result.success is True
+        assert coord.send_message.call_args.kwargs["inject_timestamp"] is False
 
 
 class TestSenderScopedFlush:
@@ -727,7 +758,7 @@ class TestAuthorityGate:
         result = await gate.deliver(comm)
 
         assert result.success is False
-        assert "authority" in result.error.lower()
+        assert "ancestor" in result.error.lower()
         coord.interrupt_session.assert_not_called()
         coord.send_message.assert_not_called()
         assert _status_of(coord, "s1", comm.comm_id) == "failed"
@@ -746,7 +777,7 @@ class TestAuthorityGate:
         result = await gate.deliver(comm)
 
         assert result.success is False
-        assert "authority" in result.error.lower()
+        assert "ancestor" in result.error.lower()
         coord.interrupt_session.assert_not_called()
         coord.send_message.assert_not_called()
         assert _status_of(coord, "s1", comm.comm_id) == "failed"
@@ -916,4 +947,305 @@ class TestQueuePausedGate:
 
         coord.send_message.assert_awaited_once()
         assert _status_of(coord, "s1", comm.comm_id) == "delivered"
+
+
+class TestAC8AutoStart:
+    """Issue #2193 PR5 — AC8 enforcement: a dormant target only auto-starts if
+    comm.auto_start is set, applied uniformly across every delivery policy."""
+
+    @pytest.mark.asyncio
+    async def test_auto_start_false_on_dormant_target_fails_without_starting(self, tmp_path):
+        info = _make_session_info(state=SessionState.CREATED)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", delivery=DeliveryPolicy.IMMEDIATE, auto_start=False)
+        result = await gate.deliver(comm)
+
+        assert result.success is False
+        assert "auto_start" in result.error
+        coord.start_session.assert_not_called()
+        assert comm.metadata["delivery_failure_reason"] == result.error
+        assert _status_of(coord, "s1", comm.comm_id) == "failed"
+
+    @pytest.mark.asyncio
+    async def test_auto_start_true_default_on_dormant_target_still_auto_starts(self, tmp_path):
+        """Regression guard against the make_comm() default change itself."""
+        info = _make_session_info(state=SessionState.CREATED)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", delivery=DeliveryPolicy.IMMEDIATE)  # auto_start=True default
+        result = await gate.deliver(comm)
+
+        assert result.success is True
+        coord.start_session.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_auto_start_true_dormant_halt_still_auto_starts_then_interrupts(self, tmp_path):
+        """The specific regression test: dormant + HALT + the new auto_start=True
+        default still auto-starts, then interrupts — asserted explicitly rather than
+        relying on incidental coverage from the pre-existing ordering tests."""
+        info = _make_session_info(state=SessionState.CREATED)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", content="halt now", delivery=DeliveryPolicy.HALT)
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            result = await gate.deliver(comm)
+
+        assert result.success is True
+        coord.start_session.assert_awaited_once()
+        coord.interrupt_session.assert_awaited_once()
+        coord.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_auto_start_true_dormant_pivot_still_auto_starts_then_interrupts_then_sends(self, tmp_path):
+        """Same regression, for PIVOT — auto-starts, interrupts, then sends."""
+        info = _make_session_info(state=SessionState.CREATED)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", content="pivot now", delivery=DeliveryPolicy.PIVOT)
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            result = await gate.deliver(comm)
+
+        assert result.success is True
+        coord.start_session.assert_awaited_once()
+        coord.interrupt_session.assert_awaited_once()
+        coord.send_message.assert_awaited_once()
+
+
+class TestDeliveryFailureReason:
+    """Issue #2193 PR5 — every deliver() failure branch stamps
+    comm.metadata['delivery_failure_reason'] via the new _fail() helper."""
+
+    @pytest.mark.asyncio
+    async def test_readiness_failure_sets_reason(self, tmp_path):
+        info = _make_session_info(state=SessionState.ERROR)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1")
+        result = await gate.deliver(comm)
+
+        assert result.success is False
+        assert comm.metadata["delivery_failure_reason"] == result.error
+
+    @pytest.mark.asyncio
+    async def test_halt_authority_failure_sets_reason(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE)
+        coord = _make_coordinator(info, tmp_path)
+        coord.legion_system.comm_router.is_authorized_sender = AsyncMock(return_value=False)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm(
+            "s1", delivery=DeliveryPolicy.HALT, from_user=False, from_minion_id="sibling-a",
+        )
+        result = await gate.deliver(comm)
+
+        assert result.success is False
+        assert comm.metadata["delivery_failure_reason"] == result.error
+
+    @pytest.mark.asyncio
+    async def test_pivot_authority_failure_sets_reason(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE)
+        coord = _make_coordinator(info, tmp_path)
+        coord.legion_system.comm_router.is_authorized_sender = AsyncMock(return_value=False)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm(
+            "s1", delivery=DeliveryPolicy.PIVOT, from_user=False, from_minion_id="sibling-a",
+        )
+        result = await gate.deliver(comm)
+
+        assert result.success is False
+        assert comm.metadata["delivery_failure_reason"] == result.error
+
+    @pytest.mark.asyncio
+    async def test_interrupt_failure_sets_reason(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE)
+        coord = _make_coordinator(info, tmp_path)
+        coord.interrupt_session = AsyncMock(return_value=False)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", delivery=DeliveryPolicy.HALT)
+        result = await gate.deliver(comm)
+
+        assert result.success is False
+        assert comm.metadata["delivery_failure_reason"] == result.error
+
+    @pytest.mark.asyncio
+    async def test_race_cancelled_sets_reason(self, tmp_path):
+        """Simulates a concurrent flush_sender() cancelling the entry between
+        enqueue and the dispatch lock's post-lock re-check: wrap enqueue() so
+        the item is cancelled immediately after deliver() enqueues it."""
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        real_enqueue = coord.pending_store.enqueue
+
+        async def cancel_before_dispatch(*args, **kwargs):
+            item = await real_enqueue(*args, **kwargs)
+            await coord.pending_store.cancel("s1", tmp_path, item.comm.comm_id)
+            return item
+
+        coord.pending_store.enqueue = AsyncMock(side_effect=cancel_before_dispatch)
+
+        comm = make_comm("s1", delivery=DeliveryPolicy.IMMEDIATE)
+        result = await gate.deliver(comm)
+
+        assert result.success is False
+        assert "Cancelled before dispatch" in result.error
+        coord.send_message.assert_not_called()
+        assert comm.metadata["delivery_failure_reason"] == result.error
+
+    @pytest.mark.asyncio
+    async def test_send_exception_sets_reason(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
+        coord = _make_coordinator(info, tmp_path)
+        coord.send_message = AsyncMock(side_effect=RuntimeError("boom"))
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", delivery=DeliveryPolicy.IMMEDIATE)
+        result = await gate.deliver(comm)
+
+        assert result.success is False
+        assert comm.metadata["delivery_failure_reason"] == result.error
+
+    @pytest.mark.asyncio
+    async def test_send_failure_sets_reason(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
+        coord = _make_coordinator(info, tmp_path)
+        coord.send_message = AsyncMock(return_value=False)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", delivery=DeliveryPolicy.IMMEDIATE)
+        result = await gate.deliver(comm)
+
+        assert result.success is False
+        assert comm.metadata["delivery_failure_reason"] == result.error
+
+
+class TestDispatchContentOverride:
+    """Issue #2193 PR5 — dispatch_content/dispatch_metadata persisted onto the
+    PendingItem at enqueue time, applied at whichever dispatch site actually sends."""
+
+    @pytest.mark.asyncio
+    async def test_immediate_uses_override_and_restores_comm_after(self, tmp_path):
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", content="raw content", delivery=DeliveryPolicy.IMMEDIATE)
+        comm.metadata = {"caller_key": "caller_value"}
+
+        result = await gate.deliver(
+            comm, dispatch_content="formatted content", dispatch_metadata={"comm": {}},
+        )
+
+        assert result.success is True
+        sent_kwargs = coord.send_message.call_args.kwargs
+        assert sent_kwargs["message"] == "formatted content"
+        assert sent_kwargs["metadata"] == {"comm": {}}
+
+        # Swap didn't leak onto the caller's Comm.
+        assert comm.content == "raw content"
+        assert comm.metadata == {"caller_key": "caller_value"}
+
+        # The ledger's persisted copy shows the original, unformatted content.
+        ledger_item = coord.pending_store.get_item("s1", comm.comm_id)
+        assert ledger_item.comm.content == "raw content"
+
+    @pytest.mark.asyncio
+    async def test_when_idle_dispatched_via_loop_uses_override(self, tmp_path):
+        """Proves the override survives the enqueue()-now/send()-later gap —
+        the mechanism that motivated persisting these fields on PendingItem
+        rather than passing them as transient deliver() arguments."""
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
+        coord = _make_coordinator(info, tmp_path)
+
+        captured = []
+
+        async def fake_send_message(session_id, message, metadata=None, inject_timestamp=True):
+            captured.append((message, metadata))
+            return True
+
+        coord.send_message = AsyncMock(side_effect=fake_send_message)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", content="raw when-idle content", delivery=DeliveryPolicy.WHEN_IDLE)
+
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            result = await gate.deliver(
+                comm, dispatch_content="formatted when-idle content", dispatch_metadata={"comm": {"x": 1}},
+            )
+            assert result.success is True  # fire-and-forget enqueue ack
+
+            for _ in range(50):
+                await asyncio.sleep(0)
+                if captured:
+                    break
+
+        assert captured == [("formatted when-idle content", {"comm": {"x": 1}})]
+        assert comm.content == "raw when-idle content"
+        gate.stop_when_idle("s1")
+
+    @pytest.mark.asyncio
+    async def test_composition_dispatch_override_then_stale_pivot_note(self, tmp_path):
+        """The composition test: a WHEN_IDLE comm enqueued with dispatch_content
+        set, then a concurrent PIVOT from a different sender resolves successfully
+        before this item's own eventual dispatch — the text actually sent must
+        contain both the dispatch override's formatting AND the stale-pivot note
+        appended after it, in that order (swap to dispatch_content FIRST, then
+        annotate on top of that)."""
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
+        coord = _make_coordinator(info, tmp_path)
+
+        captured = []
+
+        async def fake_send_message(session_id, message, metadata=None, inject_timestamp=True):
+            captured.append(message)
+            return True
+
+        coord.send_message = AsyncMock(side_effect=fake_send_message)
+        gate = DeliveryGate(coord)
+
+        stale = make_comm(
+            "s1", content="raw stale content", delivery=DeliveryPolicy.WHEN_IDLE,
+            from_user=False, from_minion_id="late-sender",
+        )
+
+        with patch("backend.delivery_gate.asyncio.sleep", new=AsyncMock(side_effect=_fast_sleep)):
+            result = await gate.deliver(
+                stale, dispatch_content="**Report** formatted body", dispatch_metadata={"comm": {}},
+            )
+            assert result.success is True
+
+            pivot = make_comm(
+                "s1", content="pivot message", delivery=DeliveryPolicy.PIVOT,
+                from_user=False, from_minion_id="other-sender", from_minion_name="OtherSender",
+            )
+            pivot_result = await gate.deliver(pivot)
+            assert pivot_result.success is True
+
+            gate.ensure_when_idle_running("s1")
+            for _ in range(50):
+                await asyncio.sleep(0)
+                if len(captured) >= 2:
+                    break
+
+        assert len(captured) == 2
+        assert captured[0] == "pivot message"
+        stale_sent = captured[1]
+        assert stale_sent.startswith("**Report** formatted body")
+        assert "queued before a pivot from OtherSender" in stale_sent
+        # Composition order: dispatch override first, stale note appended after it.
+        assert stale_sent.index("**Report** formatted body") < stale_sent.index("queued before a pivot")
+
+        # Ledger's persisted copy stays the original, un-annotated, un-formatted content.
+        ledger_item = coord.pending_store.get_item("s1", stale.comm_id)
+        assert ledger_item.comm.content == "raw stale content"
+        gate.stop_when_idle("s1")
         gate.stop_when_idle("s1")

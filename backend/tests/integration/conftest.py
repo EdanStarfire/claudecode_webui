@@ -250,7 +250,7 @@ async def api_integration_env(request, tmp_path):
         }
         resp = await client.post(f"/api/legions/{legion_id}/minions", json=payload)
         assert resp.status_code == 200, f"create_test_minion failed: {resp.text}"
-        return resp.json()["session"]
+        return resp.json()["minion"]
 
     env = {
         "app": webui.app,

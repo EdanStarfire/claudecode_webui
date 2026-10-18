@@ -786,8 +786,19 @@ async def test_issue_1839_send_comm_generic_text_unchanged_without_reason(tmp_pa
 def _make_send_comm_authority_system(from_id: str, to_id: str, to_name: str, is_authorized: bool):
     """Helper: build a mock system for a minion-to-minion send_comm_tool call that
     reaches the AC7 authority check — validate_comm_target (visibility) already
-    passes, only is_authorized_sender is under test."""
+    passes, only is_authorized_sender is under test.
+
+    Issue #2193 PR5: the tool-layer authority check (added in PR4) is removed —
+    the AC7 check now lives solely inside delivery_gate.deliver(), which this
+    unit test mocks out entirely at the comm_router.route_comm() level. route_comm
+    here simulates what deliver() would really do for an unauthorized HALT/PIVOT:
+    stamp comm.metadata["delivery_failure_reason"] and return False — the same
+    observable contract _handle_send_comm's route_comm()-returned-False branch
+    already handles for every other delivery failure.
+    """
     from unittest.mock import AsyncMock, MagicMock
+
+    from backend.models.legion_models import DeliveryPolicy
 
     from_session = MagicMock()
     from_session.project_id = "legion-authority"
@@ -811,10 +822,19 @@ def _make_send_comm_authority_system(from_id: str, to_id: str, to_name: str, is_
     legion_coordinator = MagicMock()
     legion_coordinator.get_minion_by_name_in_legion = AsyncMock(return_value=to_minion)
 
+    async def fake_route_comm(comm, **_kwargs):
+        if not is_authorized and comm.delivery in (DeliveryPolicy.HALT, DeliveryPolicy.PIVOT):
+            verb = comm.delivery.value.upper()
+            comm.metadata["delivery_failure_reason"] = (
+                f"{verb} requires the sender to be the user or an ancestor of the recipient"
+            )
+            return False
+        return True
+
     comm_router = MagicMock()
     comm_router.validate_comm_target = AsyncMock(return_value=True)
     comm_router.is_authorized_sender = AsyncMock(return_value=is_authorized)
-    comm_router.route_comm = AsyncMock(return_value=True)
+    comm_router.route_comm = AsyncMock(side_effect=fake_route_comm)
 
     mock_system = MagicMock()
     mock_system.session_port = session_coordinator
@@ -825,8 +845,10 @@ def _make_send_comm_authority_system(from_id: str, to_id: str, to_name: str, is_
 
 @pytest.mark.asyncio
 async def test_send_comm_halt_from_sibling_rejected_without_routing():
-    """Issue #2193 AC7: a sibling (not the user or an ancestor) cannot HALT —
-    rejected with a clear error, route_comm never reached."""
+    """Issue #2193 AC7: a sibling (not the user or an ancestor) cannot HALT.
+    PR5: the tool-layer early-return is gone — route_comm() IS now reached, but
+    returns False with delivery_failure_reason set, surfaced the same way any
+    other delivery failure is (self._err(f"Failed to send message to {name}: {reason}"))."""
     from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
 
     mock_system = _make_send_comm_authority_system(
@@ -839,19 +861,20 @@ async def test_send_comm_halt_from_sibling_rejected_without_routing():
         "to_minion_name": "SiblingB",
         "content": "stop now",
         "comm_type": "task",
-        "interrupt_priority": "halt",
+        "delivery": "halt",
     })
 
     assert result["is_error"] is True
     text = result["content"][0]["text"]
     assert "SiblingB" in text
     assert "ancestor" in text.lower()
-    mock_system.comm_router.route_comm.assert_not_called()
+    mock_system.comm_router.route_comm.assert_called_once()
+    mock_system.comm_router.is_authorized_sender.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_send_comm_pivot_from_sibling_rejected_without_routing():
-    """Same rejection for PIVOT."""
+    """Same rejection for PIVOT, post-PR5 cutover."""
     from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
 
     mock_system = _make_send_comm_authority_system(
@@ -864,14 +887,15 @@ async def test_send_comm_pivot_from_sibling_rejected_without_routing():
         "to_minion_name": "SiblingB",
         "content": "redirect now",
         "comm_type": "task",
-        "interrupt_priority": "pivot",
+        "delivery": "pivot",
     })
 
     assert result["is_error"] is True
     text = result["content"][0]["text"]
     assert "SiblingB" in text
     assert "ancestor" in text.lower()
-    mock_system.comm_router.route_comm.assert_not_called()
+    mock_system.comm_router.route_comm.assert_called_once()
+    mock_system.comm_router.is_authorized_sender.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -889,7 +913,7 @@ async def test_send_comm_halt_from_ancestor_succeeds():
         "to_minion_name": "DescendantB",
         "content": "stop now",
         "comm_type": "task",
-        "interrupt_priority": "halt",
+        "delivery": "halt",
     })
 
     assert result["is_error"] is False
@@ -938,12 +962,56 @@ async def test_send_comm_halt_to_user_succeeds_without_authority_check(tmp_path)
         "to_minion_name": "user",
         "content": "stop now",
         "comm_type": "task",
-        "interrupt_priority": "halt",
+        "delivery": "halt",
     })
 
     assert result["is_error"] is False
     mock_system.comm_router.route_comm.assert_called_once()
     mock_system.comm_router.is_authorized_sender.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_send_comm_auto_start_defaults_true_when_omitted(tmp_path):
+    """Issue #2193 PR5: auto_start defaults True when the caller omits it —
+    preserves the pre-AC8-enforcement observed behavior."""
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    mock_system = _make_send_comm_system_with_router("any-minion", tmp_path, resource_ids=[])
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_send_comm({
+        "_from_minion_id": "any-minion",
+        "to_minion_name": "user",
+        "content": "fyi",
+        "comm_type": "task",
+    })
+
+    assert result["is_error"] is False
+    sent_comm = mock_system.comm_router.route_comm.call_args.args[0]
+    assert sent_comm.auto_start is True
+
+
+@pytest.mark.asyncio
+async def test_send_comm_auto_start_false_explicit_is_honored(tmp_path):
+    """An explicit auto_start=False from a minion is threaded through to the
+    constructed Comm — the delivery outcome itself is delivery_gate.py's job,
+    not this tool-layer test's."""
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    mock_system = _make_send_comm_system_with_router("any-minion", tmp_path, resource_ids=[])
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_send_comm({
+        "_from_minion_id": "any-minion",
+        "to_minion_name": "user",
+        "content": "fyi",
+        "comm_type": "task",
+        "auto_start": False,
+    })
+
+    assert result["is_error"] is False
+    sent_comm = mock_system.comm_router.route_comm.call_args.args[0]
+    assert sent_comm.auto_start is False
 
 
 # ── queue_task handler tests (Issue #1114) ──

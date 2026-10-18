@@ -109,7 +109,10 @@ def build_router(webui) -> APIRouter:
         if request.to_minion_id:
             to_minion_name = await webui.service.get_minion_name(request.to_minion_id)
 
-        # Create Comm from user
+        # Create Comm from user. auto_start=True (issue #2193 PR5 AC8): preserves
+        # this endpoint's pre-AC8-enforcement observed behavior of auto-starting
+        # a dormant target minion — deliver()'s _ensure_session_ready() now fails
+        # fast on a dormant target unless auto_start is explicitly set.
         comm = Comm(
             comm_id=str(uuid.uuid4()),
             from_user=True,
@@ -117,7 +120,8 @@ def build_router(webui) -> APIRouter:
             to_user=request.to_user,
             to_minion_name=to_minion_name,
             content=request.content,
-            comm_type=CommType(request.comm_type)
+            comm_type=CommType(request.comm_type),
+            auto_start=True,
         )
 
         # Route the comm

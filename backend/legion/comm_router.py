@@ -317,16 +317,12 @@ class CommRouter:
         Attachments (if any) must already be delivered via _deliver_attachments()
         before this is called — this only formats comm.attachments for display.
 
-        Issue #2189 (coordinator-split PR 10): the auto-start/readiness-wait gate
-        lives in delivery_gate.py now (DeliveryGate.ensure_ready()) — see that
-        module. It still runs here FIRST and unconditionally, before formatting
-        and before interrupt-priority is checked, exactly as pre-PR: a HALT/PIVOT
-        comm to a dormant target must still force it through the same gate a
-        NORMAL comm would (HALT: auto-started then immediately interrupted;
-        PIVOT: gated, then interrupted, then sent) — calling the gate only AFTER
-        the interrupt-priority branch would be a real behavior change, not just
-        an internal-mechanics detail. HALT/PIVOT interrupt-priority handling and
-        the comm-timeline formatting below are otherwise unchanged.
+        Issue #2193 PR5: this is now a thin wrapper — all gating (auto-start/
+        readiness-wait, AC5/AC6/AC7/AC8 ordering, HALT/PIVOT interrupt handling)
+        lives in delivery_gate.py's deliver(), the single call below. This
+        method keeps only the formatting logic (header, attachment listing,
+        trailing instruction, comm_metadata) and the failure-notification call,
+        unchanged from before this PR.
 
         Args:
             comm: Comm with to_minion_id set
@@ -335,19 +331,6 @@ class CommRouter:
             bool: True if sent successfully
         """
         try:
-            gate_result = await self.system.session_port.delivery_gate.ensure_ready(comm)
-            if not gate_result.success:
-                legion_logger.error(
-                    f"Failed to deliver comm {comm.comm_id} to minion {comm.to_minion_id}: {gate_result.error}"
-                )
-                if comm.from_minion_id:
-                    await self._send_system_error_comm(
-                        to_minion_id=comm.from_minion_id,
-                        error_message=f"Failed to deliver message: {gate_result.error}",
-                        original_comm_id=comm.comm_id
-                    )
-                return False
-
             # Get sender name for formatting
             # Use "Minion #user" to signal that replies should use send_comm MCP tool
             from_name = "Minion #user"
@@ -427,56 +410,20 @@ class CommRouter:
                     for a in delivered_attachments
                 ]
 
-            # Handle interrupt priority (issue #748)
-            if comm.delivery == DeliveryPolicy.HALT:
-                # HALT: interrupt only — do NOT deliver message to the SDK.
-                # Sending a message via client.query() creates a new conversation
-                # turn that the minion would process after the interrupt, defeating
-                # the purpose of HALT. The comm is already persisted to the timeline
-                # above for user inspection.
-                legion_logger.info(f"Comm {comm.comm_id} has HALT priority - interrupting {comm.to_minion_id} (message not delivered to SDK)")
-                try:
-                    interrupted = await self.system.session_port.interrupt_session(comm.to_minion_id)
-                    if interrupted:
-                        legion_logger.debug(f"Successfully interrupted session {comm.to_minion_id}")
-                    else:
-                        legion_logger.warning(f"interrupt_session returned False for session {comm.to_minion_id}")
-                except Exception as e:
-                    legion_logger.warning(f"Failed to interrupt session {comm.to_minion_id}: {e}")
-                legion_logger.info(f"HALT comm {comm.comm_id} from {from_name} - minion {comm.to_minion_id} interrupted")
-                return True
-
-            if comm.delivery == DeliveryPolicy.PIVOT:
-                # PIVOT: interrupt first to stop current work, then deliver new direction.
-                legion_logger.info(f"Comm {comm.comm_id} has PIVOT priority - interrupting then sending to {comm.to_minion_id}")
-                try:
-                    interrupted = await self.system.session_port.interrupt_session(comm.to_minion_id)
-                    if interrupted:
-                        legion_logger.debug(f"Successfully interrupted session {comm.to_minion_id}")
-                    else:
-                        legion_logger.warning(f"interrupt_session returned False for session {comm.to_minion_id}")
-                except Exception as e:
-                    legion_logger.warning(f"Failed to interrupt session {comm.to_minion_id}: {e}")
-                # Fall through to send_message below
-
-            # Send to target minion via DeliveryGate (PIVOT and NORMAL). The gate
-            # already ran above, unconditionally, before this interrupt-priority
-            # branch — send() only needs the SDK-formatted content/metadata, so
-            # swap them in for the call and restore the caller's originals right
-            # after (send() never touches delivery_failure_reason, unlike
-            # ensure_ready(), so no restore special-case is needed for that key
-            # here — callers that inspect the Comm post-return, e.g. the REST
-            # POST /api/legions/{id}/comms response, see what they passed in).
-            # Issue #1779: inter-agent comms aren't "user messages" — skip timestamp injection.
-            original_content = comm.content
-            original_metadata = comm.metadata
-            comm.content = formatted_message
-            comm.metadata = comm_metadata
-            result = await self.system.session_port.delivery_gate.send(
-                comm, inject_timestamp=False
+            # Issue #2193 PR5: deliver_gate.deliver() now owns auto-start/readiness,
+            # AC5 sender-scoped flush, AC6 queue-pause gating, AC7 HALT/PIVOT
+            # authority, AC8 auto_start enforcement, and the HALT/PIVOT interrupt
+            # handling itself (strictly richer than this method's former dedicated
+            # branches, which are deleted). dispatch_content/dispatch_metadata carry
+            # the SDK-formatted message/metadata built above through to whichever
+            # dispatch site actually sends it (inline, or later via the WHEN_IDLE
+            # drain loop) — comm.content/comm.metadata themselves are left untouched
+            # for any caller that inspects this Comm post-return.
+            result = await self.system.session_port.delivery_gate.deliver(
+                comm,
+                dispatch_content=formatted_message,
+                dispatch_metadata=comm_metadata,
             )
-            comm.content = original_content
-            comm.metadata = original_metadata
             if not result.success:
                 legion_logger.error(
                     f"Failed to deliver comm {comm.comm_id} to minion {comm.to_minion_id}: {result.error}"
