@@ -51,6 +51,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     EXEMPT_PATHS = {
         '/', '/health', '/ready', '/api/auth/check', '/oauth/callback',
+        '/oauth/client-metadata.json',
         # Public static assets from frontend/public/ — served at root without hashing,
         # must be accessible without a token (browsers fetch favicons unauthenticated).
         '/favicon.ico', '/favicon-16x16.png', '/favicon-32x32.png',

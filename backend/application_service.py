@@ -963,9 +963,11 @@ class ApplicationService:
         server_url: str,
         redirect_uri: str,
         client_name: str,
+        client_metadata_url: str | None = None,
     ) -> str | None:
         return await self.coordinator.oauth_secret_bundle_manager.oauth_initiate_flow(
-            config_id, server_url, redirect_uri, client_name
+            config_id, server_url, redirect_uri, client_name,
+            client_metadata_url=client_metadata_url,
         )
 
     async def oauth_disconnect(self, config_id: str) -> bool:

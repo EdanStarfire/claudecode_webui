@@ -208,6 +208,7 @@ def build_router(webui) -> APIRouter:
             server_url=config["url"],
             redirect_uri=request.redirect_uri,
             client_name=f"Claude Code WebUI — {config['name']}",
+            client_metadata_url=request.client_metadata_url,
         )
         return {"auth_url": auth_url}
 

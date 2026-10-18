@@ -58,6 +58,26 @@ def build_router(webui) -> APIRouter:
             "timestamp": datetime.now(UTC).isoformat(),
         }
 
+    @router.get("/oauth/client-metadata.json")
+    @handle_exceptions("serve oauth client metadata document")
+    async def oauth_client_metadata(request: Request):
+        """draft-ietf-oauth-client-id-metadata-document: self-describing client identity,
+        fetched directly by MCP authorization servers that don't support RFC 7591 DCR.
+        client_id is computed from this request's own URL — whatever hostname/scheme
+        the fetching server actually used to reach us is definitionally the one correct
+        value (unlike redirect_uri, which must be browser-computed because Backend can't
+        see the browser's address, this document is fetched directly from the public
+        internet-facing tier, so request.url is authoritative)."""
+        origin = f"{request.url.scheme}://{request.url.netloc}"
+        return {
+            "client_id": f"{origin}/oauth/client-metadata.json",
+            "client_name": "Claude Code WebUI",
+            "redirect_uris": [f"{origin}/oauth/callback"],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none",
+        }
+
     @router.get("/api/auth/check")
     @handle_exceptions("check auth")
     async def auth_check(request: Request):

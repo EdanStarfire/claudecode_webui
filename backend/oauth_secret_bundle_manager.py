@@ -38,6 +38,7 @@ class OAuthSecretBundleManager:
         server_url: str,
         redirect_uri: str,
         client_name: str,
+        client_metadata_url: str | None = None,
     ) -> str | None:
         from .mcp.secret_resolver import resolve_secret_refs_in_str
 
@@ -49,6 +50,13 @@ class OAuthSecretBundleManager:
             client_secret = await resolve_secret_refs_in_str(
                 config.oauth_client_secret, self.credential_vault
             )
+        # Issue #2231: the hosted client-metadata document always advertises the
+        # default /oauth/callback path — a config with its own custom callback
+        # path/port would get a mismatched document, so CIMD is withheld entirely
+        # and start_flow() falls back to DCR (or its distinct CIMD error).
+        effective_client_metadata_url = client_metadata_url
+        if config.oauth_custom_callback_path or config.oauth_custom_callback_port:
+            effective_client_metadata_url = None
         return await self.oauth_manager.start_flow(
             server_id=config_id,
             server_url=server_url,
@@ -56,6 +64,7 @@ class OAuthSecretBundleManager:
             client_name=client_name,
             pre_registered_client_id=config.oauth_client_id or None,
             client_secret=client_secret,
+            client_metadata_url=effective_client_metadata_url,
         )
 
     async def oauth_disconnect(self, config_id: str) -> bool:
