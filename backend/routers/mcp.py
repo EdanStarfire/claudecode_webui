@@ -210,7 +210,8 @@ def build_router(webui) -> APIRouter:
             client_name=f"Claude Code WebUI — {config['name']}",
             client_metadata_url=request.client_metadata_url,
         )
-        return {"auth_url": auth_url}
+        discovery = webui.service.get_oauth_discovery_summary(config_id)
+        return {"auth_url": auth_url, "discovery": discovery}
 
     @router.post("/api/mcp-configs/{config_id}/oauth/disconnect")
     @handle_exceptions("disconnect MCP OAuth")

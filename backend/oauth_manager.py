@@ -13,11 +13,12 @@ Token storage uses Fernet symmetric encryption:
 - Per-server client: {data_dir}/oauth_clients/{server_id}.enc
 """
 
+import json
 import logging
 import secrets
 import time
 from pathlib import Path
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 
 import httpx
 from cryptography.fernet import Fernet
@@ -28,15 +29,20 @@ from mcp.client.auth.utils import (
     create_client_info_from_metadata_url,
     create_client_registration_request,
     create_oauth_metadata_request,
-    handle_auth_metadata_response,
     handle_protected_resource_response,
     handle_registration_response,
     handle_token_response_scopes,
     is_valid_client_metadata_url,
     should_use_client_metadata_url,
 )
-from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
+from mcp.shared.auth import (
+    OAuthClientInformationFull,
+    OAuthClientMetadata,
+    OAuthMetadata,
+    OAuthToken,
+)
 from mcp.shared.auth_utils import calculate_token_expiry
+from pydantic import ValidationError
 
 from shared.logging_config import get_logger
 
@@ -52,6 +58,44 @@ debug_logger = get_logger('oauth', category='OAUTH')
 # before a lazy sweep discards it. Existing behavior (no TTL at all) is preserved for
 # the lifetime of a normal flow — this only reclaims abandoned ones.
 _PENDING_TTL_SECONDS = 600
+
+# Issue #2240: AS metadata endpoint fields that may be served as paths relative
+# to the server's own origin instead of absolute URLs (e.g. Home Assistant).
+# RFC 8414 requires absolute AnyHttpUrl values, so the SDK's own
+# OAuthMetadata.model_validate() rejects these outright; _normalize_oauth_metadata_document
+# resolves them against the discovery URL's origin before validation is attempted.
+_RELATIVE_ENDPOINT_FIELDS = (
+    "authorization_endpoint",
+    "token_endpoint",
+    "registration_endpoint",
+    "revocation_endpoint",
+)
+
+
+def _normalize_oauth_metadata_document(raw: dict, discovery_url: str) -> dict:
+    """Best-effort fixups for AS metadata documents that violate RFC 8414 in two
+    specific, observed ways (issue #2240): endpoint paths relative to the
+    server's own origin instead of absolute URLs, and a missing `issuer`.
+
+    Relative endpoints resolve against the discovery URL's own origin — not
+    `server_url`/`auth_server_url` — since RFC 8414 path-aware discovery can
+    target a different path on the same host than the resource server. A
+    missing/falsy `issuer` defaults to that same origin; an `issuer` that is
+    merely present but different is left untouched.
+    """
+    parsed = urlparse(discovery_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+
+    normalized = dict(raw)
+    for field in _RELATIVE_ENDPOINT_FIELDS:
+        value = normalized.get(field)
+        if isinstance(value, str) and value and not urlparse(value).netloc:
+            normalized[field] = urljoin(origin, value)
+
+    if not normalized.get("issuer"):
+        normalized["issuer"] = origin
+
+    return normalized
 
 
 class FernetTokenStore:
@@ -180,6 +224,10 @@ class OAuthFlowManager:
         # Keyed by OAuth `state` token: {server_id, token_endpoint, client_id,
         # code_verifier, redirect_uri, created_at, context}
         self._pending: dict[str, dict] = {}
+        # Issue #2240 (AC5): last start_flow() discovery outcome per server_id, for
+        # callers to surface alongside the auth URL without changing start_flow()'s
+        # own return type.
+        self._discovery_summaries: dict[str, dict] = {}
 
     def get_token_store(self, server_id: str) -> FernetTokenStore:
         """Return a FernetTokenStore for the given server_id."""
@@ -223,6 +271,45 @@ class OAuthFlowManager:
         the removed context dict, or None if no such pending flow existed."""
         pending = self._pending.pop(state, None)
         return pending.get("context") if pending else None
+
+    def get_discovery_summary(self, server_id: str) -> dict | None:
+        """Return the most recent start_flow() discovery outcome for server_id, or
+        None if start_flow() hasn't run (successfully) for it yet. Issue #2240
+        (AC5): a side channel for callers that want to surface discovery details
+        without start_flow()'s own return type changing."""
+        return self._discovery_summaries.get(server_id)
+
+    async def _fetch_as_metadata(
+        self, response: httpx.Response, discovery_url: str
+    ) -> tuple[bool, OAuthMetadata | None, bool]:
+        """Mirrors mcp.client.auth.utils.handle_auth_metadata_response's status-code
+        branching exactly — same (ok, metadata) contract, so the caller's discovery
+        loop/fallback behavior is unaffected — but on the 200 branch, normalizes the
+        raw body (_normalize_oauth_metadata_document) before validating, so servers
+        that violate RFC 8414 with relative endpoints/no issuer (e.g. Home Assistant,
+        issue #2240) still validate. Logs at WARNING, rather than silently swallowing,
+        when a document still fails validation after normalization.
+
+        The third element reports whether normalization actually changed anything in
+        a 200 response's body — used only for the discovery-summary side channel
+        (AC5); it has no effect on the (ok, metadata) contract.
+        """
+        if response.status_code == 200:
+            try:
+                content = await response.aread()
+                raw = json.loads(content)
+                normalized = _normalize_oauth_metadata_document(raw, discovery_url)
+                asm = OAuthMetadata.model_validate(normalized)
+                return True, asm, normalized != raw
+            except (ValueError, ValidationError) as exc:
+                debug_logger.warning(
+                    "AS metadata at %s rejected by validation even after normalization: %s",
+                    discovery_url, exc,
+                )
+                return True, None, False
+        elif 300 <= response.status_code < 500:
+            return True, None, False  # Not served at this URL - try the next candidate
+        return False, None, False  # Server error or unexpected status, stop trying
 
     async def start_flow(
         self,
@@ -273,6 +360,12 @@ class OAuthFlowManager:
             client_metadata_url,
         )
         self._sweep_expired_pending()
+        # Drop any summary from a prior successful call for this server_id up front, so a
+        # retry that raises partway through (e.g. the AC4 check, or a DCR failure) leaves
+        # get_discovery_summary() returning None instead of stale, no-longer-trustworthy
+        # data from the earlier attempt.
+        self._discovery_summaries.pop(server_id, None)
+        summary: dict = {}
         async with httpx.AsyncClient() as http:
             # --- Step 1: Protected resource metadata ---
             prm = None
@@ -289,29 +382,38 @@ class OAuthFlowManager:
                 except Exception as exc:
                     debug_logger.debug("PRM discovery at %s failed: %s", url, exc)
                     continue
-            debug_logger.debug(
+            summary["prm_found"] = bool(prm)
+            debug_logger.info(
                 "PRM discovery result: found=%s auth_server_url=%s", bool(prm), auth_server_url
             )
 
             # --- Step 2: Authorization server metadata ---
             oauth_metadata = None
+            as_metadata_normalized = False
+            as_metadata_rejected = False
             for url in build_oauth_authorization_server_metadata_discovery_urls(
                 auth_server_url, server_url
             ):
                 req = create_oauth_metadata_request(url)
                 try:
                     resp = await http.send(req)
-                    ok, meta = await handle_auth_metadata_response(resp)
+                    ok, meta, normalized = await self._fetch_as_metadata(resp, url)
                     if meta:
                         oauth_metadata = meta
+                        as_metadata_normalized = normalized
                         break
                     if not ok:
                         debug_logger.debug("AS metadata discovery at %s rejected (not ok)", url)
                         break
+                    if resp.status_code == 200:
+                        as_metadata_rejected = True
                 except Exception as exc:
                     debug_logger.debug("AS metadata discovery at %s failed: %s", url, exc)
                     continue
-            debug_logger.debug("AS metadata discovery result: found=%s", bool(oauth_metadata))
+            summary["as_metadata_found"] = bool(oauth_metadata)
+            summary["as_metadata_normalized"] = as_metadata_normalized
+            summary["as_metadata_rejected"] = as_metadata_rejected
+            debug_logger.info("AS metadata discovery result: found=%s", bool(oauth_metadata))
 
             # --- Derive requested scopes from discovery metadata ---
             # Prefer PRM scopes (RFC 9728) as they represent what the resource needs.
@@ -342,8 +444,29 @@ class OAuthFlowManager:
 
             # --- Step 3: Dynamic Client Registration ---
             store = self.get_token_store(server_id)
+            has_registration_endpoint = bool(
+                oauth_metadata and oauth_metadata.registration_endpoint
+            )
 
             if pre_registered_client_id:
+                # Issue #2240 (AC4): a pre-registered client_id is meaningless for a
+                # server that only supports CIMD (no registration_endpoint at all, so
+                # there's no "registration" to be pre-registered with) — fail clearly
+                # instead of sending a client_id the server will never recognize.
+                cimd_only = (
+                    not has_registration_endpoint
+                    and oauth_metadata is not None
+                    and bool(oauth_metadata.client_id_metadata_document_supported)
+                )
+                if cimd_only and not is_valid_client_metadata_url(pre_registered_client_id):
+                    raise RuntimeError(
+                        f"MCP server {server_id!r} is configured with "
+                        f"oauth_client_id={pre_registered_client_id!r}, but this server "
+                        f"only supports the OAuth Client ID Metadata Document mechanism "
+                        f"(draft-ietf-oauth-client-id-metadata-document), not a "
+                        f"pre-registered client_id. Remove 'oauth_client_id' from this "
+                        f"server's config to let CIMD take over automatically."
+                    )
                 # Pre-registered app (e.g. Slack, Google): skip DCR and use the configured
                 # client_id. Servers that don't support RFC 7591 DCR must be handled this way.
                 auth_method = "client_secret_post" if client_secret else "none"
@@ -357,17 +480,17 @@ class OAuthFlowManager:
                 # only the DCR branch below did this, leaving refresh_token() unable to find
                 # client info for any pre-registered client (issue #1867's latent bug).
                 await store.set_client_info(client_info)
+                summary["mechanism"] = "pre_registered"
                 debug_logger.info(
                     "OAuth: using pre-registered client_id for MCP server %s (auth_method=%s)",
                     server_id, auth_method,
                 )
             else:
                 client_info = await store.get_client_info()
+                if client_info:
+                    summary["mechanism"] = "cached"
 
             if not client_info:
-                has_registration_endpoint = bool(
-                    oauth_metadata and oauth_metadata.registration_endpoint
-                )
                 if (
                     not has_registration_endpoint
                     and should_use_client_metadata_url(oauth_metadata, client_metadata_url)
@@ -380,6 +503,7 @@ class OAuthFlowManager:
                         client_metadata_url, redirect_uris=[redirect_uri],  # type: ignore[arg-type]
                     )
                     await store.set_client_info(client_info)
+                    summary["mechanism"] = "cimd"
                     debug_logger.info(
                         "OAuth: using client-ID metadata document for MCP server %s (%s)",
                         server_id, client_metadata_url,
@@ -399,6 +523,7 @@ class OAuthFlowManager:
                         reg_resp = await http.send(reg_req)
                         client_info = await handle_registration_response(reg_resp)
                         await store.set_client_info(client_info)
+                        summary["mechanism"] = "dcr"
                         debug_logger.info("DCR succeeded for MCP server %s", server_id)
                     except Exception as exc:
                         debug_logger.warning(
@@ -482,6 +607,8 @@ class OAuthFlowManager:
                 "context": {"flow_type": "mcp"},
             }
 
+            self._discovery_summaries[server_id] = summary
+            debug_logger.info("OAuth discovery summary for %s: %s", server_id, summary)
             debug_logger.info(
                 "OAuth flow started for MCP server %s (state=%s…)", server_id, state[:8]
             )
