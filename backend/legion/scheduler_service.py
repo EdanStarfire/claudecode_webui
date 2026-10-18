@@ -1038,6 +1038,28 @@ class SchedulerService:
         Polls every 10 seconds. Once idle for a grace period, archives session
         data (with completion timestamp), clears messages, and terminates — leaving
         the agent ready for its next scheduled fire.
+
+        Issue #2193 PR7 (AC13): deliberately NOT folded onto any DeliveryGate
+        primitive, despite being an independent is_processing polling loop — a
+        confirmed scope decision, not an oversight. Reasons: (1) a gone/errored
+        session means "done, proceed to archive" here, the opposite of
+        _wait_for_idle()'s hard-failure treatment of the same conditions; (2) it has
+        no use for _wait_for_idle()'s has_inflight_scripts() check — an ephemeral
+        session doesn't run cron script schedules against itself; (3) it also
+        re-checks every iteration whether the schedule itself still exists
+        (self._schedules.get(schedule_id)), a scheduler-bookkeeping concern with no
+        relationship to session readiness; (4) a shared primitive accumulating
+        parameters serving only this one caller's idiosyncrasies isn't real reuse.
+
+        Only the pending-queue check below was removed, per AC13's own explicit
+        instruction not to have one here. It is dead for every producer this loop
+        actually cares about: no ephemeral-schedule-fired prompt has written to
+        queue_manager since PR6's cutover to pending_store. It is not literally
+        unreachable for every possible queue_manager entry — a user could still
+        manually queue a message against this same session_id via the generic
+        Queue REST/UI path, independent of the ephemeral-schedule machinery — but
+        AC13 deliberately accepts that: this loop's idle signal is is_processing
+        only, by design, not "is_processing AND no queued work of any kind."
         """
         poll_interval = 10  # seconds
         idle_grace = 10  # seconds of idle before cleanup
@@ -1077,23 +1099,8 @@ class SchedulerService:
                     )
                     break
 
-                # Check if session is idle (not processing and queue empty)
+                # Check if session is idle
                 is_idle = not session_info.is_processing
-
-                # Also check queue for pending items
-                try:
-                    session_dir = await self.system.session_port.session_manager.get_session_directory(session_id)
-                    if session_dir:
-                        queue_items = await self.system.session_port.queue_manager.get_queue(
-                            session_id, session_dir
-                        )
-                        pending_items = [
-                            q for q in queue_items if q.status == "pending"
-                        ]
-                        if pending_items:
-                            is_idle = False
-                except Exception:
-                    pass  # If we can't check queue, use is_processing only
 
                 if is_idle:
                     if idle_since is None:
@@ -1152,6 +1159,21 @@ class SchedulerService:
         through to the unconditional start_session() call below, force-restarting a
         session mid-permission-wait (discarding the in-flight turn) instead of simply
         waiting for the permission decision like the poll loop already does.
+
+        Issue #2193 PR7 (AC13): deliberately NOT folded onto DeliveryGate.ensure_session_active(),
+        despite being exactly the kind of is_processing/state poll loop AC13 targets — review
+        during this PR found the shared primitive encodes two comm-delivery-specific assumptions
+        that don't hold here: (1) it treats PAUSED as "already fine, nothing to wait for" (correct
+        for comm delivery's queue-and-wait semantics; wrong here — a script/prompt firing against a
+        session mid-permission-wait would reintroduce the exact #2159 race), and (2) it
+        unconditionally wires in the live, interactive permission_callback_factory for an
+        auto-start (correct for a user-facing comm; wrong for this scheduler-triggered, unattended
+        auto-start, which would now hang on a permission prompt nobody will ever answer instead of
+        this method's original fail-fast auto-deny via no callback). Both are genuine per-caller
+        forks, not single-caller idiosyncrasies — same "don't force a shared primitive to
+        accumulate single-caller special cases" reasoning already applied to
+        wait_for_not_processing()'s split from _wait_for_busy_clear() and to
+        _monitor_ephemeral_session's non-fold, elsewhere in this PR.
         """
         session_info = await self.system.session_port.session_manager.get_session_info(session_id)
         if not session_info:

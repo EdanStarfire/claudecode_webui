@@ -2,7 +2,7 @@
 Tests for the restart_session MCP tool (Issue #680).
 """
 
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
@@ -23,6 +23,10 @@ def legion_system():
     system.session_port.restart_session = AsyncMock(return_value=True)
     system.session_port.enqueue_message = AsyncMock()
     system.session_port.send_message = AsyncMock(return_value=True)
+    # Issue #2193 PR7: _restart_monitor's wait is now delivery_gate.wait_for_not_processing()
+    # — default "already idle", individual tests override for timeout/disappeared cases.
+    system.session_port.delivery_gate = Mock()
+    system.session_port.delivery_gate.wait_for_not_processing = AsyncMock(return_value=True)
     return system
 
 
@@ -142,7 +146,9 @@ async def test_issue_680_monitor_detects_idle_and_restarts(mcp_tools):
     """Monitor detects idle session and triggers restart."""
     coordinator = mcp_tools.system.session_port
 
-    # Session becomes idle on first check
+    # Issue #2193 PR7: idle detection is now delivery_gate.wait_for_not_processing()
+    # (mocked via the fixture's default return_value=True) rather than an in-method
+    # poll loop — the session_manager lookup is no longer consulted on this branch.
     idle_info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
     coordinator.session_manager.get_session_info = AsyncMock(return_value=idle_info)
 
@@ -158,9 +164,11 @@ async def test_issue_680_monitor_detects_idle_and_restarts(mcp_tools):
     mock_ui_queue.current_cursor = 0
     mcp_tools.system.ui_queue = mock_ui_queue
 
-    with patch("backend.legion.mcp.legion_mcp_tools.asyncio.sleep", new_callable=AsyncMock):
-        await mcp_tools._restart_monitor("session-1", "restart-123", "test reason")
+    await mcp_tools._restart_monitor("session-1", "restart-123", "test reason")
 
+    coordinator.delivery_gate.wait_for_not_processing.assert_awaited_once_with(
+        "session-1", timeout=30.0
+    )
     coordinator.restart_session.assert_awaited_once_with("session-1", mock_callback)
     coordinator.enqueue_message.assert_awaited_once()
     enqueue_kwargs = coordinator.enqueue_message.call_args
@@ -182,14 +190,15 @@ async def test_issue_680_monitor_timeout_sends_failure(mcp_tools):
     """Monitor sends failure message after 30s timeout."""
     coordinator = mcp_tools.system.session_port
 
-    # Session stays processing for all checks
+    # wait_for_not_processing() times out (still processing) — the call site then
+    # re-checks session existence to distinguish timeout from disappearance.
+    coordinator.delivery_gate.wait_for_not_processing = AsyncMock(return_value=False)
     busy_info = _make_session_info(state=SessionState.ACTIVE, is_processing=True)
     coordinator.session_manager.get_session_info = AsyncMock(return_value=busy_info)
 
     mcp_tools._pending_restarts.add("session-1")
 
-    with patch("backend.legion.mcp.legion_mcp_tools.asyncio.sleep", new_callable=AsyncMock):
-        await mcp_tools._restart_monitor("session-1", "restart-456", "stuck")
+    await mcp_tools._restart_monitor("session-1", "restart-456", "stuck")
 
     # restart_session should NOT have been called
     coordinator.restart_session.assert_not_awaited()
@@ -210,12 +219,12 @@ async def test_issue_680_monitor_timeout_sends_failure(mcp_tools):
 async def test_issue_680_monitor_session_disappears(mcp_tools):
     """Monitor exits gracefully if session disappears."""
     coordinator = mcp_tools.system.session_port
+    coordinator.delivery_gate.wait_for_not_processing = AsyncMock(return_value=False)
     coordinator.session_manager.get_session_info = AsyncMock(return_value=None)
 
     mcp_tools._pending_restarts.add("session-1")
 
-    with patch("backend.legion.mcp.legion_mcp_tools.asyncio.sleep", new_callable=AsyncMock):
-        await mcp_tools._restart_monitor("session-1", "restart-789", "")
+    await mcp_tools._restart_monitor("session-1", "restart-789", "")
 
     coordinator.restart_session.assert_not_awaited()
     coordinator.send_message.assert_not_awaited()
@@ -234,10 +243,27 @@ async def test_issue_680_continuation_message_no_reason(mcp_tools):
     mcp_tools.system.permission_callback_factory = None
     mcp_tools.system.ui_queue = None
 
-    with patch("backend.legion.mcp.legion_mcp_tools.asyncio.sleep", new_callable=AsyncMock):
-        await mcp_tools._restart_monitor("session-2", "restart-abc", "")
+    await mcp_tools._restart_monitor("session-2", "restart-abc", "")
 
     coordinator.restart_session.assert_awaited_once_with("session-2", None)
     enqueue_call = coordinator.enqueue_message.call_args
     content = enqueue_call.kwargs.get("content", enqueue_call[1].get("content", ""))
     assert "Restart reason:" not in content
+
+
+@pytest.mark.asyncio
+async def test_issue_2193_restart_attempted_when_session_errored_but_not_processing(mcp_tools):
+    """Issue #2193 PR7 (AC13): the specific scenario motivating a new standalone
+    wait_for_not_processing() primitive instead of reusing _wait_for_busy_clear()
+    (which treats ERROR as a hard failure) — a session that reached ERROR state
+    during the wait but is no longer processing still gets a restart attempted,
+    since that's often exactly why the restart was requested."""
+    coordinator = mcp_tools.system.session_port
+    coordinator.delivery_gate.wait_for_not_processing = AsyncMock(return_value=True)
+    errored_info = _make_session_info(state=SessionState.ERROR, is_processing=False)
+    coordinator.session_manager.get_session_info = AsyncMock(return_value=errored_info)
+
+    await mcp_tools._restart_monitor("session-1", "restart-err", "errored mid-wait")
+
+    coordinator.restart_session.assert_awaited_once()
+    assert "session-1" not in mcp_tools._pending_restarts

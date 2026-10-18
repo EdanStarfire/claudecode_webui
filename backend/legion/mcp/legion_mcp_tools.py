@@ -2295,66 +2295,76 @@ class LegionMCPTools:
         }
 
     async def _restart_monitor(self, session_id: str, restart_id: str, reason: str) -> None:
-        """Background task that waits for session idle then triggers restart."""
+        """Background task that waits for session idle then triggers restart.
+
+        Issue #2193 PR7 (AC13): the wait is DeliveryGate.wait_for_not_processing(),
+        not an independent poll loop. Cadence changes from 2s/15-iterations to
+        1s-interval/30s-timeout — a polling-granularity change only, not a behavior
+        change (same 30s wall-clock budget either way). Deliberately not reusing
+        _wait_for_busy_clear() — that primitive treats ERROR as a hard failure,
+        while a restart here should still be attempted if the session is now
+        ERRORED (often exactly why the restart was requested).
+        """
         timestamp = datetime.now(UTC).isoformat()
         coordinator = self.system.session_port
 
         try:
-            # Poll is_processing every 2 seconds for up to 30 seconds
-            for _ in range(15):
-                await asyncio.sleep(2)
+            cleared = await coordinator.delivery_gate.wait_for_not_processing(session_id, timeout=30.0)
+            if cleared:
+                # Session is idle (or errored-but-idle) — proceed with restart
+                permission_callback = None
+                if self.system.permission_callback_factory:
+                    permission_callback = self.system.permission_callback_factory(session_id)
 
-                session_info = await coordinator.session_manager.get_session_info(session_id)
-                if not session_info:
-                    legion_logger.warning(f"Session {session_id} disappeared during restart monitor")
-                    return
+                success = await coordinator.restart_session(
+                    session_id, permission_callback
+                )
 
-                if not session_info.is_processing:
-                    # Session is idle — proceed with restart
-                    permission_callback = None
-                    if self.system.permission_callback_factory:
-                        permission_callback = self.system.permission_callback_factory(session_id)
-
-                    success = await coordinator.restart_session(
-                        session_id, permission_callback
+                if success:
+                    legion_logger.info(
+                        f"Session {session_id} self-restarted successfully "
+                        f"(restart_id={restart_id}, reason={reason})"
                     )
 
-                    if success:
-                        legion_logger.info(
-                            f"Session {session_id} self-restarted successfully "
-                            f"(restart_id={restart_id}, reason={reason})"
-                        )
+                    # Broadcast poll event
+                    self.system.broadcast_ui_event({
+                        "type": "session_self_restart",
+                        "data": {
+                            "session_id": session_id,
+                            "restart_id": restart_id,
+                            "reason": reason,
+                            "timestamp": timestamp,
+                        },
+                    })
 
-                        # Broadcast poll event
-                        self.system.broadcast_ui_event({
-                            "type": "session_self_restart",
-                            "data": {
-                                "session_id": session_id,
-                                "restart_id": restart_id,
-                                "reason": reason,
-                                "timestamp": timestamp,
-                            },
-                        })
+                    # Queue continuation message
+                    continuation = (
+                        "Your session has been restarted successfully. "
+                        "Continue with your previous work."
+                    )
+                    if reason:
+                        continuation += f" Restart reason: {reason}"
 
-                        # Queue continuation message
-                        continuation = (
-                            "Your session has been restarted successfully. "
-                            "Continue with your previous work."
-                        )
-                        if reason:
-                            continuation += f" Restart reason: {reason}"
+                    await coordinator.enqueue_message(
+                        session_id=session_id,
+                        content=continuation,
+                        reset_session=False,
+                    )
+                else:
+                    legion_logger.error(
+                        f"Session {session_id} restart failed (restart_id={restart_id})"
+                    )
 
-                        await coordinator.enqueue_message(
-                            session_id=session_id,
-                            content=continuation,
-                            reset_session=False,
-                        )
-                    else:
-                        legion_logger.error(
-                            f"Session {session_id} restart failed (restart_id={restart_id})"
-                        )
+                return
 
-                    return
+            # cleared is False: either timed out still processing, or the session
+            # disappeared mid-wait — re-check to preserve the distinct handling of
+            # these two cases (no restart attempt either way, but different
+            # logging and only the timeout case sends a message back).
+            session_info = await coordinator.session_manager.get_session_info(session_id)
+            if not session_info:
+                legion_logger.warning(f"Session {session_id} disappeared during restart monitor")
+                return
 
             # Timeout — session still processing after 30 seconds
             legion_logger.warning(

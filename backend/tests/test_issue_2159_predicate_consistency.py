@@ -98,9 +98,10 @@ ALLOWLIST: dict[str, set[str]] = {
         "if not (session_info.state == SessionState.ACTIVE or is_auto_startable(session_info.state)):",
         # _fire_ephemeral_schedule: same already-ACTIVE skip, different schedule kind.
         "if session_info.state != SessionState.ACTIVE:",
-        # _ensure_session_active: early success/failure terminal checks, not a
-        # deliverability predicate — this helper's whole job is deciding whether to
-        # call start_session() at all.
+        # _ensure_session_active (issue #2193 PR7: deliberately NOT folded onto
+        # DeliveryGate.ensure_session_active() — see the method's own docstring):
+        # early success/failure terminal checks, not a deliverability predicate —
+        # this helper's whole job is deciding whether to call start_session() at all.
         "if session_info.state == SessionState.ACTIVE:",
         "if info and info.state == SessionState.ACTIVE:",
         "if info and info.state == SessionState.ERROR:",

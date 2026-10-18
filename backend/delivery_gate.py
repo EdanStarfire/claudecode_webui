@@ -303,6 +303,64 @@ class DeliveryGate:
             await coordinator.pending_store.mark_delivered(session_id, session_dir, comm.comm_id)
             return DeliveryResult(success=True)
 
+    async def ensure_session_active(
+        self, session_id: str, *, auto_start: bool = True,
+        timeout: float = UNIFIED_READINESS_TIMEOUT_SECONDS,
+    ) -> DeliveryResult:
+        """Shared auto-start-and-wait-for-ready core (issue #2193 AC13), extracted
+        out of _ensure_session_ready()'s own body so that method's auto-start/wait
+        portion is callable on its own — no reset_first, no comm.auto_start
+        reading. _ensure_session_ready() wraps this for comm delivery, layering
+        those on top.
+
+        Issue #2193 PR7: scheduler_service.py's own independent
+        _ensure_session_active() poll loop was evaluated for the same AC13 fold
+        and deliberately NOT migrated onto this method — found during review
+        that this primitive's PAUSED-is-already-fine and interactive-permission-
+        callback-on-auto-start semantics (both correct for comm delivery) would
+        silently regress that caller's issue #2159 PAUSED-wait guard and turn its
+        fail-fast auto-deny into a hang-until-a-human-answers risk for unattended
+        scheduled runs. See scheduler_service.py's _ensure_session_active() for
+        the full reasoning; it keeps its own, separate poll loop.
+
+        Stamps the readiness settle deadline whenever it actually had to wait —
+        so a comm delivered to the same session shortly after this method's own
+        start inherits the same courtesy settle window a direct delivery-
+        triggered start would get.
+        """
+        coordinator = self._coordinator
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        if not session_info:
+            return DeliveryResult(success=False, error="Target minion not found")
+        if is_errored(session_info.state):
+            return DeliveryResult(success=False, error="Target minion is in ERROR state")
+
+        waited = False
+        if is_auto_startable(session_info.state):
+            if not auto_start:
+                return DeliveryResult(
+                    success=False,
+                    error="Target minion is stopped and auto_start was not requested",
+                )
+            self._ensure_message_callback(session_id)
+            permission_callback = None
+            if coordinator._permission_callback_factory:
+                permission_callback = coordinator._permission_callback_factory(session_id)
+            started = await coordinator.start_session(session_id, permission_callback)
+            if not started:
+                return DeliveryResult(success=False, error="Could not auto-start target minion")
+            waited = True
+        elif not is_deliverable(session_info.state):
+            waited = True
+
+        if waited:
+            ready = await coordinator.wait_for_session_ready(session_id, timeout=timeout)
+            if not ready:
+                return DeliveryResult(success=False, error="Target minion did not become ready in time")
+            self._readiness_deadlines[session_id] = asyncio.get_event_loop().time() + READINESS_SETTLE_SECONDS
+
+        return DeliveryResult(success=True)
+
     async def _ensure_session_ready(
         self, comm: Comm, *, timeout: float = UNIFIED_READINESS_TIMEOUT_SECONDS,
     ) -> DeliveryResult:
@@ -320,55 +378,17 @@ class DeliveryGate:
         call into this method). Before this PR, auto-start was unconditional
         here (no producer set auto_start meaningfully); send_comm's migration
         (this same PR) is what gives it a real, non-default-False value.
+
+        Issue #2193 PR7 (AC13): the auto-start/wait portion is now the shared
+        ensure_session_active() core — this method layers reset_first and the
+        settle-barrier wait on top, same as before PR7 (relocated, not changed).
         """
         coordinator = self._coordinator
         session_id = comm.to_minion_id
 
-        session_info = await coordinator.session_manager.get_session_info(session_id)
-        if not session_info:
-            return DeliveryResult(success=False, error="Target minion not found")
-
-        if is_errored(session_info.state):
-            # Unified behavior change (flagged, confirmed): comm_router's current
-            # ensure_ready() would auto-restart an ERRORED target (ERROR isn't in
-            # is_deliverable(), so it falls into the auto-start branch) — an
-            # apparent accident of is_deliverable()'s boolean shape, not a
-            # designed behavior. prepare_for_send() already fails fast on ERROR.
-            # The unified gate standardizes on the fail-fast behavior, requiring
-            # explicit user recovery.
-            return DeliveryResult(success=False, error="Target minion is in ERROR state")
-
-        waited = False
-        if is_auto_startable(session_info.state):  # CREATED, TERMINATED
-            if not comm.auto_start:
-                return DeliveryResult(
-                    success=False,
-                    error="Target minion is stopped and auto_start was not requested",
-                )
-            self._ensure_message_callback(session_id)
-            permission_callback = None
-            if coordinator._permission_callback_factory:
-                permission_callback = coordinator._permission_callback_factory(session_id)
-            started = await coordinator.start_session(session_id, permission_callback)
-            if not started:
-                return DeliveryResult(success=False, error="Could not auto-start target minion")
-            waited = True
-        elif not is_deliverable(session_info.state):  # STARTING, TERMINATING
-            waited = True
-        # else: ACTIVE or PAUSED already (is_deliverable) — nothing to wait for,
-        # matching ensure_ready()'s existing, test-validated treatment of PAUSED
-        # as already-fine (TestPausedTargetDeliversWithoutForceStart), not
-        # prepare_for_send()'s treatment (which only accepts is_active() and
-        # would send a PAUSED session through an unbounded wait). Unifying on
-        # ensure_ready()'s reading here specifically.
-
-        if waited:
-            ready = await coordinator.wait_for_session_ready(session_id, timeout=timeout)
-            if not ready:
-                return DeliveryResult(success=False, error="Target minion did not become ready in time")
-            self._readiness_deadlines[session_id] = (
-                asyncio.get_event_loop().time() + READINESS_SETTLE_SECONDS
-            )
+        base = await self.ensure_session_active(session_id, auto_start=comm.auto_start, timeout=timeout)
+        if not base.success:
+            return base
 
         if comm.reset_first:
             self._ensure_message_callback(session_id)
@@ -426,6 +446,41 @@ class DeliveryGate:
             if not info.is_processing:
                 return True
             await asyncio.sleep(1)
+
+    async def wait_for_not_processing(
+        self, session_id: str, *, timeout: float | None = None, poll_interval: float = 1.0,
+    ) -> bool:
+        """Poll is_processing until it clears, or timeout elapses (issue #2193 AC13 —
+        folded in from legion_mcp_tools.py::_restart_monitor's independent 2s-interval
+        poll loop). Returns True only when the session exists and is no longer
+        processing; False for both "timed out still processing" and "session
+        disappeared" — deliberately collapsed, since this primitive is agnostic to
+        *why* processing cleared or didn't. The caller re-checks existence itself on
+        a False return to produce the right message; see _restart_monitor.
+
+        A disappeared session (get_session_info returns None) fails fast on the very
+        next check, regardless of timeout/poll_interval — found during review: the
+        old _restart_monitor poll loop detected disappearance within one 2s tick,
+        and a version of this primitive that only gave up at the timeout deadline
+        would have silently prolonged that detection to the full budget (or hung
+        forever for a timeout=None caller).
+
+        Deliberately not a generalization of _wait_for_busy_clear(): that method
+        treats ERROR as a hard failure for its own caller (which has nothing to
+        dispatch to on error); this one must return True for an ERRORED-but-not-
+        processing session, since _restart_monitor's caller often wants the restart
+        precisely *because* the session errored.
+        """
+        deadline = asyncio.get_event_loop().time() + timeout if timeout is not None else None
+        while True:
+            info = await self._coordinator.session_manager.get_session_info(session_id)
+            if info is None:
+                return False
+            if not info.is_processing:
+                return True
+            if deadline is not None and asyncio.get_event_loop().time() >= deadline:
+                return False
+            await asyncio.sleep(poll_interval)
 
     def _get_dispatch_lock(self, session_id: str) -> asyncio.Lock:
         """Serializes actual send() calls per session so concurrent immediate
