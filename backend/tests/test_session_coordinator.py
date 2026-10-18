@@ -3600,7 +3600,35 @@ class TestIssue2193PR6EnqueueMessageMigration:
         """Builder-review finding: queue_processor.py's enqueue_message() read
         queue_config['max_queue_size'] and enforced it via queue_manager.enqueue();
         the migrated version must do the same via deliver()'s max_pending_size,
-        not silently fall back to the method-default cap of 100."""
+        not silently fall back to the method-default cap of 100.
+
+        Issue #2233: max_queue_size only ever gates SCHEDULE-sourced enqueues, so
+        this must now pass sender_type=SCHEDULE explicitly to keep exercising the
+        cap at all (the default sender_type=USER is never capacity-rejected)."""
+        from backend.models.legion_models import SenderType
+
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
+        await coordinator.session_manager.update_session(session_id, queue_paused=True)
+        await coordinator.update_queue_config(session_id, {"max_queue_size": 1})
+
+        await coordinator.enqueue_message(
+            session_id, "first", reset_session=False, sender_type=SenderType.SCHEDULE
+        )
+        with pytest.raises(ValueError, match="Pending store full"):
+            await coordinator.enqueue_message(
+                session_id, "second", reset_session=False, sender_type=SenderType.SCHEDULE
+            )
+
+    @pytest.mark.asyncio
+    async def test_enqueue_message_manual_queue_message_never_capacity_rejected(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Issue #2233: the manual queue-message REST endpoint's producer identity
+        (enqueue_message()'s default sender_type=USER) must never be capacity-
+        rejected, even past a fully configured max_queue_size — only SCHEDULE-
+        sourced enqueues are gated."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
         await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
@@ -3608,8 +3636,10 @@ class TestIssue2193PR6EnqueueMessageMigration:
         await coordinator.update_queue_config(session_id, {"max_queue_size": 1})
 
         await coordinator.enqueue_message(session_id, "first", reset_session=False)
-        with pytest.raises(ValueError, match="Pending store full"):
-            await coordinator.enqueue_message(session_id, "second", reset_session=False)
+        # Second manual enqueue past the configured cap still succeeds.
+        await coordinator.enqueue_message(session_id, "second", reset_session=False)
+        result = await coordinator.get_queue(session_id)
+        assert len(result["items"]) == 2
 
     @pytest.mark.asyncio
     async def test_enqueue_message_raises_on_deliver_failure_instead_of_broken_dict(
@@ -3621,16 +3651,26 @@ class TestIssue2193PR6EnqueueMessageMigration:
         handle_exceptions(..., value_error_status=400) depends on — rather than
         falling back to a {"queue_id": ...} dict missing "position", which
         routers/queue.py's handler unconditionally indexes (would 500 with a
-        KeyError instead of a clean 400)."""
+        KeyError instead of a clean 400).
+
+        Issue #2233: only SCHEDULE-sourced enqueues can hit the capacity cap at
+        all, so sender_type=SCHEDULE is required to still exercise the
+        deliver()-failure path this test is about."""
+        from backend.models.legion_models import SenderType
+
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
         await coordinator.session_manager._update_session_state(session_id, SessionState.ACTIVE)
         await coordinator.session_manager.update_session(session_id, queue_paused=True)
         await coordinator.update_queue_config(session_id, {"max_queue_size": 1})
-        await coordinator.enqueue_message(session_id, "first", reset_session=False)
+        await coordinator.enqueue_message(
+            session_id, "first", reset_session=False, sender_type=SenderType.SCHEDULE
+        )
 
         with pytest.raises(ValueError):
-            await coordinator.enqueue_message(session_id, "second", reset_session=False)
+            await coordinator.enqueue_message(
+                session_id, "second", reset_session=False, sender_type=SenderType.SCHEDULE
+            )
 
         # And the first item is still cleanly retrievable with a real "position".
         result = await coordinator.get_queue(session_id)

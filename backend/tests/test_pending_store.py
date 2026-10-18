@@ -23,6 +23,13 @@ def make_comm(session_id: str, *, comm_id: str | None = None, content: str = "he
     return Comm(**kwargs)
 
 
+def make_schedule_comm(session_id: str, *, content: str = "hello") -> Comm:
+    """Build a Comm whose sender_type is SCHEDULE (from_user stays True, matching
+    how the real scheduler/enqueue_message() builds its Comm — only sender_type
+    diverges from the default inference)."""
+    return make_comm(session_id, content=content, sender_type=SenderType.SCHEDULE)
+
+
 @pytest.fixture
 def pending_store():
     return PendingStore()
@@ -159,11 +166,70 @@ class TestPendingStoreCRUD:
 
     @pytest.mark.asyncio
     async def test_enqueue_respects_max_pending_size(self, pending_store, temp_session):
+        """max_pending_size only gates SCHEDULE-sourced enqueues (issue #2233)."""
         sid, sdir = temp_session
-        await pending_store.enqueue(sid, sdir, make_comm(sid, content="a"), max_pending_size=2)
-        await pending_store.enqueue(sid, sdir, make_comm(sid, content="b"), max_pending_size=2)
+
+        await pending_store.enqueue(sid, sdir, make_schedule_comm(sid, content="a"), max_pending_size=2)
+        await pending_store.enqueue(sid, sdir, make_schedule_comm(sid, content="b"), max_pending_size=2)
         with pytest.raises(ValueError, match="Pending store full"):
-            await pending_store.enqueue(sid, sdir, make_comm(sid, content="c"), max_pending_size=2)
+            await pending_store.enqueue(sid, sdir, make_schedule_comm(sid, content="c"), max_pending_size=2)
+
+    @pytest.mark.asyncio
+    async def test_enqueue_non_schedule_bypasses_cap(self, pending_store, temp_session):
+        """USER/MINION/SYSTEM/EXTERNAL enqueues always succeed, even past a full
+        SCHEDULE cap (issue #2233)."""
+        sid, sdir = temp_session
+
+        # Fill the schedule cap.
+        await pending_store.enqueue(sid, sdir, make_schedule_comm(sid, content="s1"), max_pending_size=1)
+        with pytest.raises(ValueError, match="Pending store full"):
+            await pending_store.enqueue(sid, sdir, make_schedule_comm(sid, content="s2"), max_pending_size=1)
+
+        # USER-, MINION-, SYSTEM-, and EXTERNAL-sourced enqueues still succeed,
+        # unconditionally, with a full SCHEDULE cap already in place.
+        user_item = await pending_store.enqueue(
+            sid, sdir, make_comm(sid, content="user msg"), max_pending_size=1
+        )
+        assert user_item.status == "pending"
+
+        minion_comm = make_comm(
+            sid, content="minion msg", from_user=False, from_minion_id="minion-x"
+        )
+        minion_item = await pending_store.enqueue(sid, sdir, minion_comm, max_pending_size=1)
+        assert minion_item.status == "pending"
+
+        system_comm = make_comm(
+            sid, content="system msg", from_user=False,
+            from_minion_id="system", sender_type=SenderType.SYSTEM,
+        )
+        system_item = await pending_store.enqueue(sid, sdir, system_comm, max_pending_size=1)
+        assert system_item.status == "pending"
+
+        external_comm = make_comm(sid, content="external msg", sender_type=SenderType.EXTERNAL)
+        external_item = await pending_store.enqueue(sid, sdir, external_comm, max_pending_size=1)
+        assert external_item.status == "pending"
+
+    @pytest.mark.asyncio
+    async def test_enqueue_schedule_cap_only_counts_pending_schedule_items(
+        self, pending_store, temp_session
+    ):
+        """Non-schedule pending volume and terminal-status schedule items must
+        neither count toward nor protect against the schedule-only cap
+        (issue #2233) — only still-pending SCHEDULE items are counted."""
+        sid, sdir = temp_session
+
+        # A delivered SCHEDULE item must not count toward the cap.
+        delivered = await pending_store.enqueue(
+            sid, sdir, make_schedule_comm(sid, content="done"), max_pending_size=1
+        )
+        await pending_store.mark_delivered(sid, sdir, delivered.comm.comm_id)
+        await pending_store.enqueue(sid, sdir, make_schedule_comm(sid, content="still fits"), max_pending_size=1)
+
+        # A pile of non-schedule pending items doesn't protect the cap either.
+        for i in range(5):
+            await pending_store.enqueue(sid, sdir, make_comm(sid, content=f"user {i}"), max_pending_size=1)
+        with pytest.raises(ValueError, match="Pending store full"):
+            await pending_store.enqueue(sid, sdir, make_schedule_comm(sid, content="over cap"), max_pending_size=1)
 
     @pytest.mark.asyncio
     async def test_mark_delivered(self, pending_store, temp_session):
