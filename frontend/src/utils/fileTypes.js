@@ -125,6 +125,18 @@ export function getFileIcon(filename) {
 }
 
 /**
+ * Format a byte count as a short human-readable string (e.g. "18.4 KB").
+ * @param {number} bytes
+ * @returns {string}
+ */
+export function formatFileSize(bytes) {
+  if (bytes == null || Number.isNaN(bytes)) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/**
  * Get an icon emoji for a file based on its MIME type.
  * @param {string} mimeType
  * @returns {string} emoji

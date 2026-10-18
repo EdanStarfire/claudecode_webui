@@ -162,6 +162,78 @@ class ArchiveCoordinator:
             session_id, archive_id, resource_id
         )
 
+    async def archive_exists(self, session_id: str, archive_id: str) -> bool:
+        """Check whether an archive directory exists."""
+        if not self.legion_system:
+            return False
+        return await self.legion_system.archive_manager.archive_exists(session_id, archive_id)
+
+    async def get_archive_queue(self, session_id: str, archive_id: str) -> list[dict]:
+        """Read archived queue entries."""
+        if not self.legion_system:
+            return []
+        return await self.legion_system.archive_manager.get_archive_queue(session_id, archive_id)
+
+    async def get_archive_proxy_logs(self, session_id: str, archive_id: str) -> list[dict]:
+        """List archived proxy log files with size and line count."""
+        if not self.legion_system:
+            return []
+        return await self.legion_system.archive_manager.get_archive_proxy_logs(session_id, archive_id)
+
+    async def get_archive_proxy_log_content(
+        self,
+        session_id: str,
+        archive_id: str,
+        log_name: str,
+        offset: int = 0,
+        limit: int = 100,
+        from_end: bool = False,
+    ) -> dict:
+        """Read a chunk of lines from an archived proxy log file."""
+        if not self.legion_system:
+            return {"lines": [], "total_lines": 0, "start_line": 0, "end_line": 0}
+        return await self.legion_system.archive_manager.get_archive_proxy_log_content(
+            session_id, archive_id, log_name, offset=offset, limit=limit, from_end=from_end
+        )
+
+    async def get_archive_history(self, session_id: str, archive_id: str) -> list[dict]:
+        """List history .md files in an archive."""
+        if not self.legion_system:
+            return []
+        return await self.legion_system.archive_manager.get_archive_history(session_id, archive_id)
+
+    async def get_archive_history_content(
+        self, session_id: str, archive_id: str, filename: str
+    ) -> str | None:
+        """Read raw markdown text for an archived history file."""
+        if not self.legion_system:
+            return None
+        return await self.legion_system.archive_manager.get_archive_history_content(
+            session_id, archive_id, filename
+        )
+
+    async def get_archive_schedules(self, session_id: str, archive_id: str) -> dict:
+        """Read archived schedules and schedule execution history."""
+        if not self.legion_system:
+            return {"schedules": [], "history": []}
+        return await self.legion_system.archive_manager.get_archive_schedules(session_id, archive_id)
+
+    async def get_archive_attachments(self, session_id: str, archive_id: str) -> list[dict]:
+        """List files in archived attachments/ directory."""
+        if not self.legion_system:
+            return []
+        return await self.legion_system.archive_manager.get_archive_attachments(session_id, archive_id)
+
+    async def get_archive_attachment_file(
+        self, session_id: str, archive_id: str, filename: str
+    ) -> tuple[bytes, str] | None:
+        """Read raw bytes + content type for an archived attachment file."""
+        if not self.legion_system:
+            return None
+        return await self.legion_system.archive_manager.get_archive_attachment_file(
+            session_id, archive_id, filename
+        )
+
     async def list_project_deleted_agents(self, project_id: str, limit: int = 50, offset: int = 0) -> dict:
         """List deleted agents with archives for a project, paginated."""
         if not self.legion_system:

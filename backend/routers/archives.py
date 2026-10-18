@@ -114,6 +114,122 @@ def build_router(webui) -> APIRouter:
             disposition="inline",
         )
 
+    @router.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/proxy-logs")
+    @handle_exceptions("get archive proxy logs")
+    async def get_archive_proxy_logs(project_id: str, session_id: str, archive_id: str):
+        """List archived proxy log files with size and line count."""
+        if not await webui.service.validate_project_exists(project_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+        if not await webui.service.archive_exists(session_id, archive_id):
+            raise HTTPException(status_code=404, detail="Archive not found")
+        return await webui.service.get_archive_proxy_logs(session_id, archive_id)
+
+    @router.get(
+        "/api/projects/{project_id}/archives/{session_id}/{archive_id}/proxy-logs/{log_name}"
+    )
+    @handle_exceptions("get archive proxy log content", value_error_status=400)
+    async def get_archive_proxy_log_content(
+        project_id: str,
+        session_id: str,
+        archive_id: str,
+        log_name: str,
+        offset: int = 0,
+        limit: int = 100,
+        from_end: bool = False,
+    ):
+        """Get a chunk of lines from an archived proxy log file."""
+        if not await webui.service.validate_project_exists(project_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+        if not await webui.service.archive_exists(session_id, archive_id):
+            raise HTTPException(status_code=404, detail="Archive not found")
+        return await webui.service.get_archive_proxy_log_content(
+            session_id, archive_id, log_name, offset=offset, limit=limit, from_end=from_end
+        )
+
+    @router.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/queue")
+    @handle_exceptions("get archive queue")
+    async def get_archive_queue(project_id: str, session_id: str, archive_id: str):
+        """Get archived message queue entries."""
+        if not await webui.service.validate_project_exists(project_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+        if not await webui.service.archive_exists(session_id, archive_id):
+            raise HTTPException(status_code=404, detail="Archive not found")
+        return await webui.service.get_archive_queue(session_id, archive_id)
+
+    @router.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/attachments")
+    @handle_exceptions("get archive attachments")
+    async def get_archive_attachments(project_id: str, session_id: str, archive_id: str):
+        """List files in an archive's attachments/ directory."""
+        if not await webui.service.validate_project_exists(project_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+        if not await webui.service.archive_exists(session_id, archive_id):
+            raise HTTPException(status_code=404, detail="Archive not found")
+        return await webui.service.get_archive_attachments(session_id, archive_id)
+
+    @router.get(
+        "/api/projects/{project_id}/archives/{session_id}/{archive_id}/attachments/{filename}"
+    )
+    @handle_exceptions("get archive attachment file")
+    async def get_archive_attachment_file(
+        project_id: str, session_id: str, archive_id: str, filename: str, request: Request
+    ):
+        """Get raw file bytes for an archived attachment."""
+        if not await webui.service.validate_project_exists(project_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+        if not await webui.service.archive_exists(session_id, archive_id):
+            raise HTTPException(status_code=404, detail="Archive not found")
+
+        result = await webui.service.get_archive_attachment_file(session_id, archive_id, filename)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+        content, content_type = result
+
+        return build_resource_response(
+            request,
+            content=content,
+            media_type=content_type,
+            filename=filename,
+            disposition="attachment",
+        )
+
+    @router.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/history")
+    @handle_exceptions("get archive history listing")
+    async def get_archive_history(project_id: str, session_id: str, archive_id: str):
+        """List distilled history .md files in an archive."""
+        if not await webui.service.validate_project_exists(project_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+        if not await webui.service.archive_exists(session_id, archive_id):
+            raise HTTPException(status_code=404, detail="Archive not found")
+        return await webui.service.get_archive_history(session_id, archive_id)
+
+    @router.get(
+        "/api/projects/{project_id}/archives/{session_id}/{archive_id}/history/{filename}"
+    )
+    @handle_exceptions("get archive history content")
+    async def get_archive_history_content(
+        project_id: str, session_id: str, archive_id: str, filename: str
+    ):
+        """Get raw markdown text for an archived history file."""
+        if not await webui.service.validate_project_exists(project_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+        if not await webui.service.archive_exists(session_id, archive_id):
+            raise HTTPException(status_code=404, detail="Archive not found")
+
+        content = await webui.service.get_archive_history_content(session_id, archive_id, filename)
+        if content is None:
+            raise HTTPException(status_code=404, detail="History file not found")
+        return {"content": content}
+
+    @router.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/schedules")
+    @handle_exceptions("get archive schedules")
+    async def get_archive_schedules(project_id: str, session_id: str, archive_id: str):
+        """Get archived schedule config and execution history."""
+        if not await webui.service.validate_project_exists(project_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+        if not await webui.service.archive_exists(session_id, archive_id):
+            raise HTTPException(status_code=404, detail="Archive not found")
+        return await webui.service.get_archive_schedules(session_id, archive_id)
+
     @router.get("/api/projects/{project_id}/deleted-agents")
     @handle_exceptions("list deleted agents")
     async def list_deleted_agents(project_id: str, limit: int = 50, offset: int = 0):

@@ -10,6 +10,7 @@ Responsibilities:
 import asyncio
 import json
 import logging
+import mimetypes
 import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -51,6 +52,30 @@ def scrub_state_for_archive(state: dict) -> dict:
 
 
 _PROXY_LOG_NAMES = ("access.log", "dns.log", "socks5.log", "dropped.log")
+
+
+def _safe_child_path(parent_dir: Path, filename: str) -> Path | None:
+    """Resolve filename as a basename-only child of parent_dir, rejecting traversal.
+
+    filename is free-text from the client (unlike _PROXY_LOG_NAMES, which is a
+    fixed allowlist). Rejects anything containing path separators or "..", and
+    as a second line of defense also rejects any resolved path that would
+    escape parent_dir (covers bare ".." — Path("..").name == ".." so the
+    basename-equality check alone doesn't catch it).
+    """
+    if not filename or filename in (".", "..") or Path(filename).name != filename:
+        return None
+    candidate = parent_dir / filename
+    try:
+        resolved_parent = parent_dir.resolve()
+        resolved_candidate = candidate.resolve()
+    except (OSError, ValueError):
+        # ValueError covers e.g. embedded null bytes, which raise instead of
+        # just failing an OSError-style filesystem check.
+        return None
+    if not resolved_candidate.is_relative_to(resolved_parent):
+        return None
+    return candidate
 
 
 @dataclass
@@ -658,16 +683,20 @@ class ArchiveManager:
     ) -> dict:
         """Read archived schedules.json and schedule_history.jsonl from an archive.
 
+        The source files are legion-wide (copied verbatim by _copy_legion_schedules),
+        so results are filtered down to this minion's own schedules — otherwise a
+        minion's archive would show every other minion's schedules in the same legion.
+
         Returns {schedules: list, history: list}.
         """
         archive_dir = self.archives_dir / session_id / archive_id
-        schedules: list = []
-        history: list = []
+        all_schedules: list = []
+        all_history: list = []
 
         sched_file = archive_dir / "schedules.json"
         if sched_file.exists():
             try:
-                schedules = json.loads(sched_file.read_text(encoding="utf-8"))
+                all_schedules = json.loads(sched_file.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError) as e:
                 archive_logger.error(f"Failed to read archived schedules: {e}")
 
@@ -679,11 +708,18 @@ class ArchiveManager:
                         line = line.strip()
                         if line:
                             try:
-                                history.append(json.loads(line))
+                                all_history.append(json.loads(line))
                             except json.JSONDecodeError:
                                 pass
             except OSError as e:
                 archive_logger.error(f"Failed to read archived schedule history: {e}")
+
+        schedules = [
+            s for s in all_schedules
+            if s.get("minion_id") == session_id or s.get("ephemeral_agent_id") == session_id
+        ]
+        own_schedule_ids = {s.get("schedule_id") for s in schedules}
+        history = [h for h in all_history if h.get("schedule_id") in own_schedule_ids]
 
         return {"schedules": schedules, "history": history}
 
@@ -709,6 +745,114 @@ class ArchiveManager:
                 except OSError:
                     pass
         return entries
+
+    async def archive_exists(self, session_id: str, archive_id: str) -> bool:
+        """Check whether an archive directory exists.
+
+        Distinct from "artifact not captured for this archive" (e.g. proxy
+        wasn't enabled) — that case returns 200-empty from the listing/content
+        methods above. This check is for the archive itself being invalid
+        (bad session_id/archive_id), which routes should 404 on.
+        """
+        return (self.archives_dir / session_id / archive_id).exists()
+
+    async def get_archive_proxy_log_content(
+        self,
+        session_id: str,
+        archive_id: str,
+        log_name: str,
+        offset: int = 0,
+        limit: int = 100,
+        from_end: bool = False,
+    ) -> dict:
+        """Read a chunk of lines from an archived proxy log file.
+
+        log_name is validated against the fixed _PROXY_LOG_NAMES allowlist
+        (not a free-text filename, so no path-traversal surface) — raises
+        ValueError for anything else. from_end=True returns the last `limit`
+        lines (for the initial tail chunk); from_end=False paginates forward
+        from `offset` (for the head chunk + "load more").
+
+        Returns {"lines": [...], "total_lines": N, "start_line": N, "end_line": N}.
+        An uncaptured/missing log file returns an empty-but-valid result, not None.
+        """
+        if log_name not in _PROXY_LOG_NAMES:
+            raise ValueError(f"Invalid proxy log name: {log_name!r}")
+
+        archive_dir = self.archives_dir / session_id / archive_id
+        log_file = archive_dir / "proxy" / log_name
+        empty = {"lines": [], "total_lines": 0, "start_line": 0, "end_line": 0}
+        if not log_file.exists():
+            return empty
+
+        try:
+            lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError as e:
+            archive_logger.error(f"Failed to read proxy log {log_name}: {e}")
+            return empty
+
+        total_lines = len(lines)
+        if from_end:
+            start_line = max(0, total_lines - limit)
+            selected = lines[start_line:]
+        else:
+            start_line = max(0, offset)
+            selected = lines[start_line : start_line + limit]
+        end_line = start_line + len(selected)
+
+        return {
+            "lines": selected,
+            "total_lines": total_lines,
+            "start_line": start_line,
+            "end_line": end_line,
+        }
+
+    async def get_archive_history_content(
+        self, session_id: str, archive_id: str, filename: str
+    ) -> str | None:
+        """Read raw markdown text for an archived history file.
+
+        filename is free-text from the client — validated as a basename-only
+        child of archive_dir/history/ via _safe_child_path (path-traversal
+        protection here is load-bearing, not a convenience check).
+
+        Returns None if filename is invalid, outside history/, or missing.
+        """
+        archive_dir = self.archives_dir / session_id / archive_id
+        history_dir = archive_dir / "history"
+        safe_path = _safe_child_path(history_dir, filename)
+        if safe_path is None or not safe_path.is_file():
+            return None
+        try:
+            return safe_path.read_text(encoding="utf-8")
+        except OSError as e:
+            archive_logger.error(f"Failed to read archive history file {filename}: {e}")
+            return None
+
+    async def get_archive_attachment_file(
+        self, session_id: str, archive_id: str, filename: str
+    ) -> tuple[bytes, str] | None:
+        """Read raw bytes + guessed content type for an archived attachment file.
+
+        filename is free-text from the client — validated as a basename-only
+        child of archive_dir/attachments/ via _safe_child_path (this serves
+        arbitrary user-uploaded filenames; path traversal here is a real
+        attack surface, not a convenience check).
+
+        Returns None if filename is invalid, outside attachments/, or missing.
+        """
+        archive_dir = self.archives_dir / session_id / archive_id
+        att_dir = archive_dir / "attachments"
+        safe_path = _safe_child_path(att_dir, filename)
+        if safe_path is None or not safe_path.is_file():
+            return None
+        try:
+            content = safe_path.read_bytes()
+        except OSError as e:
+            archive_logger.error(f"Failed to read archive attachment {filename}: {e}")
+            return None
+        content_type, _ = mimetypes.guess_type(safe_path.name)
+        return content, content_type or "application/octet-stream"
 
     async def list_project_deleted_agents(self, project_id: str) -> list[dict]:
         """

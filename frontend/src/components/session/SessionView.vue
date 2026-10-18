@@ -11,6 +11,9 @@
       >Info</button>
     </div>
 
+    <!-- Archive viewer tabs (issue #1263) -->
+    <ArchiveTabBar v-if="isArchiveMode" :session-id="props.sessionId" />
+
     <!-- Ephemeral Session Banner (schedule-managed, not yet fired) -->
     <div v-if="isEphemeralIdle" class="ephemeral-banner">
       <span class="ephemeral-badge">SCHEDULED</span>
@@ -26,8 +29,40 @@
     />
 
     <!-- Messages Area -->
-    <div class="d-flex flex-column flex-grow-1 overflow-hidden">
+    <div
+      v-if="!isArchiveMode || currentArchiveTab === 'messages'"
+      class="d-flex flex-column flex-grow-1 overflow-hidden"
+    >
       <MessageList ref="messageListRef" />
+    </div>
+
+    <!-- Archive viewer tab panes (issue #1263) -->
+    <div v-if="isArchiveMode && currentArchiveTab !== 'messages'" class="flex-grow-1 overflow-auto">
+      <ArchiveProxyLogsTab
+        v-if="currentArchiveTab === 'proxy'"
+        :session-id="props.sessionId"
+        :archive-id="effectiveArchiveId"
+      />
+      <ArchiveQueueTab
+        v-else-if="currentArchiveTab === 'queue'"
+        :session-id="props.sessionId"
+        :archive-id="effectiveArchiveId"
+      />
+      <ArchiveAttachmentsTab
+        v-else-if="currentArchiveTab === 'attachments'"
+        :session-id="props.sessionId"
+        :archive-id="effectiveArchiveId"
+      />
+      <ArchiveHistoryTab
+        v-else-if="currentArchiveTab === 'history'"
+        :session-id="props.sessionId"
+        :archive-id="effectiveArchiveId"
+      />
+      <ArchiveSchedulesTab
+        v-else-if="currentArchiveTab === 'schedules'"
+        :session-id="props.sessionId"
+        :archive-id="effectiveArchiveId"
+      />
     </div>
 
     <!-- Bottom input-bar stack — measured so PermissionQueue's floating offset always clears
@@ -63,6 +98,7 @@ import { useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
 import { useResourceStore } from '@/stores/resource'
+import { useArchiveTabsStore } from '@/stores/archiveTabs'
 import { useUIStore } from '@/stores/ui'
 import { usePollingStore } from '@/stores/polling'
 import { apiGet } from '@/utils/api'
@@ -72,6 +108,12 @@ import MessageList from '../messages/MessageList.vue'
 import InputArea from '../messages/InputArea.vue'
 import AgentNotificationStrip from '../messages/AgentNotificationStrip.vue'
 import PermissionQueue from '../messages/PermissionQueue.vue'
+import ArchiveTabBar from './ArchiveTabBar.vue'
+import ArchiveProxyLogsTab from './ArchiveProxyLogsTab.vue'
+import ArchiveQueueTab from './ArchiveQueueTab.vue'
+import ArchiveAttachmentsTab from './ArchiveAttachmentsTab.vue'
+import ArchiveHistoryTab from './ArchiveHistoryTab.vue'
+import ArchiveSchedulesTab from './ArchiveSchedulesTab.vue'
 
 const props = defineProps({
   sessionId: {
@@ -104,6 +146,7 @@ let bottomStackObserver = null
 const sessionStore = useSessionStore()
 const messageStore = useMessageStore()
 const resourceStore = useResourceStore()
+const archiveTabsStore = useArchiveTabsStore()
 const uiStore = useUIStore()
 const pollingStore = usePollingStore()
 
@@ -150,6 +193,7 @@ function replyToAgent(label) {
 
 const isArchiveMode = computed(() => !!(props.archiveId || route.params.archiveId))
 const effectiveArchiveId = computed(() => props.archiveId || route.params.archiveId)
+const currentArchiveTab = computed(() => archiveTabsStore.activeTabForSession(props.sessionId))
 
 // Per-instance ephemeral check — reads this instance's session state, not the global current.
 const isEphemeralIdle = computed(() => {
@@ -172,8 +216,13 @@ async function loadArchiveMessages() {
   try {
     const data = await apiGet(`/api/projects/${pid}/archives/${props.sessionId}/${archiveId}/messages?limit=1000&offset=0`)
     messageStore.setArchiveMessages(props.sessionId, data.messages || [])
-    // Load archived resources
-    await resourceStore.loadArchiveResources(props.sessionId, pid, archiveId)
+    // Load archived resources + the 5 archive-viewer tabs (issue #1263) concurrently —
+    // independent fetches, and running them together shrinks the window where a tab
+    // pane could render before loadAllTabs has even started.
+    await Promise.all([
+      resourceStore.loadArchiveResources(props.sessionId, pid, archiveId),
+      archiveTabsStore.loadAllTabs(props.sessionId, pid, archiveId),
+    ])
   } catch (e) {
     console.error('Failed to load archive messages:', e)
   } finally {
@@ -216,6 +265,7 @@ onDeactivated(() => {
     messageStore.clearArchiveMessages(props.sessionId)
     resourceStore.clearResources(props.sessionId)
     resourceStore.clearArchiveContext(props.sessionId)
+    archiveTabsStore.clearArchiveTabs(props.sessionId)
     // Builder-review finding: deliberately NOT calling pollingStore.disconnectSession()
     // here. The same sessionId can have a separate, concurrently KeepAlive-cached LIVE
     // instance (the user flips between "live" and "archive X" tabs for the same agent) —
@@ -244,6 +294,7 @@ onUnmounted(() => {
     messageStore.clearArchiveMessages(props.sessionId)
     resourceStore.clearResources(props.sessionId)
     resourceStore.clearArchiveContext(props.sessionId)
+    archiveTabsStore.clearArchiveTabs(props.sessionId)
     // See onDeactivated's identical note above — same reasoning applies to LRU eviction.
   }
   teardownBottomStackObserver()
