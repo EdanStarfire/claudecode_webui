@@ -1014,6 +1014,66 @@ async def test_send_comm_auto_start_false_explicit_is_honored(tmp_path):
     assert sent_comm.auto_start is False
 
 
+# ── send_comm delivery-default-by-comm_type tests (Issue #2193 AC2) ──
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("comm_type", "expected_delivery"),
+    [
+        ("report", "when_idle"),
+        ("info", "when_idle"),
+        ("task", "immediate"),
+        ("question", "immediate"),
+    ],
+)
+async def test_send_comm_delivery_defaults_by_comm_type_when_omitted(
+    tmp_path, comm_type, expected_delivery
+):
+    """Issue #2193 AC2: omitting `delivery` defers to
+    `default_delivery_for_type()` — REPORT/INFO default to WHEN_IDLE,
+    TASK/QUESTION stay IMMEDIATE (unchanged from before this fix)."""
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from backend.models.legion_models import DeliveryPolicy
+
+    mock_system = _make_send_comm_system_with_router("any-minion", tmp_path, resource_ids=[])
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_send_comm({
+        "_from_minion_id": "any-minion",
+        "to_minion_name": "user",
+        "content": "fyi",
+        "comm_type": comm_type,
+    })
+
+    assert result["is_error"] is False
+    sent_comm = mock_system.comm_router.route_comm.call_args.args[0]
+    assert sent_comm.delivery == DeliveryPolicy(expected_delivery)
+
+
+@pytest.mark.asyncio
+async def test_send_comm_explicit_delivery_overrides_type_default(tmp_path):
+    """An explicit `delivery` always wins, including an explicit 'immediate'
+    on a REPORT — matches AC2's 'every send may override the default'."""
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from backend.models.legion_models import DeliveryPolicy
+
+    mock_system = _make_send_comm_system_with_router("any-minion", tmp_path, resource_ids=[])
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_send_comm({
+        "_from_minion_id": "any-minion",
+        "to_minion_name": "user",
+        "content": "fyi",
+        "comm_type": "report",
+        "delivery": "immediate",
+    })
+
+    assert result["is_error"] is False
+    sent_comm = mock_system.comm_router.route_comm.call_args.args[0]
+    assert sent_comm.delivery == DeliveryPolicy.IMMEDIATE
+
+
 # ── queue_task handler tests (Issue #1114) ──
 
 
