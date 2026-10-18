@@ -1011,6 +1011,11 @@ class ApplicationService:
             client_metadata_url=client_metadata_url,
         )
 
+    def get_oauth_discovery_summary(self, config_id: str) -> dict | None:
+        return self.coordinator.oauth_secret_bundle_manager.oauth_manager.get_discovery_summary(
+            config_id
+        )
+
     async def oauth_disconnect(self, config_id: str) -> bool:
         return await self.coordinator.oauth_secret_bundle_manager.oauth_disconnect(config_id)
 
