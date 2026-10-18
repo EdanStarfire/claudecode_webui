@@ -164,16 +164,30 @@ def resource_registered(session_id: str) -> Predicate:
     return _match
 
 
-def comm_delivered() -> Predicate:
+def comm_delivered(content_contains: str | None = None) -> Predicate:
     """A comm delivered INTO a session's message stream (e.g. a minion's
     `send_comm` reply reaching the main session) — an ordinary message whose
     `metadata.comm` is set, the same field `fixture_export._check_markers()`
     keys "inter-minion comm" on. Scope it to one session's stream via
-    `WaitSpec.stream`."""
+    `WaitSpec.stream`.
+
+    `content_contains`, when given, also requires `metadata.comm.content`
+    (the comm's original, unformatted text — see `comm_router.py::_send_to_minion`,
+    which sets this field from `comm.content` before any header/attachment
+    formatting) to contain that substring. Needed to tell two deliveries into
+    the same stream apart (issue #2193 PR8), e.g. a WHEN_IDLE comm and a later
+    PIVOT comm both landing in the same minion's stream."""
 
     def _match(tagged: TaggedEvent) -> bool:
         data = _message_data(tagged)
-        return data is not None and "comm" in (data.get("metadata") or {})
+        if data is None:
+            return False
+        comm = (data.get("metadata") or {}).get("comm")
+        if comm is None:
+            return False
+        if content_contains is None:
+            return True
+        return content_contains in (comm.get("content") or "")
 
     return _match
 

@@ -667,4 +667,104 @@ def build_scenarios(
         )
     )
 
+    # 23 (new): WHEN_IDLE queues until idle, PIVOT interrupts and redirects.
+    #
+    # Issue #2193 AC3/AC4. Scoped to the driver's existing two-session setup
+    # (main session `m` + Test Minion) — single-sender only. Full multi-sender
+    # AC5 flush coverage needs a dynamically-spawned third session and is
+    # explicitly out of scope here (see the PR8 plan, section 3).
+    #
+    # Both `send_comm` calls go through `m`'s own send_comm MCP tool (via
+    # send_prompt, mirroring scenario 13), not the driver's direct REST
+    # `actions.send_comm()` — that REST action has no `delivery` parameter.
+    #
+    # Live-run caveat (honesty requirement, see the PR8 plan section 3/4):
+    # Test Minion's fixed system prompt (`TEST_MINION_SYSTEM_PROMPT`) replies
+    # to any ordinary comm with exactly '42', regardless of the task's
+    # described length — so against a real model, Test Minion's "long task"
+    # turns may complete far faster than a real multi-minute task would,
+    # potentially narrowing or closing the busy window this scenario depends
+    # on. This has not been exercised against a live credentialed backend;
+    # the structural wiring below (predicates/actions referenced, ordering
+    # via sequential waits) is believed correct but unverified end-to-end.
+    scenarios.append(
+        Scenario(
+            id=23,
+            title="WHEN_IDLE queues until idle, PIVOT interrupts and redirects",
+            # Documentation only — deliberately NOT added to
+            # fixture_export.REQUIRED_MARKERS (see the PR8 plan, section 0).
+            coverage_markers=("legion delivery ordering",),
+            steps=[
+                # Step 1: kick off Test Minion's first long-running task.
+                Step(action=partial(
+                    actions.send_prompt, session_id=m,
+                    message=f"Use the send_comm Legion MCP tool exactly once to send a TASK "
+                            f"comm to the minion named '{TEST_MINION_NAME}' asking it to write "
+                            f"a long, detailed 1000-word report on the history of computing. "
+                            f"Then stop and do not wait for a reply.",
+                )),
+                Step(wait=_wait_result(m, "23 step 1 (first task sent)", timeout_s=60.0)),
+                # Step 2: while Test Minion is still busy, queue a WHEN_IDLE comm —
+                # must not interrupt the task in progress.
+                Step(action=partial(
+                    actions.send_prompt, session_id=m,
+                    message=f"Use the send_comm Legion MCP tool exactly once, with "
+                            f"delivery=when_idle, to send this message to the minion named "
+                            f"'{TEST_MINION_NAME}': 'Please also summarize your findings in one "
+                            f"sentence when you're free.' Then stop and do not wait for a reply.",
+                )),
+                Step(wait=_wait_result(m, "23 step 2 (WHEN_IDLE comm sent)", timeout_s=60.0)),
+                # Step 3: the first task must complete before the queued WHEN_IDLE
+                # comm is delivered — two sequential waits on Test Minion's own
+                # stream, consumed in order, so the second can't match an event
+                # that landed before the first's match point.
+                Step(wait=WaitSpec(
+                    predicate=predicates.result_message(minion_id),
+                    description="scenario 23: Test Minion's first long task completes",
+                    timeout_s=180.0,
+                )),
+                Step(wait=WaitSpec(
+                    predicate=predicates.comm_delivered(content_contains="summarize your findings"),
+                    description="scenario 23: WHEN_IDLE comm delivered only after the task finished",
+                    stream="minion",
+                    timeout_s=60.0,
+                )),
+                # Step 4: a second long-running task, then PIVOT — must interrupt
+                # the in-flight task and have its own content delivered+answered.
+                Step(action=partial(
+                    actions.send_prompt, session_id=m,
+                    message=f"Use the send_comm Legion MCP tool exactly once to send a TASK "
+                            f"comm to the minion named '{TEST_MINION_NAME}' asking it to write "
+                            f"a long, detailed 2000-word essay on the history of mathematics. "
+                            f"Then stop and do not wait for a reply.",
+                )),
+                Step(wait=_wait_result(m, "23 step 4 (second task sent)", timeout_s=60.0)),
+                Step(action=partial(
+                    actions.send_prompt, session_id=m,
+                    message=f"Use the send_comm Legion MCP tool exactly once, with "
+                            f"delivery=pivot, to send this message to the minion named "
+                            f"'{TEST_MINION_NAME}': 'Stop that and instead just tell me your "
+                            f"name.' Then stop and do not wait for a reply.",
+                )),
+                Step(wait=_wait_result(m, "23 step 4 (PIVOT comm sent)", timeout_s=60.0)),
+                Step(wait=WaitSpec(
+                    predicate=predicates.system_subtype(minion_id, "interrupt"),
+                    description="scenario 23: PIVOT interrupted Test Minion's second task",
+                    timeout_s=60.0,
+                )),
+                Step(wait=WaitSpec(
+                    predicate=predicates.comm_delivered(content_contains="tell me your name"),
+                    description="scenario 23: PIVOT comm delivered after the interrupt",
+                    stream="minion",
+                    timeout_s=60.0,
+                )),
+                Step(wait=WaitSpec(
+                    predicate=predicates.result_message(minion_id),
+                    description="scenario 23: Test Minion answers the PIVOT comm",
+                    timeout_s=60.0,
+                )),
+            ],
+        )
+    )
+
     return scenarios

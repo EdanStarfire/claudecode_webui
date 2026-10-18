@@ -98,7 +98,7 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("send comm to legion")
     async def send_comm_to_legion(legion_id: str, request: CommSendRequest):
         """Send a Comm in the legion"""
-        from backend.models.legion_models import Comm, CommType
+        from backend.models.legion_models import Comm, CommType, default_delivery_for_type
 
         legion = await webui.service.get_legion(legion_id)
         if not legion:
@@ -113,6 +113,7 @@ def build_router(webui) -> APIRouter:
         # this endpoint's pre-AC8-enforcement observed behavior of auto-starting
         # a dormant target minion — deliver()'s _ensure_session_ready() now fails
         # fast on a dormant target unless auto_start is explicitly set.
+        comm_type = CommType(request.comm_type)
         comm = Comm(
             comm_id=str(uuid.uuid4()),
             from_user=True,
@@ -120,7 +121,8 @@ def build_router(webui) -> APIRouter:
             to_user=request.to_user,
             to_minion_name=to_minion_name,
             content=request.content,
-            comm_type=CommType(request.comm_type),
+            comm_type=comm_type,
+            delivery=default_delivery_for_type(comm_type),
             auto_start=True,
         )
 

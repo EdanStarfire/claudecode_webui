@@ -567,7 +567,12 @@ class LegionMCPTools:
         """
         import uuid
 
-        from backend.models.legion_models import Comm, CommType, DeliveryPolicy
+        from backend.models.legion_models import (
+            Comm,
+            CommType,
+            DeliveryPolicy,
+            default_delivery_for_type,
+        )
 
         # Get current minion context (from session_id in SDK context)
         # For now, we'll need to pass this through - placeholder
@@ -597,13 +602,18 @@ class LegionMCPTools:
         # Validate delivery (optional) — issue #2193 PR5: replaces interrupt_priority.
         # DeliveryPolicy's values already match these four strings exactly, so this is
         # a direct 1:1 map, not a remapping.
-        delivery_str = args.get("delivery", "immediate").lower()
+        delivery_str = args.get("delivery")
         valid_deliveries = ["immediate", "when_idle", "pivot", "halt"]
 
-        if delivery_str not in valid_deliveries:
-            return self._err(f"Error: Invalid delivery '{delivery_str}'. Valid values are: {', '.join(valid_deliveries)}")
-
-        delivery = DeliveryPolicy(delivery_str)
+        if delivery_str is not None:
+            delivery_str = delivery_str.lower()
+            if delivery_str not in valid_deliveries:
+                return self._err(f"Error: Invalid delivery '{delivery_str}'. Valid values are: {', '.join(valid_deliveries)}")
+            delivery = DeliveryPolicy(delivery_str)
+        else:
+            # Issue #2193 AC2: type default when the sender omits delivery entirely —
+            # default_delivery_for_type() has existed since PR1 with zero callers until now.
+            delivery = default_delivery_for_type(CommType(internal_comm_type))
 
         # Issue #2193 PR5: auto_start defaults True, preserving the pre-AC8-enforcement
         # observed behavior (every send_comm call effectively auto-started a dormant
