@@ -441,6 +441,257 @@ class TestArchiveManagerErasure:
         assert status["has_history"] is False
 
 
+class TestArchiveSchedulesFiltering:
+    """get_archive_schedules() must scope the legion-wide schedules.json down to
+    this minion's own schedules — _copy_legion_schedules() copies the whole
+    legion's file verbatim into every minion's archive dir (issue #1263 review
+    finding: this was previously unreachable, now newly exposed to users)."""
+
+    @pytest.mark.asyncio
+    async def test_filters_to_own_minion_schedules_and_history(self, mock_system):
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / "sess-1" / "20240101_120000"
+        archive_dir.mkdir(parents=True)
+        (archive_dir / "schedules.json").write_text(json.dumps([
+            {"schedule_id": "s1", "minion_id": "sess-1", "cron_expression": "0 2 * * *"},
+            {"schedule_id": "s2", "minion_id": "sess-2", "cron_expression": "*/5 * * * *"},
+        ]))
+        (archive_dir / "schedule_history.jsonl").write_text(
+            json.dumps({"execution_id": "e1", "schedule_id": "s1", "status": "delivered"}) + "\n"
+            + json.dumps({"execution_id": "e2", "schedule_id": "s2", "status": "delivered"}) + "\n"
+        )
+
+        result = await manager.get_archive_schedules("sess-1", "20240101_120000")
+
+        assert [s["schedule_id"] for s in result["schedules"]] == ["s1"]
+        assert [h["execution_id"] for h in result["history"]] == ["e1"]
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_schedule_matched_by_agent_id(self, mock_system):
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / "sess-1" / "20240101_120000"
+        archive_dir.mkdir(parents=True)
+        (archive_dir / "schedules.json").write_text(json.dumps([
+            {"schedule_id": "s1", "minion_id": None, "ephemeral_agent_id": "sess-1", "cron_expression": "0 3 * * *"},
+        ]))
+
+        result = await manager.get_archive_schedules("sess-1", "20240101_120000")
+
+        assert [s["schedule_id"] for s in result["schedules"]] == ["s1"]
+
+
+class TestArchiveExists:
+    """Tests for archive_exists() — the 404-vs-200-empty distinguisher."""
+
+    @pytest.mark.asyncio
+    async def test_archive_exists_true(self, mock_system):
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / "sess-1" / "20240101_120000"
+        archive_dir.mkdir(parents=True)
+
+        assert await manager.archive_exists("sess-1", "20240101_120000") is True
+
+    @pytest.mark.asyncio
+    async def test_archive_exists_false(self, mock_system):
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+
+        assert await manager.archive_exists("sess-1", "nonexistent") is False
+
+
+class TestArchiveProxyLogContent:
+    """Tests for get_archive_proxy_log_content() — issue #1263."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_log_name_raises_value_error(self, mock_system):
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / "sess-1" / "20240101_120000"
+        archive_dir.mkdir(parents=True)
+
+        with pytest.raises(ValueError):
+            await manager.get_archive_proxy_log_content("sess-1", "20240101_120000", "../../etc/passwd")
+
+    @pytest.mark.asyncio
+    async def test_missing_log_file_returns_empty_not_none(self, mock_system):
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / "sess-1" / "20240101_120000"
+        archive_dir.mkdir(parents=True)
+
+        result = await manager.get_archive_proxy_log_content(
+            "sess-1", "20240101_120000", "dropped.log"
+        )
+        assert result == {"lines": [], "total_lines": 0, "start_line": 0, "end_line": 0}
+
+    @pytest.mark.asyncio
+    async def test_head_chunk_pagination(self, mock_system):
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / "sess-1" / "20240101_120000"
+        proxy_dir = archive_dir / "proxy"
+        proxy_dir.mkdir(parents=True)
+        lines = [f"line-{i}" for i in range(10)]
+        (proxy_dir / "access.log").write_text("\n".join(lines) + "\n")
+
+        result = await manager.get_archive_proxy_log_content(
+            "sess-1", "20240101_120000", "access.log", offset=0, limit=3
+        )
+        assert result["lines"] == ["line-0", "line-1", "line-2"]
+        assert result["total_lines"] == 10
+        assert result["start_line"] == 0
+        assert result["end_line"] == 3
+
+    @pytest.mark.asyncio
+    async def test_tail_chunk_from_end(self, mock_system):
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / "sess-1" / "20240101_120000"
+        proxy_dir = archive_dir / "proxy"
+        proxy_dir.mkdir(parents=True)
+        lines = [f"line-{i}" for i in range(10)]
+        (proxy_dir / "access.log").write_text("\n".join(lines) + "\n")
+
+        result = await manager.get_archive_proxy_log_content(
+            "sess-1", "20240101_120000", "access.log", limit=3, from_end=True
+        )
+        assert result["lines"] == ["line-7", "line-8", "line-9"]
+        assert result["start_line"] == 7
+        assert result["end_line"] == 10
+
+
+class TestArchiveHistoryContent:
+    """Tests for get_archive_history_content() — path-traversal protection is load-bearing."""
+
+    @pytest.mark.asyncio
+    async def test_reads_markdown_content(self, mock_system):
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / "sess-1" / "20240101_120000"
+        history_dir = archive_dir / "history"
+        history_dir.mkdir(parents=True)
+        (history_dir / "disposal.md").write_text("# Summary\n")
+
+        content = await manager.get_archive_history_content(
+            "sess-1", "20240101_120000", "disposal.md"
+        )
+        assert content == "# Summary\n"
+
+    @pytest.mark.asyncio
+    async def test_missing_file_returns_none(self, mock_system):
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / "sess-1" / "20240101_120000"
+        (archive_dir / "history").mkdir(parents=True)
+
+        content = await manager.get_archive_history_content(
+            "sess-1", "20240101_120000", "nope.md"
+        )
+        assert content is None
+
+    @pytest.mark.asyncio
+    async def test_path_traversal_rejected(self, mock_system):
+        """../../etc/passwd-style attempt must not escape history/."""
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / "sess-1" / "20240101_120000"
+        (archive_dir / "history").mkdir(parents=True)
+        secret_file = temp_path / "secret.txt"
+        secret_file.write_text("super secret")
+
+        for attempt in (
+            "../../../../secret.txt",
+            "../secret.txt",
+            "..",
+            "../../../..",
+        ):
+            content = await manager.get_archive_history_content(
+                "sess-1", "20240101_120000", attempt
+            )
+            assert content is None, f"traversal attempt {attempt!r} was not rejected"
+
+    @pytest.mark.asyncio
+    async def test_absolute_path_rejected(self, mock_system):
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / "sess-1" / "20240101_120000"
+        (archive_dir / "history").mkdir(parents=True)
+
+        content = await manager.get_archive_history_content(
+            "sess-1", "20240101_120000", "/etc/passwd"
+        )
+        assert content is None
+
+
+class TestArchiveAttachmentFile:
+    """Tests for get_archive_attachment_file() — path-traversal protection is load-bearing."""
+
+    @pytest.mark.asyncio
+    async def test_reads_file_bytes_and_content_type(self, mock_system):
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / "sess-1" / "20240101_120000"
+        att_dir = archive_dir / "attachments"
+        att_dir.mkdir(parents=True)
+        (att_dir / "notes.txt").write_bytes(b"hello world")
+
+        result = await manager.get_archive_attachment_file(
+            "sess-1", "20240101_120000", "notes.txt"
+        )
+        assert result is not None
+        content, content_type = result
+        assert content == b"hello world"
+        assert content_type == "text/plain"
+
+    @pytest.mark.asyncio
+    async def test_missing_file_returns_none(self, mock_system):
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / "sess-1" / "20240101_120000"
+        (archive_dir / "attachments").mkdir(parents=True)
+
+        result = await manager.get_archive_attachment_file(
+            "sess-1", "20240101_120000", "nope.bin"
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_path_traversal_rejected(self, mock_system):
+        """../../etc/passwd-style attempt must not escape attachments/."""
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / "sess-1" / "20240101_120000"
+        (archive_dir / "attachments").mkdir(parents=True)
+        secret_file = temp_path / "secret.txt"
+        secret_file.write_text("super secret")
+
+        for attempt in ("../../../../secret.txt", "../secret.txt", "..", "/etc/passwd"):
+            result = await manager.get_archive_attachment_file(
+                "sess-1", "20240101_120000", attempt
+            )
+            assert result is None, f"traversal attempt {attempt!r} was not rejected"
+
+    @pytest.mark.asyncio
+    async def test_rejects_filename_with_separator(self, mock_system):
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / "sess-1" / "20240101_120000"
+        att_dir = archive_dir / "attachments"
+        att_dir.mkdir(parents=True)
+        # Even if a nested path coincidentally exists, basename-only filenames are required.
+        nested = att_dir / "sub"
+        nested.mkdir()
+        (nested / "inner.txt").write_bytes(b"nested")
+
+        result = await manager.get_archive_attachment_file(
+            "sess-1", "20240101_120000", "sub/inner.txt"
+        )
+        assert result is None
+
+
 class TestArchiveManagerInLegionSystem:
     """Test ArchiveManager integration with LegionSystem."""
 

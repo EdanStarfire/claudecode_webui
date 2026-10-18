@@ -1986,6 +1986,46 @@ class SessionCoordinator:
             session_id, archive_id, resource_id
         )
 
+    async def archive_exists(self, session_id: str, archive_id: str) -> bool:
+        return await self._archive_coordinator.archive_exists(session_id, archive_id)
+
+    async def get_archive_queue(self, session_id: str, archive_id: str) -> list[dict]:
+        return await self._archive_coordinator.get_archive_queue(session_id, archive_id)
+
+    async def get_archive_proxy_logs(self, session_id: str, archive_id: str) -> list[dict]:
+        return await self._archive_coordinator.get_archive_proxy_logs(session_id, archive_id)
+
+    async def get_archive_proxy_log_content(
+        self, session_id: str, archive_id: str, log_name: str,
+        offset: int = 0, limit: int = 100, from_end: bool = False,
+    ) -> dict:
+        return await self._archive_coordinator.get_archive_proxy_log_content(
+            session_id, archive_id, log_name, offset, limit, from_end
+        )
+
+    async def get_archive_history(self, session_id: str, archive_id: str) -> list[dict]:
+        return await self._archive_coordinator.get_archive_history(session_id, archive_id)
+
+    async def get_archive_history_content(
+        self, session_id: str, archive_id: str, filename: str
+    ) -> str | None:
+        return await self._archive_coordinator.get_archive_history_content(
+            session_id, archive_id, filename
+        )
+
+    async def get_archive_schedules(self, session_id: str, archive_id: str) -> dict:
+        return await self._archive_coordinator.get_archive_schedules(session_id, archive_id)
+
+    async def get_archive_attachments(self, session_id: str, archive_id: str) -> list[dict]:
+        return await self._archive_coordinator.get_archive_attachments(session_id, archive_id)
+
+    async def get_archive_attachment_file(
+        self, session_id: str, archive_id: str, filename: str
+    ) -> tuple[bytes, str] | None:
+        return await self._archive_coordinator.get_archive_attachment_file(
+            session_id, archive_id, filename
+        )
+
     async def list_project_deleted_agents(self, project_id: str, limit: int = 50, offset: int = 0) -> dict:
         return await self._archive_coordinator.list_project_deleted_agents(project_id, limit, offset)
 

@@ -66,8 +66,12 @@ def build_resource_response(
     """
     file_size = len(content)
     range_header = request.headers.get("range")
+    # Defense in depth: filename may originate from a client-supplied path segment
+    # (e.g. archive attachment/history routes). Strip CR/LF (header injection) and
+    # escape `"` so it can't break out of the quoted filename attribute.
+    safe_filename = filename.replace("\r", "").replace("\n", "").replace('"', "'")
     base_headers = {
-        "Content-Disposition": f'{disposition}; filename="{filename}"',
+        "Content-Disposition": f'{disposition}; filename="{safe_filename}"',
         "Accept-Ranges": "bytes",
     }
 
