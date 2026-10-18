@@ -47,6 +47,8 @@ class TestPendingItem:
         assert item.delivered_at is None
         assert item.error is None
         assert item.inject_timestamp is True
+        assert item.dispatch_content is None
+        assert item.dispatch_metadata is None
 
     def test_to_dict_from_dict_roundtrip_fully_populated_comm(self):
         comm = make_comm(
@@ -88,6 +90,8 @@ class TestPendingItem:
             delivered_at=None,
             error=None,
             inject_timestamp=False,
+            dispatch_content="formatted dispatch text",
+            dispatch_metadata={"comm": {"from_name": "sender"}},
         )
 
         d = item.to_dict()
@@ -95,6 +99,8 @@ class TestPendingItem:
         assert d["session_id"] == "s1"
         assert d["position"] == 2
         assert d["inject_timestamp"] is False
+        assert d["dispatch_content"] == "formatted dispatch text"
+        assert d["dispatch_metadata"] == {"comm": {"from_name": "sender"}}
 
         restored = PendingItem.from_dict(d)
         assert isinstance(restored.comm, Comm)
@@ -106,6 +112,8 @@ class TestPendingItem:
         assert restored.position == item.position
         assert restored.created_at == item.created_at
         assert restored.inject_timestamp == item.inject_timestamp
+        assert restored.dispatch_content == "formatted dispatch text"
+        assert restored.dispatch_metadata == {"comm": {"from_name": "sender"}}
 
     def test_from_dict_ignores_unknown_keys(self):
         comm = make_comm("s1")
@@ -113,6 +121,19 @@ class TestPendingItem:
         item = PendingItem.from_dict(d)
         assert item.session_id == "s1"
         assert not hasattr(item, "extra_field")
+
+    def test_from_dict_missing_dispatch_fields_defaults_to_none(self):
+        """Pre-PR5 ledger entries have neither key — from_dict() must not raise
+        and must default both to None (same setdefault pattern as every prior
+        optional-field addition to this dataclass)."""
+        comm = make_comm("s1")
+        d = {"comm": comm.to_dict(), "session_id": "s1"}
+        assert "dispatch_content" not in d
+        assert "dispatch_metadata" not in d
+
+        item = PendingItem.from_dict(d)
+        assert item.dispatch_content is None
+        assert item.dispatch_metadata is None
 
 
 class TestPendingStoreCRUD:
@@ -348,6 +369,30 @@ class TestPendingStorePersistence:
         items = await store.load(sid, sdir)
         assert len(items) == 1
         assert items[0].comm.comm_id == "comm-ok"
+
+    @pytest.mark.asyncio
+    async def test_enqueue_with_dispatch_fields_persists_across_restart(self, temp_session):
+        """enqueue()'s dispatch_content/dispatch_metadata kwargs survive a
+        simulated restart (write via one PendingStore instance, load() via a
+        fresh one) — the mechanism PR5's WHEN_IDLE dispatch depends on."""
+        sid, sdir = temp_session
+
+        store1 = PendingStore()
+        item = await store1.enqueue(
+            sid, sdir, make_comm(sid, content="raw content"),
+            dispatch_content="formatted content",
+            dispatch_metadata={"comm": {"from_name": "sender"}},
+        )
+
+        store2 = PendingStore()
+        items = await store2.load(sid, sdir)
+        assert len(items) == 1
+        restored = items[0]
+        assert restored.comm.comm_id == item.comm.comm_id
+        assert restored.dispatch_content == "formatted content"
+        assert restored.dispatch_metadata == {"comm": {"from_name": "sender"}}
+        # The comm's own raw content is untouched by the dispatch override.
+        assert restored.comm.content == "raw content"
 
     @pytest.mark.asyncio
     async def test_replay_preserves_failed_error(self, temp_session):

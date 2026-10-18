@@ -39,6 +39,12 @@ class PendingItem:
     delivered_at: float | None = None
     error: str | None = None
     inject_timestamp: bool = True
+    # Issue #2193 (PR5): what to actually send to the SDK, if different from
+    # comm.content/comm.metadata (the ledger's raw, sender-facing record).
+    # Persisted (not a transient deliver() argument) because WHEN_IDLE items
+    # dispatch later, from _run_when_idle_loop's own call stack.
+    dispatch_content: str | None = None
+    dispatch_metadata: dict | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -50,12 +56,16 @@ class PendingItem:
             "delivered_at": self.delivered_at,
             "error": self.error,
             "inject_timestamp": self.inject_timestamp,
+            "dispatch_content": self.dispatch_content,
+            "dispatch_metadata": self.dispatch_metadata,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PendingItem":
         data = data.copy()
         data["comm"] = Comm.from_dict(data["comm"])
+        data.setdefault("dispatch_content", None)
+        data.setdefault("dispatch_metadata", None)
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
@@ -138,6 +148,8 @@ class PendingStore:
                             position=entry.get("position", 0),
                             created_at=entry.get("created_at", 0.0),
                             inject_timestamp=entry.get("inject_timestamp", True),
+                            dispatch_content=entry.get("dispatch_content"),
+                            dispatch_metadata=entry.get("dispatch_metadata"),
                         )
                         items_by_id[comm.comm_id] = item
 
@@ -181,6 +193,8 @@ class PendingStore:
         *,
         inject_timestamp: bool = True,
         max_pending_size: int = 100,
+        dispatch_content: str | None = None,
+        dispatch_metadata: dict | None = None,
     ) -> PendingItem:
         """Add a Comm to the session's pending-delivery ledger."""
         comm.validate()
@@ -205,6 +219,8 @@ class PendingStore:
             position=next_pos,
             created_at=get_unix_timestamp(),
             inject_timestamp=inject_timestamp,
+            dispatch_content=dispatch_content,
+            dispatch_metadata=dispatch_metadata,
         )
 
         pending_items.append(item)
@@ -217,6 +233,8 @@ class PendingStore:
             "position": item.position,
             "created_at": item.created_at,
             "inject_timestamp": item.inject_timestamp,
+            "dispatch_content": item.dispatch_content,
+            "dispatch_metadata": item.dispatch_metadata,
         })
 
         pending_logger.info(f"Enqueued {item.comm.comm_id} for session {session_id} at position {next_pos}")

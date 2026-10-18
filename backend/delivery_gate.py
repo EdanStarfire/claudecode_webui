@@ -11,13 +11,15 @@ in two different files:
   busy-wait, followed by a post-send idle busy-wait.
 
 Those two mechanisms still live here, verbatim, as ensure_ready()/send() and
-prepare_for_send()/send_queued()/wait_until_idle() — comm_router.py and
-queue_processor.py keep calling them exactly as before. Issue #2193 PR3 adds
-a third, new mechanism alongside them: deliver(), a single unified entry
-point implementing AC3 (one readiness/busy gate pair) and AC4 (full ordering
-semantics over the PR2 pending-set). Nothing in production calls deliver()
-yet — comm_router.py/queue_processor.py cut over in PR5/PR6. See
-test_delivery_gate.py for the ordering-matrix derivation this implements.
+prepare_for_send()/send_queued()/wait_until_idle() — queue_processor.py keeps
+calling its pair exactly as before (cuts over in PR6). Issue #2193 PR3 adds a
+third mechanism alongside them: deliver(), a single unified entry point
+implementing AC3 (one readiness/busy gate pair) and AC4 (full ordering
+semantics over the PR2 pending-set). Issue #2193 PR5 cuts comm_router.py's
+_send_to_minion() over to deliver() for real — ensure_ready()/send() remain
+defined (confirmed unused by any production caller) but are not deleted here,
+out of scope for a PR that changes live delivery behavior. See
+test_delivery_gate.py for the ordering-matrix derivation deliver() implements.
 """
 
 import asyncio
@@ -69,12 +71,15 @@ class DeliveryGate:
 
     Three mechanisms coexist here (issue #2193 PR3):
 
-    - ensure_ready() + send(): comm_router.py's existing mechanism, untouched.
+    - ensure_ready() + send(): comm_router.py's former mechanism — no longer called
+      in production as of issue #2193 PR5 (comm_router.py now calls deliver()),
+      kept defined rather than deleted (out of scope for this cutover PR).
     - prepare_for_send() + send_queued() + wait_until_idle(): queue_processor.py's
-      existing mechanism, untouched.
-    - deliver(): the new unified AC3/AC4 mechanism below, with no production
-      callers yet. It always enqueues into coordinator.pending_store first
-      (including IMMEDIATE/HALT/PIVOT items), then branches on comm.delivery.
+      existing mechanism, untouched (cuts over in PR6).
+    - deliver(): the unified AC3/AC4 mechanism below — comm_router.py's single
+      production call site as of PR5. Always enqueues into
+      coordinator.pending_store first (including IMMEDIATE/HALT/PIVOT items),
+      then branches on comm.delivery.
 
     The two existing mechanisms are kept split into primitives rather than
     folded into one atomic call for reasons specific to each caller's own
@@ -97,17 +102,30 @@ class DeliveryGate:
     # Issue #2193 (PR 3) — unified gate: deliver() and its helpers
     # =========================================================================
 
-    async def deliver(self, comm: Comm) -> DeliveryResult:
-        """Unified entry point (issue #2193 AC3/AC4). Not yet called by any
-        production code — comm_router.py and queue_processor.py keep using
-        their existing methods until PR5/PR6 cut their call sites over.
-        Exercised directly by test_delivery_gate.py.
+    async def deliver(
+        self, comm: Comm, *,
+        dispatch_content: str | None = None,
+        dispatch_metadata: dict | None = None,
+    ) -> DeliveryResult:
+        """Unified entry point (issue #2193 AC3/AC4). Now the single production
+        call site: comm_router.py's _send_to_minion() cuts over to this in PR5
+        (queue_processor.py still cuts over in PR6). Exercised directly by
+        test_delivery_gate.py.
 
         Every comm — including IMMEDIATE/HALT/PIVOT ones — is enqueued into
         the pending store first, fixing its FIFO position at arrival time
         regardless of which gate it takes afterward. See
         test_delivery_gate.py's TestOrderingMatrix for the ordering-matrix
         derivation this guarantees.
+
+        dispatch_content/dispatch_metadata (issue #2193 PR5): the SDK-formatted
+        content/metadata to actually send, if different from comm.content/
+        comm.metadata (the ledger's raw, sender-facing record) — e.g.
+        comm_router.py's header/attachment-formatted message. Persisted onto
+        the enqueued PendingItem rather than used directly here, because a
+        WHEN_IDLE item's actual send() happens later, from
+        _run_when_idle_loop's own call stack, which has no access to this
+        call's local arguments.
 
         comm.reset_first is not consulted here, same deliberate deferral as
         comm.auto_start (see _ensure_session_ready's AC8 note) — no producer
@@ -119,12 +137,15 @@ class DeliveryGate:
 
         session_dir = await coordinator.session_manager.get_session_directory(session_id)
         if not session_dir:
-            return DeliveryResult(success=False, error="Session directory not found")
+            return self._fail(comm, "Session directory not found")
 
         try:
-            await coordinator.pending_store.enqueue(session_id, session_dir, comm)
+            await coordinator.pending_store.enqueue(
+                session_id, session_dir, comm,
+                dispatch_content=dispatch_content, dispatch_metadata=dispatch_metadata,
+            )
         except ValueError as e:
-            return DeliveryResult(success=False, error=str(e))
+            return self._fail(comm, str(e))
 
         # Issue #2193 AC6: a paused session queues everything except an authorized
         # implicit-resume trigger (TASK/QUESTION/PIVOT from the user or an ancestor).
@@ -164,15 +185,17 @@ class DeliveryGate:
         ready = await self._ensure_session_ready(comm)
         if not ready.success:
             await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, ready.error)
-            return ready
+            return self._fail(comm, ready.error)
 
         if comm.delivery == DeliveryPolicy.HALT:
             if not await self._is_authorized(comm):
-                await coordinator.pending_store.mark_failed(
-                    session_id, session_dir, comm.comm_id,
-                    "HALT requires the sender to be the user or an ancestor of the recipient",
-                )
-                return DeliveryResult(success=False, error="HALT requires sender authority")
+                # Full, actionable wording (not a terser summary) — this is what
+                # send_comm_tool surfaces back to the caller via
+                # comm.metadata["delivery_failure_reason"], restoring the guidance
+                # PR4's now-removed tool-layer check used to give directly.
+                reason = "HALT requires the sender to be the user or an ancestor of the recipient"
+                await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, reason)
+                return self._fail(comm, reason)
             interrupted = await self._interrupt(session_id)
             # AC10 lists exactly 4 statuses (pending/delivered/failed/cancelled) — none
             # literally means "interrupted, never sent." "delivered" here means the gate
@@ -189,15 +212,13 @@ class DeliveryGate:
             await coordinator.pending_store.mark_failed(
                 session_id, session_dir, comm.comm_id, "interrupt_session did not succeed"
             )
-            return DeliveryResult(success=False, error="interrupt_session did not succeed")
+            return self._fail(comm, "interrupt_session did not succeed")
 
         if comm.delivery == DeliveryPolicy.PIVOT:
             if not await self._is_authorized(comm):
-                await coordinator.pending_store.mark_failed(
-                    session_id, session_dir, comm.comm_id,
-                    "PIVOT requires the sender to be the user or an ancestor of the recipient",
-                )
-                return DeliveryResult(success=False, error="PIVOT requires sender authority")
+                reason = "PIVOT requires the sender to be the user or an ancestor of the recipient"
+                await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, reason)
+                return self._fail(comm, reason)
             await self.flush_sender(session_id, comm)
             # Swallowed deliberately (via _interrupt()) — PIVOT's ledger entry is decided
             # by the send below, which is the actually-observable completed action; an
@@ -214,8 +235,16 @@ class DeliveryGate:
             # flush), not "failed" — a legitimate AC5 outcome, not an error.
             current = coordinator.pending_store.get_item(session_id, comm.comm_id)
             if current is None or current.status != "pending":
-                return DeliveryResult(success=False, error="Cancelled before dispatch")
+                return self._fail(comm, "Cancelled before dispatch")
             original_content = comm.content
+            original_metadata = comm.metadata
+            # Issue #2193 PR5: apply the dispatch override (if any) FIRST, then
+            # annotate for staleness on top of that — so a stale-pivot note appends
+            # onto the formatted dispatch text, not the raw, sender-facing content.
+            if current.dispatch_content is not None:
+                comm.content = current.dispatch_content
+            if current.dispatch_metadata is not None:
+                comm.metadata = current.dispatch_metadata
             comm.content = self._maybe_annotate_stale(session_id, comm, current)
             try:
                 result = await self.send(comm, inject_timestamp=self._should_inject_timestamp(comm))
@@ -225,10 +254,10 @@ class DeliveryGate:
                 # status="pending" forever — the item was already enqueued above, so there's
                 # no path back to a terminal state without catching it here.
                 gate_logger.exception(f"Unexpected error sending comm {comm.comm_id} to {session_id}")
-                comm.content = original_content
+                comm.content, comm.metadata = original_content, original_metadata
                 await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, str(e))
-                return DeliveryResult(success=False, error=str(e))
-            comm.content = original_content
+                return self._fail(comm, str(e))
+            comm.content, comm.metadata = original_content, original_metadata
             # mark_failed/mark_delivered run while still holding the dispatch lock
             # (issue #2193 PR4 race fix, strengthened during review): keeping them
             # outside the lock left a narrow window where a concurrent flush_sender()
@@ -237,7 +266,7 @@ class DeliveryGate:
             # own outcome while the ledger silently disagreed (stuck "cancelled").
             if not result.success:
                 await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, result.error)
-                return result
+                return self._fail(comm, result.error)
             if comm.delivery == DeliveryPolicy.PIVOT:
                 # Stamped only now, after a CONFIRMED successful send — not up in the
                 # PIVOT branch above — so this pivot's own entry never has to special-
@@ -259,13 +288,12 @@ class DeliveryGate:
         gate uses it for every target. One shared timeout (120s) regardless of
         caller.
 
-        AC8 note (deliberate, not an oversight): auto-starts unconditionally
-        whenever the session is dormant, exactly like both of today's
-        predecessors. Does NOT consult comm.auto_start — no producer sets it
-        meaningfully yet (PR1's default is False), so gating on it here would
-        regress every existing immediate send to a dormant target. PR5 is where
-        AC8's conditional "fails unless auto_start is set" enforcement lands,
-        once send_comm's migration can set a real default.
+        AC8 (issue #2193 PR5): a dormant (CREATED/TERMINATED) target only
+        auto-starts if comm.auto_start is set — applied uniformly regardless of
+        delivery policy (IMMEDIATE/HALT/PIVOT, and WHEN_IDLE via the loop's own
+        call into this method). Before this PR, auto-start was unconditional
+        here (no producer set auto_start meaningfully); send_comm's migration
+        (this same PR) is what gives it a real, non-default-False value.
         """
         coordinator = self._coordinator
         session_id = comm.to_minion_id
@@ -286,6 +314,11 @@ class DeliveryGate:
 
         waited = False
         if is_auto_startable(session_info.state):  # CREATED, TERMINATED
+            if not comm.auto_start:
+                return DeliveryResult(
+                    success=False,
+                    error="Target minion is stopped and auto_start was not requested",
+                )
             self._ensure_message_callback(session_id)
             permission_callback = None
             if coordinator._permission_callback_factory:
@@ -323,6 +356,14 @@ class DeliveryGate:
                 await asyncio.sleep(deadline - now)
 
         return DeliveryResult(success=True)
+
+    def _fail(self, comm: Comm, error: str) -> DeliveryResult:
+        """Every deliver() failure routes through here (issue #2193 PR5): sets
+        comm.metadata["delivery_failure_reason"], the key send_comm_tool already
+        reads back after route_comm() returns False. Widens the ensure_ready()-era
+        auto-start-failure-only behavior to every failure path."""
+        comm.metadata["delivery_failure_reason"] = error
+        return DeliveryResult(success=False, error=error)
 
     async def _wait_for_busy_clear(self, session_id: str) -> bool:
         """Busy gate for a when_idle item with no settle (AC3) — the moment
@@ -470,8 +511,11 @@ class DeliveryGate:
         """Per-session background drain of WHEN_IDLE pending items (AC3/AC4).
         Generalizes queue_processor._process_loop()'s busy-wait mechanics onto
         pending_store — but queue_processor.py itself is not rewired onto this
-        in this PR; this loop has no real callers until PR5/PR6 wire deliver()
-        into production."""
+        yet (still PR6); comm_router.py's send_comm-originated WHEN_IDLE items
+        (any send_comm call with delivery="when_idle" — AC2's per-comm_type
+        default, e.g. REPORT, is defined in legion_models.default_delivery_for_type()
+        but not yet wired into send_comm_tool's own default) are this loop's
+        first real traffic, as of issue #2193 PR5."""
         coordinator = self._coordinator
         # Identifies this task so the finally block below doesn't evict a *newer*
         # task that ensure_when_idle_running() may have already started for this
@@ -500,6 +544,7 @@ class DeliveryGate:
                 ready = await self._ensure_session_ready(comm)
                 if not ready.success:
                     await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, ready.error)
+                    self._fail(comm, ready.error)
                     continue
 
                 is_schedule = comm.sender_type == SenderType.SCHEDULE
@@ -508,9 +553,9 @@ class DeliveryGate:
                     await asyncio.sleep(queue_config.get("min_wait_seconds", DEFAULT_MIN_WAIT_SECONDS))
 
                 if not await self._wait_for_busy_clear(session_id):
-                    await coordinator.pending_store.mark_failed(
-                        session_id, session_dir, comm.comm_id, "Session entered error state"
-                    )
+                    error = "Session entered error state"
+                    await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, error)
+                    self._fail(comm, error)
                     continue
 
                 lock = self._get_dispatch_lock(session_id)
@@ -523,6 +568,15 @@ class DeliveryGate:
                     if current is None or current.status != "pending":
                         continue
                     original_content = comm.content
+                    original_metadata = comm.metadata
+                    # Issue #2193 PR5: same dispatch_content/dispatch_metadata override +
+                    # stale-annotate composition as deliver()'s inline dispatch above —
+                    # read off this same already-fetched `current` PendingItem, since this
+                    # is the call stack where a WHEN_IDLE item's send actually happens.
+                    if current.dispatch_content is not None:
+                        comm.content = current.dispatch_content
+                    if current.dispatch_metadata is not None:
+                        comm.metadata = current.dispatch_metadata
                     comm.content = self._maybe_annotate_stale(session_id, comm, current)
                     try:
                         result = await self.send(comm, inject_timestamp=self._should_inject_timestamp(comm))
@@ -532,14 +586,22 @@ class DeliveryGate:
                         # entry stuck at status="pending" and the loop stuck retrying it
                         # forever (it's still the head of when_idle_pending next iteration).
                         gate_logger.exception(f"Unexpected error sending comm {comm.comm_id} to {session_id}")
-                        comm.content = original_content
+                        comm.content, comm.metadata = original_content, original_metadata
                         await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, str(e))
+                        self._fail(comm, str(e))
                         continue
-                    comm.content = original_content
-                if not result.success:
-                    await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, result.error)
-                    continue
-                await coordinator.pending_store.mark_delivered(session_id, session_dir, comm.comm_id)
+                    comm.content, comm.metadata = original_content, original_metadata
+                    # mark_failed/mark_delivered run while still holding the dispatch lock
+                    # (issue #2193 PR5 — matches the inline dispatch path above, closing a
+                    # PR4 inconsistency: running these after releasing the lock left a
+                    # narrow window where a concurrent flush_sender() could cancel this
+                    # entry between the send above and the mark_* call, potentially
+                    # leaving a genuinely-delivered item mislabeled "cancelled").
+                    if not result.success:
+                        await coordinator.pending_store.mark_failed(session_id, session_dir, comm.comm_id, result.error)
+                        self._fail(comm, result.error)
+                        continue
+                    await coordinator.pending_store.mark_delivered(session_id, session_dir, comm.comm_id)
 
                 if is_schedule:
                     queue_config = await self._queue_config_for(session_id)

@@ -60,7 +60,8 @@ class SendCommInput(TypedDict):
     summary: NotRequired[str]              # Specific one-sentence update (actionable)
     content: NotRequired[str]              # Details only if summary needs elaboration (supports markdown)
     comm_type: NotRequired[str]            # One of: task, question, report, info
-    interrupt_priority: NotRequired[str]   # Optional: "none", "halt", or "pivot" (default: "none")
+    delivery: NotRequired[str]             # Optional: "immediate", "when_idle", "pivot", or "halt" (default: "immediate")
+    auto_start: NotRequired[bool]          # Optional: auto-start a dormant target (default: True)
     attachments: NotRequired[str]          # Optional: JSON array of absolute file paths to attach
 
 
@@ -178,16 +179,21 @@ class LegionMCPTools:
             "'Blocked: missing DATABASE_URL'). AVOID generic summaries like 'Status update' or 'Progress report'. "
             "\n\nSTOP when: task acknowledged complete OR awaiting external input (no 'standing by' messages). "
             "\n\nValid comm_type: 'task', 'question', 'report', 'info'"
-            "\n\nInterrupt Priority (optional):"
-            "\n- 'none' (default): Queue message normally"
+            "\n\nDelivery (optional):"
+            "\n- 'immediate' (default): Deliver right away."
+            "\n- 'when_idle': Deliver once the target is idle, instead of interrupting it."
             "\n- 'halt': Full stop. The target minion is interrupted immediately and will NOT receive the message. "
             "The message is stored in the comm timeline for user inspection only. Use when the minion must cease "
-            "all work — the minion will not see the halt message or act on it."
+            "all work — the minion will not see the halt message or act on it. Requires you to be the user or an "
+            "ancestor of the recipient."
             "\n- 'pivot': Stop and redirect. Current work is interrupted immediately, then the new direction "
-            "is delivered as the next message. Message must include explicit 'cease prior work' instructions."
+            "is delivered as the next message. Message must include explicit 'cease prior work' instructions. "
+            "Requires you to be the user or an ancestor of the recipient."
             "\n\nUse HALT when: critical error, minion must stop immediately with no further action"
             "\nUse PIVOT when: requirements changed, need to redirect — minion receives the new direction after interruption"
-            "\nUse NONE when: normal coordination, non-urgent updates, FYI messages (task completion notification)"
+            "\nUse IMMEDIATE/WHEN_IDLE when: normal coordination, non-urgent updates, FYI messages (task completion notification)"
+            "\n\n**auto_start (optional, default True):** whether to auto-start the target if it's stopped. "
+            "Set False to fail instead of starting a dormant target."
             "\n\n**Visibility Scope:** You can only send comms to minions in your full hierarchy chain: "
             "all ancestors, all descendants, and siblings. To reach minions outside your group, ask your overseer to relay."
             "\n\n**File Attachments (optional):**"
@@ -588,21 +594,21 @@ class LegionMCPTools:
         # Get the internal enum value
         internal_comm_type = comm_type_mapping[comm_type_str]
 
-        # Validate interrupt_priority (optional)
-        interrupt_priority_str = args.get("interrupt_priority", "none").lower()
-        valid_priorities = ["none", "halt", "pivot"]
+        # Validate delivery (optional) — issue #2193 PR5: replaces interrupt_priority.
+        # DeliveryPolicy's values already match these four strings exactly, so this is
+        # a direct 1:1 map, not a remapping.
+        delivery_str = args.get("delivery", "immediate").lower()
+        valid_deliveries = ["immediate", "when_idle", "pivot", "halt"]
 
-        if interrupt_priority_str not in valid_priorities:
-            return self._err(f"Error: Invalid interrupt_priority '{interrupt_priority_str}'. Valid values are: {', '.join(valid_priorities)}")
+        if delivery_str not in valid_deliveries:
+            return self._err(f"Error: Invalid delivery '{delivery_str}'. Valid values are: {', '.join(valid_deliveries)}")
 
-        # Map to DeliveryPolicy enum
-        priority_mapping = {
-            "none": DeliveryPolicy.IMMEDIATE,
-            "halt": DeliveryPolicy.HALT,
-            "pivot": DeliveryPolicy.PIVOT
-        }
+        delivery = DeliveryPolicy(delivery_str)
 
-        delivery = priority_mapping[interrupt_priority_str]
+        # Issue #2193 PR5: auto_start defaults True, preserving the pre-AC8-enforcement
+        # observed behavior (every send_comm call effectively auto-started a dormant
+        # target) now that deliver()'s _ensure_session_ready() actually gates on it.
+        auto_start = args.get("auto_start", True)
 
         # Look up target minion by name
         to_minion_name = args.get("to_minion_name")
@@ -767,26 +773,16 @@ class LegionMCPTools:
             comm_type=CommType(internal_comm_type),
             delivery=delivery,  # Use validated delivery policy
             attachments=attachment_metadata,
-            visible_to_user=True
+            visible_to_user=True,
+            auto_start=auto_start,
         )
 
-        # Issue #2193 AC7 (live retrofit, PR4): HALT/PIVOT requires the sender to be
-        # the user or an ancestor of the recipient. Enforced here, at the tool layer —
-        # send_comm is the only live producer of HALT/PIVOT comms today. Scoped to
-        # minion-to-minion only (not sending_to_user): AC7's authority concept is
-        # about one minion's standing over another (to_minion_id); a message to the
-        # user has to_minion_id=None, which would otherwise make is_ancestor() look
-        # up a None session and unconditionally deny every minion's HALT/PIVOT to the
-        # user — a real regression caught in review, not the sibling-abuse case AC7
-        # targets.
-        if not sending_to_user and comm.delivery in (DeliveryPolicy.HALT, DeliveryPolicy.PIVOT):
-            if not await self.system.comm_router.is_authorized_sender(comm):
-                return self._err(
-                    f"Error: {interrupt_priority_str.upper()} requires you to be the user or "
-                    f"an ancestor of '{to_minion_name}'. Siblings and unrelated minions cannot "
-                    f"{interrupt_priority_str} each other — ask a shared ancestor to relay, or "
-                    "send a normal task/question instead."
-                )
+        # Issue #2193 PR5: the PR4 tool-layer HALT/PIVOT authority check (AC7) that
+        # lived here is removed — deliver()'s own authority check (now live via this
+        # PR's cutover) is the single source of truth. An unauthorized HALT/PIVOT now
+        # fails via route_comm() returning False with comm.metadata["delivery_failure_reason"]
+        # set, surfaced below in the same way any other delivery failure is, instead of
+        # this dedicated early return.
 
         # Route the comm (pass file data as parameter, not stashed on Comm)
         try:

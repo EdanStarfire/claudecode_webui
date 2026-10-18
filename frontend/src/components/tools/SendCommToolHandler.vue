@@ -39,7 +39,16 @@ const recipientName = computed(() => props.toolCall.input?.to_minion_name || 'un
 const content = computed(() => props.toolCall.input?.content || '')
 const summaryText = computed(() => props.toolCall.input?.summary || '')
 const commType = computed(() => props.toolCall.input?.comm_type || '')
-const interruptPriority = computed(() => props.toolCall.input?.interrupt_priority || '')
+// Issue #2193 PR5: send_comm's schema migrated interrupt_priority (none/halt/pivot)
+// to delivery (immediate/when_idle/pivot/halt) — only halt/pivot warrant the
+// CommCard badge (immediate/when_idle map to the old "none", no badge). Falls
+// back to interrupt_priority for tool calls persisted before this migration.
+const interruptPriority = computed(() => {
+  const delivery = props.toolCall.input?.delivery
+  if (delivery === 'halt' || delivery === 'pivot') return delivery
+  if (delivery !== undefined) return ''
+  return props.toolCall.input?.interrupt_priority || ''
+})
 
 const sessionStore = useSessionStore()
 const resourceStore = useResourceStore()

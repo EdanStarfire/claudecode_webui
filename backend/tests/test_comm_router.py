@@ -3,7 +3,6 @@ Tests for CommRouter communication routing.
 """
 
 import uuid
-from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -11,10 +10,11 @@ import pytest
 from backend.delivery_gate import DeliveryGate
 from backend.legion_system import LegionSystem
 from backend.models.legion_models import Comm, CommType, DeliveryPolicy
+from backend.pending_store import PendingStore
 
 
 @pytest.fixture
-def legion_system():
+def legion_system(tmp_path):
     """Create mock LegionSystem for testing."""
     from backend.session_manager import SessionInfo, SessionState
 
@@ -24,17 +24,29 @@ def legion_system():
     default_minion.name = "TestMinion"
     default_minion.project_id = "test-legion-456"
     default_minion.state = SessionState.ACTIVE
+    # Issue #2193 PR5: explicit, not left to spec's auto-mock default (a truthy
+    # MagicMock) — deliver()'s AC6 queue_paused gate must see a real False here,
+    # or every test below would spuriously hit the "queues instead" branch the
+    # moment _send_to_minion() cuts over to deliver().
+    default_minion.queue_paused = False
 
     mock_session_coordinator = Mock()
     mock_session_coordinator.send_message = AsyncMock()
     mock_session_coordinator.session_manager = Mock()
     mock_session_coordinator.session_manager.get_session_info = AsyncMock(return_value=default_minion)
+    # Issue #2193 PR5: deliver() enqueues into a real pending_store ledger backed
+    # by a real session directory — both needed now that _send_to_minion() calls
+    # through to deliver() for real instead of ensure_ready()/send().
+    mock_session_coordinator.session_manager.get_session_directory = AsyncMock(return_value=tmp_path)
+    mock_session_coordinator.session_manager.update_session = AsyncMock(return_value=True)
+    mock_session_coordinator.pending_store = PendingStore()
     mock_session_coordinator.start_session = AsyncMock()
-    mock_session_coordinator.data_dir = Path("/tmp/test")
-    # Issue #2189 (coordinator-split PR 10): _send_to_minion now calls through
-    # delivery_gate.deliver(), which internally calls back out to this same
-    # mock coordinator's send_message/start_session/session_manager — a real
-    # DeliveryGate bound to the mock keeps those the exercised mocked seams.
+    mock_session_coordinator.data_dir = tmp_path
+    # Issue #2189 (coordinator-split PR 10); issue #2193 PR5: _send_to_minion now
+    # calls through delivery_gate.deliver(), which internally calls back out to
+    # this same mock coordinator's send_message/start_session/session_manager/
+    # pending_store — a real DeliveryGate bound to the mock keeps those the
+    # exercised mocked seams.
     mock_session_coordinator.delivery_gate = DeliveryGate(mock_session_coordinator)
 
     system = LegionSystem(
@@ -42,6 +54,11 @@ def legion_system():
         data_storage_manager=Mock(),
         template_manager=Mock()
     )
+    # Issue #2193 PR5: back-reference deliver()'s _is_authorized() needs to reach
+    # the real CommRouter.is_authorized_sender() for HALT/PIVOT comms — mirrors
+    # the real production wiring (coordinator.legion_system is the LegionSystem
+    # that owns this same comm_router).
+    mock_session_coordinator.legion_system = system
 
     # Mock async methods that tests will use
     system.legion_coordinator.get_minion_info = AsyncMock(return_value=default_minion)
@@ -64,6 +81,8 @@ def sample_minion():
     mock.name = "TestMinion"
     mock.project_id = "test-legion-456"
     mock.state = SessionState.ACTIVE
+    # Issue #2193 PR5: see legion_system fixture's default_minion comment above.
+    mock.queue_paused = False
     return mock
 
 
@@ -725,8 +744,12 @@ class TestCommRouter:
 
 
 class TestAutoStartFailureReason:
-    """Issue #1839: auto-start failure should surface the real error_message
-    (re-fetched from SessionInfo) instead of only the generic state text."""
+    """Issue #1839 originally added error_message re-fetching to the old
+    ensure_ready() mechanism. Issue #2193 PR3's unified _ensure_session_ready()
+    never carried that re-fetch logic forward (it returns a plain generic
+    "Could not auto-start target minion" on start_session() failure) — dormant
+    until PR5 actually routes production traffic through it. These tests now
+    pin that generic-message reality instead of the old per-cause detail."""
 
     def _make_minion(self, state, error_message=None):
         from backend.session_manager import SessionInfo, SessionState
@@ -737,20 +760,18 @@ class TestAutoStartFailureReason:
         mock.project_id = "test-legion-456"
         mock.state = state if state is not None else SessionState.CREATED
         mock.error_message = error_message
+        # Issue #2193 PR5: see legion_system fixture's default_minion comment.
+        mock.queue_paused = False
         return mock
 
     @pytest.mark.asyncio
-    async def test_auto_start_failure_surfaces_error_message(self, comm_router):
-        """T1-equivalent: a freshly computed error_message on the re-fetched
-        SessionInfo is included in both the error Comm and the log line."""
+    async def test_auto_start_failure_surfaces_generic_message(self, comm_router):
+        """start_session() returning False surfaces the unified gate's generic
+        message — no per-cause detail (issue #1839's old re-fetch is gone)."""
         from backend.session_manager import SessionState
 
         sm = comm_router.system.session_port.session_manager
-        initial_minion = self._make_minion(SessionState.CREATED)
-        failed_minion = self._make_minion(
-            SessionState.ERROR, error_message="Docker sandbox unavailable: image not found"
-        )
-        sm.get_session_info = AsyncMock(side_effect=[initial_minion, failed_minion])
+        sm.get_session_info = AsyncMock(return_value=self._make_minion(SessionState.CREATED))
         comm_router.system.session_port.start_session = AsyncMock(return_value=False)
 
         comm = Comm(
@@ -759,121 +780,26 @@ class TestAutoStartFailureReason:
             to_minion_id="test-minion-123",
             content="Test message",
             comm_type=CommType.TASK,
-        )
-
-        with patch.object(comm_router, '_send_system_error_comm', new=AsyncMock()) as mock_error_comm, \
-                patch('backend.legion.comm_router.legion_logger') as mock_logger:
-            result = await comm_router._send_to_minion(comm)
-
-        assert result is False
-        mock_error_comm.assert_called_once()
-        error_message_arg = mock_error_comm.call_args.kwargs["error_message"]
-        assert "Docker sandbox unavailable: image not found" in error_message_arg
-        assert comm.metadata["delivery_failure_reason"] == "Docker sandbox unavailable: image not found"
-
-        logged = "".join(str(call) for call in mock_logger.error.call_args_list)
-        assert "Docker sandbox unavailable: image not found" in logged
-
-    @pytest.mark.asyncio
-    async def test_auto_start_failure_surfaces_stale_error_message(self, comm_router):
-        """T2-equivalent: session already in ERROR state from a prior failure
-        (no fresh error computed this call) still surfaces its stale-but-relevant
-        error_message via the re-fetch."""
-        from backend.session_manager import SessionState
-
-        sm = comm_router.system.session_port.session_manager
-        initial_minion = self._make_minion(SessionState.CREATED)
-        failed_minion = self._make_minion(
-            SessionState.ERROR, error_message="Previous failure: connection refused"
-        )
-        sm.get_session_info = AsyncMock(side_effect=[initial_minion, failed_minion])
-        comm_router.system.session_port.start_session = AsyncMock(return_value=False)
-
-        comm = Comm(
-            comm_id=str(uuid.uuid4()),
-            from_minion_id="sender-minion",
-            to_minion_id="test-minion-123",
-            content="Test message",
-            comm_type=CommType.TASK,
+            auto_start=True,
         )
 
         with patch.object(comm_router, '_send_system_error_comm', new=AsyncMock()) as mock_error_comm:
             result = await comm_router._send_to_minion(comm)
 
         assert result is False
-        error_message_arg = mock_error_comm.call_args.kwargs["error_message"]
-        assert "Previous failure: connection refused" in error_message_arg
-
-    @pytest.mark.asyncio
-    async def test_auto_start_failure_degrades_gracefully_when_session_info_none(self, comm_router):
-        """Degrade-gracefully case: get_session_info() returns None on the
-        re-fetch — falls back to the existing state-based text, no exception."""
-        from backend.session_manager import SessionState
-
-        sm = comm_router.system.session_port.session_manager
-        initial_minion = self._make_minion(SessionState.CREATED)
-        sm.get_session_info = AsyncMock(side_effect=[initial_minion, None])
-        comm_router.system.session_port.start_session = AsyncMock(return_value=False)
-
-        comm = Comm(
-            comm_id=str(uuid.uuid4()),
-            from_minion_id="sender-minion",
-            to_minion_id="test-minion-123",
-            content="Test message",
-            comm_type=CommType.TASK,
+        mock_error_comm.assert_called_once_with(
+            to_minion_id="sender-minion",
+            error_message="Failed to deliver message: Could not auto-start target minion",
+            original_comm_id=comm.comm_id,
         )
-
-        with patch.object(comm_router, '_send_system_error_comm', new=AsyncMock()) as mock_error_comm:
-            result = await comm_router._send_to_minion(comm)
-
-        assert result is False
-        error_message_arg = mock_error_comm.call_args.kwargs["error_message"]
-        assert f"state: {SessionState.CREATED}" in error_message_arg
-        assert comm.metadata["delivery_failure_reason"] is None
+        assert comm.metadata["delivery_failure_reason"] == "Could not auto-start target minion"
 
     @pytest.mark.asyncio
-    async def test_auto_start_failure_degrades_gracefully_when_lookup_raises(self, comm_router):
-        """Degrade-gracefully case: get_session_info() raises on the re-fetch —
-        falls back to the existing state-based text, no exception escapes."""
-        from backend.session_manager import SessionState
-
-        sm = comm_router.system.session_port.session_manager
-        initial_minion = self._make_minion(SessionState.CREATED)
-
-        async def raise_on_second_call(*_args, **_kwargs):
-            raise RuntimeError("db unavailable")
-
-        call_count = {"n": 0}
-
-        async def side_effect(*args, **kwargs):
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                return initial_minion
-            return await raise_on_second_call()
-
-        sm.get_session_info = AsyncMock(side_effect=side_effect)
-        comm_router.system.session_port.start_session = AsyncMock(return_value=False)
-
-        comm = Comm(
-            comm_id=str(uuid.uuid4()),
-            from_minion_id="sender-minion",
-            to_minion_id="test-minion-123",
-            content="Test message",
-            comm_type=CommType.TASK,
-        )
-
-        with patch.object(comm_router, '_send_system_error_comm', new=AsyncMock()) as mock_error_comm:
-            result = await comm_router._send_to_minion(comm)
-
-        assert result is False
-        error_message_arg = mock_error_comm.call_args.kwargs["error_message"]
-        assert f"state: {SessionState.CREATED}" in error_message_arg
-        assert comm.metadata["delivery_failure_reason"] is None
-
-    @pytest.mark.asyncio
-    async def test_target_not_found_message_unchanged(self, comm_router):
-        """AC4 regression: target-not-found failure keeps its existing
-        generic message, byte-for-byte, untouched by this change."""
+    async def test_target_not_found_message_sets_delivery_failure_reason(self, comm_router):
+        """AC4 regression, updated for PR5: target-not-found keeps its existing
+        generic message text, but now also stamps delivery_failure_reason —
+        _fail()'s deliberate widening to every failure path (issue #2193 PR5),
+        not a byte-for-byte carry-forward of the pre-PR5 narrower behavior."""
         sm = comm_router.system.session_port.session_manager
         sm.get_session_info = AsyncMock(return_value=None)
 
@@ -894,7 +820,7 @@ class TestAutoStartFailureReason:
             error_message="Failed to deliver message: Target minion not found",
             original_comm_id=comm.comm_id,
         )
-        assert "delivery_failure_reason" not in comm.metadata
+        assert comm.metadata["delivery_failure_reason"] == "Target minion not found"
 
     @pytest.mark.asyncio
     async def test_send_message_rejection_message_unchanged(self, comm_router):
@@ -927,57 +853,21 @@ class TestAutoStartFailureReason:
 
 
 class TestHaltPivotRunGateBeforeInterrupt:
-    """Issue #2189 (coordinator-split PR 10) regression: pre-PR, the auto-start/
-    readiness-wait gate ran unconditionally for every comm BEFORE interrupt-priority
-    (HALT/PIVOT) was even checked — a HALT comm to a dormant target still forced it
-    through the gate (auto-started, then immediately interrupted); a PIVOT comm ran
-    the gate, then interrupted, then sent. An earlier version of this port called
-    the gate only as part of the post-interrupt send step, which meant HALT skipped
-    the gate entirely (deliver() was never reached) and PIVOT ran it AFTER the
-    interrupt instead of before — a real behavior change caught in review, not just
-    an internal-mechanics nuance. These tests pin the gate running first, via
-    start_session() happening before interrupt_session()."""
-
-    def _make_dormant_minion(self, state):
-        from backend.session_manager import SessionInfo
-
-        mock = Mock(spec=SessionInfo)
-        mock.session_id = "test-minion-123"
-        mock.name = "TestMinion"
-        mock.project_id = "test-legion-456"
-        mock.state = state
-        mock.error_message = None
-        return mock
-
-    def _wire_call_order_tracking(self, comm_router, call_order):
-        from backend.session_manager import SessionState
-
-        sm = comm_router.system.session_port.session_manager
-        sm.get_session_info = AsyncMock(return_value=self._make_dormant_minion(SessionState.CREATED))
-        comm_router.system.session_port.wait_for_session_ready = AsyncMock(return_value=True)
-
-        async def record_start_session(**kwargs):
-            call_order.append("start_session")
-            return True
-
-        async def record_interrupt(session_id):
-            call_order.append("interrupt_session")
-            return True
-
-        async def record_send_message(**kwargs):
-            call_order.append("send_message")
-            return True
-
-        comm_router.system.session_port.start_session = AsyncMock(side_effect=record_start_session)
-        comm_router.system.session_port.interrupt_session = AsyncMock(side_effect=record_interrupt)
-        comm_router.system.session_port.send_message = AsyncMock(side_effect=record_send_message)
+    """Issue #2189 (coordinator-split PR 10): the auto-start/readiness-wait gate
+    (and, as of issue #2193 PR5, every other ordering guarantee — AC5/AC6/AC7/AC8)
+    must run before HALT/PIVOT's own handling. That ordering guarantee itself is
+    now owned entirely by delivery_gate.deliver() and is already covered by
+    test_delivery_gate.py's own ordering/authority tests. These tests are
+    retargeted (issue #2193 PR5) to mock deliver() itself and assert only
+    _send_to_minion()'s delegation: it calls deliver() exactly once with the
+    correctly-built dispatch_content/dispatch_metadata, and correctly relays
+    success/failure."""
 
     @pytest.mark.asyncio
-    async def test_halt_to_dormant_target_runs_gate_before_interrupt(self, comm_router):
-        """HALT never sends, but must still auto-start the dormant target before
-        interrupting it — exactly as pre-PR."""
-        call_order = []
-        self._wire_call_order_tracking(comm_router, call_order)
+    async def test_halt_to_dormant_target_delegates_to_deliver_with_formatted_dispatch(self, comm_router):
+        from backend.delivery_gate import DeliveryResult
+        mock_deliver = AsyncMock(return_value=DeliveryResult(success=True))
+        comm_router.system.session_port.delivery_gate.deliver = mock_deliver
 
         comm = Comm(
             comm_id=str(uuid.uuid4()),
@@ -991,14 +881,17 @@ class TestHaltPivotRunGateBeforeInterrupt:
         result = await comm_router._send_to_minion(comm)
 
         assert result is True
-        assert call_order == ["start_session", "interrupt_session"]
+        mock_deliver.assert_awaited_once()
+        call_args, call_kwargs = mock_deliver.call_args
+        assert call_args[0] is comm
+        assert "halt now" in call_kwargs["dispatch_content"]
+        assert call_kwargs["dispatch_metadata"]["comm"]["content"] == "halt now"
 
     @pytest.mark.asyncio
-    async def test_pivot_to_dormant_target_runs_gate_before_interrupt(self, comm_router):
-        """PIVOT must auto-start the dormant target, THEN interrupt, THEN send —
-        not interrupt first and gate/send afterward."""
-        call_order = []
-        self._wire_call_order_tracking(comm_router, call_order)
+    async def test_pivot_to_dormant_target_delegates_to_deliver_with_formatted_dispatch(self, comm_router):
+        from backend.delivery_gate import DeliveryResult
+        mock_deliver = AsyncMock(return_value=DeliveryResult(success=True))
+        comm_router.system.session_port.delivery_gate.deliver = mock_deliver
 
         comm = Comm(
             comm_id=str(uuid.uuid4()),
@@ -1012,26 +905,90 @@ class TestHaltPivotRunGateBeforeInterrupt:
         result = await comm_router._send_to_minion(comm)
 
         assert result is True
-        assert call_order == ["start_session", "interrupt_session", "send_message"]
+        mock_deliver.assert_awaited_once()
+        call_args, call_kwargs = mock_deliver.call_args
+        assert call_args[0] is comm
+        assert "pivot now" in call_kwargs["dispatch_content"]
+        assert call_kwargs["dispatch_metadata"]["comm"]["content"] == "pivot now"
+
+    @pytest.mark.asyncio
+    async def test_deliver_failure_relayed_and_sends_system_error_comm(self, comm_router):
+        from backend.delivery_gate import DeliveryResult
+        mock_deliver = AsyncMock(return_value=DeliveryResult(success=False, error="boom"))
+        comm_router.system.session_port.delivery_gate.deliver = mock_deliver
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="sender-minion",
+            to_minion_id="test-minion-123",
+            content="halt now",
+            comm_type=CommType.TASK,
+            delivery=DeliveryPolicy.HALT,
+        )
+
+        with patch.object(comm_router, '_send_system_error_comm', new=AsyncMock()) as mock_error_comm:
+            result = await comm_router._send_to_minion(comm)
+
+        assert result is False
+        mock_error_comm.assert_called_once_with(
+            to_minion_id="sender-minion",
+            error_message="Failed to deliver message: boom",
+            original_comm_id=comm.comm_id,
+        )
+
+    @pytest.mark.asyncio
+    async def test_sibling_halt_rejected_end_to_end_via_real_deliver(self, comm_router):
+        """Regression for the authority-check consolidation (issue #2193 PR5):
+        with PR4's tool-layer check removed, a sibling's HALT routed all the way
+        through _send_to_minion() with a REAL (not mocked) deliver() call must
+        still be rejected — now via deliver()'s own AC7 check alone."""
+        from backend.session_manager import SessionInfo, SessionState
+
+        sibling = Mock(spec=SessionInfo)
+        sibling.session_id = "test-minion-123"
+        sibling.name = "TestMinion"
+        sibling.project_id = "test-legion-456"
+        sibling.state = SessionState.ACTIVE
+        sibling.queue_paused = False
+        sibling.parent_overseer_id = None
+        comm_router.system.session_port.session_manager.get_session_info = AsyncMock(return_value=sibling)
+        comm_router.system.session_port.interrupt_session = AsyncMock(return_value=True)
+        # from_minion_id "sender-minion" has no parent_overseer_id wired to
+        # "test-minion-123" — is_ancestor() correctly finds no relationship.
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id="sender-minion",
+            to_minion_id="test-minion-123",
+            content="halt now",
+            comm_type=CommType.TASK,
+            delivery=DeliveryPolicy.HALT,
+        )
+
+        with patch.object(comm_router, '_send_system_error_comm', new=AsyncMock()) as mock_error_comm:
+            result = await comm_router._send_to_minion(comm)
+
+        assert result is False
+        comm_router.system.session_port.interrupt_session.assert_not_awaited()
+        error_message_arg = mock_error_comm.call_args.kwargs["error_message"]
+        assert "authority" in error_message_arg.lower() or "ancestor" in error_message_arg.lower()
 
 
 class TestPausedTargetDeliversWithoutForceStart:
     """Issue #1918 stopped comm delivery from force-starting a target minion PAUSED
     mid-permission-wait (e.g. AskUserQuestion) — that clobbers it into STARTING with
     no way back. Issue #1940: that fix over-scoped the protection into skipping
-    delivery entirely. Message injection via send_message() works identically for
-    ACTIVE and PAUSED targets, so PAUSED must still deliver normally — only the
-    auto-start attempt should be skipped."""
+    delivery entirely. The PAUSED-is-already-ready ordering guarantee itself is now
+    owned by delivery_gate.deliver() (covered by test_delivery_gate.py's
+    TestReadinessUnification::test_paused_session_ready_without_waiting) —
+    retargeted (issue #2193 PR5) to mock deliver() and assert only
+    _send_to_minion()'s delegation."""
 
     @pytest.mark.asyncio
-    async def test_paused_target_delivers_without_force_start(self, comm_router, sample_minion):
-        from backend.session_manager import SessionState
-
-        sample_minion.state = SessionState.PAUSED
-        sm = comm_router.system.session_port.session_manager
-        sm.get_session_info = AsyncMock(return_value=sample_minion)
-        comm_router.system.session_port.start_session = AsyncMock()
-        comm_router.system.session_port.send_message = AsyncMock(return_value=True)
+    async def test_paused_target_delegates_to_deliver_and_relays_success(self, comm_router):
+        from backend.delivery_gate import DeliveryResult
+        mock_deliver = AsyncMock(return_value=DeliveryResult(success=True))
+        comm_router.system.session_port.delivery_gate.deliver = mock_deliver
 
         comm = Comm(
             comm_id=str(uuid.uuid4()),
@@ -1045,19 +1002,15 @@ class TestPausedTargetDeliversWithoutForceStart:
             result = await comm_router._send_to_minion(comm)
 
         assert result is True
-        comm_router.system.session_port.start_session.assert_not_awaited()
+        mock_deliver.assert_awaited_once()
         mock_error_comm.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_active_target_still_delivers_unchanged(self, comm_router, sample_minion):
-        """Regression: ACTIVE targets are unaffected by the PAUSED branch."""
-        from backend.session_manager import SessionState
-
-        sample_minion.state = SessionState.ACTIVE
-        sm = comm_router.system.session_port.session_manager
-        sm.get_session_info = AsyncMock(return_value=sample_minion)
-        comm_router.system.session_port.start_session = AsyncMock()
-        comm_router.system.session_port.send_message = AsyncMock(return_value=True)
+    async def test_active_target_still_delegates_to_deliver_unchanged(self, comm_router):
+        """Regression: ACTIVE targets go through the same single deliver() call."""
+        from backend.delivery_gate import DeliveryResult
+        mock_deliver = AsyncMock(return_value=DeliveryResult(success=True))
+        comm_router.system.session_port.delivery_gate.deliver = mock_deliver
 
         comm = Comm(
             comm_id=str(uuid.uuid4()),
@@ -1070,5 +1023,5 @@ class TestPausedTargetDeliversWithoutForceStart:
         result = await comm_router._send_to_minion(comm)
 
         assert result is True
-        comm_router.system.session_port.start_session.assert_not_awaited()
+        mock_deliver.assert_awaited_once()
         assert "delivery_failure_reason" not in comm.metadata

@@ -98,6 +98,46 @@ class TestSendComm:
         )
         assert resp.status_code == 404
 
+    async def test_send_comm_to_dormant_minion_auto_starts(self, api_integration_env):
+        """Issue #2193 PR5 regression: this endpoint's Comm must set auto_start=True
+        so a message to a dormant (CREATED) minion still triggers an auto-start
+        attempt, matching the pre-AC8-enforcement behavior — a cutover-era
+        regression caught in review (deliver()'s AC8 gate now fails fast on a
+        dormant target unless auto_start is set, and this endpoint doesn't take a
+        delivery/auto_start request field). Asserts the auto-start was actually
+        attempted (state left "created" would mean AC8 blocked it outright) rather
+        than asserting a full mock-SDK conversation succeeds, which is unrelated to
+        this fix."""
+        client = api_integration_env["client"]
+        create_test_session = api_integration_env["create_test_session"]
+        data_dir = api_integration_env["data_dir"]
+        project = await _setup_legion(api_integration_env)
+        lid = project["project_id"]
+
+        session = await create_test_session(lid, name="Dormant")
+        sid = session["session_id"]
+        assert session["state"] == "created"
+        # MockClaudeSDK's SessionRecording requires messages.jsonl to already
+        # exist (even empty) in the session's working_directory (not its data
+        # dir) when no fixture session_name is given — unrelated to this fix,
+        # just a replay-engine precondition for a session with no recorded
+        # fixture.
+        (data_dir.parent / "messages.jsonl").touch()
+
+        resp = await client.post(
+            f"/api/legions/{lid}/comms",
+            json={
+                "to_minion_id": sid,
+                "content": "wake up",
+                "comm_type": "task",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+        session_resp = await client.get(f"/api/sessions/{sid}")
+        assert session_resp.json()["session"]["state"] == "active"
+
 
 class TestCreateMinion:
     async def test_create_minion(self, api_integration_env):
