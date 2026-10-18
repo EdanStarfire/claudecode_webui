@@ -21,7 +21,7 @@ from typing import Any
 
 from shared.logging_config import get_logger
 
-from .models.legion_models import Comm
+from .models.legion_models import Comm, SenderType
 from .timestamp_utils import get_unix_timestamp
 
 pending_logger = get_logger('queue_manager', category='PENDING')
@@ -233,8 +233,15 @@ class PendingStore:
         pending_items = self._pending.get(session_id, [])
         pending = [i for i in pending_items if i.status == "pending"]
 
-        if len(pending) >= max_pending_size:
-            raise ValueError(f"Pending store full: {len(pending)}/{max_pending_size} pending items")
+        # max_pending_size only guards against a runaway/misconfigured SCHEDULE
+        # producer; comms and manual queue messages (USER/MINION/SYSTEM/EXTERNAL)
+        # must never be capacity-rejected.
+        if comm.sender_type == SenderType.SCHEDULE:
+            pending_schedule = [i for i in pending if i.comm.sender_type == SenderType.SCHEDULE]
+            if len(pending_schedule) >= max_pending_size:
+                raise ValueError(
+                    f"Pending store full: {len(pending_schedule)}/{max_pending_size} pending schedule items"
+                )
 
         # Determine next position (after highest existing pending position)
         next_pos = max((i.position for i in pending), default=-1) + 1
