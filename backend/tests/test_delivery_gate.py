@@ -517,7 +517,14 @@ class TestInjectTimestampScoping:
     @pytest.mark.parametrize(
         "sender_type,expected",
         [
-            (SenderType.USER, True),
+            # USER is False, not True (issue #2193 PR5 bug fix, found in review):
+            # every comm reaching deliver() today flows through comm_router.py,
+            # i.e. "Legion inter-agent comms" per session_coordinator.send_message()'s
+            # docstring, which pass inject_timestamp=False unconditionally — the rule
+            # is scoped by subsystem (direct chat/queue vs. Legion routing), not by
+            # who authored the comm. A from_user=True Comm sent via
+            # POST /api/legions/{id}/comms is still Legion-routed traffic.
+            (SenderType.USER, False),
             (SenderType.SCHEDULE, True),
             (SenderType.MINION, False),
             (SenderType.SYSTEM, False),
@@ -530,6 +537,23 @@ class TestInjectTimestampScoping:
             kwargs["from_minion_id"] = "sender-x"
         comm = make_comm("s1", sender_type=sender_type, **kwargs)
         assert DeliveryGate._should_inject_timestamp(comm) == expected
+
+    @pytest.mark.asyncio
+    async def test_user_sent_comm_dispatched_through_deliver_skips_injection(self, tmp_path):
+        """Regression for the bug above, exercised through deliver() itself (not
+        just the static helper) — a from_user=True Comm routed through deliver()
+        (e.g. a user message to a minion via POST /api/legions/{id}/comms) must
+        reach send_message() with inject_timestamp=False, or the SDK-delivered
+        text desyncs from timeline.jsonl's pre-injection comm.content."""
+        info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
+        coord = _make_coordinator(info, tmp_path)
+        gate = DeliveryGate(coord)
+
+        comm = make_comm("s1", content="hello from the user", delivery=DeliveryPolicy.IMMEDIATE, from_user=True)
+        result = await gate.deliver(comm)
+
+        assert result.success is True
+        assert coord.send_message.call_args.kwargs["inject_timestamp"] is False
 
 
 class TestSenderScopedFlush:

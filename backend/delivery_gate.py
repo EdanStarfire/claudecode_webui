@@ -478,15 +478,29 @@ class DeliveryGate:
 
     @staticmethod
     def _should_inject_timestamp(comm: Comm) -> bool:
-        """Issue #1779's existing rule ("user messages get timestamp injection,
-        inter-agent/system messages don't"), re-expressed on sender_type instead
-        of the old from_user check. SCHEDULE is included because today's
-        schedule-fired prompts are constructed with from_user=True by
-        queue_processor.py's Comm wrapper and so already get injection by
-        default — this preserves that observed behavior under the new
-        discriminator, for PR6 to confirm/keep when it migrates the scheduler
-        for real."""
-        return comm.sender_type in (SenderType.USER, SenderType.SCHEDULE)
+        """Issue #1779's rule ("user messages get timestamp injection, inter-agent/
+        system messages don't") is scoped by SUBSYSTEM, not by who authored the
+        comm (session_coordinator.send_message()'s docstring: True for the live
+        user-send/queue/cron paths; "Legion inter-agent comms... (comm_router.py)
+        pass False" — unconditionally, regardless of comm.from_user). Every comm
+        reaching deliver() today flows through comm_router.py, so SenderType.USER
+        must NOT return True here — a user-sent Legion comm (e.g. via
+        POST /api/legions/{id}/comms) is still Legion-routed traffic, persisted to
+        timeline.jsonl pre-injection; injecting into the SDK-delivered copy would
+        desync the two, exactly what the docstring warns against. Found as a live
+        bug in review (issue #2193 PR5): dormant since PR3, this cutover is what
+        makes it reachable for the first time.
+
+        SCHEDULE stays True: today's schedule-fired prompts are constructed with
+        from_user=True by queue_processor.py's Comm wrapper and already get
+        injection by default via the queue/cron path (a different subsystem,
+        under the docstring's "live user-send and queue/cron paths" rule) — this
+        preserves that observed behavior under the new discriminator, for PR6 to
+        confirm/keep when it migrates the scheduler onto deliver() for real (PR6
+        will also need to make queue_processor's Comm wrapper set sender_type=
+        SCHEDULE explicitly, since today it's inferred as USER from from_user=True
+        and isn't yet exercised by this method at all)."""
+        return comm.sender_type == SenderType.SCHEDULE
 
     def ensure_when_idle_running(self, session_id: str) -> None:
         """Starts the per-session background when_idle drain loop if not
