@@ -382,6 +382,99 @@ async def test_concurrent_same_config_calls_serialize_via_lock():
 
 
 # ---------------------------------------------------------------------------
+# Issue #2247 (AC3/AC4): errors are formatted via _describe_open_failure at every
+# stage, so a raw ExceptionGroup never leaks "unhandled errors in a TaskGroup".
+# ---------------------------------------------------------------------------
+
+
+def _http_401_exception_group():
+    import httpx
+
+    response = MagicMock()
+    response.status_code = 401
+    response.reason_phrase = "Unauthorized"
+    leaf = httpx.HTTPStatusError("401", request=MagicMock(), response=response)
+    return ExceptionGroup("unhandled errors in a TaskGroup", [leaf])
+
+
+@pytest.mark.asyncio
+async def test_transport_stage_unwraps_exception_group():
+    connector = _make_connector()
+    cfg = _http_cfg()
+
+    with patch.object(
+        connector, "_enter_transport", AsyncMock(side_effect=_http_401_exception_group())
+    ):
+        result = await connector.test_connect(cfg)
+
+    assert result["status"] == "failed"
+    assert result["stage"] == "transport"
+    assert result["error"] == "401 Unauthorized"
+    assert "TaskGroup" not in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_handshake_stage_unwraps_exception_group():
+    connector = _make_connector()
+    cfg = _http_cfg()
+
+    @asynccontextmanager
+    async def fake_http(url, headers=None, **kw):
+        yield (MagicMock(), MagicMock())
+
+    sess = _fake_session(initialize_side_effect=_http_401_exception_group())
+
+    with (
+        patch("backend.mcp.oneshot_connection.ClientSession", return_value=sess),
+        patch("backend.mcp.oneshot_connection.streamable_http_client", fake_http),
+    ):
+        result = await connector.test_connect(cfg)
+
+    assert result["status"] == "failed"
+    assert result["stage"] == "handshake"
+    assert result["error"] == "401 Unauthorized"
+    assert "TaskGroup" not in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_list_tools_stage_unwraps_exception_group():
+    connector = _make_connector()
+    cfg = _http_cfg()
+
+    @asynccontextmanager
+    async def fake_http(url, headers=None, **kw):
+        yield (MagicMock(), MagicMock())
+
+    sess = _fake_session(list_tools_side_effect=_http_401_exception_group())
+
+    with (
+        patch("backend.mcp.oneshot_connection.ClientSession", return_value=sess),
+        patch("backend.mcp.oneshot_connection.streamable_http_client", fake_http),
+    ):
+        result = await connector.test_connect(cfg)
+
+    assert result["status"] == "failed"
+    assert result["stage"] == "list_tools"
+    assert result["error"] == "401 Unauthorized"
+    assert "TaskGroup" not in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_outer_catch_all_unwraps_exception_group():
+    """The outer except in test_connect() (cleanup failures escaping _run()) also
+    formats via _describe_open_failure, not a raw str(exc)."""
+    connector = _make_connector()
+    cfg = _http_cfg()
+
+    with patch.object(McpOneshotConnector, "_run", AsyncMock(side_effect=_http_401_exception_group())):
+        result = await connector.test_connect(cfg)
+
+    assert result["status"] == "failed"
+    assert result["error"] == "401 Unauthorized"
+    assert "TaskGroup" not in result["error"]
+
+
+# ---------------------------------------------------------------------------
 # Secret-ref resolution failure
 # ---------------------------------------------------------------------------
 

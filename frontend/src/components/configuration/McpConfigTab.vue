@@ -101,6 +101,14 @@
         <span v-else>{{ config.url }}</span>
       </div>
 
+      <!-- Connect/Reconnect error + discovery summary (issue #2247) -->
+      <div v-if="connectFeedback.get(config.id)?.error" class="alert alert-danger py-1 small mb-2 mt-1">
+        {{ connectFeedback.get(config.id).error }}
+      </div>
+      <div v-if="connectFeedback.get(config.id)?.discovery" class="small text-muted mt-1">
+        {{ connectFeedback.get(config.id).discovery }}
+      </div>
+
       <!-- Show tools result panel (issue #1799) -->
       <div v-if="isToolsExpanded(config.id)" class="tools-panel mt-2 p-2 border rounded">
         <div v-if="configStore.checkingToolsIds.has(config.id)" class="small text-muted d-flex align-items-center gap-2">
@@ -558,6 +566,42 @@ const connectingId = ref(null)
 const disconnectingId = ref(null)
 const importingId = ref(null)
 const reconnectingId = ref(null)  // Issue #1387: tracks in-progress Reconnect
+// Issue #2247: per-config Connect/Reconnect failure detail + discovery summary, so
+// errors for different servers don't collide and a retry clears the stale message.
+// Map value shape: {error: string|null, discovery: string|null}.
+const connectFeedback = ref(new Map())
+
+function clearConnectFeedback(configId) {
+  if (connectFeedback.value.has(configId)) {
+    const next = new Map(connectFeedback.value)
+    next.delete(configId)
+    connectFeedback.value = next
+  }
+}
+
+function setConnectError(configId, message) {
+  connectFeedback.value = new Map(connectFeedback.value.set(configId, { error: message, discovery: null }))
+}
+
+function setConnectDiscovery(configId, summary) {
+  connectFeedback.value = new Map(connectFeedback.value.set(configId, { error: null, discovery: summary }))
+}
+
+// Issue #2247 (AC1): surface a discovery summary only when it carries something
+// interesting — the common clean-success case has no *_error keys, so nothing renders.
+function discoverySummaryText(discovery) {
+  if (!discovery) return null
+  const errorKeys = Object.keys(discovery).filter((k) => k.endsWith('_error'))
+  if (errorKeys.length === 0) return null
+  const parts = []
+  if (discovery.mechanism) parts.push(`mechanism: ${discovery.mechanism}`)
+  if (discovery.origin) parts.push(`origin: ${discovery.origin}`)
+  for (const key of errorKeys) {
+    const err = discovery[key]
+    parts.push(`${key}: ${err?.message || err}`)
+  }
+  return parts.join(', ')
+}
 
 // Show tools state (issue #1799)
 const expandedToolsIds = ref(new Set())
@@ -726,6 +770,7 @@ async function reconnectVault(config) {
   const baseName = vaultBaseName(config)
   if (!baseName) return
   reconnectingId.value = config.id
+  clearConnectFeedback(config.id)
   try {
     // Register pending reconnect so polling.js completes it on mcp_oauth_complete
     configStore.startReconnect(config.id, baseName)
@@ -733,8 +778,13 @@ async function reconnectVault(config) {
     if (result?.auth_url) {
       window.open(result.auth_url, '_blank', 'noopener,noreferrer')
     }
+    const summary = discoverySummaryText(result?.discovery)
+    if (summary) {
+      setConnectDiscovery(config.id, summary)
+    }
   } catch (e) {
     console.error('Reconnect OAuth initiate failed:', e)
+    setConnectError(config.id, e?.data?.detail || e.message || 'Failed to connect')
     // Clear the pending reconnect if initiate failed
     const next = new Map(configStore.pendingReconnect)
     next.delete(config.id)
@@ -765,13 +815,19 @@ function oauthStatusClass(configId) {
 
 async function connectOAuth(config) {
   connectingId.value = config.id
+  clearConnectFeedback(config.id)
   try {
     const result = await configStore.initiateOAuth(config.id)
     if (result?.auth_url) {
       window.open(result.auth_url, '_blank', 'noopener,noreferrer')
     }
+    const summary = discoverySummaryText(result?.discovery)
+    if (summary) {
+      setConnectDiscovery(config.id, summary)
+    }
   } catch (e) {
     console.error('OAuth initiate failed:', e)
+    setConnectError(config.id, e?.data?.detail || e.message || 'Failed to connect')
   } finally {
     connectingId.value = null
   }

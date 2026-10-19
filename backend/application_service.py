@@ -918,19 +918,52 @@ class ApplicationService:
             shared_mcp_manager=self.coordinator.shared_mcp_manager,
         )
 
+    async def _resolve_oauth_needs_auth(self, config_id: str) -> dict | None:
+        """Check whether config_id has a usable stored OAuth token, refreshing an
+        expired one. Returns None if a usable token is available (caller should
+        proceed with the connection attempt), or a needs_auth_extra dict
+        ({"expires_at": float | None}) to merge into a needs-auth response otherwise.
+
+        Neither caller uses the token itself — SharedMcpConnectionManager.list_tools()
+        and McpOneshotConnector.test_connect() each resolve their own token when
+        building connection headers — so only the needs-auth verdict is returned.
+
+        Uses hard expiry (expiry <= now), not OAuthRefreshManager.REFRESH_BUFFER_SECONDS
+        — that 300s proactive buffer exists to keep an unattended background session
+        warm before it needs the token, a different concern from a user-triggered
+        action that should still try a technically-valid token rather than preemptively
+        declaring needs-auth up to 5 minutes early.
+
+        Fetches the token store once and reuses it for both the token and expiry reads
+        (rather than going through get_stored_token() separately) since FernetTokenStore
+        construction does blocking directory/key-file I/O.
+        """
+        store = self.coordinator.oauth_manager.get_token_store(config_id)
+        token = await store.get_tokens()
+        if token is None:
+            return {"expires_at": None}
+        expiry = await store.get_token_expiry()
+        if expiry is not None and expiry <= time.time():
+            refreshed = await self.coordinator.oauth_refresh_manager.refresh_token(config_id)
+            if refreshed is None:
+                return {"expires_at": expiry}
+        return None
+
     async def get_mcp_config_tools(self, config_id: str) -> dict | None:
         """Return live tool list for a shared-connection MCP config (issue #1799).
 
         Returns None if the config doesn't exist (router raises 404).
         Raises ValueError if the config isn't shared_connection (router raises 400).
 
-        Status resolution order: disabled -> needs-auth (oauth enabled, no stored
-        token) -> connected/failed via SharedMcpConnectionManager.list_tools(). The
-        connection attempt can block up to ~35s on a broken shared server (inherited
-        from SharedMcpConnectionManager._open_locked's own timeout), or up to ~70s if
-        a concurrent OAuth token-refresh reconnect (_on_token_refreshed) is also
-        contending for the same config's open-lock (issue #1806).
+        Status resolution order: disabled -> needs-auth (oauth enabled, no stored or
+        unrefreshable token) -> connected/failed via SharedMcpConnectionManager.
+        list_tools(). The connection attempt can block up to ~35s on a broken shared
+        server (inherited from SharedMcpConnectionManager._open_locked's own timeout),
+        or up to ~70s if a concurrent OAuth token-refresh reconnect
+        (_on_token_refreshed) is also contending for the same config's open-lock
+        (issue #1806).
         """
+        from backend.mcp.shared_connection_manager import _describe_open_failure
         from backend.mcp_config_manager import McpServerType
 
         config = await self.coordinator.mcp_config_manager.get_config(config_id)
@@ -943,9 +976,9 @@ class ApplicationService:
             return {"status": "disabled", "tools": [], "error": None}
 
         if config.oauth_enabled and config.type in (McpServerType.HTTP, McpServerType.SSE):
-            token = await self.coordinator.oauth_manager.get_stored_token(config_id)
-            if token is None:
-                return {"status": "needs-auth", "tools": [], "error": None}
+            needs_auth_extra = await self._resolve_oauth_needs_auth(config_id)
+            if needs_auth_extra is not None:
+                return {"status": "needs-auth", "tools": [], "error": None, **needs_auth_extra}
 
         try:
             tools = await self.coordinator.shared_mcp_manager.list_tools(config)
@@ -955,7 +988,7 @@ class ApplicationService:
                 "error": None,
             }
         except Exception as exc:
-            return {"status": "failed", "tools": [], "error": str(exc)}
+            return {"status": "failed", "tools": [], "error": _describe_open_failure(exc)}
 
     async def test_connect_mcp_config(self, config_id: str) -> dict | None:
         """Open a throwaway connection to a non-shared-connection MCP config, list its
@@ -966,7 +999,7 @@ class ApplicationService:
         get_mcp_config_tools()/the /tools endpoint for those instead.
 
         Status resolution order mirrors get_mcp_config_tools(): disabled -> needs-auth
-        (oauth enabled, no stored token) -> connected/failed via
+        (oauth enabled, no stored or unrefreshable token) -> connected/failed via
         McpOneshotConnector.test_connect(). Blocks until the outcome is known — up to
         ~30s on a hung server.
         """
@@ -985,9 +1018,15 @@ class ApplicationService:
             return {"status": "disabled", "stage": None, "tools": [], "error": None}
 
         if config.oauth_enabled and config.type in (McpServerType.HTTP, McpServerType.SSE):
-            token = await self.coordinator.oauth_manager.get_stored_token(config_id)
-            if token is None:
-                return {"status": "needs-auth", "stage": None, "tools": [], "error": None}
+            needs_auth_extra = await self._resolve_oauth_needs_auth(config_id)
+            if needs_auth_extra is not None:
+                return {
+                    "status": "needs-auth",
+                    "stage": None,
+                    "tools": [],
+                    "error": None,
+                    **needs_auth_extra,
+                }
 
         result = await self.coordinator.mcp_oneshot_connector.test_connect(config)
         if result["status"] != "failed":
