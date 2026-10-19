@@ -60,7 +60,7 @@ async def test_fernet_store_client_info_round_trip(tmp_path: Path):
 
     assert await store.get_client_info() is None
 
-    await store.set_client_info(info)
+    await store.set_client_info(info, origin="dcr")
     recovered = await store.get_client_info()
     assert recovered is not None
     assert recovered.client_id == "my-client-id"
@@ -70,7 +70,7 @@ async def test_fernet_store_client_info_round_trip(tmp_path: Path):
 async def test_fernet_store_clear(tmp_path: Path):
     store = FernetTokenStore(tmp_path, "server1")
     await store.set_tokens(_make_token())
-    await store.set_client_info(_make_client_info())
+    await store.set_client_info(_make_client_info(), origin="dcr")
 
     await store.clear()
 

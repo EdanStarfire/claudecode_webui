@@ -159,7 +159,7 @@ async def test_issue_1381_import_creates_all_three_secrets_when_dcr(
     expiry_file.write_text(str(expiry))
     tmp_store.set_token_endpoint(_TOKEN_URL)
     client_info = _make_client_info()
-    await tmp_store.set_client_info(client_info)
+    await tmp_store.set_client_info(client_info, origin="dcr")
 
     service = _make_service(tmp_path, _make_mcp_config(), tmp_store)
     with (
@@ -185,7 +185,7 @@ async def test_issue_1381_import_creates_two_secrets_when_no_client_secret(
     tmp_store.set_token_endpoint(_TOKEN_URL)
     # client_info without client_secret
     info = _make_client_info(client_secret=None)
-    await tmp_store.set_client_info(info)
+    await tmp_store.set_client_info(info, origin="dcr")
 
     service = _make_service(tmp_path, _make_mcp_config(), tmp_store)
     with (
@@ -348,7 +348,7 @@ async def test_issue_1381_import_rolls_back_on_primary_failure(
     token = _make_token()
     await tmp_store.set_tokens(token)
     tmp_store.set_token_endpoint(_TOKEN_URL)
-    await tmp_store.set_client_info(_make_client_info())
+    await tmp_store.set_client_info(_make_client_info(), origin="dcr")
 
     service = _make_service(tmp_path, _make_mcp_config(), tmp_store)
 
@@ -441,7 +441,7 @@ async def test_issue_1381_import_sets_correct_refresh_spec_fields(
     (tmp_path / "oauth_expiry").mkdir(parents=True, exist_ok=True)
     (tmp_path / "oauth_expiry" / f"{_CONFIG_ID}.expiry").write_text(str(expiry))
     tmp_store.set_token_endpoint(_TOKEN_URL)
-    await tmp_store.set_client_info(_make_client_info(client_id="the_client_id"))
+    await tmp_store.set_client_info(_make_client_info(client_id="the_client_id"), origin="dcr")
 
     captured_records = []
     service = _make_service(tmp_path, _make_mcp_config(), tmp_store)
@@ -868,7 +868,7 @@ async def test_issue_1871_replace_true_updates_bundle_in_place(
     token = _make_token(access_token="access_v1", refresh_token="refresh_v1")
     await tmp_store.set_tokens(token)
     tmp_store.set_token_endpoint(_TOKEN_URL)
-    await tmp_store.set_client_info(_make_client_info())
+    await tmp_store.set_client_info(_make_client_info(), origin="dcr")
 
     service = _make_service(tmp_path, _make_mcp_config(), tmp_store)
     with (
@@ -951,7 +951,7 @@ async def test_issue_2005_reuse_existing_reference_no_drift(
     token = _make_token()
     await tmp_store.set_tokens(token)
     tmp_store.set_token_endpoint(_TOKEN_URL)
-    await tmp_store.set_client_info(_make_client_info(client_secret="my_client_secret"))
+    await tmp_store.set_client_info(_make_client_info(client_secret="my_client_secret"), origin="dcr")
 
     fake = _FakeKeyring()
     cfg = _make_mcp_config(oauth_client_secret="${secret:existing-cs}")
@@ -998,7 +998,7 @@ async def test_issue_2005_reuse_existing_reference_with_drift_overwrites(
     token = _make_token()
     await tmp_store.set_tokens(token)
     tmp_store.set_token_endpoint(_TOKEN_URL)
-    await tmp_store.set_client_info(_make_client_info(client_secret="fresh-value"))
+    await tmp_store.set_client_info(_make_client_info(client_secret="fresh-value"), origin="dcr")
 
     fake = _FakeKeyring()
     cfg = _make_mcp_config(oauth_client_secret="${secret:existing-cs}")
@@ -1033,7 +1033,7 @@ async def test_issue_2005_reuse_deleted_reference_raises_404(
     token = _make_token()
     await tmp_store.set_tokens(token)
     tmp_store.set_token_endpoint(_TOKEN_URL)
-    await tmp_store.set_client_info(_make_client_info())
+    await tmp_store.set_client_info(_make_client_info(), origin="dcr")
 
     cfg = _make_mcp_config(oauth_client_secret="${secret:missing-cs}")
     service = _make_service(tmp_path, cfg, tmp_store)
@@ -1059,7 +1059,7 @@ async def test_issue_2005_raw_literal_oauth_client_secret_unchanged(
     token = _make_token()
     await tmp_store.set_tokens(token)
     tmp_store.set_token_endpoint(_TOKEN_URL)
-    await tmp_store.set_client_info(_make_client_info())
+    await tmp_store.set_client_info(_make_client_info(), origin="dcr")
 
     cfg = _make_mcp_config(oauth_client_secret="raw-literal-secret")
     service = _make_service(tmp_path, cfg, tmp_store)
@@ -1087,7 +1087,7 @@ async def test_issue_2005_no_dcr_client_secret_with_existing_reference_configure
     token = _make_token()
     await tmp_store.set_tokens(token)
     tmp_store.set_token_endpoint(_TOKEN_URL)
-    await tmp_store.set_client_info(_make_client_info(client_secret=None))
+    await tmp_store.set_client_info(_make_client_info(client_secret=None), origin="dcr")
 
     fake = _FakeKeyring()
     cfg = _make_mcp_config(oauth_client_secret="${secret:existing-cs}")
@@ -1123,7 +1123,7 @@ async def test_issue_2005_reconnect_after_reused_reference_import(
     token = _make_token(access_token="access_v1", refresh_token="refresh_v1")
     await tmp_store.set_tokens(token)
     tmp_store.set_token_endpoint(_TOKEN_URL)
-    await tmp_store.set_client_info(_make_client_info(client_secret="my_client_secret"))
+    await tmp_store.set_client_info(_make_client_info(client_secret="my_client_secret"), origin="dcr")
 
     fake = _FakeKeyring()
     cfg = _make_mcp_config(oauth_client_secret="${secret:existing-cs}")
@@ -1149,7 +1149,7 @@ async def test_issue_2005_reconnect_after_reused_reference_import(
         # Re-authorize with a rotated client secret + fresh tokens under the same base_name.
         token2 = _make_token(access_token="access_v2", refresh_token="refresh_v2")
         await tmp_store.set_tokens(token2)
-        await tmp_store.set_client_info(_make_client_info(client_secret="rotated-secret"))
+        await tmp_store.set_client_info(_make_client_info(client_secret="rotated-secret"), origin="dcr")
 
         result = await service.import_oauth_as_secret(_CONFIG_ID, "jira_oauth", replace=True)
 
@@ -1168,7 +1168,7 @@ async def test_issue_2005_reused_reference_not_deleted_on_rollback(
     token = _make_token()
     await tmp_store.set_tokens(token)
     tmp_store.set_token_endpoint(_TOKEN_URL)
-    await tmp_store.set_client_info(_make_client_info(client_secret="fresh-value"))
+    await tmp_store.set_client_info(_make_client_info(client_secret="fresh-value"), origin="dcr")
 
     fake = _FakeKeyring()
     cfg = _make_mcp_config(oauth_client_secret="${secret:existing-cs}")
@@ -1223,7 +1223,7 @@ async def test_issue_2005_reused_reference_deleted_between_check_and_write_raise
     token = _make_token()
     await tmp_store.set_tokens(token)
     tmp_store.set_token_endpoint(_TOKEN_URL)
-    await tmp_store.set_client_info(_make_client_info(client_secret="fresh-value"))
+    await tmp_store.set_client_info(_make_client_info(client_secret="fresh-value"), origin="dcr")
 
     fake = _FakeKeyring()
     cfg = _make_mcp_config(oauth_client_secret="${secret:existing-cs}")

@@ -156,7 +156,8 @@ async def test_complete_flow_includes_client_secret_when_present(tmp_path: Path)
             client_secret="s3cr3t",
             redirect_uris=["http://localhost/oauth/callback"],  # type: ignore[arg-type]
             token_endpoint_auth_method="client_secret_post",
-        )
+        ),
+        origin="dcr",
     )
 
     state = "state1"
@@ -233,7 +234,8 @@ async def test_refresh_token_includes_client_secret_when_present(tmp_path: Path)
             client_secret="s3cr3t",
             redirect_uris=["http://localhost/oauth/callback"],  # type: ignore[arg-type]
             token_endpoint_auth_method="client_secret_post",
-        )
+        ),
+        origin="dcr",
     )
     store.set_token_endpoint("https://auth.example.com/token")
 
@@ -267,7 +269,8 @@ async def test_refresh_token_omits_client_secret_when_absent(tmp_path: Path):
             client_id="cid",
             redirect_uris=["http://localhost/oauth/callback"],  # type: ignore[arg-type]
             token_endpoint_auth_method="none",
-        )
+        ),
+        origin="dcr",
     )
     store.set_token_endpoint("https://auth.example.com/token")
 

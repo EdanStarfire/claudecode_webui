@@ -854,7 +854,9 @@ class ApplicationService:
         return await self.coordinator.mcp_config_manager.export_configs(ids)
 
     async def import_mcp_configs(self, servers: dict, dry_run: bool) -> dict:
-        return await self.coordinator.mcp_config_manager.import_configs(servers, dry_run)
+        return await self.coordinator.mcp_config_manager.import_configs(
+            servers, dry_run, oauth_manager=self.coordinator.oauth_manager
+        )
 
     async def get_mcp_config(self, config_id: str) -> dict | None:
         config = await self.coordinator.mcp_config_manager.get_config(config_id)
@@ -903,6 +905,7 @@ class ApplicationService:
         config = await self.coordinator.mcp_config_manager.update_config(
             config_id,
             shared_mcp_manager=self.coordinator.shared_mcp_manager,
+            oauth_manager=self.coordinator.oauth_manager,
             main_app_port=self.coordinator.port,
             litellm_port=self._litellm_port(),
             **kwargs,

@@ -179,11 +179,41 @@ class FernetTokenStore:
             logger.error("Failed to decrypt client info for MCP server %s", self._server_id)
             return None
 
-    async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
-        """Encrypt and persist OAuthClientInformationFull for this server."""
+    async def set_client_info(self, client_info: OAuthClientInformationFull, origin: str) -> None:
+        """Encrypt and persist OAuthClientInformationFull for this server.
+
+        `origin` (issue #2243) names the mechanism that produced this client info
+        ("pre_registered"|"cimd"|"dcr") and is written alongside it in plaintext —
+        not a secret, mirrors the existing `.endpoint` sidecar — so a later Connect
+        can tell whether the stored client info still matches what discovery would
+        select.
+        """
         client_file = self._clients_dir / f"{self._server_id}.enc"
         encrypted = self._fernet.encrypt(client_info.model_dump_json().encode())
         client_file.write_bytes(encrypted)
+        origin_file = self._clients_dir / f"{self._server_id}.origin"
+        origin_file.write_text(origin)
+
+    def get_client_info_origin(self) -> str | None:
+        """Return the stored mechanism origin for this server's client info, or
+        None if never recorded (including for client info persisted before issue
+        #2243, which has no origin sidecar on disk)."""
+        origin_file = self._clients_dir / f"{self._server_id}.origin"
+        if not origin_file.exists():
+            return None
+        text = origin_file.read_text().strip()
+        return text if text else None
+
+    def clear_client_info(self) -> None:
+        """Delete just the stored client info + origin sidecar for this server,
+        leaving tokens/expiry/token_endpoint untouched (issue #2243). Unlike
+        clear(), which Disconnect uses to wipe everything."""
+        for f in (
+            self._clients_dir / f"{self._server_id}.enc",
+            self._clients_dir / f"{self._server_id}.origin",
+        ):
+            if f.exists():
+                f.unlink()
 
     def set_token_endpoint(self, token_endpoint: str) -> None:
         """Persist the token endpoint URL for this server (plaintext — not a secret)."""
@@ -203,6 +233,7 @@ class FernetTokenStore:
         for f in (
             self._tokens_dir / f"{self._server_id}.enc",
             self._clients_dir / f"{self._server_id}.enc",
+            self._clients_dir / f"{self._server_id}.origin",
             self._expiry_dir / f"{self._server_id}.expiry",
             self._endpoints_dir / f"{self._server_id}.endpoint",
         ):
@@ -237,6 +268,14 @@ class OAuthFlowManager:
     async def get_stored_token(self, server_id: str) -> OAuthToken | None:
         """Return the persisted OAuthToken for a server, or None if not authenticated."""
         return await self.get_token_store(server_id).get_tokens()
+
+    def invalidate_stored_client_info(self, server_id: str) -> None:
+        """Discard stored client info (and its origin tag) for a server without
+        touching its tokens/expiry/token_endpoint (issue #2243, AC1). Called when
+        `McpConfigManager.update_config()` changes or clears a server's
+        `oauth_client_id`/`oauth_client_secret`, so the next Connect re-discovers
+        fresh instead of reusing a client registered under the old config."""
+        self.get_token_store(server_id).clear_client_info()
 
     def _sweep_expired_pending(self) -> None:
         """Issue #1871: lazily discard `_pending` entries older than the TTL.
@@ -496,16 +535,43 @@ class OAuthFlowManager:
                 # Persist so refresh_token() can read client_id/secret back later — previously
                 # only the DCR branch below did this, leaving refresh_token() unable to find
                 # client info for any pre-registered client (issue #1867's latent bug).
-                await store.set_client_info(client_info)
+                await store.set_client_info(client_info, origin="pre_registered")
                 summary["mechanism"] = "pre_registered"
                 debug_logger.info(
                     "OAuth: using pre-registered client_id for MCP server %s (auth_method=%s)",
                     server_id, auth_method,
                 )
             else:
+                # Issue #2243 (AC2): don't blindly trust stored client info — compare
+                # the mechanism it was stored under against what discovery would select
+                # right now, using the same signals the cimd/dcr branches below consume.
+                # A mismatch (including a config change discovery has no way to see,
+                # e.g. the server gaining CIMD support since this client was stored, or
+                # client info persisted before this origin sidecar existed) means the
+                # stored client info is stale — discard it and fall through to
+                # re-discover fresh, exactly as if nothing were cached.
+                current_mechanism = (
+                    "cimd"
+                    if (
+                        not has_registration_endpoint
+                        and should_use_client_metadata_url(oauth_metadata, client_metadata_url)
+                        and is_valid_client_metadata_url(client_metadata_url)
+                    )
+                    else "dcr"
+                )
                 client_info = await store.get_client_info()
                 if client_info:
-                    summary["mechanism"] = "cached"
+                    stored_origin = store.get_client_info_origin()
+                    if stored_origin == current_mechanism:
+                        summary["mechanism"] = "cached"
+                        summary["origin"] = stored_origin
+                    else:
+                        logger.info(
+                            "Discarding stored OAuth client info for %s: stored via %s, "
+                            "discovery now selects %s",
+                            server_id, stored_origin, current_mechanism,
+                        )
+                        client_info = None
 
             if not client_info:
                 if (
@@ -519,7 +585,7 @@ class OAuthFlowManager:
                     client_info = create_client_info_from_metadata_url(
                         client_metadata_url, redirect_uris=[redirect_uri],  # type: ignore[arg-type]
                     )
-                    await store.set_client_info(client_info)
+                    await store.set_client_info(client_info, origin="cimd")
                     summary["mechanism"] = "cimd"
                     debug_logger.info(
                         "OAuth: using client-ID metadata document for MCP server %s (%s)",
@@ -539,7 +605,7 @@ class OAuthFlowManager:
                     try:
                         reg_resp = await http.send(reg_req)
                         client_info = await handle_registration_response(reg_resp)
-                        await store.set_client_info(client_info)
+                        await store.set_client_info(client_info, origin="dcr")
                         summary["mechanism"] = "dcr"
                         debug_logger.info("DCR succeeded for MCP server %s", server_id)
                     except Exception as exc:

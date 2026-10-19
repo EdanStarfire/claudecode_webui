@@ -156,7 +156,7 @@ async def test_refresh_token_success(tmp_path: Path):
     manager = OAuthFlowManager(tmp_path)
     store = manager.get_token_store("srv1")
     await store.set_tokens(_make_token("old_access", "old_refresh"))
-    await store.set_client_info(_make_client_info("cid123"))
+    await store.set_client_info(_make_client_info("cid123"), origin="dcr")
     store.set_token_endpoint("https://auth.example.com/token")
 
     with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
@@ -186,7 +186,7 @@ async def test_refresh_token_stores_rotated_refresh_token(tmp_path: Path):
     manager = OAuthFlowManager(tmp_path)
     store = manager.get_token_store("srv1")
     await store.set_tokens(_make_token("old_access", "old_refresh"))
-    await store.set_client_info(_make_client_info("cid"))
+    await store.set_client_info(_make_client_info("cid"), origin="dcr")
     store.set_token_endpoint("https://auth.example.com/token")
 
     with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
@@ -212,7 +212,7 @@ async def test_refresh_token_revoked_clears_tokens(tmp_path: Path):
     manager = OAuthFlowManager(tmp_path)
     store = manager.get_token_store("srv1")
     await store.set_tokens(_make_token("old_access", "revoked_refresh"))
-    await store.set_client_info(_make_client_info("cid"))
+    await store.set_client_info(_make_client_info("cid"), origin="dcr")
     store.set_token_endpoint("https://auth.example.com/token")
 
     error_body = json.dumps({"error": "invalid_grant"}).encode()
@@ -247,7 +247,7 @@ async def test_refresh_token_no_refresh_field_returns_none(tmp_path: Path):
     store = manager.get_token_store("srv1")
     # Token without refresh_token
     await store.set_tokens(_make_token("access", refresh_token=None))
-    await store.set_client_info(_make_client_info())
+    await store.set_client_info(_make_client_info(), origin="dcr")
 
     result = await manager.refresh_token("srv1")
     assert result is None
@@ -259,7 +259,7 @@ async def test_refresh_token_no_endpoint_returns_none(tmp_path: Path):
     manager = OAuthFlowManager(tmp_path)
     store = manager.get_token_store("srv1")
     await store.set_tokens(_make_token("access", "refresh"))
-    await store.set_client_info(_make_client_info())
+    await store.set_client_info(_make_client_info(), origin="dcr")
     # Intentionally do NOT call store.set_token_endpoint()
 
     result = await manager.refresh_token("srv1")
@@ -297,7 +297,7 @@ async def test_get_mcp_sdk_config_proactive_refresh_before_expiry(tmp_path: Path
     future_expiry = time.time() + 200
     (tmp_path / "oauth_expiry" / "srv-oauth.expiry").write_text(str(future_expiry))
     store.set_token_endpoint("https://auth.example.com/token")
-    await store.set_client_info(_make_client_info("cid"))
+    await store.set_client_info(_make_client_info("cid"), origin="dcr")
 
     new_token = _make_token("fresh_token", "refresh_tok")
 
@@ -322,7 +322,7 @@ async def test_get_mcp_sdk_config_reactive_refresh_on_expired(tmp_path: Path):
     past_expiry = time.time() - 100
     (tmp_path / "oauth_expiry" / "srv-oauth.expiry").write_text(str(past_expiry))
     store.set_token_endpoint("https://auth.example.com/token")
-    await store.set_client_info(_make_client_info("cid"))
+    await store.set_client_info(_make_client_info("cid"), origin="dcr")
 
     new_token = _make_token("refreshed_token", "refresh_tok")
 
