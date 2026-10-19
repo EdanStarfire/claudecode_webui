@@ -133,11 +133,13 @@ def build_router(webui) -> APIRouter:
         if "oauth_custom_callback_port" in request.model_fields_set:
             sparse_update_kwargs["oauth_custom_callback_port"] = request.oauth_custom_callback_port
         # Issue #1867: same hazard as oauth_custom_callback_path/port above — only forward
-        # oauth_client_secret when the caller actually set it, so a partial update (e.g.
-        # {"enabled": false}) can't silently wipe a confidential client's stored secret via
-        # Pydantic's None default.
+        # oauth_client_secret and oauth_client_id when the caller actually set them, so a
+        # partial update (e.g. {"enabled": false}) can't silently wipe a confidential
+        # client's stored secret or client ID via Pydantic's None default.
         if "oauth_client_secret" in request.model_fields_set:
             sparse_update_kwargs["oauth_client_secret"] = request.oauth_client_secret
+        if "oauth_client_id" in request.model_fields_set:
+            sparse_update_kwargs["oauth_client_id"] = request.oauth_client_id
 
         result = await webui.service.update_mcp_config(
             config_id,
@@ -150,7 +152,6 @@ def build_router(webui) -> APIRouter:
             headers=request.headers,
             enabled=request.enabled,
             oauth_enabled=request.oauth_enabled,
-            oauth_client_id=request.oauth_client_id,
             oauth_callback_port=request.oauth_callback_port,
             shared_connection=request.shared_connection,
             **sparse_update_kwargs,
