@@ -339,7 +339,7 @@ class BackendApp:
         logger.info("Link broadcast callback injected into SessionCoordinator")
 
         # Issue #976/#989: Inject OAuth refresh broadcast callback into OAuthRefreshManager
-        self.coordinator.oauth_refresh_manager.set_broadcast_callback(self._broadcast_mcp_oauth_refreshed)
+        self.coordinator.oauth_refresh_manager.add_broadcast_subscriber(self._broadcast_mcp_oauth_refreshed)
         logger.info("OAuth refresh broadcast callback injected into OAuthRefreshManager")
 
         # Issue #1789: Inject OAuth completion broadcast callback into OAuthCallbackListenerManager

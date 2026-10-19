@@ -583,6 +583,44 @@ async def test_get_mcp_config_tools_expired_token_refresh_succeeds_connects(
 
 
 @pytest.mark.asyncio
+async def test_get_mcp_config_tools_expired_token_refresh_notifies_shared_connection(
+    service, mock_coordinator
+):
+    """Issue #2252: the on-demand refresh triggered from get_mcp_config_tools() must
+    reach SharedMcpConnectionManager's reconnect-on-refresh subscriber, not just update
+    stored token state. Uses a real OAuthRefreshManager (instead of the fixture's bare
+    mock) so refresh_token()'s subscriber-dispatch logic actually runs."""
+    import time
+
+    from backend.mcp_config_manager import McpServerType
+    from backend.oauth_refresh_manager import OAuthRefreshManager
+
+    inner_oauth_manager = MagicMock()
+    inner_oauth_manager.refresh_token = AsyncMock(return_value=MagicMock(access_token="new-token"))
+    real_refresh_manager = OAuthRefreshManager(inner_oauth_manager)
+    on_token_refreshed = AsyncMock()
+    real_refresh_manager.add_broadcast_subscriber(on_token_refreshed)
+    mock_coordinator.oauth_refresh_manager = real_refresh_manager
+
+    mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
+        shared_connection=True, oauth_enabled=True, config_type=McpServerType.HTTP
+    )
+    mock_coordinator.oauth_manager.get_token_store.return_value.get_tokens = AsyncMock(return_value=MagicMock())
+    mock_coordinator.oauth_manager.get_token_store.return_value.get_token_expiry = AsyncMock(
+        return_value=time.time() - 10
+    )
+    tool = MagicMock()
+    tool.name = "ping"
+    tool.description = "ping tool"
+    mock_coordinator.shared_mcp_manager.list_tools.return_value = [tool]
+
+    result = await service.get_mcp_config_tools("c1")
+
+    on_token_refreshed.assert_called_once_with("c1")
+    assert result["status"] == "connected"
+
+
+@pytest.mark.asyncio
 async def test_get_mcp_config_tools_expired_token_refresh_fails_needs_auth(
     service, mock_coordinator
 ):

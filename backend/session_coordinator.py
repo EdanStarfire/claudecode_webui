@@ -432,8 +432,11 @@ class SessionCoordinator:
         self.mcp_oneshot_connector = McpOneshotConnector(self.oauth_manager, self.credential_vault)
 
         # Issue #1789: custom OAuth callback path/port listeners for Shared MCP servers.
-        # Broadcast callback (UI notification) is injected later via set_broadcast_callback,
-        # same pattern as oauth_refresh_manager below.
+        # Broadcast callback (UI notification) is injected later via set_broadcast_callback.
+        # Issue #2252: oauth_refresh_manager below uses add_broadcast_subscriber instead —
+        # set_broadcast_callback clobbers any subscriber registered earlier (e.g.
+        # SharedMcpConnectionManager's own), so don't copy that pattern for new multi-
+        # subscriber consumers.
         self.oauth_callback_listener_manager = OAuthCallbackListenerManager(
             self.oauth_manager, host=self.host,
         )
