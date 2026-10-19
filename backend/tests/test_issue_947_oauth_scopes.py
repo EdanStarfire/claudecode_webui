@@ -85,7 +85,7 @@ async def test_issue_947_scope_included_from_prm(tmp_path: Path):
     """scope is included in auth URL when PRM advertises scopes_supported."""
     manager = OAuthFlowManager(tmp_path)
     # Pre-store client so DCR is skipped (focuses test on scope logic)
-    await manager.get_token_store("srv1").set_client_info(_make_client_info())
+    await manager.get_token_store("srv1").set_client_info(_make_client_info(), origin="dcr")
 
     mock_prm = _make_prm_mock(["read:jira-work", "write:jira-work"])
     mock_asm = _make_asm_mock(scopes=None)
@@ -110,7 +110,7 @@ async def test_issue_947_scope_included_from_prm(tmp_path: Path):
 async def test_issue_947_scope_falls_back_to_asm(tmp_path: Path):
     """scope falls back to AS metadata scopes when PRM has no scopes_supported."""
     manager = OAuthFlowManager(tmp_path)
-    await manager.get_token_store("srv1").set_client_info(_make_client_info())
+    await manager.get_token_store("srv1").set_client_info(_make_client_info(), origin="dcr")
 
     mock_prm = _make_prm_mock(scopes=None)
     mock_asm = _make_asm_mock(scopes=["read", "write"])
@@ -135,7 +135,7 @@ async def test_issue_947_scope_falls_back_to_asm(tmp_path: Path):
 async def test_issue_947_scope_omitted_when_no_metadata_scopes(tmp_path: Path):
     """scope is omitted from auth URL when neither PRM nor ASM advertises scopes."""
     manager = OAuthFlowManager(tmp_path)
-    await manager.get_token_store("srv1").set_client_info(_make_client_info())
+    await manager.get_token_store("srv1").set_client_info(_make_client_info(), origin="dcr")
 
     mock_prm = _make_prm_mock(scopes=None)
     mock_asm = _make_asm_mock(scopes=None)
@@ -161,7 +161,7 @@ async def test_issue_947_scope_included_on_reauth_stored_client(tmp_path: Path):
     """scope is included in auth URL on re-auth where DCR is skipped (stored client)."""
     manager = OAuthFlowManager(tmp_path)
     # Simulate re-authentication: client already registered from a previous flow
-    await manager.get_token_store("srv1").set_client_info(_make_client_info("existing-client"))
+    await manager.get_token_store("srv1").set_client_info(_make_client_info("existing-client"), origin="dcr")
 
     mock_prm = _make_prm_mock(["profile", "email"])
     mock_asm = _make_asm_mock(scopes=None)

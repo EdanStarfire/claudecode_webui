@@ -382,7 +382,9 @@ async def test_import_mcp_configs_delegates_to_mcp_config_manager(service, mock_
     )
 
     mock_coordinator.mcp_config_manager.import_configs.assert_called_once_with(
-        {"myserver": {"type": "stdio", "command": "npx"}}, True
+        {"myserver": {"type": "stdio", "command": "npx"}},
+        True,
+        oauth_manager=mock_coordinator.oauth_manager,
     )
     assert result == {"dry_run": True}
 

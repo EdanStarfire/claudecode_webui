@@ -320,7 +320,7 @@ class McpConfigManager:
             configs = [c for c in configs if c.id in id_set]
         return configs
 
-    async def import_configs(self, servers: dict, dry_run: bool) -> dict:
+    async def import_configs(self, servers: dict, dry_run: bool, *, oauth_manager=None) -> dict:
         existing_configs = await self.list_configs()  # FIX: was manager.configs.values()
         existing_by_name = {c.name: c for c in existing_configs}
 
@@ -391,6 +391,7 @@ class McpConfigManager:
                             config_id=existing.id,
                             name=name,
                             server_type=server_type,
+                            oauth_manager=oauth_manager,
                             command=server_data.get("command"),
                             args=server_data.get("args") or [],
                             env=server_data.get("env") or {},
@@ -440,6 +441,7 @@ class McpConfigManager:
         main_app_port: int | None = None,
         litellm_port: int | None = None,
         shared_mcp_manager=None,
+        oauth_manager=None,
     ) -> McpServerConfig:
         """Update existing MCP server configuration."""
         config = self.configs.get(config_id)
@@ -504,14 +506,30 @@ class McpConfigManager:
             config.enabled = enabled
         if oauth_enabled is not None:
             config.oauth_enabled = oauth_enabled
+        # Issue #2243 (AC1): track whether oauth_client_id/oauth_client_secret were
+        # present-in-this-update AND actually changed value (including clearing to
+        # None), so stored OAuth client info registered under the old value can be
+        # invalidated. Sparse updates (field omitted entirely) and no-op saves (same
+        # value re-submitted) must NOT trigger invalidation.
+        oauth_client_identity_changed = False
         if oauth_client_id is not _UNSET:
-            config.oauth_client_id = (oauth_client_id.strip() or None) if isinstance(oauth_client_id, str) else oauth_client_id
+            new_oauth_client_id = (
+                (oauth_client_id.strip() or None) if isinstance(oauth_client_id, str) else oauth_client_id
+            )
+            if new_oauth_client_id != config.oauth_client_id:
+                oauth_client_identity_changed = True
+            config.oauth_client_id = new_oauth_client_id
         if oauth_client_secret is not _UNSET:
-            config.oauth_client_secret = (
+            new_oauth_client_secret = (
                 (oauth_client_secret.strip() or None)
                 if isinstance(oauth_client_secret, str)
                 else oauth_client_secret
             )
+            if new_oauth_client_secret != config.oauth_client_secret:
+                oauth_client_identity_changed = True
+            config.oauth_client_secret = new_oauth_client_secret
+        if oauth_client_identity_changed and oauth_manager is not None:
+            oauth_manager.invalidate_stored_client_info(config_id)
         if oauth_callback_port is not _UNSET:
             config.oauth_callback_port = oauth_callback_port
         if shared_connection is not None:
