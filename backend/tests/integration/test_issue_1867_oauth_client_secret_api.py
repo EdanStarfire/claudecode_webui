@@ -67,6 +67,46 @@ class TestUpdateDoesNotClearClientSecret:
         await client.delete(f"/api/mcp-configs/{config_id}")
 
 
+class TestUpdateDoesNotClearClientId:
+    async def test_partial_update_preserves_client_id(self, api_integration_env):
+        client = api_integration_env["client"]
+        config = await _create_confidential_config(client)
+        config_id = config["id"]
+        assert config["oauth_client_id"] == "google-client-id"
+
+        # Partial update that doesn't mention oauth_client_id at all.
+        resp = await client.put(f"/api/mcp-configs/{config_id}", json={"enabled": False})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["oauth_client_id"] == "google-client-id"
+
+        await client.delete(f"/api/mcp-configs/{config_id}")
+
+    async def test_explicit_null_clears_client_id(self, api_integration_env):
+        client = api_integration_env["client"]
+        config = await _create_confidential_config(client)
+        config_id = config["id"]
+
+        resp = await client.put(f"/api/mcp-configs/{config_id}", json={"oauth_client_id": None})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["oauth_client_id"] is None
+
+        await client.delete(f"/api/mcp-configs/{config_id}")
+
+    async def test_explicit_new_value_updates_client_id(self, api_integration_env):
+        client = api_integration_env["client"]
+        config = await _create_confidential_config(client)
+        config_id = config["id"]
+
+        resp = await client.put(
+            f"/api/mcp-configs/{config_id}",
+            json={"oauth_client_id": "rotated-client-id"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["oauth_client_id"] == "rotated-client-id"
+
+        await client.delete(f"/api/mcp-configs/{config_id}")
+
+
 class TestOAuthInitiateSecretResolutionError:
     async def test_missing_vault_secret_returns_400_not_500(self, api_integration_env):
         client = api_integration_env["client"]
