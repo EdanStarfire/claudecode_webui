@@ -743,7 +743,7 @@ async def test_issue_1867_import_as_secret_full_chain_confidential_client(tmp_pa
         service = ApplicationService(coordinator)
 
         # --- oauth_initiate_flow(): resolves the vault secret, drives start_flow() ---
-        with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
+        with patch("backend.oauth_manager.httpx2.AsyncClient") as mock_client:
             client_instance = AsyncMock()
             client_instance.__aenter__ = AsyncMock(return_value=client_instance)
             client_instance.__aexit__ = AsyncMock(return_value=False)

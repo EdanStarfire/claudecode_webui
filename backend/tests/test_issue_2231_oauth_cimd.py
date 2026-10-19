@@ -109,7 +109,7 @@ def _mock_http_client(send_side_effect):
 async def test_start_flow_uses_cimd_when_server_supports_it_and_no_dcr(tmp_path: Path):
     manager = OAuthFlowManager(tmp_path)
 
-    with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
+    with patch("backend.oauth_manager.httpx2.AsyncClient") as mock_client:
         client_instance = _mock_http_client([
             _not_found_response(),  # PRM discovery
             _metadata_response(client_id_metadata_document_supported=True),  # AS metadata
@@ -147,7 +147,7 @@ async def test_start_flow_prefers_dcr_over_cimd_when_registration_endpoint_prese
 ):
     manager = OAuthFlowManager(tmp_path)
 
-    with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
+    with patch("backend.oauth_manager.httpx2.AsyncClient") as mock_client:
         client_instance = _mock_http_client([
             _not_found_response(),  # PRM discovery
             _metadata_response(
@@ -180,7 +180,7 @@ async def test_start_flow_prefers_dcr_over_cimd_when_registration_endpoint_prese
 async def test_start_flow_raises_cimd_error_when_metadata_url_withheld(tmp_path: Path):
     manager = OAuthFlowManager(tmp_path)
 
-    with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
+    with patch("backend.oauth_manager.httpx2.AsyncClient") as mock_client:
         client_instance = _mock_http_client([
             _not_found_response(),  # PRM discovery
             _metadata_response(client_id_metadata_document_supported=True),  # AS metadata
@@ -210,7 +210,7 @@ async def test_start_flow_raises_cimd_error_when_metadata_url_withheld(tmp_path:
 async def test_start_flow_raises_cimd_error_when_metadata_url_not_https(tmp_path: Path):
     manager = OAuthFlowManager(tmp_path)
 
-    with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
+    with patch("backend.oauth_manager.httpx2.AsyncClient") as mock_client:
         client_instance = _mock_http_client([
             _not_found_response(),  # PRM discovery
             _metadata_response(client_id_metadata_document_supported=True),  # AS metadata
@@ -244,7 +244,7 @@ async def test_start_flow_dcr_path_unchanged_when_no_metadata_url(tmp_path: Path
     happens to pass client_metadata_url=None (the default)."""
     manager = OAuthFlowManager(tmp_path)
 
-    with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
+    with patch("backend.oauth_manager.httpx2.AsyncClient") as mock_client:
         client_instance = _mock_http_client([
             _not_found_response(),  # PRM discovery
             _metadata_response(),  # AS metadata: no registration_endpoint, no CIMD flag

@@ -53,7 +53,7 @@ async def _start_flow_pre_registered(
     manager: OAuthFlowManager, *, client_secret: str | None
 ) -> str:
     """Run start_flow() with all discovery calls 404ing (path-derived endpoints)."""
-    with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
+    with patch("backend.oauth_manager.httpx2.AsyncClient") as mock_client:
         client_instance = AsyncMock()
         client_instance.__aenter__ = AsyncMock(return_value=client_instance)
         client_instance.__aexit__ = AsyncMock(return_value=False)

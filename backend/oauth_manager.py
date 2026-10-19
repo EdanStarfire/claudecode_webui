@@ -21,6 +21,7 @@ from pathlib import Path
 from urllib.parse import urlencode, urljoin, urlparse
 
 import httpx
+import httpx2
 from cryptography.fernet import Fernet
 from mcp.client.auth.oauth2 import PKCEParameters
 from mcp.client.auth.utils import (
@@ -280,7 +281,7 @@ class OAuthFlowManager:
         return self._discovery_summaries.get(server_id)
 
     async def _fetch_as_metadata(
-        self, response: httpx.Response, discovery_url: str
+        self, response: httpx2.Response, discovery_url: str
     ) -> tuple[bool, OAuthMetadata | None, bool]:
         """Mirrors mcp.client.auth.utils.handle_auth_metadata_response's status-code
         branching exactly — same (ok, metadata) contract, so the caller's discovery
@@ -366,7 +367,7 @@ class OAuthFlowManager:
         # data from the earlier attempt.
         self._discovery_summaries.pop(server_id, None)
         summary: dict = {}
-        async with httpx.AsyncClient() as http:
+        async with httpx2.AsyncClient() as http:
             # --- Step 1: Protected resource metadata ---
             prm = None
             auth_server_url = None
@@ -378,9 +379,16 @@ class OAuthFlowManager:
                     if prm:
                         if prm.authorization_servers:
                             auth_server_url = str(prm.authorization_servers[0])
+                        # A later candidate succeeded after an earlier one failed —
+                        # the error reflected an intermediate attempt, not the step's
+                        # final state, so it must not survive alongside prm_found=True.
+                        summary.pop("prm_error", None)
                         break
                 except Exception as exc:
-                    debug_logger.debug("PRM discovery at %s failed: %s", url, exc)
+                    logger.error(
+                        "PRM discovery at %s failed: %s: %s", url, exc.__class__.__name__, exc
+                    )
+                    summary["prm_error"] = {"type": exc.__class__.__name__, "message": str(exc)}
                     continue
             summary["prm_found"] = bool(prm)
             debug_logger.info(
@@ -401,6 +409,9 @@ class OAuthFlowManager:
                     if meta:
                         oauth_metadata = meta
                         as_metadata_normalized = normalized
+                        # Same reasoning as the PRM loop above: a later candidate's
+                        # success supersedes an earlier candidate's recorded failure.
+                        summary.pop("as_metadata_error", None)
                         break
                     if not ok:
                         debug_logger.debug("AS metadata discovery at %s rejected (not ok)", url)
@@ -408,7 +419,13 @@ class OAuthFlowManager:
                     if resp.status_code == 200:
                         as_metadata_rejected = True
                 except Exception as exc:
-                    debug_logger.debug("AS metadata discovery at %s failed: %s", url, exc)
+                    logger.error(
+                        "AS metadata discovery at %s failed: %s: %s",
+                        url, exc.__class__.__name__, exc,
+                    )
+                    summary["as_metadata_error"] = {
+                        "type": exc.__class__.__name__, "message": str(exc)
+                    }
                     continue
             summary["as_metadata_found"] = bool(oauth_metadata)
             summary["as_metadata_normalized"] = as_metadata_normalized
@@ -526,11 +543,14 @@ class OAuthFlowManager:
                         summary["mechanism"] = "dcr"
                         debug_logger.info("DCR succeeded for MCP server %s", server_id)
                     except Exception as exc:
-                        debug_logger.warning(
+                        logger.error(
                             "DCR failed for MCP server %s (%s); no pre-registered client_id available",
                             server_id,
                             exc,
                         )
+                        summary["dcr_error"] = {
+                            "type": exc.__class__.__name__, "message": str(exc)
+                        }
                         if (
                             not has_registration_endpoint
                             and oauth_metadata

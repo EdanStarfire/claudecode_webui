@@ -130,8 +130,8 @@ async def test_start_flow_returns_auth_url(tmp_path: Path):
     """start_flow() returns a URL containing code_challenge and state."""
     manager = OAuthFlowManager(tmp_path)
 
-    # Mock httpx so no real HTTP calls are made
-    with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
+    # Mock httpx2 so no real HTTP calls are made
+    with patch("backend.oauth_manager.httpx2.AsyncClient") as mock_client:
         # All discovery requests return 404 (fall back to path-derived endpoints)
         not_found = MagicMock()
         not_found.status_code = 404
