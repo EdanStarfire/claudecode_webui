@@ -122,3 +122,123 @@ describe('McpConfigTab — discard warning on unsaved env var/header (issue #207
     expect(screen.queryByRole('button', { name: 'Save Anyway' })).toBeFalsy()
   })
 })
+
+describe('McpConfigTab — Connect/Reconnect error + discovery surfacing (issue #2247)', () => {
+  function _oauthConfig(overrides = {}) {
+    return {
+      id: 'cfg-oauth-1',
+      name: 'oauth-server',
+      type: 'http',
+      url: 'https://example.com/mcp',
+      oauth_enabled: true,
+      headers: {},
+      ...overrides,
+    }
+  }
+
+  function _mockConfigsAndStatus(config) {
+    apiMock.get.mockImplementation((url) => {
+      if (url === '/api/mcp-configs') return Promise.resolve({ configs: [config] })
+      if (url.includes('/oauth/status')) return Promise.resolve({ status: 'unauthenticated' })
+      return Promise.resolve({ secrets: [] })
+    })
+  }
+
+  it('renders the initiate-500 detail inline on the server entry (AC1/AC4)', async () => {
+    const config = _oauthConfig()
+    _mockConfigsAndStatus(config)
+    const detail =
+      "OAuth Dynamic Client Registration failed for MCP server 'oauth-server' and no " +
+      "oauth_client_id is configured. Set 'oauth_client_id' in the MCP server config " +
+      'to use a pre-registered app.'
+    apiMock.post.mockRejectedValueOnce({ data: { detail }, message: 'Request failed' })
+
+    renderWithStores(McpConfigTab)
+    await flush()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await flush()
+
+    expect(screen.getByText(detail)).toBeTruthy()
+  })
+
+  it('clears a stale Connect error on a retry that succeeds', async () => {
+    const config = _oauthConfig()
+    _mockConfigsAndStatus(config)
+    apiMock.post
+      .mockRejectedValueOnce({ data: { detail: 'first attempt failed' }, message: 'fail' })
+      .mockResolvedValueOnce({ auth_url: 'https://auth.example.com/authorize', discovery: {} })
+    vi.spyOn(window, 'open').mockImplementation(() => null)
+
+    renderWithStores(McpConfigTab)
+    await flush()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await flush()
+    expect(screen.getByText('first attempt failed')).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await flush()
+
+    expect(screen.queryByText('first attempt failed')).toBeFalsy()
+  })
+
+  it('renders a discovery summary line when the response carries a notable error key (AC1)', async () => {
+    const config = _oauthConfig()
+    _mockConfigsAndStatus(config)
+    apiMock.post.mockResolvedValueOnce({
+      auth_url: 'https://auth.example.com/authorize',
+      discovery: {
+        mechanism: 'dcr',
+        dcr_error: { type: 'Exception', message: 'registration failed, falling back' },
+      },
+    })
+    vi.spyOn(window, 'open').mockImplementation(() => null)
+
+    renderWithStores(McpConfigTab)
+    await flush()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await flush()
+
+    expect(screen.getByText(/dcr_error: registration failed, falling back/)).toBeTruthy()
+  })
+
+  it('renders nothing extra for a clean successful connect (no error keys in discovery)', async () => {
+    const config = _oauthConfig()
+    _mockConfigsAndStatus(config)
+    apiMock.post.mockResolvedValueOnce({
+      auth_url: 'https://auth.example.com/authorize',
+      discovery: { mechanism: 'dcr' },
+    })
+    vi.spyOn(window, 'open').mockImplementation(() => null)
+
+    renderWithStores(McpConfigTab)
+    await flush()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await flush()
+
+    expect(screen.queryByText(/mechanism:/)).toBeFalsy()
+  })
+
+  it('still shows the needs-auth hint when the tools response carries the new expires_at field (AC2 regression)', async () => {
+    const config = { id: 'cfg-shared-1', name: 'shared-server', type: 'http', url: 'https://example.com/mcp', shared_connection: true, oauth_enabled: false, headers: {} }
+    _mockConfigsAndStatus(config)
+    apiMock.get.mockImplementation((url) => {
+      if (url === '/api/mcp-configs') return Promise.resolve({ configs: [config] })
+      if (url.includes('/tools')) {
+        return Promise.resolve({ status: 'needs-auth', tools: [], error: null, expires_at: 12345 })
+      }
+      return Promise.resolve({ secrets: [] })
+    })
+
+    renderWithStores(McpConfigTab)
+    await flush()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Show tools' }))
+    await flush()
+
+    expect(screen.getByText('No stored OAuth token — connect above, then check again.')).toBeTruthy()
+  })
+})

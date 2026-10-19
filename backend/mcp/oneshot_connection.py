@@ -19,6 +19,12 @@ same task that entered it).
 The per-type transport dispatch (`_enter_transport`/`_build_headers`) mirrors
 SharedMcpConnectionManager's private methods of the same name rather than importing
 them, per the issue's requirement that SharedMcpConnectionManager itself not change.
+
+Issue #2247: `_describe_open_failure` (error-string formatting only, no connection
+state) is imported from shared_connection_manager rather than duplicated, since it's a
+pure function with no dependency on that module's owner-task/close_event apparatus —
+the "don't reuse SharedMcpConnectionManager" rule above is about that stateful
+machinery, not this stateless helper.
 """
 
 import asyncio
@@ -31,6 +37,8 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
 
 from shared.logging_config import get_logger
+
+from .shared_connection_manager import _describe_open_failure
 
 _logger = get_logger("mcp_oneshot", category="MCP_ONESHOT")
 
@@ -83,7 +91,7 @@ class McpOneshotConnector:
                     "status": "failed",
                     "stage": stage_tracker["stage"],
                     "tools": [],
-                    "error": str(exc),
+                    "error": _describe_open_failure(exc),
                 }
 
     def _get_lock(self, cfg_id: str) -> asyncio.Lock:
@@ -104,20 +112,35 @@ class McpOneshotConnector:
             try:
                 read, write = await self._enter_transport(cfg, stack)
             except Exception as exc:
-                return {"status": "failed", "stage": "transport", "tools": [], "error": str(exc)}
+                return {
+                    "status": "failed",
+                    "stage": "transport",
+                    "tools": [],
+                    "error": _describe_open_failure(exc),
+                }
 
             stage_tracker["stage"] = "handshake"
             try:
                 session = await stack.enter_async_context(ClientSession(read, write))
                 await session.initialize()
             except Exception as exc:
-                return {"status": "failed", "stage": "handshake", "tools": [], "error": str(exc)}
+                return {
+                    "status": "failed",
+                    "stage": "handshake",
+                    "tools": [],
+                    "error": _describe_open_failure(exc),
+                }
 
             stage_tracker["stage"] = "list_tools"
             try:
                 list_result = await session.list_tools()
             except Exception as exc:
-                return {"status": "failed", "stage": "list_tools", "tools": [], "error": str(exc)}
+                return {
+                    "status": "failed",
+                    "stage": "list_tools",
+                    "tools": [],
+                    "error": _describe_open_failure(exc),
+                }
 
             return {
                 "status": "connected",

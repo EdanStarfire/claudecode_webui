@@ -197,19 +197,28 @@ def build_router(webui) -> APIRouter:
         value_error_status=400 surfaces SharedSecretResolutionError (a ValueError) with an
         actionable message when oauth_client_secret's ${secret:NAME} reference can't be
         resolved, instead of a generic 500.
+
+        Issue #2247: OAuthFlowManager.start_flow() also raises user-actionable RuntimeErrors
+        (HTTPS-required, CIMD-vs-pre-registered mismatch) that must reach the client
+        regardless of debug_error_handler — handle_exceptions's generic Exception branch
+        only includes str(e) when that debug flag is on, otherwise it returns a generic
+        "An internal error occurred".
         """
         config = await webui.service.get_mcp_config(config_id)
         if not config:
             raise HTTPException(status_code=404, detail="MCP config not found")
         if not config.get("url"):
             raise HTTPException(status_code=400, detail="OAuth requires a URL-based MCP server")
-        auth_url = await webui.service.oauth_initiate_flow(
-            config_id=config_id,
-            server_url=config["url"],
-            redirect_uri=request.redirect_uri,
-            client_name=f"Claude Code WebUI — {config['name']}",
-            client_metadata_url=request.client_metadata_url,
-        )
+        try:
+            auth_url = await webui.service.oauth_initiate_flow(
+                config_id=config_id,
+                server_url=config["url"],
+                redirect_uri=request.redirect_uri,
+                client_name=f"Claude Code WebUI — {config['name']}",
+                client_metadata_url=request.client_metadata_url,
+            )
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
         discovery = webui.service.get_oauth_discovery_summary(config_id)
         return {"auth_url": auth_url, "discovery": discovery}
 
@@ -255,6 +264,9 @@ def build_router(webui) -> APIRouter:
         up to ~70s if a concurrent OAuth token-refresh reconnect is also contending
         for the same config's open-lock (issue #1806).
         Returns {"status": "disabled"|"needs-auth"|"connected"|"failed", "tools": [...], "error": str|None}.
+        A "needs-auth" status also carries "expires_at": float|None (issue #2247) —
+        None when no token was ever stored, or the token's past expiry timestamp when
+        a stored token expired and its refresh attempt failed.
         """
         result = await webui.service.get_mcp_config_tools(config_id)
         if result is None:
@@ -271,6 +283,9 @@ def build_router(webui) -> APIRouter:
         Returns {"status": "disabled"|"needs-auth"|"connected"|"failed",
                  "stage": "transport"|"handshake"|"list_tools"|None,
                  "tools": [...], "error": str|None}.
+        A "needs-auth" status also carries "expires_at": float|None (issue #2247) —
+        None when no token was ever stored, or the token's past expiry timestamp when
+        a stored token expired and its refresh attempt failed.
         """
         result = await webui.service.test_connect_mcp_config(config_id)
         if result is None:

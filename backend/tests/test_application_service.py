@@ -54,6 +54,14 @@ def mock_coordinator():
     coordinator.oauth_manager.disconnect = AsyncMock()
     coordinator.oauth_manager.get_stored_token = AsyncMock()
     coordinator.oauth_manager.get_token_store = MagicMock()
+    # Default: no expiry recorded, i.e. a non-expired token (issue #2247's
+    # _resolve_oauth_needs_auth treats expiry=None as usable). Tests
+    # exercising the expired-token path override this per-test.
+    coordinator.oauth_manager.get_token_store.return_value.get_token_expiry = AsyncMock(
+        return_value=None
+    )
+    coordinator.oauth_refresh_manager = MagicMock()
+    coordinator.oauth_refresh_manager.refresh_token = AsyncMock()
 
     coordinator.template_manager.list_templates = AsyncMock()
     coordinator.template_manager.get_template = AsyncMock()
@@ -453,11 +461,11 @@ async def test_get_mcp_config_tools_needs_auth_when_oauth_enabled_no_token(servi
     mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
         shared_connection=True, oauth_enabled=True, config_type=McpServerType.HTTP
     )
-    mock_coordinator.oauth_manager.get_stored_token.return_value = None
+    mock_coordinator.oauth_manager.get_token_store.return_value.get_tokens = AsyncMock(return_value=None)
 
     result = await service.get_mcp_config_tools("c1")
 
-    assert result == {"status": "needs-auth", "tools": [], "error": None}
+    assert result == {"status": "needs-auth", "tools": [], "error": None, "expires_at": None}
     mock_coordinator.shared_mcp_manager.list_tools.assert_not_called()
 
 
@@ -489,26 +497,113 @@ async def test_get_mcp_config_tools_failed_on_connection_error(service, mock_coo
 
     result = await service.get_mcp_config_tools("c1")
 
-    assert result == {"status": "failed", "tools": [], "error": "connection refused"}
+    assert result == {
+        "status": "failed",
+        "tools": [],
+        "error": "RuntimeError: connection refused",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_config_tools_connection_failure_unwraps_exception_group(
+    service, mock_coordinator
+):
+    """AC3/AC4: a real connection failure never leaks "unhandled errors in a
+    TaskGroup" — the leaf cause is unwrapped and formatted concisely."""
+    import httpx
+
+    response = MagicMock()
+    response.status_code = 401
+    response.reason_phrase = "Unauthorized"
+    leaf = httpx.HTTPStatusError("401", request=MagicMock(), response=response)
+
+    mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
+        shared_connection=True
+    )
+    mock_coordinator.shared_mcp_manager.list_tools.side_effect = ExceptionGroup(
+        "unhandled errors in a TaskGroup", [leaf]
+    )
+
+    result = await service.get_mcp_config_tools("c1")
+
+    assert result == {"status": "failed", "tools": [], "error": "401 Unauthorized"}
+    assert "TaskGroup" not in result["error"]
 
 
 @pytest.mark.asyncio
 async def test_get_mcp_config_tools_oauth_token_present_still_attempts_connection(
     service, mock_coordinator
 ):
-    """A stored-but-rejected token isn't distinguished as needs-auth; the connection
-    attempt is made and surfaces as failed/connected via list_tools() (per plan)."""
+    """A stored, non-expired (but potentially rejected) token isn't distinguished as
+    needs-auth; the connection attempt is made and surfaces as failed/connected via
+    list_tools() (per plan)."""
     from backend.mcp_config_manager import McpServerType
 
     mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
         shared_connection=True, oauth_enabled=True, config_type=McpServerType.HTTP
     )
-    mock_coordinator.oauth_manager.get_stored_token.return_value = MagicMock()
+    mock_coordinator.oauth_manager.get_token_store.return_value.get_tokens = AsyncMock(return_value=MagicMock())
     mock_coordinator.shared_mcp_manager.list_tools.side_effect = RuntimeError("401 unauthorized")
 
     result = await service.get_mcp_config_tools("c1")
 
-    assert result == {"status": "failed", "tools": [], "error": "401 unauthorized"}
+    assert result == {"status": "failed", "tools": [], "error": "RuntimeError: 401 unauthorized"}
+    mock_coordinator.oauth_refresh_manager.refresh_token.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_config_tools_expired_token_refresh_succeeds_connects(
+    service, mock_coordinator
+):
+    import time
+
+    from backend.mcp_config_manager import McpServerType
+
+    mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
+        shared_connection=True, oauth_enabled=True, config_type=McpServerType.HTTP
+    )
+    mock_coordinator.oauth_manager.get_token_store.return_value.get_tokens = AsyncMock(return_value=MagicMock())
+    mock_coordinator.oauth_manager.get_token_store.return_value.get_token_expiry = AsyncMock(
+        return_value=time.time() - 10
+    )
+    mock_coordinator.oauth_refresh_manager.refresh_token.return_value = MagicMock()
+    tool = MagicMock()
+    tool.name = "ping"
+    tool.description = "ping tool"
+    mock_coordinator.shared_mcp_manager.list_tools.return_value = [tool]
+
+    result = await service.get_mcp_config_tools("c1")
+
+    mock_coordinator.oauth_refresh_manager.refresh_token.assert_called_once_with("c1")
+    assert result == {
+        "status": "connected",
+        "tools": [{"name": "ping", "description": "ping tool"}],
+        "error": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_config_tools_expired_token_refresh_fails_needs_auth(
+    service, mock_coordinator
+):
+    import time
+
+    from backend.mcp_config_manager import McpServerType
+
+    expiry = time.time() - 10
+    mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
+        shared_connection=True, oauth_enabled=True, config_type=McpServerType.HTTP
+    )
+    mock_coordinator.oauth_manager.get_token_store.return_value.get_tokens = AsyncMock(return_value=MagicMock())
+    mock_coordinator.oauth_manager.get_token_store.return_value.get_token_expiry = AsyncMock(
+        return_value=expiry
+    )
+    mock_coordinator.oauth_refresh_manager.refresh_token.return_value = None
+
+    result = await service.get_mcp_config_tools("c1")
+
+    assert result == {"status": "needs-auth", "tools": [], "error": None, "expires_at": expiry}
+    mock_coordinator.shared_mcp_manager.list_tools.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -558,11 +653,84 @@ async def test_test_connect_mcp_config_needs_auth_when_oauth_enabled_no_token(
     mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
         shared_connection=False, oauth_enabled=True, config_type=McpServerType.HTTP
     )
-    mock_coordinator.oauth_manager.get_stored_token.return_value = None
+    mock_coordinator.oauth_manager.get_token_store.return_value.get_tokens = AsyncMock(return_value=None)
 
     result = await service.test_connect_mcp_config("c1")
 
-    assert result == {"status": "needs-auth", "stage": None, "tools": [], "error": None}
+    assert result == {
+        "status": "needs-auth",
+        "stage": None,
+        "tools": [],
+        "error": None,
+        "expires_at": None,
+    }
+    mock_coordinator.mcp_oneshot_connector.test_connect.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_test_connect_mcp_config_expired_token_refresh_succeeds_connects(
+    service, mock_coordinator
+):
+    import time
+
+    from backend.mcp_config_manager import McpServerType
+
+    mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
+        shared_connection=False, oauth_enabled=True, config_type=McpServerType.HTTP
+    )
+    mock_coordinator.oauth_manager.get_token_store.return_value.get_tokens = AsyncMock(return_value=MagicMock())
+    mock_coordinator.oauth_manager.get_token_store.return_value.get_token_expiry = AsyncMock(
+        return_value=time.time() - 10
+    )
+    mock_coordinator.oauth_refresh_manager.refresh_token.return_value = MagicMock()
+    tool = MagicMock()
+    tool.name = "ping"
+    tool.description = "ping tool"
+    mock_coordinator.mcp_oneshot_connector.test_connect.return_value = {
+        "status": "connected",
+        "stage": None,
+        "tools": [tool],
+        "error": None,
+    }
+
+    result = await service.test_connect_mcp_config("c1")
+
+    mock_coordinator.oauth_refresh_manager.refresh_token.assert_called_once_with("c1")
+    assert result == {
+        "status": "connected",
+        "stage": None,
+        "tools": [{"name": "ping", "description": "ping tool"}],
+        "error": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_test_connect_mcp_config_expired_token_refresh_fails_needs_auth(
+    service, mock_coordinator
+):
+    import time
+
+    from backend.mcp_config_manager import McpServerType
+
+    expiry = time.time() - 10
+    mock_coordinator.mcp_config_manager.get_config.return_value = _make_config(
+        shared_connection=False, oauth_enabled=True, config_type=McpServerType.HTTP
+    )
+    mock_coordinator.oauth_manager.get_token_store.return_value.get_tokens = AsyncMock(return_value=MagicMock())
+    mock_coordinator.oauth_manager.get_token_store.return_value.get_token_expiry = AsyncMock(
+        return_value=expiry
+    )
+    mock_coordinator.oauth_refresh_manager.refresh_token.return_value = None
+
+    result = await service.test_connect_mcp_config("c1")
+
+    assert result == {
+        "status": "needs-auth",
+        "stage": None,
+        "tools": [],
+        "error": None,
+        "expires_at": expiry,
+    }
     mock_coordinator.mcp_oneshot_connector.test_connect.assert_not_called()
 
 
