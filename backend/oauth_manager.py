@@ -47,6 +47,8 @@ from pydantic import ValidationError
 
 from shared.logging_config import get_logger
 
+from .mcp_config_manager import validate_mcp_server_url
+
 # Dual-logger pattern (see shared/logging_config.py's module docstring): `logger` is for
 # conditions that should always be visible (error.log + console) with no flag required;
 # `debug_logger` is opt-in verbose tracing, gated behind --debug-oauth (issue #1867 —
@@ -405,6 +407,10 @@ class OAuthFlowManager:
         # get_discovery_summary() returning None instead of stale, no-longer-trustworthy
         # data from the earlier attempt.
         self._discovery_summaries.pop(server_id, None)
+        try:
+            validate_mcp_server_url(server_url)
+        except ValueError as exc:
+            raise ValueError(f"Invalid MCP server URL {server_url!r}: {exc}") from exc
         summary: dict = {}
         async with httpx2.AsyncClient() as http:
             # --- Step 1: Protected resource metadata ---

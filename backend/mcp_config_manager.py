@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from shared.logging_config import get_logger
 
@@ -25,6 +26,20 @@ _UNSET: object = object()
 
 mcp_logger = get_logger('mcp_config', category='MCP_CONFIG')
 logger = logging.getLogger(__name__)
+
+
+def validate_mcp_server_url(url: str) -> str:
+    """Strip and validate an HTTP/SSE MCP server URL.
+
+    Returns the trimmed URL, or raises ValueError with a user-facing message.
+    """
+    stripped = url.strip()
+    parsed = urlparse(stripped)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("URL must be an absolute http:// or https:// URL")
+    if not parsed.netloc:
+        raise ValueError("URL is missing a hostname")
+    return stripped
 
 
 class McpServerType(str, Enum):
@@ -210,8 +225,10 @@ class McpConfigManager:
         if server_type_enum == McpServerType.STDIO and not command:
             raise ValueError("Command is required for stdio MCP servers")
 
-        if server_type_enum in (McpServerType.SSE, McpServerType.HTTP) and not url:
-            raise ValueError(f"URL is required for {server_type_enum.value} MCP servers")
+        if server_type_enum in (McpServerType.SSE, McpServerType.HTTP):
+            if not url:
+                raise ValueError(f"URL is required for {server_type_enum.value} MCP servers")
+            url = validate_mcp_server_url(url)
 
         slug = _slugify(name)
         # Check slug uniqueness
@@ -492,6 +509,10 @@ class McpConfigManager:
         if env is not None:
             config.env = env
         if url is not None:
+            if config.type in (McpServerType.SSE, McpServerType.HTTP):
+                if not url:
+                    raise ValueError(f"URL is required for {config.type.value} MCP servers")
+                url = validate_mcp_server_url(url)
             config.url = url
         if headers is not None:
             config.headers = headers
