@@ -13,6 +13,7 @@ from shared.event_queue import EventQueue
 from shared.git_restart import run_git_command as _run_git_command_impl
 
 from . import docker_utils
+from .mcp_config_manager import validate_mcp_server_url
 
 if TYPE_CHECKING:
     from backend.session_coordinator import SessionCoordinator
@@ -795,7 +796,7 @@ class ApplicationService:
 
     async def list_mcp_configs(self, limit: int = 100, offset: int = 0) -> dict:
         configs = await self.coordinator.mcp_config_manager.list_configs()
-        all_configs = [c.to_dict() for c in configs]
+        all_configs = [self._annotate_url_validity(c.to_dict()) for c in configs]
         total = len(all_configs)
         sliced = all_configs[offset : offset + limit]
         return {
@@ -860,7 +861,25 @@ class ApplicationService:
 
     async def get_mcp_config(self, config_id: str) -> dict | None:
         config = await self.coordinator.mcp_config_manager.get_config(config_id)
-        return config.to_dict() if config else None
+        return self._annotate_url_validity(config.to_dict()) if config else None
+
+    @staticmethod
+    def _annotate_url_validity(config_dict: dict) -> dict:
+        """Issue #2248 (AC4): flag already-stored invalid-URL configs in list/get
+        responses, computed fresh each call (never persisted/cached)."""
+        if config_dict.get("type") not in ("sse", "http"):
+            config_dict["url_valid"] = None
+            config_dict["url_error"] = None
+            return config_dict
+        try:
+            validate_mcp_server_url(config_dict.get("url") or "")
+        except ValueError as exc:
+            config_dict["url_valid"] = False
+            config_dict["url_error"] = str(exc)
+        else:
+            config_dict["url_valid"] = True
+            config_dict["url_error"] = None
+        return config_dict
 
     # ========== Hook configs (issue #1629) ==========
 

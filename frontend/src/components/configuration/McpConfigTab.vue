@@ -19,6 +19,14 @@
           </span>
           <span class="fw-medium">{{ config.name }}</span>
           <span v-if="!config.enabled" class="badge bg-warning text-dark">disabled</span>
+          <!-- Issue #2248 (AC4): flag already-stored invalid-URL configs -->
+          <span
+            v-if="config.url_valid === false"
+            class="badge bg-danger"
+            :title="config.url_error"
+          >
+            invalid URL
+          </span>
           <!-- OAuth status badge for oauth-enabled HTTP/SSE servers -->
           <span
             v-if="config.oauth_enabled && (config.type === 'http' || config.type === 'sse')"
@@ -101,7 +109,7 @@
         <span v-else>{{ config.url }}</span>
       </div>
 
-      <!-- Connect/Reconnect error + discovery summary (issue #2247) -->
+      <!-- Connect/Reconnect/Disconnect error + discovery summary (issues #2247, #2248) -->
       <div v-if="connectFeedback.get(config.id)?.error" class="alert alert-danger py-1 small mb-2 mt-1">
         {{ connectFeedback.get(config.id).error }}
       </div>
@@ -243,7 +251,14 @@
       <template v-else>
         <div class="mb-2">
           <label class="form-label">URL</label>
-          <input type="text" class="form-control form-control-sm" v-model="form.url" placeholder="https://..." />
+          <input
+            type="text"
+            class="form-control form-control-sm"
+            :class="{ 'is-invalid': urlFieldInvalid }"
+            v-model="form.url"
+            placeholder="https://..."
+          />
+          <div v-if="urlFieldInvalid" class="invalid-feedback">{{ formError }}</div>
         </div>
         <div class="mb-2">
           <label class="form-label">Headers</label>
@@ -384,7 +399,7 @@
         </div>
       </div>
 
-      <div v-if="formError" class="alert alert-danger py-1 small mb-2">{{ formError }}</div>
+      <div v-if="formError && !urlFieldInvalid" class="alert alert-danger py-1 small mb-2">{{ formError }}</div>
 
       <div class="d-flex gap-2">
         <button class="btn btn-primary btn-sm" @click="saveForm" :disabled="saving">
@@ -544,6 +559,17 @@ const form = reactive({
   oauth_custom_callback_port: null,
 })
 
+// Issue #2248 (AC2): anchor the generic save-error banner to the URL field
+// specifically when the current type is sse/http AND the message is actually
+// about the URL — every backend URL-validation message contains "URL", while
+// unrelated ValueErrors (name-uniqueness, custom-callback conflicts) never do,
+// so checking type alone would mis-attribute those to this field.
+const urlFieldInvalid = computed(() => {
+  return !!formError.value
+    && (form.type === 'sse' || form.type === 'http')
+    && /url/i.test(formError.value)
+})
+
 const rawArgs = ref('')
 const newEnvKey = ref('')
 const newEnvVal = ref('')
@@ -566,9 +592,9 @@ const connectingId = ref(null)
 const disconnectingId = ref(null)
 const importingId = ref(null)
 const reconnectingId = ref(null)  // Issue #1387: tracks in-progress Reconnect
-// Issue #2247: per-config Connect/Reconnect failure detail + discovery summary, so
-// errors for different servers don't collide and a retry clears the stale message.
-// Map value shape: {error: string|null, discovery: string|null}.
+// Issue #2247: per-config Connect/Reconnect/Disconnect failure detail + discovery
+// summary, so errors for different servers don't collide and a retry clears the
+// stale message. Map value shape: {error: string|null, discovery: string|null}.
 const connectFeedback = ref(new Map())
 
 function clearConnectFeedback(configId) {
@@ -835,10 +861,12 @@ async function connectOAuth(config) {
 
 async function disconnectOAuth(config) {
   disconnectingId.value = config.id
+  clearConnectFeedback(config.id)
   try {
     await configStore.disconnectOAuth(config.id)
   } catch (e) {
     console.error('OAuth disconnect failed:', e)
+    setConnectError(config.id, e?.data?.detail || e.message || 'Failed to disconnect')
   } finally {
     disconnectingId.value = null
   }
