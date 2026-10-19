@@ -96,6 +96,63 @@ async def test_multi_subscriber_dispatch_sync_and_async():
 
 
 @pytest.mark.asyncio
+async def test_refresh_token_dispatches_to_all_subscribers_on_success():
+    """Issue #2252: refresh_token() itself notifies subscribers (not just the
+    background _refresh_loop), so on-demand callers get the same notification."""
+    mgr = _make_manager()
+    sync_calls = []
+    async_calls = []
+
+    def sync_sub(server_id):
+        sync_calls.append(server_id)
+
+    async def async_sub(server_id):
+        async_calls.append(server_id)
+
+    mgr.add_broadcast_subscriber(sync_sub)
+    mgr.add_broadcast_subscriber(async_sub)
+
+    result = await mgr.refresh_token("srv-direct")
+
+    assert result is not None
+    assert sync_calls == ["srv-direct"]
+    assert async_calls == ["srv-direct"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_token_does_not_notify_on_failure():
+    mgr = _make_manager()
+    mgr._oauth_manager.refresh_token = AsyncMock(return_value=None)
+    calls = []
+    mgr.add_broadcast_subscriber(lambda server_id: calls.append(server_id))
+
+    result = await mgr.refresh_token("srv-fail")
+
+    assert result is None
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_refresh_token_one_subscriber_exception_does_not_suppress_other():
+    mgr = _make_manager()
+    second_calls = []
+
+    def bad_sub(server_id):
+        raise RuntimeError("subscriber error")
+
+    def good_sub(server_id):
+        second_calls.append(server_id)
+
+    mgr.add_broadcast_subscriber(bad_sub)
+    mgr.add_broadcast_subscriber(good_sub)
+
+    result = await mgr.refresh_token("srv-mixed")
+
+    assert result is not None
+    assert second_calls == ["srv-mixed"]
+
+
+@pytest.mark.asyncio
 async def test_multi_subscriber_exception_in_one_does_not_suppress_other():
     mgr = _make_manager()
     second_calls = []
@@ -125,3 +182,20 @@ async def test_multi_subscriber_exception_in_one_does_not_suppress_other():
 
     # good_sub still fired even though bad_sub raised
     assert good_sub in [type(s) for s in []] or second_calls == [server_id]
+
+
+# ---------------------------------------------------------------------------
+# Issue #2252: real BackendApp/SessionCoordinator wiring — regression test for
+# the subscriber-clobbering bug (set_broadcast_callback replacing, instead of
+# adding to, SharedMcpConnectionManager's subscription registered during
+# SessionCoordinator construction).
+# ---------------------------------------------------------------------------
+
+
+def test_shared_mcp_manager_subscribed_after_backend_app_init(tmp_path):
+    from backend.web_server import BackendApp
+
+    webui = BackendApp(data_dir=tmp_path)
+
+    subscribers = webui.coordinator.oauth_refresh_manager._broadcast_subscribers
+    assert webui.coordinator.shared_mcp_manager._on_token_refreshed in subscribers

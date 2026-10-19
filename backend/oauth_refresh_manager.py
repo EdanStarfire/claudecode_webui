@@ -52,6 +52,8 @@ class OAuthRefreshManager:
 
         Issue #976: Called by web_server after server init.
         Legacy single-subscriber API — clears existing subscribers and registers callback.
+        Prefer add_broadcast_subscriber(): calling this after other subscribers have
+        already registered silently drops them (issue #2252).
         """
         self._broadcast_subscribers = [callback]
 
@@ -102,12 +104,25 @@ class OAuthRefreshManager:
         """Refresh the OAuth token for a server with per-server locking.
 
         Issue #976: Prevents duplicate concurrent refresh requests for the same server.
+        Issue #2252: Notifies all broadcast subscribers on success, regardless of
+        whether the refresh was triggered by the background loop or on-demand.
         Returns the new OAuthToken on success, or None on failure.
         """
         if server_id not in self._refresh_locks:
             self._refresh_locks[server_id] = asyncio.Lock()
         async with self._refresh_locks[server_id]:
-            return await self._oauth_manager.refresh_token(server_id)
+            new_token = await self._oauth_manager.refresh_token(server_id)
+        if new_token:
+            for sub in self._broadcast_subscribers:
+                try:
+                    result = sub(server_id)
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception:
+                    logger.exception(
+                        "Error in OAuth refresh subscriber for %s", server_id
+                    )
+        return new_token
 
     # ------------------------------------------------------------------
     # Private
@@ -143,15 +158,6 @@ class OAuthRefreshManager:
                     logger.info(
                         "Background OAuth refresh succeeded for MCP server %s", server_id
                     )
-                    for sub in self._broadcast_subscribers:
-                        try:
-                            result = sub(server_id)
-                            if inspect.isawaitable(result):
-                                await result
-                        except Exception:
-                            logger.exception(
-                                "Error in OAuth refresh subscriber for %s", server_id
-                            )
                 else:
                     logger.warning(
                         "Background OAuth refresh failed for MCP server %s. "
