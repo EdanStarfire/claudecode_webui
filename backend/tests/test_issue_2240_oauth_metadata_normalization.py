@@ -213,7 +213,7 @@ async def test_fetch_as_metadata_logs_warning_and_swallows_when_still_invalid(tm
 async def test_start_flow_home_assistant_fixture_uses_cimd(tmp_path: Path):
     manager = OAuthFlowManager(tmp_path)
 
-    with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
+    with patch("backend.oauth_manager.httpx2.AsyncClient") as mock_client:
         client_instance = _mock_http_client([
             _not_found_response(),  # PRM path-based
             _not_found_response(),  # PRM root-based
@@ -256,7 +256,7 @@ async def test_start_flow_home_assistant_fixture_without_metadata_url_raises_htt
 ):
     manager = OAuthFlowManager(tmp_path)
 
-    with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
+    with patch("backend.oauth_manager.httpx2.AsyncClient") as mock_client:
         client_instance = _mock_http_client([
             _not_found_response(),  # PRM path-based
             _not_found_response(),  # PRM root-based
@@ -314,7 +314,7 @@ async def test_start_flow_compliant_document_unaffected_by_normalization(tmp_pat
         resp.aread = _aread
         return resp
 
-    with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
+    with patch("backend.oauth_manager.httpx2.AsyncClient") as mock_client:
         client_instance = _mock_http_client([
             _not_found_response(),  # PRM (root-based only - server_url has no path)
             _metadata_response(compliant),
@@ -345,7 +345,7 @@ async def test_start_flow_compliant_document_unaffected_by_normalization(tmp_pat
 async def test_start_flow_rejects_pre_registered_client_id_for_cimd_only_server(tmp_path: Path):
     manager = OAuthFlowManager(tmp_path)
 
-    with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
+    with patch("backend.oauth_manager.httpx2.AsyncClient") as mock_client:
         client_instance = _mock_http_client([
             _not_found_response(),
             _not_found_response(),
@@ -375,7 +375,7 @@ async def test_start_flow_clears_stale_summary_when_a_retry_fails(tmp_path: Path
     no-longer-trustworthy summary."""
     manager = OAuthFlowManager(tmp_path)
 
-    with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
+    with patch("backend.oauth_manager.httpx2.AsyncClient") as mock_client:
         client_instance = _mock_http_client([
             _not_found_response(),
             _not_found_response(),
@@ -392,7 +392,7 @@ async def test_start_flow_clears_stale_summary_when_a_retry_fails(tmp_path: Path
 
     assert manager.get_discovery_summary("srv-retry") is not None
 
-    with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
+    with patch("backend.oauth_manager.httpx2.AsyncClient") as mock_client:
         client_instance = _mock_http_client([
             _not_found_response(),
             _not_found_response(),
@@ -424,7 +424,7 @@ async def test_start_flow_allows_pre_registered_client_id_for_non_cimd_server(tm
         "token_endpoint": "https://slack.example.com/token",
     }
 
-    with patch("backend.oauth_manager.httpx.AsyncClient") as mock_client:
+    with patch("backend.oauth_manager.httpx2.AsyncClient") as mock_client:
         client_instance = _mock_http_client([
             _not_found_response(),  # PRM (root-based only - server_url has no path)
             _metadata_response(compliant),

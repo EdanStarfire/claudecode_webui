@@ -93,7 +93,7 @@ async def test_issue_947_scope_included_from_prm(tmp_path: Path):
     with (
         patch("backend.oauth_manager.handle_protected_resource_response", AsyncMock(return_value=mock_prm)),
         patch.object(OAuthFlowManager, "_fetch_as_metadata", AsyncMock(return_value=(True, mock_asm, False))),
-        patch("backend.oauth_manager.httpx.AsyncClient", _make_http_client_class()),
+        patch("backend.oauth_manager.httpx2.AsyncClient", _make_http_client_class()),
     ):
         auth_url = await manager.start_flow(
             server_id="srv1",
@@ -118,7 +118,7 @@ async def test_issue_947_scope_falls_back_to_asm(tmp_path: Path):
     with (
         patch("backend.oauth_manager.handle_protected_resource_response", AsyncMock(return_value=mock_prm)),
         patch.object(OAuthFlowManager, "_fetch_as_metadata", AsyncMock(return_value=(True, mock_asm, False))),
-        patch("backend.oauth_manager.httpx.AsyncClient", _make_http_client_class()),
+        patch("backend.oauth_manager.httpx2.AsyncClient", _make_http_client_class()),
     ):
         auth_url = await manager.start_flow(
             server_id="srv1",
@@ -143,7 +143,7 @@ async def test_issue_947_scope_omitted_when_no_metadata_scopes(tmp_path: Path):
     with (
         patch("backend.oauth_manager.handle_protected_resource_response", AsyncMock(return_value=mock_prm)),
         patch.object(OAuthFlowManager, "_fetch_as_metadata", AsyncMock(return_value=(True, mock_asm, False))),
-        patch("backend.oauth_manager.httpx.AsyncClient", _make_http_client_class()),
+        patch("backend.oauth_manager.httpx2.AsyncClient", _make_http_client_class()),
     ):
         auth_url = await manager.start_flow(
             server_id="srv1",
@@ -169,7 +169,7 @@ async def test_issue_947_scope_included_on_reauth_stored_client(tmp_path: Path):
     with (
         patch("backend.oauth_manager.handle_protected_resource_response", AsyncMock(return_value=mock_prm)),
         patch.object(OAuthFlowManager, "_fetch_as_metadata", AsyncMock(return_value=(True, mock_asm, False))),
-        patch("backend.oauth_manager.httpx.AsyncClient", _make_http_client_class()),
+        patch("backend.oauth_manager.httpx2.AsyncClient", _make_http_client_class()),
     ):
         auth_url = await manager.start_flow(
             server_id="srv1",
