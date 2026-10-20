@@ -6,11 +6,10 @@ Responsibilities:
 - Convert SDK Message → Comm for routing
 - Route Comms to minions or user (direct communication only)
 - Handle interrupt priorities (Halt, Pivot)
-- Persist Comms to legion timeline and minion-specific logs
+- Broadcast persisted Comms to WebSocket/UI notification/audit writer
 - Parse #minion-name tags for explicit references
 """
 
-import json
 import re
 import uuid
 from pathlib import Path
@@ -162,7 +161,7 @@ class CommRouter:
         Set callback for pushing notification events to the UI WebSocket.
 
         Issue #699: Decouples comm notifications from Legion WebSocket,
-        ensuring sounds fire even when the timeline view is not open.
+        ensuring sounds fire independent of whether any specific UI panel is open.
 
         Args:
             callback: Async function(comm) to broadcast UI notification
@@ -231,9 +230,10 @@ class CommRouter:
                 )
                 return False
 
-        # Deliver attachments before persisting (issue #1730) so timeline.jsonl
-        # captures the resolved resource_id from the start, instead of null
-        # placeholders mutated in place afterward.
+        # Deliver attachments before persisting (issue #1730) so _persist_comm()'s
+        # consumers (e.g. the audit writer's comm_dict) capture the resolved
+        # resource_id from the start, instead of null placeholders mutated in
+        # place afterward.
         if comm.to_minion_id:
             await self._deliver_attachments(comm, attachment_data)
 
@@ -263,8 +263,9 @@ class CommRouter:
         Write and register a Comm's file attachments in the recipient's session.
 
         Called from route_comm() before _persist_comm() (issue #1730) so that
-        timeline.jsonl captures each attachment's resolved resource_id from the
-        start, instead of a null placeholder mutated in place afterward.
+        _persist_comm()'s consumers capture each attachment's resolved
+        resource_id from the start, instead of a null placeholder mutated in
+        place afterward.
 
         Files go to the session's attachments/ dir — same location as user
         uploads via InputArea. To the agent, a comm is just an enhanced user
@@ -556,8 +557,8 @@ class CommRouter:
         """
         Persist Comm to appropriate locations.
 
-        Comms are stored in:
-        1. Legion timeline (main timeline.jsonl)
+        Broadcasts the comm to WebSocket clients watching the legion, pushes a
+        UI notification event, and emits it to the audit writer.
 
         Args:
             comm: Comm to persist
@@ -630,30 +631,6 @@ class CommRouter:
                 )
             except Exception as e:
                 legion_logger.error(f"Failed to emit comm to audit writer: {e}")
-
-    async def _append_to_timeline(self, legion_id: str, comm: Comm) -> None:
-        """
-        Append Comm to the main legion timeline.jsonl file.
-
-        Args:
-            legion_id: Legion ID
-            comm: Comm to append
-        """
-        # Get data_dir from SessionCoordinator
-        data_dir = self.system.session_port.data_dir
-
-        # Construct path: {data_dir}/legions/{legion_id}/timeline.jsonl
-        legion_dir = data_dir / "legions" / legion_id
-        legion_dir.mkdir(parents=True, exist_ok=True)
-
-        timeline_file = legion_dir / "timeline.jsonl"
-
-        # Append comm as JSON line
-        with open(timeline_file, "a", encoding="utf-8") as f:
-            json.dump(comm.to_dict(), f)
-            f.write("\n")
-
-        legion_logger.debug(f"Appended comm {comm.comm_id} to timeline {timeline_file}")
 
     @staticmethod
     def _slugify(name: str) -> str:

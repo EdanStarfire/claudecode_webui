@@ -587,11 +587,12 @@ class DeliveryGate:
         pass False" — unconditionally, regardless of comm.from_user). Every comm
         reaching deliver() today flows through comm_router.py, so SenderType.USER
         must NOT return True here — a user-sent Legion comm (e.g. via
-        POST /api/legions/{id}/comms) is still Legion-routed traffic, persisted to
-        timeline.jsonl pre-injection; injecting into the SDK-delivered copy would
-        desync the two, exactly what the docstring warns against. Found as a live
-        bug in review (issue #2193 PR5): dormant since PR3, this cutover is what
-        makes it reachable for the first time.
+        POST /api/legions/{id}/comms) is still Legion-routed traffic, and
+        comm.content is persisted (e.g. to the audit writer) pre-injection;
+        injecting into the SDK-delivered copy would desync the two, exactly
+        what the docstring warns against. Found as a live bug in review (issue
+        #2193 PR5): dormant since PR3, this cutover is what makes it reachable
+        for the first time.
 
         SCHEDULE stays True: today's schedule-fired prompts are constructed with
         from_user=True by queue_processor.py's Comm wrapper and already get

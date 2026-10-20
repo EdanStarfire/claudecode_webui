@@ -751,7 +751,7 @@ manually-run or genuinely remote Backend instead.
 - Convert between Comms and SDK Messages
 - Route Comms to minions or user
 - Handle interrupt priorities (HALT, PIVOT)
-- Persist to timeline and minion logs
+- Broadcast persisted Comms to WebSocket/UI notification/audit writer
 - Parse and validate #tag references
 
 #### `backend/legion/memory_manager.py` - **Memory & Learning** (Planned)
@@ -866,7 +866,6 @@ data/
 │   └── minions/{minion_id}/{ts}/   # Timestamped snapshots
 │
 └── legions/{uuid}/                 # One folder per legion (multi-agent project)
-    ├── timeline.jsonl              # Unified comm log
     ├── schedules.json              # Cron schedule definitions
     ├── schedule_history.jsonl      # Schedule execution log
     └── minions/{minion_id}/

@@ -9,7 +9,7 @@ Covers all seven scenarios from the plan plus edge cases:
   Scenario 5: MCP attempt outside subtree → ValueError
   Scenario 6: Self-reparent → ValueError
   Scenario 7: Cycle attempt → ValueError
-  Edge: No-op (new_parent == current parent) → success, no timeline entry
+  Edge: No-op (new_parent == current parent) → success, no comm emitted
   Edge: Leaf reparent works
   Edge: Cross-legion reparent → ValueError
   Edge: overseer_level correctly recomputed for moved subtree
@@ -311,7 +311,7 @@ class TestScenario7CycleDetection:
 
 class TestEdgeNoOp:
     @pytest.mark.asyncio
-    async def test_noop_returns_success_without_timeline_entry(self):
+    async def test_noop_returns_success_without_emitting_comm(self):
         a = _make_session("a-id", "A", parent_id=None, children=["b-id"], is_overseer=True, overseer_level=0)
         b = _make_session("b-id", "B", parent_id="a-id", children=[], is_overseer=False, overseer_level=1)
         session_map = {"a-id": a, "b-id": b}
@@ -324,7 +324,7 @@ class TestEdgeNoOp:
 
         assert result["success"] is True
         assert result["descendants_moved"] == 0
-        # No timeline event emitted for a no-op
+        # No comm emitted for a no-op
         system.comm_router.route_comm.assert_not_awaited()
 
 

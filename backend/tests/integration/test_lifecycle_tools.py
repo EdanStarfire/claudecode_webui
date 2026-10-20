@@ -4,7 +4,8 @@ Integration tests for MCP lifecycle tools.
 Tests: spawn_minion, dispose_minion
 """
 
-import json
+from contextlib import contextmanager
+from unittest.mock import patch
 
 import pytest
 
@@ -12,6 +13,26 @@ from backend.config_resolution import resolve_effective_config
 from backend.session_manager import SessionState
 
 pytestmark = pytest.mark.slow
+
+
+@contextmanager
+def _capture_persisted_comms(comm_router):
+    """Spy on CommRouter._persist_comm(), capturing each comm as it's routed.
+
+    SPAWN/DISPOSE comms are sent to_user (not to a minion session), so there's
+    no per-session store to read them back from (issue #2235: timeline.jsonl,
+    the old ledger for to_user comms, is no longer written).
+    """
+    persisted_comms = []
+    original_persist_comm = comm_router._persist_comm
+
+    async def tracked_persist_comm(comm):
+        persisted_comms.append(comm)
+        return await original_persist_comm(comm)
+
+    with patch.object(comm_router, "_persist_comm", side_effect=tracked_persist_comm):
+        yield persisted_comms
+
 
 # ============================================================================
 # spawn_minion Tests
@@ -30,11 +51,10 @@ async def test_spawn_minion_minimal(legion_test_env):
     - Tool returns success with child_minion_id
     - Child session created with ACTIVE state
     - Parent marked as overseer with child in child_minion_ids
-    - SPAWN comm logged to timeline
+    - SPAWN comm routed through CommRouter._persist_comm()
     """
     env = legion_test_env
     legion_system = env["legion_system"]
-    data_dir = env["data_dir"]
     legion_id = env["legion_id"]
     template_manager = env["template_manager"]
 
@@ -47,13 +67,14 @@ async def test_spawn_minion_minimal(legion_test_env):
     template_name = templates[0].name
 
     # Spawn child via MCP tool handler
-    result = await legion_system.mcp_tools._handle_spawn_minion({
-        "_parent_overseer_id": parent.session_id,
-        "name": "child",
-        "role": "Child Worker",
-        "system_prompt": "You are a test child minion for integration testing.",
-        "template_name": template_name,
-    })
+    with _capture_persisted_comms(legion_system.comm_router) as persisted_comms:
+        result = await legion_system.mcp_tools._handle_spawn_minion({
+            "_parent_overseer_id": parent.session_id,
+            "name": "child",
+            "role": "Child Worker",
+            "system_prompt": "You are a test child minion for integration testing.",
+            "template_name": template_name,
+        })
 
     # Verify success response (not an error)
     assert "content" in result
@@ -106,25 +127,17 @@ async def test_spawn_minion_minimal(legion_test_env):
     assert parent_updated.is_overseer is True
     assert child_id in parent_updated.child_minion_ids
 
-    # SIDE EFFECT 3: SPAWN comm logged to timeline
-    timeline_file = data_dir / "legions" / legion_id / "timeline.jsonl"
-    assert timeline_file.exists()
+    # SIDE EFFECT 3: SPAWN comm was persisted (captured via the spy above)
+    spawn_comm = next(
+        (c for c in persisted_comms if c.comm_type.value == "spawn"
+         and c.from_minion_id == parent.session_id
+         and "child" in (c.content or "")),
+        None,
+    )
 
-    with open(timeline_file) as f:
-        timeline_comms = [json.loads(line) for line in f]
-
-    # Find SPAWN comm in timeline (sent to_user, not to child)
-    spawn_comm = None
-    for c in timeline_comms:
-        if (c.get("comm_type") == "spawn" and
-            c.get("from_minion_id") == parent.session_id and
-            "child" in c.get("content", "")):
-            spawn_comm = c
-            break
-
-    assert spawn_comm is not None, f"Timeline should contain SPAWN comm for child. Got {len(timeline_comms)} comms"
-    assert spawn_comm["to_user"] is True  # SPAWN comms are sent to user
-    assert "child" in spawn_comm["content"]
+    assert spawn_comm is not None, f"Expected a SPAWN comm for child. Got {len(persisted_comms)} persisted comms"
+    assert spawn_comm.to_user is True  # SPAWN comms are sent to user
+    assert "child" in spawn_comm.content
 
 
 @pytest.mark.asyncio
@@ -456,12 +469,10 @@ async def test_dispose_minion_direct_child(legion_test_env):
     Verifies:
     - Child session terminated (TERMINATED state)
     - Parent's child_minion_ids updated (child removed)
-    - DISPOSE comm logged to timeline
+    - DISPOSE comm routed through CommRouter._persist_comm()
     """
     env = legion_test_env
     legion_system = env["legion_system"]
-    data_dir = env["data_dir"]
-    legion_id = env["legion_id"]
     template_manager = env["template_manager"]
 
     # Create parent and child
@@ -507,12 +518,13 @@ async def test_dispose_minion_direct_child(legion_test_env):
         await asyncio.sleep(poll_interval)
 
     # Dispose child via MCP tool handler (hard delete to remove from parent's child_minion_ids)
-    dispose_result = await legion_system.mcp_tools._handle_dispose_minion({
-        "_parent_overseer_id": parent.session_id,
-        "minion_name": "child",
-        "reason": "Task completed",
-        "delete": True
-    })
+    with _capture_persisted_comms(legion_system.comm_router) as persisted_comms:
+        dispose_result = await legion_system.mcp_tools._handle_dispose_minion({
+            "_parent_overseer_id": parent.session_id,
+            "minion_name": "child",
+            "reason": "Task completed",
+            "delete": True
+        })
 
     # Verify success
     assert dispose_result.get("is_error") is not True, f"Unexpected error: {dispose_result['content'][0]['text']}"
@@ -525,25 +537,17 @@ async def test_dispose_minion_direct_child(legion_test_env):
     parent_updated = await env["session_coordinator"].session_manager.get_session_info(parent.session_id)
     assert child_id not in parent_updated.child_minion_ids
 
-    # SIDE EFFECT 3: DISPOSE comm logged to timeline
-    timeline_file = data_dir / "legions" / legion_id / "timeline.jsonl"
-    assert timeline_file.exists()
+    # SIDE EFFECT 3: DISPOSE comm was persisted (captured via the spy above)
+    dispose_comm = next(
+        (c for c in persisted_comms if c.comm_type.value == "dispose"
+         and c.from_minion_id == parent.session_id
+         and "child" in (c.content or "")),
+        None,
+    )
 
-    with open(timeline_file) as f:
-        timeline_comms = [json.loads(line) for line in f]
-
-    # Find DISPOSE comm in timeline (sent to_user, not to child)
-    dispose_comm = None
-    for c in timeline_comms:
-        if (c.get("comm_type") == "dispose" and
-            c.get("from_minion_id") == parent.session_id and
-            "child" in c.get("content", "")):
-            dispose_comm = c
-            break
-
-    assert dispose_comm is not None, f"Timeline should contain DISPOSE comm for child. Got {len(timeline_comms)} comms"
-    assert dispose_comm["to_user"] is True  # DISPOSE comms are sent to user
-    assert "child" in dispose_comm["content"]
+    assert dispose_comm is not None, f"Expected a DISPOSE comm for child. Got {len(persisted_comms)} persisted comms"
+    assert dispose_comm.to_user is True  # DISPOSE comms are sent to user
+    assert "child" in dispose_comm.content
 
 
 @pytest.mark.asyncio

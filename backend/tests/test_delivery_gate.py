@@ -544,7 +544,7 @@ class TestInjectTimestampScoping:
         just the static helper) — a from_user=True Comm routed through deliver()
         (e.g. a user message to a minion via POST /api/legions/{id}/comms) must
         reach send_message() with inject_timestamp=False, or the SDK-delivered
-        text desyncs from timeline.jsonl's pre-injection comm.content."""
+        text desyncs from the persisted pre-injection comm.content."""
         info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
         coord = _make_coordinator(info, tmp_path)
         gate = DeliveryGate(coord)

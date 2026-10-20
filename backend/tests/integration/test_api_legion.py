@@ -2,7 +2,6 @@
 Stage 5: Integration tests for Legion endpoints.
 
 Tests:
-- GET /api/legions/{legion_id}/timeline — paginated comm timeline
 - GET /api/legions/{legion_id}/hierarchy — minion hierarchy tree
 - POST /api/legions/{legion_id}/comms — send comm
 - POST /api/legions/{legion_id}/minions — create minion
@@ -17,39 +16,6 @@ async def _setup_legion(env):
     """Create a legion project for testing."""
     project = await env["create_test_legion_project"]("Legion Test")
     return project
-
-
-class TestLegionTimeline:
-    async def test_timeline_empty(self, api_integration_env):
-        client = api_integration_env["client"]
-        project = await _setup_legion(api_integration_env)
-        lid = project["project_id"]
-
-        resp = await client.get(f"/api/legions/{lid}/timeline")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["comms"] == []
-        assert body["total"] == 0
-
-    async def test_timeline_nonexistent(self, api_integration_env):
-        client = api_integration_env["client"]
-        fake_id = str(uuid.uuid4())
-
-        # Non-existent legion returns empty timeline (no 404)
-        resp = await client.get(f"/api/legions/{fake_id}/timeline")
-        assert resp.status_code == 200
-        assert resp.json()["comms"] == []
-
-    async def test_timeline_pagination(self, api_integration_env):
-        client = api_integration_env["client"]
-        project = await _setup_legion(api_integration_env)
-        lid = project["project_id"]
-
-        resp = await client.get(f"/api/legions/{lid}/timeline?limit=10&offset=0")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "limit" in body
-        assert "offset" in body
 
 
 class TestLegionHierarchy:

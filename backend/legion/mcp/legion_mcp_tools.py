@@ -183,7 +183,7 @@ class LegionMCPTools:
             "\n- 'immediate' (default): Deliver right away."
             "\n- 'when_idle': Deliver once the target is idle, instead of interrupting it."
             "\n- 'halt': Full stop. The target minion is interrupted immediately and will NOT receive the message. "
-            "The message is stored in the comm timeline for user inspection only. Use when the minion must cease "
+            "The message is still visible to the user via session history only. Use when the minion must cease "
             "all work — the minion will not see the halt message or act on it. Requires you to be the user or an "
             "ancestor of the recipient."
             "\n- 'pivot': Stop and redirect. Current work is interrupted immediately, then the new direction "
