@@ -77,7 +77,6 @@ Complete REST and WebSocket API reference for Claude WebUI. For backend architec
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/legions/{id}/timeline` | Get comm timeline (paginated: `limit`, `offset`) |
 | `GET` | `/api/legions/{id}/hierarchy` | Get minion hierarchy tree |
 | `POST` | `/api/legions/{id}/comms` | Send comm to minion |
 | `POST` | `/api/legions/{id}/minions` | Create new minion |

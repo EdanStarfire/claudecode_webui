@@ -1586,8 +1586,8 @@ class SessionCoordinator:
         inject_timestamp: gates issue #1779 automatic timestamp injection. True for the
         live user-send and queue/cron paths (the feature's intended scope: "user
         messages"). Legion inter-agent comms and system-error messages (comm_router.py)
-        pass False — they aren't user messages and injecting into them would desync the
-        Legion timeline (comm.content persisted pre-injection) from the delivered text.
+        pass False — they aren't user messages and injecting into them would desync
+        the persisted record (comm.content persisted pre-injection) from the delivered text.
         """
         try:
             sdk = self._active_sdks.get(session_id)

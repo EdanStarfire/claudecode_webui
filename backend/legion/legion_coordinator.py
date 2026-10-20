@@ -9,7 +9,6 @@ Responsibilities:
 """
 
 import asyncio
-import json
 from typing import TYPE_CHECKING, Optional
 
 from backend.models.legion_models import SenderType
@@ -181,9 +180,8 @@ class LegionCoordinator:
         Assemble complete minion hierarchy with user at root.
 
         Returns hierarchy structure with:
-        - User entry at root with last outgoing comm
+        - User entry at root
         - All minions in tree structure (parent-child relationships)
-        - Last outgoing comm for each minion
         - Current state for each minion
 
         Args:
@@ -195,16 +193,12 @@ class LegionCoordinator:
                 "id": "user",
                 "type": "user",
                 "name": "User (you)",
-                "last_comm": {...} or None,
                 "children": [<minion nodes>]
             }
         """
         # Get all sessions for this legion/project
         all_sessions = await self.session_manager.list_sessions()
         project_sessions = [s for s in all_sessions if s.project_id == legion_id]
-
-        # Get user's last outgoing comm
-        user_last_comm = await self._get_last_outgoing_comm(legion_id, from_user=True)
 
         # Issue #349: All sessions are minions - build full hierarchy
         session_map = {}
@@ -219,7 +213,6 @@ class LegionCoordinator:
                 "state": session.state.value if hasattr(session.state, 'value') else str(session.state),
                 "is_overseer": session.is_overseer or False,
                 "is_processing": session.is_processing or False,
-                "last_comm": await self._get_last_outgoing_comm(legion_id, from_minion_id=session.session_id),
                 # Latest message tracking (issue #291)
                 "latest_message": session.latest_message,
                 "latest_message_type": session.latest_message_type,
@@ -250,87 +243,10 @@ class LegionCoordinator:
             "id": "user",
             "type": "user",
             "name": "User (you)",
-            "last_comm": user_last_comm,
             "children": root_sessions
         }
 
         return user_entry
-
-    async def _get_last_outgoing_comm(
-        self,
-        legion_id: str,
-        from_user: bool = False,
-        from_minion_id: str | None = None
-    ) -> dict | None:
-        """
-        Get last outgoing comm from user or specific minion.
-
-        Reads timeline.jsonl in reverse to find most recent comm where
-        from_user matches or from_minion_id matches.
-
-        Args:
-            legion_id: Legion UUID
-            from_user: If True, find comm from user
-            from_minion_id: If provided, find comm from this minion
-
-        Returns:
-            Dict with comm data or None if no comms found:
-            {
-                "to_user": bool,
-                "to_minion_name": str or None,
-                "content": str (truncated to 150 chars),
-                "comm_type": str,
-                "timestamp": str (ISO format)
-            }
-        """
-        # Path to timeline file
-        timeline_path = self.system.session_port.data_dir / "legions" / legion_id / "timeline.jsonl"
-
-        if not timeline_path.exists():
-            return None
-
-        # Read timeline in reverse to find most recent match
-        try:
-            with open(timeline_path, encoding='utf-8') as f:
-                lines = f.readlines()
-
-            # Process lines in reverse (most recent first)
-            for line in reversed(lines):
-                if not line.strip():
-                    continue
-
-                try:
-                    comm = json.loads(line)
-
-                    # Check if this comm matches our criteria
-                    if from_user and comm.get('from_user'):
-                        # Found user's outgoing comm
-                        return self._format_comm_preview(comm)
-                    elif from_minion_id and comm.get('from_minion_id') == from_minion_id:
-                        # Found minion's outgoing comm
-                        return self._format_comm_preview(comm)
-
-                except json.JSONDecodeError:
-                    continue
-
-        except Exception as e:
-            # Log error but don't fail - just return None
-            print(f"Error reading timeline for last comm: {e}")
-
-        return None
-
-    def _format_comm_preview(self, comm: dict) -> dict:
-        """
-        Return the full comm object for frontend display.
-
-        Args:
-            comm: Full comm dict from timeline
-
-        Returns:
-            Full comm dict (frontend handles display logic)
-        """
-        # Return the full comm object - let frontend decide what to display
-        return comm
 
     async def register_capability(
         self,

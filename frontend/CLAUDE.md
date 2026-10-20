@@ -102,7 +102,7 @@ Hash-based routing (`createWebHashHistory`):
 
 #### `legion.js` — Multi-agent data
 - **State**: `commsByLegion` (Map), `minionsByLegion` (Map), `currentLegionId`
-- **Key actions**: `loadTimeline()` (paginated), `addComm()`, `sendComm()`, `loadMinions()`, `createMinion()`, `haltAll()`, `resumeAll()`
+- **Key actions**: `addComm()`, `sendComm()`, `loadMinions()`, `createMinion()`, `haltAll()`, `resumeAll()`
 
 #### `ui.js` — UI state & persistence
 - **State**: `rightSidebarCollapsed`, `rightSidebarWidth`, `rightSidebarActiveTab`, `browsingProjectId`, `expandedStacks` (Set), `autoScrollEnabled`, `isRedBackground`, `activeModal`, `restartInProgress`

@@ -1,83 +1,16 @@
-"""Legion endpoints: timeline, hierarchy, comms, minions"""
+"""Legion endpoints: hierarchy, comms, minions"""
 
-import json
 import uuid
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 
 from shared.exception_handlers import handle_exceptions
 
-from ..timestamp_utils import normalize_timestamp
 from ._models import CommSendRequest, MinionCreateRequest, ReparentRequest
 
 
 def build_router(webui) -> APIRouter:
     router = APIRouter()
-
-    @router.get("/api/legions/{legion_id}/timeline")
-    @handle_exceptions("get legion timeline")
-    async def get_legion_timeline(legion_id: str, limit: int = 100, offset: int = 0):
-        """Get Comms for legion timeline (all communications in the legion)"""
-        # Read all comms from the main legion timeline
-        legion_dir = webui.service.get_data_dir() / "legions" / legion_id
-        if not legion_dir.exists():
-            return {
-                "comms": [],
-                "total": 0,
-                "limit": limit,
-                "offset": offset
-            }
-
-        all_comms = []
-
-        # Read from main timeline.jsonl (contains ALL comms)
-        timeline_file = legion_dir / "timeline.jsonl"
-        if timeline_file.exists():
-            with open(timeline_file, encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        try:
-                            comm_data = json.loads(line)
-                            all_comms.append(comm_data)
-                        except json.JSONDecodeError:
-                            continue
-
-        # Normalize timestamps to handle mixed string/float formats (backwards compatibility)
-        for comm in all_comms:
-            if 'timestamp' in comm:
-                try:
-                    comm['timestamp'] = normalize_timestamp(comm['timestamp'])
-                except (ValueError, TypeError) as e:
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        f"Invalid timestamp in comm {comm.get('comm_id', 'unknown')}: {e}, using current time"
-                    )
-                    comm['timestamp'] = datetime.now(UTC).timestamp()
-
-        # Sort by timestamp (newest first) and deduplicate
-        all_comms.sort(key=lambda x: x.get('timestamp', 0.0), reverse=True)
-
-        # Deduplicate by comm_id (since comms appear in both sender and receiver logs)
-        seen_ids = set()
-        unique_comms = []
-        for comm in all_comms:
-            comm_id = comm.get('comm_id')
-            if comm_id and comm_id not in seen_ids:
-                seen_ids.add(comm_id)
-                unique_comms.append(comm)
-
-        # Paginate
-        total = len(unique_comms)
-        paginated_comms = unique_comms[offset:offset + limit]
-
-        return {
-            "comms": paginated_comms,
-            "total": total,
-            "limit": limit,
-            "offset": offset
-        }
 
     @router.get("/api/legions/{legion_id}/hierarchy")
     @handle_exceptions("get legion hierarchy")

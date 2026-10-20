@@ -58,11 +58,6 @@
             <span class="message-content" :title="minionWithLiveData.latest_message">{{ truncatedMessage }}</span>
             <span v-if="relativeTime" class="message-time ms-1">({{ relativeTime }})</span>
           </div>
-          <!-- Fallback to last_comm if no latest_message -->
-          <div v-else-if="minionData?.last_comm" class="last-comm-preview">
-            <span class="comm-direction">→ <strong>{{ getCommRecipient(minionData.last_comm) }}</strong>:</span>
-            <span class="comm-content" :title="minionData.last_comm.content || ''">{{ getCommSummary(minionData.last_comm) }}</span>
-          </div>
           <!-- Empty state -->
           <div v-else class="text-muted fst-italic small">
             No activity yet
@@ -406,25 +401,6 @@ const relativeTime = computed(() => {
   }
 })
 
-// Helper: Get comm recipient name
-function getCommRecipient(comm) {
-  if (comm.to_user) {
-    return 'User'
-  } else if (comm.to_minion_name) {
-    return comm.to_minion_name
-  }
-  return 'unknown'
-}
-
-// Helper: Get comm summary (prioritize summary, fallback to content, truncate at 150 chars)
-function getCommSummary(comm) {
-  const text = comm.summary || comm.content || ''
-  if (text.length > 150) {
-    return text.substring(0, 150) + '...'
-  }
-  return text
-}
-
 // Handle minion card click - emit event to parent
 function handleClick() {
   emit('minion-click', props.minionData.id)
@@ -620,30 +596,6 @@ function handleClick() {
   color: var(--bs-secondary-color);
   font-size: 0.8rem;
   opacity: 0.8;
-}
-
-/* Comm preview (two-column layout) */
-.last-comm-preview {
-  font-size: 0.85rem;
-  line-height: 1.3;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: block;
-}
-
-.comm-direction {
-  color: var(--bs-secondary-color);
-  font-size: 0.85rem;
-}
-
-.comm-content {
-  color: var(--bs-body-color);
-  word-wrap: normal;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: help;
 }
 
 /* Status dot styles - matches SessionItem.vue */

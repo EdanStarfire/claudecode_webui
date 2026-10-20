@@ -132,7 +132,7 @@ async def test_send_comm_to_active_minion(legion_test_env):
     # SDK processes the message through the API.
     #
     # What we CAN verify:
-    # - Comm routed to timeline.jsonl ✓ (verified above)
+    # - Comm recorded in pending_store ✓ (verified above)
     # - Message queued to SDK (verified by successful send_message call)
     #
     # What requires end-to-end testing with live API:
