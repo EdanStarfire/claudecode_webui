@@ -12,6 +12,17 @@ AsyncExitStack for the connection's entire lifetime.  Foreign tasks signal
 close via asyncio.Event and await a closed_future — never calling
 exit_stack.aclose() directly.  This avoids the anyio cancel-scope task-affinity
 violation that previously caused RuntimeError on OAuth token refresh.
+
+Issue #2234: resource subscriptions (notifications/resources/updated) are
+deferred, not implemented. The decisive blocker is one layer above this
+module: claude_agent_sdk's own bridge (_internal/sdk_mcp_bridge.py::_Session
+._deliver()) drops every server-initiated notification unconditionally,
+regardless of what capability advertised it — so even a flawless
+subscribe/fan-out implementation here would have its update notifications
+vanish before reaching the CLI/agent. Separately, this manager has no
+per-session identity to build a subscriber map on (connections are tracked
+purely by integer refcount). Revisit once claude_agent_sdk forwards
+server-initiated notifications.
 """
 
 import asyncio
@@ -29,6 +40,16 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.types import (
     CallToolResult,
+    CompleteResult,
+    EmptyResult,
+    GetPromptResult,
+    LoggingLevel,
+    Prompt,
+    PromptReference,
+    ReadResourceResult,
+    Resource,
+    ResourceTemplate,
+    ResourceTemplateReference,
     TextContent,
     Tool,
 )
@@ -215,6 +236,48 @@ class SharedMcpConnectionManager:
             conn = self._conns.get(cfg.id)
             return list(conn.cached_tools) if conn else []
 
+    async def list_resources(self, cfg) -> list[Resource]:
+        """Return the upstream server's resources, degrading to an empty list on
+        failure rather than raising — mirrors list_tools_or_cached()'s contract.
+        Unlike cached_tools, no persisted cache field exists here: there's no
+        existing direct caller needing last-known-good data across a reconnect
+        window, so a fresh call is made every time.
+        """
+        try:
+            conn = await self._ensure_open(cfg)
+            result = await conn.session.list_resources()
+            return list(result.resources)
+        except Exception:
+            _logger.warning(
+                "shared MCP list_resources failed cfg=%s — returning empty list", cfg.id
+            )
+            return []
+
+    async def list_resource_templates(self, cfg) -> list[ResourceTemplate]:
+        """Like list_resources(), for resource templates."""
+        try:
+            conn = await self._ensure_open(cfg)
+            result = await conn.session.list_resource_templates()
+            return list(result.resource_templates)
+        except Exception:
+            _logger.warning(
+                "shared MCP list_resource_templates failed cfg=%s — returning empty list",
+                cfg.id,
+            )
+            return []
+
+    async def list_prompts(self, cfg) -> list[Prompt]:
+        """Like list_resources(), for prompts."""
+        try:
+            conn = await self._ensure_open(cfg)
+            result = await conn.session.list_prompts()
+            return list(result.prompts)
+        except Exception:
+            _logger.warning(
+                "shared MCP list_prompts failed cfg=%s — returning empty list", cfg.id
+            )
+            return []
+
     async def call_tool(self, cfg, name: str, arguments: dict[str, Any]) -> CallToolResult:
         """Forward a tool call to the upstream session.
 
@@ -240,6 +303,43 @@ class SharedMcpConnectionManager:
         except Exception as exc:
             _logger.exception("shared MCP call_tool failed cfg=%s tool=%s", cfg.id, name)
             return _internal_error_result(cfg, exc)
+
+    async def read_resource(self, cfg, uri: str) -> ReadResourceResult:
+        """Forward a resource read to the upstream session.
+
+        Explicit, caller-triggered action — unlike call_tool()'s degrade-and-
+        return-a-result contract, this raises a descriptive exception on
+        disconnect/failure rather than returning a stub result (a silent empty
+        resource would look like a successful one). Safe to raise: the SDK's
+        per-request exception handling (claude_agent_sdk's SdkMcpBridge runs
+        Server.run(raise_exceptions=False)) converts this into a clean
+        JSON-RPC error without crashing the session's connection to this proxy.
+        See _call_locked().
+        """
+        return await self._call_locked(cfg, lambda session: session.read_resource(uri))
+
+    async def get_prompt(
+        self, cfg, name: str, arguments: dict[str, str] | None = None
+    ) -> GetPromptResult:
+        """Forward a prompt retrieval to the upstream session. See read_resource()."""
+        return await self._call_locked(cfg, lambda session: session.get_prompt(name, arguments))
+
+    async def complete(
+        self,
+        cfg,
+        ref: ResourceTemplateReference | PromptReference,
+        argument: dict[str, str],
+        context_arguments: dict[str, str] | None = None,
+    ) -> CompleteResult:
+        """Forward an argument-completion request to the upstream session.
+        See read_resource()."""
+        return await self._call_locked(
+            cfg, lambda session: session.complete(ref, argument, context_arguments)
+        )
+
+    async def set_logging_level(self, cfg, level: LoggingLevel) -> EmptyResult:
+        """Forward a logging-level change to the upstream session. See read_resource()."""
+        return await self._call_locked(cfg, lambda session: session.set_logging_level(level))
 
     async def shutdown(self) -> None:
         """Close every upstream connection. Called from SessionCoordinator.cleanup()."""
@@ -300,6 +400,79 @@ class SharedMcpConnectionManager:
                 return _disconnect_error_result_named(conn.cfg_id)
         finally:
             conn.reconnect_lock.release()
+
+    async def _call_locked(self, cfg, coro_fn):
+        """Shared lock-acquire/timeout/session-None-check boilerplate for the 4
+        single-item methods (read_resource, get_prompt, complete,
+        set_logging_level). Opens the connection if needed, acquires
+        conn.reconnect_lock with the same RECONNECT_WAIT_SECONDS timeout as
+        _call_tool_locked(), then runs coro_fn(session) against the live
+        upstream session — bounding the whole operation (lock wait + upstream
+        call) the same way call_tool() bounds _call_tool_locked(), so a hung
+        upstream call can't monopolize reconnect_lock and starve call_tool().
+
+        Raises a descriptive RuntimeError (reusing _describe_open_failure for
+        an open failure, or the cached last_open_error/last_close_error for an
+        already-registered disconnected conn) rather than degrading to a stub
+        result — callers of these 4 methods are explicit, caller-triggered
+        actions where a silent empty/stub result would be misleading. Mirrors
+        _call_tool_locked()'s anyio.ClosedResourceError/BrokenResourceError
+        handling: marks the conn disconnected so the next call reopens it,
+        rather than leaving conn.session pointed at a dead session forever.
+        Any other exception from coro_fn itself propagates unchanged.
+        """
+
+        async def _run():
+            try:
+                conn = await self._ensure_open(cfg)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Upstream MCP server (config={cfg.id}) is disconnected "
+                    f"({_describe_open_failure(exc)}); try again in a few seconds."
+                ) from exc
+            try:
+                await asyncio.wait_for(
+                    conn.reconnect_lock.acquire(),
+                    timeout=self.RECONNECT_WAIT_SECONDS,
+                )
+            except TimeoutError:
+                raise RuntimeError(
+                    f"Upstream MCP server (config={cfg.id}) is disconnected; "
+                    "try again in a few seconds."
+                ) from None
+            try:
+                session = conn.session
+                if session is None:
+                    reason = conn.last_open_error or (
+                        str(conn.last_close_error) if conn.last_close_error else None
+                    )
+                    detail = f" ({reason})" if reason else ""
+                    raise RuntimeError(
+                        f"Upstream MCP server (config={cfg.id}) is disconnected{detail}; "
+                        "try again in a few seconds."
+                    )
+                try:
+                    return await coro_fn(session)
+                except (anyio.ClosedResourceError, anyio.BrokenResourceError):
+                    _logger.warning(
+                        "shared MCP upstream closed during call cfg=%s — marking disconnected",
+                        cfg.id,
+                    )
+                    await self._mark_disconnected_locked(conn)
+                    raise RuntimeError(
+                        f"Upstream MCP server (config={cfg.id}) is disconnected; "
+                        "try again in a few seconds."
+                    ) from None
+            finally:
+                conn.reconnect_lock.release()
+
+        try:
+            return await asyncio.wait_for(_run(), timeout=self.RECONNECT_WAIT_SECONDS + 30.0)
+        except TimeoutError:
+            raise RuntimeError(
+                f"Upstream MCP server (config={cfg.id}) is disconnected; "
+                "try again in a few seconds."
+            ) from None
 
     async def _run_connection(
         self,
