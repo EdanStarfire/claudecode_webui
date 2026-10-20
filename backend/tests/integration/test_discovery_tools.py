@@ -208,7 +208,7 @@ async def test_list_minions_with_multiple(legion_test_env):
 
     Verifies:
     - Tool returns success with formatted list
-    - USER_MINION_ID always included first
+    - The top-level overseer's parent is displayed as "user"
     - Sibling minions are listed
     - Response includes name, role, state, capabilities
     """
@@ -222,7 +222,7 @@ async def test_list_minions_with_multiple(legion_test_env):
         ("worker2", "Analyst", {"capabilities": ["data-analysis"]})
     )
 
-    # List minions from minion1's perspective (sees: user + overseer + sibling worker2)
+    # List minions from minion1's perspective (sees: overseer + sibling worker2)
     result = await legion_system.mcp_tools._handle_list_minions({
         "_from_minion_id": minion1.session_id
     })
@@ -233,7 +233,7 @@ async def test_list_minions_with_multiple(legion_test_env):
 
     response_text = result["content"][0]["text"]
 
-    # Verify "user" minion is always first
+    # Verify the top-level overseer's parent is displayed as "user"
     assert "user" in response_text
 
     # Verify sibling is visible
@@ -250,7 +250,7 @@ async def test_list_minions_empty_legion(legion_test_env):
 
     Verifies:
     - Tool returns success even with minimal visible minions
-    - USER_MINION_ID is always present
+    - Top-level minion's parent shows as "user (not directly addressable)"
     """
     env = legion_test_env
     legion_system = env["legion_system"]
@@ -258,7 +258,7 @@ async def test_list_minions_empty_legion(legion_test_env):
     # Create single minion with no parent/children (no hierarchy)
     minion = await env["create_minion"]("solo", role="Solo Worker")
 
-    # List minions (should only show user — no visible hierarchy peers)
+    # List minions (should only show self — no hierarchy peers, no synthetic user entry)
     result = await legion_system.mcp_tools._handle_list_minions({
         "_from_minion_id": minion.session_id
     })
@@ -268,11 +268,11 @@ async def test_list_minions_empty_legion(legion_test_env):
 
     response_text = result["content"][0]["text"]
 
-    # Verify user is present
+    # Verify the top-level minion's parent is displayed as "user"
     assert "user" in response_text
 
-    # Verify count (2 total: user + self, no hierarchy peers)
-    assert "Active Minions (2)" in response_text
+    # Verify count (1: self only, no hierarchy peers, no synthetic user entry)
+    assert "Active Minions (1)" in response_text
 
 
 @pytest.mark.asyncio
