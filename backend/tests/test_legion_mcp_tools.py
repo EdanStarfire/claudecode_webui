@@ -2473,3 +2473,141 @@ async def test_issue_1817_ownership_error_keeps_action_specific_wording():
     assert result.get("is_error") is True
     assert "own schedules" in result["content"][0]["text"].lower()
     svc.delete_schedule.assert_not_called()
+
+
+# Issue #2255: _handle_spawn_minion must prepend the *resolved* (template- or
+# profile-sourced) system_prompt, not just a directly-set template.config value.
+
+async def _spawn_with_template_config(
+    template_config: dict,
+    profile_ids: dict | None = None,
+    profile_config: dict | None = None,
+    spawn_system_prompt: str = "Do work.",
+):
+    """Drive _handle_spawn_minion with a mocked template (+ optional linked profile).
+
+    Returns the SessionConfig passed to overseer_controller.spawn_minion.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from backend.session_manager import SessionState
+
+    caller_id = "caller-id"
+
+    caller_session = MagicMock()
+    caller_session.session_id = caller_id
+    caller_session.project_id = "legion-1"
+    caller_session.state = SessionState.ACTIVE
+    caller_session.current_permission_mode = "default"
+    caller_session.working_directory = "/tmp/test"
+    caller_session.config = {}
+
+    session_manager = MagicMock()
+    session_manager.get_session_info = AsyncMock(return_value=caller_session)
+
+    profile_manager = None
+    if profile_ids:
+        profile = MagicMock()
+        profile.config = profile_config or {}
+        profile_manager = MagicMock()
+        profile_manager.get_profile = AsyncMock(return_value=profile)
+
+    session_coordinator = MagicMock()
+    session_coordinator.session_manager = session_manager
+    session_coordinator.profile_manager = profile_manager
+
+    overseer_controller = MagicMock()
+    overseer_controller.spawn_minion = AsyncMock(return_value={
+        "minion_id": "new-child-id",
+        "name": "NewChild",
+        "slug": "newchild",
+    })
+
+    template = MagicMock()
+    template.name = "TestTemplate"
+    template.role = "Worker"
+    template.capabilities = []
+    template.profile_ids = profile_ids or {}
+    template.config = template_config
+    template.template_id = "template-id"
+    template_manager = MagicMock()
+    template_manager.get_template_by_name = AsyncMock(return_value=template)
+
+    mock_system = MagicMock()
+    mock_system.session_port = session_coordinator
+    mock_system.overseer_controller = overseer_controller
+    mock_system.template_manager = template_manager
+
+    mcp_tools = LegionMCPTools(mock_system)
+
+    await mcp_tools._handle_spawn_minion({
+        "_parent_overseer_id": caller_id,
+        "name": "NewChild",
+        "system_prompt": spawn_system_prompt,
+        "template_name": "TestTemplate",
+    })
+
+    overseer_controller.spawn_minion.assert_awaited_once()
+    return overseer_controller.spawn_minion.call_args.kwargs["config"]
+
+
+@pytest.mark.asyncio
+async def test_issue_2255_spawn_prepends_profile_sourced_system_prompt():
+    """Profile-only system_prompt (no template-direct value) must still be prepended."""
+    config = await _spawn_with_template_config(
+        template_config={},
+        profile_ids={"persona": "profile-1"},
+        profile_config={"system_prompt": "You are a careful reviewer."},
+    )
+
+    assert config.system_prompt == "You are a careful reviewer.\n\nDo work."
+
+
+@pytest.mark.asyncio
+async def test_issue_2255_spawn_prepends_template_direct_system_prompt_unaffected():
+    """Template-direct system_prompt (no profile involved) keeps its existing behavior."""
+    config = await _spawn_with_template_config(
+        template_config={"system_prompt": "You are a terse assistant."},
+        profile_ids={},
+    )
+
+    assert config.system_prompt == "You are a terse assistant.\n\nDo work."
+
+
+@pytest.mark.asyncio
+async def test_issue_2255_spawn_override_system_prompt_still_plumbed_through():
+    """override_system_prompt resolves and is plumbed through regardless of prepend source."""
+    config = await _spawn_with_template_config(
+        template_config={"override_system_prompt": True},
+        profile_ids={"persona": "profile-1"},
+        profile_config={"system_prompt": "You are a careful reviewer."},
+    )
+
+    assert config.override_system_prompt is True
+    # Handler-level prepend still runs unchanged; replace-vs-prepend semantics are
+    # applied downstream when the session is constructed from this SessionConfig.
+    assert config.system_prompt == "You are a careful reviewer.\n\nDo work."
+
+
+@pytest.mark.asyncio
+async def test_issue_2255_spawn_template_direct_wins_over_profile():
+    """When both template and profile set system_prompt, template's own value wins."""
+    config = await _spawn_with_template_config(
+        template_config={"system_prompt": "Template value."},
+        profile_ids={"persona": "profile-1"},
+        profile_config={"system_prompt": "Profile value."},
+    )
+
+    assert config.system_prompt == "Template value.\n\nDo work."
+
+
+@pytest.mark.asyncio
+async def test_issue_2255_spawn_no_system_prompt_source_leaves_prompt_unchanged():
+    """Neither template nor profile sets system_prompt: spawn-provided prompt alone."""
+    config = await _spawn_with_template_config(
+        template_config={},
+        profile_ids={},
+    )
+
+    assert config.system_prompt == "Do work."

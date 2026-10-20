@@ -950,8 +950,8 @@ class LegionMCPTools:
             if not role and template.role:
                 role = template.role
 
-            # Prepend template's system_prompt if exists
-            _tpl_sp = template.config.get("system_prompt")
+            # Prepend resolved (template- or profile-sourced) system_prompt if exists
+            _tpl_sp = resolved.get("system_prompt", template.config.get("system_prompt"))
             if _tpl_sp:
                 system_prompt = f"{_tpl_sp}\n\n{system_prompt}"
 
