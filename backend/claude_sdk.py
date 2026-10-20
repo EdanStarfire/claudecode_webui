@@ -2016,7 +2016,7 @@ class ClaudeSDK:
             "check_time": health_check_time,
             "check_number": self._session_health_checks["health_check_count"],
             "session_id": self.session_id,
-            "session_state": self.info.state.value,
+            "session_state": self.info.state,
             "context_manager_active": self._session_health_checks["context_manager_active"],
             "client_object_valid": client is not None,
             "sdk_client_reference_valid": self._sdk_client is not None,
