@@ -196,6 +196,8 @@ class LegionMCPTools:
             "Set False to fail instead of starting a dormant target."
             "\n\n**Visibility Scope:** You can only send comms to minions in your full hierarchy chain: "
             "all ancestors, all descendants, and siblings. To reach minions outside your group, ask your overseer to relay."
+            "\n\n**Note:** There is no 'user' target — send_comm cannot deliver to the user. "
+            "Put reports/results in your final message, or use AskUserQuestion if you need the user's input."
             "\n\n**File Attachments (optional):**"
             "\nPass `attachments` as a list of absolute file paths to share files with the recipient. "
             "Files are copied into the recipient's session and registered for auto-approve Read. "
@@ -623,36 +625,40 @@ class LegionMCPTools:
         # Look up target minion by name
         to_minion_name = args.get("to_minion_name")
 
-        # Check if sending to the special "user" minion
-        from backend.models.legion_models import SYSTEM_MINION_NAME
-        sending_to_user = (to_minion_name == "user")
+        # Issue #2259 AC1: "user" is not a valid send_comm target — there is no
+        # delivery channel to the user. Reports belong in the minion's final message;
+        # questions go through AskUserQuestion.
+        if to_minion_name and to_minion_name.lower() == "user":
+            return self._err(
+                "Error: Cannot send comm to 'user' — there is no delivery channel to "
+                "the user. Put reports/results in your final message, or use "
+                "AskUserQuestion if you need the user's input."
+            )
 
         # Prevent sending to system (system only sends, never receives)
+        from backend.models.legion_models import SYSTEM_MINION_NAME
         if to_minion_name and to_minion_name.lower() == SYSTEM_MINION_NAME:
             return self._err(f"Error: Cannot send comm to '{SYSTEM_MINION_NAME}'. System is a special identifier for system-generated messages only.")
 
-        if sending_to_user:
-            to_minion_id = None  # User doesn't have a minion_id, only use to_user flag
-        else:
-            # Get sender's legion to scope lookup
-            sender_session = await self.system.session_port.session_manager.get_session_info(from_minion_id)
-            if not sender_session:
-                return self._err("Error: Unable to find sender session")
+        # Get sender's legion to scope lookup
+        sender_session = await self.system.session_port.session_manager.get_session_info(from_minion_id)
+        if not sender_session:
+            return self._err("Error: Unable to find sender session")
 
-            legion_id = sender_session.project_id
+        legion_id = sender_session.project_id
 
-            # Legion-scoped lookup (only search within sender's legion)
-            to_minion = await self.system.legion_coordinator.get_minion_by_name_in_legion(legion_id, to_minion_name)
-            if not to_minion:
-                return self._err(f"Error: Minion '{to_minion_name}' not found in legion {legion_id}")
-            to_minion_id = to_minion.session_id  # session_id IS the minion_id
+        # Legion-scoped lookup (only search within sender's legion)
+        to_minion = await self.system.legion_coordinator.get_minion_by_name_in_legion(legion_id, to_minion_name)
+        if not to_minion:
+            return self._err(f"Error: Minion '{to_minion_name}' not found in legion {legion_id}")
+        to_minion_id = to_minion.session_id  # session_id IS the minion_id
 
         # Block self-comms (would cause LLM loop)
-        if not sending_to_user and to_minion_id and to_minion_id == from_minion_id:
+        if to_minion_id and to_minion_id == from_minion_id:
             return self._err("Error: Cannot send comm to yourself.")
 
         # Validate comm target is within sender's immediate hierarchy group
-        if not sending_to_user and to_minion_id:
+        if to_minion_id:
             is_allowed = await self.system.comm_router.validate_comm_target(
                 sender_id=from_minion_id,
                 recipient_id=to_minion_id
@@ -776,7 +782,7 @@ class LegionMCPTools:
             from_user=False,
             from_minion_name=from_minion_name,
             to_minion_id=to_minion_id,
-            to_user=sending_to_user,
+            to_user=False,
             to_minion_name=to_minion_name_captured,
             summary=summary,
             content=content,
@@ -1444,14 +1450,12 @@ class LegionMCPTools:
         Handle list_minions tool call.
 
         Lists all active minions in the caller's legion with their names, roles, and states.
-        Always includes the special "user" minion for sending comms to the user.
+        The user is not a minion and is never included — send_comm cannot target "user".
 
         Returns:
             Tool result with formatted minion list
         """
         try:
-            from backend.models.legion_models import USER_MINION_ID
-
             # Get caller's legion to scope listing
             from_minion_id = args.get("_from_minion_id")
             if not from_minion_id:
@@ -1482,15 +1486,6 @@ class LegionMCPTools:
             # Format minion list
             minion_lines = []
 
-            # Always include the special "user" minion first
-            minion_lines.append(
-                f"• **user** (ID: {USER_MINION_ID})\n"
-                f"  - Role: Human operator\n"
-                f"  - State: active\n"
-                f"  - Activity: idle\n"
-                f"  - Capabilities: Receives reports and can send tasks"
-            )
-
             # Add other minions
             for minion in minions:
                 name = minion.name or minion.session_id[:8]
@@ -1502,7 +1497,7 @@ class LegionMCPTools:
                 cwd = minion.working_directory or "N/A"
 
                 if minion.parent_overseer_id is None:
-                    parent_display = "user"
+                    parent_display = "user (not directly addressable)"
                 elif minion.parent_overseer_id in session_name_cache:
                     parent_display = session_name_cache[minion.parent_overseer_id]
                 else:
@@ -1520,7 +1515,7 @@ class LegionMCPTools:
                     f"  - Capabilities: {capabilities}"
                 )
 
-            total_count = len(minions) + 1  # +1 for user
+            total_count = len(minions)
             result_text = f"**Active Minions ({total_count}):**\n\n" + "\n\n".join(minion_lines)
 
             return {

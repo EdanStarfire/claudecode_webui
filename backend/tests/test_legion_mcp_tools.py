@@ -138,11 +138,16 @@ async def test_send_comm_handler_requires_sender_id(mcp_tools):
 
 
 @pytest.mark.asyncio
-async def test_send_comm_requires_summary_or_content(mcp_tools):
+async def test_send_comm_requires_summary_or_content(tmp_path):
     """Issue #1912: send_comm must reject calls where both summary and content are blank."""
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    mock_system = _make_send_comm_system_with_router("sender-id", tmp_path, resource_ids=[])
+    mcp_tools = LegionMCPTools(mock_system)
+
     result = await mcp_tools._handle_send_comm({
         "_from_minion_id": "sender-id",
-        "to_minion_name": "user",
+        "to_minion_name": "TargetMinion",
         "comm_type": "info",
     })
 
@@ -377,7 +382,12 @@ async def test_get_minion_by_name_includes_overseer():
 
 
 def _make_send_comm_system(session_id: str, docker_enabled: bool, data_dir):
-    """Helper: build a mock system for send_comm path-translation tests."""
+    """Helper: build a mock system for send_comm path-translation tests.
+
+    Resolves any to_minion_name to a fixed target minion (session_id
+    "target-minion-id") so these tests exercise real minion-to-minion sends —
+    "user" stopped being a valid send_comm target per issue #2259 AC1.
+    """
     from pathlib import Path
     from unittest.mock import AsyncMock, MagicMock
 
@@ -392,8 +402,19 @@ def _make_send_comm_system(session_id: str, docker_enabled: bool, data_dir):
     session_coordinator.data_dir = Path(data_dir)
     session_coordinator.register_uploaded_resource = AsyncMock(return_value=None)
 
+    to_minion = MagicMock()
+    to_minion.session_id = "target-minion-id"
+
+    legion_coordinator = MagicMock()
+    legion_coordinator.get_minion_by_name_in_legion = AsyncMock(return_value=to_minion)
+
+    comm_router = MagicMock()
+    comm_router.validate_comm_target = AsyncMock(return_value=True)
+
     mock_system = MagicMock()
     mock_system.session_port = session_coordinator
+    mock_system.legion_coordinator = legion_coordinator
+    mock_system.comm_router = comm_router
     return mock_system
 
 
@@ -437,7 +458,7 @@ async def test_issue_824_tmp_path_translated_for_docker_session(tmp_path):
 
     await spy_handle({
         "_from_minion_id": session_id,
-        "to_minion_name": "user",
+        "to_minion_name": "TargetMinion",
         "summary": "test",
         "content": "body",
         "comm_type": "report",
@@ -480,7 +501,7 @@ async def test_issue_824_tmp_path_not_translated_for_non_docker_session(tmp_path
 
     result = await spy_handle({
         "_from_minion_id": session_id,
-        "to_minion_name": "user",
+        "to_minion_name": "TargetMinion",
         "summary": "test",
         "content": "body",
         "comm_type": "report",
@@ -524,7 +545,7 @@ async def test_issue_824_non_tmp_path_not_translated(tmp_path):
 
     result = await spy_handle({
         "_from_minion_id": session_id,
-        "to_minion_name": "user",
+        "to_minion_name": "TargetMinion",
         "summary": "test",
         "content": "body",
         "comm_type": "report",
@@ -560,6 +581,7 @@ def _make_send_comm_system_with_router(session_id: str, data_dir, resource_ids):
     )
     mock_system.comm_router = MagicMock()
     mock_system.comm_router.route_comm = AsyncMock(return_value=True)
+    mock_system.comm_router.validate_comm_target = AsyncMock(return_value=True)
     return mock_system
 
 
@@ -591,7 +613,7 @@ async def test_issue_1730_send_comm_embeds_resolved_resource_id_per_attachment(t
 
     result = await mcp_tools._handle_send_comm({
         "_from_minion_id": session_id,
-        "to_minion_name": "user",
+        "to_minion_name": "TargetMinion",
         "summary": "test",
         "content": "body",
         "comm_type": "report",
@@ -617,7 +639,7 @@ async def test_send_comm_summary_only_succeeds(tmp_path):
 
     result = await mcp_tools._handle_send_comm({
         "_from_minion_id": session_id,
-        "to_minion_name": "user",
+        "to_minion_name": "TargetMinion",
         "summary": "Task complete",
         "comm_type": "report",
     })
@@ -636,7 +658,7 @@ async def test_send_comm_content_only_succeeds(tmp_path):
 
     result = await mcp_tools._handle_send_comm({
         "_from_minion_id": session_id,
-        "to_minion_name": "user",
+        "to_minion_name": "TargetMinion",
         "content": "Detailed report body",
         "comm_type": "report",
     })
@@ -662,7 +684,7 @@ async def test_issue_1730_footer_parser_round_trips(tmp_path):
 
     result = await mcp_tools._handle_send_comm({
         "_from_minion_id": session_id,
-        "to_minion_name": "user",
+        "to_minion_name": "TargetMinion",
         "summary": "test",
         "content": "body",
         "comm_type": "report",
@@ -700,7 +722,7 @@ async def test_issue_1730_same_filename_resolves_distinct_resource_ids_across_ca
 
         result = await mcp_tools._handle_send_comm({
             "_from_minion_id": session_id,
-            "to_minion_name": "user",
+            "to_minion_name": "TargetMinion",
             "summary": "test",
             "content": "body",
             "comm_type": "report",
@@ -735,11 +757,12 @@ async def test_issue_1839_send_comm_surfaces_delivery_failure_reason(tmp_path):
 
     mock_system.comm_router = MagicMock()
     mock_system.comm_router.route_comm = AsyncMock(side_effect=failing_route_comm)
+    mock_system.comm_router.validate_comm_target = AsyncMock(return_value=True)
     mcp_tools = LegionMCPTools(mock_system)
 
     result = await mcp_tools._handle_send_comm({
         "_from_minion_id": session_id,
-        "to_minion_name": "user",
+        "to_minion_name": "TargetMinion",
         "summary": "test",
         "content": "body",
         "comm_type": "report",
@@ -747,7 +770,7 @@ async def test_issue_1839_send_comm_surfaces_delivery_failure_reason(tmp_path):
 
     assert result["is_error"] is True
     text = result["content"][0]["text"]
-    assert "Failed to send message to user" in text
+    assert "Failed to send message to TargetMinion" in text
     assert "Docker sandbox unavailable: image not found" in text
 
 
@@ -765,11 +788,12 @@ async def test_issue_1839_send_comm_generic_text_unchanged_without_reason(tmp_pa
 
     mock_system.comm_router = MagicMock()
     mock_system.comm_router.route_comm = AsyncMock(return_value=False)
+    mock_system.comm_router.validate_comm_target = AsyncMock(return_value=True)
     mcp_tools = LegionMCPTools(mock_system)
 
     result = await mcp_tools._handle_send_comm({
         "_from_minion_id": session_id,
-        "to_minion_name": "user",
+        "to_minion_name": "TargetMinion",
         "summary": "test",
         "content": "body",
         "comm_type": "report",
@@ -777,7 +801,7 @@ async def test_issue_1839_send_comm_generic_text_unchanged_without_reason(tmp_pa
 
     assert result["is_error"] is True
     text = result["content"][0]["text"]
-    assert text == "Failed to send message to user"
+    assert text == "Failed to send message to TargetMinion"
 
 
 # ── AC7 live authority retrofit tests (Issue #2193 PR4) ──
@@ -945,13 +969,9 @@ async def test_send_comm_plain_task_from_sibling_unaffected_by_authority_check()
 
 
 @pytest.mark.asyncio
-async def test_send_comm_halt_to_user_succeeds_without_authority_check(tmp_path):
-    """Regression found during review: a HALT/PIVOT addressed to the user
-    (to_minion_name='user') must not be gated by AC7's authority check at all —
-    to_minion_id is None for a to-user send, which would otherwise make
-    is_ancestor() look up a None session and unconditionally deny every minion's
-    HALT/PIVOT to the user. AC7 targets minion-to-minion abuse, not messages to
-    the user."""
+async def test_send_comm_halt_to_user_rejected_as_invalid_target(tmp_path):
+    """Issue #2259 AC1: "user" is rejected outright before any routing or
+    authority check — there's no to-user delivery path left to bypass."""
     from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
 
     mock_system = _make_send_comm_system_with_router("any-minion", tmp_path, resource_ids=[])
@@ -965,9 +985,33 @@ async def test_send_comm_halt_to_user_succeeds_without_authority_check(tmp_path)
         "delivery": "halt",
     })
 
-    assert result["is_error"] is False
-    mock_system.comm_router.route_comm.assert_called_once()
-    mock_system.comm_router.is_authorized_sender.assert_not_called()
+    assert result["is_error"] is True
+    mock_system.comm_router.route_comm.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_name", ["user", "User", "USER"])
+async def test_send_comm_to_user_rejected_regardless_of_case(tmp_path, target_name):
+    """Issue #2259 AC1: the reserved "user" target is matched case-insensitively,
+    mirroring the adjacent SYSTEM_MINION_NAME check — an LLM-generated 'User' or
+    'USER' must get the same clear guidance, not a generic 'not found' error."""
+    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    mock_system = _make_send_comm_system_with_router("any-minion", tmp_path, resource_ids=[])
+    mcp_tools = LegionMCPTools(mock_system)
+
+    result = await mcp_tools._handle_send_comm({
+        "_from_minion_id": "any-minion",
+        "to_minion_name": target_name,
+        "content": "status report",
+        "comm_type": "report",
+    })
+
+    assert result["is_error"] is True
+    text = result["content"][0]["text"]
+    assert "no delivery channel to the user" in text
+    assert "AskUserQuestion" in text
+    mock_system.comm_router.route_comm.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -981,7 +1025,7 @@ async def test_send_comm_auto_start_defaults_true_when_omitted(tmp_path):
 
     result = await mcp_tools._handle_send_comm({
         "_from_minion_id": "any-minion",
-        "to_minion_name": "user",
+        "to_minion_name": "TargetMinion",
         "content": "fyi",
         "comm_type": "task",
     })
@@ -1003,7 +1047,7 @@ async def test_send_comm_auto_start_false_explicit_is_honored(tmp_path):
 
     result = await mcp_tools._handle_send_comm({
         "_from_minion_id": "any-minion",
-        "to_minion_name": "user",
+        "to_minion_name": "TargetMinion",
         "content": "fyi",
         "comm_type": "task",
         "auto_start": False,
@@ -1041,7 +1085,7 @@ async def test_send_comm_delivery_defaults_by_comm_type_when_omitted(
 
     result = await mcp_tools._handle_send_comm({
         "_from_minion_id": "any-minion",
-        "to_minion_name": "user",
+        "to_minion_name": "TargetMinion",
         "content": "fyi",
         "comm_type": comm_type,
     })
@@ -1063,7 +1107,7 @@ async def test_send_comm_explicit_delivery_overrides_type_default(tmp_path):
 
     result = await mcp_tools._handle_send_comm({
         "_from_minion_id": "any-minion",
-        "to_minion_name": "user",
+        "to_minion_name": "TargetMinion",
         "content": "fyi",
         "comm_type": "report",
         "delivery": "immediate",
@@ -2192,24 +2236,6 @@ async def test_issue_1952_list_minions_other_states_show_state_name_as_activity(
         assert f"Activity: {state.value}" in text, (
             f"Expected Activity: {state.value}; got:\n{text}"
         )
-
-
-@pytest.mark.asyncio
-async def test_issue_1952_list_minions_user_entry_shows_idle():
-    from backend.legion.mcp.legion_mcp_tools import LegionMCPTools
-    from backend.session_manager import SessionState
-
-    session = _make_activity_test_session("mid-5", SessionState.ACTIVE, is_processing=True)
-    mock_system = _make_visible_minion_system(session, from_id="mid-5")
-
-    mcp_tools = LegionMCPTools(mock_system)
-    result = await mcp_tools._handle_list_minions({"_from_minion_id": "mid-5"})
-
-    assert result.get("is_error") is False, f"Got error: {result}"
-    text = result["content"][0]["text"]
-    assert "**user**" in text
-    user_block = text.split("**user**", 1)[1].split("•", 1)[0]
-    assert "Activity: idle" in user_block, f"User entry must always show idle; got:\n{text}"
 
 
 @pytest.mark.asyncio
