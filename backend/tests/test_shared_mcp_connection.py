@@ -7,7 +7,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import anyio
 import httpx
 import pytest
-from mcp.types import CallToolResult, TextContent, Tool
+from mcp.types import (
+    CallToolResult,
+    CompleteResult,
+    Completion,
+    EmptyResult,
+    GetPromptResult,
+    Prompt,
+    PromptReference,
+    ReadResourceResult,
+    Resource,
+    ResourceTemplate,
+    TextContent,
+    TextResourceContents,
+    Tool,
+)
 
 from backend.mcp.proxy_server_factory import build_proxy_server
 from backend.mcp.secret_resolver import SharedSecretResolutionError
@@ -70,6 +84,21 @@ def _fake_session(tools=None):
             isError=False,
         )
     )
+    list_resources_result = MagicMock()
+    list_resources_result.resources = []
+    sess.list_resources = AsyncMock(return_value=list_resources_result)
+    list_templates_result = MagicMock()
+    list_templates_result.resource_templates = []
+    sess.list_resource_templates = AsyncMock(return_value=list_templates_result)
+    sess.read_resource = AsyncMock(return_value=ReadResourceResult(contents=[]))
+    list_prompts_result = MagicMock()
+    list_prompts_result.prompts = []
+    sess.list_prompts = AsyncMock(return_value=list_prompts_result)
+    sess.get_prompt = AsyncMock(return_value=GetPromptResult(messages=[]))
+    sess.complete = AsyncMock(
+        return_value=CompleteResult(completion=Completion(values=["x"]))
+    )
+    sess.set_logging_level = AsyncMock(return_value=EmptyResult())
     return sess
 
 
@@ -1327,3 +1356,353 @@ async def test_cancellation_mid_call_releases_reconnect_lock_and_recovers():
     )
     result = await mgr.call_tool(cfg, "t1", {})
     assert result.is_error is False
+
+
+# ---------------------------------------------------------------------------
+# Issue #2234: list-shaped calls (resources/prompts) degrade to an empty list
+# on failure, mirroring list_tools_or_cached() — never raise.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_resources_delegates_to_session():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+    resources = [Resource(name="r1", uri="file:///a.txt")]
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+    conn.session.list_resources.return_value.resources = resources
+
+    result = await mgr.list_resources(cfg)
+
+    assert result == resources
+
+
+@pytest.mark.asyncio
+async def test_list_resources_degrades_to_empty_list_on_failure():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    async def failing_open(self_mgr, c, conn):
+        raise RuntimeError("boom")
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", failing_open):
+        resources = await mgr.list_resources(cfg)
+
+    assert resources == []
+
+
+@pytest.mark.asyncio
+async def test_list_resource_templates_delegates_to_session():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+    templates = [ResourceTemplate(name="rt1", uriTemplate="file:///{name}.txt")]
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+    conn.session.list_resource_templates.return_value.resource_templates = templates
+
+    result = await mgr.list_resource_templates(cfg)
+
+    assert result == templates
+
+
+@pytest.mark.asyncio
+async def test_list_resource_templates_degrades_to_empty_list_on_failure():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    async def failing_open(self_mgr, c, conn):
+        raise RuntimeError("boom")
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", failing_open):
+        templates = await mgr.list_resource_templates(cfg)
+
+    assert templates == []
+
+
+@pytest.mark.asyncio
+async def test_list_prompts_delegates_to_session():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+    prompts = [Prompt(name="p1")]
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+    conn.session.list_prompts.return_value.prompts = prompts
+
+    result = await mgr.list_prompts(cfg)
+
+    assert result == prompts
+
+
+@pytest.mark.asyncio
+async def test_list_prompts_degrades_to_empty_list_on_failure():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    async def failing_open(self_mgr, c, conn):
+        raise RuntimeError("boom")
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", failing_open):
+        prompts = await mgr.list_prompts(cfg)
+
+    assert prompts == []
+
+
+@pytest.mark.asyncio
+async def test_list_resources_degrades_to_empty_list_when_session_call_itself_fails():
+    """Even with a live, already-open session, a failing list call (not just a
+    failed open) must still degrade to [] rather than raise."""
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+    conn.session.list_resources = AsyncMock(side_effect=RuntimeError("not supported"))
+
+    resources = await mgr.list_resources(cfg)
+
+    assert resources == []
+
+
+# ---------------------------------------------------------------------------
+# Issue #2234: single-item calls (read_resource, get_prompt, complete,
+# set_logging_level) are explicit caller-triggered actions — raise a
+# descriptive exception on disconnect/failure rather than degrading.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_read_resource_delegates_to_session():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+    expected = ReadResourceResult(
+        contents=[TextResourceContents(uri="file:///a.txt", text="hi")]
+    )
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+    conn.session.read_resource = AsyncMock(return_value=expected)
+
+    result = await mgr.read_resource(cfg, "file:///a.txt")
+
+    conn.session.read_resource.assert_awaited_once_with("file:///a.txt")
+    assert result == expected
+
+
+def _fake_ensure_open_returning(conn):
+    """_ensure_open() always reopens a session=None conn via get_or_open(), so a
+    direct `conn.session = None` assignment doesn't exercise _call_locked's own
+    session-None check (reachable only in the narrow race window between
+    _ensure_open() returning and reconnect_lock.acquire() succeeding). Patching
+    _ensure_open() itself to hand back an already-disconnected conn isolates
+    that branch directly.
+    """
+
+    async def _fake(self_mgr, cfg):
+        return conn
+
+    return _fake
+
+
+@pytest.mark.asyncio
+async def test_read_resource_raises_descriptive_error_when_disconnected():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+    conn = _SharedConn(cfg_id=cfg.id, session=None, last_open_error="401 Unauthorized")
+
+    with patch.object(
+        SharedMcpConnectionManager, "_ensure_open", _fake_ensure_open_returning(conn)
+    ):
+        with pytest.raises(RuntimeError, match="401 Unauthorized"):
+            await mgr.read_resource(cfg, "file:///a.txt")
+
+
+@pytest.mark.asyncio
+async def test_read_resource_raises_when_reconnect_lock_held_too_long():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+
+    mgr.RECONNECT_WAIT_SECONDS = 0.05
+    await conn.reconnect_lock.acquire()
+    try:
+        with pytest.raises(RuntimeError, match="disconnected"):
+            await mgr.read_resource(cfg, "file:///a.txt")
+    finally:
+        conn.reconnect_lock.release()
+
+
+@pytest.mark.asyncio
+async def test_read_resource_propagates_upstream_exception():
+    """A failure from the upstream call itself (not a disconnect) must
+    propagate unchanged, not be swallowed into a stub result."""
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+    conn.session.read_resource = AsyncMock(side_effect=ValueError("no such resource"))
+
+    with pytest.raises(ValueError, match="no such resource"):
+        await mgr.read_resource(cfg, "file:///missing.txt")
+
+
+@pytest.mark.asyncio
+async def test_read_resource_marks_disconnected_on_closed_resource_error():
+    """Mirrors test_call_tool_returns_disconnect_on_closed_resource_error:
+    _call_locked must mark the conn disconnected (conn.session reset to None)
+    on a transport-closed error, same as _call_tool_locked, so the next call
+    reopens it instead of repeatedly hitting the same dead session forever."""
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+    conn.session.read_resource = AsyncMock(side_effect=anyio.ClosedResourceError())
+
+    with pytest.raises(RuntimeError, match="disconnected"):
+        await mgr.read_resource(cfg, "file:///a.txt")
+
+    assert conn.session is None
+
+
+@pytest.mark.asyncio
+async def test_next_read_resource_after_closed_resource_error_triggers_reopen():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+    open_calls = []
+
+    async def counting_open(self, c, conn):
+        open_calls.append(c.id)
+        await _stub_open_locked(self, c, conn)
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", counting_open):
+        conn = await mgr.get_or_open(cfg)
+
+    assert len(open_calls) == 1
+    conn.session.read_resource = AsyncMock(side_effect=anyio.BrokenResourceError())
+
+    with pytest.raises(RuntimeError, match="disconnected"):
+        await mgr.read_resource(cfg, "file:///a.txt")
+    assert conn.session is None
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", counting_open):
+        result = await mgr.read_resource(cfg, "file:///a.txt")
+
+    assert len(open_calls) == 2
+    assert result == ReadResourceResult(contents=[])
+
+
+@pytest.mark.asyncio
+async def test_get_prompt_delegates_to_session():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+    expected = GetPromptResult(messages=[])
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+    conn.session.get_prompt = AsyncMock(return_value=expected)
+
+    result = await mgr.get_prompt(cfg, "p1", {"arg": "val"})
+
+    conn.session.get_prompt.assert_awaited_once_with("p1", {"arg": "val"})
+    assert result == expected
+
+
+@pytest.mark.asyncio
+async def test_get_prompt_raises_descriptive_error_when_disconnected():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+    conn = _SharedConn(cfg_id=cfg.id, session=None)
+
+    with patch.object(
+        SharedMcpConnectionManager, "_ensure_open", _fake_ensure_open_returning(conn)
+    ):
+        with pytest.raises(RuntimeError, match="disconnected"):
+            await mgr.get_prompt(cfg, "p1")
+
+
+@pytest.mark.asyncio
+async def test_complete_maps_completion_argument_object_to_plain_dict():
+    """ClientSession.complete() takes a plain dict for `argument`, but the
+    proxy's on_completion handler receives a CompletionArgument object
+    (.name/.value) and a CompletionContext|None (.arguments) — the manager's
+    complete() itself takes the already-mapped plain dicts (mapping happens
+    in build_proxy_server's _complete closure); this test covers the manager
+    side: it must forward argument/context_arguments through unchanged."""
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+    expected = CompleteResult(completion=Completion(values=["foo", "foobar"]))
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+    conn.session.complete = AsyncMock(return_value=expected)
+
+    ref = PromptReference(name="p1")
+    result = await mgr.complete(cfg, ref, {"name": "fo"}, {"other": "bar"})
+
+    conn.session.complete.assert_awaited_once_with(ref, {"name": "fo"}, {"other": "bar"})
+    assert result == expected
+
+
+@pytest.mark.asyncio
+async def test_complete_raises_descriptive_error_when_disconnected():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+    conn = _SharedConn(cfg_id=cfg.id, session=None)
+
+    with patch.object(
+        SharedMcpConnectionManager, "_ensure_open", _fake_ensure_open_returning(conn)
+    ):
+        with pytest.raises(RuntimeError, match="disconnected"):
+            await mgr.complete(cfg, PromptReference(name="p1"), {"name": "fo"})
+
+
+@pytest.mark.asyncio
+async def test_set_logging_level_delegates_to_session():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", _stub_open_locked):
+        conn = await mgr.get_or_open(cfg)
+    conn.session.set_logging_level = AsyncMock(return_value=EmptyResult())
+
+    result = await mgr.set_logging_level(cfg, "debug")
+
+    conn.session.set_logging_level.assert_awaited_once_with("debug")
+    assert isinstance(result, EmptyResult)
+
+
+@pytest.mark.asyncio
+async def test_set_logging_level_raises_descriptive_error_when_disconnected():
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+    conn = _SharedConn(cfg_id=cfg.id, session=None)
+
+    with patch.object(
+        SharedMcpConnectionManager, "_ensure_open", _fake_ensure_open_returning(conn)
+    ):
+        with pytest.raises(RuntimeError, match="disconnected"):
+            await mgr.set_logging_level(cfg, "debug")
+
+
+@pytest.mark.asyncio
+async def test_single_item_call_raises_when_open_attempt_itself_fails():
+    """If _ensure_open's underlying open attempt raises (never-successful
+    connection, e.g. a cold-started cfg with a down host), the raw exception
+    must be converted into the same descriptive RuntimeError shape, not left
+    as an opaque ExceptionGroup."""
+    mgr = _make_mgr()
+    cfg = _http_cfg()
+
+    async def failing_open(self_mgr, c, conn):
+        raise RuntimeError("connection refused")
+
+    with patch.object(SharedMcpConnectionManager, "_open_locked", failing_open):
+        with pytest.raises(RuntimeError, match="disconnected"):
+            await mgr.read_resource(cfg, "file:///a.txt")

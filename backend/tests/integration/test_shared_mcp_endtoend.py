@@ -5,6 +5,9 @@ network is required. The test verifies that:
   - Two proxy sessions share exactly one upstream ClientSession.initialize() call.
   - Tool calls from both proxies reach the stub and succeed.
   - Secret refs in config headers are resolved to plaintext before the upstream opens.
+  - Issue #2234: resources/prompts round-trip through the real upstream
+    Server/ClientSession pair (not just mocked unit tests), proving the
+    wire-level JSON-RPC shapes actually match.
 """
 
 import asyncio
@@ -17,9 +20,21 @@ from mcp.server.models import InitializationOptions
 from mcp.shared.memory import create_client_server_memory_streams
 from mcp.types import (
     CallToolResult,
+    CompleteResult,
+    Completion,
+    CompletionArgument,
+    GetPromptResult,
+    ListPromptsResult,
+    ListResourcesResult,
     ListToolsResult,
+    Prompt,
+    PromptMessage,
+    PromptReference,
+    ReadResourceResult,
+    Resource,
     ServerCapabilities,
     TextContent,
+    TextResourceContents,
     Tool,
     ToolsCapability,
 )
@@ -51,6 +66,61 @@ def _make_stub_server(name: str = "stub-upstream"):
 
     server = Server(name, on_list_tools=_on_list_tools, on_call_tool=_on_call_tool)
     return server, counters
+
+
+def _make_stub_server_with_resources_and_prompts(name: str = "stub-upstream-resources"):
+    """Issue #2234: a stub server that additionally implements resources/prompts,
+    for an end-to-end round trip through the real upstream Server/ClientSession
+    pair (not mocked unit tests)."""
+
+    async def _on_list_tools(ctx, params):
+        # SharedMcpConnectionManager._run_connection calls session.list_tools()
+        # unconditionally at connect time (same as every other shared config);
+        # a server with no tools still needs a handler registered to answer it.
+        return ListToolsResult(tools=[])
+
+    async def _on_list_resources(ctx, params):
+        return ListResourcesResult(resources=[Resource(name="r1", uri="mem:///r1.txt")])
+
+    async def _on_read_resource(ctx, params):
+        return ReadResourceResult(
+            contents=[TextResourceContents(uri=params.uri, text="resource body")]
+        )
+
+    async def _on_list_prompts(ctx, params):
+        return ListPromptsResult(prompts=[Prompt(name="greet", description="greet prompt")])
+
+    async def _on_get_prompt(ctx, params):
+        return GetPromptResult(
+            messages=[
+                PromptMessage(
+                    role="user",
+                    content=TextContent(type="text", text=f"prompt:{params.name}"),
+                )
+            ]
+        )
+
+    async def _on_completion(ctx, params):
+        # Echo argument.name/.value back so the test can prove the manager's
+        # complete() forwarded the real CompletionArgument-derived dict
+        # correctly through the real ClientSession.complete() wire call
+        # (ClientSession.complete() reconstructs CompletionArgument(**argument)
+        # server-side via the JSON-RPC round trip — a wrong dict shape here
+        # would raise a pydantic ValidationError inside the real session).
+        return CompleteResult(
+            completion=Completion(values=[f"{params.argument.name}={params.argument.value}"])
+        )
+
+    server = Server(
+        name,
+        on_list_tools=_on_list_tools,
+        on_list_resources=_on_list_resources,
+        on_read_resource=_on_read_resource,
+        on_list_prompts=_on_list_prompts,
+        on_get_prompt=_on_get_prompt,
+        on_completion=_on_completion,
+    )
+    return server
 
 
 def _make_mgr():
@@ -231,3 +301,85 @@ async def test_shared_endtoend_secret_ref_header():
     assert "${secret:" not in str(captured["headers"]), (
         "Raw placeholder must NEVER appear in outbound headers"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 3 (issue #2234): resources/prompts round-trip through a real upstream
+# Server/ClientSession pair — not just mocked unit tests.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resources_and_prompts_round_trip_through_shared_manager():
+    """list_resources/read_resource/list_prompts/get_prompt all reach a real
+    stub upstream Server over in-memory streams and return real data."""
+    stub_server = _make_stub_server_with_resources_and_prompts()
+    mgr = _make_mgr()
+    cfg = _http_cfg(cfg_id="integ-cfg-resources", slug="integ-server-resources")
+
+    transport_fn, open_count = _make_in_memory_transport(stub_server)
+
+    with patch.object(SharedMcpConnectionManager, "_enter_transport", transport_fn):
+        await mgr.get_or_open(cfg)
+        assert open_count["n"] == 1
+
+        resources = await mgr.list_resources(cfg)
+        assert len(resources) == 1 and resources[0].name == "r1"
+
+        read_result = await mgr.read_resource(cfg, "mem:///r1.txt")
+        assert read_result.contents[0].text == "resource body"
+
+        prompts = await mgr.list_prompts(cfg)
+        assert len(prompts) == 1 and prompts[0].name == "greet"
+
+        prompt_result = await mgr.get_prompt(cfg, "greet", {"name": "world"})
+        assert prompt_result.messages[0].content.text == "prompt:greet"
+
+        # Also exercise the per-session proxy's handlers end-to-end, not just
+        # the manager directly — mirrors how build_proxy_server's closures are
+        # actually invoked by the SDK.
+        proxy = build_proxy_server(cfg, mgr)["instance"]
+        list_resources_entry = proxy.get_request_handler("resources/list")
+        proxy_resources = await list_resources_entry.handler(MagicMock(), None)
+        assert proxy_resources.resources[0].name == "r1"
+
+        # completion/complete round-trips through the real ClientSession.complete()
+        # wire call (not a mock) — proves the proxy's argument-dict mapping
+        # produces a shape the real session can serialize and the real upstream
+        # can deserialize via CompletionArgument(**argument), unlike a mocked
+        # session which would mask a dict-shape bug.
+        complete_entry = proxy.get_request_handler("completion/complete")
+        complete_params = MagicMock()
+        complete_params.ref = PromptReference(name="greet")
+        complete_params.argument = CompletionArgument(name="city", value="San")
+        complete_params.context = None
+        complete_result = await complete_entry.handler(MagicMock(), complete_params)
+        assert complete_result.completion.values == ["city=San"]
+
+        await mgr.release(cfg.id)
+
+    await mgr.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_resources_list_degrades_to_empty_when_upstream_does_not_implement_it():
+    """A shared server that does NOT implement resources/list must degrade to
+    an empty list through the shared manager, not crash the session/connection
+    (issue #2234 AC: 'empty list... rather than breaking the session's
+    connection'). Uses the tools-only stub server from Test 1."""
+    stub_server, _counters = _make_stub_server()
+    mgr = _make_mgr()
+    cfg = _http_cfg(cfg_id="integ-cfg-no-resources", slug="integ-server-no-resources")
+
+    transport_fn, open_count = _make_in_memory_transport(stub_server)
+
+    with patch.object(SharedMcpConnectionManager, "_enter_transport", transport_fn):
+        await mgr.get_or_open(cfg)
+        assert open_count["n"] == 1
+
+        resources = await mgr.list_resources(cfg)
+        assert resources == []
+
+        await mgr.release(cfg.id)
+
+    await mgr.shutdown()
