@@ -54,6 +54,12 @@ class TestClaudeSDK:
         assert info["state"] == "created"
         assert "working_directory" in info
 
+    def test_perform_session_health_check(self, sdk_instance):
+        """Regression test for issue #2254: session_state read must not raise AttributeError."""
+        health_status = sdk_instance._perform_session_health_check()
+        assert health_status["session_state"] == sdk_instance.info.state
+        assert sdk_instance.info.state == "created"
+
     @pytest.mark.asyncio
     async def test_start_success(self, sdk_instance):
         """Test successful SDK session start."""
