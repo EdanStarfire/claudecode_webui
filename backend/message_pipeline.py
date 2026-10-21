@@ -23,6 +23,11 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from backend.analytics.usage import (
+    _accumulate_subagent_usage,
+    _delta_from_baseline,
+    _normalize_result_usage,
+)
 from backend.docker_utils import classify_docker_output
 from shared.logging_config import get_logger
 
@@ -205,12 +210,12 @@ class MessagePipeline:
         # Issue #2189 (coordinator-split PR 2): deferred import avoids the circular
         # top-level import (session_coordinator.py imports MessagePipeline at module
         # scope) — same pattern SessionLauncher.start_session() uses for its own
-        # coordinator-module helper imports.
+        # coordinator-module helper imports. Issue #2267: the usage/cost helpers
+        # moved to backend.analytics.usage (top-level import above) — only
+        # _nested_metadata/_resolve_analytics_model_label still live on
+        # session_coordinator.py, so only those two still need deferring here.
         from .session_coordinator import (
-            _accumulate_subagent_usage,
-            _delta_from_baseline,
             _nested_metadata,
-            _normalize_result_usage,
             _resolve_analytics_model_label,
         )
 

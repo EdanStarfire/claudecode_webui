@@ -12,6 +12,19 @@ ToolCallTracker receives the same dict objects by reference, never copies.
 Unlike SessionLauncher/MessagePipeline, this is the terminal content
 extraction of the coordinator-split stage: nothing it calls is still
 stranded on the coordinator, so no Callbacks dataclass is needed here.
+
+Interface:
+- create_tool_call
+- update_tool_call_permission_request
+- update_tool_call_permission_response
+- update_tool_call_running
+- update_tool_call_result
+- update_tool_call_input
+- mark_session_tools_interrupted
+- get_tool_call_event
+- get_tool_call_by_id
+- apply_tool_call_snapshot
+- get_tool_call_by_request_id
 """
 
 import asyncio

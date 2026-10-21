@@ -22,6 +22,28 @@ and the handful of permanent coordinator methods this module calls
 `register_uploaded_resource`) are all reached directly via
 `self._coordinator.X`, same as SessionLauncher's "injected coordinator
 methods" passthroughs.
+
+Interface:
+- get_archives
+- get_archive_messages
+- get_archive_state
+- get_archive_resources
+- get_archive_resource_by_id
+- get_archive_resource_file
+- archive_exists
+- get_archive_queue
+- get_archive_proxy_logs
+- get_archive_proxy_log_content
+- get_archive_history
+- get_archive_history_content
+- get_archive_schedules
+- get_archive_attachments
+- get_archive_attachment_file
+- list_project_deleted_agents
+- erase_history
+- erase_archives
+- check_history_archives
+- archive_and_clear_session
 """
 
 import json

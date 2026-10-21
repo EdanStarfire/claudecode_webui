@@ -35,7 +35,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_ROOT = REPO_ROOT / "backend"
 
-# The coordinator plus the 7 modules extracted from it over this stage's 11 PRs.
+# The coordinator plus the 7 modules extracted from it over this stage's 11 PRs,
+# plus application_service.py (issue #2267 AC3: 4 unjustified late imports found
+# and moved to module scope — see application_service.py's own import block).
 SCANNED_FILES = [
     "backend/session_coordinator.py",
     "backend/session_launcher.py",
@@ -45,6 +47,7 @@ SCANNED_FILES = [
     "backend/session_resources.py",
     "backend/session_query.py",
     "backend/delivery_gate.py",
+    "backend/application_service.py",
 ]
 
 # file (relative to repo root) -> ceiling on UNJUSTIFIED late imports (those
@@ -61,6 +64,7 @@ UNJUSTIFIED_CEILING: dict[str, int] = {
     "backend/session_resources.py": 0,
     "backend/session_query.py": 0,
     "backend/delivery_gate.py": 0,
+    "backend/application_service.py": 0,
 }
 
 # Block-opener lines that may sit between a justification comment and the
