@@ -155,6 +155,28 @@ describe('SessionActionsMenu', () => {
     expect(assignSpy).toHaveBeenCalledWith('proj-1', 'sess-1', 'g1')
   })
 
+  it('clicking New Session From This Configuration refreshes the session then navigates with seed params', async () => {
+    const { pinia, router } = renderWithStores(SessionActionsMenu, {
+      props: { sessionId: 'sess-1', projectId: 'proj-1' },
+      routes: [
+        { path: '/', component: { template: '<div />' } },
+        { path: '/settings/session/:sessionId/general', component: { template: '<div />' } },
+      ],
+    })
+    const { useSessionStore } = await import('@/stores/session')
+    const sessionStore = useSessionStore(pinia)
+    sessionStore.sessions.set('sess-1', makeSession({ session_id: 'sess-1', project_id: 'proj-1' }))
+    const fetchSpy = vi.spyOn(sessionStore, 'fetchSessionDetails').mockResolvedValue({})
+
+    await openMenu()
+    await fireEvent.click(screen.getByRole('menuitem', { name: /new session from this configuration/i }))
+    await new Promise(r => setTimeout(r, 0))
+
+    expect(fetchSpy).toHaveBeenCalledWith('sess-1')
+    expect(router.currentRoute.value.path).toBe('/settings/session/__new__/general')
+    expect(router.currentRoute.value.query).toEqual({ project_id: 'proj-1', seed_session_id: 'sess-1' })
+  })
+
   it('hides the Move to section entirely when no projectId is provided', async () => {
     renderWithStores(SessionActionsMenu, {
       props: { sessionId: 'sess-1', projectId: null }

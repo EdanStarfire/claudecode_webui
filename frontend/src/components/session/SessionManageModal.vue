@@ -152,6 +152,15 @@
                 <div class="small text-muted">Restore the orange unread indicator</div>
               </button>
 
+              <button
+                class="btn btn-outline-secondary text-start"
+                @click="handleNewSessionFromConfig"
+                :disabled="isPerformingAction"
+              >
+                <strong><i class="bi bi-magic me-1"></i> New Session From This Configuration</strong>
+                <div class="small text-muted">Create a new, empty session linked to the same template and settings</div>
+              </button>
+
               <!-- Visual separator -->
               <hr class="my-2">
 
@@ -291,7 +300,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { useSessionStore } from '@/stores/session'
+import { useSessionStore, buildSeedSessionRoute } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import { usePollingStore } from '@/stores/polling'
 import { useMessageStore } from '@/stores/message'
@@ -458,6 +467,26 @@ async function handleMarkUnread() {
     if (wasCurrent && projectId) router.push(`/project/${projectId}`)
   } catch (error) {
     errorMessage.value = `Failed to mark unread: ${error.data?.detail || error.message || 'Unknown error'}`
+  } finally {
+    isPerformingAction.value = false
+  }
+}
+
+// New session seeded from this session's configuration (issue #2164)
+async function handleNewSessionFromConfig() {
+  if (!session.value) return
+
+  isPerformingAction.value = true
+  loadingMessage.value = 'Preparing new session...'
+  try {
+    await sessionStore.fetchSessionDetails(session.value.session_id)
+    const target = buildSeedSessionRoute(session.value)
+    if (modalInstance) modalInstance.hide()
+    router.push(target)
+  } catch (error) {
+    console.error('Error preparing seeded session:', error)
+    const errorMsg = error.data?.detail || error.message || 'Unknown error'
+    errorMessage.value = `Error preparing new session: ${errorMsg}`
   } finally {
     isPerformingAction.value = false
   }

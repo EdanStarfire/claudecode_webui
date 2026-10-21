@@ -213,7 +213,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import { useTemplateStore } from '@/stores/template'
@@ -337,6 +337,48 @@ const mergedConfig = computed(() => ({
   capabilities: capabilitiesStr.value,
 }))
 
+// Issue #2164: seed a new session's draft from an existing session's configuration.
+// template_id is pre-filled into the draft (visible/changeable via the template chip);
+// the source's CONFIG_FIELDS overrides are stashed here (not rendered field-by-field)
+// and merged into the create payload in handleSave().
+const seedSessionId = computed(() => {
+  if (!isSessionMode.value || !isNew.value) return null
+  return route.query.seed_session_id || null
+})
+const seedConfig = ref(null)
+let seedAppliedFor = null
+
+async function applySeedSession() {
+  const sid = seedSessionId.value
+  if (!sid) {
+    // SettingsLayout keys the mounted section on route.path only (not the full
+    // route with query), so navigating from this seeded route to a plain
+    // __new__ one reuses this same component instance instead of remounting
+    // it — without this reset, a stale seedConfig would otherwise leak into
+    // an unrelated, un-seeded session creation.
+    seedAppliedFor = null
+    seedConfig.value = null
+    return
+  }
+  if (seedAppliedFor === sid) return
+  seedAppliedFor = sid
+  let source = sessionStore.getSession(sid)
+  if (!source) {
+    const data = await sessionStore.fetchSessionDetails(sid)
+    source = data?.session || sessionStore.getSession(sid)
+  }
+  if (!source) return
+  seedConfig.value = source.config || {}
+  // Set unconditionally (even when the source has no template) so the area is
+  // always marked dirty once seeding applies — protecting the seeded intent
+  // with the same navigation/beforeunload guard a template pick already gets.
+  settingsStore.setField(areaKey.value, 'template_id', source.template_id || null)
+}
+
+// Reactive (not a one-shot onMounted call) so it also applies once vue-router
+// finishes resolving route.query on the very first render.
+watch(seedSessionId, applySeedSession, { immediate: true })
+
 const isDirty = computed(() => {
   // New-session mode always shows Save (no entity yet to compare against)
   if (isSessionMode.value && isNew.value) return true
@@ -423,6 +465,7 @@ async function handleSave() {
       let caps = draft.value?.capabilities
       if (typeof caps === 'string') caps = caps.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
       const session = await sessionStore.createSession(projectId, {
+        ...(seedConfig.value || {}),
         name,
         ...(templateId ? { template_id: templateId } : {}),
         ...(workingDir ? { working_directory: workingDir } : {}),

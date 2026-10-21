@@ -14,6 +14,21 @@ import { useLinksStore } from './links'
 import { pushDebugEvent } from '../composables/useDebugBuffer'
 
 /**
+ * Issue #2164: router target for creating a new session seeded from an existing
+ * session's configuration (template_id + CONFIG_FIELDS overrides, read on the
+ * target page via route.query.seed_session_id).
+ */
+export function buildSeedSessionRoute(sourceSession) {
+  return {
+    path: '/settings/session/__new__/general',
+    query: {
+      project_id: sourceSession.project_id,
+      seed_session_id: sourceSession.session_id,
+    },
+  }
+}
+
+/**
  * Session Store - Manages session state and operations
  * Replaces the complex Map+Array dual storage from vanilla JS
  */

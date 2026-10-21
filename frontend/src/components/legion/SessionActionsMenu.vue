@@ -57,6 +57,14 @@
       >
         <i class="bi bi-tools me-2"></i>Manage Session
       </button>
+      <button
+        type="button"
+        class="session-actions-item"
+        role="menuitem"
+        @click="runAction(newSessionFromConfig)"
+      >
+        <i class="bi bi-magic me-2"></i>New Session From This Configuration
+      </button>
 
       <template v-if="projectId">
         <div class="session-actions-divider"></div>
@@ -79,7 +87,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { useSessionStore } from '@/stores/session'
+import { useSessionStore, buildSeedSessionRoute } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import { useProjectStore } from '@/stores/project'
 
@@ -163,6 +171,19 @@ async function handleMarkRead() {
   } catch (e) {
     console.error('Failed to mark read:', e)
   }
+}
+
+// New session seeded from this session's configuration (issue #2164)
+async function newSessionFromConfig() {
+  if (!liveSession.value) return
+  try {
+    await sessionStore.fetchSessionDetails(props.sessionId)
+  } catch (e) {
+    console.error('Failed to refresh session before seeding new session:', e)
+  }
+  const source = liveSession.value
+  if (!source) return
+  router.push(buildSeedSessionRoute(source))
 }
 
 async function moveToGroup(groupId) {
