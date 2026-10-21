@@ -439,7 +439,9 @@ class TestCommRouter:
 
     @pytest.mark.asyncio
     async def test_route_comm_validation(self, comm_router):
-        """Test that route_comm validates Comm objects."""
+        """Test that route_comm validates Comm objects (issue #2259: no to_user
+        destination exists anymore, so a missing to_minion_id is the only way
+        to fail validation)."""
         # Create invalid Comm (no destination)
         comm = Comm(
             comm_id=str(uuid.uuid4()),
@@ -447,7 +449,7 @@ class TestCommRouter:
             content="Test message"
         )
 
-        with pytest.raises(ValueError, match="exactly one destination"):
+        with pytest.raises(ValueError, match="destination minion"):
             await comm_router.route_comm(comm)
 
     @pytest.mark.asyncio
@@ -462,20 +464,6 @@ class TestCommRouter:
         )
 
         result = await comm_router._send_to_minion(comm)
-        assert result is True
-
-    @pytest.mark.asyncio
-    async def test_send_to_user(self, comm_router):
-        """Test sending Comm to user."""
-        comm = Comm(
-            comm_id=str(uuid.uuid4()),
-            from_minion_id="test-minion-123",
-            to_user=True,
-            content="Test message to user",
-            comm_type=CommType.REPORT
-        )
-
-        result = await comm_router._send_to_user(comm)
         assert result is True
 
     @pytest.mark.asyncio

@@ -31,6 +31,7 @@ from .session_lifecycle import (  # noqa: F401 — re-exported; see module docst
     STOPPED_STATES,
     LifecycleEvent,
     SessionState,
+    is_not_terminated,
     transition,
     transition_processing,
 )
@@ -66,6 +67,9 @@ class SessionInfo:
     state: SessionState
     created_at: datetime
     updated_at: datetime
+    # Issue #2259: set when the session transitions to TERMINATED, so the
+    # hierarchy view can show "Disposed Xm ago" instead of "No activity yet".
+    disposed_at: datetime | None = None
     working_directory: str | None = None
     # Live runtime permission mode (distinct from config["permission_mode"])
     current_permission_mode: str = "acceptEdits"
@@ -178,6 +182,7 @@ class SessionInfo:
             "created_at": self.created_at.isoformat(),
             "current_model": self.current_model,
             "current_permission_mode": self.current_permission_mode,
+            "disposed_at": self.disposed_at.isoformat() if self.disposed_at else None,
             "error_message": self.error_message,
             "error_subtype": self.error_subtype,
             "error_terminal_reason": self.error_terminal_reason,
@@ -230,6 +235,8 @@ class SessionInfo:
         data["state"] = SessionState(data["state"])
         data["created_at"] = datetime.fromisoformat(data["created_at"])
         data["updated_at"] = datetime.fromisoformat(data["updated_at"])
+        if data.get("disposed_at"):
+            data["disposed_at"] = datetime.fromisoformat(data["disposed_at"])
         if data.get("latest_message_time"):
             data["latest_message_time"] = datetime.fromisoformat(data["latest_message_time"])
         if data.get("last_activity_at"):
@@ -247,6 +254,7 @@ class SessionInfo:
             if name:
                 data["slug"] = slugify_name(name)
 
+        data.setdefault("disposed_at", None)
         data.setdefault("initial_permission_mode", data.get("current_permission_mode", "acceptEdits"))
         data.setdefault("current_model", data.get("config", {}).get("model"))
         data.setdefault("initial_model", data.get("current_model"))
@@ -279,7 +287,7 @@ class SessionInfo:
         # Drop any keys not in the post-#1230 schema (legacy flat CONFIG_FIELDS
         # and session_overrides are removed by migration before from_dict is called).
         known = {
-            "session_id", "state", "created_at", "updated_at", "working_directory",
+            "session_id", "state", "created_at", "updated_at", "disposed_at", "working_directory",
             "current_permission_mode", "initial_permission_mode",
             "current_model", "initial_model", "error_message",
             "error_subtype", "error_terminal_reason", "error_api_error_status", "error_list",
@@ -1090,6 +1098,16 @@ class SessionManager:
 
         session.state = new_state
         session.updated_at = datetime.now(UTC)
+        # disposed_at tracks "is currently disposed", not "was ever disposed" —
+        # restart_session()/reset_session() route back through TERMINATED before
+        # reactivating (recover_session()), so it must clear on any transition
+        # away from TERMINATED or a reactivated minion shows a stale "Disposed"
+        # fallback in the hierarchy view until its next message.
+        if is_not_terminated(new_state):
+            if session.disposed_at is not None:
+                session.disposed_at = None
+        else:
+            session.disposed_at = session.updated_at
         if error_message:
             session.error_message = error_message
         if error_subtype is not None:

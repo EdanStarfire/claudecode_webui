@@ -1565,6 +1565,15 @@ onMounted(() => {
               minion.latest_message_type = session.latest_message_type
               minion.latest_message_time = session.latest_message_time
             }
+            // Issue #2259: mirror disposed_at (and created_at, for symmetry —
+            // it never changes post-creation) so the hierarchy's activity
+            // fallback reflects a dispose observed via live broadcast.
+            if (minion.disposed_at !== session.disposed_at) {
+              minion.disposed_at = session.disposed_at
+            }
+            if (minion.created_at !== session.created_at) {
+              minion.created_at = session.created_at
+            }
           }
         }
       }

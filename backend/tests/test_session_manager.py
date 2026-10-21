@@ -432,6 +432,63 @@ class TestSessionManager:
         assert session_info.state == SessionState.TERMINATED
 
     @pytest.mark.asyncio
+    async def test_terminate_session_sets_disposed_at(self, temp_session_manager, sample_session_config):
+        """Issue #2259 AC4: disposed_at is stamped on the TERMINATED transition
+        so the hierarchy view can show "Disposed Xm ago" activity."""
+        manager = temp_session_manager
+
+        session_id = str(uuid.uuid4())
+        await manager.create_session(session_id, config=sample_session_config)
+        session_info = manager._active_sessions[session_id]
+        assert session_info.disposed_at is None
+
+        await manager.start_session(session_id)
+        assert session_info.disposed_at is None
+
+        await manager.terminate_session(session_id)
+        assert session_info.disposed_at is not None
+        assert session_info.disposed_at == session_info.updated_at
+
+    @pytest.mark.asyncio
+    async def test_disposed_at_clears_on_transition_away_from_terminated(
+        self, temp_session_manager, sample_session_config
+    ):
+        """disposed_at tracks "is currently disposed", not "was ever disposed" —
+        a session reactivated after TERMINATED (restart_session()/reset_session()
+        route back through TERMINATED before reactivating) must not keep showing
+        a stale "Disposed" fallback in the hierarchy view."""
+        manager = temp_session_manager
+
+        session_id = str(uuid.uuid4())
+        await manager.create_session(session_id, config=sample_session_config)
+        await manager.start_session(session_id)
+        await manager.terminate_session(session_id)
+
+        session_info = manager._active_sessions[session_id]
+        assert session_info.disposed_at is not None
+
+        await manager._update_session_state(session_id, SessionState.ACTIVE)
+        assert session_info.disposed_at is None
+
+    @pytest.mark.asyncio
+    async def test_pause_session_leaves_disposed_at_none(self, temp_session_manager, sample_session_config):
+        """disposed_at must only be set by a TERMINATED transition, not any
+        other state change."""
+        manager = temp_session_manager
+
+        session_id = str(uuid.uuid4())
+        await manager.create_session(session_id, config=sample_session_config)
+        await manager.start_session(session_id)
+        # Manually transition to ACTIVE state to simulate SDK fully started
+        await manager._update_session_state(session_id, SessionState.ACTIVE)
+        success = await manager.pause_session(session_id)
+        assert success is True
+
+        session_info = manager._active_sessions[session_id]
+        assert session_info.state == SessionState.PAUSED
+        assert session_info.disposed_at is None
+
+    @pytest.mark.asyncio
     async def test_get_session_info(self, temp_session_manager, sample_session_config):
         """Test getting session information."""
         manager = temp_session_manager

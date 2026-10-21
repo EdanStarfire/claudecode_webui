@@ -188,7 +188,7 @@ class CommRouter:
         Raises:
             ValueError: If comm validation fails
         """
-        legion_logger.debug(f"Routing comm {comm.comm_id}: from={comm.from_minion_id}, to_minion={comm.to_minion_id}, to_user={comm.to_user}")
+        legion_logger.debug(f"Routing comm {comm.comm_id}: from={comm.from_minion_id}, to_minion={comm.to_minion_id}")
 
         # Validate comm has proper routing
         comm.validate()
@@ -200,8 +200,9 @@ class CommRouter:
         # have already fired unconditionally. is_authorized_sender() is the exact
         # helper _is_authorized() delegates to for minion senders — reused here as
         # a second, earlier call site for side-effect prevention, not duplicated
-        # authority logic. HALT/PIVOT-to-user (to_minion_id=None) is never gated
-        # here, matching deliver()'s own scoping (it's never reached for to_user).
+        # authority logic. comm.validate() above already guarantees to_minion_id
+        # is set (issue #2259: there is no longer a to-user destination), so the
+        # `and comm.to_minion_id` guard below is defensive, not load-bearing.
         #
         # Gated on the target session actually existing: is_ancestor()'s hierarchy
         # walk starts from comm.to_minion_id's own session info and returns False
@@ -245,10 +246,6 @@ class CommRouter:
         if comm.to_minion_id:
             result = await self._send_to_minion(comm)
             legion_logger.info(f"Comm {comm.comm_id} routed to minion {comm.to_minion_id}: {'success' if result else 'failed'}")
-            return result
-        elif comm.to_user:
-            result = await self._send_to_user(comm)
-            legion_logger.info(f"Comm {comm.comm_id} sent to user: {'success' if result else 'failed'}")
             return result
 
         legion_logger.warning(f"Comm {comm.comm_id} has no valid destination")
@@ -488,19 +485,6 @@ class CommRouter:
                 )
             return False
 
-    async def _send_to_user(self, comm: Comm) -> bool:
-        """
-        Send Comm to user via WebSocket.
-
-        Args:
-            comm: Comm with to_user=True
-
-        Returns:
-            bool: True if sent successfully
-        """
-        # TODO: Phase 2 - Broadcast via WebSocket to UI
-        return True
-
     async def _send_system_error_comm(
         self,
         to_minion_id: str,
@@ -522,12 +506,10 @@ class CommRouter:
                 from_minion_name=SYSTEM_MINION_NAME,
                 from_user=False,
                 to_minion_id=to_minion_id,
-                to_user=False,
                 content=error_message,
                 comm_type=CommType.SYSTEM,  # Use SYSTEM for system-generated messages
                 delivery=DeliveryPolicy.IMMEDIATE,
                 in_reply_to=original_comm_id,  # Reference the failed comm
-                visible_to_user=True
             )
 
             # Persist the error comm

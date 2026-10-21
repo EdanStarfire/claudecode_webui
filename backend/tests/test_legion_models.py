@@ -92,12 +92,12 @@ class TestSenderType:
 
     def test_infers_system(self):
         """from_minion_id == SYSTEM_MINION_ID infers SenderType.SYSTEM."""
-        comm = Comm(comm_id="test", from_minion_id=SYSTEM_MINION_ID, to_user=True)
+        comm = Comm(comm_id="test", from_minion_id=SYSTEM_MINION_ID, to_minion_id="minion-456")
         assert comm.sender_type == SenderType.SYSTEM
 
     def test_infers_minion(self):
         """Any other from_minion_id infers SenderType.MINION."""
-        comm = Comm(comm_id="test", from_minion_id="minion-123", to_user=True)
+        comm = Comm(comm_id="test", from_minion_id="minion-123", to_minion_id="minion-456")
         assert comm.sender_type == SenderType.MINION
 
     def test_explicit_sender_type_not_overridden(self):
@@ -105,7 +105,7 @@ class TestSenderType:
         comm = Comm(
             comm_id="test",
             from_minion_id="minion-123",
-            to_user=True,
+            to_minion_id="minion-456",
             sender_type=SenderType.MINION,
             sender_id="x",
         )
@@ -171,16 +171,6 @@ class TestCommValidation:
         )
         assert comm.validate() is True
 
-    def test_valid_minion_to_user(self):
-        """Valid Comm from minion to user."""
-        comm = Comm(
-            comm_id=str(uuid.uuid4()),
-            from_minion_id="minion-123",
-            to_user=True,
-            content="Hello"
-        )
-        assert comm.validate() is True
-
     def test_valid_minion_to_minion(self):
         """Valid Comm from minion to minion."""
         comm = Comm(
@@ -192,25 +182,14 @@ class TestCommValidation:
         assert comm.validate() is True
 
     def test_invalid_no_destination(self):
-        """Comm with no destination should fail validation."""
+        """Comm with no destination minion should fail validation (issue #2259:
+        there is no longer a to-user destination to fall back to)."""
         comm = Comm(
             comm_id=str(uuid.uuid4()),
             from_user=True,
             content="Hello"
         )
-        with pytest.raises(ValueError, match="exactly one destination"):
-            comm.validate()
-
-    def test_invalid_multiple_destinations(self):
-        """Comm with multiple destinations should fail validation."""
-        comm = Comm(
-            comm_id=str(uuid.uuid4()),
-            from_user=True,
-            to_minion_id="minion-123",
-            to_user=True,
-            content="Hello"
-        )
-        with pytest.raises(ValueError, match="exactly one destination"):
+        with pytest.raises(ValueError, match="destination minion"):
             comm.validate()
 
     def test_invalid_no_source(self):
@@ -258,7 +237,7 @@ class TestCommSerialization:
         assert data["from_user"] is True
         assert data["from_minion_id"] is None
         assert data["to_minion_id"] == "minion-123"
-        assert data["to_user"] is False
+        assert "to_user" not in data
         assert data["summary"] == "Test summary"
         assert data["content"] == "Test content"
         assert data["comm_type"] == "task"
@@ -279,7 +258,6 @@ class TestCommSerialization:
             in_reply_to="prev-comm-id",
             related_task_id="task-123",
             metadata={"key": "value"},
-            visible_to_user=False,
             timestamp=1234567890.0
         )
 
@@ -290,7 +268,7 @@ class TestCommSerialization:
         assert data["in_reply_to"] == "prev-comm-id"
         assert data["related_task_id"] == "task-123"
         assert data["metadata"] == {"key": "value"}
-        assert data["visible_to_user"] is False
+        assert "visible_to_user" not in data
         assert data["timestamp"] == 1234567890.0
 
     def test_from_dict_basic(self):
@@ -328,7 +306,7 @@ class TestCommSerialization:
             comm_id=str(uuid.uuid4()),
             from_minion_id="minion-1",
             from_minion_name="Worker",
-            to_user=True,
+            to_minion_id="minion-2",
             summary="Important report",
             content="Detailed content here",
             comm_type=CommType.REPORT,
@@ -336,7 +314,6 @@ class TestCommSerialization:
             in_reply_to="prev-id",
             related_task_id="task-id",
             metadata={"foo": "bar", "count": 42},
-            visible_to_user=True,
             timestamp=1700000000.0
         )
 
@@ -346,7 +323,7 @@ class TestCommSerialization:
         assert restored.comm_id == original.comm_id
         assert restored.from_minion_id == original.from_minion_id
         assert restored.from_minion_name == original.from_minion_name
-        assert restored.to_user == original.to_user
+        assert restored.to_minion_id == original.to_minion_id
         assert restored.summary == original.summary
         assert restored.content == original.content
         assert restored.comm_type == original.comm_type
@@ -354,7 +331,6 @@ class TestCommSerialization:
         assert restored.in_reply_to == original.in_reply_to
         assert restored.related_task_id == original.related_task_id
         assert restored.metadata == original.metadata
-        assert restored.visible_to_user == original.visible_to_user
         assert restored.timestamp == original.timestamp
 
     def test_from_dict_timestamp_normalization_float(self):
@@ -495,6 +471,37 @@ class TestCommSerialization:
         comm = Comm.from_dict(data)
         assert comm.delivery == expected
 
+    def test_from_dict_drops_legacy_to_user_and_visible_to_user_keys(self):
+        """Issue #2259 AC5: every Comm persisted before this change serialized
+        visible_to_user (default True on ALL comms, not just to_user ones), and
+        to_user comms also serialized to_user. Both fields are gone from the
+        dataclass now — from_dict() must pop them rather than raise TypeError,
+        since PendingStore replays persisted JSONL through this exact path."""
+        data = {
+            "comm_id": "test",
+            "from_user": False,
+            "from_minion_id": "minion-1",
+            "from_minion_name": None,
+            "to_minion_id": None,
+            "to_user": True,
+            "to_minion_name": None,
+            "summary": "",
+            "content": "",
+            "comm_type": "task",
+            "delivery": "immediate",
+            "in_reply_to": None,
+            "related_task_id": None,
+            "metadata": {},
+            "visible_to_user": True,
+            "timestamp": 1234567890.0,
+        }
+
+        comm = Comm.from_dict(data)
+
+        assert comm.comm_id == "test"
+        assert not hasattr(comm, "to_user")
+        assert not hasattr(comm, "visible_to_user")
+
 
 class TestCommDefaults:
     """Tests for Comm default field values."""
@@ -508,11 +515,6 @@ class TestCommDefaults:
         """Default delivery should be IMMEDIATE."""
         comm = Comm(comm_id="test")
         assert comm.delivery == DeliveryPolicy.IMMEDIATE
-
-    def test_default_visible_to_user(self):
-        """Default visible_to_user should be True."""
-        comm = Comm(comm_id="test")
-        assert comm.visible_to_user is True
 
     def test_default_metadata_is_empty_dict(self):
         """Default metadata should be empty dict."""

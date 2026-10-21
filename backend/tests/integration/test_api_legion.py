@@ -34,20 +34,82 @@ class TestLegionHierarchy:
         resp = await client.get(f"/api/legions/{fake_id}/hierarchy")
         assert resp.status_code == 404
 
+    async def test_hierarchy_exposes_created_at_and_disposed_at(self, api_integration_env):
+        """Issue #2259 AC4: hierarchy entries carry created_at/disposed_at so the
+        frontend can fall back to "Spawned"/"Disposed" activity instead of
+        "No activity yet" when there's no latest_message."""
+        from backend.session_config import SessionConfig
+
+        client = api_integration_env["client"]
+        coordinator = api_integration_env["coordinator"]
+        project = await _setup_legion(api_integration_env)
+        legion_id = project["project_id"]
+
+        parent_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=parent_id,
+            project_id=legion_id,
+            config=SessionConfig(),
+            name="Parent",
+        )
+        child_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=child_id,
+            project_id=legion_id,
+            config=SessionConfig(),
+            name="Child",
+            parent_overseer_id=parent_id,
+        )
+        parent_info = await coordinator.session_manager.get_session_info(parent_id)
+        parent_info.child_minion_ids = [child_id]
+
+        resp = await client.get(f"/api/legions/{legion_id}/hierarchy")
+        assert resp.status_code == 200
+        parent_node = resp.json()["children"][0]
+        assert parent_node["id"] == parent_id
+        assert parent_node["created_at"] is not None
+        assert parent_node["disposed_at"] is None
+        child_node = parent_node["children"][0]
+        assert child_node["id"] == child_id
+        assert child_node["created_at"] is not None
+        assert child_node["disposed_at"] is None
+
+        await coordinator.legion_system.overseer_controller.dispose_minion(
+            parent_overseer_id=parent_id,
+            child_minion_name="Child",
+            delete_after_archive=False,
+        )
+
+        resp = await client.get(f"/api/legions/{legion_id}/hierarchy")
+        assert resp.status_code == 200
+        parent_node = resp.json()["children"][0]
+        child_node = parent_node["children"][0]
+        assert child_node["disposed_at"] is not None
+
 
 class TestSendComm:
     async def test_send_comm_to_minion(self, api_integration_env):
+        """Issue #2259 AC2/AC3: "to_user" is no longer an accepted request field —
+        every comm sent through this endpoint must target a real minion."""
         client = api_integration_env["client"]
+        create_test_session = api_integration_env["create_test_session"]
+        data_dir = api_integration_env["data_dir"]
         project = await _setup_legion(api_integration_env)
         lid = project["project_id"]
 
-        # Send comm to user (avoids need for active minion SDK session)
+        session = await create_test_session(lid, name="Recipient")
+        sid = session["session_id"]
+        # MockClaudeSDK's SessionRecording requires messages.jsonl to already
+        # exist (even empty) in the session's working_directory when no fixture
+        # session_name is given — same precondition as the dormant-minion test below.
+        (data_dir.parent / "messages.jsonl").touch()
+
         resp = await client.post(
             f"/api/legions/{lid}/comms",
             json={
-                "to_user": True,
-                "content": "Status update for user",
-                "comm_type": "info",
+                "to_minion_id": sid,
+                "content": "Status update for recipient",
+                "comm_type": "task",
             },
         )
         assert resp.status_code == 200

@@ -19,9 +19,11 @@ pytestmark = pytest.mark.slow
 def _capture_persisted_comms(comm_router):
     """Spy on CommRouter._persist_comm(), capturing each comm as it's routed.
 
-    SPAWN/DISPOSE comms are sent to_user (not to a minion session), so there's
-    no per-session store to read them back from (issue #2235: timeline.jsonl,
-    the old ledger for to_user comms, is no longer written).
+    Issue #2259: spawn_minion()/dispose_minion() no longer construct a SPAWN/
+    DISPOSE Comm at all (there's no to-user delivery channel for it to go to)
+    — this spy is used to assert that no such comm is persisted, with
+    created_at/disposed_at on the hierarchy entry now the activity signal
+    instead.
     """
     persisted_comms = []
     original_persist_comm = comm_router._persist_comm
@@ -51,7 +53,8 @@ async def test_spawn_minion_minimal(legion_test_env):
     - Tool returns success with child_minion_id
     - Child session created with ACTIVE state
     - Parent marked as overseer with child in child_minion_ids
-    - SPAWN comm routed through CommRouter._persist_comm()
+    - No SPAWN comm persisted (issue #2259); hierarchy's created_at is the
+      activity signal instead
     """
     env = legion_test_env
     legion_system = env["legion_system"]
@@ -127,17 +130,18 @@ async def test_spawn_minion_minimal(legion_test_env):
     assert parent_updated.is_overseer is True
     assert child_id in parent_updated.child_minion_ids
 
-    # SIDE EFFECT 3: SPAWN comm was persisted (captured via the spy above)
-    spawn_comm = next(
-        (c for c in persisted_comms if c.comm_type.value == "spawn"
-         and c.from_minion_id == parent.session_id
-         and "child" in (c.content or "")),
-        None,
-    )
+    # SIDE EFFECT 3 (issue #2259 T2): no SPAWN comm persisted — there's no
+    # to-user delivery channel for one to go to anymore.
+    spawn_comms = [c for c in persisted_comms if c.comm_type.value == "spawn"]
+    assert spawn_comms == [], f"Expected no SPAWN comm; got {spawn_comms}"
 
-    assert spawn_comm is not None, f"Expected a SPAWN comm for child. Got {len(persisted_comms)} persisted comms"
-    assert spawn_comm.to_user is True  # SPAWN comms are sent to user
-    assert "child" in spawn_comm.content
+    # SIDE EFFECT 4 (issue #2259 T2): hierarchy shows the child's created_at
+    # as its activity signal instead.
+    hierarchy = await legion_system.legion_coordinator.assemble_minion_hierarchy(legion_id)
+    parent_node = next(n for n in hierarchy["children"] if n["id"] == parent.session_id)
+    child_node = next(n for n in parent_node["children"] if n["id"] == child_id)
+    assert child_node["created_at"] is not None
+    assert child_node["disposed_at"] is None
 
 
 @pytest.mark.asyncio
@@ -469,7 +473,7 @@ async def test_dispose_minion_direct_child(legion_test_env):
     Verifies:
     - Child session terminated (TERMINATED state)
     - Parent's child_minion_ids updated (child removed)
-    - DISPOSE comm routed through CommRouter._persist_comm()
+    - No DISPOSE comm persisted (issue #2259)
     """
     env = legion_test_env
     legion_system = env["legion_system"]
@@ -537,17 +541,10 @@ async def test_dispose_minion_direct_child(legion_test_env):
     parent_updated = await env["session_coordinator"].session_manager.get_session_info(parent.session_id)
     assert child_id not in parent_updated.child_minion_ids
 
-    # SIDE EFFECT 3: DISPOSE comm was persisted (captured via the spy above)
-    dispose_comm = next(
-        (c for c in persisted_comms if c.comm_type.value == "dispose"
-         and c.from_minion_id == parent.session_id
-         and "child" in (c.content or "")),
-        None,
-    )
-
-    assert dispose_comm is not None, f"Expected a DISPOSE comm for child. Got {len(persisted_comms)} persisted comms"
-    assert dispose_comm.to_user is True  # DISPOSE comms are sent to user
-    assert "child" in dispose_comm.content
+    # SIDE EFFECT 3 (issue #2259): no DISPOSE comm persisted — there's no
+    # to-user delivery channel for one to go to anymore.
+    dispose_comms = [c for c in persisted_comms if c.comm_type.value == "dispose"]
+    assert dispose_comms == [], f"Expected no DISPOSE comm; got {dispose_comms}"
 
 
 @pytest.mark.asyncio
@@ -656,6 +653,17 @@ async def test_dispose_minion_with_descendants(legion_test_env):
     response_text = dispose_result["content"][0]["text"]
     # Response should mention recursive disposal
     assert "grandchild" in response_text.lower() or "descendant" in response_text.lower() or "recursive" in response_text.lower()
+
+    # SIDE EFFECT 3 (issue #2259 T3): disposed_at is stamped on both the
+    # soft-disposed child and grandchild, and surfaces on the hierarchy entry.
+    assert child_final.disposed_at is not None
+    assert grandchild_final.disposed_at is not None
+
+    legion_id = env["legion_id"]
+    hierarchy = await legion_system.legion_coordinator.assemble_minion_hierarchy(legion_id)
+    parent_node = next(n for n in hierarchy["children"] if n["id"] == parent.session_id)
+    child_node = next(n for n in parent_node["children"] if n["id"] == child_id)
+    assert child_node["disposed_at"] is not None
 
 
 @pytest.mark.asyncio

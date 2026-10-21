@@ -51,7 +51,6 @@ def build_router(webui) -> APIRouter:
             comm_id=str(uuid.uuid4()),
             from_user=True,
             to_minion_id=request.to_minion_id,
-            to_user=request.to_user,
             to_minion_name=to_minion_name,
             content=request.content,
             comm_type=comm_type,

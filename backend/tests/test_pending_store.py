@@ -82,7 +82,6 @@ class TestPendingItem:
             in_reply_to="comm-parent",
             related_task_id="task-1",
             metadata={"key": "value"},
-            visible_to_user=False,
             timestamp=1700000000.0,
             auto_start=True,
             reset_first=True,
@@ -351,13 +350,6 @@ class TestPendingStoreValidation:
     """enqueue() routing guards."""
 
     @pytest.mark.asyncio
-    async def test_enqueue_rejects_to_user_comm(self, pending_store, temp_session):
-        sid, sdir = temp_session
-        comm = Comm(comm_id=str(uuid.uuid4()), from_user=True, to_user=True, content="for the user")
-        with pytest.raises(ValueError):
-            await pending_store.enqueue(sid, sdir, comm)
-
-    @pytest.mark.asyncio
     async def test_enqueue_rejects_session_id_mismatch(self, pending_store, temp_session):
         sid, sdir = temp_session
         comm = make_comm("some-other-session")
@@ -367,9 +359,10 @@ class TestPendingStoreValidation:
     @pytest.mark.asyncio
     async def test_enqueue_propagates_comm_validate_error(self, pending_store, temp_session):
         sid, sdir = temp_session
-        # Neither to_user nor to_minion_id set -> comm.validate() raises before our own guard.
+        # No to_minion_id set (issue #2259: there is no to_user fallback
+        # destination anymore) -> comm.validate() raises before our own guard.
         comm = Comm(comm_id=str(uuid.uuid4()), from_user=True, content="nowhere")
-        with pytest.raises(ValueError, match="exactly one destination"):
+        with pytest.raises(ValueError, match="destination minion"):
             await pending_store.enqueue(sid, sdir, comm)
 
 
@@ -437,6 +430,55 @@ class TestPendingStorePersistence:
         items = await store.load(sid, sdir)
         assert len(items) == 1
         assert items[0].comm.comm_id == "comm-ok"
+
+    @pytest.mark.asyncio
+    async def test_replay_tolerates_legacy_to_user_and_visible_to_user_keys(self, temp_session):
+        """Issue #2259 AC5: every pending.jsonl line written before this change
+        has visible_to_user in its serialized comm dict (it defaulted True on
+        ALL comms, not just to_user ones), and to_user comms also serialized
+        to_user. Comm.from_dict() must pop both before construction, or load()
+        raises TypeError on startup for any legion with comms persisted from
+        before this change — this directly exercises that replay path."""
+        sid, sdir = temp_session
+        ledger_file = sdir / "pending.jsonl"
+        legacy_entry = json.dumps({
+            "type": "enqueue",
+            "comm": {
+                "comm_id": "legacy-comm-1",
+                "from_minion_id": None,
+                "from_user": True,
+                "from_minion_name": None,
+                "to_minion_id": sid,
+                "to_user": False,
+                "to_minion_name": None,
+                "summary": "",
+                "content": "pre-existing pending comm",
+                "comm_type": "task",
+                "delivery": "immediate",
+                "attachments": [],
+                "in_reply_to": None,
+                "related_task_id": None,
+                "metadata": {},
+                "visible_to_user": True,
+                "timestamp": 1700000000.0,
+                "auto_start": False,
+                "reset_first": False,
+                "fire_at": None,
+                "sender_type": "user",
+                "sender_id": None,
+            },
+            "session_id": sid,
+            "position": 0,
+            "created_at": 0.0,
+        })
+        ledger_file.write_text(legacy_entry + "\n")
+
+        store = PendingStore()
+        items = await store.load(sid, sdir)
+
+        assert len(items) == 1
+        assert items[0].comm.comm_id == "legacy-comm-1"
+        assert items[0].comm.content == "pre-existing pending comm"
 
     @pytest.mark.asyncio
     async def test_enqueue_with_dispatch_fields_persists_across_restart(self, temp_session):

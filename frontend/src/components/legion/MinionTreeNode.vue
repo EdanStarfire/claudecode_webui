@@ -58,6 +58,13 @@
             <span class="message-content" :title="minionWithLiveData.latest_message">{{ truncatedMessage }}</span>
             <span v-if="relativeTime" class="message-time ms-1">({{ relativeTime }})</span>
           </div>
+          <!-- Issue #2259: fall back to dispose/spawn activity before "No activity yet" -->
+          <div v-else-if="minionWithLiveData?.disposed_at" class="text-muted fst-italic small">
+            Disposed<span v-if="relativeTime"> {{ relativeTime }}</span>
+          </div>
+          <div v-else-if="minionWithLiveData?.created_at" class="text-muted fst-italic small">
+            Spawned<span v-if="relativeTime"> {{ relativeTime }}</span>
+          </div>
           <!-- Empty state -->
           <div v-else class="text-muted fst-italic small">
             No activity yet
@@ -211,6 +218,14 @@ const minionWithLiveData = computed(() => {
       merged.latest_message_type = liveSession.value.latest_message_type
       merged.latest_message_time = liveSession.value.latest_message_time
     }
+    // Issue #2259: mirror created_at/disposed_at so a spawn/dispose observed
+    // via live broadcast updates the activity fallback without a full reload.
+    if (liveSession.value.created_at) {
+      merged.created_at = liveSession.value.created_at
+    }
+    if (liveSession.value.disposed_at) {
+      merged.disposed_at = liveSession.value.disposed_at
+    }
   }
 
   // Merge latest message if available from message store (only for the selected session;
@@ -357,28 +372,37 @@ const truncatedMessage = computed(() => {
   return msg.length > maxLen ? msg.slice(0, maxLen) + '...' : msg
 })
 
-const relativeTime = computed(() => {
+// Issue #2259: whichever timestamp the activity line is actually displaying —
+// latest_message_time takes priority, then disposed_at, then created_at,
+// matching the v-if/v-else-if chain in the template.
+const activityTimestamp = computed(() => {
   const data = minionWithLiveData.value
-  if (!data || !data.latest_message_time) return ''
+  if (!data) return null
+  return data.latest_message_time || data.disposed_at || data.created_at || null
+})
+
+const relativeTime = computed(() => {
+  const timestamp = activityTimestamp.value
+  if (!timestamp) return ''
 
   try {
     const now = Date.now()
     let msgTime
 
     // Handle both ISO string and numeric timestamp formats
-    if (typeof data.latest_message_time === 'number') {
+    if (typeof timestamp === 'number') {
       // If timestamp is in seconds (< year 3000 in milliseconds), convert to milliseconds
-      msgTime = data.latest_message_time < 32503680000
-        ? data.latest_message_time * 1000
-        : data.latest_message_time
+      msgTime = timestamp < 32503680000
+        ? timestamp * 1000
+        : timestamp
     } else {
       // Backend sends ISO string, parse it
-      msgTime = new Date(data.latest_message_time).getTime()
+      msgTime = new Date(timestamp).getTime()
     }
 
     // Validate the parsed time is reasonable (not from 1970 and not in future)
     if (isNaN(msgTime) || msgTime < 946684800000 || msgTime > now + 60000) { // Jan 1, 2000 to 1 min in future
-      console.warn('Invalid timestamp for relative time calculation:', data.latest_message_time, 'parsed to:', msgTime)
+      console.warn('Invalid timestamp for relative time calculation:', timestamp, 'parsed to:', msgTime)
       return ''
     }
 
@@ -396,7 +420,7 @@ const relativeTime = computed(() => {
     if (minutes > 0) return `${minutes}m ago`
     return 'just now'
   } catch (e) {
-    console.error('Error calculating relative time:', e, data.latest_message_time)
+    console.error('Error calculating relative time:', e, timestamp)
     return ''
   }
 })

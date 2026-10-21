@@ -217,6 +217,9 @@ class LegionCoordinator:
                 "latest_message": session.latest_message,
                 "latest_message_type": session.latest_message_type,
                 "latest_message_time": session.latest_message_time.isoformat() if session.latest_message_time else None,
+                # Spawn/dispose activity fallback (issue #2259)
+                "created_at": session.created_at.isoformat() if session.created_at else None,
+                "disposed_at": session.disposed_at.isoformat() if session.disposed_at else None,
                 "children": []
             }
             session_map[session.session_id] = session_data

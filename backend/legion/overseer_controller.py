@@ -147,8 +147,6 @@ class OverseerController:
             ValueError: If parent doesn't exist, name duplicate, or legion at capacity
             PermissionError: If parent is not a valid overseer
         """
-        from backend.models.legion_models import Comm, CommType, DeliveryPolicy
-
         # 1. Get parent minion session
         parent_session = await self.system.session_port.session_manager.get_session_info(parent_overseer_id)
         if not parent_session:
@@ -228,20 +226,6 @@ class OverseerController:
                     # Log error but don't fail spawn if capability format is invalid
                     legion_logger.warning(f"Failed to register capability '{capability}' for spawned minion {child_minion_id}: {e}")
 
-        # 10. Send SPAWN notification to user
-        spawn_comm = Comm(
-            comm_id=str(uuid.uuid4()),
-            from_minion_id=parent_overseer_id,
-            from_minion_name=parent_session.name,
-            to_user=True,
-            summary=f"Spawned {name}",
-            content=f"**{parent_session.name}** spawned minion **{name}** ({role})",
-            comm_type=CommType.SPAWN,
-            delivery=DeliveryPolicy.IMMEDIATE,
-            visible_to_user=True
-        )
-        await self.system.comm_router.route_comm(spawn_comm)
-
         # 12. Register WebSocket message callback for child session
         # This ensures messages from the spawned minion broadcast to WebSocket clients
         if self.system.message_callback_registrar:
@@ -303,8 +287,6 @@ class OverseerController:
             ValueError: If child not found
             PermissionError: If caller is not parent of child
         """
-        from backend.models.legion_models import Comm, CommType, DeliveryPolicy
-
         # 1. Get parent session
         parent_session = await self.system.session_port.session_manager.get_session_info(parent_overseer_id)
         if not parent_session:
@@ -408,22 +390,7 @@ class OverseerController:
                 if child_minion_id in minion_ids:
                     minion_ids.remove(child_minion_id)
 
-        # 8. Send DISPOSE notification to user
         action_word = "deleted" if deleted else "disposed"
-        dispose_comm = Comm(
-            comm_id=str(uuid.uuid4()),
-            from_minion_id=parent_overseer_id,
-            from_minion_name=parent_session.name,
-            to_user=True,
-            summary=f"{'Deleted' if deleted else 'Disposed'} {child_minion_name}",
-            content=f"**{parent_session.name}** {action_word} minion **{child_minion_name}**" + (
-                f" (and {descendants_disposed} descendants)" if descendants_disposed > 0 else ""
-            ),
-            comm_type=CommType.DISPOSE,
-            delivery=DeliveryPolicy.IMMEDIATE,
-            visible_to_user=True
-        )
-        await self.system.comm_router.route_comm(dispose_comm)
 
         # 9. Broadcast project update to UI poll queue (session state changed or removed)
         legion_id = parent_session.project_id
@@ -478,8 +445,6 @@ class OverseerController:
         Raises:
             ValueError: On self-reparent, cross-legion, cycle, or MCP authority violation
         """
-        from backend.models.legion_models import Comm, CommType, DeliveryPolicy
-
         if subject_id == new_parent_id:
             raise ValueError("Cannot reparent a minion to itself")
 
@@ -595,49 +560,10 @@ class OverseerController:
 
         # Post-lock: reads only — safe outside the critical section.
         caller_name = "user"
-        from_minion_id = None
-        from_user = True
         if caller_id is not None:
             caller_session = await self.system.session_port.session_manager.get_session_info(caller_id)
             if caller_session:
                 caller_name = caller_session.name
-            from_minion_id = caller_id
-            from_user = False
-
-        old_parent_name = "root"
-        if old_parent_id:
-            op_session = await self.system.session_port.session_manager.get_session_info(old_parent_id)
-            if op_session:
-                old_parent_name = op_session.name
-
-        new_parent_label = "root"
-        if new_parent_id:
-            np_session = await self.system.session_port.session_manager.get_session_info(new_parent_id)
-            if np_session:
-                new_parent_label = np_session.name
-
-        extra = ""
-        if descendants_moved:
-            extra += f"\n\n{descendants_moved} descendant(s) moved with the subject."
-        if getattr(subject, 'is_processing', False):
-            extra += "\n\nNote: subject was actively processing at time of reparent."
-
-        reparent_comm = Comm(
-            comm_id=str(uuid.uuid4()),
-            from_user=from_user,
-            from_minion_id=from_minion_id,
-            from_minion_name=caller_name if from_minion_id else None,
-            to_user=True,
-            summary=f"Reparented {subject.name} → {new_parent_label}",
-            content=(
-                f"**{caller_name}** moved **{subject.name}** "
-                f"from **{old_parent_name}** to **{new_parent_label}**{extra}"
-            ),
-            comm_type=CommType.REPARENT,
-            delivery=DeliveryPolicy.IMMEDIATE,
-            visible_to_user=True,
-        )
-        await self.system.comm_router.route_comm(reparent_comm)
 
         project = await self.system.session_port.project_manager.get_project(legion_id)
         if project:

@@ -290,3 +290,71 @@ describe('MinionTreeNode - compact row layout (issue #2061)', () => {
     expect(uiStore.isMinionCollapsed('parent')).toBe(true)
   })
 })
+
+describe('MinionTreeNode - spawn/dispose activity fallback (issue #2259)', () => {
+  it('shows "No activity yet" when there is no message, dispose, or spawn timestamp', async () => {
+    const minionData = { id: 'sess-1', name: 'Minion One', children: [] }
+    const { pinia, wrapper } = mountNode(minionData)
+    const { useSessionStore } = await import('@/stores/session')
+    useSessionStore(pinia).sessions.set('sess-1', makeSession({ session_id: 'sess-1', name: 'Minion One' }))
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('No activity yet')
+  })
+
+  it('falls back to "Spawned ... ago" from created_at when there is no latest_message or disposed_at', async () => {
+    const minionData = { id: 'sess-1', name: 'Minion One', children: [] }
+    const { pinia, wrapper } = mountNode(minionData)
+    const { useSessionStore } = await import('@/stores/session')
+    useSessionStore(pinia).sessions.set('sess-1', makeSession({
+      session_id: 'sess-1',
+      name: 'Minion One',
+      created_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    }))
+    await wrapper.vm.$nextTick()
+
+    const text = wrapper.text()
+    expect(text).toContain('Spawned')
+    expect(text).toContain('ago')
+    expect(text).not.toContain('No activity yet')
+  })
+
+  it('falls back to "Disposed ... ago" from disposed_at, taking priority over created_at', async () => {
+    const minionData = { id: 'sess-1', name: 'Minion One', children: [] }
+    const { pinia, wrapper } = mountNode(minionData)
+    const { useSessionStore } = await import('@/stores/session')
+    useSessionStore(pinia).sessions.set('sess-1', makeSession({
+      session_id: 'sess-1',
+      name: 'Minion One',
+      created_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      disposed_at: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+    }))
+    await wrapper.vm.$nextTick()
+
+    const text = wrapper.text()
+    expect(text).toContain('Disposed')
+    expect(text).not.toContain('Spawned')
+    expect(text).not.toContain('No activity yet')
+  })
+
+  it('prefers latest_message over disposed_at/created_at when all are present', async () => {
+    const minionData = { id: 'sess-1', name: 'Minion One', children: [] }
+    const { pinia, wrapper } = mountNode(minionData)
+    const { useSessionStore } = await import('@/stores/session')
+    useSessionStore(pinia).sessions.set('sess-1', makeSession({
+      session_id: 'sess-1',
+      name: 'Minion One',
+      created_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      disposed_at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+      latest_message: 'hello there',
+      latest_message_type: 'assistant',
+      latest_message_time: new Date(Date.now() - 1000).toISOString(),
+    }))
+    await wrapper.vm.$nextTick()
+
+    const text = wrapper.text()
+    expect(text).toContain('hello there')
+    expect(text).not.toContain('Disposed')
+    expect(text).not.toContain('Spawned')
+  })
+})
