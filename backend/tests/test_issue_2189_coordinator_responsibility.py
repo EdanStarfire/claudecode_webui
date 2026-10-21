@@ -40,9 +40,13 @@ DELEGATE_CEILING = 10
 # smoothing over an unrelated refactor.
 ALLOWLIST: dict[str, int] = {
     # --- Construction ---
-    # Bumped 375->378 (issue #2193 PR 3): added self.pending_store = PendingStore(),
-    # pure instantiation alongside the existing queue_manager/delivery_gate wiring.
-    "__init__": 378,
+    # Issue #2267 AC1: __init__ shrank 378->333 — the ~18 pure/already-built-
+    # manager collaborators it used to construct inline now come from
+    # coordinator_builder.build_core_managers()/build_legion_system(). The
+    # remainder (plain-dict state init, and the 6 self-referential
+    # X(coordinator=self) collaborators that need `self` to exist first) is
+    # an acknowledged residual per AC1's own design — see coordinator_builder.py.
+    "__init__": 333,
     # --- Orchestration ---
     "initialize": 69,
     "cleanup": 23,
@@ -51,12 +55,14 @@ ALLOWLIST: dict[str, int] = {
     # cluster, callback-factory setters, tool-call tracking entry points. ---
     "create_session": 76,
     "create_ephemeral_session": 66,
-    "delete_session": 208,
+    # Issue #2267 AC1: delete_session shrank 208->37 — now an orchestrator
+    # calling the 11 step-split helpers below, in order, inside one try/except.
+    "delete_session": 37,
     "send_message": 64,
     "interrupt_session": 63,
     "set_permission_mode": 55,
     "set_model": 55,
-    "add_directory": 46,
+    "add_directory": 45,
     "get_session_messages": 47,
     "get_or_create_storage_manager": 33,
     "_validate_and_cleanup_projects": 74,
@@ -94,16 +100,24 @@ ALLOWLIST: dict[str, int] = {
     "_prune_inherited_mcp_snapshot": 31,
     "_migrate_stale_mcp_snapshots": 16,
     # --- Module-level helper functions: real logic that sits outside the
-    # class but is late-imported back by message_pipeline.py/session_launcher.py ---
-    "_normalize_result_usage": 38,
-    "_delta_from_baseline": 47,
-    "_accumulate_subagent_usage": 28,
+    # class but is late-imported back by message_pipeline.py/session_launcher.py.
+    # Issue #2267 AC2: _normalize_result_usage/_delta_from_baseline/
+    # _accumulate_subagent_usage moved to backend/analytics/usage.py (no longer
+    # in this file at all — removed from this allowlist, not just shrunk).
+    # _all_tier_fields_set/_build_model_map removed too: both are 8 lines,
+    # already under DELEGATE_CEILING, so they never needed an entry here. ---
     "_render_inject_file": 38,
-    "_all_tier_fields_set": 8,
-    "_build_model_map": 8,
     "_resolve_analytics_model_label": 19,
     "_nested_metadata": 18,
     "_extract_send_comm_sender_attachments": 19,
+    # Issue #2267 AC1: delete_session's own former body was split along its
+    # existing step-boundary comments (0, 1, 1.5, 1.55, 1.6, 1.65, 1.7, 1.8, 2,
+    # 3, 4) into private helpers — every one of them (and every further
+    # sub-helper carved out of the larger steps, e.g. archiving's
+    # kwargs-building/logging pieces) lands at or under DELEGATE_CEILING, so
+    # none of delete_session's own step-split helpers need an entry here at
+    # all (confirmed by AST re-measurement — see the allowlist-shrink note in
+    # this issue's PR description for the before/after counts).
 }
 
 

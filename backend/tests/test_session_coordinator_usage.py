@@ -1,5 +1,5 @@
 """Unit tests for usage normalisation against SDK 0.1.72+ (issue #1287)."""
-from backend.session_coordinator import (
+from backend.analytics.usage import (
     _accumulate_subagent_usage,
     _delta_from_baseline,
     _normalize_result_usage,

@@ -1134,6 +1134,54 @@ class TestDeleteSessionScheduleCancellation:
         assert result["success"] is True
 
 
+class TestIssue2267DeleteSessionWithParentStillArchives:
+    """Regression test for issue #2267's delete_session() step-split: a minion
+    with a parent_overseer_id must still be archived and have its legion
+    directory cleaned up — _detach_session_from_parent() must return the
+    resolved session_info so later steps can still see it, not silently
+    drop it once a parent relationship is found."""
+
+    @pytest.mark.asyncio
+    async def test_deleting_minion_with_parent_still_archives_and_cleans_legion_dir(
+        self, temp_coordinator, sample_session_config
+    ):
+        import uuid
+
+        coordinator = temp_coordinator
+
+        parent_id = await coordinator.create_session(**sample_session_config)
+
+        child_config = dict(sample_session_config)
+        child_config["session_id"] = str(uuid.uuid4())
+        child_config["parent_overseer_id"] = parent_id
+        child_id = await coordinator.create_session(**child_config)
+
+        parent_info = await coordinator.session_manager.get_session_info(parent_id)
+        parent_info.child_minion_ids = [child_id]
+
+        mock_legion = MagicMock()
+        mock_legion.scheduler_service = AsyncMock()
+        mock_legion.scheduler_service.delete_schedules_for_minion = AsyncMock(return_value=0)
+        mock_legion.legion_coordinator = MagicMock()
+        mock_legion.legion_coordinator.unregister_minion_capabilities = MagicMock()
+        mock_legion.archive_manager = AsyncMock()
+        mock_legion.archive_manager.archive_minion = AsyncMock(
+            return_value=MagicMock(success=True, archive_path="/tmp/archive")
+        )
+        coordinator.legion_system = mock_legion
+
+        result = await coordinator.delete_session(child_id)
+
+        assert result["success"] is True
+        mock_legion.archive_manager.archive_minion.assert_awaited_once()
+        _, kwargs = mock_legion.archive_manager.archive_minion.call_args
+        assert kwargs["minion_id"] == child_id
+        assert kwargs["parent_overseer_id"] == parent_id
+
+        parent_info_after = await coordinator.session_manager.get_session_info(parent_id)
+        assert child_id not in parent_info_after.child_minion_ids
+
+
 class TestIssue1941DeleteSessionPreservesAnalytics:
     """delete_session() must never remove analytics rows (issue #1941) — it
     flags the session's aggregate row deleted via

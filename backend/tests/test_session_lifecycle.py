@@ -437,6 +437,67 @@ class TestSingleEmissionPerTransition:
         assert session_info.is_processing is False
 
     @pytest.mark.asyncio
+    async def test_transition_to_error_from_idle_emits_exactly_once(
+        self, temp_session_manager, sample_session_config
+    ):
+        """Issue #2267 AC5: the idle-case counterpart to the mid-turn test above
+        — ACTIVE, is_processing=False (no start_turn() call) -> ERROR. Not
+        previously covered: existing coverage only exercised the mid-turn case."""
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+        await manager.start_session(sid)
+        await manager.mark_session_active(sid)
+
+        emissions = []
+
+        async def _capture(session_id, new_state, is_processing, **kwargs):
+            emissions.append((session_id, new_state, is_processing))
+
+        manager.add_state_change_callback(_capture)
+
+        result = await manager.transition_to_error(sid, "simulated idle critical error")
+
+        assert result is True
+        assert emissions == [(sid, SessionState.ERROR, False)]
+
+    @pytest.mark.asyncio
+    async def test_start_turn_and_end_turn_emit_processing_change_only(
+        self, temp_session_manager, sample_session_config
+    ):
+        """Issue #2267 AC5: start_turn()/end_turn() must emit exactly one
+        processing_change each — and no state_change at all, since the
+        session's SessionState never actually changes on these two calls.
+        No prior test asserted emission counts for either wrapper."""
+        manager = temp_session_manager
+        sid = str(uuid.uuid4())
+        await manager.create_session(sid, config=sample_session_config)
+        await manager.start_session(sid)
+        await manager.mark_session_active(sid)
+
+        state_emissions = []
+        processing_emissions = []
+
+        async def _capture_state(session_id, new_state, is_processing, **kwargs):
+            state_emissions.append((session_id, new_state, is_processing))
+
+        async def _capture_processing(session_id, is_processing):
+            processing_emissions.append((session_id, is_processing))
+
+        manager.add_state_change_callback(_capture_state)
+        manager.add_processing_change_callback(_capture_processing)
+
+        result = await manager.start_turn(sid)
+        assert result is True
+        assert processing_emissions == [(sid, True)]
+        assert state_emissions == []
+
+        result = await manager.end_turn(sid)
+        assert result is True
+        assert processing_emissions == [(sid, True), (sid, False)]
+        assert state_emissions == []
+
+    @pytest.mark.asyncio
     async def test_recover_session_from_active_emits_once(
         self, temp_session_manager, sample_session_config
     ):

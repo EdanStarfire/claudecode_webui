@@ -17,9 +17,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from backend.analytics.database import AnalyticsDB
+from backend.analytics.usage import _accumulate_subagent_usage
 from backend.analytics_store import AnalyticsStore
 from backend.session_config import SessionConfig
-from backend.session_coordinator import SessionCoordinator, _accumulate_subagent_usage
+from backend.session_coordinator import SessionCoordinator
 
 
 @pytest.fixture

@@ -16,35 +16,23 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from backend.config_manager import load_config
 from backend.config_resolution import (
     _MCP_INHERITABLE_FIELDS,
     CONFIG_FIELDS,
     _mcp_field_equal,
     resolve_template_config,
 )
-from backend.credential_vault import CredentialVault
-from backend.hook_config_manager import HookConfigManager
-from backend.legion_system import LegionSystem
 from backend.mcp.links_mcp_tools import LinksMCPTools
-from backend.mcp.oneshot_connection import McpOneshotConnector
 from backend.mcp.resource_mcp_tools import ResourceMCPTools
-from backend.mcp.shared_connection_manager import SharedMcpConnectionManager
-from backend.mcp_config_manager import McpConfigManager
-from backend.oauth_callback_listener_manager import OAuthCallbackListenerManager
-from backend.oauth_manager import OAuthFlowManager
-from backend.profile_manager import ProfileManager
-from backend.provider_catalog import ProviderCatalogStore
-from backend.template_manager import TemplateManager
 from shared.logging_config import get_logger
 
 from .archive_coordinator import ArchiveCoordinator
 from .claude_sdk import ClaudeSDK, ResultError
+from .coordinator_builder import build_core_managers, build_legion_system
 from .data_storage import DataStorageManager
 from .delivery_gate import DeliveryGate
 from .hooks.pretooluse_handler import InternalPermissionHandler
 from .litellm_proxy_manager import make_model_alias
-from .message_parser import MessageParser, MessageProcessor
 from .message_pipeline import MessagePipeline, MessagePipelineCallbacks
 from .models.legion_models import Comm, CommType, DeliveryPolicy, SenderType
 from .models.messages import (
@@ -53,14 +41,9 @@ from .models.messages import (
     ToolCall,
 )
 from .models.permission_mode import PermissionMode
-from .oauth_refresh_manager import OAuthRefreshManager
-from .oauth_secret_bundle_manager import OAuthSecretBundleManager
-from .pending_store import PendingStore
-from .project_manager import ProjectInfo, ProjectManager
-from .queue_manager import QueueManager
+from .project_manager import ProjectInfo
 from .queue_processor import QueueProcessor
 from .routers._models import _validate_new_additional_directory
-from .secrets_service import SecretsService
 from .session_config import DEFAULTS, SessionConfig
 from .session_launcher import (
     STARTUP_ATTACH_TIMEOUT_SECONDS,  # noqa: F401 — re-exported; test_session_coordinator.py imports it from here
@@ -68,7 +51,7 @@ from .session_launcher import (
     SessionLauncher,
 )
 from .session_lifecycle import is_interruptible
-from .session_manager import STOPPED_STATES, SessionManager, SessionState
+from .session_manager import STOPPED_STATES, SessionInfo, SessionState
 from .session_query import SessionQuery
 from .session_recorder import SessionRecorder
 from .session_resources import SessionResources
@@ -76,131 +59,11 @@ from .task_registry import TaskLegRegistry
 from .timestamp_injection import maybe_inject_timestamp
 from .timestamp_utils import get_unix_timestamp
 from .tool_call_tracker import ToolCallTracker
-from .vault_refresh_manager import VaultRefreshManager
 
 # Get specialized logger for coordinator actions
 coord_logger = get_logger('coordinator', category='COORDINATOR')
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)
-
-
-def _normalize_result_usage(
-    usage: dict | None,
-    model_usage: dict | None,
-) -> tuple[dict, float | None]:
-    """Return (snake_case usage dict, aggregate cost from model_usage or None).
-
-    Prefers SDK 'usage' when it carries non-zero token counts. Otherwise
-    aggregates per-model 'model_usage' entries (camelCase keys, keyed by
-    model name) into the snake_case shape that AnalyticsStore.record_turn
-    already understands.
-    """
-    snake_keys = (
-        "input_tokens",
-        "output_tokens",
-        "cache_creation_input_tokens",
-        "cache_read_input_tokens",
-    )
-    if isinstance(usage, dict) and any(int(usage.get(k) or 0) for k in snake_keys):
-        return dict(usage), None
-
-    if not isinstance(model_usage, dict) or not model_usage:
-        return (dict(usage) if isinstance(usage, dict) else {}), None
-
-    agg = {k: 0 for k in snake_keys}
-    cost = 0.0
-    has_cost = False
-    for entry in model_usage.values():
-        if not isinstance(entry, dict):
-            continue
-        agg["input_tokens"] += int(entry.get("inputTokens") or 0)
-        agg["output_tokens"] += int(entry.get("outputTokens") or 0)
-        agg["cache_creation_input_tokens"] += int(entry.get("cacheCreationInputTokens") or 0)
-        agg["cache_read_input_tokens"] += int(entry.get("cacheReadInputTokens") or 0)
-        c = entry.get("costUSD")
-        if c is not None:
-            cost += float(c)
-            has_cost = True
-    return agg, (cost if has_cost else None)
-
-
-def _delta_from_baseline(
-    usage: dict,
-    sdk_cost: float | None,
-    baseline: dict[str, float] | None,
-) -> tuple[dict, float | None, dict[str, float]]:
-    """Compute per-turn deltas from cumulative-since-subprocess snapshots.
-
-    `baseline` is None at the first turn of a new epoch (post-restart or
-    brand new session) — treated as an all-zero prior snapshot, so the
-    delta equals the turn's full raw value, exactly as intended.
-
-    A field's absence is NOT the same as a real zero: `usage` is not
-    guaranteed to carry all 4 token keys on every ResultMessage — e.g.
-    backend/tests/fixtures/multi_turn/messages.jsonl has ResultMessages
-    with `total_cost_usd` present and `usage` entirely absent, and
-    `_normalize_result_usage()`'s passthrough branch
-    (`return dict(usage), None`) copies whatever partial shape the SDK
-    sent rather than guaranteeing all 4 keys. Treating a missing key as 0
-    and writing that 0 into the baseline would corrupt the *next* turn's
-    delta for that field (the same failure mode `sdk_cost is None`
-    already guards against for cost) — so missing/None fields contribute
-    0 delta for *this* turn but leave that field's baseline untouched,
-    symmetric with the cost handling below.
-    """
-    fields = (
-        "input_tokens", "output_tokens",
-        "cache_creation_input_tokens", "cache_read_input_tokens",
-    )
-    baseline = dict(baseline or {})
-    delta: dict[str, float] = {}
-    for k in fields:
-        if k in usage and usage[k] is not None:
-            current = float(usage[k])
-            delta[k] = max(0.0, current - baseline.get(k, 0.0))
-            baseline[k] = current
-        else:
-            delta[k] = 0.0
-            # field not reported this turn — leave baseline[k] untouched
-
-    delta_cost = None
-    if sdk_cost is not None:
-        delta_cost = max(0.0, float(sdk_cost) - baseline.get("total_cost_usd", 0.0))
-        baseline["total_cost_usd"] = float(sdk_cost)
-    # else: no cost reported this turn — leave total_cost_usd baseline
-    # untouched so the next turn's delta is still computed correctly.
-
-    return delta, delta_cost, baseline
-
-
-def _accumulate_subagent_usage(
-    accum: dict[str, float] | None,
-    usage: dict,
-) -> dict[str, float]:
-    """Sum one subagent AssistantMessage's usage into a running per-session accumulator.
-
-    Unlike the main thread's cumulative-since-subprocess-start snapshots (see
-    `_delta_from_baseline`), each subagent `AssistantMessage.usage` is already a
-    per-call delta for that individual API call — it must be summed directly,
-    never baseline-diffed (diffing would silently zero out everything after the
-    first call, since there's no shared cumulative counter to diff against).
-    """
-    accum = dict(accum or {})
-    cache_creation = usage.get("cache_creation") or {}
-    cache_5m = int(cache_creation.get("ephemeral_5m_input_tokens") or 0)
-    cache_1h = int(cache_creation.get("ephemeral_1h_input_tokens") or 0)
-    accum["input_tokens"] = accum.get("input_tokens", 0) + int(usage.get("input_tokens") or 0)
-    accum["output_tokens"] = accum.get("output_tokens", 0) + int(usage.get("output_tokens") or 0)
-    accum["cache_read_input_tokens"] = accum.get("cache_read_input_tokens", 0) + int(
-        usage.get("cache_read_input_tokens") or 0
-    )
-    accum["cache_write_tokens_5m"] = accum.get("cache_write_tokens_5m", 0) + cache_5m
-    accum["cache_write_tokens_1h"] = accum.get("cache_write_tokens_1h", 0) + cache_1h
-    # Flat total, kept in sync with the two TTL tiers above so callers never need
-    # to re-derive it — AnalyticsStore.record_turn()/compute_cost() key off of this
-    # flat name (or "cache_creation_input_tokens"), not the TTL-tier split.
-    accum["cache_write_tokens"] = accum.get("cache_write_tokens", 0) + cache_5m + cache_1h
-    return accum
 
 
 def _render_inject_file(placeholder: str, fmt: str, key_path: str | None) -> str:
@@ -371,37 +234,37 @@ class SessionCoordinator:
         # to bind on the same host, and by McpConfigManager's custom-callback conflict checks.
         self.host = host
         self.port = port
-        # Issue #2184: accept an externally-constructed SessionManager (web_server.py
-        # needs one before this coordinator exists, to build SessionWatchdogService
-        # from it) rather than unconditionally constructing a second instance here —
-        # construct-if-not-given keeps every other caller (tests, ApplicationService
-        # call sites that construct a bare SessionCoordinator) working unchanged.
-        self.session_manager = session_manager or SessionManager(self.data_dir)
-        self.project_manager = ProjectManager(self.data_dir)
-        self.message_parser = MessageParser()
-        self.message_processor = MessageProcessor(self.message_parser)
 
-        # Credential vault for proxy credential management (issue #1053)
-        self.credential_vault = CredentialVault(self.data_dir)
-
-        # Template manager for minion templates (issue #2184: construct-if-not-given,
-        # same convention as session_manager above).
-        self.template_manager = template_manager or TemplateManager(self.data_dir)
-
-        # Profile manager for composable session config profiles (issue #1062)
-        self.profile_manager = ProfileManager(self.data_dir)
-
-        # MCP config manager for global MCP server configurations (issue #676)
-        self.mcp_config_manager = McpConfigManager(self.data_dir)
-
-        # Hook config manager for global hook configurations (issue #1629)
-        self.hook_config_manager = HookConfigManager(self.data_dir)
-
-        # Provider catalog store — data/providers.json (issue #1465)
-        self.provider_catalog_store = ProviderCatalogStore(self.data_dir)
-
-        # OAuth 2.1 flow manager for MCP servers (issue #813)
-        self.oauth_manager = OAuthFlowManager(self.data_dir)
+        # Issue #2267: the ~18 collaborators below depend only on data_dir and/or
+        # each other (never on `self`), so their construction lives in
+        # coordinator_builder.py. Issue #2184: session_manager/template_manager are
+        # construct-if-not-given (web_server.py may pass an externally-constructed
+        # one in) — build_core_managers() applies that same convention.
+        core = build_core_managers(
+            data_dir=self.data_dir,
+            session_manager=session_manager,
+            template_manager=template_manager,
+            host=self.host,
+        )
+        self.session_manager = core.session_manager
+        self.template_manager = core.template_manager
+        self.project_manager = core.project_manager
+        self.message_parser = core.message_parser
+        self.message_processor = core.message_processor
+        self.credential_vault = core.credential_vault
+        self.profile_manager = core.profile_manager
+        self.mcp_config_manager = core.mcp_config_manager
+        self.hook_config_manager = core.hook_config_manager
+        self.provider_catalog_store = core.provider_catalog_store
+        self.oauth_manager = core.oauth_manager
+        self.oauth_refresh_manager = core.oauth_refresh_manager
+        self.mcp_oneshot_connector = core.mcp_oneshot_connector
+        self.oauth_callback_listener_manager = core.oauth_callback_listener_manager
+        self.vault_refresh_manager = core.vault_refresh_manager
+        self.secrets_service = core.secrets_service
+        self.oauth_secret_bundle_manager = core.oauth_secret_bundle_manager
+        self.queue_manager = core.queue_manager
+        self.pending_store = core.pending_store
 
         # Active SDK instances
         self._active_sdks: dict[str, ClaudeSDK] = {}
@@ -411,57 +274,17 @@ class SessionCoordinator:
         # across restart_session/reset_session (never recreated); dropped in terminate_session.
         self._session_recorders: dict[str, SessionRecorder] = {}
 
-        # Issue #976/#989: OAuth token refresh lifecycle (extracted to OAuthRefreshManager)
-        self.oauth_refresh_manager = OAuthRefreshManager(self.oauth_manager)
-
         # Issue #1484: shared-connection MCP manager for opt-in passthrough configs.
         # Receives credential_vault so ${secret:...} refs in shared configs are resolved
         # to plaintext inline (no Docker proxy sidecar in the shared-connection egress path).
-        self.shared_mcp_manager = SharedMcpConnectionManager(
-            self.oauth_manager, self.oauth_refresh_manager, self.credential_vault,
-        )
+        # Built unwired by build_core_managers() above — the set_cfg_lookup() closure
+        # captures self.mcp_config_manager, so it can only be wired after `self` exists.
+        self.shared_mcp_manager = core.shared_mcp_manager
 
         async def _cfg_lookup(server_id: str):
             return await self.mcp_config_manager.get_config(server_id)
 
         self.shared_mcp_manager.set_cfg_lookup(_cfg_lookup)
-
-        # Issue #1800: one-shot connection lifecycle for non-shared MCP configs'
-        # "Test connection" affordance. Independent of shared_mcp_manager — see
-        # src/mcp/oneshot_connection.py module docstring for why.
-        self.mcp_oneshot_connector = McpOneshotConnector(self.oauth_manager, self.credential_vault)
-
-        # Issue #1789: custom OAuth callback path/port listeners for Shared MCP servers.
-        # Broadcast callback injected later via set_broadcast_callback — unlike
-        # oauth_refresh_manager below (add_broadcast_subscriber; see its docstring, #2252).
-        self.oauth_callback_listener_manager = OAuthCallbackListenerManager(
-            self.oauth_manager, host=self.host,
-        )
-
-        # Issue #1387: Proactive vault OAuth2 secret refresh
-        self.vault_refresh_manager = VaultRefreshManager(self.credential_vault)
-
-        # Secrets Vault CRUD + session-scoped resolution (issue #2189 AC5,
-        # router-boundary PR B) — constructed last among its 6 collaborators
-        # (vault_refresh_manager, constructed just above, is the latest of the six).
-        self.secrets_service = SecretsService(
-            self.credential_vault,
-            self.vault_refresh_manager,
-            self.session_manager,
-            self.template_manager,
-            self.profile_manager,
-            self.mcp_config_manager,
-        )
-
-        # OAuth 2.1 token/secret-bundle management (issue #2189 AC5, router-boundary
-        # PR B) — all 4 collaborators (credential_vault, oauth_manager,
-        # mcp_config_manager, vault_refresh_manager) already exist by this point.
-        self.oauth_secret_bundle_manager = OAuthSecretBundleManager(
-            self.credential_vault,
-            self.oauth_manager,
-            self.mcp_config_manager,
-            self.vault_refresh_manager,
-        )
 
         # Event callbacks
         self._message_callbacks: dict[str, list[Callable]] = {}
@@ -537,24 +360,19 @@ class SessionCoordinator:
         # Allows legion components to register WebSocket message callbacks
         self._message_callback_registrar: Callable[[str], None] | None = None
 
-        # Initialize Legion multi-agent system
-        # Create a dummy storage manager for now (legion will create its own per-legion storage)
-        dummy_storage = DataStorageManager(self.data_dir / "legion_temp")
-        _app_config = load_config()
-        self.legion_system = LegionSystem(
-            session_port=self,
-            data_storage_manager=dummy_storage,
+        # Initialize Legion multi-agent system. Needs `self` (session_port=self),
+        # so it's built via a helper called here rather than from
+        # build_core_managers() above — see coordinator_builder.build_legion_system().
+        self.legion_system = build_legion_system(
+            coordinator=self,
+            data_dir=self.data_dir,
             template_manager=self.template_manager,
-            default_max_minions=_app_config.legion.max_concurrent_minions,
-            history_retention=_app_config.history_retention,
         )
 
-        # Issue #500: Message queue system
-        self.queue_manager = QueueManager()
+        # Issue #500: Message queue system. queue_manager/pending_store were
+        # built unwired by build_core_managers() above; queue_processor needs
+        # `self` so it stays here.
         self.queue_processor = QueueProcessor(self)
-
-        # Issue #2193 (PR 3): pure instantiation, no load() call yet — nothing reaches deliver().
-        self.pending_store = PendingStore()
 
         # Issue #2189 (coordinator-split PR 10): consolidated delivery gate
         self.delivery_gate = DeliveryGate(self)
@@ -1340,6 +1158,250 @@ class SessionCoordinator:
             logger.exception(f"Failed to update session {session_id} name")
             return False
 
+    async def _cascade_delete_children(
+        self, session_id: str, archive_reason: str, session_info: SessionInfo | None,
+    ) -> list[str]:
+        """Step 0: recursively delete all children first (cascading). Checks
+        child_minion_ids regardless of is_minion/is_overseer flags."""
+        if not (session_info and session_info.child_minion_ids):
+            return []
+        child_ids = list(session_info.child_minion_ids)  # Make a copy
+        return await self._cascade_delete_each_child(session_id, child_ids, archive_reason)
+
+    async def _cascade_delete_each_child(
+        self, session_id: str, child_ids: list[str], archive_reason: str,
+    ) -> list[str]:
+        """Step 0 continued: delete each child, logging the cascade boundaries."""
+        coord_logger.info(f"Session {session_id} has {len(child_ids)} children - cascading deletion")
+        deleted_ids: list[str] = []
+        for child_id in child_ids:
+            deleted_ids.extend(await self._cascade_delete_one_child(session_id, child_id, archive_reason))
+        coord_logger.info(f"Cascading deletion complete for {session_id} - all {len(child_ids)} children deleted")
+        return deleted_ids
+
+    async def _cascade_delete_one_child(
+        self, parent_session_id: str, child_id: str, archive_reason: str,
+    ) -> list[str]:
+        """Step 0 continued: delete a single cascaded child."""
+        coord_logger.info(f"Cascading: deleting child minion {child_id} of parent {parent_session_id}")
+        result = await self.delete_session(child_id, archive_reason=archive_reason)
+        return result.get("deleted_session_ids", []) if result.get("success") else []
+
+    async def _detach_session_from_project(self, session_id: str) -> ProjectInfo | None:
+        """Step 1: find and remove session from its project."""
+        project = await self.find_project_for_session(session_id)
+        if project:
+            await self._remove_and_log_project_detach(session_id, project)
+        return project
+
+    async def _remove_and_log_project_detach(self, session_id: str, project: ProjectInfo) -> None:
+        """Step 1 continued: remove from the project, then log/cleanup the outcome."""
+        removal_success, project_was_deleted = await self.project_manager.remove_session_from_project(
+            project.project_id, session_id
+        )
+        self._log_project_detach_outcome(session_id, project, removal_success, project_was_deleted)
+        if removal_success and not project_was_deleted:
+            # Issue #1722: strip the deleted session's kanban group assignment
+            await self.project_manager.cleanup_session_group_assignment(project.project_id, session_id)
+
+    def _log_project_detach_outcome(
+        self, session_id: str, project: ProjectInfo, removal_success: bool, project_was_deleted: bool,
+    ) -> None:
+        """Step 1 continued: log which of the three project-removal outcomes occurred."""
+        if not removal_success:
+            logger.warning(f"Failed to remove session {session_id} from project {project.project_id}")
+        elif project_was_deleted:
+            coord_logger.info(f"Removed session {session_id} from project {project.project_id} - project was empty and has been deleted")
+        else:
+            coord_logger.info(f"Removed session {session_id} from project {project.project_id}")
+
+    async def _detach_session_from_parent(
+        self, session_id: str, session_info: SessionInfo | None,
+    ) -> SessionInfo | None:
+        """Step 1.5: resolve session_info and detach from its parent overseer, if any."""
+        if not session_info:
+            session_info = await self.session_manager.get_session_info(session_id)
+        if session_info and session_info.parent_overseer_id:
+            await self._remove_from_parent_child_list(session_id, session_info.parent_overseer_id)
+        return session_info
+
+    async def _remove_from_parent_child_list(self, session_id: str, parent_id: str) -> None:
+        """Step 1.5 continued: remove session_id from parent_id's child_minion_ids."""
+        parent_info = await self.session_manager.get_session_info(parent_id)
+        if not parent_info:
+            coord_logger.warning(f"Parent overseer {parent_id} not found for minion {session_id}")
+            return
+        if session_id not in parent_info.child_minion_ids:
+            coord_logger.warning(f"Minion {session_id} not found in parent overseer {parent_id}'s child_minion_ids")
+            return
+        await self._persist_child_removed_from_parent(session_id, parent_id, parent_info)
+
+    async def _persist_child_removed_from_parent(
+        self, session_id: str, parent_id: str, parent_info: SessionInfo,
+    ) -> None:
+        """Step 1.5 continued: persist the parent's child_minion_ids update and log it."""
+        parent_info.child_minion_ids.remove(session_id)
+        parent_info.updated_at = datetime.now(UTC)
+        await self.session_manager._persist_session_state(parent_id)
+        coord_logger.info(f"Removed minion {session_id} from parent overseer {parent_id}'s child_minion_ids")
+
+    async def _delete_legion_schedules_for_session(self, session_id: str) -> None:
+        """Step 1.55: delete schedules for deleted session (Issue #671)."""
+        if not self.legion_system:
+            return
+        try:
+            deleted = await self.legion_system.scheduler_service.delete_schedules_for_minion(session_id)
+            if deleted:
+                coord_logger.info(f"Deleted {deleted} schedules for deleted session {session_id}")
+        except Exception as e:
+            coord_logger.warning(f"Failed to delete schedules for session {session_id}: {e}")
+
+    def _unregister_capability_registry(
+        self, session_id: str, session_info: SessionInfo | None, project: ProjectInfo | None,
+    ) -> None:
+        """Step 1.6: clean up capability registry if session has capabilities
+        (issue #349: all sessions are minions)."""
+        if session_info and session_info.capabilities and project and self.legion_system:
+            self.legion_system.legion_coordinator.unregister_minion_capabilities(session_id)
+            coord_logger.info(f"Cleaned up {len(session_info.capabilities)} capabilities from registry for minion {session_id}")
+
+    async def _teardown_sdk_before_archive(
+        self, session_id: str, session_info: SessionInfo | None,
+    ) -> None:
+        """Step 1.65: terminate SDK and update state BEFORE archive (Issue #236)
+        — ensures archive captures final "terminated" state (same pattern as
+        dispose_minion). Gives the SDK time to fully close."""
+        await self._session_launcher.teardown_active_sdk(session_id, graceful=False, settle_seconds=0.2)
+        if session_info and session_info.state != SessionState.TERMINATED:
+            await self.session_manager.terminate_session(session_id)
+            coord_logger.info(f"Terminated session {session_id} before archive/deletion")
+
+    async def _archive_session_before_delete(
+        self, session_id: str, session_info: SessionInfo | None, project: ProjectInfo | None,
+        archive_reason: str, descendants_count: int,
+    ) -> None:
+        """Step 1.7: archive any session in a project before deletion (Issue #236)."""
+        if not (session_info and project and self.legion_system):
+            return
+        await self._try_archive_minion(session_id, session_info, archive_reason, descendants_count)
+
+    async def _try_archive_minion(
+        self, session_id: str, session_info: SessionInfo, archive_reason: str, descendants_count: int,
+    ) -> None:
+        """Step 1.7 continued: wraps archive_minion() in its own try/except so a
+        single legion-archive failure doesn't abort the whole delete."""
+        try:
+            await self._run_archive_minion(session_id, session_info, archive_reason, descendants_count)
+        except Exception:
+            coord_logger.exception(f"Error archiving session {session_id} before deletion")
+
+    async def _resolve_parent_name_for_archive(self, session_info: SessionInfo) -> str | None:
+        """Step 1.7 continued: look up the parent overseer's display name, if any."""
+        if not session_info.parent_overseer_id:
+            return None
+        parent_info = await self.session_manager.get_session_info(session_info.parent_overseer_id)
+        return parent_info.name if parent_info else None
+
+    async def _run_archive_minion(
+        self, session_id: str, session_info: SessionInfo, archive_reason: str, descendants_count: int,
+    ) -> None:
+        """Step 1.7 continued: call archive_manager.archive_minion() and log the outcome."""
+        kwargs = await self._build_archive_minion_kwargs(
+            session_id, session_info, archive_reason, descendants_count
+        )
+        archive_result = await self.legion_system.archive_manager.archive_minion(**kwargs)
+        self._log_archive_minion_result(session_id, archive_result)
+
+    async def _build_archive_minion_kwargs(
+        self, session_id: str, session_info: SessionInfo, archive_reason: str, descendants_count: int,
+    ) -> dict:
+        """Step 1.7 continued: assemble archive_minion()'s kwargs."""
+        parent_name = await self._resolve_parent_name_for_archive(session_info)
+        return {
+            "minion_id": session_id, "reason": archive_reason, "will_be_deleted": True,
+            "parent_overseer_id": session_info.parent_overseer_id, "parent_overseer_name": parent_name,
+            "descendants_count": descendants_count,  # Children already deleted in cascade
+        }
+
+    def _log_archive_minion_result(self, session_id: str, archive_result) -> None:
+        """Step 1.7 continued: log the archive_minion() call's success/failure."""
+        if archive_result.success:
+            coord_logger.info(f"Archived session {session_id} to {archive_result.archive_path} before deletion")
+        else:
+            coord_logger.warning(f"Failed to archive session {session_id}: {archive_result.error_message}")
+
+    def _cleanup_legion_directory(
+        self, session_id: str, session_info: SessionInfo | None, project: ProjectInfo | None,
+    ) -> None:
+        """Step 1.8: Legion-specific cleanup — delete the minion directory."""
+        if not (session_info and project and self.legion_system):
+            return
+        legion_id = project.project_id
+        coord_logger.info(f"Starting Legion-specific cleanup for minion {session_id} in legion {legion_id}")
+        minion_dir = self.data_dir / "legions" / legion_id / "minions" / session_id
+        self._rmtree_legion_minion_dir(minion_dir)
+
+    def _rmtree_legion_minion_dir(self, minion_dir: Path) -> None:
+        """Step 1.8 continued: delete the minion directory if present, tolerating failure."""
+        if not minion_dir.exists():
+            coord_logger.debug(f"Legion minion directory does not exist (already cleaned): {minion_dir}")
+            return
+        try:
+            shutil.rmtree(minion_dir)
+            coord_logger.info(f"Deleted Legion minion directory: {minion_dir}")
+        except Exception:
+            coord_logger.exception(f"Failed to delete Legion minion directory {minion_dir}")
+
+    async def _cleanup_storage_manager(self, session_id: str) -> None:
+        """Step 2: clean up storage manager and ensure all files are closed."""
+        if session_id not in self._storage_managers:
+            return
+        storage_manager = self._storage_managers[session_id]
+        await storage_manager.cleanup()
+        del self._storage_managers[session_id]
+        # Give storage manager time to close all file handles
+        await asyncio.sleep(0.2)
+
+    def _cleanup_in_memory_callback_state(self, session_id: str) -> None:
+        """Step 3: clean up callbacks and other per-session in-memory state."""
+        self._message_callbacks.pop(session_id, None)
+        self._error_callbacks.pop(session_id, None)
+        # Issue #858: Cleanup per-session tool-call event
+        self._tool_call_events.pop(session_id, None)
+        # Issue #1694: Cleanup per-session message-emitted barrier state
+        self._message_emitted_events.pop(session_id, None)
+        self._emitted_turn_ids.pop(session_id, None)
+
+    async def _finalize_session_manager_delete(self, session_id: str) -> bool:
+        """Step 4: delete through session manager, then flush analytics and notify."""
+        success = await self.session_manager.delete_session(session_id)
+        if not success:
+            return False
+        coord_logger.info(f"Session {session_id} deleted")
+        await self._flush_analytics_and_notify_deleted(session_id)
+        return True
+
+    async def _flush_analytics_and_notify_deleted(self, session_id: str) -> None:
+        """Step 4 continued: flush leftover subagent usage (issue #1840/#1941 —
+        deletion no longer wipes analytics rows, so this is a real, permanent
+        persistence opportunity; allow_retry=False since this session_id is gone
+        for good right after), mark analytics deleted, and fire the dedicated
+        session_deleted notification (issue #1986)."""
+        await self.flush_unflushed_subagent_usage(session_id, allow_retry=False)
+        await self._mark_analytics_deleted(session_id)
+        await self._notify_session_deleted(session_id)
+
+    async def _mark_analytics_deleted(self, session_id: str) -> None:
+        """Step 4 continued: mark analytics deleted (issue #1941), tolerating failure."""
+        if not self.analytics_store:
+            return
+        try:
+            await self.analytics_store.mark_session_deleted(session_id)
+            self._turn_seq_by_session.pop(session_id, None)
+            self._usage_baseline_by_session.pop(session_id, None)
+        except Exception:
+            logger.exception("Failed to mark analytics deleted for session %s", session_id)
+
     async def delete_session(self, session_id: str, archive_reason: str = "user_deleted") -> dict:
         """
         Delete a session and cleanup all resources (with cascading deletion for child minions).
@@ -1353,197 +1415,27 @@ class SessionCoordinator:
             - deleted_session_ids: list of all session IDs deleted (including cascaded children)
         """
         deleted_ids = []
-
         try:
-            # Step 0: If this session has children, recursively delete all children first (cascading)
-            # Check child_minion_ids regardless of is_minion/is_overseer flags - any session with
-            # children should cascade the deletion
             session_info = await self.session_manager.get_session_info(session_id)
-            if session_info and session_info.child_minion_ids:
-                child_ids = list(session_info.child_minion_ids)  # Make a copy
-                coord_logger.info(f"Session {session_id} has {len(child_ids)} children - cascading deletion")
+            deleted_ids.extend(await self._cascade_delete_children(session_id, archive_reason, session_info))
 
-                for child_id in child_ids:
-                    coord_logger.info(f"Cascading: deleting child minion {child_id} of parent {session_id}")
-                    # Recursively delete child (which may have its own children)
-                    # Pass archive_reason through to children
-                    result = await self.delete_session(child_id, archive_reason=archive_reason)
-                    if result.get("success"):
-                        deleted_ids.extend(result.get("deleted_session_ids", []))
+            project = await self._detach_session_from_project(session_id)
+            session_info = await self._detach_session_from_parent(session_id, session_info)
 
-                coord_logger.info(f"Cascading deletion complete for {session_id} - all {len(child_ids)} children deleted")
-
-            # Step 1: Find and remove session from its project
-            project = await self.find_project_for_session(session_id)
-            project_was_deleted = False
-
-            if project:
-                removal_success, project_was_deleted = await self.project_manager.remove_session_from_project(project.project_id, session_id)
-
-                if removal_success:
-                    if project_was_deleted:
-                        coord_logger.info(f"Removed session {session_id} from project {project.project_id} - project was empty and has been deleted")
-                    else:
-                        coord_logger.info(f"Removed session {session_id} from project {project.project_id}")
-                        # Issue #1722: strip the deleted session's kanban group assignment,
-                        # if any (no-op if the project itself was just deleted above)
-                        await self.project_manager.cleanup_session_group_assignment(project.project_id, session_id)
-                else:
-                    logger.warning(f"Failed to remove session {session_id} from project {project.project_id}")
-
-            # Step 1.5: If this is a minion with a parent overseer, remove from parent's child_minion_ids
-            # (session_info was already fetched in Step 0)
-            if not session_info:
-                session_info = await self.session_manager.get_session_info(session_id)
-
-            # Issue #349: All sessions are minions - check parent relationship directly
-            if session_info and session_info.parent_overseer_id:
-                parent_id = session_info.parent_overseer_id
-                parent_info = await self.session_manager.get_session_info(parent_id)
-
-                if parent_info and session_id in parent_info.child_minion_ids:
-                    parent_info.child_minion_ids.remove(session_id)
-                    parent_info.updated_at = datetime.now(UTC)
-                    await self.session_manager._persist_session_state(parent_id)
-                    coord_logger.info(f"Removed minion {session_id} from parent overseer {parent_id}'s child_minion_ids")
-                elif parent_info:
-                    coord_logger.warning(f"Minion {session_id} not found in parent overseer {parent_id}'s child_minion_ids")
-                else:
-                    coord_logger.warning(f"Parent overseer {parent_id} not found for minion {session_id}")
-
-            # Step 1.55: Delete schedules for deleted session (Issue #671)
-            if self.legion_system:
-                try:
-                    deleted = await self.legion_system.scheduler_service.delete_schedules_for_minion(session_id)
-                    if deleted:
-                        coord_logger.info(
-                            f"Deleted {deleted} schedules for deleted session {session_id}"
-                        )
-                except Exception as e:
-                    coord_logger.warning(
-                        f"Failed to delete schedules for session {session_id}: {e}"
-                    )
-
-            # Step 1.6: Clean up capability registry if session has capabilities (issue #349: all sessions are minions)
-            if session_info and session_info.capabilities:
-                # Clean up capability registry
-                if project and self.legion_system:
-                    self.legion_system.legion_coordinator.unregister_minion_capabilities(session_id)
-                    coord_logger.info(f"Cleaned up {len(session_info.capabilities)} capabilities from registry for minion {session_id}")
-
-            # Step 1.65: Terminate SDK and update state BEFORE archive (Issue #236)
-            # This ensures archive captures final "terminated" state (same pattern as dispose_minion)
-            # Give SDK time to fully close
-            await self._session_launcher.teardown_active_sdk(
-                session_id, graceful=False, settle_seconds=0.2
+            await self._delete_legion_schedules_for_session(session_id)
+            self._unregister_capability_registry(session_id, session_info, project)
+            await self._teardown_sdk_before_archive(session_id, session_info)
+            await self._archive_session_before_delete(
+                session_id, session_info, project, archive_reason, len(deleted_ids)
             )
+            self._cleanup_legion_directory(session_id, session_info, project)
+            await self._cleanup_storage_manager(session_id)
+            self._cleanup_in_memory_callback_state(session_id)
 
-            # Update session state to terminated (so archive captures correct final_state)
-            if session_info and session_info.state != SessionState.TERMINATED:
-                await self.session_manager.terminate_session(session_id)
-                coord_logger.info(f"Terminated session {session_id} before archive/deletion")
-
-            # Step 1.7: Archive session before deletion (Issue #236)
-            # Archive any session in a project before deletion
-            if session_info and project and self.legion_system:
-                try:
-                    # Get parent info for archive metadata
-                    parent_name = None
-                    if session_info.parent_overseer_id:
-                        parent_info = await self.session_manager.get_session_info(session_info.parent_overseer_id)
-                        parent_name = parent_info.name if parent_info else None
-
-                    archive_result = await self.legion_system.archive_manager.archive_minion(
-                        minion_id=session_id,
-                        reason=archive_reason,
-                        parent_overseer_id=session_info.parent_overseer_id,
-                        parent_overseer_name=parent_name,
-                        descendants_count=len(deleted_ids),  # Children already deleted in cascade
-                        will_be_deleted=True  # This is a hard delete
-                    )
-                    if archive_result.success:
-                        coord_logger.info(f"Archived session {session_id} to {archive_result.archive_path} before deletion")
-                    else:
-                        coord_logger.warning(f"Failed to archive session {session_id}: {archive_result.error_message}")
-                except Exception:
-                    coord_logger.exception(f"Error archiving session {session_id} before deletion")
-
-            # Step 1.8: Legion-specific cleanup (issue #349: all sessions are minions)
-            if session_info and project and self.legion_system:
-                legion_id = project.project_id
-                coord_logger.info(f"Starting Legion-specific cleanup for minion {session_id} in legion {legion_id}")
-
-                # 1.8a: Delete minion directory in legions/{legion_id}/minions/{minion_id}/
-                minion_dir = self.data_dir / "legions" / legion_id / "minions" / session_id
-                if minion_dir.exists():
-                    try:
-                        shutil.rmtree(minion_dir)
-                        coord_logger.info(f"Deleted Legion minion directory: {minion_dir}")
-                    except Exception:
-                        coord_logger.exception(f"Failed to delete Legion minion directory {minion_dir}")
-                else:
-                    coord_logger.debug(f"Legion minion directory does not exist (already cleaned): {minion_dir}")
-
-            # Step 2: Clean up storage manager and ensure all files are closed
-            if session_id in self._storage_managers:
-                storage_manager = self._storage_managers[session_id]
-                # logger.info(f"Cleaning up storage manager for session {session_id}")
-                await storage_manager.cleanup()
-                del self._storage_managers[session_id]
-                # Give storage manager time to close all file handles
-                await asyncio.sleep(0.2)
-
-            # Step 3: Clean up callbacks
-            if session_id in self._message_callbacks:
-                del self._message_callbacks[session_id]
-            if session_id in self._error_callbacks:
-                del self._error_callbacks[session_id]
-            # Issue #858: Cleanup per-session tool-call event
-            self._tool_call_events.pop(session_id, None)
-            # Issue #1694: Cleanup per-session message-emitted barrier state
-            self._message_emitted_events.pop(session_id, None)
-            self._emitted_turn_ids.pop(session_id, None)
-
-            # Step 4: Delete through session manager (this removes from active sessions and deletes files)
-            # Issue #1942: the unconditional gc.collect() calls formerly here (and the
-            # Windows-specific one that followed) reclaimed nothing — storage_manager.cleanup()
-            # already closes every file handle deterministically (see #1933), and the real
-            # Windows fallback for a stuck directory delete already lives, properly gated on
-            # an actual shutil.rmtree() failure, inside session_manager.delete_session() below.
-            # logger.info(f"Deleting session files for session {session_id}")
-            success = await self.session_manager.delete_session(session_id)
-
+            success = await self._finalize_session_manager_delete(session_id)
             if success:
-                coord_logger.info(f"Session {session_id} deleted")
-                # Issue #1840/#1941: flush any unflushed subagent usage before marking
-                # analytics deleted below — deletion no longer wipes analytics rows, so
-                # this is a real, permanent persistence opportunity, not a no-op. Also
-                # owns clearing _last_turn_model_by_session (formerly a standalone
-                # Issue #1831 pop here; folded into the shared helper since the flush
-                # needs that same value to attribute its catch-up row). allow_retry=False:
-                # unlike terminate_session(), this session_id is gone for good right after
-                # this — restoring the accumulator on a write failure would just leak it in
-                # memory forever with no code path left to ever retry the flush.
-                await self.flush_unflushed_subagent_usage(session_id, allow_retry=False)
-                # Issue #1941: mark analytics deleted instead of removing rows, so
-                # historical totals survive session/project deletion.
-                if self.analytics_store:
-                    try:
-                        await self.analytics_store.mark_session_deleted(session_id)
-                        self._turn_seq_by_session.pop(session_id, None)
-                        self._usage_baseline_by_session.pop(session_id, None)
-                    except Exception:
-                        logger.exception("Failed to mark analytics deleted for session %s", session_id)
-                # Notify about session deletion (issue #1986: dedicated event, mirrors
-                # session_reset — _notify_state_change() requires a SessionState enum
-                # member and there is no DELETED one, and by this point the session is
-                # already gone from session_manager so a state-change lookup would no-op)
-                await self._notify_session_deleted(session_id)
-                # Add this session to the deleted list
                 deleted_ids.append(session_id)
-
             return {"success": success, "deleted_session_ids": deleted_ids}
-
         except Exception:
             logger.exception(f"Failed to delete integrated session {session_id}")
             return {"success": False, "deleted_session_ids": deleted_ids}

@@ -9,11 +9,13 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any
 
+from backend.mcp.shared_connection_manager import _describe_open_failure
 from shared.event_queue import EventQueue
 from shared.git_restart import run_git_command as _run_git_command_impl
 
 from . import docker_utils
-from .mcp_config_manager import validate_mcp_server_url
+from .fixture_export import export_fixture
+from .mcp_config_manager import McpServerType, validate_mcp_server_url
 
 if TYPE_CHECKING:
     from backend.session_coordinator import SessionCoordinator
@@ -253,7 +255,6 @@ class ApplicationService:
         self.coordinator.permission_service.cleanup_pending_for_session(session_id)
 
     async def export_session_fixture(self, session_id: str, name: str):
-        from .fixture_export import export_fixture
         return await export_fixture(self.coordinator, session_id, name)
 
     async def update_session_name(self, session_id: str, name: str) -> bool:
@@ -982,9 +983,6 @@ class ApplicationService:
         (_on_token_refreshed) is also contending for the same config's open-lock
         (issue #1806).
         """
-        from backend.mcp.shared_connection_manager import _describe_open_failure
-        from backend.mcp_config_manager import McpServerType
-
         config = await self.coordinator.mcp_config_manager.get_config(config_id)
         if config is None:
             return None
@@ -1022,8 +1020,6 @@ class ApplicationService:
         McpOneshotConnector.test_connect(). Blocks until the outcome is known — up to
         ~30s on a hung server.
         """
-        from backend.mcp_config_manager import McpServerType
-
         config = await self.coordinator.mcp_config_manager.get_config(config_id)
         if config is None:
             return None
