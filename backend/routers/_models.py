@@ -194,7 +194,6 @@ class McpReconnectRequest(BaseModel):
 
 class CommSendRequest(BaseModel):
     to_minion_id: str | None = None
-    to_user: bool = False
     content: str
     comm_type: str = "task"
 

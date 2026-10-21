@@ -81,7 +81,6 @@ class Comm:
 
     # Destination
     to_minion_id: str | None = None    # Direct to minion
-    to_user: bool = False
     to_minion_name: str | None = None  # Captured name (for historical display)
 
     # Content
@@ -99,9 +98,6 @@ class Comm:
     in_reply_to: str | None = None
     related_task_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
-
-    # Visibility
-    visible_to_user: bool = True  # Should this show in UI?
 
     # Timestamp (Unix timestamp in seconds)
     timestamp: float = field(default_factory=lambda: datetime.now(UTC).timestamp())
@@ -128,12 +124,8 @@ class Comm:
 
     def validate(self) -> bool:
         """Ensure Comm has valid routing."""
-        destinations = sum([
-            self.to_minion_id is not None,
-            self.to_user
-        ])
-        if destinations != 1:
-            raise ValueError("Comm must have exactly one destination (minion or user)")
+        if self.to_minion_id is None:
+            raise ValueError("Comm must have a destination minion")
 
         sources = sum([
             self.from_minion_id is not None,
@@ -152,7 +144,6 @@ class Comm:
             "from_user": self.from_user,
             "from_minion_name": self.from_minion_name,
             "to_minion_id": self.to_minion_id,
-            "to_user": self.to_user,
             "to_minion_name": self.to_minion_name,
             "summary": self.summary,
             "content": self.content,
@@ -162,7 +153,6 @@ class Comm:
             "in_reply_to": self.in_reply_to,
             "related_task_id": self.related_task_id,
             "metadata": self.metadata,
-            "visible_to_user": self.visible_to_user,
             "timestamp": self.timestamp,
             "auto_start": self.auto_start,
             "reset_first": self.reset_first,
@@ -176,6 +166,14 @@ class Comm:
         """Create from dictionary."""
         data = data.copy()
         data["comm_type"] = CommType(data["comm_type"])
+
+        # Backward compat: every Comm persisted before issue #2259 serialized
+        # visible_to_user (default True on ALL comms, not just to_user ones),
+        # and to_user comms also serialized to_user — both fields are gone
+        # from the dataclass now, so drop them before construction or every
+        # historical PendingItem replay raises TypeError.
+        data.pop("to_user", None)
+        data.pop("visible_to_user", None)
 
         # Backward compat: old comms persisted under the removed interrupt_priority field
         if "delivery" not in data and "interrupt_priority" in data:

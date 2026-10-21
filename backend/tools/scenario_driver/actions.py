@@ -228,5 +228,5 @@ async def send_comm(
 ) -> dict:
     return await ctx.post_json(
         f"/api/legions/{legion_id}/comms",
-        json={"to_minion_id": to_minion_id, "to_user": False, "content": content, "comm_type": comm_type},
+        json={"to_minion_id": to_minion_id, "content": content, "comm_type": comm_type},
     )

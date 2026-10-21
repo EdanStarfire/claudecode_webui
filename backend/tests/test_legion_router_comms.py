@@ -39,7 +39,7 @@ async def test_send_comm_to_legion_delivery_defaults_by_comm_type(comm_type, exp
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.post(
             "/api/legions/legion-1/comms",
-            json={"to_user": True, "content": "fyi", "comm_type": comm_type},
+            json={"to_minion_id": "minion-1", "content": "fyi", "comm_type": comm_type},
         )
 
     assert resp.status_code == 200

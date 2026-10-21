@@ -21,7 +21,6 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from backend.legion.overseer_controller import OverseerController
-from backend.models.legion_models import CommType
 from backend.session_manager import SessionInfo, SessionState
 from backend.slug_utils import slugify_name
 
@@ -153,11 +152,9 @@ class TestScenario1GrandchildToSibling:
         # Level recomputed: A=0, C (child of A) = 1
         assert c.overseer_level == 1
 
-        # Timeline REPARENT comm emitted
-        system.comm_router.route_comm.assert_awaited_once()
-        comm = system.comm_router.route_comm.call_args[0][0]
-        assert comm.comm_type == CommType.REPARENT
-        assert comm.to_user is True
+        # Issue #2259: reparent no longer emits a to-user REPARENT comm — the
+        # project_updated broadcast below is the sole notification path now.
+        system.comm_router.route_comm.assert_not_awaited()
 
         # UI event broadcast
         system.broadcast_ui_event.assert_called_once()

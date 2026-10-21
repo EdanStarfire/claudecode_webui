@@ -782,14 +782,12 @@ class LegionMCPTools:
             from_user=False,
             from_minion_name=from_minion_name,
             to_minion_id=to_minion_id,
-            to_user=False,
             to_minion_name=to_minion_name_captured,
             summary=summary,
             content=content,
             comm_type=CommType(internal_comm_type),
             delivery=delivery,  # Use validated delivery policy
             attachments=attachment_metadata,
-            visible_to_user=True,
             auto_start=auto_start,
         )
 
