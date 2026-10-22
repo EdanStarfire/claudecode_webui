@@ -87,6 +87,34 @@ def service(mock_coordinator):
     return ApplicationService(mock_coordinator)
 
 
+# ---------------------------------------------------------------------------
+# current_principal (issue #2268 AC3)
+# ---------------------------------------------------------------------------
+
+
+def test_current_principal_returns_none_when_unset(service):
+    """No AuthMiddleware has run in this test's context — nothing set the
+    contextvar, so current_principal() must not invent a value."""
+    from backend.principal import set_current_principal
+
+    # Reset explicitly rather than assuming a pristine baseline — this
+    # contextvar isn't task-scoped when set from plain (non-async) test code,
+    # so it would otherwise leak across tests run in the same process/thread.
+    set_current_principal(None)
+    assert service.current_principal() is None
+
+
+def test_current_principal_returns_the_set_value(service):
+    from backend.principal import Principal, set_current_principal
+
+    principal = Principal(id="local", backend_id="local")
+    set_current_principal(principal)
+    try:
+        assert service.current_principal() is principal
+    finally:
+        set_current_principal(None)
+
+
 def _make_project(project_id="p1", session_ids=None):
     p = MagicMock()
     p.project_id = project_id
