@@ -231,7 +231,7 @@ class PermissionService:
                                         "data": tool_call_data,
                                         "timestamp": datetime.now(UTC).isoformat(),
                                     },
-                                    scope=session_id,
+                                    scope=session_id, backend_id=self.coordinator.tenant_context.backend_id,
                                 )
                             debug_logger.info(f"Appended tool_call awaiting_permission for {tool_name} in session {session_id}")
                     else:
@@ -527,7 +527,7 @@ class PermissionService:
                                         "data": tool_call_data,
                                         "timestamp": datetime.now(UTC).isoformat(),
                                     },
-                                    scope=session_id,
+                                    scope=session_id, backend_id=self.coordinator.tenant_context.backend_id,
                                 )
                             debug_logger.info(
                                 f"Appended tool_call {'running' if granted else 'denied'} "

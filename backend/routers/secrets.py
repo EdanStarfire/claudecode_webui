@@ -304,7 +304,7 @@ def build_router(webui) -> APIRouter:
                     "data": event_data,
                     "timestamp": datetime.now(UTC).isoformat(),
                 },
-                scope=session_id,
+                scope=session_id, backend_id=webui.tenant_context.backend_id,
             )
         return {"queued": True}
 

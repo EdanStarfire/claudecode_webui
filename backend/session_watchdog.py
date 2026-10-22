@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from shared.event_emitter import emit
-from shared.event_envelope import QUEUE_UI
+from shared.event_envelope import DEFAULT_BACKEND_ID, QUEUE_UI
 from shared.logging_config import get_logger
 
 if TYPE_CHECKING:
@@ -64,11 +64,15 @@ class SessionWatchdogService:
         template_manager: "TemplateManager",
         app_config: "AppConfig",
         ui_queue: "EventQueue",
+        backend_id: str = DEFAULT_BACKEND_ID,
     ) -> None:
         self._session_manager = session_manager
         self._template_manager = template_manager
         self._app_config = app_config
         self._ui_queue = ui_queue
+        # Issue #2268 AC4: constructed before SessionCoordinator (and its
+        # tenant_context) exist — seeded explicitly by the caller instead.
+        self._backend_id = backend_id
 
         self._running = False
         self._task: asyncio.Task | None = None
@@ -298,7 +302,7 @@ class SessionWatchdogService:
             emit(
                 self._ui_queue, QUEUE_UI, event["type"],
                 {k: v for k, v in event.items() if k != "type"},
-                scope=session.session_id,
+                scope=session.session_id, backend_id=self._backend_id,
             )
             watchdog_logger.info(
                 f"Watchdog alert fired: session={session.session_id} type={watchdog} details={details}"
