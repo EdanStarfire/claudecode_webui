@@ -14,6 +14,7 @@ from enum import Enum
 from typing import Any
 
 from backend.timestamp_utils import normalize_timestamp
+from shared.event_envelope import DEFAULT_BACKEND_ID
 
 # Constants
 
@@ -111,8 +112,16 @@ class Comm:
     sender_type: SenderType | None = None
     sender_id: str | None = None
 
+    # Issue #2268 AC7: unused by any routing logic until #1819 — a seam so that
+    # stage doesn't need a schema migration. Self-contained default (mirrors
+    # TenantContext.backend_id's own default), not threaded in from every
+    # construction call site, same as sender_type's own inference below.
+    origin_backend_id: str | None = None
+
     def __post_init__(self) -> None:
         """Infer sender_type from existing source fields when not explicitly provided."""
+        if self.origin_backend_id is None:
+            self.origin_backend_id = DEFAULT_BACKEND_ID
         if self.sender_type is not None:
             return
         if self.from_user:
@@ -159,6 +168,7 @@ class Comm:
             "fire_at": self.fire_at,
             "sender_type": self.sender_type.value if self.sender_type else None,
             "sender_id": self.sender_id,
+            "origin_backend_id": self.origin_backend_id,
         }
 
     @classmethod
@@ -189,6 +199,7 @@ class Comm:
         data.setdefault("auto_start", False)
         data.setdefault("reset_first", False)
         data.setdefault("fire_at", None)
+        data.setdefault("origin_backend_id", None)
         data["sender_type"] = SenderType(data["sender_type"]) if data["sender_type"] else None
 
         # Normalize timestamp to handle mixed string/float formats (backwards compatibility)

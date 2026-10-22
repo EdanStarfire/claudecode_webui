@@ -259,7 +259,7 @@ def build_router(webui) -> APIRouter:
             emit(
                 queue, QUEUE_SESSION, "resource_removed",
                 {"resource_id": resource_id},
-                scope=session_id,
+                scope=session_id, backend_id=webui.tenant_context.backend_id,
             )
 
         return {"status": "ok", "resource_id": resource_id}

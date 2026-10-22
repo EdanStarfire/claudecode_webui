@@ -72,6 +72,7 @@ _ATTRIBUTE_PAIRS: list[tuple[type, list[str]]] = [
         [
             "data_dir", "template_manager", "profile_manager", "credential_vault",
             "session_manager", "project_manager", "queue_manager", "delivery_gate",
+            "tenant_context",
         ],
     ),
 ]

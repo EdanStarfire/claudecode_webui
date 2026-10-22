@@ -194,6 +194,7 @@ class BackendApp:
             template_manager=template_manager,
             app_config=_cfg,
             ui_queue=_ui_queue,
+            backend_id=self.tenant_context.backend_id,
         )
 
         # Issue #1998: dev-only raw SDK traffic capture, structurally unavailable unless the
@@ -497,14 +498,14 @@ class BackendApp:
         """Forward watchdog alerts to AuditWriter and wake audit long-poll."""
         try:
             await self._audit_writer.on_watchdog_alert(alert)
-            emit(self.audit_queue, QUEUE_AUDIT, "audit_event", {"data": alert})
+            emit(self.audit_queue, QUEUE_AUDIT, "audit_event", {"data": alert}, backend_id=self.tenant_context.backend_id)
         except Exception:
             logger.exception("_on_watchdog_alert_audit error (non-fatal)")
 
     async def _wake_audit_queue(self) -> None:
         """Signal audit long-poll that new rows are available after a flush."""
         try:
-            emit(self.audit_queue, QUEUE_AUDIT, "audit_event_flush", {})
+            emit(self.audit_queue, QUEUE_AUDIT, "audit_event_flush", {}, backend_id=self.tenant_context.backend_id)
         except Exception:
             logger.exception("_wake_audit_queue error (non-fatal)")
 
@@ -519,7 +520,7 @@ class BackendApp:
                     "comm_id": comm.comm_id,
                     "session_id": comm.from_minion_id,
                 }
-            })
+            }, backend_id=self.tenant_context.backend_id)
             logger.debug(f"Appended UI notification for comm {comm.comm_id}")
         except Exception:
             logger.exception("Error appending comm notification to UI queue")
@@ -528,7 +529,7 @@ class BackendApp:
         """Broadcast schedule event to UI poll queue."""
         try:
             event["legion_id"] = legion_id
-            emit(self.ui_queue, QUEUE_UI, event["type"], {k: v for k, v in event.items() if k != "type"})
+            emit(self.ui_queue, QUEUE_UI, event["type"], {k: v for k, v in event.items() if k != "type"}, backend_id=self.tenant_context.backend_id)
         except Exception:
             logger.exception("Error appending schedule event")
 
@@ -537,7 +538,7 @@ class BackendApp:
         try:
             emit(
                 self.ui_queue, QUEUE_UI, "project_updated", {"data": {"project": project}},
-                scope=project.get("project_id"),
+                scope=project.get("project_id"), backend_id=self.tenant_context.backend_id,
             )
             logger.debug("Appended project_updated for project %s", project.get("project_id"))
         except Exception:
@@ -548,7 +549,7 @@ class BackendApp:
         try:
             emit(
                 self.ui_queue, QUEUE_UI, "project_deleted", {"data": {"project_id": project_id}},
-                scope=project_id,
+                scope=project_id, backend_id=self.tenant_context.backend_id,
             )
             logger.debug("Appended project_deleted for project %s", project_id)
         except Exception:
@@ -559,7 +560,7 @@ class BackendApp:
         try:
             emit(
                 self.ui_queue, QUEUE_UI, "session_deleted", {"data": {"session_id": session_id}},
-                scope=session_id,
+                scope=session_id, backend_id=self.tenant_context.backend_id,
             )
             logger.debug("Appended session_deleted for session %s", session_id)
         except Exception:
@@ -572,7 +573,7 @@ class BackendApp:
                 self.ui_queue, QUEUE_UI, "state_change", {
                     "data": {"session_id": session_id, "session": session_dict, "timestamp": timestamp}
                 },
-                scope=session_id,
+                scope=session_id, backend_id=self.tenant_context.backend_id,
             )
             logger.info("Appended state_change for session %s", session_id)
         except Exception:
@@ -591,7 +592,7 @@ class BackendApp:
                 self.ui_queue, QUEUE_UI, "session_metadata_updated", {
                     "data": {"session_id": session_id, "session": session_dict}
                 },
-                scope=session_id,
+                scope=session_id, backend_id=self.tenant_context.backend_id,
             )
             logger.info("Appended session_metadata_updated for session %s", session_id)
         except Exception:
@@ -612,7 +613,7 @@ class BackendApp:
                 self.ui_queue, QUEUE_UI, "processing_change", {
                     "data": {"session_id": session_id, "session": session_dict}
                 },
-                scope=session_id,
+                scope=session_id, backend_id=self.tenant_context.backend_id,
             )
             logger.info("Appended processing_change for session %s", session_id)
         except Exception:
@@ -625,14 +626,14 @@ class BackendApp:
                 "message": "Server is restarting...",
                 "pull_output": pull_output,
                 "sync_output": sync_output,
-            })
+            }, backend_id=self.tenant_context.backend_id)
         except Exception:
             logger.warning("Failed to append restart notice")
 
     def _broadcast_mcp_oauth_complete(self, server_id: str) -> None:
         """Emit mcp_oauth_complete to the global UI poll queue."""
         try:
-            emit(self.ui_queue, QUEUE_UI, "mcp_oauth_complete", {"server_id": server_id})
+            emit(self.ui_queue, QUEUE_UI, "mcp_oauth_complete", {"server_id": server_id}, backend_id=self.tenant_context.backend_id)
         except Exception:
             logger.exception("Error appending mcp_oauth_complete")
 
@@ -658,7 +659,7 @@ class BackendApp:
                 "secret_name": secret_name,
                 "error": error,
                 "error_code": error_code,
-            })
+            }, backend_id=self.tenant_context.backend_id)
         except Exception:
             logger.exception("Error appending secret_oauth_complete")
 
@@ -811,26 +812,26 @@ class BackendApp:
         """Issue #1387: Emit secret_refreshed or secret_refresh_failed to the UI poll queue."""
         try:
             if error is None:
-                emit(self.ui_queue, QUEUE_UI, "secret_refreshed", {"secret_name": secret_name})
+                emit(self.ui_queue, QUEUE_UI, "secret_refreshed", {"secret_name": secret_name}, backend_id=self.tenant_context.backend_id)
             else:
                 emit(self.ui_queue, QUEUE_UI, "secret_refresh_failed", {
                     "secret_name": secret_name,
                     "error": error,
-                })
+                }, backend_id=self.tenant_context.backend_id)
         except Exception:
             logger.exception("Error appending vault secret event for %s", secret_name)
 
     def _broadcast_mcp_oauth_refreshed(self, server_id: str) -> None:
         """Issue #976: Emit mcp_oauth_refreshed to the global UI poll queue."""
         try:
-            emit(self.ui_queue, QUEUE_UI, "mcp_oauth_refreshed", {"server_id": server_id})
+            emit(self.ui_queue, QUEUE_UI, "mcp_oauth_refreshed", {"server_id": server_id}, backend_id=self.tenant_context.backend_id)
         except Exception:
             logger.exception("Error appending mcp_oauth_refreshed")
 
     def _broadcast_rate_limits_update(self, data: dict) -> None:
         """Issue #899: Emit rate_limits_update to the global UI poll queue."""
         try:
-            emit(self.ui_queue, QUEUE_UI, "rate_limits_update", {"data": data})
+            emit(self.ui_queue, QUEUE_UI, "rate_limits_update", {"data": data}, backend_id=self.tenant_context.backend_id)
         except Exception:
             logger.exception("Error appending rate_limits_update")
 
@@ -841,7 +842,7 @@ class BackendApp:
                 emit(
                     self.session_queues[session_id], QUEUE_SESSION, "resource_registered",
                     {"resource": resource_metadata},
-                    scope=session_id,
+                    scope=session_id, backend_id=self.tenant_context.backend_id,
                 )
                 logger.debug(f"Appended resource_registered for {resource_metadata.get('resource_id')} to session {session_id}")
         except Exception:
@@ -854,7 +855,7 @@ class BackendApp:
                 emit(
                     self.session_queues[session_id], QUEUE_SESSION, "link_registered",
                     {"link": link},
-                    scope=session_id,
+                    scope=session_id, backend_id=self.tenant_context.backend_id,
                 )
                 logger.debug(f"Appended link_registered for '{link.get('label')}' to session {session_id}")
         except Exception:
@@ -871,7 +872,7 @@ class BackendApp:
                         "item": item,
                         "pending_count": self.coordinator.queue_manager.get_pending_count(session_id),
                     },
-                    scope=session_id,
+                    scope=session_id, backend_id=self.tenant_context.backend_id,
                 )
         except Exception:
             logger.exception("Error appending queue_update")
@@ -883,7 +884,7 @@ class BackendApp:
                 emit(
                     self.session_queues[session_id], QUEUE_SESSION, "usage_updated",
                     {"session_id": session_id, "usage": usage},
-                    scope=session_id,
+                    scope=session_id, backend_id=self.tenant_context.backend_id,
                 )
         except Exception:
             logger.exception("Error appending usage_updated")
@@ -1033,7 +1034,7 @@ class BackendApp:
                                     "data": tool_call_data,
                                     "timestamp": datetime.now(UTC).isoformat(),
                                 },
-                                scope=session_id,
+                                scope=session_id, backend_id=self.tenant_context.backend_id,
                             )
 
                     if session_id in self.session_queues:
@@ -1049,7 +1050,7 @@ class BackendApp:
                                 },
                                 "timestamp": datetime.now(UTC).isoformat(),
                             },
-                            scope=session_id,
+                            scope=session_id, backend_id=self.tenant_context.backend_id,
                         )
                     return
 
@@ -1064,7 +1065,7 @@ class BackendApp:
                                 "data": message_data["data"],
                                 "timestamp": datetime.now(UTC).isoformat(),
                             },
-                            scope=session_id,
+                            scope=session_id, backend_id=self.tenant_context.backend_id,
                         )
                     return
 
@@ -1097,7 +1098,7 @@ class BackendApp:
                             "data": websocket_data,
                             "timestamp": datetime.now(UTC).isoformat(),
                         },
-                        scope=session_id,
+                        scope=session_id, backend_id=self.tenant_context.backend_id,
                     )
                     logger.info(f"Appended message to session queue for {session_id}")
 
@@ -1127,7 +1128,7 @@ class BackendApp:
                                 "context_pct": round(ctx["percentage"], 1),
                                 "timestamp": datetime.now(UTC).isoformat(),
                             },
-                            scope=session_id,
+                            scope=session_id, backend_id=self.tenant_context.backend_id,
                         )
 
             except Exception:
@@ -1193,7 +1194,7 @@ class BackendApp:
                                     "data": tool_call_data,
                                     "timestamp": datetime.now(UTC).isoformat(),
                                 },
-                                scope=session_id,
+                                scope=session_id, backend_id=self.tenant_context.backend_id,
                             )
                         logger.debug(f"Emitted tool_call pending for {tool_name} ({tool_id}) in session {session_id}")
 
@@ -1243,7 +1244,7 @@ class BackendApp:
                                         "data": tool_call_data,
                                         "timestamp": datetime.now(UTC).isoformat(),
                                     },
-                                    scope=session_id,
+                                    scope=session_id, backend_id=self.tenant_context.backend_id,
                                 )
                             logger.debug(
                                 f"Emitted tool_call {'failed' if is_error else 'completed'} "
@@ -1287,7 +1288,7 @@ class BackendApp:
                                     "data": tool_call_data,
                                     "timestamp": datetime.now(UTC).isoformat(),
                                 },
-                                scope=session_id,
+                                scope=session_id, backend_id=self.tenant_context.backend_id,
                             )
                         logger.debug(
                             f"Mirrored replayed tool_call snapshot ({message_data.get('status')}) "
@@ -1342,7 +1343,7 @@ class BackendApp:
                                     "data": tool_call_data,
                                     "timestamp": datetime.now(UTC).isoformat(),
                                 },
-                                scope=session_id,
+                                scope=session_id, backend_id=self.tenant_context.backend_id,
                             )
                         logger.debug(
                             f"Emitted tool_call awaiting_permission for {tool_name} "
@@ -1378,7 +1379,7 @@ class BackendApp:
                                     "data": tool_call_data,
                                     "timestamp": datetime.now(UTC).isoformat(),
                                 },
-                                scope=session_id,
+                                scope=session_id, backend_id=self.tenant_context.backend_id,
                             )
                         logger.debug(
                             f"Emitted tool_call {'running' if granted else 'denied'} "
@@ -1447,7 +1448,7 @@ class BackendApp:
                     "data": tool_call_data,
                     "timestamp": datetime.now(UTC).isoformat(),
                 },
-                scope=session_id,
+                scope=session_id, backend_id=self.tenant_context.backend_id,
             )
 
     async def _on_session_reset(self, session_id: str):
@@ -1455,7 +1456,7 @@ class BackendApp:
         try:
             emit(
                 self.ui_queue, QUEUE_UI, "session_reset", {"data": {"session_id": session_id}},
-                scope=session_id,
+                scope=session_id, backend_id=self.tenant_context.backend_id,
             )
             logger.info(f"Appended session_reset for {session_id} to UI queue")
         except Exception:

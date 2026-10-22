@@ -27,6 +27,7 @@ from backend.template_manager import TemplateManager
 
 if TYPE_CHECKING:
     from backend.delivery_gate import DeliveryGate
+    from backend.tenant_context import TenantContext
 
 
 class SessionManagerPort(Protocol):
@@ -73,8 +74,8 @@ class LegionCoordinatorPort(Protocol):
     """Narrow view of SessionCoordinator used by Legion components.
 
     Covers data_dir, template_manager, profile_manager, credential_vault,
-    delivery_gate, the 3 sub-manager ports, and the async verbs Legion calls
-    directly on the coordinator.
+    delivery_gate, tenant_context, the 3 sub-manager ports, and the async
+    verbs Legion calls directly on the coordinator.
     """
 
     data_dir: Path
@@ -85,6 +86,9 @@ class LegionCoordinatorPort(Protocol):
     project_manager: ProjectManagerPort
     queue_manager: QueueManagerPort
     delivery_gate: "DeliveryGate"
+    # Issue #2268 AC4: legion_system.py's broadcast_ui_event() reaches through
+    # session_port.tenant_context.backend_id — was missing from this Protocol.
+    tenant_context: "TenantContext"
 
     async def enqueue_message(
         self,

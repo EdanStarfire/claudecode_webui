@@ -113,6 +113,46 @@ class TestSenderType:
         assert comm.sender_id == "x"
 
 
+class TestOriginBackendId:
+    """Tests for Comm.origin_backend_id (issue #2268 AC7)."""
+
+    def test_defaults_to_default_backend_id_when_not_given(self):
+        from shared.event_envelope import DEFAULT_BACKEND_ID
+
+        comm = Comm(comm_id="test", from_user=True, to_minion_id="minion-123")
+        assert comm.origin_backend_id == DEFAULT_BACKEND_ID
+
+    def test_explicit_origin_backend_id_not_overridden(self):
+        comm = Comm(
+            comm_id="test",
+            from_user=True,
+            to_minion_id="minion-123",
+            origin_backend_id="some-other-backend",
+        )
+        assert comm.origin_backend_id == "some-other-backend"
+
+    def test_round_trips_through_to_dict_from_dict(self):
+        comm = Comm(
+            comm_id="test",
+            from_user=True,
+            to_minion_id="minion-123",
+            origin_backend_id="some-other-backend",
+        )
+        restored = Comm.from_dict(comm.to_dict())
+        assert restored.origin_backend_id == "some-other-backend"
+
+    def test_from_dict_backfills_historical_comms_missing_the_field(self):
+        """A Comm persisted before issue #2268 never serialized origin_backend_id —
+        from_dict() must backfill it via the same default __post_init__ applies,
+        not raise a KeyError/TypeError."""
+        from shared.event_envelope import DEFAULT_BACKEND_ID
+
+        data = Comm(comm_id="test", from_user=True, to_minion_id="minion-123").to_dict()
+        del data["origin_backend_id"]
+        restored = Comm.from_dict(data)
+        assert restored.origin_backend_id == DEFAULT_BACKEND_ID
+
+
 class TestDefaultDeliveryForType:
     """Tests for default_delivery_for_type() (issue #2193 AC2)."""
 
