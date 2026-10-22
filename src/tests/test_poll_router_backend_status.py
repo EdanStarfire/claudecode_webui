@@ -34,10 +34,14 @@ def _make_webui(*, is_unreachable=False, degraded=None):
     webui.backend_client.reachability.is_unreachable = is_unreachable
     # MagicMock()'s auto-created attributes are truthy, so backend_supervisor must be
     # set explicitly — see test_relay_router.py's _make_app for the same gotcha.
+    # Issue #2268 AC5: is_backend_degraded() now reads webui.backend_binding.degraded
+    # directly rather than deriving it from backend_supervisor — mirror it explicitly.
     if degraded is None:
         webui.backend_supervisor = None
+        webui.backend_binding.degraded = False
     else:
         webui.backend_supervisor.degraded = degraded
+        webui.backend_binding.degraded = degraded
     app = FastAPI()
     app.include_router(build_router(webui))
     return app, webui

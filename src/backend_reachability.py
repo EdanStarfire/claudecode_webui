@@ -101,15 +101,15 @@ class BackendUnreachableError(HTTPException):
 
 def is_backend_degraded(webui) -> bool:
     """Whether Backend's auto-restart supervisor has given up after its
-    crash-loop budget — centralizes the `backend_supervisor is not None and
-    backend_supervisor.degraded` check (None in remote-Backend mode, where
-    "degraded" can never apply) so every call site derives it identically
-    instead of duplicating the None-guard inline (issue #1989 review finding:
-    two call sites — src/routers/config.py, src/web_server.py's dynamic OAuth
-    callback relay — were missed entirely when this was first wired through
-    inline at each of relay.py's/poll.py's call sites).
+    crash-loop budget — centralizes the `BackendBinding.degraded` check (always
+    False in remote-Backend mode, where "degraded" can never apply) so every
+    call site derives it identically instead of duplicating the None-guard
+    inline (issue #1989 review finding: two call sites — src/routers/config.py,
+    src/web_server.py's dynamic OAuth callback relay — were missed entirely
+    when this was first wired through inline at each of relay.py's/poll.py's
+    call sites).
     """
-    return webui.backend_supervisor is not None and webui.backend_supervisor.degraded
+    return webui.backend_binding.degraded
 
 
 def to_http_exception(exc: Exception, *, degraded: bool = False) -> BackendUnreachableError:

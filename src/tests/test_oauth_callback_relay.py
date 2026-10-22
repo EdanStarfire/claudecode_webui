@@ -18,15 +18,16 @@ from src.web_server import ClaudeWebUI
 
 
 def _make_webui(reserved_paths=frozenset(), auth_middleware=None):
+    from src.backend_binding import BackendBinding
+
     webui = ClaudeWebUI.__new__(ClaudeWebUI)  # bypass __init__ (needs frontend/dist)
     from fastapi import FastAPI
     webui.app = FastAPI()
-    webui._oauth_callback_paths = set()
     webui._reserved_route_paths = frozenset(reserved_paths)
-    webui.backend_client = MagicMock()
-    # __new__ bypasses __init__, so this attribute is never set unless done here
-    # explicitly — is_backend_degraded() (src/backend_reachability.py) reads it.
-    webui.backend_supervisor = None
+    # Issue #2268 AC5: backend_client/backend_supervisor/_oauth_callback_paths are
+    # read-only properties forwarding to backend_binding now — __new__ bypasses
+    # __init__, so this is never set unless done here explicitly.
+    webui.backend_binding = BackendBinding(client=MagicMock(), token="test-token", supervisor=None)
     # Issue #2268 AC2: exempt_paths mutation goes through the live AuthMiddleware
     # instance now, not the class — tests that don't care about exemptions get None.
     webui.auth_middleware = auth_middleware
@@ -108,7 +109,7 @@ async def test_resync_is_a_noop_on_backend_error():
     import httpx
 
     webui = _make_webui()
-    webui._oauth_callback_paths = {"/custom/existing"}
+    webui.backend_binding.oauth_callback_paths = {"/custom/existing"}
     webui.backend_client.get_json = AsyncMock(side_effect=httpx.ConnectError("refused"))
 
     await webui.resync_oauth_callback_paths()
@@ -233,7 +234,7 @@ async def test_issue_1989_dynamic_callback_route_backend_degraded_returns_503():
 
     webui = _make_webui()
     webui.backend_client.relay = AsyncMock(side_effect=httpx.ConnectError("refused"))
-    webui.backend_supervisor = MagicMock(degraded=True)
+    webui.backend_binding.supervisor = MagicMock(degraded=True)
 
     webui._add_oauth_callback_relay_route("/custom/callback")
 

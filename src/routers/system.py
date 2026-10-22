@@ -82,7 +82,7 @@ class BackendRestartOutcome:
 async def _restart_remote_backend(webui, payload: "RestartRequest") -> BackendRestartOutcome:
     """Orchestrate a remote Backend's own restart before Frontend restarts itself.
 
-    Only called in remote mode (webui.backend_supervisor is None). Backend's own
+    Only called in remote mode (not webui.backend_binding.is_embedded). Backend's own
     POST /api/system/restart (backend/routers/system.py) already fully implements
     this exact {branch, commit} target contract, already validates/fetches/
     checks-out/resets against its own repo, and already waits, re-execs, and comes
@@ -275,11 +275,10 @@ async def _finish_restart(webui) -> None:
         await webui.backend_client.aclose()
     except Exception:
         logger.warning("Error closing backend_client during restart")
-    if webui.backend_supervisor is not None:
-        try:
-            await webui.backend_supervisor.stop()
-        except Exception:
-            logger.warning("Error stopping Backend during restart")
+    try:
+        await webui.backend_binding.stop_supervisor()
+    except Exception:
+        logger.warning("Error stopping Backend during restart")
     # Issue #2027: os.execv never returns into the interpreter's normal
     # shutdown sequence, so frontend_log_tee's atexit-registered drain would
     # never run — without this, the new process image would inherit fd 1/2
@@ -324,14 +323,14 @@ def build_router(webui) -> APIRouter:
         """Return whether Frontend is running in remote-Backend mode (issue #1847).
 
         Authoritative signal for RestartModal.vue's dual-tier UI — reflects the actual live
-        wiring (webui.backend_supervisor is None means Backend was pointed to via
+        wiring (not webui.backend_binding.is_embedded means Backend was pointed to via
         --remote-backend-url/--remote-backend-token rather than auto-started), not
         config.json's persisted backend_connection.remote_backend_url alone, which misses
         deployments where those were passed as CLI-only flags and never written to disk
         (review finding: main.py's `args.remote_backend_url or frontend_config...` falls
         through to the CLI value without ever persisting it back).
         """
-        return {"remote_mode": webui.backend_supervisor is None}
+        return {"remote_mode": not webui.backend_binding.is_embedded}
 
     @router.post("/api/system/restart", status_code=202)
     @handle_exceptions("restart server")
@@ -339,7 +338,7 @@ def build_router(webui) -> APIRouter:
         """Pull latest code (default) or switch Frontend to a specific
         branch/commit, then restart.
 
-        Embedded mode (webui.backend_supervisor is not None): also stops the
+        Embedded mode (webui.backend_binding.is_embedded): also stops the
         current Backend child before restarting Frontend. Frontend's own
         re-exec re-runs main.py's normal startup sequence, which auto-starts a
         fresh Backend from the same, already-pulled repo on disk — reusing the
@@ -350,7 +349,7 @@ def build_router(webui) -> APIRouter:
         would keep running under a supervisor that's about to stop watching
         it, orphaned, while a second, fresh Backend also starts on re-exec.)
 
-        Remote mode (webui.backend_supervisor is None): Backend is restarted
+        Remote mode (not webui.backend_binding.is_embedded): Backend is restarted
         first via _restart_remote_backend() — defaulting to "pull latest" on
         Backend too when backend_branch/backend_commit are both absent, or an
         explicit independent target otherwise. Frontend's own restart only
@@ -388,7 +387,7 @@ def build_router(webui) -> APIRouter:
         has_custom_target = bool(payload.branch or payload.commit)
 
         backend_outcome = None
-        if webui.backend_supervisor is None:
+        if not webui.backend_binding.is_embedded:
             outcome = await _restart_remote_backend(webui, payload)
             backend_outcome = {"status": outcome.status, "detail": outcome.detail}
             logger.info(

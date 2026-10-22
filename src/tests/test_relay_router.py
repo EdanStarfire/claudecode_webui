@@ -61,13 +61,11 @@ def _extract_real_halt_all_route_path() -> str:
 def _make_app(*, degraded=False):
     webui = MagicMock()
     webui.backend_client.relay = AsyncMock(side_effect=httpx.ConnectError("refused"))
-    # MagicMock()'s auto-created attributes are truthy, so backend_supervisor must be
-    # set explicitly — otherwise `webui.backend_supervisor is not None` is always True
-    # and the degraded branch silently activates regardless of intent (issue #1989).
-    if degraded:
-        webui.backend_supervisor.degraded = True
-    else:
-        webui.backend_supervisor = None
+    # Issue #2268 AC5: is_backend_degraded() now reads webui.backend_binding.degraded
+    # directly — set it explicitly rather than relying on MagicMock()'s auto-created
+    # (always truthy) attributes, which would activate the degraded branch regardless
+    # of intent (issue #1989).
+    webui.backend_binding.degraded = degraded
     app = FastAPI()
     app.include_router(build_router(webui))
 
