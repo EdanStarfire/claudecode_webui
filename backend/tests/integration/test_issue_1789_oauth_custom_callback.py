@@ -1,7 +1,7 @@
 """Integration tests for issue #1789 — per-server custom OAuth callback path/port.
 
 Covers T6 for both mechanisms:
-- path-only (no custom port): a dynamic Route + AuthMiddleware.EXEMPT_PATHS entry
+- path-only (no custom port): a dynamic Route + webui.auth_middleware.exempt_paths entry
   registered directly on the main app; torn down on delete, confirmed via a 404 (and
   re-imposed auth) on the very next request — the case the plan calls out as easy to
   under-test if only the listener-port variant is covered.
@@ -10,12 +10,28 @@ Covers T6 for both mechanisms:
 """
 
 import socket
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from backend.web_server import AuthMiddleware, BackendApp
+from backend.web_server import BackendApp
+
+
+def test_exempt_paths_are_instance_scoped_not_shared_across_middleware_instances():
+    """Issue #2268 AC2: exempt_paths must be a per-instance set, not a shared class
+    attribute — mutating one AuthMiddleware instance's exemptions must not leak into
+    another instance (e.g. two separate BackendApp/test apps)."""
+    from backend.web_server import DEFAULT_EXEMPT_PATHS, AuthMiddleware
+
+    first = AuthMiddleware(app=MagicMock(), auth_token="token-a")
+    second = AuthMiddleware(app=MagicMock(), auth_token="token-b")
+
+    first.exempt_paths.add("/only-on-first")
+
+    assert "/only-on-first" in first.exempt_paths
+    assert "/only-on-first" not in second.exempt_paths
+    assert second.exempt_paths == set(DEFAULT_EXEMPT_PATHS)
 
 
 def _free_port() -> int:
@@ -39,7 +55,7 @@ async def _create_mcp_config(client, auth_headers, **overrides):
 
 @pytest.fixture
 async def auth_env(tmp_path):
-    """A BackendApp instance with auth ENABLED, to verify EXEMPT_PATHS wiring for real."""
+    """A BackendApp instance with auth ENABLED, to verify exempt_paths wiring for real."""
     data_dir = tmp_path / "test_data_oauth_1789"
     data_dir.mkdir()
     config_file = tmp_path / "config.json"
@@ -77,7 +93,7 @@ class TestPathOnlyCustomCallback:
             client, auth_headers, oauth_custom_callback_path="/my-callback"
         )
         config_id = config["id"]
-        assert "/my-callback" in AuthMiddleware.EXEMPT_PATHS
+        assert "/my-callback" in webui.auth_middleware.exempt_paths
 
         # No auth header — proves the dynamic route is genuinely exempt, not just present.
         resp = await client.get("/my-callback", params={"state": "s1", "code": "c1"})
@@ -98,7 +114,7 @@ class TestPathOnlyCustomCallback:
             "/my-callback", params={"state": "s1", "code": "c1"}, headers=auth_headers
         )
         assert resp3.status_code == 404
-        assert "/my-callback" not in AuthMiddleware.EXEMPT_PATHS
+        assert "/my-callback" not in webui.auth_middleware.exempt_paths
         assert config_id not in webui._dynamic_oauth_routes
 
     async def test_torn_down_on_disable(self, auth_env):
@@ -110,7 +126,7 @@ class TestPathOnlyCustomCallback:
             client, auth_headers, oauth_custom_callback_path="/disable-callback"
         )
         config_id = config["id"]
-        assert "/disable-callback" in AuthMiddleware.EXEMPT_PATHS
+        assert "/disable-callback" in webui.auth_middleware.exempt_paths
 
         upd_resp = await client.put(
             f"/api/mcp-configs/{config_id}",
@@ -125,7 +141,7 @@ class TestPathOnlyCustomCallback:
             "/disable-callback", params={"state": "s1", "code": "c1"}, headers=auth_headers
         )
         assert resp_auth.status_code == 404
-        assert "/disable-callback" not in AuthMiddleware.EXEMPT_PATHS
+        assert "/disable-callback" not in webui.auth_middleware.exempt_paths
 
     async def test_path_change_on_update_swaps_route(self, auth_env):
         webui, client, auth_headers = auth_env
@@ -149,11 +165,11 @@ class TestPathOnlyCustomCallback:
             "/old-callback", params={"state": "s1", "code": "c1"}, headers=auth_headers
         )
         assert old_resp_auth.status_code == 404
-        assert "/old-callback" not in AuthMiddleware.EXEMPT_PATHS
+        assert "/old-callback" not in webui.auth_middleware.exempt_paths
 
         new_resp = await client.get("/new-callback", params={"state": "s1", "code": "c1"})
         assert new_resp.status_code == 200
-        assert "/new-callback" in AuthMiddleware.EXEMPT_PATHS
+        assert "/new-callback" in webui.auth_middleware.exempt_paths
 
 
 class TestCustomPortListener:

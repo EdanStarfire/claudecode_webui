@@ -17,7 +17,7 @@ from httpx import ASGITransport, AsyncClient
 from src.web_server import ClaudeWebUI
 
 
-def _make_webui(reserved_paths=frozenset()):
+def _make_webui(reserved_paths=frozenset(), auth_middleware=None):
     webui = ClaudeWebUI.__new__(ClaudeWebUI)  # bypass __init__ (needs frontend/dist)
     from fastapi import FastAPI
     webui.app = FastAPI()
@@ -27,6 +27,9 @@ def _make_webui(reserved_paths=frozenset()):
     # __new__ bypasses __init__, so this attribute is never set unless done here
     # explicitly — is_backend_degraded() (src/backend_reachability.py) reads it.
     webui.backend_supervisor = None
+    # Issue #2268 AC2: exempt_paths mutation goes through the live AuthMiddleware
+    # instance now, not the class — tests that don't care about exemptions get None.
+    webui.auth_middleware = auth_middleware
     return webui
 
 
@@ -46,14 +49,31 @@ def test_add_and_remove_oauth_callback_relay_route():
 
 def test_add_oauth_callback_route_exempts_from_auth_middleware():
     from src.web_server import AuthMiddleware
-    webui = _make_webui()
+    auth_middleware = AuthMiddleware(app=MagicMock(), auth_token="test-token")
+    webui = _make_webui(auth_middleware=auth_middleware)
 
     webui._add_oauth_callback_relay_route("/another/callback")
     try:
-        assert "/another/callback" in AuthMiddleware.EXEMPT_PATHS
+        assert "/another/callback" in webui.auth_middleware.exempt_paths
     finally:
         webui._remove_oauth_callback_relay_route("/another/callback")
-        assert "/another/callback" not in AuthMiddleware.EXEMPT_PATHS
+        assert "/another/callback" not in webui.auth_middleware.exempt_paths
+
+
+def test_exempt_paths_are_instance_scoped_not_shared_across_middleware_instances():
+    """Issue #2268 AC2: exempt_paths must be a per-instance set, not a shared class
+    attribute — mutating one AuthMiddleware instance's exemptions must not leak into
+    another instance (e.g. two separate ClaudeWebUI/test apps)."""
+    from src.web_server import DEFAULT_EXEMPT_PATHS, AuthMiddleware
+
+    first = AuthMiddleware(app=MagicMock(), auth_token="token-a")
+    second = AuthMiddleware(app=MagicMock(), auth_token="token-b")
+
+    first.exempt_paths.add("/only-on-first")
+
+    assert "/only-on-first" in first.exempt_paths
+    assert "/only-on-first" not in second.exempt_paths
+    assert second.exempt_paths == set(DEFAULT_EXEMPT_PATHS)
 
 
 @pytest.mark.asyncio

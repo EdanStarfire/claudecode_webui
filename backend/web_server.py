@@ -43,6 +43,22 @@ from .task_utils import task_done_log_exception
 logger = logging.getLogger(__name__)
 
 
+def _find_middleware_instance(asgi_app: Any, middleware_cls: type) -> Any | None:
+    """Walk the built middleware chain to find the live instance of `middleware_cls`.
+
+    Starlette's add_middleware() only records the class + kwargs; the actual
+    instance is constructed when the stack is built. Each middleware wraps the
+    next one inward via `.app`, so walking that chain locates the instance
+    (issue #2268 AC2 — needed to mutate the now instance-scoped exempt_paths).
+    """
+    node = asgi_app
+    while node is not None:
+        if isinstance(node, middleware_cls):
+            return node
+        node = getattr(node, "app", None)
+    return None
+
+
 def _read_litellm_port_sync(data_dir: Path) -> int | None:
     """Read litellm_port from providers.json or legacy config.json without async I/O.
 
@@ -63,6 +79,11 @@ def _read_litellm_port_sync(data_dir: Path) -> int | None:
     return None
 
 
+# Issue #2268 AC2: seed value for each AuthMiddleware instance's own exempt_paths —
+# no longer a shared class-level mutable set.
+DEFAULT_EXEMPT_PATHS = frozenset({'/health', '/ready'})
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     """Bearer-token auth for the Backend-scoped credential (issue #498).
 
@@ -74,7 +95,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
     endpoints consumed directly by Docker/LiteLLM sidecars, which use their own auth.
     """
 
-    EXEMPT_PATHS = {'/health', '/ready'}
     # Issue #827: the per-session secrets resolve endpoint uses its own Bearer token
     # auth, not the backend-scoped operator token. Exempt it from global AuthMiddleware.
     EXEMPT_SUFFIXES = ('/secrets/resolve', '/routing')
@@ -84,11 +104,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, auth_token: str):
         super().__init__(app)
         self.auth_token = auth_token
+        # Issue #2268 AC2: instance-scoped, not a shared class attribute — dynamic
+        # OAuth callback paths registered on one BackendApp instance no longer leak
+        # into every other instance's exemptions (e.g. across test apps).
+        self.exempt_paths = set(DEFAULT_EXEMPT_PATHS)
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        if path in self.EXEMPT_PATHS:
+        if path in self.exempt_paths:
             return await call_next(request)
         for suffix in self.EXEMPT_SUFFIXES:
             if path.endswith(suffix):
@@ -285,6 +309,14 @@ class BackendApp:
             minimum_size=500,
             exclude_content_types=(*DEFAULT_EXCLUDED_CONTENT_TYPES, "application/octet-stream"),
         )
+
+        # Issue #2268 AC2: build the middleware stack now (instead of lazily on the
+        # first request) so the live AuthMiddleware instance is available immediately
+        # for dynamic OAuth exempt-path mutation (_add_dynamic_oauth_route etc.) —
+        # EXEMPT_PATHS is instance-scoped now, so mutation must go through this
+        # specific instance rather than the AuthMiddleware class.
+        self.app.middleware_stack = self.app.build_middleware_stack()
+        self.auth_middleware = _find_middleware_instance(self.app.middleware_stack, AuthMiddleware)
 
         @self.app.get("/health")
         async def health_check():
@@ -659,15 +691,17 @@ class BackendApp:
             return await render_oauth_callback(request, complete_flow, denied)
 
         self.app.router.routes.insert(0, Route(path, _handler, methods=["GET"]))
-        AuthMiddleware.EXEMPT_PATHS.add(path)
+        if self.auth_middleware is not None:
+            self.auth_middleware.exempt_paths.add(path)
         logger.info(f"Registered dynamic OAuth callback route: {path}")
 
     def _remove_dynamic_oauth_route(self, path: str) -> None:
-        """Remove a dynamic OAuth callback route + its EXEMPT_PATHS entry (paired teardown)."""
+        """Remove a dynamic OAuth callback route + its exempt_paths entry (paired teardown)."""
         self.app.router.routes[:] = [
             r for r in self.app.router.routes if getattr(r, "path", None) != path
         ]
-        AuthMiddleware.EXEMPT_PATHS.discard(path)
+        if self.auth_middleware is not None:
+            self.auth_middleware.exempt_paths.discard(path)
         logger.info(f"Removed dynamic OAuth callback route: {path}")
 
     async def _sync_oauth_callback_for_config(self, config) -> None:
@@ -1418,7 +1452,7 @@ class BackendApp:
         except Exception:
             logger.exception("Error stopping OAuth callback listeners during cleanup")
         # Issue #1789: tear down any remaining dynamic OAuth callback routes + their
-        # AuthMiddleware.EXEMPT_PATHS entries.
+        # auth_middleware.exempt_paths entries.
         for path in list(self._dynamic_oauth_routes.values()):
             try:
                 self._remove_dynamic_oauth_route(path)
