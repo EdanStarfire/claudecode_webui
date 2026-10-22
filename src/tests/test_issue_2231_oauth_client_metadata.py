@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from src.routers import core
-from src.web_server import AuthMiddleware
+from src.web_server import DEFAULT_EXEMPT_PATHS
 
 
 def _make_app():
@@ -25,7 +25,7 @@ def _make_app():
 
 
 def test_exempt_from_auth_middleware():
-    assert "/oauth/client-metadata.json" in AuthMiddleware.EXEMPT_PATHS
+    assert "/oauth/client-metadata.json" in DEFAULT_EXEMPT_PATHS
 
 
 @pytest.mark.asyncio
@@ -48,7 +48,7 @@ async def test_returns_valid_document_matching_request_origin():
 @pytest.mark.asyncio
 async def test_reachable_without_any_authorization_header():
     """No Authorization header sent at all — the route itself never checks for
-    one; it's AuthMiddleware.EXEMPT_PATHS membership (asserted above) that
+    one; it's DEFAULT_EXEMPT_PATHS membership (asserted above) that
     makes this reachable unauthenticated in the real app stack."""
     app = _make_app()
 

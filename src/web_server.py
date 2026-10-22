@@ -13,6 +13,7 @@ import logging
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import httpx
 from fastapi import (
@@ -41,6 +42,35 @@ logger = logging.getLogger(__name__)
 _OAUTH_RESYNC_INTERVAL_SECONDS = 60
 
 
+def _find_middleware_instance(asgi_app: Any, middleware_cls: type) -> Any | None:
+    """Walk the built middleware chain to find the live instance of `middleware_cls`.
+
+    Starlette's add_middleware() only records the class + kwargs; the actual
+    instance is constructed when the stack is built. Each middleware wraps the
+    next one inward via `.app`, so walking that chain locates the instance
+    (issue #2268 AC2 — needed to mutate the now instance-scoped exempt_paths).
+    """
+    node = asgi_app
+    while node is not None:
+        if isinstance(node, middleware_cls):
+            return node
+        node = getattr(node, "app", None)
+    return None
+
+
+# Issue #2268 AC2: seed value for each AuthMiddleware instance's own exempt_paths —
+# no longer a shared class-level mutable set.
+DEFAULT_EXEMPT_PATHS = frozenset({
+    '/', '/health', '/ready', '/api/auth/check', '/oauth/callback',
+    '/oauth/client-metadata.json',
+    # Public static assets from frontend/public/ — served at root without hashing,
+    # must be accessible without a token (browsers fetch favicons unauthenticated).
+    '/favicon.ico', '/favicon-16x16.png', '/favicon-32x32.png',
+    '/apple-touch-icon.png', '/android-chrome-192x192.png', '/android-chrome-512x512.png',
+    '/site.webmanifest', '/robots.txt',
+})
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     """Authentication middleware for the browser-facing token (issue #728).
 
@@ -49,15 +79,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
     Backend's own AuthMiddleware enforces (backend/web_server.py).
     """
 
-    EXEMPT_PATHS = {
-        '/', '/health', '/ready', '/api/auth/check', '/oauth/callback',
-        '/oauth/client-metadata.json',
-        # Public static assets from frontend/public/ — served at root without hashing,
-        # must be accessible without a token (browsers fetch favicons unauthenticated).
-        '/favicon.ico', '/favicon-16x16.png', '/favicon-32x32.png',
-        '/apple-touch-icon.png', '/android-chrome-192x192.png', '/android-chrome-512x512.png',
-        '/site.webmanifest', '/robots.txt',
-    }
     EXEMPT_PREFIXES = ('/assets/',)
     # Issue #827: The per-session secrets resolve endpoint uses its own Bearer token
     # auth, not the global operator token. Exempt it from global AuthMiddleware.
@@ -71,11 +92,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, auth_token: str):
         super().__init__(app)
         self.auth_token = auth_token
+        # Issue #2268 AC2: instance-scoped, not a shared class attribute — dynamic
+        # OAuth callback paths registered on one ClaudeWebUI instance no longer leak
+        # into every other instance's exemptions (e.g. across test apps).
+        self.exempt_paths = set(DEFAULT_EXEMPT_PATHS)
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        if path in self.EXEMPT_PATHS:
+        if path in self.exempt_paths:
             return await call_next(request)
         for prefix in self.EXEMPT_PREFIXES:
             if path.startswith(prefix):
@@ -197,6 +222,15 @@ class ClaudeWebUI:
             exclude_content_types=(*DEFAULT_EXCLUDED_CONTENT_TYPES, "application/octet-stream"),
         )
 
+        # Issue #2268 AC2: build the middleware stack now (instead of lazily on the
+        # first request) so the live AuthMiddleware instance is available immediately
+        # for dynamic OAuth exempt-path mutation (_add_oauth_callback_relay_route etc.)
+        # — EXEMPT_PATHS is instance-scoped now, so mutation must go through this
+        # specific instance rather than the AuthMiddleware class. None if auth is
+        # disabled (no AuthMiddleware registered at all in that case).
+        self.app.middleware_stack = self.app.build_middleware_stack()
+        self.auth_middleware = _find_middleware_instance(self.app.middleware_stack, AuthMiddleware)
+
         # Setup static files (Vue 3 production build)
         static_dir = Path(__file__).parent.parent / "frontend" / "dist"
         if not static_dir.exists():
@@ -262,7 +296,8 @@ class ClaudeWebUI:
                 raise to_http_exception(e, degraded=is_backend_degraded(self)) from e
 
         self.app.router.routes.insert(0, Route(path, _handler, methods=["GET"]))
-        AuthMiddleware.EXEMPT_PATHS.add(path)
+        if self.auth_middleware is not None:
+            self.auth_middleware.exempt_paths.add(path)
         self._oauth_callback_paths.add(path)
         logger.info("Registered OAuth callback relay route: %s", path)
         return True
@@ -271,7 +306,8 @@ class ClaudeWebUI:
         self.app.router.routes[:] = [
             r for r in self.app.router.routes if getattr(r, "path", None) != path
         ]
-        AuthMiddleware.EXEMPT_PATHS.discard(path)
+        if self.auth_middleware is not None:
+            self.auth_middleware.exempt_paths.discard(path)
         self._oauth_callback_paths.discard(path)
         logger.info("Removed OAuth callback relay route: %s", path)
 
