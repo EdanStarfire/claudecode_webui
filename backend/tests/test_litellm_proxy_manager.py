@@ -46,6 +46,7 @@ def _make_manager():
         mgr._catalog_manager = catalog
         mgr._vault = vault
         mgr._port = 4000
+        mgr._backend_id = "local"
         mgr._key_registry = {}
         mgr._routing_registry = {}
         mgr._server_task = None
@@ -117,6 +118,76 @@ def test_unregister_session_key_removes_all_keys_for_session(manager):
 def test_unregister_nonexistent_session_is_noop(manager):
     manager.unregister_session_key("never-registered")
     assert manager._key_registry == {}
+
+
+# ── Composite-Key Isolation Tests (issue #2268 AC8) ─────────────────────────
+#
+# These exercise isolation WITHIN one shared registry dict (the scenario
+# composite-keying actually guards against — a future #1818 model where one
+# process's registries could hold entries for more than one backend_id), not
+# just instance separation between two managers (which would isolate even
+# with plain, non-composite keys and so wouldn't be a real regression guard).
+
+
+def test_lookup_session_for_key_scoped_to_own_backend_id():
+    """lookup_session_for_key() must not match a same-named key registered
+    under a different backend_id in the same underlying dict."""
+    mgr, _ = _make_manager()
+    mgr._backend_id = "backend-a"
+    key = mgr.register_session_key("sess-1")
+    # Simulate a foreign backend_id's entry sharing this registry.
+    mgr._key_registry[("backend-b", "lc-foreign")] = "sess-1"
+
+    assert mgr.lookup_session_for_key(key) == "sess-1"
+    assert mgr.lookup_session_for_key("lc-foreign") is None
+
+
+def test_unregister_session_key_does_not_cross_backend_ids():
+    """unregister_session_key() must only remove entries for its own
+    backend_id, even when another backend_id's entry for the same
+    session_id shares the same underlying dict."""
+    mgr, _ = _make_manager()
+    mgr._backend_id = "backend-a"
+    key_a = mgr.register_session_key("sess-shared")
+    mgr._key_registry[("backend-b", "lc-foreign")] = "sess-shared"
+
+    mgr.unregister_session_key("sess-shared")
+
+    assert mgr.lookup_session_for_key(key_a) is None
+    assert mgr._key_registry.get(("backend-b", "lc-foreign")) == "sess-shared"
+
+
+def test_get_session_routing_scoped_to_own_backend_id():
+    """get_session_routing() must not match a same-named session_id
+    registered under a different backend_id in the same underlying dict."""
+    mgr, _ = _make_manager()
+    mgr._backend_id = "backend-a"
+    mgr.register_session_routing("sess-1", "lc-abc", "http://127.0.0.1:4000/")
+    mgr._routing_registry[("backend-b", "sess-1")] = {
+        "virtual_key": "foreign", "base_url": "http://foreign/",
+        "model_map": {}, "default_model": None,
+    }
+
+    entry = mgr.get_session_routing("sess-1")
+    assert entry["virtual_key"] == "lc-abc"
+
+
+def test_unregister_session_routing_does_not_cross_backend_ids():
+    """unregister_session_routing() must only remove its own backend_id's
+    entry, leaving a same-named session_id under a different backend_id
+    sharing the same underlying dict untouched."""
+    mgr, _ = _make_manager()
+    mgr._backend_id = "backend-a"
+    mgr.register_session_routing("sess-1", "lc-abc", "http://127.0.0.1:4000/")
+    mgr._routing_registry[("backend-b", "sess-1")] = {
+        "virtual_key": "foreign", "base_url": "http://foreign/",
+        "model_map": {}, "default_model": None,
+    }
+
+    mgr.unregister_session_routing("sess-1")
+
+    assert mgr.get_session_routing("sess-1") is None
+    assert mgr._routing_registry.get(("backend-b", "sess-1")) is not None
 
 
 # ── Auth Callback Tests ────────────────────────────────────────────────────
@@ -364,6 +435,7 @@ def _make_manager_stub(config_file: Path | None):
     mgr._catalog_manager = catalog
     mgr._vault = AsyncMock()
     mgr._port = 4000
+    mgr._backend_id = "local"
     mgr._key_registry = {}
     mgr._routing_registry = {}
     mgr._server_task = None
