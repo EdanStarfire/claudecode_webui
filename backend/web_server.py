@@ -265,6 +265,7 @@ class BackendApp:
             self.coordinator.credential_vault,
             port=_litellm_port,
             config_file=self.config_file,
+            backend_id=self.tenant_context.backend_id,
         )
         self.coordinator.litellm_proxy_manager = self.litellm_proxy_manager
 

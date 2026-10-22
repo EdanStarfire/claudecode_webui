@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from shared.event_envelope import DEFAULT_BACKEND_ID
 from shared.logging_config import get_logger
 
 if TYPE_CHECKING:
@@ -33,6 +34,15 @@ class LiteLLMProxyManager:
     - Start/stop the uvicorn task serving the LiteLLM proxy app
     - Rebuild the proxy model_list from the provider catalog + vault secrets
     - Maintain a per-session virtual key registry for custom_auth
+
+    Issue #2268 AC8: already structurally a correct per-backend singleton — one
+    instance per BackendApp process, matching the "one backend : one user" model
+    the rest of this stage's TenantContext work assumes. Not reconstructed per
+    tenant context (there's only ever one tenant context per process to begin
+    with); the registries below use composite (backend_id, key) tuples purely so
+    this file's internals don't need touching if #1818 ever changes that
+    assumption — backend_id is always this process's own tenant_context.backend_id
+    today, never varying within one manager instance.
     """
 
     def __init__(
@@ -42,13 +52,18 @@ class LiteLLMProxyManager:
         port: int,
         *,
         config_file: Path | None = None,
+        backend_id: str = DEFAULT_BACKEND_ID,
     ):
         self._catalog_manager = catalog_manager
         self._vault = vault
         self._port = port
         self._config_file = config_file
-        self._key_registry: dict[str, str] = {}  # api_key -> session_id
-        self._routing_registry: dict[str, dict] = {}  # session_id -> {virtual_key, base_url}
+        self._backend_id = backend_id
+        # Issue #2268 AC8: composite-keyed so a future multi-backend-per-process
+        # model (#1818) wouldn't need to touch this file's internals — the
+        # backend_id component is always self._backend_id, never passed per-call.
+        self._key_registry: dict[tuple[str, str], str] = {}  # (backend_id, api_key) -> session_id
+        self._routing_registry: dict[tuple[str, str], dict] = {}  # (backend_id, session_id) -> {virtual_key, base_url}
         self._server_task: asyncio.Task | None = None
         self._server: object | None = None  # uvicorn.Server reference for graceful shutdown
         self._rebuild_lock = asyncio.Lock()
@@ -137,18 +152,21 @@ class LiteLLMProxyManager:
     def register_session_key(self, session_id: str) -> str:
         """Mint and register a virtual API key for a session. Returns the key."""
         key = f"lc-{uuid.uuid4().hex}"
-        self._key_registry[key] = session_id
+        self._key_registry[(self._backend_id, key)] = session_id
         return key
 
     def unregister_session_key(self, session_id: str) -> None:
         """Remove all keys belonging to session_id."""
-        keys_to_remove = [k for k, v in self._key_registry.items() if v == session_id]
+        keys_to_remove = [
+            k for k, v in self._key_registry.items()
+            if k[0] == self._backend_id and v == session_id
+        ]
         for k in keys_to_remove:
             del self._key_registry[k]
 
     def lookup_session_for_key(self, api_key: str) -> str | None:
         """Return session_id for api_key, or None if not registered."""
-        return self._key_registry.get(api_key)
+        return self._key_registry.get((self._backend_id, api_key))
 
     # ── Routing Registry ──────────────────────────────────────────────────────
 
@@ -165,7 +183,7 @@ class LiteLLMProxyManager:
         model_map: optional tier→alias dict (issue #1469 per-tier routing).
         default_model: optional LiteLLM alias to rewrite unmatched body model fields.
         """
-        self._routing_registry[session_id] = {
+        self._routing_registry[(self._backend_id, session_id)] = {
             "virtual_key": virtual_key,
             "base_url": base_url,
             "model_map": model_map or {},
@@ -174,11 +192,11 @@ class LiteLLMProxyManager:
 
     def unregister_session_routing(self, session_id: str) -> None:
         """Remove routing entry for session_id (no-op if absent)."""
-        self._routing_registry.pop(session_id, None)
+        self._routing_registry.pop((self._backend_id, session_id), None)
 
     def get_session_routing(self, session_id: str) -> dict | None:
         """Return {virtual_key, base_url} for session_id, or None if not registered."""
-        return self._routing_registry.get(session_id)
+        return self._routing_registry.get((self._backend_id, session_id))
 
     def build_hostname_rewrites(self) -> dict[str, str]:
         """Return the static hostname-rewrite map for Docker sidecars.
