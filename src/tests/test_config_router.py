@@ -30,6 +30,9 @@ def _make_app(tmp_path, backend_config: dict | None = None):
     # already-degraded supervisor (see test_relay_router.py's _make_app for the same
     # gotcha).
     webui.backend_supervisor = None
+    # Issue #2268 AC5: is_backend_degraded() now reads webui.backend_binding.degraded
+    # directly rather than deriving it from backend_supervisor — mirror it explicitly.
+    webui.backend_binding.degraded = False
     webui.backend_client = MagicMock()
     webui.backend_client.get_json = AsyncMock(
         return_value={"config": backend_config or {"features": {"skill_sync_enabled": True}}}
@@ -142,6 +145,7 @@ async def test_issue_1989_get_config_backend_degraded_returns_503(tmp_path):
     app, _, webui = _make_app(tmp_path)
     webui.backend_client.get_json = AsyncMock(side_effect=httpx.ConnectError("refused"))
     webui.backend_supervisor = MagicMock(degraded=True)
+    webui.backend_binding.degraded = True
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/api/config")
@@ -159,6 +163,7 @@ async def test_issue_1989_put_config_backend_degraded_returns_503(tmp_path):
     app, _, webui = _make_app(tmp_path)
     webui.backend_client.request_json = AsyncMock(side_effect=httpx.ConnectError("refused"))
     webui.backend_supervisor = MagicMock(degraded=True)
+    webui.backend_binding.degraded = True
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.put("/api/config", json={"features": {"skill_sync_enabled": False}})

@@ -29,6 +29,7 @@ from starlette.routing import Route
 from shared.event_queue import EventQueue
 from shared.gzip_request_middleware import GZipRequestMiddleware
 
+from .backend_binding import BackendBinding
 from .backend_client import BackendClient
 from .backend_reachability import BackendUnreachableError, is_backend_degraded, to_http_exception
 from .backend_supervisor import BackendSupervisor
@@ -154,13 +155,20 @@ class ClaudeWebUI:
         # Either a supervisor that owns an auto-started local Backend (single-user
         # self-hosted default, issue #498 Phase 3), or a manually-configured
         # remote Backend URL/token — exactly one of the two is provided.
-        self.backend_supervisor = backend_supervisor
         if backend_supervisor is not None:
             backend_url = backend_supervisor.base_url
             backend_token = backend_supervisor.token
         if not backend_url or not backend_token:
             raise ValueError("Either backend_supervisor or backend_url+backend_token is required")
-        self.backend_client = BackendClient(backend_url, backend_token)
+        # Issue #2268 AC5: BackendBinding composes everything that distinguishes
+        # embedded-with-supervisor mode from remote mode — the one binary
+        # distinction every backend_supervisor-is-None-style check collapses to.
+        self.backend_binding = BackendBinding(
+            client=BackendClient(backend_url, backend_token),
+            token=backend_token,
+            supervisor=backend_supervisor,
+            config_file=config_file,
+        )
 
         # Local fan-out queues for the poll-relay — multiple browser tabs share
         # these instead of each opening their own upstream connection to Backend.
@@ -171,7 +179,6 @@ class ClaudeWebUI:
         # Issue #1789 (via #498): custom OAuth callback paths for shared MCP servers
         # are registered dynamically on Backend, but only Frontend is typically
         # publicly reachable — mirror Backend's registry as dynamic relay routes here.
-        self._oauth_callback_paths: set[str] = set()
         self._oauth_resync_task: asyncio.Task | None = None
 
         self._ready = False
@@ -254,6 +261,23 @@ class ClaudeWebUI:
         self._reserved_route_paths: frozenset[str] = frozenset(
             r.path for r in self.app.router.routes if getattr(r, "path", None)
         )
+
+    # Issue #2268 AC5: backend_client/backend_supervisor/_oauth_callback_paths are no
+    # longer independently stored — self.backend_binding is the single source of
+    # truth. These stay as read-only passthroughs so the many existing call sites
+    # elsewhere (routers, PollRelay construction above) don't all need touching for
+    # this stage's single-binding scope.
+    @property
+    def backend_client(self) -> BackendClient:
+        return self.backend_binding.client
+
+    @property
+    def backend_supervisor(self) -> BackendSupervisor | None:
+        return self.backend_binding.supervisor
+
+    @property
+    def _oauth_callback_paths(self) -> set[str]:
+        return self.backend_binding.oauth_callback_paths
 
     def _setup_routes(self):
         """Setup FastAPI routes"""
@@ -387,9 +411,9 @@ class ClaudeWebUI:
         instead of a one-time cached snapshot — so it naturally self-heals
         once Backend catches up, with no separate recovery path to maintain.
         """
-        if self.backend_supervisor is not None:
-            await self.backend_supervisor.start()
-            ready = await self.backend_supervisor.wait_ready(self.backend_client)
+        if self.backend_binding.is_embedded:
+            await self.backend_binding.supervisor.start()
+            ready = await self.backend_binding.supervisor.wait_ready(self.backend_client)
             if not ready:
                 logger.warning(
                     "Backend did not become ready within the startup window — "
@@ -449,8 +473,7 @@ class ClaudeWebUI:
         await self.backend_client.aclose()
         # Frontend does not exit before Backend has had a chance to shut down
         # cleanly — SIGTERM, wait with timeout, then SIGKILL (backend_supervisor.stop).
-        if self.backend_supervisor is not None:
-            await self.backend_supervisor.stop()
+        await self.backend_binding.stop_supervisor()
         logger.info("Frontend cleanup completed")
 
 

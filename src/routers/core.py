@@ -50,7 +50,7 @@ def build_router(webui) -> APIRouter:
         """
         if not webui._ready:
             return {"ready": False, "degraded": False, "timestamp": datetime.now(UTC).isoformat()}
-        degraded = webui.backend_supervisor is not None and webui.backend_supervisor.degraded
+        degraded = webui.backend_binding.degraded
         backend_ready = await webui.backend_client.ready()
         return {
             "ready": backend_ready and not degraded,

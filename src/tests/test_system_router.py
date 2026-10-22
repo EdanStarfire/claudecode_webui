@@ -36,6 +36,24 @@ def _make_webui(backend_supervisor=None):
     webui._last_restart_time = 0
     webui._oauth_resync_task = None
     webui.backend_supervisor = backend_supervisor
+    # Issue #2268 AC5: restart_server()/get_frontend_mode() now read
+    # webui.backend_binding.is_embedded/.supervisor/.stop_supervisor() directly —
+    # mirror backend_supervisor onto a MagicMock binding so these tests exercise
+    # the real decision logic instead of an auto-generated (always-truthy) mock.
+    webui.backend_binding.supervisor = backend_supervisor
+    webui.backend_binding.is_embedded = backend_supervisor is not None
+    # Mirrors BackendBinding.degraded's own real logic — only meaningful for
+    # tests that explicitly set a `degraded` attribute on their supervisor mock
+    # (e.g. MagicMock(degraded=True)); harmless (unread) for the rest.
+    webui.backend_binding.degraded = (
+        backend_supervisor is not None and bool(backend_supervisor.degraded)
+    )
+
+    async def _stop_supervisor():
+        if backend_supervisor is not None:
+            await backend_supervisor.stop()
+
+    webui.backend_binding.stop_supervisor = AsyncMock(side_effect=_stop_supervisor)
     webui.poll_relay.stop = AsyncMock()
     webui.backend_client.aclose = AsyncMock()
     # Remote-mode Backend orchestration defaults (#1847) — sane "everything's fine"
