@@ -16,6 +16,7 @@ from shared.git_restart import run_git_command as _run_git_command_impl
 from . import docker_utils
 from .fixture_export import export_fixture
 from .mcp_config_manager import McpServerType, validate_mcp_server_url
+from .principal import Principal, get_current_principal
 
 if TYPE_CHECKING:
     from backend.session_coordinator import SessionCoordinator
@@ -54,6 +55,14 @@ class ApplicationService:
 
     def get_session_recording_enabled(self) -> bool:
         return self.coordinator.session_recording_enabled
+
+    def current_principal(self) -> Principal | None:
+        """The authenticated identity behind the current request (issue #2268 AC3).
+
+        Set once per request by AuthMiddleware.dispatch() after the bearer token
+        validates — always the same implicit singleton in single-user mode. A seam
+        for #1818, not consumed by any existing logic in this stage."""
+        return get_current_principal()
 
     def get_session_manager(self):
         """Return the SessionManager instance (issue #2189 router-boundary PR A) —

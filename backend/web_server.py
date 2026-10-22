@@ -25,7 +25,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 
 from shared.event_emitter import emit
-from shared.event_envelope import QUEUE_AUDIT, QUEUE_SESSION, QUEUE_UI
+from shared.event_envelope import DEFAULT_BACKEND_ID, QUEUE_AUDIT, QUEUE_SESSION, QUEUE_UI
 from shared.event_queue import EventQueue
 from shared.gzip_request_middleware import GZipRequestMiddleware
 
@@ -37,6 +37,7 @@ from .config_manager import default_config_file
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import MessageRecord, PermissionInfo, ToolCall
 from .permission_service import PermissionService
+from .principal import Principal, set_current_principal
 from .session_coordinator import SessionCoordinator
 from .skill_manager import SkillManager
 from .task_utils import task_done_log_exception
@@ -103,13 +104,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
     # Issue #1134: session-scoped proxy write-back endpoints (per-session Bearer token auth).
     _PROXY_WRITE_BACK_PATTERN = re.compile(r'^/api/sessions/[^/]+/(secrets/[^/]+|events)$')
 
-    def __init__(self, app, auth_token: str):
+    def __init__(self, app, auth_token: str, backend_id: str = DEFAULT_BACKEND_ID):
         super().__init__(app)
         self.auth_token = auth_token
         # Issue #2268 AC2: instance-scoped, not a shared class attribute — dynamic
         # OAuth callback paths registered on one BackendApp instance no longer leak
         # into every other instance's exemptions (e.g. across test apps).
         self.exempt_paths = set(DEFAULT_EXEMPT_PATHS)
+        # Issue #2268 AC3: seeds the implicit singleton Principal set below once the
+        # token validates — always this process's own TenantContext.backend_id.
+        self.backend_id = backend_id
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -135,6 +139,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Authentication required", "auth_required": True}
             )
 
+        # Issue #2268 AC3: set once per request, after the token validates — read
+        # on demand via ApplicationService.current_principal(). Always the same
+        # implicit singleton in single-user mode; a seam for #1818, not consumed
+        # by any existing logic this stage.
+        set_current_principal(Principal(id="local", backend_id=self.backend_id))
         return await call_next(request)
 
 
@@ -318,7 +327,11 @@ class BackendApp:
         # Frontend's browser-facing auth, there's no "auth disabled" mode here: the token
         # is generated (or supplied) at process start regardless of deployment shape.
         if self.auth_token:
-            self.app.add_middleware(AuthMiddleware, auth_token=self.auth_token)
+            self.app.add_middleware(
+                AuthMiddleware,
+                auth_token=self.auth_token,
+                backend_id=self.tenant_context.backend_id,
+            )
             logger.info("Backend authentication middleware enabled")
 
         self.app.add_middleware(
