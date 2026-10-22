@@ -1815,8 +1815,8 @@ class TestIssue819DockerHistoryMount:
         coordinator.set_sdk_factory(Mock(return_value=mock_sdk))
 
         with patch("backend.docker_utils.resolve_docker_cli_path", fake_resolve):
-            with patch("backend.skill_manager.NEW_GLOBAL_SKILLS_DIR") as mock_skills_dir:
-                mock_skills_dir.exists.return_value = False
+            with patch("backend.skill_manager.new_global_skills_dir") as mock_new_skills_dir:
+                mock_new_skills_dir.return_value.exists.return_value = False
                 await coordinator.start_session(session_id)
 
         history_mounts = [m for m in captured_mounts if "/history" in m]
@@ -1941,9 +1941,9 @@ class TestIssue1088CredFilePermissions:
         with (
             _patch("backend.credential_vault.get_secret_value", return_value="ghp_real"),
             _patch("backend.docker_utils.resolve_docker_cli_path", return_value=("/usr/bin/docker", {})),
-            _patch("backend.skill_manager.NEW_GLOBAL_SKILLS_DIR") as mock_skills_dir,
+            _patch("backend.skill_manager.new_global_skills_dir") as mock_new_skills_dir,
         ):
-            mock_skills_dir.exists.return_value = False
+            mock_new_skills_dir.return_value.exists.return_value = False
             await coordinator.start_session(session_id)
 
         # Issue #1134: file-based delivery is removed — these files must NOT exist
@@ -2492,8 +2492,8 @@ class TestIssue1396GhMountRemoved:
         coordinator.set_sdk_factory(Mock(return_value=mock_sdk))
 
         with patch("backend.docker_utils.resolve_docker_cli_path", fake_resolve):
-            with patch("backend.skill_manager.NEW_GLOBAL_SKILLS_DIR") as mock_skills_dir:
-                mock_skills_dir.exists.return_value = False
+            with patch("backend.skill_manager.new_global_skills_dir") as mock_new_skills_dir:
+                mock_new_skills_dir.return_value.exists.return_value = False
                 await coordinator.start_session(session_id)
 
         gh_mounts = [m for m in captured_mounts if ".config/gh" in m]

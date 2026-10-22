@@ -21,10 +21,14 @@ from shared.logging_config import get_logger
 skill_logger = get_logger("skill_manager", category="SKILL_MANAGER")
 logger = logging.getLogger(__name__)
 
-# Old path (for migration detection)
-OLD_GLOBAL_SKILLS_DIR = Path.home() / ".cc_webui" / "skills"
-# New path
-NEW_GLOBAL_SKILLS_DIR = Path.home() / ".config" / "cc_webui" / "skills"
+# Issue #2268 AC1: functions, not module constants — see TenantContext.
+def old_global_skills_dir(home_dir: Path) -> Path:
+    """Old path (for migration detection)."""
+    return home_dir / ".cc_webui" / "skills"
+
+
+def new_global_skills_dir(home_dir: Path) -> Path:
+    return home_dir / ".config" / "cc_webui" / "skills"
 
 
 class SkillManager:
@@ -39,11 +43,12 @@ class SkillManager:
     6. Clean up orphaned skills and symlinks
     """
 
-    def __init__(self):
+    def __init__(self, home_dir: Path | None = None):
+        self._home_dir = home_dir or Path.home()
         self.source_dir = Path(__file__).parent / "default_skills"
-        self.global_skills_dir = NEW_GLOBAL_SKILLS_DIR
-        self.global_plans_dir = Path.home() / ".cc_webui" / "plans"
-        self.claude_skills_dir = Path.home() / ".claude" / "skills"
+        self.global_skills_dir = new_global_skills_dir(self._home_dir)
+        self.global_plans_dir = self._home_dir / ".cc_webui" / "plans"
+        self.claude_skills_dir = self._home_dir / ".claude" / "skills"
         self.last_sync_time: str | None = None
 
         skill_logger.debug(
@@ -56,7 +61,7 @@ class SkillManager:
 
         Only migrates if old directory exists and new directory does not.
         """
-        old_dir = OLD_GLOBAL_SKILLS_DIR
+        old_dir = old_global_skills_dir(self._home_dir)
         new_dir = self.global_skills_dir
 
         if not old_dir.exists():
@@ -254,7 +259,7 @@ class SkillManager:
             else:
                 target = target.resolve()
             # Check both new and old paths during transition
-            for skills_dir in (self.global_skills_dir, OLD_GLOBAL_SKILLS_DIR):
+            for skills_dir in (self.global_skills_dir, old_global_skills_dir(self._home_dir)):
                 resolved = skills_dir.resolve()
                 if str(target).startswith(str(resolved) + os.sep) or target == resolved:
                     return True

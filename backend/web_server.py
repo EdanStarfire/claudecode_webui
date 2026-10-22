@@ -33,12 +33,14 @@ from .analytics.audit_writer import AuditWriter
 from .analytics.database import AnalyticsDB
 from .analytics_store import AnalyticsStore
 from .application_service import ApplicationService
+from .config_manager import default_config_file
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import MessageRecord, PermissionInfo, ToolCall
 from .permission_service import PermissionService
 from .session_coordinator import SessionCoordinator
 from .skill_manager import SkillManager
 from .task_utils import task_done_log_exception
+from .tenant_context import TenantContext
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +61,7 @@ def _find_middleware_instance(asgi_app: Any, middleware_cls: type) -> Any | None
     return None
 
 
-def _read_litellm_port_sync(data_dir: Path) -> int | None:
+def _read_litellm_port_sync(data_dir: Path, home_dir: Path) -> int | None:
     """Read litellm_port from providers.json or legacy config.json without async I/O.
 
     Returns None if no explicit value has ever been persisted — callers fall back to
@@ -70,7 +72,7 @@ def _read_litellm_port_sync(data_dir: Path) -> int | None:
         providers = data_dir / "providers.json"
         if providers.exists():
             return _json.loads(providers.read_text(encoding="utf-8")).get("litellm_port")
-        legacy = Path.home() / ".config" / "cc_webui" / "config.json"
+        legacy = home_dir / ".config" / "cc_webui" / "config.json"
         if legacy.exists():
             data = _json.loads(legacy.read_text(encoding="utf-8"))
             return data.get("provider_catalog", {}).get("litellm_port")
@@ -146,24 +148,34 @@ class BackendApp:
                  auth_token: str | None = None,
                  host: str = "127.0.0.1", port: int = 8000,
                  litellm_port: int | None = None,
-                 session_recording_enabled: bool = False):
+                 session_recording_enabled: bool = False,
+                 tenant_context: TenantContext | None = None):
         self.app = FastAPI(title="Claude Code WebUI Backend", version="1.0.0")
         self.host = host
         self.port = port
+        # Issue #2268 AC1: single source of truth for this process's data_dir/
+        # config_file/host/home_dir/backend_id — constructed here if the caller
+        # (main.py's create_app() in production; many tests directly) didn't
+        # already build and pass one. Collapses the data_dir/config_file fallback
+        # expressions this constructor used to re-derive independently below.
+        self.tenant_context = tenant_context or TenantContext(
+            data_dir=data_dir or Path("data"),
+            config_file=config_file or default_config_file(),
+            host=host,
+        )
         # Issue #2184: construct SessionManager/TemplateManager BEFORE the coordinator
         # (same data_dir resolution SessionCoordinator itself uses) so SessionWatchdogService
         # can be built from them below and all three passed into the SessionCoordinator(...)
         # constructor directly — no more post-construction set_watchdog() reassignment.
         from .session_manager import SessionManager
         from .template_manager import TemplateManager
-        _data_dir = data_dir or Path("data")
+        _data_dir = self.tenant_context.data_dir
         session_manager = SessionManager(_data_dir)
         template_manager = TemplateManager(_data_dir)
 
         # Issue #1130/#1131: Session watchdog service (created here, started in initialize())
-        from .config_manager import load_config as _load_cfg
         from .session_watchdog import SessionWatchdogService
-        _cfg = _load_cfg(config_file) if config_file else _load_cfg()
+        _cfg = self.tenant_context.load_config()
         # Issue #2189 (router-boundary PR A): ui_queue's single source of truth lives on
         # coordinator (self.ui_queue below is a property forwarding to it) — constructed
         # as a plain local here since self.coordinator doesn't exist yet at this point.
@@ -185,6 +197,7 @@ class BackendApp:
             watchdog=self._watchdog,
             session_manager=session_manager,
             template_manager=template_manager,
+            tenant_context=self.tenant_context,
         )
         self.coordinator.ui_queue = _ui_queue
         self.service = ApplicationService(self.coordinator)
@@ -204,7 +217,7 @@ class BackendApp:
                     coordinator=self.coordinator,
                 )
             )
-        self.skill_manager = SkillManager()
+        self.skill_manager = SkillManager(home_dir=self.tenant_context.home_dir)
         self.coordinator.skill_manager = self.skill_manager
         self.session_queues: dict[str, EventQueue] = {}
         # Issue #2189 (router-boundary PR A): dual-home the same dict/queue object onto
@@ -218,14 +231,18 @@ class BackendApp:
         from .config_manager import AppConfigManager
         from .litellm_proxy_manager import LiteLLMProxyManager
         from .provider_catalog import ProviderCatalogManager
-        self.app_config_manager = AppConfigManager(config_file=config_file) if config_file else AppConfigManager()
+        # Issue #2268: AppConfigManager.__init__ now resolves a None config_file to
+        # the same default() internally, so this ternary is no longer needed.
+        self.app_config_manager = AppConfigManager(config_file=config_file)
         self.provider_catalog_manager = ProviderCatalogManager(self.coordinator.provider_catalog_store)
         # Resolve the LiteLLM proxy port: explicit CLI flag > explicit persisted value
         # (providers.json may not exist yet — store.load() runs in coordinator.initialize(),
         # so read synchronously here — or migrated legacy config.json) > OS-assigned dynamic
         # port. The dynamic port is never persisted (issue #1825).
         from shared.net_utils import allocate_free_port
-        _persisted_litellm_port = _read_litellm_port_sync(data_dir or Path("data"))
+        _persisted_litellm_port = _read_litellm_port_sync(
+            self.tenant_context.data_dir, home_dir=self.tenant_context.home_dir
+        )
         if litellm_port is not None:
             _litellm_port = litellm_port
         elif _persisted_litellm_port is not None:
@@ -242,7 +259,7 @@ class BackendApp:
         self.coordinator.litellm_proxy_manager = self.litellm_proxy_manager
 
         # Issue #1127: Audit subsystem — analytics DB + AuditWriter
-        _analytics_db_path = (data_dir or Path("data")) / "analytics.db"
+        _analytics_db_path = self.tenant_context.data_dir / "analytics.db"
         self._analytics_db = AnalyticsDB(_analytics_db_path)
         self._audit_writer = AuditWriter(self._analytics_db)
         # Issue #1125: Per-session token usage store (shares AnalyticsDB connection)
@@ -864,7 +881,6 @@ class BackendApp:
 
     async def initialize(self):
         """Initialize the Backend application."""
-        from .config_manager import load_config
         await self.coordinator.initialize()
 
         try:
@@ -887,7 +903,7 @@ class BackendApp:
                     "custom-callback OAuth will be unavailable for it until fixed"
                 )
 
-        config = load_config(self.config_file) if self.config_file else load_config()
+        config = self.tenant_context.load_config()
         if config.features.skill_sync_enabled:
             await self.skill_manager.sync()
         else:
@@ -920,7 +936,7 @@ class BackendApp:
         # Issue #1050: Best-effort proxy image check on startup (informational only)
         from shared.logging_config import get_logger as _get_logger
         _startup_logger = _get_logger('coordinator', category='PROXY')
-        startup_config = load_config(self.config_file) if self.config_file else load_config()
+        startup_config = self.tenant_context.load_config()
         if startup_config.proxy.proxy_image:
             from .docker_utils import check_proxy_image_available
             image_ok = await check_proxy_image_available(startup_config.proxy.proxy_image)
@@ -1501,6 +1517,7 @@ def create_app(
     port: int = 8000,
     litellm_port: int | None = None,
     session_recording_enabled: bool = False,
+    tenant_context: TenantContext | None = None,
 ) -> FastAPI:
     """Create and configure the Backend FastAPI application"""
     app_instance = BackendApp(
@@ -1511,6 +1528,7 @@ def create_app(
         host=host, port=port,
         litellm_port=litellm_port,
         session_recording_enabled=session_recording_enabled,
+        tenant_context=tenant_context,
     )
 
     @asynccontextmanager

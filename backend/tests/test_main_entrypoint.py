@@ -104,8 +104,8 @@ class TestEmbeddedModeNetworkBinding:
         env = os.environ.copy()
         env.pop("CLAUDECODE", None)
         # Isolate from the real ~/.config/cc_webui/config.json (backend/config_manager.py's
-        # CONFIG_DIR is Path.home()-derived) so this test's outcome doesn't depend on
-        # whatever network-binding settings happen to already be on the host machine.
+        # default_config_dir() is Path.home()-derived) so this test's outcome doesn't
+        # depend on whatever network-binding settings happen to already be on the host.
         env["HOME"] = str(tmp_path)
         return env
 

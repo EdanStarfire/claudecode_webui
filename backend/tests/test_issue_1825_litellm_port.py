@@ -20,7 +20,7 @@ from backend.web_server import BackendApp, _read_litellm_port_sync
 
 
 def test_read_litellm_port_sync_returns_none_when_nothing_persisted(tmp_path):
-    assert _read_litellm_port_sync(tmp_path) is None
+    assert _read_litellm_port_sync(tmp_path, home_dir=tmp_path) is None
 
 
 def test_read_litellm_port_sync_returns_persisted_value(tmp_path):
@@ -28,7 +28,7 @@ def test_read_litellm_port_sync_returns_persisted_value(tmp_path):
         json.dumps({"entries": [], "litellm_port": 4321, "pending_changes": False}),
         encoding="utf-8",
     )
-    assert _read_litellm_port_sync(tmp_path) == 4321
+    assert _read_litellm_port_sync(tmp_path, home_dir=tmp_path) == 4321
 
 
 # ---------------------------------------------------------------------------

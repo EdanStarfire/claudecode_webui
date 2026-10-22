@@ -25,7 +25,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
-from backend.config_manager import load_config as load_app_config
 from backend.docker_utils import (
     cleanup_session_tmp,
     get_session_tmp_dir,
@@ -130,6 +129,7 @@ class SessionLauncher:
         self._sdk_factory = self._default_sdk_factory
 
     # --- Collaborator managers: live passthrough to the coordinator ----------
+    tenant_context = property(lambda self: self._coordinator.tenant_context)
     session_manager = property(lambda self: self._coordinator.session_manager)
     template_manager = property(lambda self: self._coordinator.template_manager)
     profile_manager = property(lambda self: self._coordinator.profile_manager)
@@ -710,14 +710,15 @@ class SessionLauncher:
                 # Deferred import: NOT a circular-import break (confirmed during issue
                 # #2189 PR 11's AC6 cleanup) — kept late because
                 # test_session_coordinator.py patches backend.skill_manager.
-                # NEW_GLOBAL_SKILLS_DIR directly, which only takes effect if this name
+                # new_global_skills_dir directly, which only takes effect if this name
                 # is looked up fresh per call rather than bound once at module import.
-                from backend.skill_manager import NEW_GLOBAL_SKILLS_DIR
+                from backend.skill_manager import new_global_skills_dir
 
                 docker_home = effective_config.docker_home_directory or "/home/claude"
-                if NEW_GLOBAL_SKILLS_DIR.exists():
+                global_skills_dir = new_global_skills_dir(self.tenant_context.home_dir)
+                if global_skills_dir.exists():
                     extra_mounts.append(
-                        f"{NEW_GLOBAL_SKILLS_DIR}:{docker_home}/.claude/skills:ro"
+                        f"{global_skills_dir}:{docker_home}/.claude/skills:ro"
                     )
                 # Issue #820: Mount session-specific /tmp dir so container /tmp is host-accessible
                 # IMPORTANT: mkdir must happen BEFORE adding to extra_mounts — Docker bind-mount
@@ -998,13 +999,14 @@ class SessionLauncher:
                 coord_logger.debug(f"Custom auto-memory directory for session {session_id}: {custom_memory_dir}")
 
             # Issue #707: Build PreToolUse handler for internal tool access control
+            _features = self.tenant_context.load_config().features
             permission_handler = self._build_permission_handler(
                 session_dir, effective_config.history_distillation_enabled, effective_config.auto_memory_mode,
                 skill_creating_enabled=effective_config.skill_creating_enabled,
                 working_directory=Path(session_info.working_directory),
                 is_legion=("legion" in mcp_servers),
-                allow_background_agent=load_app_config().features.allow_background_agent,
-                block_cross_session_messaging=load_app_config().features.block_cross_session_messaging,
+                allow_background_agent=_features.allow_background_agent,
+                block_cross_session_messaging=_features.block_cross_session_messaging,
             )
 
             # extra_env merge order: user-set < docker wrapper vars < litellm routing.
@@ -1752,7 +1754,7 @@ class SessionLauncher:
         memory_dir = session_dir / "memory" if auto_memory_mode == "session" else None
         return InternalPermissionHandler(
             session_data_dir=session_dir,
-            plans_dir=Path.home() / ".cc_webui" / "plans",
+            plans_dir=self.tenant_context.home_dir / ".cc_webui" / "plans",
             knowledge_mgmt_enabled=knowledge_mgmt_enabled,
             memory_dir=memory_dir,
             skill_creating_enabled=skill_creating_enabled,
@@ -1764,5 +1766,5 @@ class SessionLauncher:
 
     def _resolve_default_proxy_image(self) -> str:
         """Return the app-config default proxy image name (issue #1050)."""
-        app_config = load_app_config()
+        app_config = self.tenant_context.load_config()
         return app_config.proxy.proxy_image

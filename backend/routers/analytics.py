@@ -14,7 +14,7 @@ from ..analytics.aggregator import (
     compute_bucket_totals,
     compute_session_totals,
 )
-from ..config_manager import PricingConfig, load_config
+from ..config_manager import PricingConfig
 
 _VALID_GROUP_BY = {"session", "hour", "day"}
 
@@ -24,7 +24,7 @@ def build_router(webui) -> APIRouter:
 
     def _get_pricing() -> PricingConfig:
         try:
-            cfg = load_config()
+            cfg = webui.tenant_context.load_config()
             return cfg.pricing if cfg.pricing else PricingConfig()
         except Exception:
             return PricingConfig()

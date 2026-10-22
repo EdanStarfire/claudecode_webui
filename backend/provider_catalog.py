@@ -15,7 +15,9 @@ legion_logger = get_logger("legion", category="PROVIDER_CATALOG")
 
 _SECRET_PLACEHOLDER_RE = re.compile(r"\$\{secret:([^}]+)\}")
 
-_LEGACY_CONFIG_FILE = Path.home() / ".config" / "cc_webui" / "config.json"
+def _legacy_config_file(home_dir: Path) -> Path:
+    """Issue #2268 AC1: a function, not a module constant — see TenantContext."""
+    return home_dir / ".config" / "cc_webui" / "config.json"
 
 
 # ---------------------------------------------------------------------------
@@ -87,8 +89,9 @@ class ProviderCatalogStore:
     when providers.json does not yet exist.
     """
 
-    def __init__(self, data_dir: Path):
+    def __init__(self, data_dir: Path, home_dir: Path | None = None):
         self.providers_file = data_dir / "providers.json"
+        self._home_dir = home_dir or Path.home()
         self._entries: list[ProviderCatalogEntry] = []
         self._litellm_port: int | None = None
         self._pending_changes: bool = False
@@ -129,7 +132,7 @@ class ProviderCatalogStore:
     def _read_legacy_catalog(self) -> dict | None:
         """Return the provider_catalog dict from legacy config.json, or None if absent/empty."""
         try:
-            data = json.loads(_LEGACY_CONFIG_FILE.read_text(encoding="utf-8"))
+            data = json.loads(_legacy_config_file(self._home_dir).read_text(encoding="utf-8"))
             pc = data.get("provider_catalog")
             if pc and (pc.get("entries") or "litellm_port" in pc):
                 return pc

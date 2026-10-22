@@ -25,7 +25,8 @@ class ResolvedPermission:
 def resolve_effective_permissions(
     working_directory: str,
     setting_sources: list[str] | None = None,
-    session_allowed_tools: list[str] | None = None
+    session_allowed_tools: list[str] | None = None,
+    home_dir: Path | None = None,
 ) -> list[dict]:
     """
     Resolve effective permissions from settings files and session config.
@@ -34,6 +35,8 @@ def resolve_effective_permissions(
         working_directory: Project working directory (used to find .claude/ settings)
         setting_sources: Which sources to include ("user", "project", "local")
         session_allowed_tools: Tools explicitly allowed at session level
+        home_dir: Home directory the "user" source's settings.json lives under
+            (issue #2268 AC1) — defaults to Path.home() if not given.
 
     Returns:
         List of dicts: [{"permission": str, "sources": [str, ...]}]
@@ -47,7 +50,7 @@ def resolve_effective_permissions(
 
     # Parse each enabled settings source
     for source in setting_sources:
-        permissions = _parse_settings_source(source, working_directory)
+        permissions = _parse_settings_source(source, working_directory, home_dir)
         for perm in permissions:
             if perm not in permission_map:
                 permission_map[perm] = []
@@ -71,18 +74,21 @@ def resolve_effective_permissions(
     return result
 
 
-def _parse_settings_source(source: str, working_directory: str) -> list[str]:
+def _parse_settings_source(
+    source: str, working_directory: str, home_dir: Path | None = None
+) -> list[str]:
     """
     Parse permissions from a specific settings source.
 
     Args:
         source: One of "user", "project", "local"
         working_directory: Project working directory
+        home_dir: Home directory the "user" source's settings.json lives under
 
     Returns:
         List of permission strings from this source
     """
-    settings_path = _get_settings_path(source, working_directory)
+    settings_path = _get_settings_path(source, working_directory, home_dir)
     if not settings_path or not settings_path.exists():
         logger.debug(f"Settings file not found for source '{source}': {settings_path}")
         return []
@@ -124,20 +130,24 @@ def _parse_settings_source(source: str, working_directory: str) -> list[str]:
         return []
 
 
-def _get_settings_path(source: str, working_directory: str) -> Path | None:
+def _get_settings_path(
+    source: str, working_directory: str, home_dir: Path | None = None
+) -> Path | None:
     """
     Get the path to a settings file for a specific source.
 
     Args:
         source: One of "user", "project", "local"
         working_directory: Project working directory
+        home_dir: Home directory the "user" source's settings.json lives under
+            (issue #2268 AC1) — defaults to Path.home() if not given.
 
     Returns:
         Path to the settings file, or None if source is unknown
     """
     if source == "user":
         # User settings: ~/.claude/settings.json
-        return Path.home() / ".claude" / "settings.json"
+        return (home_dir or Path.home()) / ".claude" / "settings.json"
     elif source == "project":
         # Project settings: <working_dir>/.claude/settings.json
         return Path(working_directory) / ".claude" / "settings.json"
@@ -149,12 +159,13 @@ def _get_settings_path(source: str, working_directory: str) -> Path | None:
         return None
 
 
-def get_settings_file_info(working_directory: str) -> dict:
+def get_settings_file_info(working_directory: str, home_dir: Path | None = None) -> dict:
     """
     Get information about available settings files.
 
     Args:
         working_directory: Project working directory
+        home_dir: Home directory the "user" source's settings.json lives under
 
     Returns:
         Dict with info about each settings source
@@ -163,7 +174,7 @@ def get_settings_file_info(working_directory: str) -> dict:
     result = {}
 
     for source in sources:
-        path = _get_settings_path(source, working_directory)
+        path = _get_settings_path(source, working_directory, home_dir)
         if path:
             result[source] = {
                 "path": str(path),

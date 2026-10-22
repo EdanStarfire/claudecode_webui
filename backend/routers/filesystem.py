@@ -18,7 +18,7 @@ def build_router(webui) -> APIRouter:
         """Browse filesystem directories"""
         # Default to user home directory if no path provided
         if not path:
-            path = str(Path.home())
+            path = str(webui.tenant_context.home_dir)
 
         # Resolve and validate path
         browse_path = Path(path).resolve()

@@ -134,12 +134,12 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("get session usage")
     async def get_session_usage(session_id: str):
         """Return aggregated token usage and estimated cost for a session (issue #1125)."""
-        from ..config_manager import PricingConfig, compute_cost, load_config
+        from ..config_manager import PricingConfig, compute_cost
         aggregate = await webui.service.get_session_usage_aggregate(session_id)
         if aggregate is None:
             raise HTTPException(status_code=404, detail="No usage data for this session")
 
-        config = load_config(webui.config_file) if webui.config_file else load_config()
+        config = webui.tenant_context.load_config()
         pricing = config.pricing if config.pricing else PricingConfig()
 
         model = aggregate.get("model")

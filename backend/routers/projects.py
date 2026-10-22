@@ -25,8 +25,7 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("create project")
     async def create_project(request: ProjectCreateRequest):
         """Create a new project."""
-        from ..config_manager import load_config
-        cfg = load_config(webui.config_file) if webui.config_file else load_config()
+        cfg = webui.tenant_context.load_config()
         max_minions = request.max_concurrent_minions
         if max_minions is None:
             max_minions = cfg.legion.max_concurrent_minions

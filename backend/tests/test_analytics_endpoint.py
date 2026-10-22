@@ -59,6 +59,7 @@ async def app_and_db(tmp_path):
     await db.initialize()
 
     from backend.application_service import ApplicationService
+    from backend.config_manager import AppConfig
 
     sm = MagicMock()
     sm.get_session_info = AsyncMock(return_value=None)  # all sessions appear as "(deleted)" by default
@@ -69,6 +70,10 @@ async def app_and_db(tmp_path):
     webui = MagicMock()
     webui.analytics_db = db
     webui.service = ApplicationService(coordinator)
+    # Issue #2268: _get_pricing() now reads webui.tenant_context.load_config()
+    # instead of a bare module-level load_config() — give it a real AppConfig
+    # (default pricing) instead of an unconfigured MagicMock standing in for one.
+    webui.tenant_context.load_config.return_value = AppConfig()
 
     app = FastAPI()
     app.include_router(build_router(webui))

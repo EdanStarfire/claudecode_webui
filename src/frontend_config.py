@@ -14,7 +14,13 @@ from pathlib import Path
 from shared.config_file_lock import atomic_write_text, locked_config_write
 from shared.config_models import NetworkingConfig
 
-CONFIG_FILE = Path.home() / ".config" / "cc_webui" / "config.json"
+
+def default_config_file() -> Path:
+    """Issue #2268 AC1: a function, not a module constant, so it's never
+    evaluated at import time."""
+    return Path.home() / ".config" / "cc_webui" / "config.json"
+
+
 LOCALHOST_ADDRESSES = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -37,8 +43,9 @@ class FrontendConfig:
         }
 
 
-def ensure_config_file(config_file: Path = CONFIG_FILE) -> Path:
+def ensure_config_file(config_file: Path | None = None) -> Path:
     """Create config directory and file with safe defaults if missing."""
+    config_file = config_file or default_config_file()
     if config_file.exists():
         return config_file
     config_file.parent.mkdir(parents=True, exist_ok=True)
@@ -47,8 +54,9 @@ def ensure_config_file(config_file: Path = CONFIG_FILE) -> Path:
     return config_file
 
 
-def load_frontend_config(config_file: Path = CONFIG_FILE) -> FrontendConfig:
+def load_frontend_config(config_file: Path | None = None) -> FrontendConfig:
     """Load just the networking/backend_connection sections. Safe defaults on malformed JSON."""
+    config_file = config_file or default_config_file()
     try:
         data = json.loads(config_file.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
@@ -67,12 +75,13 @@ def load_frontend_config(config_file: Path = CONFIG_FILE) -> FrontendConfig:
     )
 
 
-def save_frontend_config(config: FrontendConfig, config_file: Path = CONFIG_FILE) -> None:
+def save_frontend_config(config: FrontendConfig, config_file: Path | None = None) -> None:
     """Write only networking/backend_connection, preserving Backend's sections untouched.
 
     Holds a cross-process lock for the full read-modify-write so a concurrent
     Backend save can't be silently dropped (issue #498 review finding).
     """
+    config_file = config_file or default_config_file()
     with locked_config_write(config_file):
         try:
             data = json.loads(config_file.read_text())
@@ -83,11 +92,14 @@ def save_frontend_config(config: FrontendConfig, config_file: Path = CONFIG_FILE
         atomic_write_text(config_file, json.dumps(data, indent=2) + "\n")
 
 
-def check_network_binding(host: str, config: FrontendConfig, config_file: Path = CONFIG_FILE) -> bool:
+def check_network_binding(
+    host: str, config: FrontendConfig, config_file: Path | None = None
+) -> bool:
     """Validate that the Frontend's host binding is permitted by config.
 
     Returns True if binding is allowed, False if blocked. Prints an error when blocked.
     """
+    config_file = config_file or default_config_file()
     if host in LOCALHOST_ADDRESSES:
         return True
 

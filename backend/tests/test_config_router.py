@@ -14,11 +14,17 @@ _HAIKU = "claude-haiku-4-5"
 
 def _make_app(tmp_path):
     from backend.routers.config import build_router
+    from backend.tenant_context import TenantContext
 
     config_file = tmp_path / "config.json"
 
     webui = MagicMock()
-    webui.config_file = config_file
+    # Issue #2268: get_config()/update_config() now read/write through
+    # webui.tenant_context — give it a real TenantContext pointed at this
+    # test's config_file instead of an auto-generated MagicMock child.
+    webui.tenant_context = TenantContext(
+        data_dir=tmp_path, config_file=config_file, host="127.0.0.1"
+    )
     webui.service.cleanup_skill_symlinks = AsyncMock()
     webui.service.sync_skills = AsyncMock()
 

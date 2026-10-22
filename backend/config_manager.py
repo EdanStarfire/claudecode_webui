@@ -14,8 +14,16 @@ from typing import Any
 from shared.config_file_lock import atomic_write_text, locked_config_write
 from shared.config_models import NetworkingConfig
 
-CONFIG_DIR = Path.home() / ".config" / "cc_webui"
-CONFIG_FILE = CONFIG_DIR / "config.json"
+
+def default_config_dir() -> Path:
+    """The global config directory — issue #2268 AC1: a function, not a module
+    constant, so it's never evaluated at import time (before a TenantContext
+    with a possibly-different home_dir could exist)."""
+    return Path.home() / ".config" / "cc_webui"
+
+
+def default_config_file() -> Path:
+    return default_config_dir() / "config.json"
 
 LOCALHOST_ADDRESSES = {"127.0.0.1", "localhost", "::1"}
 
@@ -444,11 +452,12 @@ class AppConfig:
         }
 
 
-def ensure_config_file(config_file: Path = CONFIG_FILE) -> Path:
+def ensure_config_file(config_file: Path | None = None) -> Path:
     """Create config directory and file with safe defaults if missing.
 
     Returns the path to the config file.
     """
+    config_file = config_file or default_config_file()
     if config_file.exists():
         return config_file
 
@@ -461,8 +470,9 @@ def ensure_config_file(config_file: Path = CONFIG_FILE) -> Path:
     return config_file
 
 
-def load_config(config_file: Path = CONFIG_FILE) -> AppConfig:
+def load_config(config_file: Path | None = None) -> AppConfig:
     """Load config from file. Returns safe defaults on malformed JSON."""
+    config_file = config_file or default_config_file()
     try:
         data = json.loads(config_file.read_text())
         return AppConfig.from_dict(data)
@@ -474,7 +484,7 @@ def load_config(config_file: Path = CONFIG_FILE) -> AppConfig:
         return AppConfig()
 
 
-def save_config(config: AppConfig, config_file: Path = CONFIG_FILE) -> None:
+def save_config(config: AppConfig, config_file: Path | None = None) -> None:
     """Save config to file.
 
     Issue #498: merges into the existing file rather than overwriting it outright
@@ -488,6 +498,7 @@ def save_config(config: AppConfig, config_file: Path = CONFIG_FILE) -> None:
     cross-process lock for the full read-modify-write so a concurrent Frontend
     save can't be silently dropped either (review finding).
     """
+    config_file = config_file or default_config_file()
     with locked_config_write(config_file):
         try:
             existing = json.loads(config_file.read_text())
@@ -502,8 +513,8 @@ def save_config(config: AppConfig, config_file: Path = CONFIG_FILE) -> None:
 class AppConfigManager:
     """Async wrapper around load_config/save_config with in-memory cache and write lock."""
 
-    def __init__(self, config_file: Path = CONFIG_FILE):
-        self._config_file = config_file
+    def __init__(self, config_file: Path | None = None):
+        self._config_file = config_file or default_config_file()
         self._cache: AppConfig | None = None
         self._lock = asyncio.Lock()
 
@@ -521,12 +532,13 @@ class AppConfigManager:
             self._cache = config
 
 
-def check_network_binding(host: str, config: AppConfig, config_file: Path = CONFIG_FILE) -> bool:
+def check_network_binding(host: str, config: AppConfig, config_file: Path | None = None) -> bool:
     """Validate that the host binding is permitted by config.
 
     Returns True if binding is allowed, False if blocked.
     Prints an error message when blocked.
     """
+    config_file = config_file or default_config_file()
     if host in LOCALHOST_ADDRESSES:
         return True
 
