@@ -28,6 +28,7 @@ from shared.logging_config import get_logger
 
 from .archive_coordinator import ArchiveCoordinator
 from .claude_sdk import ClaudeSDK, ResultError
+from .config_manager import default_config_file
 from .coordinator_builder import build_core_managers, build_legion_system
 from .data_storage import DataStorageManager
 from .delivery_gate import DeliveryGate
@@ -56,6 +57,7 @@ from .session_query import SessionQuery
 from .session_recorder import SessionRecorder
 from .session_resources import SessionResources
 from .task_registry import TaskLegRegistry
+from .tenant_context import TenantContext
 from .timestamp_injection import maybe_inject_timestamp
 from .timestamp_utils import get_unix_timestamp
 from .tool_call_tracker import ToolCallTracker
@@ -214,8 +216,17 @@ class SessionCoordinator:
         watchdog: Any | None = None,
         session_manager: Any | None = None,
         template_manager: Any | None = None,
+        tenant_context: TenantContext | None = None,
     ):
-        self.data_dir = data_dir or Path("data")
+        # Issue #2268 AC1: tenant_context is the single source of truth for this
+        # process's data_dir/config_file/host/home_dir/backend_id — constructed here
+        # if the caller (tests, mostly) didn't already build and pass one.
+        self.tenant_context = tenant_context or TenantContext(
+            data_dir=data_dir or Path("data"),
+            config_file=default_config_file(),
+            host=host,
+        )
+        self.data_dir = self.tenant_context.data_dir
         self.experimental = experimental
         # Issue #2159: watchdog is a declared constructor dependency (same
         # None-default-then-reassign pattern as litellm_proxy_manager below).
@@ -245,6 +256,7 @@ class SessionCoordinator:
             session_manager=session_manager,
             template_manager=template_manager,
             host=self.host,
+            tenant_context=self.tenant_context,
         )
         self.session_manager = core.session_manager
         self.template_manager = core.template_manager
@@ -367,6 +379,7 @@ class SessionCoordinator:
             coordinator=self,
             data_dir=self.data_dir,
             template_manager=self.template_manager,
+            tenant_context=self.tenant_context,
         )
 
         # Issue #500: Message queue system. queue_manager/pending_store were

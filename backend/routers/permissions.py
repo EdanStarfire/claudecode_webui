@@ -22,7 +22,8 @@ def build_router(webui) -> APIRouter:
         permissions = resolve_effective_permissions(
             working_directory=request.working_directory,
             setting_sources=request.setting_sources,
-            session_allowed_tools=request.session_allowed_tools
+            session_allowed_tools=request.session_allowed_tools,
+            home_dir=webui.tenant_context.home_dir,
         )
         return {"permissions": permissions}
 

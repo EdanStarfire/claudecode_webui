@@ -46,7 +46,13 @@ ALLOWLIST: dict[str, int] = {
     # remainder (plain-dict state init, and the 6 self-referential
     # X(coordinator=self) collaborators that need `self` to exist first) is
     # an acknowledged residual per AC1's own design — see coordinator_builder.py.
-    "__init__": 333,
+    # Issue #2268 AC1: 333->344 — constructs the one TenantContext for this
+    # process (replacing the data_dir/Path("data") fallback expression) and
+    # threads it into build_core_managers()/build_legion_system()/the 10
+    # self-referential constructions below. The 10 inline constructions
+    # themselves deliberately stayed put (see coordinator_builder.py's own
+    # docstring) — only tenant_context construction/threading grew this.
+    "__init__": 344,
     # --- Orchestration ---
     "initialize": 69,
     "cleanup": 23,

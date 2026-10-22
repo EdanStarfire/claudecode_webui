@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from backend.config_manager import load_config
 from backend.credential_vault import CredentialVault
 from backend.hook_config_manager import HookConfigManager
 from backend.mcp.oneshot_connection import McpOneshotConnector
@@ -49,6 +48,7 @@ from .vault_refresh_manager import VaultRefreshManager
 
 if TYPE_CHECKING:
     from .session_coordinator import SessionCoordinator
+    from .tenant_context import TenantContext
 
 
 @dataclass
@@ -85,6 +85,7 @@ def build_core_managers(
     session_manager: SessionManager | None,
     template_manager: TemplateManager | None,
     host: str,
+    tenant_context: TenantContext,
 ) -> CoreManagers:
     """Construct the ~18 pure/already-built-manager collaborators, in the
     same dependency order SessionCoordinator.__init__ built them in."""
@@ -100,7 +101,7 @@ def build_core_managers(
     profile_manager = ProfileManager(data_dir)
     mcp_config_manager = McpConfigManager(data_dir)
     hook_config_manager = HookConfigManager(data_dir)
-    provider_catalog_store = ProviderCatalogStore(data_dir)
+    provider_catalog_store = ProviderCatalogStore(data_dir, home_dir=tenant_context.home_dir)
     oauth_manager = OAuthFlowManager(data_dir)
     oauth_refresh_manager = OAuthRefreshManager(oauth_manager)
 
@@ -157,13 +158,14 @@ def build_legion_system(
     coordinator: SessionCoordinator,
     data_dir: Path,
     template_manager: TemplateManager,
+    tenant_context: TenantContext,
 ) -> LegionSystem:
     """Construct LegionSystem. Needs `coordinator` to exist first — its
     `session_port` is the coordinator itself — but the AppConfig-loading and
     throwaway-storage-manager construction around it carry no such
     dependency, so they're factored out here rather than left inline."""
     dummy_storage = DataStorageManager(data_dir / "legion_temp")
-    app_config = load_config()
+    app_config = tenant_context.load_config()
     return LegionSystem(
         session_port=coordinator,
         data_storage_manager=dummy_storage,

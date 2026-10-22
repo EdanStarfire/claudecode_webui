@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from backend.config_manager import check_network_binding, ensure_config_file, load_config
 from backend.docker_utils import build_embedded_sockets, detect_docker_bridge_gateway
 from backend.secrets_keyring import configure_keyring
+from backend.tenant_context import TenantContext
 from backend.web_server import create_app
 from shared.logging_config import configure_logging
 
@@ -151,6 +152,17 @@ def main():
         print(f"Failed to create data directory {data_dir_path}: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # Issue #2268 AC1: construct the one TenantContext for this process now that
+    # data_dir/config_file/host are all resolved — threaded through create_app()
+    # into BackendApp and from there into every collaborator that used to
+    # independently re-derive a data_dir/config_file fallback or import-time
+    # Path.home() constant.
+    tenant_context = TenantContext(
+        data_dir=data_dir_path,
+        config_file=config_file,
+        host=args.host,
+    )
+
     # Configure logging with debug flags
     configure_logging(
         debug_polling=args.debug_polling,
@@ -209,6 +221,7 @@ def main():
         port=args.port,
         litellm_port=args.litellm_port,
         session_recording_enabled=args.enable_session_recording,
+        tenant_context=tenant_context,
     )
 
     # Run the server

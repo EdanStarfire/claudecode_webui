@@ -423,12 +423,18 @@ class TestIssue1840UsageEndpointExposesTtlTiers:
         store = AnalyticsStore(db)
 
         from backend.application_service import ApplicationService
+        from backend.tenant_context import TenantContext
 
         coordinator = MagicMock()
         coordinator.analytics_store = store
         webui = MagicMock()
         webui.service = ApplicationService(coordinator)
         webui.config_file = tmp_path / "nonexistent_config.json"
+        # Issue #2268: get_session_usage() now reads webui.tenant_context.load_config()
+        # instead of webui.config_file directly — give it a real TenantContext.
+        webui.tenant_context = TenantContext(
+            data_dir=tmp_path, config_file=webui.config_file, host="127.0.0.1"
+        )
 
         app = FastAPI()
         app.include_router(build_router(webui))

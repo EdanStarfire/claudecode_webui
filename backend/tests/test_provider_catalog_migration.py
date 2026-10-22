@@ -36,19 +36,17 @@ def _sample_catalog():
 
 
 @pytest.mark.asyncio
-async def test_migration_from_legacy_config(tmp_path, monkeypatch):
+async def test_migration_from_legacy_config(tmp_path):
     """Legacy config.json with non-empty provider_catalog → migrated on first load."""
-    legacy_cfg = tmp_path / "config.json"
+    home_dir = tmp_path / "home"
+    legacy_cfg = home_dir / ".config" / "cc_webui" / "config.json"
+    legacy_cfg.parent.mkdir(parents=True)
     _write_legacy_config(legacy_cfg, _sample_catalog())
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
 
-    # Point the store at the patched legacy path
-    import backend.provider_catalog as pc_mod
-    monkeypatch.setattr(pc_mod, "_LEGACY_CONFIG_FILE", legacy_cfg)
-
-    store = ProviderCatalogStore(data_dir)
+    store = ProviderCatalogStore(data_dir, home_dir=home_dir)
     await store.load()
 
     providers_file = data_dir / "providers.json"
@@ -65,18 +63,17 @@ async def test_migration_from_legacy_config(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_no_migration_when_catalog_absent(tmp_path, monkeypatch):
+async def test_no_migration_when_catalog_absent(tmp_path):
     """Legacy config.json without provider_catalog → empty store, no migration log."""
-    legacy_cfg = tmp_path / "config.json"
+    home_dir = tmp_path / "home"
+    legacy_cfg = home_dir / ".config" / "cc_webui" / "config.json"
+    legacy_cfg.parent.mkdir(parents=True)
     legacy_cfg.write_text(json.dumps({"networking": {}}), encoding="utf-8")
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
 
-    import backend.provider_catalog as pc_mod
-    monkeypatch.setattr(pc_mod, "_LEGACY_CONFIG_FILE", legacy_cfg)
-
-    store = ProviderCatalogStore(data_dir)
+    store = ProviderCatalogStore(data_dir, home_dir=home_dir)
     await store.load()
 
     assert not (data_dir / "providers.json").exists(), (
@@ -87,23 +84,22 @@ async def test_no_migration_when_catalog_absent(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_migration_triggered_when_legacy_port_explicitly_4000(tmp_path, monkeypatch):
+async def test_migration_triggered_when_legacy_port_explicitly_4000(tmp_path):
     """Legacy config.json with litellm_port explicitly set to 4000 still migrates.
 
     Regression test for the sentinel bug (issue #1825): the old migration gate compared
     the value against 4000, so a legitimate `litellm_port: 4000` was indistinguishable
     from "never set" and silently skipped migration. The fix checks key presence instead.
     """
-    legacy_cfg = tmp_path / "config.json"
+    home_dir = tmp_path / "home"
+    legacy_cfg = home_dir / ".config" / "cc_webui" / "config.json"
+    legacy_cfg.parent.mkdir(parents=True)
     _write_legacy_config(legacy_cfg, {"entries": [], "litellm_port": 4000, "pending_changes": False})
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
 
-    import backend.provider_catalog as pc_mod
-    monkeypatch.setattr(pc_mod, "_LEGACY_CONFIG_FILE", legacy_cfg)
-
-    store = ProviderCatalogStore(data_dir)
+    store = ProviderCatalogStore(data_dir, home_dir=home_dir)
     await store.load()
 
     providers_file = data_dir / "providers.json"
@@ -112,19 +108,18 @@ async def test_migration_triggered_when_legacy_port_explicitly_4000(tmp_path, mo
 
 
 @pytest.mark.asyncio
-async def test_migration_is_idempotent(tmp_path, monkeypatch):
+async def test_migration_is_idempotent(tmp_path):
     """Second load() with providers.json present does not re-read legacy config."""
-    legacy_cfg = tmp_path / "config.json"
+    home_dir = tmp_path / "home"
+    legacy_cfg = home_dir / ".config" / "cc_webui" / "config.json"
+    legacy_cfg.parent.mkdir(parents=True)
     _write_legacy_config(legacy_cfg, _sample_catalog())
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
 
-    import backend.provider_catalog as pc_mod
-    monkeypatch.setattr(pc_mod, "_LEGACY_CONFIG_FILE", legacy_cfg)
-
     # First load — migration
-    store = ProviderCatalogStore(data_dir)
+    store = ProviderCatalogStore(data_dir, home_dir=home_dir)
     await store.load()
     assert len(store.entries) == 1
 
@@ -132,7 +127,7 @@ async def test_migration_is_idempotent(tmp_path, monkeypatch):
     legacy_cfg.unlink()
 
     # Second load — should read from providers.json, not re-migrate
-    store2 = ProviderCatalogStore(data_dir)
+    store2 = ProviderCatalogStore(data_dir, home_dir=home_dir)
     await store2.load()
     assert len(store2.entries) == 1
     assert store2.entries[0].id == "bedrock-prod"

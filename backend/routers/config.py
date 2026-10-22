@@ -18,8 +18,8 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("get config")
     async def get_config():
         """Return Backend-owned application config sections (excludes networking)."""
-        from ..config_manager import default_pricing_rates, load_config
-        config = load_config(webui.config_file) if webui.config_file else load_config()
+        from ..config_manager import default_pricing_rates
+        config = webui.tenant_context.load_config()
         result = config.to_dict()
         result.pop("networking", None)
         result["pricing_defaults"] = {
@@ -39,9 +39,9 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("update config", value_error_status=400)
     async def update_config(request: Request):
         """Update Backend-owned application config sections with side effects."""
-        from ..config_manager import load_config, save_config
+        from ..config_manager import save_config
         body = await request.json()
-        config = load_config(webui.config_file) if webui.config_file else load_config()
+        config = webui.tenant_context.load_config()
         old_sync = config.features.skill_sync_enabled
 
         # Merge features section
@@ -151,10 +151,7 @@ def build_router(webui) -> APIRouter:
                         )
                     config.pricing.rates.pop(model_id, None)
 
-        if webui.config_file:
-            save_config(config, webui.config_file)
-        else:
-            save_config(config)
+        save_config(config, webui.tenant_context.config_file)
 
         # Side effects for skill sync toggle
         new_sync = config.features.skill_sync_enabled
