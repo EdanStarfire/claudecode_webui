@@ -1539,3 +1539,44 @@ class TestIssue2046SystemMessageInitDataPromotion:
             "sdk_message": sdk_msg, "session_id": "sess-1", "timestamp": 1.0,
         })
         assert parsed.metadata["system_prompt"] is None
+
+
+class TestIssue2284SystemInitData:
+    """Issue #2284: init payloads follow the SDK's SystemInitData type."""
+
+    FULL = {
+        "type": "system", "subtype": "init", "uuid": "u1", "session_id": "cli-1",
+        "apiKeySource": "none", "claude_code_version": "2.1.309", "cwd": "/work",
+        "tools": ["Read", "Bash"], "mcp_servers": [{"name": "m", "status": "connected"}],
+        "model": "claude-sonnet-5-5", "permissionMode": "acceptEdits",
+        "slash_commands": ["/help"], "output_style": "default", "skills": [],
+        "plugins": [{"name": "p", "path": "/p"}],
+        "plugin_errors": [{"plugin": "p", "type": "load", "message": "x"}],
+        "fast_mode_state": "off", "capabilities": ["a"],
+    }
+
+    def _parse(self, data):
+        from claude_agent_sdk import SystemMessage
+
+        return SystemMessageHandler().parse(
+            {"type": "system", "subtype": "init", "sdk_message": SystemMessage(subtype="init", data=data),
+             "session_id": "s", "timestamp": time.time()}
+        )
+
+    def test_full_payload_promoted_and_preserved(self):
+        parsed = self._parse(dict(self.FULL))
+        md = parsed.metadata
+        assert md["init_data"] == self.FULL
+        assert (md["working_directory"], md["permissions"], md["tools"], md["model"]) == (
+            "/work", "acceptEdits", ["Read", "Bash"], "claude-sonnet-5-5")
+
+    def test_minimal_and_missing_session_id(self):
+        md = self._parse({"cwd": "/w", "model": "m"}).metadata
+        assert md["working_directory"] == "/w" and md["model"] == "m"
+        assert md["permissions"] is None and md["tools"] == []
+
+    def test_drift_guard_consumed_keys_exist_in_sdk_type(self):
+        from claude_agent_sdk import SystemInitData
+
+        consumed = {"session_id", "cwd", "permissionMode", "tools", "model", "slash_commands"}
+        assert consumed <= set(SystemInitData.__annotations__)

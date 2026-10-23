@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable, Coroutine
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from shared.logging_config import get_logger
 
@@ -34,6 +34,7 @@ try:
         ResultError,
         ResultMessage,
         StreamEvent,
+        SystemInitData,
         SystemMessage,
         TaskNotificationMessage,
         TaskProgressMessage,
@@ -53,6 +54,7 @@ except ImportError:
     AssistantMessage = None
     UserMessage = None
     SystemMessage = None
+    SystemInitData = dict
     ResultMessage = None
 
     class ResultError(Exception):
@@ -1486,7 +1488,10 @@ class ClaudeSDK:
 
             # Capture Claude Code's actual session ID from init message
             if hasattr(sdk_message, 'subtype') and sdk_message.subtype == 'init':
-                session_id = getattr(sdk_message, 'data', {}).get('session_id') if hasattr(sdk_message, 'data') else None
+                # Issue #2284: SystemMessage.data is untyped; narrow to the SDK's SystemInitData.
+                # `.get` retained — the SDK does not validate the payload at runtime.
+                init_data = cast(SystemInitData, getattr(sdk_message, 'data', None) or {})
+                session_id = init_data.get('session_id')
                 if session_id:
                     # Only store if this is a different session ID (prevent duplicates)
                     if not hasattr(self, '_claude_code_session_id') or self._claude_code_session_id != session_id:

@@ -1716,3 +1716,35 @@ class TestIssue2084AC2LiveStorageByteIdentity:
         # storage write and the live callback invocation read from the one
         # `record.to_dict()` call in _process_sdk_message().
         assert stored_dict is live_dict
+
+
+class TestIssue2284InitSessionIdCapture:
+    """Issue #2284: CLI session id is captured from a SystemInitData-shaped init message."""
+
+    @pytest.fixture
+    def sdk(self, tmp_path):
+        return ClaudeSDK(session_id="webui-2284", working_directory=str(tmp_path), config=SessionConfig())
+
+    @pytest.mark.asyncio
+    async def test_init_message_captures_cli_session_id(self, sdk):
+        from claude_agent_sdk import SystemMessage
+
+        sdk.message_callback = AsyncMock()
+        sdk.session_manager = Mock()
+        sdk.session_manager.update_claude_code_session_id = AsyncMock()
+        await sdk._process_sdk_message(
+            SystemMessage(subtype="init", data={"type": "system", "subtype": "init", "session_id": "cli-abc"})
+        )
+        assert sdk._claude_code_session_id == "cli-abc"
+        sdk.session_manager.update_claude_code_session_id.assert_awaited_once_with("webui-2284", "cli-abc")
+
+    @pytest.mark.asyncio
+    async def test_init_message_missing_session_id_is_tolerated(self, sdk):
+        from claude_agent_sdk import SystemMessage
+
+        sdk.message_callback = AsyncMock()
+        sdk.session_manager = Mock()
+        sdk.session_manager.update_claude_code_session_id = AsyncMock()
+        await sdk._process_sdk_message(SystemMessage(subtype="init", data={"cwd": "/x"}))
+        assert not getattr(sdk, "_claude_code_session_id", None)
+        sdk.session_manager.update_claude_code_session_id.assert_not_called()
