@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 _ENTRY_FIELDS = (
     "id", "events", "matcher", "enabled", "type", "command",
-    "timeout", "url", "headers", "allowed_env_vars",
+    "timeout", "url", "headers", "allowed_env_vars", "on_failure",
 )
 
 
@@ -58,6 +58,8 @@ class HookEntry:
     url: str | None = None
     headers: dict[str, str] | None = None
     allowed_env_vars: list[str] | None = None
+    # both types: "block" treats a hook failure as a blocking error; None omits the key (CLI default)
+    on_failure: Literal["block"] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -79,6 +81,7 @@ class HookEntry:
         data['url'] = data.get('url')
         data['headers'] = data.get('headers')
         data['allowed_env_vars'] = data.get('allowed_env_vars')
+        data['on_failure'] = data.get('on_failure')
         return cls(**{k: data[k] for k in _ENTRY_FIELDS})
 
 
@@ -301,6 +304,8 @@ class HookConfigManager:
                 cfg["headers"] = entry.headers
             if entry.allowed_env_vars:
                 cfg["allowedEnvVars"] = entry.allowed_env_vars
+            if entry.on_failure == "block":
+                cfg["onFailure"] = "block"
             return cfg
 
         # command (default)
@@ -309,6 +314,8 @@ class HookConfigManager:
         cfg = {"type": "command", "command": entry.command}
         if entry.timeout is not None:
             cfg["timeout"] = entry.timeout
+        if entry.on_failure == "block":
+            cfg["onFailure"] = "block"
         return cfg
 
     def _remove_file_by_slug(self, slug: str):
