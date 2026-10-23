@@ -129,6 +129,21 @@
           <input type="number" class="form-control form-control-sm" v-model.number="local.timeout" placeholder="default" />
         </div>
       </template>
+      <div class="form-check mt-2">
+        <label class="form-check-label small">
+          <input
+            class="form-check-input"
+            type="checkbox"
+            :checked="local.on_failure === 'block'"
+            @change="local.on_failure = $event.target.checked ? 'block' : null"
+          />
+          Block on failure
+        </label>
+      </div>
+      <div class="form-text small">
+        If this hook fails (error, timeout, or a non-0/2 exit), block the guarded action instead of
+        continuing. Ignored for async hooks and on Stop/SubagentStop/TaskCompleted/TeammateIdle events.
+      </div>
     </div>
   </div>
 </template>

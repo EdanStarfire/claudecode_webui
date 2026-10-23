@@ -477,6 +477,7 @@ class HookEntryModel(BaseModel):
     url: str | None = None
     headers: dict[str, str] | None = None
     allowed_env_vars: list[str] | None = None
+    on_failure: Literal["block"] | None = None
 
 
 class HookConfigCreateRequest(BaseModel):

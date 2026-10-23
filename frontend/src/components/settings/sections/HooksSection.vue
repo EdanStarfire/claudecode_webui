@@ -323,11 +323,13 @@ function entryToHookConfig(entry) {
     if (entry.timeout != null) cfg.timeout = entry.timeout
     if (entry.headers && Object.keys(entry.headers).length) cfg.headers = entry.headers
     if (entry.allowed_env_vars && entry.allowed_env_vars.length) cfg.allowedEnvVars = entry.allowed_env_vars
+    if (entry.on_failure === 'block') cfg.onFailure = 'block'
     return cfg
   }
   if (!entry.command) return null
   const cfg = { type: 'command', command: entry.command }
   if (entry.timeout != null) cfg.timeout = entry.timeout
+  if (entry.on_failure === 'block') cfg.onFailure = 'block'
   return cfg
 }
 

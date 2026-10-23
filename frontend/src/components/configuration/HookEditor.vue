@@ -95,6 +95,7 @@ function cloneEntry(entry) {
     url: entry.url || '',
     headers: entry.headers || null,
     allowed_env_vars: entry.allowed_env_vars || null,
+    on_failure: entry.on_failure || null,
   }
 }
 
@@ -132,6 +133,7 @@ function save() {
       url: e.type === 'http' ? (e.url || null) : null,
       headers: e.type === 'http' ? e.headers : null,
       allowed_env_vars: e.type === 'http' ? e.allowed_env_vars : null,
+      on_failure: e.on_failure === 'block' ? 'block' : null,
     })),
   })
 }

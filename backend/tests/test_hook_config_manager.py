@@ -249,3 +249,57 @@ def test_issue_1629_to_sdk_hooks_payload_concatenation_order_follows_config_orde
 
     commands = [rule["hooks"][0]["command"] for rule in payload["hooks"]["Stop"]]
     assert commands == ["first", "second"]
+
+
+# ---------------------------------------------------------------------------
+# on_failure (issue #2286)
+# ---------------------------------------------------------------------------
+
+
+def test_issue_2286_on_failure_round_trip_and_legacy_default():
+    entry = HookEntry.from_dict(_entry(on_failure="block"))
+    assert entry.on_failure == "block"
+    assert HookEntry.from_dict(entry.to_dict()).on_failure == "block"
+    assert HookEntry.from_dict(_entry()).on_failure is None
+
+
+def test_issue_2286_payload_emits_on_failure_for_command_and_http():
+    manager = HookConfigManager(Path(tempfile.mkdtemp()))
+    config = _cfg(
+        _entry(events=["PreToolUse"], on_failure="block"),
+        _entry(events=["PreToolUse"], type="http", url="https://x.test", command=None,
+               on_failure="block"),
+    )
+    hooks = manager.to_sdk_hooks_payload([config])["hooks"]["PreToolUse"]
+    assert hooks[0]["hooks"][0]["onFailure"] == "block"
+    assert hooks[1]["hooks"][0]["onFailure"] == "block"
+
+
+def test_issue_2286_payload_omits_on_failure_when_unset():
+    manager = HookConfigManager(Path(tempfile.mkdtemp()))
+    config = _cfg(
+        _entry(),
+        _entry(type="http", url="https://x.test", command=None),
+    )
+    for rule in manager.to_sdk_hooks_payload([config])["hooks"]["PreToolUse"]:
+        assert "onFailure" not in rule["hooks"][0]
+
+
+async def test_issue_2286_on_failure_persists_across_reload(manager):
+    await manager.create_config(name="Guard", hooks=[_entry(on_failure="block")])
+    reloaded = HookConfigManager(manager.configs_dir.parent)
+    await reloaded.load_configs()
+    cfgs = await reloaded.list_configs()
+    assert cfgs[0].hooks[0].on_failure == "block"
+
+
+def test_issue_2286_hook_entry_model_validation():
+    from pydantic import ValidationError
+
+    from backend.routers._models import HookEntryModel
+
+    assert HookEntryModel(on_failure="block").on_failure == "block"
+    assert HookEntryModel().on_failure is None
+    for bad in ("continue", "garbage"):
+        with pytest.raises(ValidationError):
+            HookEntryModel(on_failure=bad)
