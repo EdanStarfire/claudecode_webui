@@ -19,6 +19,7 @@ export const CONFIG_FIELDS_LIST = Object.freeze([
   'auto_mode_soft_deny',
   'auto_mode_hard_deny',
   'auto_mode_classify_all_shell',
+  'auto_mode_classifier_model',
   // system_prompt area
   'system_prompt',
   'override_system_prompt',
@@ -81,6 +82,7 @@ export const FIELD_DEFAULTS = Object.freeze({
   auto_mode_soft_deny: null,
   auto_mode_hard_deny: null,
   auto_mode_classify_all_shell: null,
+  auto_mode_classifier_model: null,
   cli_path: null,
   process_wrapper: null,
   setting_sources: null,
@@ -133,6 +135,7 @@ const _FIELD_TO_AREA = Object.freeze({
   auto_mode_soft_deny: 'permissions',
   auto_mode_hard_deny: 'permissions',
   auto_mode_classify_all_shell: 'permissions',
+  auto_mode_classifier_model: 'permissions',
   // system_prompt
   system_prompt: 'system_prompt',
   override_system_prompt: 'system_prompt',

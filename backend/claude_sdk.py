@@ -318,6 +318,7 @@ class ClaudeSDK:
         self.auto_mode_soft_deny = config.auto_mode_soft_deny
         self.auto_mode_hard_deny = config.auto_mode_hard_deny
         self.auto_mode_classify_all_shell = config.auto_mode_classify_all_shell
+        self.auto_mode_classifier_model = config.auto_mode_classifier_model
         self.enable_claudeai_mcp_servers = config.enable_claudeai_mcp_servers
         self.enable_streaming_text = config.enable_streaming_text
         self.strict_mcp_config = config.strict_mcp_config
@@ -1354,6 +1355,9 @@ class ClaudeSDK:
         non-Claude model). task_tools_mode controls both together: "default" omits both
         (defers to the CLI's own gating), "on"/"off" force both to "true"/"false" so the
         combined gate is overridden uniformly regardless of model family.
+
+        Issue #2285: CLAUDE_CODE_AUTO_MODE_MODEL (client-side Auto Mode classifier model) is
+        opt-in — emitted only when auto_mode_classifier_model is set.
         """
         env_vars: dict[str, str] = {}
         if self.task_tools_mode == "on":
@@ -1392,6 +1396,12 @@ class ClaudeSDK:
         env_vars["CLAUDE_CODE_AUTO_MODE_SERVER"] = (
             "1" if app_cfg.features.auto_mode_server_classifier else "0"
         )
+
+        # Issue #2285: client-side Auto Mode classifier model — opt-in (omitted when unset).
+        # Independent of CLAUDE_CODE_AUTO_MODE_SERVER; a server-configured classifier model
+        # takes priority over this var inside the CLI. Placed before extra_env so extra_env wins.
+        if self.auto_mode_classifier_model:
+            env_vars["CLAUDE_CODE_AUTO_MODE_MODEL"] = self.auto_mode_classifier_model
 
         # Per-session opt-back-in: remove suppression keys when session expresses preference
         # Issues #709, #906: auto-memory

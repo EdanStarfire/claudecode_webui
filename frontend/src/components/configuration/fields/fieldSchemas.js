@@ -247,6 +247,14 @@ export const FIELD_SCHEMAS = {
       defaultValue: null,
       description: 'When on, every shell command is run through the Auto Mode classifier, not just ones matching risk heuristics.',
     },
+    {
+      key: 'auto_mode_classifier_model',
+      label: 'Auto Mode: Classifier Model (client-side only)',
+      widget: 'classifier-model-select',
+      placeholder: 'Default (CLI-chosen) — or a model ID / LiteLLM catalog model',
+      defaultValue: null,
+      description: 'Model used by the client-side Auto Mode classifier (CLAUDE_CODE_AUTO_MODE_MODEL). Does not affect the server-side classifier (see the Auto Mode server classifier toggle in Features); a server-configured classifier model takes priority over this setting. Catalog models are only usable on LiteLLM-routed sessions. Weaker models may misclassify actions — this is security-relevant.',
+    },
 
   ],
 

@@ -671,6 +671,7 @@ class ApplicationService:
             "virtual_key": routing["virtual_key"],
             "model_map": routing.get("model_map", {}),
             "default_model": routing.get("default_model"),
+            "passthrough_models": routing.get("passthrough_models", []),
         }
 
     def get_litellm_proxy_runtime_status(self) -> dict:

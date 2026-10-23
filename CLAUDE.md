@@ -200,6 +200,16 @@ model families and only consults the env var for models outside that list — wh
 cascade as `auto_memory_mode`, resolved in `backend/claude_sdk.py::_resolve_env_vars()`. See the
 issue #2010 investigation notes for the CLI-binary-level trace this is based on.
 
+## Auto Mode Classifier Model (issue #2285)
+
+`auto_mode_classifier_model` (str|None, `permissions` area, Profile → Template → Session cascade)
+maps to `CLAUDE_CODE_AUTO_MODE_MODEL`, emitted opt-in in `_resolve_env_vars()` (omitted when
+unset; `extra_env` wins). It affects only the **client-side** classifier; a server-configured
+classifier model (GrowthBook) takes priority inside the CLI. The value is a plain model ID or a
+LiteLLM catalog alias `catalog--model`. `session_launcher._vet_classifier_model` drops a known
+catalog alias (with a warning) on sessions not routed through LiteLLM, and for Docker sessions
+registers it as a `passthrough_models` entry so the proxy addon does not rewrite it.
+
 ## Verifying Configuration
 
 The injected env dict is logged at debug level by `claude_sdk.py` when `--debug-sdk` is enabled.

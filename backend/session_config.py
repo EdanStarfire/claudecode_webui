@@ -77,6 +77,10 @@ class SessionConfig(BaseModel):
     # Deliberately bool | None (not bool = False): AC4 requires distinguishing
     # "nobody configured this" from "explicitly set to False" across S->T->P.
     auto_mode_classify_all_shell: bool | None = None
+    # Issue #2285: model for the client-side Auto Mode classifier
+    # (CLAUDE_CODE_AUTO_MODE_MODEL). Plain model ID, or a LiteLLM catalog alias
+    # "{catalog}--{model}". None = unset (var not emitted).
+    auto_mode_classifier_model: str | None = None
 
     # Prompt
     system_prompt: str | None = None
@@ -171,7 +175,7 @@ class SessionConfig(BaseModel):
     provider_opus_model_id: str | None = None
     provider_default_tier: str | None = None  # "haiku" | "sonnet" | "opus"
 
-    @field_validator("model")
+    @field_validator("model", "auto_mode_classifier_model")
     @classmethod
     def _normalize_model(cls, v):
         if v is None:
@@ -188,6 +192,7 @@ CONFIG_FIELDS: set[str] = {
     "permission_mode", "deny_unattended_permission_prompts",
     "auto_mode_environment", "auto_mode_allow", "auto_mode_soft_deny",
     "auto_mode_hard_deny", "auto_mode_classify_all_shell",
+    "auto_mode_classifier_model",
     "system_prompt", "override_system_prompt",
     "allowed_tools", "disallowed_tools", "restricted_mode", "model",
     "thinking_mode", "thinking_budget_tokens", "effort",

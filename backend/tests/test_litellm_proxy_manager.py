@@ -607,3 +607,12 @@ def test_features_config_round_trips_disable_openai_responses_count_tokens_api()
     )
     assert cfg_false.features.disable_openai_responses_count_tokens_api is False
     assert cfg_false.to_dict()["features"]["disable_openai_responses_count_tokens_api"] is False
+
+
+def test_register_session_routing_passthrough_models(manager):
+    manager.register_session_routing(
+        "sess-p", "lc-p", "http://127.0.0.1:4000/", passthrough_models=["cat--m"]
+    )
+    assert manager.get_session_routing("sess-p")["passthrough_models"] == ["cat--m"]
+    manager.register_session_routing("sess-q", "lc-q", "http://127.0.0.1:4000/")
+    assert manager.get_session_routing("sess-q")["passthrough_models"] == []

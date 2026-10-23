@@ -36,6 +36,7 @@ PROFILE_AREAS: dict[str, set[str]] = {
         "additional_directories", "setting_sources",
         "auto_mode_environment", "auto_mode_allow", "auto_mode_soft_deny",
         "auto_mode_hard_deny", "auto_mode_classify_all_shell",
+        "auto_mode_classifier_model",
     },
     "system_prompt": {
         "system_prompt", "override_system_prompt",

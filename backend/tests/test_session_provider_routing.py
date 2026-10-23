@@ -298,7 +298,7 @@ async def test_docker_catalog_routes_via_registry_not_env(coordinator):
 
     proxy.register_session_routing.assert_called_once_with(
         session_id, "lc-test-virtual-key", "http://127.0.0.1:4000/",
-        model_map={}, default_model="cat--mod",
+        model_map={}, default_model="cat--mod", passthrough_models=[],
     )
 
     # ANTHROPIC_BASE_URL must NOT appear in extra_env for Docker sessions
@@ -358,7 +358,7 @@ async def test_issue_1469_docker_single_model_register_routing_called_with_defau
 
     proxy.register_session_routing.assert_called_once_with(
         session_id, "lc-test-virtual-key", "http://127.0.0.1:4000/",
-        model_map={}, default_model="openai--gpt-4o",
+        model_map={}, default_model="openai--gpt-4o", passthrough_models=[],
     )
 
 
