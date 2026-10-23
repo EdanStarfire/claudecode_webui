@@ -100,6 +100,36 @@ PHASE_DISCONNECTED = "disconnected"
 PHASE_STOPPED = "stopped"
 
 
+def _normalize_ignore_violations(raw: Any) -> dict[str, list[str]]:
+    """Coerce sandbox ``ignoreViolations`` to the SDK shape ``dict[str, list[str]]`` (issue #2283).
+
+    Keys are command-text substrings (``"*"`` = all commands); values are lists of
+    violation-text substrings. Legacy configs stored ``{file, network}`` as raw strings;
+    when those are the only keys they are migrated to ``{"*": [...]}``.
+    """
+    if not isinstance(raw, dict):
+        return {}
+
+    def _items(value: Any) -> list[str]:
+        if isinstance(value, str):
+            value = value.split(",")
+        if not isinstance(value, list | tuple):
+            return []
+        return [v.strip() for v in value if isinstance(v, str) and v.strip()]
+
+    if raw and set(raw) <= {"file", "network"}:
+        merged = _items(raw.get("file")) + _items(raw.get("network"))
+        logger.warning("Migrating legacy sandbox ignoreViolations {file, network} to {'*': [...]}")
+        return {"*": merged} if merged else {}
+
+    result: dict[str, list[str]] = {}
+    for pattern, value in raw.items():
+        items = _items(value)
+        if isinstance(pattern, str) and pattern.strip() and items:
+            result.setdefault(pattern.strip(), []).extend(items)
+    return result
+
+
 def _schedule_coro(coro: Coroutine) -> None:
     """Schedule a coroutine as a task and attach error logging done callback."""
     task = asyncio.ensure_future(coro)
@@ -1213,6 +1243,12 @@ class ClaudeSDK:
             # Merge custom sandbox config if provided
             if self.sandbox_config:
                 sandbox_settings.update(self.sandbox_config)
+                if "ignoreViolations" in sandbox_settings:
+                    normalized = _normalize_ignore_violations(sandbox_settings["ignoreViolations"])
+                    if normalized:
+                        sandbox_settings["ignoreViolations"] = normalized
+                    else:
+                        del sandbox_settings["ignoreViolations"]
             # Issue #958: Enforce failIfUnavailable after merge to prevent silent fallback
             sandbox_settings["failIfUnavailable"] = True
             options_kwargs["sandbox"] = sandbox_settings
