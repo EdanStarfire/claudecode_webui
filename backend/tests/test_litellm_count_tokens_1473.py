@@ -73,6 +73,7 @@ async def test_count_tokens_succeeds_without_calling_upstream_responses_api(tmp_
             provider_counter=counter,
             custom_llm_provider="openai",
             model_to_use="gpt-4o-mini",
+            region=None,
             messages=[
                 {
                     "role": "user",

@@ -235,10 +235,19 @@ async def test_unexpected_exit_logs_at_error_level(
             pass
 
     exit_records = [r for r in caplog.records if "exited unexpectedly" in r.getMessage()]
-    assert len(exit_records) == 1
-    assert exit_records[0].levelno == logging.ERROR
+    # Dedupe by object identity: pytest's caplog machinery can attach more than
+    # one internal LogCaptureHandler to a non-propagating logger across
+    # setup/call phases (observed starting pytest 9.1), causing the exact same
+    # LogRecord object from one real logger.error() call to be appended to
+    # caplog.records more than once (confirmed via `is`/`id()`/`.created`).
+    # Dedupe by identity rather than by rendered message so a genuine
+    # production regression that logs two *separate* real exits with
+    # coincidentally identical text would still be caught.
+    unique_records = list({id(r): r for r in exit_records}.values())
+    assert len(unique_records) == 1, exit_records
+    assert unique_records[0].levelno == logging.ERROR
     for fragment in expected_fragments:
-        assert fragment in exit_records[0].getMessage()
+        assert fragment in unique_records[0].getMessage()
 
 
 @pytest.mark.asyncio

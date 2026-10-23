@@ -186,7 +186,7 @@ RUN cd /tmp/frontend-prewarm \
 
 # ---------- Layer 7: Claude Code CLI ----------
 # Bump in lockstep with claude-agent-sdk in pyproject.toml/uv.lock.
-ARG CLAUDE_CODE_VERSION=2.1.281
+ARG CLAUDE_CODE_VERSION=2.1.309
 RUN curl -fsSL https://claude.ai/install.sh | bash -s ${CLAUDE_CODE_VERSION}
 
 # ---------- Layer 8: Entrypoint ----------
