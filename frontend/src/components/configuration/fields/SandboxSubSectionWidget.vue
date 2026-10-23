@@ -173,21 +173,27 @@
 
     <!-- Violation Handling -->
     <div class="sandbox-section-label">Violation Handling</div>
-    <div class="mb-1 ms-3">
-      <label class="form-label">Ignore File Violations</label>
-      <input type="text" class="form-control form-control-sm"
-        :value="val.ignoreViolations?.file"
-        :disabled="disabled"
-        @input="updateViolation('file', $event.target.value)"
-        placeholder="File paths to ignore" />
-    </div>
-    <div class="mb-1 ms-3">
-      <label class="form-label">Ignore Network Violations</label>
-      <input type="text" class="form-control form-control-sm"
-        :value="val.ignoreViolations?.network"
-        :disabled="disabled"
-        @input="updateViolation('network', $event.target.value)"
-        placeholder="Network patterns to ignore" />
+    <div class="ms-3 mb-1">
+      <label class="form-label">Ignore Violations</label>
+      <p class="cred-note">
+        When a command contains the <strong>command pattern</strong>, sandbox violations whose text contains any
+        listed substring are ignored. Use <code>*</code> to match all commands. Substrings are plain text, not globs.
+      </p>
+      <div v-if="migratedLegacy" class="cred-note" data-testid="ignore-violations-migrated">
+        Migrated legacy file/network ignores to command pattern <code>*</code>.
+      </div>
+      <div v-if="!violationRows.length" class="cred-empty-hint">No ignore rules.</div>
+      <div v-for="(row, idx) in violationRows" :key="idx" class="cred-row">
+        <div class="cred-row-main violation-row-main">
+          <input type="text" class="form-control form-control-sm font-monospace" v-model="row.pattern"
+            :disabled="disabled" placeholder="*" aria-label="Command pattern" @input="updateViolationRow" />
+          <input type="text" class="form-control form-control-sm font-monospace" v-model="row.substrings"
+            :disabled="disabled" placeholder="/tmp/cache, example.com" aria-label="Violation substrings"
+            @input="updateViolationRow" />
+          <button type="button" class="btn btn-outline-danger btn-sm" :disabled="disabled" @click="removeViolationRow(idx)">×</button>
+        </div>
+      </div>
+      <button type="button" class="btn btn-outline-secondary btn-sm" :disabled="disabled" @click="addViolationRow">+ Add ignore rule</button>
     </div>
   </div>
 </template>
@@ -218,17 +224,42 @@ function updateNetwork(field, newVal) {
   })
 }
 
-function updateViolation(field, newVal) {
-  emit('update:value', {
-    ...val.value,
-    ignoreViolations: { ...(val.value.ignoreViolations || {}), [field]: newVal },
-  })
-}
-
 // Credentials: repeatable file/envVar masking rules, mirroring the CLI's
 // sandbox.credentials.files/envVars schema (path|name, mode, decode, maskClaims, extract, onExtractNoMatch).
 const fileRows = ref([])
 const envRows = ref([])
+// Ignore violations: rows of {pattern, substrings}; emitted as {pattern: [substring, ...]}.
+const violationRows = ref([])
+const migratedLegacy = ref(false)
+
+function splitList(str) {
+  return String(str || '').split(',').map((x) => x.trim()).filter(Boolean)
+}
+
+// Legacy configs stored {file, network} as raw strings (issue #2283). When those are the
+// only keys, fold them into {"*": [...]} — the SDK's {command-pattern: [substrings]} shape.
+function isLegacyIgnoreViolations(iv) {
+  const keys = Object.keys(iv || {})
+  return keys.length > 0 && keys.every((k) => k === 'file' || k === 'network')
+}
+
+function ignoreViolationsToRows(iv) {
+  return Object.entries(iv || {}).map(([pattern, v]) => ({
+    pattern,
+    substrings: Array.isArray(v) ? v.join(', ') : String(v || ''),
+  }))
+}
+
+function rowsToIgnoreViolations(rows) {
+  const out = {}
+  for (const r of rows) {
+    const items = splitList(r.substrings)
+    if (!items.length) continue
+    const pattern = r.pattern.trim() || '*'
+    out[pattern] = [...(out[pattern] || []), ...items]
+  }
+  return out
+}
 
 function entryToRow(entry, key) {
   return {
@@ -268,6 +299,17 @@ watch(() => props.value, () => {
     skipNextSync = false
     return
   }
+  const iv = val.value.ignoreViolations
+  if (isLegacyIgnoreViolations(iv)) {
+    const items = [...splitList(Array.isArray(iv.file) ? iv.file.join(',') : iv.file),
+      ...splitList(Array.isArray(iv.network) ? iv.network.join(',') : iv.network)]
+    violationRows.value = items.length ? [{ pattern: '*', substrings: items.join(', ') }] : []
+    migratedLegacy.value = true
+    skipNextSync = true
+    emit('update:value', { ...val.value, ignoreViolations: rowsToIgnoreViolations(violationRows.value) })
+  } else {
+    violationRows.value = ignoreViolationsToRows(iv)
+  }
   fileRows.value = (val.value.credentials?.files || []).map((e) => entryToRow(e, 'path'))
   envRows.value = (val.value.credentials?.envVars || []).map((e) => entryToRow(e, 'name'))
 }, { immediate: true })
@@ -281,6 +323,22 @@ function emitCredentials(listKey, rows, key) {
       [listKey]: rows.map((r) => rowToEntry(r, key)),
     },
   })
+}
+
+function emitViolations() {
+  skipNextSync = true
+  emit('update:value', { ...val.value, ignoreViolations: rowsToIgnoreViolations(violationRows.value) })
+}
+function addViolationRow() {
+  violationRows.value.push({ pattern: '', substrings: '' })
+  emitViolations()
+}
+function removeViolationRow(idx) {
+  violationRows.value.splice(idx, 1)
+  emitViolations()
+}
+function updateViolationRow() {
+  emitViolations()
 }
 
 function addFileRow() {
@@ -346,6 +404,10 @@ function updateEnvRow() {
   grid-template-columns: 1fr 120px auto;
   gap: 8px;
   align-items: center;
+}
+
+.violation-row-main {
+  grid-template-columns: 140px 1fr auto;
 }
 
 .cred-row-mask-fields {
