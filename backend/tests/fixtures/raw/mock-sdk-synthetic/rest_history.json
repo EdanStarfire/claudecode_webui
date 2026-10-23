@@ -2,9 +2,9 @@
   "messages": [
     {
       "type": "assistant",
-      "timestamp": 1791920465.2395704,
+      "timestamp": 1792715477.64233,
       "session_id": "mock-sdk-synthetic-session",
-      "message_id": "ebe577a2-9c83-42b6-86f3-e81ea14efa3f",
+      "message_id": "5a03d3c8-9af4-454b-85ab-78d625c40778",
       "content": "I'll read that file for you.",
       "sdk_uuid": "synthetic-am-1",
       "metadata": {
@@ -15,7 +15,7 @@
             "input": {
               "file_path": "/tmp/example.txt"
             },
-            "timestamp": 1791920465.2395704
+            "timestamp": 1792715477.64233
           }
         ],
         "tool_results": [],
@@ -32,9 +32,9 @@
     },
     {
       "type": "user",
-      "timestamp": 1791920465.2398703,
+      "timestamp": 1792715477.6429138,
       "session_id": "mock-sdk-synthetic-session",
-      "message_id": "d0009667-a1db-4c9d-a8c3-31e7f6b4ae69",
+      "message_id": "0477c872-3eee-41bc-985d-60c06f5cf3d7",
       "content": "Tool results: 1 results",
       "sdk_uuid": "synthetic-um-1",
       "metadata": {
@@ -44,7 +44,7 @@
             "tool_use_id": "synthetic-tu-1",
             "content": "Line 1: hello\nLine 2: world\n",
             "is_error": false,
-            "timestamp": 1791920465.2398703
+            "timestamp": 1792715477.6429138
           }
         ],
         "has_tool_uses": false,
@@ -58,9 +58,9 @@
     },
     {
       "type": "assistant",
-      "timestamp": 1791920465.2400463,
+      "timestamp": 1792715477.643088,
       "session_id": "mock-sdk-synthetic-session",
-      "message_id": "c9d76568-abaa-4626-8548-9a455217992c",
+      "message_id": "580a86e8-f290-4d6a-937d-aa5e1e35fffd",
       "content": "I'll update that config file for you.",
       "sdk_uuid": "synthetic-am-deny-1",
       "metadata": {
@@ -72,7 +72,7 @@
               "file_path": "/etc/synthetic-example.conf",
               "content": "updated"
             },
-            "timestamp": 1791920465.2400463
+            "timestamp": 1792715477.643088
           }
         ],
         "tool_results": [],
@@ -89,9 +89,9 @@
     },
     {
       "type": "user",
-      "timestamp": 1791920465.2402077,
+      "timestamp": 1792715477.6432524,
       "session_id": "mock-sdk-synthetic-session",
-      "message_id": "1f9a5ad5-210a-4754-98aa-d1af98aa0ff5",
+      "message_id": "0efebdba-8fe1-4bc1-9472-4611ca7b3614",
       "content": "Tool results: 1 results",
       "sdk_uuid": "synthetic-um-deny-1",
       "metadata": {
@@ -101,7 +101,7 @@
             "tool_use_id": "synthetic-tu-deny-1",
             "content": "Permission to use Write was denied by the user.",
             "is_error": true,
-            "timestamp": 1791920465.2402077
+            "timestamp": 1792715477.6432524
           }
         ],
         "has_tool_uses": false,
@@ -115,9 +115,9 @@
     },
     {
       "type": "assistant",
-      "timestamp": 1791920465.2403326,
+      "timestamp": 1792715477.6433752,
       "session_id": "mock-sdk-synthetic-session",
-      "message_id": "51fa7031-bee9-408c-971e-787680bfb5dd",
+      "message_id": "2130752f-c047-41c5-a134-0b427dbfc459",
       "content": "I need clarification before proceeding.",
       "sdk_uuid": "synthetic-am-ask-1",
       "metadata": {
@@ -144,7 +144,7 @@
                 }
               ]
             },
-            "timestamp": 1791920465.2403326
+            "timestamp": 1792715477.6433752
           }
         ],
         "tool_results": [],
@@ -161,9 +161,9 @@
     },
     {
       "type": "user",
-      "timestamp": 1791920465.2404912,
+      "timestamp": 1792715477.6435301,
       "session_id": "mock-sdk-synthetic-session",
-      "message_id": "ca820ce0-c798-40ea-868f-6ba6987e1ebe",
+      "message_id": "13db1fd9-90e0-45d2-be52-ff33e413c99e",
       "content": "Tool results: 1 results",
       "sdk_uuid": "synthetic-um-ask-1",
       "metadata": {
@@ -173,7 +173,7 @@
             "tool_use_id": "synthetic-tu-ask-1",
             "content": "staging",
             "is_error": false,
-            "timestamp": 1791920465.2404912
+            "timestamp": 1792715477.6435301
           }
         ],
         "has_tool_uses": false,
@@ -187,9 +187,9 @@
     },
     {
       "type": "assistant",
-      "timestamp": 1791920465.2405982,
+      "timestamp": 1792715477.6436472,
       "session_id": "mock-sdk-synthetic-session",
-      "message_id": "012f9032-1b0c-466e-a4e8-1213ae9c08d1",
+      "message_id": "9e17df23-7e34-4509-a1d7-18b6cd58930f",
       "content": "Running a long-lived command.",
       "sdk_uuid": "synthetic-am-interrupt-1",
       "metadata": {
@@ -200,7 +200,7 @@
             "input": {
               "command": "sleep 100"
             },
-            "timestamp": 1791920465.2405982
+            "timestamp": 1792715477.6436472
           }
         ],
         "tool_results": [],
@@ -217,9 +217,9 @@
     },
     {
       "type": "user",
-      "timestamp": 1791920465.2407174,
+      "timestamp": 1792715477.6437676,
       "session_id": "mock-sdk-synthetic-session",
-      "message_id": "6abe82a8-9a5c-4bbe-a18d-14173504fe15",
+      "message_id": "d2edceab-d3a0-46dc-9b03-8a363a1ec8c3",
       "content": "Tool results: 1 results",
       "sdk_uuid": "synthetic-um-interrupt-1",
       "metadata": {
@@ -229,7 +229,7 @@
             "tool_use_id": "synthetic-tu-interrupt-1",
             "content": "Tool execution interrupted by user.",
             "is_error": true,
-            "timestamp": 1791920465.2407174
+            "timestamp": 1792715477.6437676
           }
         ],
         "has_tool_uses": false,
@@ -243,9 +243,9 @@
     },
     {
       "type": "system",
-      "timestamp": 1791920465.2408144,
+      "timestamp": 1792715477.6438668,
       "session_id": "mock-sdk-synthetic-session",
-      "message_id": "eb83268e-88f8-4d88-830b-2ab529ce08de",
+      "message_id": "84423d87-0645-446e-9bbd-72fc563339f2",
       "content": "System message",
       "subtype": "compact_boundary",
       "metadata": {
@@ -272,9 +272,9 @@
     },
     {
       "type": "user",
-      "timestamp": 1791920465.2409105,
+      "timestamp": 1792715477.6439555,
       "session_id": "mock-sdk-synthetic-session",
-      "message_id": "eaecb1a1-d35e-4d78-a997-5ed798660220",
+      "message_id": "ccbcee59-8a03-4ea2-8e78-4ee9383942d2",
       "content": "Please proceed with the next step.\n\n---\nAlways send messages to Minion #Planner using the `send_comm` tool.",
       "metadata": {
         "comm": {
@@ -290,9 +290,9 @@
     },
     {
       "type": "system",
-      "timestamp": 1791920465.2409897,
+      "timestamp": 1792715477.644034,
       "session_id": "mock-sdk-synthetic-session",
-      "message_id": "95921fd4-4255-4707-8921-523548ceb80f",
+      "message_id": "31485953-5b84-4050-92b3-c2dc2e4c5947",
       "content": "Agent spawned: Explore the repository structure",
       "turn_id": "synthetic-ts-1",
       "sdk_uuid": "synthetic-ts-1",
@@ -310,9 +310,9 @@
     },
     {
       "type": "system",
-      "timestamp": 1791920465.241103,
+      "timestamp": 1792715477.6441314,
       "session_id": "mock-sdk-synthetic-session",
-      "message_id": "b5a3db51-5f00-4d9a-862a-80d1c98a23ff",
+      "message_id": "c890de0f-9b61-480b-98f0-6fde8448a4be",
       "content": "Agent progress: Reading files in src/ [Read]",
       "turn_id": "synthetic-tp-1",
       "sdk_uuid": "synthetic-tp-1",
@@ -335,9 +335,9 @@
     },
     {
       "type": "system",
-      "timestamp": 1791920465.2412133,
+      "timestamp": 1792715477.644243,
       "session_id": "mock-sdk-synthetic-session",
-      "message_id": "bc4a6c60-d5ec-499b-891e-a5a12c93e6da",
+      "message_id": "090a873b-509a-4efd-83d6-d19294119420",
       "content": "Agent completed: Explored the repository structure and summarized key directories.",
       "turn_id": "synthetic-tn-1",
       "sdk_uuid": "synthetic-tn-1",
@@ -361,9 +361,9 @@
     },
     {
       "type": "assistant",
-      "timestamp": 1791920465.2413716,
+      "timestamp": 1792715477.6443968,
       "session_id": "mock-sdk-synthetic-session",
-      "message_id": "fde09fb3-9f0a-4ab8-afc3-513aaa35f033",
+      "message_id": "d3afac2f-c1c2-46b1-a23a-9229637b9a76",
       "content": "Welcome back \u2014 resuming where we left off.",
       "sdk_uuid": "synthetic-am-2",
       "metadata": {
@@ -382,9 +382,9 @@
     },
     {
       "type": "result",
-      "timestamp": 1791920465.2414782,
+      "timestamp": 1792715477.6445,
       "session_id": "mock-sdk-synthetic-session",
-      "message_id": "49d09774-b083-452e-97aa-0e6d3a3bb4ca",
+      "message_id": "185e48a8-ff66-4a67-aeaf-307c1d411e8a",
       "content": "Conversation success",
       "metadata": {
         "subtype": "success",

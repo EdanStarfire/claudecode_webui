@@ -1,7 +1,7 @@
 {
-  "sdk_version": "0.2.159",
+  "sdk_version": "0.2.173",
   "cli_version": null,
   "model": "synthetic",
-  "git_sha": "dc3b1083deb425114436aa4009607dd3fc3ecb4d",
-  "capture_date": "2026-10-13T19:41:05.244822+00:00"
+  "git_sha": "48f606c129e4fb9a60e6c84e0c01c187b2bbfe2a",
+  "capture_date": "2026-10-23T00:31:17.647599+00:00"
 }
