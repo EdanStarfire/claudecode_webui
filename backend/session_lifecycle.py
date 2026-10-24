@@ -168,6 +168,21 @@ def is_deliverable(state: SessionState) -> bool:
     return state in (SessionState.ACTIVE, SessionState.PAUSED)
 
 
+RESTARTABLE_STATES = frozenset({SessionState.ACTIVE, SessionState.ERROR, SessionState.TERMINATED})
+
+
+def is_restartable(state: SessionState) -> bool:
+    """True if "Restart Agent" (recover -> start) may act on a session in this state.
+
+    Issue #2293: ACTIVE (unstick a live turn), ERROR and TERMINATED (retry/revive with
+    the same ID and history). Deliberately NOT deliverability: PAUSED is blocked on a
+    permission decision (#2159), STARTING/TERMINATING have a transition in flight that
+    recover_session() would clobber, and CREATED was never started — Start is the right
+    action there, not recovery.
+    """
+    return state in RESTARTABLE_STATES
+
+
 def is_interruptible(state: SessionState) -> bool:
     """True if ``interrupt_session()`` may act on a session in this state.
 

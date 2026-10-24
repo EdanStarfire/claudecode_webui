@@ -313,16 +313,15 @@ class TestSessionCoordinator:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "state",
-        [SessionState.CREATED, SessionState.PAUSED, SessionState.TERMINATED, SessionState.ERROR],
+        [SessionState.CREATED, SessionState.PAUSED, SessionState.STARTING, SessionState.TERMINATING],
     )
     async def test_issue_2159_restart_session_rejects_non_active(
         self, temp_coordinator, sample_session_config, state
     ):
-        """Issue #2159: session_coordinator.restart_session() enforces ACTIVE-only
-        directly, regardless of entry point — not just as a courtesy check in
-        legion_mcp_tools.py's MCP tool or the REST router. Restarting a live turn is
-        a different predicate than deliverability (a PAUSED/ERROR/TERMINATED session
-        has no live turn to restart)."""
+        """Issue #2159/#2293: session_coordinator.restart_session() enforces its
+        restartable-state gate directly, regardless of entry point. ERROR/TERMINATED
+        became restartable in #2293; PAUSED (blocked on a permission), CREATED (Start
+        is the right action) and in-flight STARTING/TERMINATING stay rejected."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
         await coordinator.session_manager._update_session_state(session_id, state)

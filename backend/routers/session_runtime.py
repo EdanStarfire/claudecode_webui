@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from shared.exception_handlers import handle_exceptions
 
 from ..models.permission_mode import PermissionMode
-from ..session_manager import SessionState
+from ..session_lifecycle import is_restartable
 from ._models import (
     AddDirectoryRequest,
     McpReconnectRequest,
@@ -160,20 +160,28 @@ def build_router(webui) -> APIRouter:
     async def restart_session(session_id: str):
         """Restart a session (disconnect and resume).
 
-        Issue #2159: ACTIVE-only, matching legion_mcp_tools.py's restart_session MCP
-        tool and session_coordinator.restart_session()'s own now-centralized guard —
-        restarting a live turn is a different predicate than deliverability, not a
-        missed migration. Checked here too for a specific 409 instead of a generic
-        {"success": false}.
+        Issue #2293: allowed from ACTIVE, ERROR and TERMINATED (is_restartable());
+        PAUSED/STARTING/TERMINATING/CREATED are rejected with 409. The Legion
+        restart_session MCP tool stays ACTIVE-only (its own check). Checked here too
+        for a specific 409 instead of a generic {"success": false}. On failure the
+        session's new error_message is returned as "error".
         """
         state = await webui.service.get_session_state(session_id)
         if state is None:
             raise HTTPException(status_code=404, detail="Session not found")
-        if state != SessionState.ACTIVE:
-            raise HTTPException(status_code=409, detail="Session is not active")
+        if not is_restartable(state):
+            raise HTTPException(
+                status_code=409, detail=f"Session cannot be restarted from state {state.value}"
+            )
 
         success = await webui.service.restart_session_with_fresh_callback(session_id)
-        return {"success": success}
+        if success:
+            return {"success": True}
+        info = await webui.service.coordinator.session_manager.get_session_info(session_id)
+        return {
+            "success": False,
+            "error": (info.error_message if info else None) or "Failed to restart session",
+        }
 
     @router.post("/api/sessions/{session_id}/reset")
     @handle_exceptions("reset session")

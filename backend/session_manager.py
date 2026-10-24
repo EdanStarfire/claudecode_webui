@@ -699,6 +699,15 @@ class SessionManager:
                     session_logger.warning(f"Cannot start session {session_id} in state {session.state}")
                     return False
 
+                # Issue #2293: a new start attempt supersedes any prior failure; clear
+                # the error fields so a restart from ERROR doesn't leave a stale reason.
+                # Persisted by the single _update_session_state() call below.
+                session.error_message = None
+                session.error_subtype = None
+                session.error_terminal_reason = None
+                session.error_api_error_status = None
+                session.error_list = None
+
                 await self._update_session_state(session_id, new_state)
                 await self._notify_lifecycle_record_callbacks(session_id, action)
 

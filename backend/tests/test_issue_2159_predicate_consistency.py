@@ -117,12 +117,9 @@ ALLOWLIST: dict[str, set[str]] = {
         # too, so re-confirm the real resulting state before logging a resume.
         "if post_info and post_info.state == SessionState.ACTIVE:",
     },
-    "backend/routers/session_runtime.py": {
-        # REST restart_session: same deliberate ACTIVE-only restart gate as
-        # legion_mcp_tools.py's MCP tool and session_coordinator.restart_session()'s
-        # own centralized guard — checked here too for a specific 409 response.
-        "if state != SessionState.ACTIVE:",
-    },
+    # Issue #2293: the REST restart endpoint and SessionLauncher.restart_session()
+    # now gate on is_restartable() (ACTIVE/ERROR/TERMINATED), so their literal
+    # ACTIVE-only pins are gone; only the MCP tool keeps its own ACTIVE-only check.
     "backend/session_coordinator.py": {
         # archive_and_clear_session: force a final TERMINATED transition only if not
         # already there — a terminal guard, not a predicate duplicate.
@@ -138,9 +135,6 @@ ALLOWLIST: dict[str, set[str]] = {
     # Issue #2189 (coordinator-split PR 1): restart_session()/reset_session() moved
     # to SessionLauncher verbatim — these two entries moved with them.
     "backend/session_launcher.py": {
-        # restart_session(): the method's own centralized ACTIVE-only restart gate
-        # (restarting a live turn is a different predicate than deliverability).
-        "if not session_info or session_info.state != SessionState.ACTIVE:",
         # reset_session(): issue #1019 pattern — ERROR has no SDK to disconnect, so
         # recover_session() is called directly instead of going through the
         # disconnect-then-recover branch above.
