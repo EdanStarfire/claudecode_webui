@@ -89,6 +89,8 @@ ALLOWLIST: dict[str, set[str]] = {
     # turn is deliberately ACTIVE-only, not is_deliverable().
     "backend/legion/mcp/legion_mcp_tools.py": {
         "if session_info.state != SessionState.ACTIVE:",
+        # _restart_monitor (issue #2293): don't revive a session ended during the wait.
+        "if session_info.state == SessionState.TERMINATED:",
     },
     "backend/legion/scheduler_service.py": {
         # _fire_auto_resume_schedule: decide whether the #1019-pattern unstick
