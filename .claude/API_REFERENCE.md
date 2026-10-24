@@ -28,7 +28,7 @@ Complete REST and WebSocket API reference for Claude WebUI. For backend architec
 | `PATCH` | `/api/sessions/{id}` | Update session fields (model, tools, permissions, cli_path, etc.) |
 | `POST` | `/api/sessions/{id}/start` | Start or resume session |
 | `POST` | `/api/sessions/{id}/terminate` | Terminate session |
-| `POST` | `/api/sessions/{id}/restart` | Restart session (keep message history) |
+| `POST` | `/api/sessions/{id}/restart` | Restart session (keep message history); allowed from ACTIVE/ERROR/TERMINATED, else 409; on failure returns `{success:false, error}` (issue #2293) |
 | `POST` | `/api/sessions/{id}/reset` | Clear messages and fresh start |
 | `POST` | `/api/sessions/{id}/disconnect` | End SDK session, keep state |
 | `DELETE` | `/api/sessions/{id}` | Delete session |

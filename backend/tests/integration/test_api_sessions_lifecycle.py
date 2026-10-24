@@ -480,10 +480,9 @@ class TestRestartSession:
         sid = session["session_id"]
 
         resp = await client.post(f"/api/sessions/{sid}/restart")
-        # Should handle gracefully — may start fresh or return error. Issue #2159:
-        # restart_session is ACTIVE-only everywhere it's reachable, so a CREATED
-        # session now gets a specific 409 rather than a generic failure.
-        assert resp.status_code in (200, 400, 409, 500)
+        # Issue #2293: CREATED is deliberately not restartable (Start is the right
+        # action), so it gets a specific 409.
+        assert resp.status_code == 409
 
 
 class TestResetSession:

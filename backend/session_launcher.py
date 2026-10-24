@@ -51,6 +51,7 @@ from .litellm_proxy_manager import (
 )
 from .mcp_config_manager import McpServerType
 from .oauth_refresh_manager import OAuthRefreshManager
+from .session_lifecycle import is_restartable
 from .session_manager import SessionState
 from .session_recorder import SessionRecorder
 
@@ -177,6 +178,11 @@ class SessionLauncher:
         # Owned here now; SessionCoordinator exposes a property + set_sdk_factory()
         # delegate so existing direct-attribute test pokes keep working unchanged.
         self._sdk_factory = self._default_sdk_factory
+
+        # Issue #2293: sessions with a restart_session() in flight (recover_session()
+        # is unguarded, so a concurrent second restart could knock a STARTING session
+        # back to TERMINATED).
+        self._restarting: set[str] = set()
 
     # --- Collaborator managers: live passthrough to the coordinator ----------
     tenant_context = property(lambda self: self._coordinator.tenant_context)
@@ -1461,19 +1467,26 @@ class SessionLauncher:
 
         This is useful for unsticking the agent without losing conversation history.
 
-        Issue #2159: deliberately ACTIVE-only, not is_deliverable() — restarting the
-        live turn is a different predicate than deliverability (a PAUSED session has
-        no live turn to restart; it's blocked on a permission decision, not running).
+        Issue #2293: restartable from ACTIVE, ERROR and TERMINATED (is_restartable()) —
+        ERROR/TERMINATED have no SDK to tear down, so this reduces to recover -> start,
+        the same pattern as reset_session. Issue #2159: deliberately not
+        is_deliverable() — a PAUSED session is blocked on a permission decision, so it
+        stays rejected, as do STARTING/TERMINATING (transition in flight) and CREATED.
+        A restart already in flight for the session also returns False.
         Enforced here, the one place every caller (REST endpoint, legion_mcp_tools's
         restart_session MCP tool, ApplicationService.restart_session) funnels through,
         so the gate holds regardless of entry point rather than being trusted to
         whichever caller remembers to check it themselves.
         """
+        if session_id in self._restarting:
+            logger.warning(f"Cannot restart session {session_id}: restart already in progress")
+            return False
+        self._restarting.add(session_id)
         try:
             session_info = await self.session_manager.get_session_info(session_id)
-            if not session_info or session_info.state != SessionState.ACTIVE:
+            if not session_info or not is_restartable(session_info.state):
                 logger.warning(
-                    f"Cannot restart session {session_id}: not ACTIVE "
+                    f"Cannot restart session {session_id}: not restartable "
                     f"(state: {session_info.state if session_info else 'not found'})"
                 )
                 return False
@@ -1531,6 +1544,8 @@ class SessionLauncher:
         except Exception:
             logger.exception(f"Failed to restart session {session_id}")
             return False
+        finally:
+            self._restarting.discard(session_id)
 
     async def reset_session(self, session_id: str, permission_callback: Callable | None = None, _from_queue_processor: bool = False) -> bool:
         """
