@@ -366,6 +366,13 @@ class TemplateUpdateRequest(BaseModel):
     disable_file_mentions: bool | None = None
     disable_idle_compaction: bool | None = None
     idle_compact_min_tokens: int | None = Field(None, ge=1)
+    # Issue #2287 (stage B): unattended-run retry options (bounds mirror the CLI)
+    retry_watchdog: bool | None = None
+    retry_watchdog_max_wait_ms: int | None = Field(None, ge=1)
+    retry_watchdog_max_usage_limit_wait_ms: int | None = Field(None, ge=1)
+    retry_watchdog_usage_limit_recheck_ms: int | None = Field(None, ge=60000, le=10800000)
+    overloaded_retry_base_delay_ms: int | None = Field(None, ge=500, le=32000)
+    overloaded_retry_max_delay_ms: int | None = Field(None, ge=32000, le=64000)
     enable_streaming_text: bool | None = None  # Issue #1486 — opt-in streaming text rendering
     # Non-secret direct env passthrough (issue #1396)
     extra_env: dict[str, str] | None = None

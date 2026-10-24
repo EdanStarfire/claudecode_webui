@@ -128,6 +128,12 @@ export const settingsIndex = [
   { section: 'edit-features', fieldKey: 'disable_file_mentions',        label: 'Disable @file Mentions' },
   { section: 'edit-features', fieldKey: 'disable_idle_compaction',      label: 'Disable Idle Compaction' },
   { section: 'edit-features', fieldKey: 'idle_compact_min_tokens',      label: 'Idle Compaction Min Tokens' },
+  { section: 'edit-features', fieldKey: 'retry_watchdog',               label: 'Unattended Runs: Retry Watchdog' },
+  { section: 'edit-features', fieldKey: 'retry_watchdog_max_wait_ms',   label: 'Retry Watchdog Max Wait' },
+  { section: 'edit-features', fieldKey: 'retry_watchdog_max_usage_limit_wait_ms', label: 'Retry Watchdog Max Usage-Limit Wait' },
+  { section: 'edit-features', fieldKey: 'retry_watchdog_usage_limit_recheck_ms',  label: 'Retry Watchdog Usage-Limit Recheck' },
+  { section: 'edit-features', fieldKey: 'overloaded_retry_base_delay_ms', label: 'Overloaded Retry Base Delay' },
+  { section: 'edit-features', fieldKey: 'overloaded_retry_max_delay_ms',  label: 'Overloaded Retry Max Delay' },
 
   // System Prompt section
   { section: 'edit-system-prompt', fieldKey: 'system_prompt',          label: 'System Prompt' },

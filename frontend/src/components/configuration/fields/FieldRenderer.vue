@@ -96,6 +96,9 @@
         :placeholder="field.placeholder || ''"
         :monospace="field.monospace || false"
         :numeric="field.numeric || false"
+        :min="field.min"
+        :max="field.max"
+        :unit="field.unit || ''"
         @update:value="$emit('update:value', $event)"
       />
 

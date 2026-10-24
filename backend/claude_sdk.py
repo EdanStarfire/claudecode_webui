@@ -71,6 +71,16 @@ except ImportError:
     TaskNotificationMessage = None
     TextBlock = None
 
+# Issue #2287 (stage B): opt-in integer env vars (config_attr, env_var); emitted as str(int)
+# only when the config value is not None. Not background-call suppressions.
+_RETRY_INT_ENV_MAP: tuple[tuple[str, str], ...] = (
+    ("retry_watchdog_max_wait_ms", "CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS"),
+    ("retry_watchdog_max_usage_limit_wait_ms", "CLAUDE_CODE_RETRY_WATCHDOG_MAX_USAGE_LIMIT_WAIT_MS"),
+    ("retry_watchdog_usage_limit_recheck_ms", "CLAUDE_CODE_RETRY_WATCHDOG_USAGE_LIMIT_RECHECK_MS"),
+    ("overloaded_retry_base_delay_ms", "CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS"),
+    ("overloaded_retry_max_delay_ms", "CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS"),
+)
+
 # Issue #1126: Mapping from BackgroundCallsConfig fields to SDK env vars.
 # Each entry: config_attr -> (env_var_name, value_when_true)
 _BACKGROUND_CALL_ENV_MAP: dict[str, tuple[str, str]] = {
@@ -331,6 +341,13 @@ class ClaudeSDK:
         self.disable_file_mentions = config.disable_file_mentions if config else None
         self.disable_idle_compaction = config.disable_idle_compaction if config else None
         self.idle_compact_min_tokens = config.idle_compact_min_tokens if config else None
+        # Issue #2287 (stage B): unattended-run retry options
+        self.retry_watchdog = config.retry_watchdog if config else None
+        self.retry_watchdog_max_wait_ms = config.retry_watchdog_max_wait_ms if config else None
+        self.retry_watchdog_max_usage_limit_wait_ms = config.retry_watchdog_max_usage_limit_wait_ms if config else None
+        self.retry_watchdog_usage_limit_recheck_ms = config.retry_watchdog_usage_limit_recheck_ms if config else None
+        self.overloaded_retry_base_delay_ms = config.overloaded_retry_base_delay_ms if config else None
+        self.overloaded_retry_max_delay_ms = config.overloaded_retry_max_delay_ms if config else None
         # Issue #1779: automatic timestamp injection into user messages
         self.inject_timestamps_enabled = config.inject_timestamps_enabled
         self.timestamp_injection_frequency = config.timestamp_injection_frequency
@@ -1364,6 +1381,9 @@ class ClaudeSDK:
         (defers to the CLI's own gating), "on"/"off" force both to "true"/"false" so the
         combined gate is overridden uniformly regardless of model family.
 
+        Issue #2287 (stage B): CLAUDE_CODE_RETRY_WATCHDOG and the retry/overloaded-delay
+        integer vars (_RETRY_INT_ENV_MAP) are likewise opt-in.
+
         Issue #2287: CLAUDE_CODE_DISABLE_WEB_FETCH, CLAUDE_CODE_DISABLE_FILE_MENTIONS and
         CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS are opt-in — emitted only when the matching
         field is set/True. (idleCompaction goes through the --settings payload, not env.)
@@ -1443,6 +1463,14 @@ class ClaudeSDK:
             env_vars["CLAUDE_CODE_DISABLE_FILE_MENTIONS"] = "1"
         if self.idle_compact_min_tokens is not None:
             env_vars["CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS"] = str(self.idle_compact_min_tokens)
+        # Issue #2287 (stage B): retry watchdog is the master switch for the three
+        # watchdog tunables; the overloaded-retry delays are independent of it.
+        if self.retry_watchdog:
+            env_vars["CLAUDE_CODE_RETRY_WATCHDOG"] = "1"
+        for _attr, _var in _RETRY_INT_ENV_MAP:
+            _val = getattr(self, _attr)
+            if _val is not None:
+                env_vars[_var] = str(_val)
 
         # Issue #1672: Route Claude Code self-spawns through a corporate launcher wrapper
         if self.process_wrapper:

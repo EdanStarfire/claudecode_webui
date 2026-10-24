@@ -118,3 +118,82 @@ class TestCascadeAndBounds:
         with pytest.raises(ValidationError):
             TemplateUpdateRequest(idle_compact_min_tokens=0)
         assert SessionConfig(idle_compact_min_tokens=1).idle_compact_min_tokens == 1
+
+
+# ---- Stage B: unattended-run retry options ----
+
+RETRY_FIELDS = (
+    "retry_watchdog",
+    "retry_watchdog_max_wait_ms",
+    "retry_watchdog_max_usage_limit_wait_ms",
+    "retry_watchdog_usage_limit_recheck_ms",
+    "overloaded_retry_base_delay_ms",
+    "overloaded_retry_max_delay_ms",
+)
+RETRY_ENV = {
+    "retry_watchdog_max_wait_ms": ("CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS", 90000),
+    "retry_watchdog_max_usage_limit_wait_ms": (
+        "CLAUDE_CODE_RETRY_WATCHDOG_MAX_USAGE_LIMIT_WAIT_MS", 3600000),
+    "retry_watchdog_usage_limit_recheck_ms": (
+        "CLAUDE_CODE_RETRY_WATCHDOG_USAGE_LIMIT_RECHECK_MS", 120000),
+    "overloaded_retry_base_delay_ms": ("CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS", 1000),
+    "overloaded_retry_max_delay_ms": ("CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS", 40000),
+}
+
+
+class TestRetryEnvEmission:
+    def test_watchdog_master_switch(self):
+        assert _env(_sdk(SessionConfig(retry_watchdog=True)))["CLAUDE_CODE_RETRY_WATCHDOG"] == "1"
+        for val in (False, None):
+            assert "CLAUDE_CODE_RETRY_WATCHDOG" not in _env(
+                _sdk(SessionConfig(retry_watchdog=val)))
+
+    @pytest.mark.parametrize("field", list(RETRY_ENV))
+    def test_int_env(self, field):
+        name, val = RETRY_ENV[field]
+        assert _env(_sdk(SessionConfig(**{field: val})))[name] == str(val)
+        assert name not in _env(_sdk(SessionConfig()))
+
+    def test_tunables_emitted_independent_of_master_switch(self):
+        # The CLI ignores the watchdog tunables without the master switch, but we emit
+        # exactly what is configured (the UI hides them unless the switch is on).
+        env = _env(_sdk(SessionConfig(overloaded_retry_base_delay_ms=1000)))
+        assert env["CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS"] == "1000"
+        assert "CLAUDE_CODE_RETRY_WATCHDOG" not in env
+
+    def test_extra_env_wins(self):
+        sdk = _sdk(
+            SessionConfig(retry_watchdog=True, overloaded_retry_max_delay_ms=40000),
+            extra_env={"CLAUDE_CODE_RETRY_WATCHDOG": "0",
+                       "CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS": "50000"},
+        )
+        env = _env(sdk)
+        assert env["CLAUDE_CODE_RETRY_WATCHDOG"] == "0"
+        assert env["CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS"] == "50000"
+
+
+class TestRetryCascadeAndBounds:
+    def test_fields_registered(self):
+        for f in RETRY_FIELDS:
+            assert f in CONFIG_FIELDS
+            assert f in PROFILE_AREAS["features"]
+            assert FIELD_TO_AREA[f] == "features"
+
+    @pytest.mark.parametrize(
+        "field,bad,good",
+        [
+            ("retry_watchdog_max_wait_ms", 0, 1),
+            ("retry_watchdog_max_usage_limit_wait_ms", 0, 1),
+            ("retry_watchdog_usage_limit_recheck_ms", 59999, 60000),
+            ("retry_watchdog_usage_limit_recheck_ms", 10800001, 10800000),
+            ("overloaded_retry_base_delay_ms", 100, 500),
+            ("overloaded_retry_base_delay_ms", 32001, 32000),
+            ("overloaded_retry_max_delay_ms", 31999, 32000),
+            ("overloaded_retry_max_delay_ms", 64001, 64000),
+        ],
+    )
+    def test_bounds(self, field, bad, good):
+        for model in (SessionConfig, TemplateUpdateRequest):
+            with pytest.raises(ValidationError):
+                model(**{field: bad})
+            assert getattr(model(**{field: good}), field) == good
