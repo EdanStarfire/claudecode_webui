@@ -113,6 +113,12 @@ def build_router(webui) -> APIRouter:
             disable_file_mentions=request.disable_file_mentions,
             disable_idle_compaction=request.disable_idle_compaction,
             idle_compact_min_tokens=request.idle_compact_min_tokens,
+            retry_watchdog=request.retry_watchdog,
+            retry_watchdog_max_wait_ms=request.retry_watchdog_max_wait_ms,
+            retry_watchdog_max_usage_limit_wait_ms=request.retry_watchdog_max_usage_limit_wait_ms,
+            retry_watchdog_usage_limit_recheck_ms=request.retry_watchdog_usage_limit_recheck_ms,
+            overloaded_retry_base_delay_ms=request.overloaded_retry_base_delay_ms,
+            overloaded_retry_max_delay_ms=request.overloaded_retry_max_delay_ms,
             enable_streaming_text=request.enable_streaming_text,
             # Non-secret direct env passthrough (issue #1396)
             extra_env=request.extra_env,

@@ -159,6 +159,16 @@ class SessionConfig(BaseModel):
     disable_idle_compaction: bool | None = None
     # CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS (CLI clamps to >= 100000)
     idle_compact_min_tokens: int | None = Field(default=None, ge=1)
+    # Issue #2287 (stage B): unattended-run retry options. Bounds mirror the CLI's accepted
+    # ranges (CLI 2.1.309). None/False = nothing emitted.
+    retry_watchdog: bool | None = None  # CLAUDE_CODE_RETRY_WATCHDOG=1 (master switch)
+    retry_watchdog_max_wait_ms: int | None = Field(default=None, ge=1)
+    retry_watchdog_max_usage_limit_wait_ms: int | None = Field(default=None, ge=1)
+    retry_watchdog_usage_limit_recheck_ms: int | None = Field(
+        default=None, ge=60000, le=10800000
+    )
+    overloaded_retry_base_delay_ms: int | None = Field(default=None, ge=500, le=32000)
+    overloaded_retry_max_delay_ms: int | None = Field(default=None, ge=32000, le=64000)
 
     # Non-secret direct env passthrough (issue #1396)
     # Plain key=value pairs emitted as -e flags by claude-docker BEFORE delivery_envs,
@@ -217,6 +227,9 @@ CONFIG_FIELDS: set[str] = {
     "bare_mode", "env_scrub_enabled", "recording_enabled", "max_subagent_spawn_depth", "extra_env",
     "disable_web_fetch", "disable_file_mentions", "disable_idle_compaction",
     "idle_compact_min_tokens",
+    "retry_watchdog", "retry_watchdog_max_wait_ms", "retry_watchdog_max_usage_limit_wait_ms",
+    "retry_watchdog_usage_limit_recheck_ms", "overloaded_retry_base_delay_ms",
+    "overloaded_retry_max_delay_ms",
     "provider_catalog_id", "provider_model_id",
     "provider_haiku_catalog_id", "provider_haiku_model_id",
     "provider_sonnet_catalog_id", "provider_sonnet_model_id",
