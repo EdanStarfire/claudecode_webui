@@ -326,6 +326,11 @@ class ClaudeSDK:
         self.restricted_mode = config.restricted_mode if config else False
         self.env_scrub_enabled = config.env_scrub_enabled if config else False
         self.max_subagent_spawn_depth = config.max_subagent_spawn_depth if config else 1
+        # Issue #2287: opt-in CLI behavior options
+        self.disable_web_fetch = config.disable_web_fetch if config else None
+        self.disable_file_mentions = config.disable_file_mentions if config else None
+        self.disable_idle_compaction = config.disable_idle_compaction if config else None
+        self.idle_compact_min_tokens = config.idle_compact_min_tokens if config else None
         # Issue #1779: automatic timestamp injection into user messages
         self.inject_timestamps_enabled = config.inject_timestamps_enabled
         self.timestamp_injection_frequency = config.timestamp_injection_frequency
@@ -1193,6 +1198,9 @@ class ClaudeSDK:
         if self.auto_memory_directory and self.auto_memory_mode in ("claude", "session"):
             settings_payload["autoMemoryDirectory"] = self.auto_memory_directory
             sdk_logger.info(f"Auto-memory directory for session {self.session_id}: {self.auto_memory_directory}")
+        if self.disable_idle_compaction:
+            # Issue #2287: kill switch only — the CLI never treats true as "enable".
+            settings_payload["idleCompaction"] = False
         auto_mode_block = self._build_auto_mode_block()
         if auto_mode_block:
             settings_payload["autoMode"] = auto_mode_block
@@ -1356,6 +1364,10 @@ class ClaudeSDK:
         (defers to the CLI's own gating), "on"/"off" force both to "true"/"false" so the
         combined gate is overridden uniformly regardless of model family.
 
+        Issue #2287: CLAUDE_CODE_DISABLE_WEB_FETCH, CLAUDE_CODE_DISABLE_FILE_MENTIONS and
+        CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS are opt-in — emitted only when the matching
+        field is set/True. (idleCompaction goes through the --settings payload, not env.)
+
         Issue #2285: CLAUDE_CODE_AUTO_MODE_MODEL (client-side Auto Mode classifier model) is
         opt-in — emitted only when auto_mode_classifier_model is set.
         """
@@ -1423,6 +1435,14 @@ class ClaudeSDK:
         # Issue #1669: always-set (not opt-in) — WebUI default (1) diverges from CC's
         # own CLI default (3), so omitting the var when unset would silently pick up 3.
         env_vars["CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"] = str(self.max_subagent_spawn_depth)
+
+        # Issue #2287: opt-in CLI behavior options — emitted only when set; extra_env wins.
+        if self.disable_web_fetch:
+            env_vars["CLAUDE_CODE_DISABLE_WEB_FETCH"] = "1"
+        if self.disable_file_mentions:
+            env_vars["CLAUDE_CODE_DISABLE_FILE_MENTIONS"] = "1"
+        if self.idle_compact_min_tokens is not None:
+            env_vars["CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS"] = str(self.idle_compact_min_tokens)
 
         # Issue #1672: Route Claude Code self-spawns through a corporate launcher wrapper
         if self.process_wrapper:

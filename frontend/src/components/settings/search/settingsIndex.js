@@ -124,6 +124,10 @@ export const settingsIndex = [
   { section: 'edit-features', fieldKey: 'auto_memory_directory',        label: 'Memory Directory' },
   { section: 'edit-features', fieldKey: 'task_tools_mode',              label: 'Task Tracking Tools' },
   { section: 'edit-features', fieldKey: 'skill_creating_enabled',       label: 'Skill Creating' },
+  { section: 'edit-features', fieldKey: 'disable_web_fetch',            label: 'Disable WebFetch' },
+  { section: 'edit-features', fieldKey: 'disable_file_mentions',        label: 'Disable @file Mentions' },
+  { section: 'edit-features', fieldKey: 'disable_idle_compaction',      label: 'Disable Idle Compaction' },
+  { section: 'edit-features', fieldKey: 'idle_compact_min_tokens',      label: 'Idle Compaction Min Tokens' },
 
   // System Prompt section
   { section: 'edit-system-prompt', fieldKey: 'system_prompt',          label: 'System Prompt' },

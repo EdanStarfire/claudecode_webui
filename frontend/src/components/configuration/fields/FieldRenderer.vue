@@ -95,6 +95,7 @@
         :disabled="isDisabled"
         :placeholder="field.placeholder || ''"
         :monospace="field.monospace || false"
+        :numeric="field.numeric || false"
         @update:value="$emit('update:value', $event)"
       />
 

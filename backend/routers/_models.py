@@ -361,6 +361,11 @@ class TemplateUpdateRequest(BaseModel):
     recording_enabled: bool | None = None
     # Issue #1669: max depth for nested subagent spawning (WebUI default: 1)
     max_subagent_spawn_depth: int | None = Field(None, ge=1, le=3)
+    # Issue #2287: opt-in CLI behavior options
+    disable_web_fetch: bool | None = None
+    disable_file_mentions: bool | None = None
+    disable_idle_compaction: bool | None = None
+    idle_compact_min_tokens: int | None = Field(None, ge=1)
     enable_streaming_text: bool | None = None  # Issue #1486 — opt-in streaming text rendering
     # Non-secret direct env passthrough (issue #1396)
     extra_env: dict[str, str] | None = None

@@ -60,6 +60,8 @@ PROFILE_AREAS: dict[str, set[str]] = {
         "task_tools_mode",
         "skill_creating_enabled", "enable_streaming_text",
         "max_subagent_spawn_depth", "extra_env",
+        "disable_web_fetch", "disable_file_mentions", "disable_idle_compaction",
+        "idle_compact_min_tokens",
         "inject_timestamps_enabled", "timestamp_injection_frequency",
         "timestamp_injection_timezone",
     },
