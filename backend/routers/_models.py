@@ -585,6 +585,7 @@ class ProviderModelEntryRequest(BaseModel):
     id: str
     litellm_model: str
     drop_params: bool = False
+    context_window: int | None = None  # Issue #2288
 
     class Config:
         extra = "allow"

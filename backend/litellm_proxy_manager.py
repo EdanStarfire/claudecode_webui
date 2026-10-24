@@ -26,6 +26,29 @@ def make_model_alias(catalog_id: str, model_id: str) -> str:
     return f"{catalog_id}{MODEL_ALIAS_SEP}{model_id}"
 
 
+# Issue #2288: bounds of the Claude CLI's CLAUDE_CODE_AUTO_COMPACT_WINDOW (it clamps
+# below the minimum UP and above the maximum down, and only ever lowers the window).
+AUTO_COMPACT_WINDOW_MIN = 100_000
+AUTO_COMPACT_WINDOW_MAX = 1_000_000
+
+
+def compute_auto_compact_window(values: list[int | None]) -> int | None:
+    """Issue #2288: pick the CLAUDE_CODE_AUTO_COMPACT_WINDOW value for known context windows.
+
+    Takes the minimum over known values, then emits it only when
+    AUTO_COMPACT_WINDOW_MIN <= v < AUTO_COMPACT_WINDOW_MAX. Below the minimum the CLI
+    would clamp UP (overflowing the model), so nothing is emitted; at/above the maximum
+    the CLI default already suffices. Never clamps.
+    """
+    known = [v for v in values if v is not None]
+    if not known:
+        return None
+    v = min(known)
+    if AUTO_COMPACT_WINDOW_MIN <= v < AUTO_COMPACT_WINDOW_MAX:
+        return v
+    return None
+
+
 class LiteLLMProxyManager:
     """
     Lifecycle manager for the embedded LiteLLM ASGI proxy.
@@ -247,6 +270,27 @@ class LiteLLMProxyManager:
             for model in entry.get("models", [])
         }
 
+    async def get_model_context_window(self, alias: str) -> int | None:
+        """Issue #2288: max input tokens for a catalog alias.
+
+        Catalog `context_window` first, then LiteLLM's `max_input_tokens` for the
+        model; None when neither is known (e.g. unmapped local/custom models).
+        """
+        entries = await self._catalog_manager.list_entries()
+        for entry in entries:
+            for model in entry.get("models", []):
+                if make_model_alias(entry["id"], model["id"]) != alias:
+                    continue
+                if model.get("context_window"):
+                    return int(model["context_window"])
+                try:
+                    import litellm
+                    value = litellm.get_model_info(model["litellm_model"]).get("max_input_tokens")
+                    return int(value) if value else None
+                except Exception:
+                    return None
+        return None
+
     async def _build_model_list(self) -> list[dict]:
         """Resolve catalog entries + secrets into LiteLLM model_list format."""
         entries = await self._catalog_manager.list_entries()
@@ -255,14 +299,17 @@ class LiteLLMProxyManager:
             resolved_params = await self._catalog_manager.resolve_params(entry, self._vault)
             for model in entry.get("models", []):
                 model_name = make_model_alias(entry['id'], model['id'])
-                model_list.append({
+                item = {
                     "model_name": model_name,
                     "litellm_params": {
                         "model": model["litellm_model"],
                         "drop_params": model.get("drop_params", False),
                         **resolved_params,
                     },
-                })
+                }
+                if model.get("context_window"):
+                    item["model_info"] = {"max_input_tokens": model["context_window"]}
+                model_list.append(item)
         self._model_count = len(model_list)
         return model_list
 

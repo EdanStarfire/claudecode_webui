@@ -43,7 +43,12 @@ from .config_resolution import resolve_effective_config
 from .data_storage import DataStorageManager
 from .distillation_trigger import schedule_history_distillation
 from .hooks.pretooluse_handler import InternalPermissionHandler
-from .litellm_proxy_manager import MODEL_ALIAS_SEP, make_model_alias
+from .litellm_proxy_manager import (
+    AUTO_COMPACT_WINDOW_MIN,
+    MODEL_ALIAS_SEP,
+    compute_auto_compact_window,
+    make_model_alias,
+)
 from .mcp_config_manager import McpServerType
 from .oauth_refresh_manager import OAuthRefreshManager
 from .session_manager import SessionState
@@ -89,6 +94,29 @@ async def _vet_classifier_model(config, proxy_mgr, litellm_routed: bool, session
         "alias but the session is not routed through LiteLLM; ignoring it."
     )
     return config.model_copy(update={"auto_mode_classifier_model": None}), []
+
+
+async def _resolve_auto_compact_window(proxy_mgr, aliases: list[str], session_id: str) -> int | None:
+    """Issue #2288: CLAUDE_CODE_AUTO_COMPACT_WINDOW value for a LiteLLM-routed session.
+
+    One CLI window covers every tier model, so the minimum known context window wins.
+    """
+    windows = {a: await proxy_mgr.get_model_context_window(a) for a in aliases}
+    known = {a: w for a, w in windows.items() if w is not None}
+    result = compute_auto_compact_window(list(known.values()))
+    if result is None and known:
+        smallest_alias, smallest = min(known.items(), key=lambda kv: kv[1])
+        if smallest < AUTO_COMPACT_WINDOW_MIN:
+            coord_logger.warning(
+                f"Session {session_id}: model '{smallest_alias}' context window {smallest} is "
+                f"below the CLI's {AUTO_COMPACT_WINDOW_MIN} auto-compact minimum; not setting "
+                "CLAUDE_CODE_AUTO_COMPACT_WINDOW (it would be clamped up)."
+            )
+    elif result is not None:
+        coord_logger.info(
+            f"Session {session_id}: CLAUDE_CODE_AUTO_COMPACT_WINDOW={result} from {known}"
+        )
+    return result
 
 
 @dataclass
@@ -940,6 +968,11 @@ class SessionLauncher:
                 effective_config, _proxy_mgr, litellm_routed, session_id
             )
 
+            # Issue #2288: user extra_env always wins over the derived window.
+            _wants_compact_window = litellm_routed and (
+                "CLAUDE_CODE_AUTO_COMPACT_WINDOW" not in (effective_config.extra_env or {})
+            )
+
             if litellm_routed:
                 if not _proxy_mgr.is_running:
                     # Issue #2183: the proxy manager object existing doesn't mean the
@@ -989,6 +1022,17 @@ class SessionLauncher:
                     # _merged_extra_env only reaches the wrapper process, not the container.
                     _extra = json.loads(docker_env_vars.get("CLAUDE_DOCKER_EXTRA_ENV", "{}"))
                     _extra["CLAUDE_CODE_ATTRIBUTION_HEADER"] = "0"
+                    if _wants_compact_window:
+                        _aliases = (
+                            list(dict.fromkeys(
+                                v for k, v in model_map.items() if k != "default"
+                            )) or [default_alias]
+                        )
+                        _win = await _resolve_auto_compact_window(
+                            _proxy_mgr, _aliases, session_id
+                        )
+                        if _win is not None:
+                            _extra["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(_win)
                     docker_env_vars["CLAUDE_DOCKER_EXTRA_ENV"] = json.dumps(_extra)
                 else:
                     # Non-Docker: tier breakout not available; single-model alias override only
@@ -1010,6 +1054,12 @@ class SessionLauncher:
                         "ANTHROPIC_API_KEY": virtual_key,
                         "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
                     }
+                    if _wants_compact_window:
+                        _win = await _resolve_auto_compact_window(
+                            _proxy_mgr, [model_alias], session_id
+                        )
+                        if _win is not None:
+                            litellm_env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(_win)
 
             # Override fields computed earlier in this method:
             #   system_prompt   — assembled above (includes legion guide, history ref, etc.)
