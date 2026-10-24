@@ -170,6 +170,19 @@
                 <div v-if="modelFormErrors.litellm_model" class="field-error">{{ modelFormErrors.litellm_model }}</div>
               </div>
             </div>
+            <div class="form-field">
+              <label class="field-label">Context window (tokens)</label>
+              <input
+                v-model="modelForm.context_window"
+                type="number"
+                min="1000"
+                class="field-input font-monospace"
+                placeholder="optional, e.g. 200000"
+                :class="{ 'is-invalid': modelFormErrors.context_window }"
+              />
+              <div v-if="modelFormErrors.context_window" class="field-error">{{ modelFormErrors.context_window }}</div>
+              <div class="field-hint">Optional. Sets auto-compact against this window for LiteLLM sessions (overrides LiteLLM's reported value). Below 100000 cannot be enforced by the CLI, so nothing is applied; 1000000 or more opts the model out of the cap. Tier sessions use the smallest window.</div>
+            </div>
             <div class="form-check mt-1">
               <input type="checkbox" v-model="modelForm.drop_params" class="form-check-input" id="model-drop-params-check" />
               <label class="form-check-label" for="model-drop-params-check">Drop Params</label>
@@ -202,6 +215,7 @@
             <span class="model-name">{{ model.id }}</span>
             <span class="model-litellm font-monospace">{{ model.litellm_model }}</span>
             <span v-if="model.drop_params" class="badge bg-secondary ms-1">drop_params</span>
+            <span v-if="model.context_window" class="badge bg-secondary ms-1">{{ model.context_window }} ctx</span>
             <div class="row-actions">
               <button
                 class="row-action-btn"
@@ -239,6 +253,19 @@
               />
               <div v-if="modelFormErrors.litellm_model" class="field-error">{{ modelFormErrors.litellm_model }}</div>
             </div>
+          </div>
+          <div class="form-field">
+            <label class="field-label">Context window (tokens)</label>
+            <input
+              v-model="modelForm.context_window"
+              type="number"
+              min="1000"
+              class="field-input font-monospace"
+              placeholder="optional, e.g. 200000"
+              :class="{ 'is-invalid': modelFormErrors.context_window }"
+            />
+            <div v-if="modelFormErrors.context_window" class="field-error">{{ modelFormErrors.context_window }}</div>
+            <div class="field-hint">Optional. Sets auto-compact against this window for LiteLLM sessions (overrides LiteLLM's reported value). Below 100000 cannot be enforced by the CLI, so nothing is applied; 1000000 or more opts the model out of the cap. Tier sessions use the smallest window.</div>
           </div>
           <div class="form-field form-field--check">
             <label class="check-label">
@@ -314,8 +341,8 @@ const editProviderFormErrors = reactive({ provider_type: '' })
 const editProviderFormError = ref(null)
 
 // ── Model form (shared add/edit) ──────────────────────────────────────────
-const modelForm = reactive({ id: '', litellm_model: '', drop_params: false })
-const modelFormErrors = reactive({ id: '', litellm_model: '' })
+const modelForm = reactive({ id: '', litellm_model: '', drop_params: false, context_window: '' })
+const modelFormErrors = reactive({ id: '', litellm_model: '', context_window: '' })
 const modelFormError = ref(null)
 
 // ── Provider type helpers ─────────────────────────────────────────────────
@@ -365,10 +392,26 @@ function validateProvider(form, selection, errors, isAdd) {
   return ok
 }
 
+// Issue #2288: optional context window -> {context_window: int} or {}
+function contextWindowField() {
+  const cw = modelForm.context_window
+  return cw === '' || cw === null || cw === undefined ? {} : { context_window: Number(cw) }
+}
+
 function validateModel(form, errors, existingIds, isAdd) {
   let ok = true
   errors.id = ''
   errors.litellm_model = ''
+  errors.context_window = ''
+
+  const cw = form.context_window
+  if (cw !== '' && cw !== null && cw !== undefined) {
+    const n = Number(cw)
+    if (!Number.isInteger(n) || n < 1000) {
+      errors.context_window = 'Must be a whole number of tokens, at least 1000.'
+      ok = false
+    }
+  }
 
   if (isAdd) {
     if (!form.id.trim()) {
@@ -473,8 +516,8 @@ async function executeDeleteProvider(entryId) {
 // ── Add Model ─────────────────────────────────────────────────────────────
 function startAddModel(providerId) {
   closeAllForms()
-  Object.assign(modelForm, { id: '', litellm_model: '', drop_params: false })
-  Object.assign(modelFormErrors, { id: '', litellm_model: '' })
+  Object.assign(modelForm, { id: '', litellm_model: '', drop_params: false, context_window: '' })
+  Object.assign(modelFormErrors, { id: '', litellm_model: '', context_window: '' })
   modelFormError.value = null
   addingModelForProvider.value = providerId
 }
@@ -489,6 +532,7 @@ async function saveNewModel(entry) {
       id: modelForm.id.trim(),
       litellm_model: modelForm.litellm_model.trim(),
       drop_params: modelForm.drop_params,
+      ...contextWindowField(),
     }
     await store.updateEntry(entry.id, entryPayload(entry, { models: [...entry.models, newModel] }))
     addingModelForProvider.value = null
@@ -502,8 +546,8 @@ async function saveNewModel(entry) {
 // ── Edit Model ────────────────────────────────────────────────────────────
 function startEditModel(providerId, idx, model) {
   closeAllForms()
-  Object.assign(modelForm, { id: model.id, litellm_model: model.litellm_model, drop_params: model.drop_params ?? false })
-  Object.assign(modelFormErrors, { id: '', litellm_model: '' })
+  Object.assign(modelForm, { id: model.id, litellm_model: model.litellm_model, drop_params: model.drop_params ?? false, context_window: model.context_window ?? '' })
+  Object.assign(modelFormErrors, { id: '', litellm_model: '', context_window: '' })
   modelFormError.value = null
   editingModelKey.value = { providerId, idx }
 }
@@ -520,7 +564,7 @@ async function saveEditModel(entry) {
     const { idx } = editingModelKey.value
     const updatedModels = entry.models.map((m, i) =>
       i === idx
-        ? { ...m, litellm_model: modelForm.litellm_model.trim(), drop_params: modelForm.drop_params }
+        ? { ...m, litellm_model: modelForm.litellm_model.trim(), drop_params: modelForm.drop_params, context_window: contextWindowField().context_window ?? null }
         : m
     )
     await store.updateEntry(entry.id, entryPayload(entry, { models: updatedModels }))

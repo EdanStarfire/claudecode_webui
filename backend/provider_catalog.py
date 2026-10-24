@@ -32,6 +32,8 @@ class CatalogModelEntry:
     id: str
     litellm_model: str  # e.g. "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"
     drop_params: bool = False
+    # Issue #2288: optional max input context (tokens); overrides LiteLLM's reported value.
+    context_window: int | None = None
 
     @classmethod
     def from_dict(cls, data: dict) -> CatalogModelEntry:
@@ -39,14 +41,18 @@ class CatalogModelEntry:
             id=data["id"],
             litellm_model=data["litellm_model"],
             drop_params=data.get("drop_params", False),
+            context_window=data.get("context_window"),
         )
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "id": self.id,
             "litellm_model": self.litellm_model,
             "drop_params": self.drop_params,
         }
+        if self.context_window is not None:
+            d["context_window"] = self.context_window
+        return d
 
 
 @dataclass
@@ -250,6 +256,12 @@ class ProviderCatalogManager:
         model_ids = [m["id"] for m in entry_data.get("models", [])]
         if len(model_ids) != len(set(model_ids)):
             raise ValueError("Duplicate model ids within entry")
+        for m in entry_data.get("models", []):
+            cw = m.get("context_window")
+            if cw is not None and (isinstance(cw, bool) or not isinstance(cw, int) or cw < 1000):
+                raise ValueError(
+                    f"Model '{m['id']}': context_window must be an integer >= 1000 (tokens)"
+                )
 
 
 def _dict_to_entry(data: dict) -> ProviderCatalogEntry:

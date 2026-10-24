@@ -18,6 +18,7 @@ def _make_proxy_manager(port: int = 4000) -> MagicMock:
     mgr.is_running = True
     mgr.register_session_key.return_value = "lc-test-virtual-key"
     mgr.register_session_routing = MagicMock()
+    mgr.get_model_context_window = AsyncMock(return_value=None)  # issue #2288
     mgr.unregister_session_key = MagicMock()
     mgr.unregister_session_routing = MagicMock()
     return mgr

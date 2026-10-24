@@ -227,6 +227,22 @@ Stage A (verified against CLI 2.1.309 / SDK 0.2.173):
 Pydantic bounds mirror the CLI's accepted ranges; re-audit them when upgrading the SDK. Cascade-style
 opt-in vars like these do not belong in `_BACKGROUND_CALL_ENV_MAP`.
 
+## Auto-Compact Window for LiteLLM Sessions (issue #2288)
+
+On LiteLLM-routed sessions the CLI assumes a 1M window for unknown `catalog--model` aliases, so
+auto-compaction can fire too late for 128k–200k models. The launcher
+(`session_launcher._resolve_auto_compact_window`) derives `CLAUDE_CODE_AUTO_COMPACT_WINDOW` per
+model: catalog model `context_window` (optional, tokens, >= 1000) first, else LiteLLM's
+`get_model_info(...)["max_input_tokens"]` (unmapped local/custom models yield nothing). Tier
+sessions use the **minimum** known value across the three tier models (one CLI window per
+session); non-Docker tier fallback uses the default tier only. Emission rule on that minimum `v`:
+`100000 <= v < 1000000` emits the integer; `v < 100000` emits nothing and logs a warning (the CLI
+clamps UP to 100k, which would overflow the model — never clamp up); `v >= 1000000` or unknown
+emits nothing (set `context_window` >= 1000000 to opt a model out of a LiteLLM-reported cap). The
+env var only lowers the CLI window. User `extra_env` always wins; non-LiteLLM sessions are
+untouched. Docker sessions receive it via `CLAUDE_DOCKER_EXTRA_ENV`. Manual workaround:
+`extra_env CLAUDE_CODE_AUTO_COMPACT_WINDOW=200k` or `/autocompact 200k`.
+
 ## Verifying Configuration
 
 The injected env dict is logged at debug level by `claude_sdk.py` when `--debug-sdk` is enabled.
