@@ -1130,6 +1130,7 @@ class TestIssue1884AutoModeResolution:
             "auto_mode_soft_deny",
             "auto_mode_hard_deny",
             "auto_mode_classify_all_shell",
+            "auto_mode_classifier_model",
         ):
             assert FIELD_TO_AREA.get(field_name) == "permissions"
             assert field_name in PROFILE_AREAS["permissions"]
@@ -1141,6 +1142,7 @@ class TestIssue1884AutoModeResolution:
             "auto_mode_allow": ["$defaults"],
             "auto_mode_hard_deny": ["$defaults", "Never modify prod database credentials"],
             "auto_mode_classify_all_shell": False,
+            "auto_mode_classifier_model": "cat--m1",
         })
         pm = _make_profile_manager([profile])
         template = _make_template(profile_ids={"permissions": profile.profile_id})
@@ -1153,6 +1155,7 @@ class TestIssue1884AutoModeResolution:
         assert result.auto_mode_allow == ["$defaults"]
         assert result.auto_mode_hard_deny == ["$defaults", "Never modify prod database credentials"]
         assert result.auto_mode_classify_all_shell is False
+        assert result.auto_mode_classifier_model == "cat--m1"
 
     async def test_template_overrides_profile(self):
         """Template config value wins over profile value, per field (not per-block)."""

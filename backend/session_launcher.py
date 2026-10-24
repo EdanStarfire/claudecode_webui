@@ -43,7 +43,7 @@ from .config_resolution import resolve_effective_config
 from .data_storage import DataStorageManager
 from .distillation_trigger import schedule_history_distillation
 from .hooks.pretooluse_handler import InternalPermissionHandler
-from .litellm_proxy_manager import make_model_alias
+from .litellm_proxy_manager import MODEL_ALIAS_SEP, make_model_alias
 from .mcp_config_manager import McpServerType
 from .oauth_refresh_manager import OAuthRefreshManager
 from .session_manager import SessionState
@@ -67,6 +67,28 @@ _SECRET_REF_RE = re.compile(r"\$\{secret:([^}]+)\}")
 # can't stall session start, but a still-in-flight open isn't cancelled and may
 # still succeed in time for the session's first tool call.
 STARTUP_ATTACH_TIMEOUT_SECONDS = 8.0
+
+
+async def _vet_classifier_model(config, proxy_mgr, litellm_routed: bool, session_id: str):
+    """Issue #2285: validate auto_mode_classifier_model against LiteLLM routing.
+
+    A LiteLLM catalog alias ("{catalog}--{model}") is only routable on a LiteLLM-routed
+    session; elsewhere it would be sent to api.anthropic.com, so it is dropped with a
+    warning. Returns (config, passthrough_aliases) where passthrough_aliases lists aliases
+    the Docker proxy addon must not rewrite.
+    """
+    model = config.auto_mode_classifier_model
+    if not model or MODEL_ALIAS_SEP not in model or proxy_mgr is None:
+        return config, []
+    if model not in await proxy_mgr.list_model_aliases():
+        return config, []
+    if litellm_routed:
+        return config, [model]
+    coord_logger.warning(
+        f"Session {session_id}: auto_mode_classifier_model '{model}' is a LiteLLM catalog "
+        "alias but the session is not routed through LiteLLM; ignoring it."
+    )
+    return config.model_copy(update={"auto_mode_classifier_model": None}), []
 
 
 @dataclass
@@ -909,7 +931,16 @@ class SessionLauncher:
                 effective_config.provider_catalog_id and effective_config.provider_model_id
             )
 
-            if (tier_active or single_active) and _proxy_mgr is not None:
+            litellm_routed = (tier_active or single_active) and _proxy_mgr is not None
+
+            # Issue #2285: a LiteLLM catalog alias used as the Auto Mode classifier model is
+            # only routable on a LiteLLM-routed session; elsewhere it would be sent to
+            # api.anthropic.com. Drop it (with a warning) instead of emitting it.
+            effective_config, classifier_passthrough = await _vet_classifier_model(
+                effective_config, _proxy_mgr, litellm_routed, session_id
+            )
+
+            if litellm_routed:
                 if not _proxy_mgr.is_running:
                     # Issue #2183: the proxy manager object existing doesn't mean the
                     # proxy actually booted — without this guard, a catalog session
@@ -950,6 +981,7 @@ class SessionLauncher:
                     _proxy_mgr.register_session_routing(
                         session_id, virtual_key, base_url,
                         model_map=model_map, default_model=default_alias,
+                        passthrough_models=classifier_passthrough,
                     )
                     # Inject CLAUDE_CODE_ATTRIBUTION_HEADER=0 into the agent container so
                     # the billing header doesn't cache-bust 3rd-party / local LLM APIs.

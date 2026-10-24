@@ -354,3 +354,21 @@ async def test_issue_1469_request_hook_skips_denied_flow():
     await addon.request(f)
     body = json.loads(f.request.content)
     assert body["model"] == "claude-opus-4-7"
+
+
+def test_issue_2285_passthrough_model_not_rewritten():
+    """Aliases in passthrough_models (Auto Mode classifier) are left untouched."""
+    routing = {**ROUTING_WITH_TIERS, "passthrough_models": ["cat--classifier"]}
+    addon = _make_addon(routing=routing)
+    f = _flow(body_dict={"model": "cat--classifier"}, metadata={"routed_via_litellm": True})
+    addon._rewrite_model_in_body(f)
+    assert json.loads(f.request.content)["model"] == "cat--classifier"
+    assert "model_rewrite" not in f.metadata
+
+
+def test_issue_2285_other_models_still_rewritten_with_passthrough():
+    routing = {**ROUTING_WITH_TIERS, "passthrough_models": ["cat--classifier"]}
+    addon = _make_addon(routing=routing)
+    f = _flow(body_dict={"model": "claude-opus-4-7"}, metadata={"routed_via_litellm": True})
+    addon._rewrite_model_in_body(f)
+    assert json.loads(f.request.content)["model"] == "bedrock--opus-power"

@@ -730,6 +730,9 @@ class ProxyAddon:
         if not isinstance(body, dict) or "model" not in body:
             return
         original = body["model"]
+        # Issue #2285: aliases the session explicitly routes itself (Auto Mode classifier).
+        if original in (self._routing.get("passthrough_models") or []):
+            return
         model_map = self._routing.get("model_map") or {}
         if model_map:
             match = _TIER_REGEX.search(str(original))

@@ -177,17 +177,21 @@ class LiteLLMProxyManager:
         base_url: str,
         model_map: dict[str, str] | None = None,
         default_model: str | None = None,
+        passthrough_models: list[str] | None = None,
     ) -> None:
         """Store virtual key + base URL for a session (used by Docker delivery, Phase 3).
 
         model_map: optional tier→alias dict (issue #1469 per-tier routing).
         default_model: optional LiteLLM alias to rewrite unmatched body model fields.
+        passthrough_models: aliases the Docker addon must NOT rewrite (issue #2285, e.g. the
+        Auto Mode classifier model).
         """
         self._routing_registry[(self._backend_id, session_id)] = {
             "virtual_key": virtual_key,
             "base_url": base_url,
             "model_map": model_map or {},
             "default_model": default_model,
+            "passthrough_models": list(passthrough_models or []),
         }
 
     def unregister_session_routing(self, session_id: str) -> None:
@@ -233,6 +237,15 @@ class LiteLLMProxyManager:
             return True  # default-on; matches FeaturesConfig default
         from .config_manager import load_config
         return load_config(self._config_file).features.disable_openai_responses_count_tokens_api
+
+    async def list_model_aliases(self) -> set[str]:
+        """Return every catalog model alias ("{catalog}--{model}") currently defined."""
+        entries = await self._catalog_manager.list_entries()
+        return {
+            make_model_alias(entry["id"], model["id"])
+            for entry in entries
+            for model in entry.get("models", [])
+        }
 
     async def _build_model_list(self) -> list[dict]:
         """Resolve catalog entries + secrets into LiteLLM model_list format."""

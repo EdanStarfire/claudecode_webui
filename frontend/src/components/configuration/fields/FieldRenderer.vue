@@ -186,6 +186,14 @@
         @update:value="$emit('update:value', $event)"
       />
 
+      <ClassifierModelWidget
+        v-else-if="field.widget === 'classifier-model-select'"
+        :value="value"
+        :disabled="isDisabled"
+        :placeholder="field.placeholder || ''"
+        @update:value="$emit('update:value', $event)"
+      />
+
       <small v-if="field.description" class="field-description">
         <span v-html="field.description" />
       </small>
@@ -209,6 +217,7 @@ import KeyValueListWidget from './KeyValueListWidget.vue'
 import RuleListWidget from './RuleListWidget.vue'
 import ProviderSelectWidget from './ProviderSelectWidget.vue'
 import ProviderModelSelectWidget from './ProviderModelSelectWidget.vue'
+import ClassifierModelWidget from './ClassifierModelWidget.vue'
 import SourceMarker from '../../settings/SourceMarker.vue'
 
 const props = defineProps({

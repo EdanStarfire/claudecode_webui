@@ -321,3 +321,33 @@ class TestAutoModeServerClassifier:
         with patch("backend.config_manager.load_config", return_value=config):
             env = sdk._resolve_env_vars()
         assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0"
+
+
+class TestAutoModeClassifierModel:
+    """Issue #2285 — CLAUDE_CODE_AUTO_MODE_MODEL is opt-in, independent of the server toggle."""
+
+    def _env(self, model, server=True, extra_env=None):
+        sdk = _make_sdk(SessionConfig(auto_mode_classifier_model=model), extra_env=extra_env)
+        config = AppConfig(features=FeaturesConfig(auto_mode_server_classifier=server))
+        with patch("backend.config_manager.load_config", return_value=config):
+            return sdk._resolve_env_vars()
+
+    def test_set_emits_value(self):
+        assert self._env("claude-haiku-4-5")["CLAUDE_CODE_AUTO_MODE_MODEL"] == "claude-haiku-4-5"
+
+    def test_catalog_alias_emitted_verbatim(self):
+        assert self._env("cat--m1")["CLAUDE_CODE_AUTO_MODE_MODEL"] == "cat--m1"
+
+    def test_unset_and_empty_omitted(self):
+        assert "CLAUDE_CODE_AUTO_MODE_MODEL" not in self._env(None)
+        assert "CLAUDE_CODE_AUTO_MODE_MODEL" not in self._env("  ")
+
+    def test_independent_of_server_classifier(self):
+        for server, expected in ((True, "1"), (False, "0")):
+            env = self._env("m", server=server)
+            assert env["CLAUDE_CODE_AUTO_MODE_MODEL"] == "m"
+            assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == expected
+
+    def test_extra_env_overrides(self):
+        env = self._env("m", extra_env={"CLAUDE_CODE_AUTO_MODE_MODEL": "other"})
+        assert env["CLAUDE_CODE_AUTO_MODE_MODEL"] == "other"

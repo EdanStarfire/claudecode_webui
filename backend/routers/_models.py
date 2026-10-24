@@ -306,6 +306,7 @@ class TemplateUpdateRequest(BaseModel):
     auto_mode_soft_deny: list[str] | None = None
     auto_mode_hard_deny: list[str] | None = None
     auto_mode_classify_all_shell: bool | None = None
+    auto_mode_classifier_model: str | None = None
     role: str | None = None
     system_prompt: str | None = None
     description: str | None = None

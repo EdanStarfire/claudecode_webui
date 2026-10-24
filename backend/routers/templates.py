@@ -66,6 +66,7 @@ def build_router(webui) -> APIRouter:
             auto_mode_soft_deny=request.auto_mode_soft_deny,
             auto_mode_hard_deny=request.auto_mode_hard_deny,
             auto_mode_classify_all_shell=request.auto_mode_classify_all_shell,
+            auto_mode_classifier_model=request.auto_mode_classifier_model,
             role=request.role,
             system_prompt=request.system_prompt,
             description=request.description,
