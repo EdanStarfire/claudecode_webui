@@ -2314,6 +2314,21 @@ class LegionMCPTools:
         try:
             cleared = await coordinator.delivery_gate.wait_for_not_processing(session_id, timeout=30.0)
             if cleared:
+                # Issue #2293: coordinator.restart_session() now accepts TERMINATED, but a
+                # session ended/disposed during the wait must not be revived by a
+                # self-restart that was requested while it was ACTIVE. No continuation
+                # message: the session is dead. ERROR is still restarted (see docstring).
+                session_info = await coordinator.session_manager.get_session_info(session_id)
+                if not session_info:
+                    legion_logger.warning(f"Session {session_id} disappeared during restart monitor")
+                    return
+                if session_info.state == SessionState.TERMINATED:
+                    legion_logger.warning(
+                        f"Session {session_id} was terminated during restart wait; "
+                        f"skipping restart (restart_id={restart_id})"
+                    )
+                    return
+
                 # Session is idle (or errored-but-idle) — proceed with restart
                 permission_callback = None
                 if self.system.permission_callback_factory:

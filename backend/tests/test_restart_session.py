@@ -267,3 +267,29 @@ async def test_issue_2193_restart_attempted_when_session_errored_but_not_process
 
     coordinator.restart_session.assert_awaited_once()
     assert "session-1" not in mcp_tools._pending_restarts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "restarted"),
+    [
+        (SessionState.TERMINATED, False),
+        (SessionState.ACTIVE, True),
+        (SessionState.ERROR, True),
+    ],
+)
+async def test_issue_2293_monitor_does_not_revive_terminated(mcp_tools, state, restarted):
+    """Issue #2293: restart_session() accepts TERMINATED now, so the monitor must skip a
+    session that was ended during the idle wait (no restart, no continuation message)."""
+    coordinator = mcp_tools.system.session_port
+    info = _make_session_info(state=state, is_processing=False)
+    coordinator.session_manager.get_session_info = AsyncMock(return_value=info)
+    mcp_tools.system.permission_callback_factory = None
+    mcp_tools.system.ui_queue = None
+    mcp_tools._pending_restarts.add("session-1")
+
+    await mcp_tools._restart_monitor("session-1", "restart-2293", "r")
+
+    assert coordinator.restart_session.await_count == (1 if restarted else 0)
+    assert coordinator.enqueue_message.await_count == (1 if restarted else 0)
+    assert "session-1" not in mcp_tools._pending_restarts
