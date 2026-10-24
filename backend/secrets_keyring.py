@@ -22,12 +22,14 @@ _active_backend_name: str = "uninitialized"
 _backend_warning: str | None = None
 
 
-def configure_keyring(service_name: str = _SERVICE_NAME) -> str:
+def configure_keyring(home_dir: Path, service_name: str = _SERVICE_NAME) -> str:
     """Configure keyring backend at application startup.
 
     Probes the native OS keyring (SecretService / Keychain / Credential Manager).
     Falls back to CryptFileKeyring on headless Linux if native backend is unavailable.
     Uses CC_WEBUI_KEYRING_PASSWORD environment variable to unlock the cryptfile backend.
+
+    `home_dir` locates the encrypted-file fallback (<home_dir>/.config/cc_webui/keyring.enc).
 
     Returns the active backend class name for logging/display.
     """
@@ -59,7 +61,7 @@ def configure_keyring(service_name: str = _SERVICE_NAME) -> str:
         from keyrings.cryptfile.cryptfile import CryptFileKeyring
 
         cf = CryptFileKeyring()
-        cf.file_path = str(Path("~/.config/cc_webui/keyring.enc").expanduser())
+        cf.file_path = str(home_dir / ".config" / "cc_webui" / "keyring.enc")
         password = os.environ.get("CC_WEBUI_KEYRING_PASSWORD")
         if password is None:
             _backend_warning = (

@@ -377,8 +377,8 @@ def _migrate_session_to_config_dict(raw: dict) -> tuple[dict, bool]:
 class SessionManager:
     """Manages Claude Code session lifecycle and persistence"""
 
-    def __init__(self, data_dir: Path = None):
-        self.data_dir = data_dir or Path("data")
+    def __init__(self, data_dir: Path):
+        self.data_dir = data_dir
         self.sessions_dir = self.data_dir / "sessions"
         self._active_sessions: dict[str, SessionInfo] = {}
         self._session_locks: dict[str, asyncio.Lock] = {}

@@ -1126,6 +1126,7 @@ class SessionLauncher:
                 permission_handler=permission_handler,
                 recorder=recorder,
                 phase_callback=self._callbacks.create_phase_callback(session_id),
+                config_file=self.tenant_context.config_file,
             )
             # Issue #707: Set auto-approval callback so can_use_tool can notify us
             sdk.auto_approval_callback = self._callbacks.create_auto_approval_callback(session_id)

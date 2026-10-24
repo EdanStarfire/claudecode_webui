@@ -43,8 +43,8 @@ class SkillManager:
     6. Clean up orphaned skills and symlinks
     """
 
-    def __init__(self, home_dir: Path | None = None):
-        self._home_dir = home_dir or Path.home()
+    def __init__(self, home_dir: Path):
+        self._home_dir = home_dir
         self.source_dir = Path(__file__).parent / "default_skills"
         self.global_skills_dir = new_global_skills_dir(self._home_dir)
         self.global_plans_dir = self._home_dir / ".cc_webui" / "plans"

@@ -128,7 +128,7 @@ def main():
     args = parser.parse_args()
 
     # Configure keyring backend early (before ApplicationService init)
-    configure_keyring()
+    configure_keyring(Path.home())
 
     # Ensure config file exists (creates with safe defaults on first run) — shared
     # ~/.config/cc_webui/config.json, Backend owns everything but the networking/
