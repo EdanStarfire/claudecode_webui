@@ -8,11 +8,12 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 from claude_agent_sdk import (
     AssistantMessage,
     ResultMessage,
+    SystemInitData,
     SystemMessage,
     TaskNotificationMessage,
     TaskProgressMessage,
@@ -559,7 +560,13 @@ class SystemMessageHandler(MessageHandler):
         # never promoted them out of `init_data`, leaving live init messages with None/[].
         # `system_prompt` is confirmed never provided by the SDK itself (real fixture data),
         # so it genuinely has nothing to fall back to.
-        init_data = extracted["metadata"].get("init_data") or {}
+        # Issue #2284: `init_data` also carries non-init subtype payloads (hook_*, status,
+        # compact...), so SystemInitData typing applies only under the `init` guard; the
+        # promoted keys are required SystemInitData fields. `.get` keeps tolerance of
+        # older CLIs / malformed payloads (the SDK does not validate at runtime).
+        init_data: Any = extracted["metadata"].get("init_data") or {}
+        if extracted["metadata"].get("subtype") == "init":
+            init_data = cast(SystemInitData, init_data)
         extracted["metadata"]["working_directory"] = message_data.get("cwd") or init_data.get("cwd")
         extracted["metadata"]["permissions"] = message_data.get("permissionMode") or init_data.get("permissionMode")
         extracted["metadata"]["tools"] = message_data.get("tools") or init_data.get("tools") or []

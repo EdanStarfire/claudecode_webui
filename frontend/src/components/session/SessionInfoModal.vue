@@ -344,6 +344,7 @@ const modelDisplayNames = {
 
 // Raw init-message data for this view: archive-scoped map when viewing a historical
 // snapshot, live map otherwise. Never derived from the webui's own session API response.
+// Fields consumed here follow the SDK's SystemInitData: cwd, model, permissionMode, tools.
 function getInitDataForView() {
   if (!sessionId.value) return null
   if (isArchiveView.value) {
@@ -384,12 +385,9 @@ const permissionModeDisplay = computed(() => {
 
 const sdkSessionInfo = computed(() => sessionData.value?.sdk_session_info || null)
 
-// Additional directories (issue #1675) — from API response, falling back to Pinia initData
+// Additional directories (issue #1675) — API response only; not a SDK SystemInitData field
 const additionalDirectories = computed(() => {
-  const fromApi = sessionData.value?.session?.config?.additional_directories
-  if (fromApi) return fromApi
-  if (!sessionId.value) return []
-  return getInitDataForView()?.additional_directories || []
+  return sessionData.value?.session?.config?.additional_directories || []
 })
 
 const isDockerEnabled = computed(() => {
