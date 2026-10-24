@@ -224,6 +224,21 @@ Stage A (verified against CLI 2.1.309 / SDK 0.2.173):
 | `disable_idle_compaction` | settings key `idleCompaction: false` (via the `--settings` temp file) when True | **Kill switch only** — `true` never enables it; feature is server-gated. Honoring of the `--settings` layer by the CLI is unverified live |
 | `idle_compact_min_tokens` (`ge=1`) | env `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` when set | CLI clamps to `max(100000, v)`, default 200000; inert unless idle compaction is enabled server-side |
 
+Stage B — "Unattended runs" (same mechanism; every value emitted as `str(int)` only when not None,
+via `_RETRY_INT_ENV_MAP` in `backend/claude_sdk.py`):
+
+| Field | Env var | Bounds (ms) |
+|---|---|---|
+| `retry_watchdog` (bool) | `CLAUDE_CODE_RETRY_WATCHDOG=1` when True | master switch — the three watchdog tunables are only read by the CLI in this mode (UI `showWhen`) |
+| `retry_watchdog_max_wait_ms` | `CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS` | `>=1`, default unbounded |
+| `retry_watchdog_max_usage_limit_wait_ms` | `CLAUDE_CODE_RETRY_WATCHDOG_MAX_USAGE_LIMIT_WAIT_MS` | `>=1`, default unbounded |
+| `retry_watchdog_usage_limit_recheck_ms` | `CLAUDE_CODE_RETRY_WATCHDOG_USAGE_LIMIT_RECHECK_MS` | 60000–10800000 |
+| `overloaded_retry_base_delay_ms` | `CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS` | 500–32000 (independent of the watchdog) |
+| `overloaded_retry_max_delay_ms` | `CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS` | 32000–64000 (independent of the watchdog) |
+
+Enabling the watchdog with unbounded waits can stall a session for hours; set the max-wait values for
+unattended runs.
+
 Pydantic bounds mirror the CLI's accepted ranges; re-audit them when upgrading the SDK. Cascade-style
 opt-in vars like these do not belong in `_BACKGROUND_CALL_ENV_MAP`.
 
