@@ -152,6 +152,13 @@ class SessionConfig(BaseModel):
     # Issue #1669: CC 2.1.220 raised the CLI default from 1 to 3; WebUI restores 1
     # to avoid silently changing Legion hierarchy tracking behavior underneath it.
     max_subagent_spawn_depth: int = Field(default=1, ge=1, le=3)
+    # Issue #2287 (stage A): opt-in CLI behavior options. None/False = nothing emitted.
+    disable_web_fetch: bool | None = None  # CLAUDE_CODE_DISABLE_WEB_FETCH=1 when True
+    disable_file_mentions: bool | None = None  # CLAUDE_CODE_DISABLE_FILE_MENTIONS=1 when True
+    # settings.json idleCompaction=false when True (kill switch only; never enables)
+    disable_idle_compaction: bool | None = None
+    # CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS (CLI clamps to >= 100000)
+    idle_compact_min_tokens: int | None = Field(default=None, ge=1)
 
     # Non-secret direct env passthrough (issue #1396)
     # Plain key=value pairs emitted as -e flags by claude-docker BEFORE delivery_envs,
@@ -208,6 +215,8 @@ CONFIG_FIELDS: set[str] = {
     "hook_ids",
     "mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config",
     "bare_mode", "env_scrub_enabled", "recording_enabled", "max_subagent_spawn_depth", "extra_env",
+    "disable_web_fetch", "disable_file_mentions", "disable_idle_compaction",
+    "idle_compact_min_tokens",
     "provider_catalog_id", "provider_model_id",
     "provider_haiku_catalog_id", "provider_haiku_model_id",
     "provider_sonnet_catalog_id", "provider_sonnet_model_id",

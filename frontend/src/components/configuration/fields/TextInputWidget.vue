@@ -1,21 +1,31 @@
 <template>
   <input
-    type="text"
+    :type="numeric ? 'number' : 'text'"
+    :min="numeric ? 1 : undefined"
     :class="['form-control', 'form-control-sm', { 'font-monospace': monospace }]"
-    :value="value || ''"
+    :value="value ?? ''"
     :disabled="disabled"
     :placeholder="placeholder"
-    @input="$emit('update:value', $event.target.value)"
+    @input="onInput"
   />
 </template>
 
 <script setup>
-defineProps({
-  value: { type: String, default: '' },
+const props = defineProps({
+  value: { type: [String, Number], default: '' },
+  numeric: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   placeholder: { type: String, default: '' },
   monospace: { type: Boolean, default: false },
 })
 
-defineEmits(['update:value'])
+const emit = defineEmits(['update:value'])
+
+// Numeric mode (issue #2287): emit an integer, or null when cleared/invalid.
+function onInput(event) {
+  const raw = event.target.value
+  if (!props.numeric) return emit('update:value', raw)
+  const n = parseInt(raw, 10)
+  emit('update:value', Number.isFinite(n) && n >= 1 ? n : null)
+}
 </script>

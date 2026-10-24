@@ -359,6 +359,10 @@ class TemplateManager:
         restricted_mode: bool | None = None,
         recording_enabled: bool | None = None,
         max_subagent_spawn_depth: int | None = None,
+        disable_web_fetch: bool | None = None,  # Issue #2287
+        disable_file_mentions: bool | None = None,
+        disable_idle_compaction: bool | None = None,
+        idle_compact_min_tokens: int | None = None,
         enable_streaming_text: bool | None = None,  # Issue #1486
         # Non-secret direct env passthrough (issue #1396)
         extra_env: dict[str, str] | None = None,
@@ -451,6 +455,10 @@ class TemplateManager:
             "restricted_mode": restricted_mode,
             "recording_enabled": recording_enabled,
             "max_subagent_spawn_depth": max_subagent_spawn_depth,
+            "disable_web_fetch": disable_web_fetch,
+            "disable_file_mentions": disable_file_mentions,
+            "disable_idle_compaction": disable_idle_compaction,
+            "idle_compact_min_tokens": idle_compact_min_tokens,
             "enable_streaming_text": enable_streaming_text,
             "extra_env": extra_env,
             "provider_catalog_id": provider_catalog_id,

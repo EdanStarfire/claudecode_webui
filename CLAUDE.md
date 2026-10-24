@@ -210,6 +210,23 @@ LiteLLM catalog alias `catalog--model`. `session_launcher._vet_classifier_model`
 catalog alias (with a warning) on sessions not routed through LiteLLM, and for Docker sessions
 registers it as a `passthrough_models` entry so the proxy addon does not rewrite it.
 
+## Opt-in CLI Behavior Options (issue #2287)
+
+Cascade-only fields (Profile → Template → Session, `features` area; no global/`BackgroundCallsConfig`
+entry). `None`/`False` always emits nothing, so unset preserves current behavior. All are resolved
+in `backend/claude_sdk.py` (`_resolve_env_vars()` before the `extra_env` merge, or `settings_payload`).
+Stage A (verified against CLI 2.1.309 / SDK 0.2.173):
+
+| Field | Mechanism | Notes |
+|---|---|---|
+| `disable_web_fetch` | env `CLAUDE_CODE_DISABLE_WEB_FETCH=1` when True | Disables WebFetch tool + web-fetch agent; overlaps (harmlessly) with `restricted_mode`/`disallowed_tools` |
+| `disable_file_mentions` | env `CLAUDE_CODE_DISABLE_FILE_MENTIONS=1` when True | `@path` mentions are not expanded into file reads |
+| `disable_idle_compaction` | settings key `idleCompaction: false` (via the `--settings` temp file) when True | **Kill switch only** — `true` never enables it; feature is server-gated. Honoring of the `--settings` layer by the CLI is unverified live |
+| `idle_compact_min_tokens` (`ge=1`) | env `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` when set | CLI clamps to `max(100000, v)`, default 200000; inert unless idle compaction is enabled server-side |
+
+Pydantic bounds mirror the CLI's accepted ranges; re-audit them when upgrading the SDK. Cascade-style
+opt-in vars like these do not belong in `_BACKGROUND_CALL_ENV_MAP`.
+
 ## Verifying Configuration
 
 The injected env dict is logged at debug level by `claude_sdk.py` when `--debug-sdk` is enabled.
@@ -222,6 +239,7 @@ When upgrading `claude-agent-sdk`, check for new env vars by:
 1. Grepping the installed package for `os.environ`, `os.getenv`, `CLAUDE_*`, `ANTHROPIC_*`.
 2. Checking the bundled CLI binary for new `CLAUDE_CODE_DISABLE_*` flags.
 3. Updating `_BACKGROUND_CALL_ENV_MAP` in `backend/claude_sdk.py` and `BackgroundCallsConfig` in `backend/config_manager.py`.
+   (Opt-in cascade fields, see issue #2287, are not background-call suppressions and stay out of that map.)
 
 # Frontend Architecture - Vue 3 + Pinia + Vite (PRODUCTION)
 

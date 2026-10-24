@@ -109,6 +109,10 @@ def build_router(webui) -> APIRouter:
             restricted_mode=request.restricted_mode,
             recording_enabled=request.recording_enabled,
             max_subagent_spawn_depth=request.max_subagent_spawn_depth,
+            disable_web_fetch=request.disable_web_fetch,
+            disable_file_mentions=request.disable_file_mentions,
+            disable_idle_compaction=request.disable_idle_compaction,
+            idle_compact_min_tokens=request.idle_compact_min_tokens,
             enable_streaming_text=request.enable_streaming_text,
             # Non-secret direct env passthrough (issue #1396)
             extra_env=request.extra_env,
