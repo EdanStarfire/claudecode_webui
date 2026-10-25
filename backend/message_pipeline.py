@@ -326,17 +326,14 @@ class MessagePipeline:
                     if task_subtype in PROCESS_BOUNDARY_SUBTYPES:
                         self._background_tasks[session_id] = []
                     elif task_subtype == BACKGROUND_TASKS_SUBTYPE:
+                        # Each frame carries the FULL list, so it simply replaces the
+                        # cache (no cold/warm guard needed, unlike the leg registry).
+                        # Prefer the record's own nested metadata: the parser's dict
+                        # path drops init_data (same trap as issue #2190).
                         try:
-                            # Same cold/warm guard as the registry above: a cold
-                            # hydration already replays this stored frame.
-                            tasks_already_cached = session_id in self._background_tasks
-                            await self._coordinator._get_background_tasks(session_id)
-                            if tasks_already_cached:
-                                # Prefer the record's own nested metadata: the parser's
-                                # dict path drops init_data (same trap as issue #2190).
-                                self._background_tasks[session_id] = parse_background_tasks(
-                                    _nested_metadata(message_data, parsed_message)
-                                )
+                            self._background_tasks[session_id] = parse_background_tasks(
+                                _nested_metadata(message_data, parsed_message)
+                            )
                         except Exception:
                             logger.exception(f"Failed to update background tasks for session {session_id}")
 

@@ -1463,6 +1463,9 @@ class SessionLauncher:
             await asyncio.sleep(settle_seconds)
 
         del self._active_sdks[session_id]
+        # A late frame or a hydrate during the teardown window may have re-cached
+        # the dying process's list; drop it again now that the process is gone.
+        self._background_tasks.pop(session_id, None)
 
         return True
 

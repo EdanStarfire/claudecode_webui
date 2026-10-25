@@ -277,3 +277,30 @@ async def test_live_canonical_record_dict_warm_cache(tmp_path):
     callback = coordinator._create_message_callback(APP_SID)
     await callback({**_bg([T1, T2]), "timestamp": 1.0})
     assert coordinator._background_tasks[APP_SID] == [T1, T2]
+
+
+@pytest.mark.asyncio
+async def test_live_frame_with_cold_cache_sets_snapshot(tmp_path):
+    coordinator = await _coordinator(tmp_path, [_bg([T1])])
+    callback = coordinator._create_message_callback(APP_SID)
+    await callback({**_bg([T1, T2]), "timestamp": 1.0})
+    assert coordinator._background_tasks[APP_SID] == [T1, T2]
+
+
+@pytest.mark.asyncio
+async def test_teardown_drops_cache_repopulated_during_settle(tmp_path):
+    coordinator = await _coordinator(tmp_path, [_bg([T1])])
+
+    class _Sdk:
+        async def terminate(self):
+            pass
+
+    coordinator._active_sdks[APP_SID] = _Sdk()
+
+    async def _repopulate():
+        coordinator._background_tasks[APP_SID] = [T1]  # late frame / hydrate in the window
+
+    await coordinator._session_launcher.teardown_active_sdk(
+        APP_SID, graceful=False, after_op=_repopulate
+    )
+    assert APP_SID not in coordinator._background_tasks

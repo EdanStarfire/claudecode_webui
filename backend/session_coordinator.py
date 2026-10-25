@@ -1853,9 +1853,6 @@ class SessionCoordinator:
     async def get_background_tasks(self, session_id: str) -> dict[str, Any]:
         return await self._session_query.get_background_tasks(session_id)
 
-    async def _get_background_tasks(self, session_id: str) -> list[dict[str, Any]]:
-        return await self._session_query._get_background_tasks(session_id)
-
     # ==================== ARCHIVE METHODS ====================
 
     async def get_archives(self, session_id: str, limit: int = 50, offset: int = 0) -> dict:
