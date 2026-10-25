@@ -7,6 +7,7 @@ Step 5+: reset cleanup helpers (added in later steps)
 """
 
 import json
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock
@@ -457,7 +458,8 @@ class TestResetCleanupHelpers:
         session_id = "sess-plog"
         proxy_dir = sessions_dir / session_id / "docker_claude_data" / "proxy"
         proxy_dir.mkdir(parents=True)
-        for name in ("access.log", "dns.log", "socks5.log", "dropped.log"):
+        names = ("access.log", "dns.log", "socks5.log", "dropped.log", "mitm.flows")
+        for name in names:
             (proxy_dir / name).write_text("data")
 
         launcher = Mock(spec=SessionLauncher)
@@ -467,8 +469,83 @@ class TestResetCleanupHelpers:
 
         await launcher._rotate_proxy_logs(session_id)
 
-        for name in ("access.log", "dns.log", "socks5.log", "dropped.log"):
+        for name in names:
             assert (proxy_dir / name).read_bytes() == b""
+
+    def _rotation_launcher(self, sessions_dir):
+        from unittest.mock import Mock
+
+        from backend.session_launcher import SessionLauncher
+
+        launcher = Mock(spec=SessionLauncher)
+        launcher.session_manager = Mock()
+        launcher.session_manager.sessions_dir = sessions_dir
+        launcher._rotate_proxy_logs = SessionLauncher._rotate_proxy_logs.__get__(launcher)
+        return launcher
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses permission checks")
+    @pytest.mark.asyncio
+    async def test_issue_2303_rotate_unwritable_files_via_unlink(self, tmp_data):
+        """Files the Backend uid cannot write (sidecar-owned) are removed via unlink (sidecar recreates them)."""
+        from unittest.mock import patch
+
+        sessions_dir = tmp_data / "sessions"
+        proxy_dir = sessions_dir / "sess-2303a" / "docker_claude_data" / "proxy"
+        proxy_dir.mkdir(parents=True)
+        names = ("access.log", "dns.log", "socks5.log", "dropped.log", "mitm.flows")
+        for name in names:
+            (proxy_dir / name).write_text("data")
+            (proxy_dir / name).chmod(0o444)
+
+        launcher = self._rotation_launcher(sessions_dir)
+        with patch("backend.session_launcher.coord_logger") as log, patch(
+            "backend.session_launcher.logger"
+        ) as plain_log:
+            await launcher._rotate_proxy_logs("sess-2303a")
+
+        for name in names:
+            assert not (proxy_dir / name).exists()
+        log.warning.assert_not_called()
+        plain_log.exception.assert_not_called()
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses permission checks")
+    @pytest.mark.asyncio
+    async def test_issue_2303_rotate_failure_is_single_warning(self, tmp_data):
+        """Neither truncate nor unlink possible -> one WARNING per file, no traceback/raise."""
+        from unittest.mock import patch
+
+        sessions_dir = tmp_data / "sessions"
+        proxy_dir = sessions_dir / "sess-2303b" / "docker_claude_data" / "proxy"
+        proxy_dir.mkdir(parents=True)
+        for name in ("access.log", "dns.log"):
+            (proxy_dir / name).write_text("data")
+            (proxy_dir / name).chmod(0o444)
+        proxy_dir.chmod(0o555)
+        try:
+            launcher = self._rotation_launcher(sessions_dir)
+            with patch("backend.session_launcher.coord_logger") as log, patch(
+                "backend.session_launcher.logger"
+            ) as plain_log:
+                await launcher._rotate_proxy_logs("sess-2303b")
+        finally:
+            proxy_dir.chmod(0o755)
+
+        assert log.warning.call_count == 2
+        for call, name in zip(log.warning.call_args_list, ("access.log", "dns.log"), strict=True):
+            msg = call.args[0]
+            assert name in msg
+            assert f"owner uid {os.getuid()}" in msg
+            assert "exc_info" not in call.kwargs
+        plain_log.exception.assert_not_called()
+        assert (proxy_dir / "access.log").read_bytes() == b"data"
+
+    def test_issue_2303_rotation_set_excludes_mitm_flows_from_archive(self):
+        from backend.legion.archive_manager import _PROXY_LOG_NAMES
+        from backend.session_launcher import _PROXY_ROTATE_LOG_NAMES
+
+        assert "mitm.flows" not in _PROXY_LOG_NAMES
+        assert set(_PROXY_LOG_NAMES) < set(_PROXY_ROTATE_LOG_NAMES)
+        assert "mitm.flows" in _PROXY_ROTATE_LOG_NAMES
 
     @pytest.mark.asyncio
     async def test_clear_docker_claude_data_except_proxy(self, tmp_data):

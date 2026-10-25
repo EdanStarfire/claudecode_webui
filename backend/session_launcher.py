@@ -30,7 +30,7 @@ from backend.docker_utils import (
     get_session_tmp_dir,
     prepare_session_ssh,
 )
-from backend.legion.archive_manager import SnapshotContext
+from backend.legion.archive_manager import _PROXY_LOG_NAMES, SnapshotContext
 from backend.legion.minion_system_prompts import get_legion_guide_only
 from backend.mcp.proxy_server_factory import build_proxy_server
 from backend.mcp.shared_connection_manager import _describe_open_failure
@@ -63,6 +63,22 @@ if TYPE_CHECKING:
 # perspective, just physically relocated).
 coord_logger = get_logger('coordinator', category='COORDINATOR')
 logger = logging.getLogger(__name__)
+
+# Issue #2303: proxy logs emptied at reset. Superset of the archived set: mitm.flows
+# is reclaimed (it is discarded at every sidecar start anyway) but never archived.
+_PROXY_ROTATE_LOG_NAMES = (*_PROXY_LOG_NAMES, "mitm.flows")
+
+
+def _warn_proxy_log_rotation_skipped(log_file: Path, session_id: str, err: OSError) -> None:
+    try:
+        owner = str(log_file.stat().st_uid)
+    except OSError:
+        owner = "unknown"
+    coord_logger.warning(
+        f"Proxy log rotation skipped for {log_file.name} (session {session_id}): "
+        f"owner uid {owner}; {err}"
+    )
+
 
 # Issue #1375: Regex for ${secret:<name>} references in MCP server header values.
 _SECRET_REF_RE = re.compile(r"\$\{secret:([^}]+)\}")
@@ -1795,22 +1811,41 @@ class SessionLauncher:
             return False
 
     async def _rotate_proxy_logs(self, session_id: str) -> None:
-        """Truncate proxy log files to empty after archiving (issue #1244, decision #11).
+        """Empty proxy log files after archiving (issues #1244, #2303).
 
-        Truncate rather than unlink so the file descriptor stays valid if the
-        proxy container is mid-write at reset time.
+        Truncate first so the file descriptor stays valid if the proxy
+        container is mid-write at reset time. The sidecar creates these files
+        as its own uid (root / 9999), so the Backend's uid usually gets EACCES
+        on write; the proxy dir is world-writable and non-sticky though, so
+        fall back to unlink (the sidecar recreates the file at next start). Caveat: if a sidecar were still
+        running, it would keep writing to the unlinked inode until it exits;
+        reset tears the session container down before rotating, so that is
+        not expected. Any remaining failure is a single WARNING (no traceback).
         """
         proxy_dir = self.session_manager.sessions_dir / session_id / "docker_claude_data" / "proxy"
         if not proxy_dir.is_dir():
             return
-        for name in ("access.log", "dns.log", "socks5.log", "dropped.log"):
+        for name in _PROXY_ROTATE_LOG_NAMES:
             log_file = proxy_dir / name
-            if log_file.exists():
-                try:
-                    log_file.write_bytes(b"")
-                    coord_logger.debug(f"Truncated proxy log {name} for {session_id}")
-                except OSError:
-                    logger.exception(f"Failed to truncate proxy log {name} for {session_id}")
+            if not log_file.exists():
+                continue
+            try:
+                log_file.write_bytes(b"")
+                coord_logger.debug(f"Truncated proxy log {name} for {session_id}")
+                continue
+            except PermissionError:
+                pass
+            except OSError as e:
+                _warn_proxy_log_rotation_skipped(log_file, session_id, e)
+                continue
+            try:
+                log_file.unlink()
+            except OSError as e:
+                _warn_proxy_log_rotation_skipped(log_file, session_id, e)
+                continue
+            # Deliberately not recreated: a host-owned empty file would be unwritable
+            # by the sidecar uid; the sidecar creates it (as itself) at next start.
+            coord_logger.debug(f"Unlinked non-writable proxy log {name} for {session_id}")
 
     async def _clear_docker_claude_data(
         self, session_id: str, keep_subdirs: set[str] | None = None
