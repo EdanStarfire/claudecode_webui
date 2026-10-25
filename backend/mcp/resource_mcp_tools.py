@@ -18,11 +18,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 try:
-    from claude_agent_sdk import create_sdk_mcp_server, tool
+    from claude_agent_sdk import ToolAnnotations, create_sdk_mcp_server, tool
 except ImportError:
     # For testing environments without SDK
     tool = None
     create_sdk_mcp_server = None
+    ToolAnnotations = None
 
 from backend.docker_utils import translate_docker_tmp_path
 
@@ -30,6 +31,28 @@ if TYPE_CHECKING:
     from backend.session_coordinator import SessionCoordinator
 
 logger = logging.getLogger(__name__)
+
+# MCP tool hints (issue #2269). Advisory only; they do not affect permission flow.
+_RO = (
+    ToolAnnotations(
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
+    if ToolAnnotations
+    else None
+)
+_WRITE = (
+    ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=False,
+    )
+    if ToolAnnotations
+    else None
+)
 
 
 class RegisterResourceInput(TypedDict):
@@ -200,6 +223,7 @@ Examples:
 Supported types: Text, Code, Config, Images, Videos (webm, mp4), Data files
 Maximum size: 10MB per resource""",
             RegisterResourceInput,
+            annotations=_WRITE,
         )
         async def register_resource_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Register a resource for display in the task panel."""
@@ -214,6 +238,7 @@ DEPRECATED: Use register_resource() instead - it supports all file types.
 
 This tool is kept for backward compatibility but simply calls register_resource.""",
             RegisterResourceInput,
+            annotations=_WRITE,
         )
         async def register_image_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Register an image (backward compatibility wrapper)."""
@@ -239,6 +264,7 @@ Each resource includes:
 Optional: Use format_filter to filter by format type (e.g. "image" for images only,
 or a specific extension like "png", "json").""",
             ListResourcesInput,
+            annotations=_RO,
         )
         async def list_resources_tool(args: dict[str, Any]) -> dict[str, Any]:
             """List all session resources with metadata."""
@@ -253,6 +279,7 @@ Provide either resource_id or filename (case-insensitive match on original filen
 
 Provide exactly one of resource_id or filename.""",
             GetResourceInput,
+            annotations=_RO,
         )
         async def get_resource_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Get a specific resource by ID or filename."""
