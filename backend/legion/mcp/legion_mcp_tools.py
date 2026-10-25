@@ -19,11 +19,12 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 try:
-    from claude_agent_sdk import create_sdk_mcp_server, tool
+    from claude_agent_sdk import ToolAnnotations, create_sdk_mcp_server, tool
 except ImportError:
     # For testing environments without SDK
     tool = None
     create_sdk_mcp_server = None
+    ToolAnnotations = None
 
 from backend.config_resolution import resolve_template_config
 from backend.docker_utils import translate_docker_tmp_path
@@ -38,6 +39,79 @@ legion_logger = get_logger('legion', 'MCP_TOOLS')
 
 if TYPE_CHECKING:
     from backend.legion_system import LegionSystem
+
+
+# MCP tool hints (issue #2269). Advisory only; they do not affect permission flow.
+_DESTRUCTIVE = (
+    ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=False,
+        open_world_hint=False,
+    )
+    if ToolAnnotations
+    else None
+)
+_DESTRUCTIVE_IDEM = (
+    ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
+    if ToolAnnotations
+    else None
+)
+_OPEN_CREATE = (
+    ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=True,
+    )
+    if ToolAnnotations
+    else None
+)
+_OPEN_UPDATE = (
+    ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=True,
+    )
+    if ToolAnnotations
+    else None
+)
+_RO = (
+    ToolAnnotations(
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
+    if ToolAnnotations
+    else None
+)
+_UPSERT = (
+    ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
+    if ToolAnnotations
+    else None
+)
+_WRITE = (
+    ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=False,
+    )
+    if ToolAnnotations
+    else None
+)
 
 
 def _compute_activity_status(state: SessionState, is_processing: bool) -> str:
@@ -204,6 +278,7 @@ class LegionMCPTools:
             "Max 10MB per file. Supported extensions: text, code, config, image, and data files."
             "\n\n**Note:** At least one of `summary` or `content` must be provided.",
             SendCommInput,
+            annotations=_WRITE,
         )
         async def send_comm_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Send communication to another minion."""
@@ -241,6 +316,7 @@ class LegionMCPTools:
             "\n- The named parent must be one of your descendants (or yourself)"
             "\n- If omitted, the new minion is your direct child (default behavior)",
             SpawnMinionInput,
+            annotations=_WRITE,
         )
         async def spawn_minion_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Spawn a new child minion."""
@@ -256,6 +332,7 @@ class LegionMCPTools:
             "Use delete=False (default) for soft dispose - the minion can be restarted later "
             "by sending it a comm.",
             DisposeMinionInput,
+            annotations=_DESTRUCTIVE_IDEM,
         )
         async def dispose_minion_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Dispose of a child minion."""
@@ -273,7 +350,8 @@ class LegionMCPTools:
             "your group, ask your overseer to locate it.",
             {
                 "capability": str  # Capability keyword to search for
-            }
+            },
+            annotations=_RO,
         )
         async def search_capability_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Search for minions by capability."""
@@ -287,7 +365,8 @@ class LegionMCPTools:
             "\n\n**Visibility Scope:** Returns only minions in your full hierarchy chain: "
             "all ancestors, all descendants, and siblings. Use your overseer to discover minions "
             "outside your group.",
-            {}  # No parameters required
+            {},  # No parameters required
+            annotations=_RO,
         )
         async def list_minions_tool(args: dict[str, Any]) -> dict[str, Any]:
             """List all active minions."""
@@ -300,7 +379,8 @@ class LegionMCPTools:
             "current task, and parent/children hierarchy.",
             {
                 "minion_name": str  # Name of minion to query
-            }
+            },
+            annotations=_RO,
         )
         async def get_minion_info_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Get detailed minion information."""
@@ -317,7 +397,8 @@ class LegionMCPTools:
             "\n- list_templates() returns all templates"
             "\n- Use with spawn_minion to apply template: spawn_minion(name='Helper', template_name='Code Expert')"
             "\n\nTemplates include permission_mode and allowed_tools for each minion type.",
-            {}  # No parameters required
+            {},  # No parameters required
+            annotations=_RO,
         )
         async def list_templates_tool(args: dict[str, Any]) -> dict[str, Any]:
             """List all minion templates."""
@@ -335,6 +416,7 @@ class LegionMCPTools:
             "\n- update_expertise('postgresql', 0.9)"
             "\n- update_expertise('docker')  # Uses default 0.5",
             UpdateExpertiseInput,
+            annotations=_UPSERT,
         )
         async def update_expertise_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Update minion's expertise for a capability."""
@@ -352,7 +434,8 @@ class LegionMCPTools:
             "\n- Hierarchy navigation (discover parent/children for coordination)"
             "\n- Capability discovery (query own capabilities to report expertise)"
             "\n\nReturns a structured dictionary with all identity fields.",
-            {}  # No parameters required - returns caller's identity
+            {},  # No parameters required - returns caller's identity
+            annotations=_RO,
         )
         async def whoami_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Get calling minion's identity and metadata."""
@@ -380,6 +463,7 @@ class LegionMCPTools:
             "\n- max_retries (optional, default 3): Max delivery retries on failure"
             "\n- timeout_seconds (optional, default 3600): Delivery timeout",
             CreateScheduleInput,
+            annotations=_OPEN_CREATE,
         )
         async def create_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Create a recurring schedule for the calling minion."""
@@ -393,6 +477,7 @@ class LegionMCPTools:
             "\n\nParameters:"
             "\n- status (optional): Filter by 'active', 'paused', or 'cancelled'",
             ListSchedulesInput,
+            annotations=_RO,
         )
         async def list_schedules_tool(args: dict[str, Any]) -> dict[str, Any]:
             """List schedules for the calling minion."""
@@ -406,6 +491,7 @@ class LegionMCPTools:
             "\n- schedule_id: The ID of the schedule to pause"
             "\n- schedule_name: The name of the schedule to pause (must be one of your own schedules)",
             PauseScheduleInput,
+            annotations=_UPSERT,
         )
         async def pause_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Pause a schedule owned by the calling minion."""
@@ -420,6 +506,7 @@ class LegionMCPTools:
             "\n- schedule_id: The ID of the schedule to resume"
             "\n- schedule_name: The name of the schedule to resume (must be one of your own schedules)",
             ResumeScheduleInput,
+            annotations=_UPSERT,
         )
         async def resume_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Resume a schedule owned by the calling minion."""
@@ -433,6 +520,7 @@ class LegionMCPTools:
             "\n- schedule_id: The ID of the schedule to delete"
             "\n- schedule_name: The name of the schedule to delete (must be one of your own schedules)",
             DeleteScheduleInput,
+            annotations=_DESTRUCTIVE_IDEM,
         )
         async def delete_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Delete a schedule owned by the calling minion."""
@@ -456,6 +544,7 @@ class LegionMCPTools:
             "\n- cron_expression (optional): New cron expression (5-field standard cron). "
             "Examples: '0 8 * * 1-5' (weekdays 8am), '*/30 * * * *' (every 30 min)",
             UpdateScheduleInput,
+            annotations=_OPEN_UPDATE,
         )
         async def update_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Update a schedule owned by the calling minion."""
@@ -475,6 +564,7 @@ class LegionMCPTools:
             "\n- reason (required): Why you need to restart (logged for audit and included "
             "in your post-restart continuation message)",
             RestartSessionInput,
+            annotations=_DESTRUCTIVE,
         )
         async def restart_session_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Request a session restart."""
@@ -498,6 +588,7 @@ class LegionMCPTools:
             "Note: queue_task is not hierarchy-scoped — you may queue into any session "
             "whose ID you know, not just your own children.",
             QueueTaskInput,
+            annotations=_WRITE,
         )
         async def queue_task_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Enqueue a prompt for deferred delivery to a session."""
@@ -521,7 +612,8 @@ class LegionMCPTools:
             {
                 "subject_name": str,     # Name of the minion to move
                 "new_parent_name": str,  # Name of the new parent (yourself or a descendant)
-            }
+            },
+            annotations=_UPSERT,
         )
         async def reparent_minion_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Reparent a descendant minion to a new parent within caller's subtree."""

@@ -12,15 +12,38 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 try:
-    from claude_agent_sdk import create_sdk_mcp_server, tool
+    from claude_agent_sdk import ToolAnnotations, create_sdk_mcp_server, tool
 except ImportError:
     tool = None
     create_sdk_mcp_server = None
+    ToolAnnotations = None
 
 if TYPE_CHECKING:
     from backend.session_coordinator import SessionCoordinator
 
 logger = logging.getLogger(__name__)
+
+# MCP tool hints (issue #2269). Advisory only; they do not affect permission flow.
+_RO = (
+    ToolAnnotations(
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
+    if ToolAnnotations
+    else None
+)
+_UPSERT = (
+    ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
+    if ToolAnnotations
+    else None
+)
 
 MAX_LABEL_LENGTH = 200
 MAX_URL_LENGTH = 2000
@@ -74,6 +97,7 @@ Examples:
                 "label": str,
                 "url": str,
             },
+            annotations=_UPSERT,
         )
         async def register_link_tool(args: dict[str, Any]) -> dict[str, Any]:
             return await self._handle_register_link(session_id, args)
@@ -89,6 +113,7 @@ Returns a JSON array of link objects, each with:
 
 Use this to check what links are already registered before deciding to upsert.""",
             {},
+            annotations=_RO,
         )
         async def list_links_tool(args: dict[str, Any]) -> dict[str, Any]:
             return await self._handle_list_links(session_id, args)
