@@ -289,6 +289,38 @@ describe('MessageList', () => {
     expect(items.length).toBe(1)
     expect(items[0].textContent).toBe('Real assistant reply')
   })
+
+  it('hides background_tasks_changed bubbles but still shows other system messages (#2145)', async () => {
+    const { pinia } = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: {
+        MessageItem: { template: '<div role="article" data-testid="msg-item">{{ message.content }}</div>', props: ['message', 'attachedTools'] },
+        TruncationBanner: true,
+        SubagentTimeline: true
+      }
+    })
+
+    const { useMessageStore } = await import('@/stores/message')
+    const messageStore = useMessageStore(pinia)
+
+    messageStore.messagesBySession.set(SESSION_ID, [
+      makeMessage({ type: 'system', content: 'Claude Code Launched', metadata: { subtype: 'client_launched' } }),
+      makeMessage({
+        type: 'system', content: 'BG bubble',
+        metadata: { subtype: 'background_tasks_changed', init_data: { tasks: [{ task_id: 't1', task_type: 'local_bash', description: 'x' }] } }
+      }),
+      makeMessage({ type: 'system', content: 'BG bubble top-level', subtype: 'background_tasks_changed' }),
+      makeMessage({ type: 'user', content: 'hello' })
+    ])
+    messageStore.messagesBySession = new Map(messageStore.messagesBySession)
+
+    await new Promise(r => setTimeout(r, 50))
+
+    const texts = screen.getAllByRole('article').map(el => el.textContent)
+    expect(texts).toContain('Claude Code Launched')
+    expect(texts).toContain('hello')
+    expect(texts.some(t => t.includes('BG bubble'))).toBe(false)
+  })
 })
 
 // Issue #2035: three-way empty-state split (loading / error+retry / genuinely-empty),

@@ -287,6 +287,9 @@ class ApplicationService:
     async def get_background_agents(self, session_id: str) -> dict:
         return await self.coordinator.get_background_agents(session_id)
 
+    async def get_background_tasks(self, session_id: str) -> dict:
+        return await self.coordinator.get_background_tasks(session_id)
+
     async def restart_session(self, session_id: str, permission_callback: Any) -> bool:
         self.coordinator.clear_message_callbacks(session_id)
         return await self.coordinator.restart_session(

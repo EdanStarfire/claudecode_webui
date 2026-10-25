@@ -52,7 +52,9 @@ ALLOWLIST: dict[str, int] = {
     # self-referential constructions below. The 10 inline constructions
     # themselves deliberately stayed put (see coordinator_builder.py's own
     # docstring) — only tenant_context construction/threading grew this.
-    "__init__": 344,
+    # Issue #2145: 344->346 — one process-bound `_background_tasks` state dict
+    # (plain-dict state init, same residual category as above) plus its comment.
+    "__init__": 346,
     # --- Orchestration ---
     "initialize": 69,
     "cleanup": 23,

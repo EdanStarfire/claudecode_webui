@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useSessionStore } from './session'
 import { useProjectStore } from './project'
 import { useMessageStore } from './message'
+import { useBackgroundTasksStore } from './backgroundTasks'
 import { useResourceStore } from './resource'
 import { useQueueStore } from './queue'
 import { useUIStore } from './ui'
@@ -645,6 +646,8 @@ export const usePollingStore = defineStore('polling', () => {
         inactivityMs: HISTORY_PAGE_INACTIVITY_TIMEOUT_MS,
         onPageComplete: (progress) => pushDebugEvent('polling', 'hydration-stage', { sessionId, stage: 'resync', progress }),
       })
+      // Issue #2145: background_tasks_changed events lost in the gap are not replayed.
+      useBackgroundTasksStore().hydrate(sessionId)
       resyncAttemptsBySession.delete(sessionId)
       if (resyncStallBySession.value.has(sessionId)) {
         resyncStallBySession.value.delete(sessionId)
@@ -969,6 +972,12 @@ export const usePollingStore = defineStore('polling', () => {
         const changedSessionId = payload.data.session_id
         const newState = payload.data.session.state
 
+        // Issue #2145: background tasks die with the process — real teardown only
+        // (paused/awaiting-permission keeps them running).
+        if (newState === 'error' || newState === 'terminated') {
+          useBackgroundTasksStore().clear(changedSessionId)
+        }
+
         if (newState === 'error') {
           console.log(`[UI state_change] Session ${changedSessionId} entered error state, reloading messages`)
           const messageStore = useMessageStore()
@@ -980,6 +989,7 @@ export const usePollingStore = defineStore('polling', () => {
           // and loadMessages() no longer reconstructs it from history (hydrateBackgroundAgents
           // is the sole source now). Without this, an error-state reload permanently loses
           // subagent leg/task_id state for the session.
+          useBackgroundTasksStore().hydrate(changedSessionId)
           messageStore.hydrateBackgroundAgents(changedSessionId).then(() => {
             messageStore.loadMessages(changedSessionId)
           })

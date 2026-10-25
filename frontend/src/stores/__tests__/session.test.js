@@ -726,6 +726,7 @@ describe('session store', () => {
 
         apiMock.get.mockImplementation((url) => {
           if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
+          if (url.includes('/background_tasks')) return Promise.resolve({ tasks: [] })
           const offset = Number(url.match(/offset=(\d+)/)[1])
           const pageIndex = offset / 10000
           return new Promise((resolve) => {
@@ -770,6 +771,7 @@ describe('session store', () => {
         // Pages 0-2 succeed; page 3 (the 4th page) never responds on its own.
         apiMock.get.mockImplementation((url, options) => {
           if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
+          if (url.includes('/background_tasks')) return Promise.resolve({ tasks: [] })
           const offset = Number(url.match(/offset=(\d+)/)[1])
           const pageIndex = offset / 10000
           if (pageIndex < 3) {
@@ -800,6 +802,7 @@ describe('session store', () => {
         // T3: resume via retryHydration() — the rest of the pages now succeed.
         apiMock.get.mockImplementation((url) => {
           if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
+          if (url.includes('/background_tasks')) return Promise.resolve({ tasks: [] })
           const offset = Number(url.match(/offset=(\d+)/)[1])
           const pageIndex = offset / 10000
           return Promise.resolve({
@@ -837,6 +840,7 @@ describe('session store', () => {
       const capturedSignals = []
       apiMock.get.mockImplementation((url, options) => {
         if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
+        if (url.includes('/background_tasks')) return Promise.resolve({ tasks: [] })
         capturedSignals.push(options?.signal)
         return new Promise((_resolve, reject) => {
           options?.signal?.addEventListener('abort', () => {
@@ -859,6 +863,7 @@ describe('session store', () => {
       // succeeds — retry1's just-claimed controller must be the one aborted.
       apiMock.get.mockImplementation((url) => {
         if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
+        if (url.includes('/background_tasks')) return Promise.resolve({ tasks: [] })
         return Promise.resolve({ messages: [], total_count: 0, has_more: false, epoch: 'e1' })
       })
       await store.retryHydration('sess-concurrent')
@@ -887,6 +892,7 @@ describe('session store', () => {
       let sessAMessagesCallCount = 0
       apiMock.get.mockImplementation((url, options) => {
         if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
+        if (url.includes('/background_tasks')) return Promise.resolve({ tasks: [] })
         if (url.includes('sess-switch-a') && url.includes('/messages')) {
           capturedSignalsA.push(options?.signal)
           sessAMessagesCallCount++
@@ -933,6 +939,7 @@ describe('session store', () => {
 
       apiMock.get.mockImplementation((url, options) => {
         if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
+        if (url.includes('/background_tasks')) return Promise.resolve({ tasks: [] })
         return new Promise((_resolve, reject) => {
           options?.signal?.addEventListener('abort', () => {
             const err = new Error('Aborted'); err.name = 'AbortError'; reject(err)
@@ -971,6 +978,7 @@ describe('session store', () => {
       let messagesCallCount = 0
       apiMock.get.mockImplementation((url) => {
         if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
+        if (url.includes('/background_tasks')) return Promise.resolve({ tasks: [] })
         messagesCallCount++
         if (messagesCallCount === 1) {
           // First page of the first attempt: epoch 5, more pages to come.

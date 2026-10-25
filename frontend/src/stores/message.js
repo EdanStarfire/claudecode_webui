@@ -3,6 +3,7 @@ import { ref, computed, readonly, watch } from 'vue'
 import { api } from '../utils/api'
 import { useSessionStore } from './session'
 import { useTaskStore } from './task'
+import { useBackgroundTasksStore } from './backgroundTasks'
 import { correlateHooks } from '../utils/hookCorrelation'
 import { getAgentColor, getAssistantRowColor, slugifyAgentName } from '../composables/useAgentColor'
 import { pushDebugEvent, flushDebugBuffer } from '../composables/useDebugBuffer'
@@ -1135,6 +1136,13 @@ export const useMessageStore = defineStore('message', () => {
       const subtype = message.metadata?.subtype
       if (TASK_LIFECYCLE_SUBTYPES.has(subtype)) {
         applyTaskLifecycleFrame(sessionId, subtype, message.metadata, message.timestamp)
+      }
+      // Issue #2145: background-task snapshot. Live-only (history replay would feed stale
+      // snapshots); client_launched/session_failed mean the previous process is gone.
+      if (subtype === 'background_tasks_changed') {
+        useBackgroundTasksStore().setTasks(sessionId, message.metadata?.init_data?.tasks)
+      } else if (subtype === 'client_launched' || subtype === 'session_failed') {
+        useBackgroundTasksStore().clear(sessionId)
       }
     }
 

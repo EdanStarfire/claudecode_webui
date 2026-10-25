@@ -350,6 +350,8 @@ class SessionCoordinator:
         # Lazily hydrated from stored messages on first access, then kept live
         # via the four Task lifecycle frames as they stream in.
         self._task_leg_registries: dict[str, TaskLegRegistry] = {}
+        # Issue #2145: latest background-task snapshot per session (process-bound)
+        self._background_tasks: dict[str, list[dict[str, Any]]] = {}
 
         # Issue #858: Per-session event notified on every create_tool_call(), allowing
         # permission callbacks to wait efficiently instead of polling.
@@ -1847,6 +1849,9 @@ class SessionCoordinator:
 
     async def get_background_agents(self, session_id: str) -> dict[str, Any]:
         return await self._session_query.get_background_agents(session_id)
+
+    async def get_background_tasks(self, session_id: str) -> dict[str, Any]:
+        return await self._session_query.get_background_tasks(session_id)
 
     # ==================== ARCHIVE METHODS ====================
 

@@ -90,6 +90,7 @@ import { usePollingStore } from './stores/polling'
 import { useSessionStore } from './stores/session'
 import { useProjectStore } from './stores/project'
 import { useTaskStore } from './stores/task'
+import { useBackgroundTasksStore } from './stores/backgroundTasks'
 import { apiGet, getAuthToken, setAuthToken, authRequired } from './utils/api'
 
 const uiStore = useUIStore()
@@ -98,6 +99,7 @@ const wsStore = usePollingStore()
 const sessionStore = useSessionStore()
 const projectStore = useProjectStore()
 const taskStore = useTaskStore()
+const backgroundTasksStore = useBackgroundTasksStore()
 const router = useRouter()
 const route = useRoute()
 
@@ -150,6 +152,14 @@ watch(() => route.name, (routeName) => {
 // Auto-show right panel when tasks first appear (suppressed during session switch, #521)
 watch(() => taskStore.currentHasTasks, (hasTasks, hadTasks) => {
   if (hasTasks && !hadTasks && !uiStore.suppressAutoShow) {
+    uiStore.setPanelExpanded('tasks', true)
+    uiStore.setRightPanelVisible(true)
+  }
+})
+
+// Issue #2145: also auto-show when background tasks first appear (0 -> >0)
+watch(() => backgroundTasksStore.currentCount, (count, prev) => {
+  if (count > 0 && !prev && !uiStore.suppressAutoShow) {
     uiStore.setPanelExpanded('tasks', true)
     uiStore.setRightPanelVisible(true)
   }
