@@ -2,7 +2,7 @@
 
 This manual checklist has been replaced by the scripted scenario driver
 (`backend/tools/scenario_driver/`). The 22 scenarios that reproduce the
-`2026-09-23-primary` fixture — and every other equivalence-fixture recording
+`primary` fixture — and every other equivalence-fixture recording
 — are now defined as data in `backend/tools/scenario_driver/scenarios.py`
 (`build_scenarios()`), which is the source of truth (issue #2038's AC8).
 

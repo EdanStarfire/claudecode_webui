@@ -11,6 +11,8 @@ from backend.fixture_export import (
     REQUIRED_MARKERS,
     FixtureExportError,
     _check_markers,
+    _recorded_cli_versions,
+    _resolve_cli_path,
     export_fixture,
 )
 from backend.session_config import SessionConfig
@@ -149,6 +151,65 @@ class TestCheckMarkers:
         assert found["inter-minion comm"] is True
 
 
+def _init_record(version: str | None) -> dict:
+    inner = {} if version is None else {"claude_code_version": version}
+    return {
+        "kind": "sdk_message",
+        "_type": "SystemMessage",
+        "data": {"subtype": "init", "data": inner},
+    }
+
+
+class TestCliVersionProvenance:
+    """Issue #2281: provenance's cli_version must reflect the CLI the recorded
+    session actually ran, not whichever `claude` happens to be on PATH at export
+    time (the `primary` re-recording ran the SDK's bundled 2.1.309 but
+    was stamped with PATH's 2.1.261)."""
+
+    def test_reads_version_from_init_messages(self):
+        records = [
+            {"kind": "sdk_message", "_type": "StreamEvent", "data": {}},
+            _init_record("2.1.309"),
+            _init_record("2.1.309"),
+        ]
+        assert _recorded_cli_versions(records) == "2.1.309 (Claude Code)"
+
+    def test_distinct_versions_joined_in_first_seen_order(self):
+        records = [_init_record("2.1.309"), _init_record("2.1.310"), _init_record("2.1.309")]
+        assert _recorded_cli_versions(records) == "2.1.309 (Claude Code), 2.1.310 (Claude Code)"
+
+    def test_none_without_init_version(self):
+        records = [
+            _init_record(None),
+            {"kind": "sdk_message", "_type": "SystemMessage", "data": {"subtype": "compact_boundary"}},
+        ]
+        assert _recorded_cli_versions(records) is None
+
+    def test_explicit_cli_path_wins(self):
+        assert _resolve_cli_path("/opt/custom/claude") == "/opt/custom/claude"
+
+    def test_bundled_cli_preferred_over_path(self, tmp_path, monkeypatch):
+        import claude_agent_sdk
+
+        package_dir = tmp_path / "claude_agent_sdk"
+        (package_dir / "_bundled").mkdir(parents=True)
+        bundled = package_dir / "_bundled" / "claude"
+        bundled.write_text("")
+        monkeypatch.setattr(claude_agent_sdk, "__file__", str(package_dir / "__init__.py"))
+        monkeypatch.setattr("backend.fixture_export.platform.system", lambda: "Linux")
+        monkeypatch.setattr("backend.fixture_export.shutil.which", lambda _name: "/usr/bin/claude")
+
+        assert _resolve_cli_path(None) == str(bundled)
+
+    def test_falls_back_to_path_without_bundled_cli(self, tmp_path, monkeypatch):
+        import claude_agent_sdk
+
+        monkeypatch.setattr(claude_agent_sdk, "__file__", str(tmp_path / "__init__.py"))
+        monkeypatch.setattr("backend.fixture_export.shutil.which", lambda _name: "/usr/bin/claude")
+
+        assert _resolve_cli_path(None) == "/usr/bin/claude"
+
+
 class TestExportFixture:
     @pytest.mark.asyncio
     async def test_missing_markers_raises_naming_specifics(self, session_with_dir, tmp_path):
@@ -186,6 +247,22 @@ class TestExportFixture:
         provenance = json.loads((fixture_dir / "provenance.json").read_text())
         assert "sdk_version" in provenance
         assert "capture_date" in provenance
+
+    @pytest.mark.asyncio
+    async def test_provenance_cli_version_comes_from_recorded_init(self, session_with_dir, tmp_path):
+        coordinator, session_id, session_dir = session_with_dir
+        recorder = SessionRecorder(session_id, session_dir)
+        recorder._write("sdk_message", lambda: {
+            "_type": "SystemMessage",
+            "data": {"subtype": "init", "data": {"claude_code_version": "9.9.999"}},
+        })
+        _write_full_coverage_raw_log(recorder)
+
+        result = await export_fixture(coordinator, session_id, "test-fixture", fixtures_root=tmp_path)
+
+        assert result.provenance["cli_version"] == "9.9.999 (Claude Code)"
+        provenance = json.loads((tmp_path / "test-fixture" / "provenance.json").read_text())
+        assert provenance["cli_version"] == "9.9.999 (Claude Code)"
 
     @pytest.mark.asyncio
     async def test_issue_1998_exported_state_scrubs_secret_fetch_token(self, session_with_dir, tmp_path):

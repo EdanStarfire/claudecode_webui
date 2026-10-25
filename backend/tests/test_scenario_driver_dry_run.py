@@ -51,7 +51,7 @@ from shared.event_envelope import EventEnvelope
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RAW_FIXTURES_DIR = REPO_ROOT / "backend" / "tests" / "fixtures" / "raw"
-PRIMARY_FIXTURE = "2026-09-23-primary"
+PRIMARY_FIXTURE = "primary"
 
 
 def _free_port() -> int:

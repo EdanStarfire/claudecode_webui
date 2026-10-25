@@ -431,7 +431,7 @@ def _build_synthetic_state() -> dict[str, Any]:
     """DataStorageManager doesn't produce state.json on its own (that's
     SessionManager's job, which requires the full coordinator object graph) —
     so this is a scrubbed-down synthetic state.json with the same top-level
-    keys as backend/tests/fixtures/raw/2026-09-23-primary/state.json, good
+    keys as backend/tests/fixtures/raw/primary/state.json, good
     enough for a synthetic fixture without needing to be realistic beyond that.
     """
     now = datetime.now(UTC).isoformat()

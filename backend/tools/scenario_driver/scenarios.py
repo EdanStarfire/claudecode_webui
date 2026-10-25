@@ -109,11 +109,14 @@ class Scenario:
     coverage_markers: tuple[str, ...] = field(default_factory=tuple)
 
 
-def _wait_result(session_id: str, scenario: str, timeout_s: float = 60.0) -> WaitSpec:
+def _wait_result(
+    session_id: str, scenario: str, timeout_s: float = 60.0, consume: bool = True
+) -> WaitSpec:
     return WaitSpec(
         predicate=predicates.result_message(session_id),
         description=f"scenario {scenario}: result message",
         timeout_s=timeout_s,
+        consume=consume,
     )
 
 
@@ -299,10 +302,12 @@ def build_scenarios(
         )
     )
 
-    # 8: Foreground subagent reads folder and writes a file. Runs in acceptEdits:
-    # the subagent's choice of listing tool (Read/Glob/Bash ls) isn't predictable,
-    # and read-only tools don't prompt anyway, so waiting on specific permission
-    # prompts here is flaky. Permission prompts are covered by other scenarios.
+    # 8: Foreground subagent reads folder and writes a file. Runs in
+    # bypassPermissions: the subagent's choice of listing tool (Read/Glob/Bash)
+    # isn't predictable, and a compound Bash command (e.g. `file *; cat ...`)
+    # still prompts under acceptEdits, stalling the scenario on an unanswered
+    # prompt. Permission prompts are covered by other scenarios. Restores
+    # acceptEdits afterwards, which scenario 9 inherits.
     scenarios.append(
         Scenario(
             id=8,
@@ -310,7 +315,7 @@ def build_scenarios(
             coverage_markers=("subagent task with progress",),
             steps=[
                 Step(action=partial(
-                    actions.set_permission_mode, session_id=m, mode="acceptEdits",
+                    actions.set_permission_mode, session_id=m, mode="bypassPermissions",
                 )),
                 Step(action=partial(
                     actions.send_prompt, session_id=m,
@@ -333,6 +338,9 @@ def build_scenarios(
                     ),
                 ),
                 Step(wait=_wait_result(m, "8")),
+                Step(action=partial(
+                    actions.set_permission_mode, session_id=m, mode="acceptEdits",
+                )),
             ],
         )
     )
@@ -573,21 +581,37 @@ def build_scenarios(
         Scenario(
             id=19,
             title="Comm with attachment, reply as attachment",
+            # Like scenario 13, the main session sends the comm: since #2265 a minion
+            # can no longer send_comm to the user, so a driver-sent (REST) comm has
+            # no reply path. The reply (with attachment) lands in the main session,
+            # the exported one.
             steps=[
                 Step(action=partial(
-                    actions.send_comm, legion_id=legion_id, to_minion_id=minion_id,
-                    content="Please write a haiku and send it back as an attachment.",
+                    actions.send_prompt, session_id=m,
+                    message=f"Use the send_comm Legion MCP tool exactly once to send the "
+                            f"message 'Please write a haiku and send it back as an "
+                            f"attachment.' to the minion named '{TEST_MINION_NAME}', then "
+                            f"stop and wait for its reply.",
                 )),
                 Step(wait=WaitSpec(
                     predicate=predicates.resource_registered(minion_id),
                     description="scenario 19: haiku attachment registered as a resource",
-                    timeout_s=60.0,
+                    timeout_s=90.0,
+                    consume=False,
                 )),
                 Step(wait=WaitSpec(
                     predicate=predicates.minion_comm_notification(TEST_MINION_NAME),
                     description="scenario 19: comm reply with attachment from Test Minion",
-                    timeout_s=60.0,
+                    timeout_s=90.0,
+                    consume=False,
                 )),
+                Step(wait=WaitSpec(
+                    predicate=predicates.comm_delivered(),
+                    description="scenario 19: Test Minion's reply delivered to main session",
+                    stream="session",
+                    timeout_s=90.0,
+                )),
+                Step(wait=_wait_result(m, "19")),
             ],
         )
     )
@@ -746,7 +770,11 @@ def build_scenarios(
                             f"'{TEST_MINION_NAME}': 'Stop that and instead just tell me your "
                             f"name.' Then stop and do not wait for a reply.",
                 )),
-                Step(wait=_wait_result(m, "23 step 4 (PIVOT comm sent)", timeout_s=60.0)),
+                # consume=False: the PIVOT interrupts Test Minion as soon as the comm
+                # is routed, which can land before `m`'s own turn result.
+                Step(wait=_wait_result(
+                    m, "23 step 4 (PIVOT comm sent)", timeout_s=60.0, consume=False,
+                )),
                 Step(wait=WaitSpec(
                     predicate=predicates.system_subtype(minion_id, "interrupt"),
                     description="scenario 23: PIVOT interrupted Test Minion's second task",

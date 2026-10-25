@@ -1,4 +1,4 @@
-"""Regenerates 2026-09-23-primary's committed raw_log.jsonl `queue_event` records via the
+"""Regenerates the `primary` fixture's committed raw_log.jsonl `queue_event` records via the
 real-pipeline replay (issue #2063 AC12). NOT run by default — writes to a committed fixture.
 
     uv run pytest backend/tests/test_regenerate_primary_fixture_queue_events.py -m regenerate_fixture
@@ -17,7 +17,7 @@ from backend.tests.integration import conftest as _integration_conftest
 
 api_integration_env = _integration_conftest.api_integration_env
 
-_FIXTURE_NAME = "2026-09-23-primary"
+_FIXTURE_NAME = "primary"
 _RAW_LOG_PATH = Path(__file__).parent / "fixtures" / "raw" / _FIXTURE_NAME / "raw_log.jsonl"
 
 

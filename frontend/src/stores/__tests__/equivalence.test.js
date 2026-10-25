@@ -218,7 +218,7 @@ function normalizeStreamingPreview(preview) {
 // that on regenerable synthetic data (not just by inspection) is what makes this
 // removal trustworthy rather than asserted.
 //
-// 2026-09-23-primary (issue #2017) was re-captured live against a real Anthropic API
+// The `primary` fixture (issue #2017) was re-captured live against a real Anthropic API
 // (claude-agent-sdk==0.2.159). After that re-capture it surfaced 5 further reload-path
 // gaps in backend/session_coordinator.py left over from #2032's port of
 // message_parser.py's live-path defaults (missing SystemMessage metadata defaults,

@@ -391,12 +391,12 @@ async def test_generate_fixture_from_real_pipeline(api_integration_env, fixture_
         f"rest_history.json round-trip for fixture '{fixture_name}' came back empty."
     )
 
-    # Issue #2179: committed-fixture promotion for 2026-09-23-primary (previously done
+    # Issue #2179: committed-fixture promotion for `primary` (previously done
     # unconditionally here) now lives in test_regenerate_primary_fixture_messages.py,
     # opt-in via `-m regenerate_fixture` — this test must never write to a committed
     # fixture by default. AC12's convergence check below has no dependency on that
     # write and keeps running unconditionally for this fixture.
-    if fixture_name == "2026-09-23-primary":
+    if fixture_name == "primary":
         # Issue #2109 (AC12): live-streamed and REST-reloaded tool_call records must
         # converge to the same final per-tool_use_id state. The issue text says this
         # recording contains "two restarts"; counted directly it actually has 3

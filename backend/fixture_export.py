@@ -15,6 +15,7 @@ render the failure panel inline instead of treating it as a request error.
 import asyncio
 import importlib.metadata
 import json
+import platform
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -170,9 +171,52 @@ def _check_markers(raw_records: list[dict[str, Any]]) -> dict[str, bool]:
     return found
 
 
+def _recorded_cli_versions(raw_records: list[dict[str, Any]]) -> str | None:
+    """The CLI version(s) the recorded session actually ran, from the
+    `claude_code_version` every SDK `init` system message reports. Authoritative
+    over probing a binary at export time, which can differ from what the session
+    used (e.g. the SDK's bundled CLI vs. whichever `claude` is on PATH). Several
+    distinct versions (a CLI swapped mid-recording) are joined in first-seen order.
+    """
+    versions: list[str] = []
+    for record in raw_records:
+        if record.get("kind") != "sdk_message" or record.get("_type") != "SystemMessage":
+            continue
+        data = record.get("data") or {}
+        if data.get("subtype") != "init":
+            continue
+        version = (data.get("data") or {}).get("claude_code_version")
+        if version and version not in versions:
+            versions.append(version)
+    if not versions:
+        return None
+    return ", ".join(f"{v} (Claude Code)" for v in versions)
+
+
+def _resolve_cli_path(cli_path: str | None) -> str | None:
+    """Which CLI binary a session with this `cli_path` config would launch,
+    following claude_agent_sdk's own precedence (an explicit `cli_path`, then the
+    SDK's bundled CLI, then `claude` on PATH). The bundled-CLI location mirrors
+    the SDK's private `SubprocessCLITransport._find_bundled_cli()`.
+    """
+    if cli_path:
+        return cli_path
+    try:
+        import claude_agent_sdk
+
+        cli_name = "claude.exe" if platform.system() == "Windows" else "claude"
+        bundled = Path(claude_agent_sdk.__file__).parent / "_bundled" / cli_name
+        if bundled.is_file():
+            return str(bundled)
+    except ImportError:
+        pass
+    return shutil.which("claude")
+
+
 def _resolve_cli_version(cli_path: str | None) -> str | None:
-    """Best-effort `<cli> --version` capture. Opaque string, no semantic parsing —
-    no existing precedent in this codebase for CLI version detection.
+    """Best-effort `<cli> --version` capture, for when the raw log carries no
+    `init` message to read the version from (see _recorded_cli_versions). Opaque
+    string, no semantic parsing.
 
     Synchronous/blocking by design (subprocess.run) — always run this via
     asyncio.to_thread from an async caller. A single-threaded Backend process also
@@ -180,7 +224,7 @@ def _resolve_cli_version(cli_path: str | None) -> str | None:
     loop, so calling this directly from async code would stall all of them for up
     to the full timeout if the CLI is slow to start or hung.
     """
-    resolved = cli_path or shutil.which("claude")
+    resolved = _resolve_cli_path(cli_path)
     if not resolved:
         return None
     try:
@@ -192,18 +236,24 @@ def _resolve_cli_version(cli_path: str | None) -> str | None:
         return None
 
 
-async def _build_provenance(session_config: dict[str, Any]) -> dict[str, Any]:
+async def _build_provenance(
+    session_config: dict[str, Any], raw_records: list[dict[str, Any]]
+) -> dict[str, Any]:
     try:
         sdk_version = importlib.metadata.version("claude-agent-sdk")
     except importlib.metadata.PackageNotFoundError:
         sdk_version = None
 
-    # Independent lookups — run concurrently, and keep the blocking CLI-version
-    # subprocess off the event loop (see _resolve_cli_version's docstring).
-    git_sha, cli_version = await asyncio.gather(
-        run_git_command(["git", "rev-parse", "HEAD"], str(_REPO_ROOT)),
-        asyncio.to_thread(_resolve_cli_version, session_config.get("cli_path")),
-    )
+    cli_version = _recorded_cli_versions(raw_records)
+    if cli_version is None:
+        # Independent lookups — run concurrently, and keep the blocking CLI-version
+        # subprocess off the event loop (see _resolve_cli_version's docstring).
+        git_sha, cli_version = await asyncio.gather(
+            run_git_command(["git", "rev-parse", "HEAD"], str(_REPO_ROOT)),
+            asyncio.to_thread(_resolve_cli_version, session_config.get("cli_path")),
+        )
+    else:
+        git_sha = await run_git_command(["git", "rev-parse", "HEAD"], str(_REPO_ROOT))
 
     return {
         "sdk_version": sdk_version,
@@ -241,7 +291,7 @@ async def export_fixture(
 
     session_info = await coordinator.session_manager.get_session_info(session_id)
     session_config = session_info.config if session_info else {}
-    provenance = await _build_provenance(session_config)
+    provenance = await _build_provenance(session_config, raw_records)
 
     fixtures_root = fixtures_root or _DEFAULT_FIXTURES_ROOT
     fixture_dir = fixtures_root / name
