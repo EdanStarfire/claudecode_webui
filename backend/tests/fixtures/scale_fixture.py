@@ -111,7 +111,7 @@ def _shift_timestamps(event: dict[str, Any], offset_seconds: float) -> dict[str,
 
 
 def generate_scale_events(
-    source_name: str = "2026-09-23-primary",
+    source_name: str = "primary",
     target_event_count: int = 20_000,
     seed: int = 0,
 ) -> list[dict[str, Any]]:
@@ -146,7 +146,7 @@ def generate_scale_events(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", default="2026-09-23-primary", help="Source fixture name under backend/tests/fixtures/raw/")
+    parser.add_argument("--source", default="primary", help="Source fixture name under backend/tests/fixtures/raw/")
     parser.add_argument("--count", type=int, default=20_000, help="Minimum target event count")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args(argv)

@@ -4,7 +4,7 @@ import { loadScaledRestHistory } from './helpers/scaleFixture'
 
 // Issue #2131 (AC3): the cold-load regression this issue exists to fix only manifests at
 // real-world scale (the reported freeze was at N=92,480) — a small fixture can't exercise it.
-// Scales the committed '2026-09-23-primary' rest_history.json to 100,000+ records via
+// Scales the committed 'primary' rest_history.json to 100,000+ records via
 // scaleFixture.js (see its own comment for why this isn't a reuse of
 // backend/tests/fixtures/scale_fixture.py) and drives it through the real loadMessages() path.
 
@@ -27,7 +27,7 @@ const TARGET_COUNT = 100000
 
 describe('cold load scale regression (Issue #2131, AC3)', () => {
   it('loads 100,000+ records under budget with correct identity dedup, including a redelivered subset', async () => {
-    const scaled = loadScaledRestHistory('2026-09-23-primary', TARGET_COUNT)
+    const scaled = loadScaledRestHistory('primary', TARGET_COUNT)
     expect(scaled.length).toBeGreaterThanOrEqual(TARGET_COUNT)
 
     // (c): simulate a redelivered tail subset (e.g. a reconnect replaying the most recent

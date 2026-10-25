@@ -163,7 +163,7 @@ def _init_record(version: str | None) -> dict:
 class TestCliVersionProvenance:
     """Issue #2281: provenance's cli_version must reflect the CLI the recorded
     session actually ran, not whichever `claude` happens to be on PATH at export
-    time (the 2026-09-23-primary re-recording ran the SDK's bundled 2.1.309 but
+    time (the `primary` re-recording ran the SDK's bundled 2.1.309 but
     was stamped with PATH's 2.1.261)."""
 
     def test_reads_version_from_init_messages(self):

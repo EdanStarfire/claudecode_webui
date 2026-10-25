@@ -33,7 +33,7 @@ _TOOL_USE_ID = "toolu_restart_mid_tool_test"
 def _build_fixture(fixture_dir, *, kind: str, action: str | None) -> None:
     """A Bash tool_use left open when the recording's restart_session()/
     interrupt_session()/terminate_session() fired — the same historical shape
-    2026-09-23-primary's real capture has, at a fraction of the size."""
+    the `primary` fixture's real capture has, at a fraction of the size."""
     recorder = SessionRecorder("sess-1", fixture_dir)
     recorder.record_lifecycle("start")
     recorder.record_sdk_message(SystemMessage(subtype="init", data={"session_id": "claude-sess-1"}))

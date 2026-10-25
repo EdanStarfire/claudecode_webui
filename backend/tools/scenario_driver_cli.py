@@ -24,7 +24,7 @@ change a scenario.
     uv run python -m backend.tools.scenario_driver_cli \\
         --url http://127.0.0.1:8001 --token <frontend-token> \\
         --scratch-repo /tmp/scenario-scratch \\
-        --fixture-name 2026-09-23-primary
+        --fixture-name primary
 
 The exported fixture lands under `backend/tests/fixtures/raw/<fixture-name>/`
 on whichever machine the *Backend* is running on (not necessarily the machine
