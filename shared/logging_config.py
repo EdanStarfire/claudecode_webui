@@ -165,7 +165,8 @@ def configure_logging(
     debug_profile_manager: bool = False,
     debug_oauth: bool = False,
     debug_all: bool = False,
-    log_dir: str = "data/logs"
+    *,
+    log_dir: str,
 ) -> None:
     """Configure the logging system with CLI flag controls.
 

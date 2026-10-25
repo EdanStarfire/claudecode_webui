@@ -23,7 +23,7 @@ def _sample_entry(entry_id: str = "bedrock-1") -> dict:
 
 @pytest.fixture
 def catalog_store(tmp_path):
-    return ProviderCatalogStore(tmp_path)
+    return ProviderCatalogStore(tmp_path, home_dir=tmp_path)
 
 
 @pytest.fixture
@@ -208,12 +208,12 @@ async def test_entry_roundtrips_through_store(catalog):
 @pytest.mark.asyncio
 async def test_store_persists_to_disk(tmp_path):
     """Mutations are written to providers.json immediately."""
-    store = ProviderCatalogStore(tmp_path)
+    store = ProviderCatalogStore(tmp_path, home_dir=tmp_path)
     mgr = ProviderCatalogManager(store)
     await mgr.create_entry(_sample_entry())
 
     # Reload from disk
-    store2 = ProviderCatalogStore(tmp_path)
+    store2 = ProviderCatalogStore(tmp_path, home_dir=tmp_path)
     await store2.load()
     assert len(store2.entries) == 1
     assert store2.entries[0].id == "bedrock-1"

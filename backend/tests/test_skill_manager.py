@@ -25,7 +25,7 @@ def tmp_dirs(tmp_path):
 def manager(tmp_dirs):
     """Create a SkillManager with patched paths."""
     source_dir, global_dir, claude_dir = tmp_dirs
-    mgr = SkillManager()
+    mgr = SkillManager(home_dir=global_dir.parent)
     mgr.source_dir = source_dir
     mgr.global_dir = global_dir
     mgr.global_skills_dir = global_dir / "skills"

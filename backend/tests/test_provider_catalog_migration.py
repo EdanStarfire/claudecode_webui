@@ -154,7 +154,7 @@ async def test_load_ignores_entry_display_name(tmp_path):
     }
     (tmp_path / "providers.json").write_text(json.dumps(data), encoding="utf-8")
 
-    store = ProviderCatalogStore(tmp_path)
+    store = ProviderCatalogStore(tmp_path, home_dir=tmp_path)
     await store.load()
 
     assert len(store.entries) == 1
@@ -185,7 +185,7 @@ async def test_load_ignores_model_display_name(tmp_path):
     }
     (tmp_path / "providers.json").write_text(json.dumps(data), encoding="utf-8")
 
-    store = ProviderCatalogStore(tmp_path)
+    store = ProviderCatalogStore(tmp_path, home_dir=tmp_path)
     await store.load()
 
     model = store.entries[0].models[0]
@@ -211,7 +211,7 @@ async def test_load_model_drop_params_defaults_false(tmp_path):
     }
     (tmp_path / "providers.json").write_text(json.dumps(data), encoding="utf-8")
 
-    store = ProviderCatalogStore(tmp_path)
+    store = ProviderCatalogStore(tmp_path, home_dir=tmp_path)
     await store.load()
 
     assert store.entries[0].models[0].drop_params is False

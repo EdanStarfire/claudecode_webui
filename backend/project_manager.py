@@ -119,8 +119,8 @@ class ProjectInfo:
 class ProjectManager:
     """Manages project lifecycle and session associations"""
 
-    def __init__(self, data_dir: Path = None):
-        self.data_dir = data_dir or Path("data")
+    def __init__(self, data_dir: Path):
+        self.data_dir = data_dir
         self.projects_dir = self.data_dir / "projects"
         self._active_projects: dict[str, ProjectInfo] = {}
         self._project_locks: dict[str, asyncio.Lock] = {}

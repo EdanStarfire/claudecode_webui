@@ -26,7 +26,8 @@ def resolve_effective_permissions(
     working_directory: str,
     setting_sources: list[str] | None = None,
     session_allowed_tools: list[str] | None = None,
-    home_dir: Path | None = None,
+    *,
+    home_dir: Path,
 ) -> list[dict]:
     """
     Resolve effective permissions from settings files and session config.
@@ -36,7 +37,7 @@ def resolve_effective_permissions(
         setting_sources: Which sources to include ("user", "project", "local")
         session_allowed_tools: Tools explicitly allowed at session level
         home_dir: Home directory the "user" source's settings.json lives under
-            (issue #2268 AC1) — defaults to Path.home() if not given.
+            (issue #2268 AC1).
 
     Returns:
         List of dicts: [{"permission": str, "sources": [str, ...]}]
@@ -75,7 +76,7 @@ def resolve_effective_permissions(
 
 
 def _parse_settings_source(
-    source: str, working_directory: str, home_dir: Path | None = None
+    source: str, working_directory: str, home_dir: Path
 ) -> list[str]:
     """
     Parse permissions from a specific settings source.
@@ -131,7 +132,7 @@ def _parse_settings_source(
 
 
 def _get_settings_path(
-    source: str, working_directory: str, home_dir: Path | None = None
+    source: str, working_directory: str, home_dir: Path
 ) -> Path | None:
     """
     Get the path to a settings file for a specific source.
@@ -140,14 +141,14 @@ def _get_settings_path(
         source: One of "user", "project", "local"
         working_directory: Project working directory
         home_dir: Home directory the "user" source's settings.json lives under
-            (issue #2268 AC1) — defaults to Path.home() if not given.
+            (issue #2268 AC1).
 
     Returns:
         Path to the settings file, or None if source is unknown
     """
     if source == "user":
         # User settings: ~/.claude/settings.json
-        return (home_dir or Path.home()) / ".claude" / "settings.json"
+        return home_dir / ".claude" / "settings.json"
     elif source == "project":
         # Project settings: <working_dir>/.claude/settings.json
         return Path(working_directory) / ".claude" / "settings.json"

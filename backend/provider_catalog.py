@@ -95,9 +95,9 @@ class ProviderCatalogStore:
     when providers.json does not yet exist.
     """
 
-    def __init__(self, data_dir: Path, home_dir: Path | None = None):
+    def __init__(self, data_dir: Path, home_dir: Path):
         self.providers_file = data_dir / "providers.json"
-        self._home_dir = home_dir or Path.home()
+        self._home_dir = home_dir
         self._entries: list[ProviderCatalogEntry] = []
         self._litellm_port: int | None = None
         self._pending_changes: bool = False

@@ -242,6 +242,7 @@ class ClaudeSDK:
         permission_handler: Any | None = None,
         recorder: Any | None = None,
         phase_callback: Callable[[str], Any] | None = None,
+        config_file: Path | None = None,
     ):
         """
         Initialize enhanced Claude Code SDK wrapper.
@@ -279,9 +280,13 @@ class ClaudeSDK:
                 phase_callback handler is what actually drives the backend's
                 authoritative SessionState (session_lifecycle.transition()), e.g. on
                 "connected" it calls session_manager.mark_session_active().
+            config_file: App config file whose `background_calls`/`features` sections this
+                wrapper reads (issue #2279 — the tenant's file, threaded from the
+                launcher). None falls back to the default config file.
         """
         if config is None:
             config = SessionConfig()
+        self._config_file = config_file
         self.session_id = session_id
         self.working_directory = Path(working_directory)
         self.storage_manager = storage_manager
@@ -1204,7 +1209,7 @@ class ClaudeSDK:
         # own types.py docstring). Both features share this one options_kwargs["settings"]
         # slot, so they must be merged rather than each independently assigning it.
         from .config_manager import load_config as _load_app_config
-        _app_cfg = _load_app_config()
+        _app_cfg = _load_app_config(self._config_file)
 
         settings_payload: dict = {}
         if _app_cfg.features.block_cross_session_messaging:
@@ -1407,7 +1412,7 @@ class ClaudeSDK:
 
         # Issue #1126: Apply global background-call suppression as the floor
         from .config_manager import load_config
-        app_cfg = load_config()
+        app_cfg = load_config(self._config_file)
         bg_cfg = app_cfg.background_calls
         for attr, (var, value) in _BACKGROUND_CALL_ENV_MAP.items():
             if getattr(bg_cfg, attr):
