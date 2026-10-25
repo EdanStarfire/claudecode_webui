@@ -86,6 +86,7 @@ class ArchiveCoordinator:
     # --- Shared per-session state: live passthrough to the coordinator -------
     _storage_managers = property(lambda self: self._coordinator._storage_managers)
     _task_leg_registries = property(lambda self: self._coordinator._task_leg_registries)
+    _background_tasks = property(lambda self: self._coordinator._background_tasks)
 
     # Injected coordinator methods — never reimplemented here. All permanent
     # (not pending extraction elsewhere).
@@ -328,6 +329,7 @@ class ArchiveCoordinator:
             # Issue #1746: Drop cached task leg registry — it would otherwise
             # keep serving stale legs from before the message history wipe.
             self._task_leg_registries.pop(session_id, None)
+            self._background_tasks.pop(session_id, None)
 
             # Notify frontend to clear messages
             await self._notify_session_reset(session_id)

@@ -155,6 +155,7 @@
 import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useUIStore } from '@/stores/ui'
 import { useTaskStore } from '@/stores/task'
+import { useBackgroundTasksStore } from '@/stores/backgroundTasks'
 import { useResourceStore } from '@/stores/resource'
 import { useDiffStore } from '@/stores/diff'
 import { useSessionStore } from '@/stores/session'
@@ -178,6 +179,7 @@ import SchedulesPanel from '../tasks/SchedulesPanel.vue'
 
 const uiStore = useUIStore()
 const taskStore = useTaskStore()
+const backgroundTasksStore = useBackgroundTasksStore()
 const resourceStore = useResourceStore()
 const diffStore = useDiffStore()
 const sessionStore = useSessionStore()
@@ -198,7 +200,7 @@ const linksBadge = computed(() => {
   return c > 0 ? c : null
 })
 const taskBadge = computed(() => {
-  const total = taskStore.currentTaskStats.total
+  const total = taskStore.currentTaskStats.total + backgroundTasksStore.currentCount
   return total > 0 ? total : null
 })
 const resourceBadge = computed(() => {

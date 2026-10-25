@@ -513,4 +513,12 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=404, detail="Session not found")
         return await webui.service.get_background_agents(session_id)
 
+    @router.get("/api/sessions/{session_id}/background_tasks")
+    @handle_exceptions("get background tasks")
+    async def get_background_tasks(session_id: str):
+        """Currently running background tasks (bash/agent/workflow) snapshot (issue #2145)."""
+        if not await webui.service.get_session_exists(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        return await webui.service.get_background_tasks(session_id)
+
     return router

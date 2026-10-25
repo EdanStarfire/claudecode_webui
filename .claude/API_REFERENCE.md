@@ -24,6 +24,7 @@ Complete REST and WebSocket API reference for Claude WebUI. For backend architec
 | `POST` | `/api/sessions` | Create session (`project_id`, `permission_mode`, `tools`, `model`, `name`) |
 | `GET` | `/api/sessions` | List all sessions |
 | `GET` | `/api/sessions/{id}` | Get session info |
+| `GET` | `/api/sessions/{id}/background_tasks` | Latest snapshot of running background tasks `{session_id, tasks:[{task_id, task_type, description}]}`; empty unless the SDK process is alive (issue #2145) |
 | `GET` | `/api/sessions/{id}/descendants` | Get all descendant sessions (minion tree) |
 | `PATCH` | `/api/sessions/{id}` | Update session fields (model, tools, permissions, cli_path, etc.) |
 | `POST` | `/api/sessions/{id}/start` | Start or resume session |

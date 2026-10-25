@@ -18,7 +18,9 @@ import asyncio
 import logging
 from typing import Any
 
+from .background_tasks import latest_background_tasks
 from .config_resolution import resolve_effective_config
+from .session_lifecycle import is_live, is_paused
 from .task_registry import TaskLegRegistry
 
 logger = logging.getLogger(__name__)
@@ -44,6 +46,7 @@ class SessionQuery:
     _active_sdks = property(lambda self: self._coordinator._active_sdks)
     _storage_managers = property(lambda self: self._coordinator._storage_managers)
     _task_leg_registries = property(lambda self: self._coordinator._task_leg_registries)
+    _background_tasks = property(lambda self: self._coordinator._background_tasks)
 
     async def _build_effective_config_payload(
         self, session_info
@@ -204,3 +207,37 @@ class SessionQuery:
         """Snapshot of background-agent (Task) leg history for reload/reconnect."""
         registry = await self._get_task_leg_registry(session_id)
         return {"session_id": session_id, "agents": registry.snapshot()}
+
+    # ==================== BACKGROUND TASKS (Issue #2145) ====================
+
+    async def _get_background_tasks(self, session_id: str) -> list[dict[str, Any]]:
+        """Latest background-task snapshot, lazily hydrated from messages.jsonl.
+
+        Only cached once storage exists (same rule as the task leg registry), so a
+        not-yet-started session returns an ephemeral empty list.
+        """
+        cached = self._background_tasks.get(session_id)
+        if cached is not None:
+            return cached
+        storage = self._storage_managers.get(session_id)
+        if not storage:
+            return []
+        tasks = latest_background_tasks(await storage.read_messages())
+        self._background_tasks[session_id] = tasks
+        return tasks
+
+    async def get_background_tasks(self, session_id: str) -> dict[str, Any]:
+        """Currently running background tasks, for reload/reconnect.
+
+        Empty unless the session's SDK process is alive — keyed on process liveness,
+        not state == ACTIVE, so a PAUSED session (awaiting permission) keeps its list.
+        """
+        info = await self.session_manager.get_session_info(session_id)
+        state = getattr(info, "state", None)
+        if (
+            session_id not in self._active_sdks
+            or state is None
+            or not (is_live(state) or is_paused(state))
+        ):
+            return {"session_id": session_id, "tasks": []}
+        return {"session_id": session_id, "tasks": await self._get_background_tasks(session_id)}

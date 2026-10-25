@@ -1,7 +1,7 @@
 <template>
   <div class="task-list-panel">
     <div class="task-list p-2">
-      <div v-if="tasks.length === 0" class="empty-placeholder">
+      <div v-if="tasks.length === 0 && backgroundCount === 0" class="empty-placeholder">
         <span>Tasks will appear here as the agent works</span>
       </div>
 
@@ -14,6 +14,8 @@
           @toggle="toggleTaskExpansion(task.id)"
         />
       </TransitionGroup>
+
+      <BackgroundTasksSection />
     </div>
   </div>
 </template>
@@ -21,12 +23,15 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useTaskStore } from '@/stores/task'
+import { useBackgroundTasksStore } from '@/stores/backgroundTasks'
 import TaskItem from './TaskItem.vue'
+import BackgroundTasksSection from './BackgroundTasksSection.vue'
 
 const taskStore = useTaskStore()
 
 const expandedTasks = ref(new Set())
 const tasks = computed(() => taskStore.currentTasks)
+const backgroundCount = computed(() => useBackgroundTasksStore().currentCount)
 
 function toggleTaskExpansion(taskId) {
   if (expandedTasks.value.has(taskId)) {

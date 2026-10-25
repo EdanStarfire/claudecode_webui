@@ -230,6 +230,7 @@ class SessionLauncher:
     _message_emitted_events = property(lambda self: self._coordinator._message_emitted_events)
     _emitted_turn_ids = property(lambda self: self._coordinator._emitted_turn_ids)
     _task_leg_registries = property(lambda self: self._coordinator._task_leg_registries)
+    _background_tasks = property(lambda self: self._coordinator._background_tasks)
 
     @staticmethod
     def _default_sdk_factory(session_id, working_directory, **kwargs):
@@ -1443,6 +1444,9 @@ class SessionLauncher:
 
         Returns True if an active SDK was found and torn down, False if none was active.
         """
+        # Issue #2145: background tasks die with the process.
+        self._background_tasks.pop(session_id, None)
+
         sdk = self._active_sdks.get(session_id)
         if not sdk:
             return False
@@ -1630,6 +1634,7 @@ class SessionLauncher:
                 # Issue #1746: Drop cached task leg registry along with the
                 # cleared message history it was built from.
                 self._task_leg_registries.pop(session_id, None)
+                self._background_tasks.pop(session_id, None)
 
             # Issue #1244: rotate proxy logs then clear non-proxy docker_claude_data and tmp
             await self._rotate_proxy_logs(session_id)

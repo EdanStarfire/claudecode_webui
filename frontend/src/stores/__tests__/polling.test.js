@@ -187,6 +187,20 @@ describe('polling store', () => {
     pollingStore.stopUIPolling()
   }
 
+  // Issue #2145: background tasks are process-bound — cleared on real teardown only.
+  it.each([['terminated', true], ['error', true], ['paused', false], ['active', false]])(
+    'state_change to %s %s clears background tasks (#2145)',
+    async (state, shouldClear) => {
+      const { useBackgroundTasksStore } = await import('@/stores/backgroundTasks')
+      const bg = useBackgroundTasksStore()
+      bg.setTasks('sess-bg', [{ task_id: 't1', task_type: 'local_bash', description: 'x' }])
+
+      await runStateChangeSequence('sess-bg', [{ state }])
+
+      expect(bg.tasksForSession('sess-bg').length).toBe(shouldClear ? 0 : 1)
+    }
+  )
+
   // Issue #2184: same shape as runStateChangeSequence, but for processing_change
   // events — the backend no longer emits state_change for is_processing-only
   // transitions (AC1), so the task_complete notify trigger now rides this stream.

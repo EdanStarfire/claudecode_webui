@@ -135,6 +135,10 @@ Hash-based routing (`createWebHashHistory`):
 - **Key actions**: `createTask()`, `updateTask()`, `clearTasks()`, `reconstructFromMessages()`, `handleTaskToolResult()`
 - **Helpers**: `tasksForSession()`, `activeTask()`, `taskStats()`
 
+#### `backgroundTasks.js` — Running background tasks per session (issue #2145)
+- **State**: `tasksBySession` (Map of latest snapshot `[{task_id, task_type, description}]`)
+- **Key actions**: `setTasks()` (replace), `clear()`, `hydrate()` (GET `/background_tasks`); fed by live `background_tasks_changed` only (never history), cleared on client_launched/session_failed/terminated/error. Rendered by `BackgroundTasksSection` in the Tasks panel; bubbles are hidden in `MessageList`.
+
 #### `mcp.js` — Active MCP server state per session
 - Runtime state of active MCP servers, synced from backend
 

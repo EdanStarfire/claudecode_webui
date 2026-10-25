@@ -1604,6 +1604,9 @@ function shouldDisplayMessage(message) {
     }
   }
 
+  // Issue #2145: background task snapshots render in the Tasks panel's Background section
+  if (message.type === 'system' && subtype === 'background_tasks_changed') return false
+
   // Issue #1676: Suppress background subagent notifications from the inline message
   // list — they render exclusively in the session-level AgentNotificationStrip.
   if (message.type === 'system' && message.metadata?.subtype === 'agent_notification') {

@@ -9,6 +9,7 @@ import { useResourceStore } from './resource'
 import { useEditHistoryStore } from './editHistory'
 import { useQueueStore } from './queue'
 import { useTaskStore } from './task'
+import { useBackgroundTasksStore } from './backgroundTasks'
 import { useDiffStore } from './diff'
 import { useLinksStore } from './links'
 import { pushDebugEvent } from '../composables/useDebugBuffer'
@@ -203,6 +204,9 @@ export const useSessionStore = defineStore('session', () => {
           resume,
           onPageComplete: (progress) => updateHydrationProgress(sessionId, abortController, progress),
         })
+        // Issue #2145: seed the Background section from the backend snapshot (never throws;
+        // not awaited so it can't delay or reorder the history-load chain).
+        useBackgroundTasksStore().hydrate(sessionId)
       } catch (error) {
         if (abortController.signal.aborted || historyController.signal.aborted) {
           clearHydrationStageIfOwned(sessionId, abortController)

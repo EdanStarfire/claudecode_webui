@@ -31,6 +31,11 @@ from backend.analytics.usage import (
 from backend.docker_utils import classify_docker_output
 from shared.logging_config import get_logger
 
+from .background_tasks import (
+    BACKGROUND_TASKS_SUBTYPE,
+    PROCESS_BOUNDARY_SUBTYPES,
+    parse_background_tasks,
+)
 from .claude_sdk import ResultError
 from .config_resolution import resolve_effective_config
 from .models.messages import _message_dict_to_record
@@ -104,6 +109,7 @@ class MessagePipeline:
     _rate_limit_broadcast_callback = property(lambda self: self._coordinator._rate_limit_broadcast_callback)
     _usage_broadcast_callback = property(lambda self: self._coordinator._usage_broadcast_callback)
     _task_leg_registries = property(lambda self: self._coordinator._task_leg_registries)
+    _background_tasks = property(lambda self: self._coordinator._background_tasks)
     _tool_call_events = property(lambda self: self._coordinator._tool_call_events)
     _message_emitted_events = property(lambda self: self._coordinator._message_emitted_events)
     _emitted_turn_ids = property(lambda self: self._coordinator._emitted_turn_ids)
@@ -313,6 +319,26 @@ class MessagePipeline:
                                 registry.apply_frame(task_subtype, parsed_message.metadata, parsed_message.timestamp)
                         except Exception:
                             logger.exception(f"Failed to update task leg registry for session {session_id}")
+
+                    # Issue #2145: keep the latest-snapshot background-task cache warm.
+                    # client_launched/session_failed mean any earlier snapshot belonged
+                    # to a dead process (the CLI emits no empty list on death).
+                    if task_subtype in PROCESS_BOUNDARY_SUBTYPES:
+                        self._background_tasks[session_id] = []
+                    elif task_subtype == BACKGROUND_TASKS_SUBTYPE:
+                        try:
+                            # Same cold/warm guard as the registry above: a cold
+                            # hydration already replays this stored frame.
+                            tasks_already_cached = session_id in self._background_tasks
+                            await self._coordinator._get_background_tasks(session_id)
+                            if tasks_already_cached:
+                                # Prefer the record's own nested metadata: the parser's
+                                # dict path drops init_data (same trap as issue #2190).
+                                self._background_tasks[session_id] = parse_background_tasks(
+                                    _nested_metadata(message_data, parsed_message)
+                                )
+                        except Exception:
+                            logger.exception(f"Failed to update background tasks for session {session_id}")
 
                 # Track permission responses with applied updates (for historical/display purposes)
                 if parsed_message.type.value == 'permission_response' and parsed_message.metadata:
@@ -637,6 +663,8 @@ class MessagePipeline:
         (the double-emission half of the AC1/AC5 bug) — this method no longer makes
         its own redundant update_processing_state() call.
         """
+        # Issue #2145: the process is gone; its background tasks died with it.
+        self._background_tasks.pop(session_id, None)
         try:
             await self.session_manager.transition_to_error(
                 session_id, error_message, **structured_error_kwargs
