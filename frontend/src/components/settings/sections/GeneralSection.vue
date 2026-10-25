@@ -4,6 +4,7 @@
       :title="isSessionMode ? 'General' : 'General'"
       :show-save-cancel="isDirty"
       :saving="saving"
+      :save-disabled="seedLoading"
       @save="handleSave"
       @cancel="handleCancel"
     >
@@ -347,6 +348,9 @@ const seedSessionId = computed(() => {
 })
 const seedConfig = ref(null)
 let seedAppliedFor = null
+// Issue #2264: true while a cold-cache fetch of the seed source is in flight, so
+// Save cannot create a session before seedConfig has been populated.
+const seedLoading = ref(false)
 
 async function applySeedSession() {
   const sid = seedSessionId.value
@@ -358,14 +362,26 @@ async function applySeedSession() {
     // an unrelated, un-seeded session creation.
     seedAppliedFor = null
     seedConfig.value = null
+    seedLoading.value = false
     return
   }
   if (seedAppliedFor === sid) return
   seedAppliedFor = sid
+  // A previous seed's pending fetch no longer owns the flag (its finally is a no-op now).
+  seedLoading.value = false
   let source = sessionStore.getSession(sid)
   if (!source) {
-    const data = await sessionStore.fetchSessionDetails(sid)
-    source = data?.session || sessionStore.getSession(sid)
+    seedLoading.value = true
+    try {
+      const data = await sessionStore.fetchSessionDetails(sid)
+      source = data?.session || sessionStore.getSession(sid)
+    } catch {
+      // Fetch failure: fall through and create an unseeded session (Save re-enabled).
+    } finally {
+      // Only clear for the latest seed; a newer seed/route change owns the flag otherwise.
+      if (seedAppliedFor === sid) seedLoading.value = false
+    }
+    if (seedAppliedFor !== sid) return
   }
   if (!source) return
   seedConfig.value = source.config || {}
@@ -450,6 +466,7 @@ function handleProfileBinding(area, profileId) {
 }
 
 async function handleSave() {
+  if (isSessionMode.value && isNew.value && seedLoading.value) return
   saving.value = true
   try {
     if (isSessionMode.value && isNew.value) {
