@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from shared.exception_handlers import handle_exceptions
 
 from ..models.messages import LegacyMessageFormatError
+from ..path_display import relativize_to
 
 # Heuristic for classifying Bash commands as likely file-modifying.
 # Conservative — false positives (treating non-modifying as modifying)
@@ -66,10 +67,19 @@ def _resolve_status(
     return ("completed" if succeeded else "failed"), succeeded
 
 
-def _build_entry(block: dict, ts: float | None) -> dict:
-    """Build an edit-history entry from a tool_use block."""
+def _build_entry(block: dict, ts: float | None, workdir: str | None = None) -> dict:
+    """Build an edit-history entry from a tool_use block.
+
+    Issue #2279: `file_path` and `input.file_path` are rewritten (on a copy) to a
+    path relative to the session working directory; a path outside it stays absolute
+    and the entry gets `file_path_outside_workdir: true`.
+    """
     name = block.get("name")
     inp = block.get("input") or {}
+    outside = False
+    if workdir and isinstance(inp.get("file_path"), str) and inp["file_path"]:
+        rel, outside = relativize_to(workdir, inp["file_path"])
+        inp = {**inp, "file_path": rel}
     entry: dict = {
         "tool_use_id": block.get("id"),
         "tool_name": name,
@@ -84,6 +94,8 @@ def _build_entry(block: dict, ts: float | None) -> dict:
     elif name == "Bash":
         entry["command"] = inp.get("command", "")
         entry["likely_modifying"] = _classify_bash(entry["command"])
+    if outside and "file_path" in entry:
+        entry["file_path_outside_workdir"] = True
     return entry
 
 
@@ -103,6 +115,7 @@ def build_router(webui) -> APIRouter:
         if not ctx.get("exists"):
             raise HTTPException(status_code=404, detail="Session not found")
 
+        workdir = ctx.get("working_directory")
         messages_path = await webui.service.get_session_messages_path(session_id)
         if not messages_path or not Path(messages_path).exists():
             return {"entries": [], "tool_count": 0}
@@ -137,7 +150,7 @@ def build_router(webui) -> APIRouter:
                             continue
                         if tu.get("name") not in ("Edit", "Write", "Bash"):
                             continue
-                        entries.append(_build_entry(tu, ts))
+                        entries.append(_build_entry(tu, ts, workdir))
 
                 elif msg_type == "user":
                     metadata = msg.get("metadata") or {}
