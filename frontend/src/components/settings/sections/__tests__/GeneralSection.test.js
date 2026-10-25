@@ -143,3 +143,93 @@ describe('GeneralSection — seed a new session from an existing one (issue #216
     expect(payload.model).toBeUndefined()
   })
 })
+
+// Issue #2264: block Save while the cold-cache seed source fetch is in flight.
+describe('GeneralSection — Save blocked during cold-cache seed fetch (issue #2264)', () => {
+  const URL = '/settings/session/__new__/general?project_id=proj-1&seed_session_id=src-1'
+
+  function deferredSource() {
+    let resolve, reject
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej })
+    apiMock.get.mockImplementation((url) => {
+      if (url === '/api/templates') return Promise.resolve({ templates: [] })
+      if (url === '/api/profiles') return Promise.resolve({ profiles: [] })
+      if (url === '/api/sessions/src-1') return promise
+      return Promise.resolve({})
+    })
+    return { resolve, reject }
+  }
+
+  async function mountCold() {
+    const rendered = renderWithStores(GeneralSection, { routes: ROUTES, initialRoute: URL })
+    await rendered.router.push(URL)
+    await flush()
+    return rendered
+  }
+
+  const saveDisabled = (wrapper) => wrapper.find('.btn-save').element.disabled
+
+  it('disables Save while pending, enables it after resolve, and includes the seed config', async () => {
+    const d = deferredSource()
+    apiMock.post.mockResolvedValue({ session_id: 'new-id' })
+    const { wrapper } = await mountCold()
+    expect(saveDisabled(wrapper)).toBe(true)
+
+    // handleSave is a no-op while loading
+    await wrapper.vm.save()
+    expect(apiMock.post).not.toHaveBeenCalled()
+
+    d.resolve({ session: makeSession({ session_id: 'src-1', template_id: 'tmpl-1', config: { model: 'opus' } }) })
+    await flush()
+    expect(saveDisabled(wrapper)).toBe(false)
+
+    await wrapper.vm.save()
+    await flush()
+    expect(apiMock.post).toHaveBeenCalledWith('/api/sessions', expect.objectContaining({ model: 'opus' }))
+  })
+
+  it('re-enables Save when the fetch rejects', async () => {
+    const d = deferredSource()
+    const { wrapper } = await mountCold()
+    expect(saveDisabled(wrapper)).toBe(true)
+
+    d.reject(new Error('404'))
+    await flush()
+    expect(saveDisabled(wrapper)).toBe(false)
+  })
+
+  it('re-enables Save when the fetch returns no session', async () => {
+    const d = deferredSource()
+    const { wrapper } = await mountCold()
+    d.resolve({})
+    await flush()
+    expect(saveDisabled(wrapper)).toBe(false)
+  })
+
+  it('never disables Save when the source is already cached', async () => {
+    const { wrapper } = await mountSeeded()
+    expect(saveDisabled(wrapper)).toBe(false)
+  })
+
+  it('clears the flag when navigating to a plain __new__ route mid-fetch', async () => {
+    deferredSource()
+    const { wrapper, router } = await mountCold()
+    expect(saveDisabled(wrapper)).toBe(true)
+
+    await router.push('/settings/session/__new__/general?project_id=proj-2')
+    await flush()
+    expect(saveDisabled(wrapper)).toBe(false)
+  })
+
+  it('clears the flag when switching to a cached seed while another fetch is pending', async () => {
+    deferredSource()
+    const { wrapper, router, pinia } = await mountCold()
+    expect(saveDisabled(wrapper)).toBe(true)
+
+    const { useSessionStore } = await import('@/stores/session')
+    useSessionStore(pinia).sessions.set('src-2', makeSession({ session_id: 'src-2', config: {} }))
+    await router.push('/settings/session/__new__/general?project_id=proj-1&seed_session_id=src-2')
+    await flush()
+    expect(saveDisabled(wrapper)).toBe(false)
+  })
+})
