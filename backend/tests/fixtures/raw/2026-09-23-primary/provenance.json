@@ -1,7 +1,7 @@
 {
-  "sdk_version": "0.2.159",
-  "cli_version": "2.1.283 (Claude Code)",
+  "sdk_version": "0.2.173",
+  "cli_version": "2.1.261 (Claude Code)",
   "model": "sonnet",
-  "git_sha": "b90b3f63b2a0fd3c7f483dd7d05fa3470d4fd891",
-  "capture_date": "2026-09-27T21:45:09.164445+00:00"
+  "git_sha": "2341f2c8e7c5c594a1df6f32afab43d99be7bfb5",
+  "capture_date": "2026-10-25T19:41:29.140058+00:00"
 }

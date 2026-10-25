@@ -128,10 +128,16 @@ def state_change(session_id: str, state: str | None = None) -> Predicate:
     return _match
 
 
+# Issue #2159: metadata-only updates (permission mode, model, ...) emit
+# `session_metadata_updated` rather than `state_change`; both carry the same
+# `{session_id, session}` payload, so either is accepted.
+_SESSION_DICT_EVENT_TYPES = ("state_change", "session_metadata_updated")
+
+
 def permission_mode_state_change(session_id: str, mode: str) -> Predicate:
     def _match(tagged: TaggedEvent) -> bool:
         event = tagged.event
-        if event.type != "state_change":
+        if event.type not in _SESSION_DICT_EVENT_TYPES:
             return False
         data = event.data or {}
         if data.get("session_id") != session_id:
@@ -144,7 +150,7 @@ def permission_mode_state_change(session_id: str, mode: str) -> Predicate:
 def model_state_change(session_id: str, model: str) -> Predicate:
     def _match(tagged: TaggedEvent) -> bool:
         event = tagged.event
-        if event.type != "state_change":
+        if event.type not in _SESSION_DICT_EVENT_TYPES:
             return False
         data = event.data or {}
         if data.get("session_id") != session_id:

@@ -176,20 +176,33 @@ class PollConsumer:
             await self.buffer.append(self.stream, event)
         self.cursor = batch.next_cursor
 
-    async def fast_forward(self) -> None:
+    async def fast_forward(self, settle_s: float = 3.0, max_rounds: int = 20) -> None:
         """Moves the cursor to the stream's current head, discarding every event
         already queued (a `timeout=0` poll returns all of them at once). Used on
         resume so events from before the reattach — notably a failed attempt at
-        the scenario being retried — can never match that scenario's waits."""
+        the scenario being retried — can never match that scenario's waits.
+
+        Re-polls until one taken `settle_s` after the previous returns nothing:
+        while no client polled, Frontend's poll relay may have aged this stream
+        out of its subscription set, so its local queue is stale (the first poll
+        can come back empty) and only that first poll re-subscribes it — the
+        relay's catch-up from Backend lands afterwards and would otherwise be
+        replayed."""
         async with httpx.AsyncClient(base_url=self.base_url) as client:
-            resp = await client.post(
-                "/api/poll",
-                json=self._multiplex_body(0),
-                headers=self._headers(),
-                timeout=30.0,
-            )
-            resp.raise_for_status()
-        self.cursor = parse_poll_response(self._unwrap(resp.json())).next_cursor
+            for round_index in range(max_rounds):
+                if round_index:
+                    await asyncio.sleep(settle_s)
+                resp = await client.post(
+                    "/api/poll",
+                    json=self._multiplex_body(0),
+                    headers=self._headers(),
+                    timeout=30.0,
+                )
+                resp.raise_for_status()
+                parsed = parse_poll_response(self._unwrap(resp.json()))
+                self.cursor = parsed.next_cursor
+                if round_index and not parsed.events and not parsed.reset:
+                    return
 
     async def run(self) -> None:
         async with httpx.AsyncClient(base_url=self.base_url) as client:
