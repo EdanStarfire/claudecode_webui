@@ -42,9 +42,15 @@
         <div class="entry-row" @click="entry.tool_name === 'Edit' ? openDiff(entry) : toggle(entry)">
           <span class="entry-icon">{{ toolIcon(entry.tool_name) }}</span>
 
-          <span class="entry-label text-truncate" :title="entryLabel(entry)">
+          <span class="entry-label text-truncate" :title="entryTitle(entry)">
             {{ entryLabel(entry) }}
           </span>
+
+          <span
+            v-if="entry.file_path_outside_workdir"
+            class="entry-outside"
+            title="Outside the session working directory"
+          >↗</span>
 
           <span v-if="entry.tool_name === 'Write'" class="entry-stats write-lines">
             {{ entry.line_count }} lines
@@ -162,6 +168,13 @@ function entryLabel(entry) {
   }
   const fp = entry.file_path || ''
   return fp.split('/').pop() || fp
+}
+
+// Hover text: the full (working-directory-relative, or absolute when outside) path.
+function entryTitle(entry) {
+  if (entry.tool_name === 'Bash') return entryLabel(entry)
+  const fp = entry.file_path || ''
+  return entry.file_path_outside_workdir ? `${fp} (outside session working directory)` : fp
 }
 
 function relativeTs(ts) {
@@ -338,6 +351,15 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.entry-outside {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 3px;
+  color: var(--bs-warning-text-emphasis, #997404);
+  background: var(--bs-warning-bg-subtle, #fff3cd);
 }
 
 .entry-stats {

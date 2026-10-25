@@ -60,6 +60,17 @@ Complete REST and WebSocket API reference for Claude WebUI. For backend architec
 |--------|------|-------------|
 | `GET` | `/api/sessions/{id}/diffs` | Get diff summary (changed files, commit list) |
 | `GET` | `/api/sessions/{id}/diffs/{file_path}` | Get diff content for specific file |
+| `GET` | `/api/sessions/{id}/edit-history` | Chronological Edit/Write/Bash tool calls (see Host paths below) |
+
+#### Host paths in payloads (issue #2279)
+
+`edit-history` entries carry `file_path` and `input.file_path` **relative to the session working
+directory** (`old_string`/`new_string`/`content` are untouched). A path outside the working directory
+stays absolute and the entry gets `file_path_outside_workdir: true`. Diff payloads are already
+repo-relative. These fields intentionally remain absolute **display fields** (registry:
+`backend/path_display.py::DISPLAY_PATH_FIELDS`): session and project `working_directory`,
+`GET /api/filesystem/browse` paths, resource `file_path`, upload `stored_path`, and tool_use/message
+payloads. Archived sessions keep their recorded `working_directory`.
 
 ### Queue Endpoints
 
