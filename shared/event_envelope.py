@@ -14,6 +14,15 @@ from dataclasses import asdict, dataclass
 # random-unique, not "recognize the same Backend restarting into the same epoch").
 PROCESS_EPOCH: str = secrets.token_hex(8)
 
+
+def session_stream_epoch(queue) -> str:
+    """Epoch reported for a session stream: the Backend process generation plus the
+    queue's own reset generation (issue #2305), so a session reset — which restarts the
+    queue's cursor space without a process restart — is visible to the relay exactly
+    like a Backend restart. Shared by the poll and `GET /messages` handlers so both
+    always report the identical value."""
+    return f"{PROCESS_EPOCH}:{queue.generation}"
+
 DEFAULT_BACKEND_ID = "local"  # UC4: single implicit value until #1818 multi-backend.
 # Frontend-local writes (e.g. src/routers/system.py's server_restarting) land on the same
 # ui_queue poll_relay.py relays Backend's real backend_id/sequence into — stamping

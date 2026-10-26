@@ -4,6 +4,7 @@ Bounded in-memory event queue for HTTP long-polling.
 
 import asyncio
 import logging
+import secrets
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,25 @@ class EventQueue:
         self._oldest_cursor: int = 1
         self._waiters: list[asyncio.Event] = []
         self._on_append = on_append
+        # Issue #2305: identifies which reset-generation this queue's cursor space belongs
+        # to. Changes on every reset(), so pollers can tell "cursor space restarted".
+        self.generation: str = secrets.token_hex(8)
+
+    def reset(self) -> None:
+        """Discard every retained event and restart the cursor space (issue #2305).
+
+        In place rather than replacing the queue object, so in-flight polls and
+        `on_append` hooks holding a reference keep working. A new `generation` token
+        lets pollers detect the discontinuity. Waiters are woken so a long-poll
+        holding a pre-reset cursor re-evaluates immediately.
+        """
+        self._events.clear()
+        self._cursor = 0
+        self._oldest_cursor = 1
+        self.generation = secrets.token_hex(8)
+        for waiter in self._waiters:
+            waiter.set()
+        self._waiters.clear()
 
     def append(self, event: dict) -> int:
         """Append an event, auto-incrementing the local cursor.
