@@ -6,7 +6,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 
-from shared.event_envelope import PROCESS_EPOCH
+from shared.event_envelope import PROCESS_EPOCH, session_stream_epoch
 from shared.exception_handlers import handle_exceptions
 
 from ..fixture_export import FixtureExportError
@@ -502,7 +502,7 @@ def build_router(webui) -> APIRouter:
         # Epic #1990 stage 5a: which Backend-process generation produced event_cursor —
         # needed by the Frontend-issued history cursor mechanism (src/routers/sessions.py)
         # to detect a restart racing this very read.
-        result["epoch"] = PROCESS_EPOCH
+        result["epoch"] = session_stream_epoch(queue) if queue else PROCESS_EPOCH
         return result
 
     @router.get("/api/sessions/{session_id}/background_agents")

@@ -154,6 +154,15 @@ class FakeBackend:
         """
         self.queue_for(session_id).MAX_SIZE = n
 
+    def reset_session(self, session_id: str) -> None:
+        """Issue #2305 primitive: session reset — same process, the session's queue is
+        reset in place (cursor space restarts, new generation => new epoch), exactly
+        like backend/web_server.py's `_on_session_reset`."""
+        self.queue_for(session_id).reset()
+
+    def _session_epoch(self, session_id: str) -> str:
+        return f"{self._epoch}:{self.queue_for(session_id).generation}"
+
     def slow_ready(self, delay: float) -> None:
         """AC3 primitive: every subsequent poll response is delayed by `delay`
         seconds before Backend "answers" — models a Backend that's up but slow
@@ -196,7 +205,7 @@ class FakeBackend:
             session_id: {
                 "events": results[session_id].events, "next_cursor": results[session_id].next_cursor,
                 "reset": results[session_id].reset, "evicted": results[session_id].evicted,
-                "epoch": str(self._epoch),
+                "epoch": self._session_epoch(session_id),
             }
             for session_id in session_queries
         }

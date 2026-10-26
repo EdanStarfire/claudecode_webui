@@ -18,7 +18,7 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, HTTPException
 
-from shared.event_envelope import PROCESS_EPOCH
+from shared.event_envelope import PROCESS_EPOCH, session_stream_epoch
 from shared.event_queue import EventQueue
 from shared.exception_handlers import handle_exceptions
 from shared.logging_config import get_logger
@@ -90,12 +90,13 @@ def build_router(webui) -> APIRouter:
         sessions_response: dict = {}
         for session_id in valid_session_ids:
             result = results[session_id]
+            session_queue = streams[session_id][0]
             sessions_response[session_id] = asdict(MultiplexStreamResponse(
                 events=result.events,
                 next_cursor=result.next_cursor,
                 reset=result.reset,
                 evicted=result.evicted,
-                epoch=PROCESS_EPOCH,
+                epoch=session_stream_epoch(session_queue),
             ))
             if result.events:
                 _polling_logger.info(

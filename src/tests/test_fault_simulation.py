@@ -390,3 +390,161 @@ async def test_cursor_collision_silently_drops_colliding_post_restart_events():
         or client.reset_count >= 1
         or client.evicted_count >= 1
     )
+
+
+# --- Issue #2305: session age-out / re-entry must not replay Backend's queue -------
+
+_AGE_OUT_IDLE_SECONDS = 0.3
+
+
+async def _run_age_out_scenario(
+    before_events: list[dict], while_aged_out: list[dict], gap_fault=None
+) -> dict:
+    """K events delivered, client goes quiet past the (shrunk) idle timeout so the
+    relay drops the session from its subscription set, N more events land on
+    Backend, client resumes. Returns the raw (non-deduped) post-resume deliveries."""
+    session_id = "age-out-session"
+    backend = FakeBackend()
+    frontend = FakeFrontend(backend)
+    client = BrowserClient(frontend, session_id=session_id)
+    try:
+        for i, event in enumerate(before_events):
+            backend.queue_for(session_id).append({**event, "__fault_harness_seq__": i})
+        # Initial subscription + catch-up on the K events.
+        for _ in range(20):
+            await client.poll_once(timeout=0.05)
+            if len(client.received) >= len(before_events):
+                break
+        assert len(client.received) == len(before_events)
+
+        # Client frozen: no touch_session() calls, so the session ages out.
+        await asyncio.sleep(_AGE_OUT_IDLE_SECONDS * 2 + 0.3)
+        assert session_id not in frontend.poll_relay._session_last_activity
+
+        if gap_fault is not None:
+            gap_fault(backend, session_id)
+
+        for j, event in enumerate(while_aged_out):
+            backend.queue_for(session_id).append(
+                {**event, "__fault_harness_seq__": len(before_events) + j}
+            )
+
+        received_before_resume = len(client.received)
+        local_cursor_before = client.cursor
+        # Resume and drain until quiescent (several consecutive empty polls), so a relay
+        # that wrongly re-appends the whole queue is fully observed rather than cut off.
+        idle_polls = 0
+        for _ in range(60):
+            before = len(client.received)
+            await client.poll_once(timeout=0.1)
+            idle_polls = idle_polls + 1 if len(client.received) == before else 0
+            if idle_polls >= 4:
+                break
+        post = client.received[received_before_resume:]
+        return {
+            "post_resume": post,
+            "post_resume_count": len(post),
+            "local_cursor_delta": client.cursor - local_cursor_before,
+            "duplicates": len(post) - len({identity for identity, _ in post}),
+            "pre_seq_redelivered": sum(
+                1 for identity, _ in post if identity < len(before_events)
+            ),
+            "reset_markers": client.reset_count,
+            "backend": backend,
+            "frontend": frontend,
+            "client": client,
+        }
+    finally:
+        await frontend.stop()
+
+
+@pytest.fixture
+def _short_idle(monkeypatch):
+    monkeypatch.setattr("src.poll_relay._SESSION_IDLE_TIMEOUT_SECONDS", _AGE_OUT_IDLE_SECONDS)
+
+
+@pytest.mark.asyncio
+async def test_issue_2305_age_out_reentry_delivers_only_new_events(_short_idle):
+    """AC4: after age-out + re-entry the browser receives exactly the N events produced
+    while aged out — not K+N (the whole Backend queue re-appended from cursor 0)."""
+    k, n = 30, 7
+    # Synthetic payload: the recorded fixture slice is only ~17 events, fewer than K+N.
+    payload = [{**_SAMPLE_EVENTS[i % len(_SAMPLE_EVENTS)]} for i in range(k + n)]
+    result = await _run_age_out_scenario(payload[:k], payload[k:])
+    print(
+        f"AGE_OUT_RESULT delivered={result['post_resume_count']} "
+        f"duplicates={result['pre_seq_redelivered']} cursor_delta={result['local_cursor_delta']}"
+    )
+    assert result["post_resume_count"] == n
+    assert result["pre_seq_redelivered"] == 0
+    assert result["duplicates"] == 0
+    assert result["local_cursor_delta"] == n
+
+
+def _synthetic_payload(total: int) -> list[dict]:
+    return [{**_SAMPLE_EVENTS[i % len(_SAMPLE_EVENTS)]} for i in range(total)]
+
+
+@pytest.mark.asyncio
+async def test_issue_2305_age_out_then_session_reset_delivers_no_pre_reset_events(_short_idle):
+    """AC3/AC4: a session reset during the gap -> one explicit stream_reset, and none of
+    the pre-reset records (seq < K) are ever redelivered."""
+    k, n = 30, 5
+    payload = _synthetic_payload(k + n)
+    result = await _run_age_out_scenario(
+        payload[:k], payload[k:], gap_fault=lambda backend, sid: backend.reset_session(sid)
+    )
+    assert result["reset_markers"] == 1
+    assert result["pre_seq_redelivered"] == 0
+    delivered = [i for i, e in result["post_resume"] if e.type != "stream_reset"]
+    assert delivered == list(range(k, k + n))
+
+
+@pytest.mark.asyncio
+async def test_issue_2305_age_out_then_backend_restart_emits_exactly_one_reset(_short_idle):
+    k, n = 30, 5
+    payload = _synthetic_payload(k + n)
+    result = await _run_age_out_scenario(
+        payload[:k], payload[k:], gap_fault=lambda backend, sid: backend.restart()
+    )
+    assert result["reset_markers"] == 1
+    assert result["pre_seq_redelivered"] == 0
+    assert result["duplicates"] == 0
+
+
+@pytest.mark.asyncio
+async def test_issue_2305_age_out_with_two_browsers_at_different_local_cursors(_short_idle):
+    """Browsers share one relay cursor but keep independent local cursors: each receives
+    exactly the delta it lacks, nothing twice."""
+    session_id = "two-browser-session"
+    backend = FakeBackend()
+    frontend = FakeFrontend(backend)
+    a = BrowserClient(frontend, session_id=session_id)
+    b = BrowserClient(frontend, session_id=session_id)
+    payload = _synthetic_payload(40)
+    try:
+        for i in range(20):
+            backend.queue_for(session_id).append({**payload[i], "__fault_harness_seq__": i})
+        for _ in range(20):
+            await a.poll_once(timeout=0.05)
+            if len(a.received) >= 20:
+                break
+        # Browser B arrives later, behind: it has only seen the first 8 local events.
+        b.cursor = 8
+        b_seen = len(b.received)
+
+        await asyncio.sleep(_AGE_OUT_IDLE_SECONDS * 2 + 0.3)
+        assert session_id not in frontend.poll_relay._session_last_activity
+        for i in range(20, 25):
+            backend.queue_for(session_id).append({**payload[i], "__fault_harness_seq__": i})
+
+        a_before = len(a.received)
+        for _ in range(15):
+            await a.poll_once(timeout=0.1)
+            await b.poll_once(timeout=0.1)
+        a_new = [identity for identity, _ in a.received[a_before:]]
+        b_new = [identity for identity, _ in b.received[b_seen:]]
+        assert a_new == list(range(20, 25))
+        assert b_new == list(range(8, 25))  # exactly the delta B lacks, once
+    finally:
+        await frontend.stop()

@@ -1455,6 +1455,12 @@ class BackendApp:
     async def _on_session_reset(self, session_id: str):
         """Issue #500: Append session_reset to UI queue so frontend clears stale messages."""
         try:
+            # Issue #2305: pre-reset records must never reappear — restart the session
+            # stream's cursor space (in place; new generation => new epoch, which the
+            # Frontend relay surfaces as stream_reset) before start_session emits new events.
+            session_queue = self.session_queues.get(session_id)
+            if session_queue is not None:
+                session_queue.reset()
             emit(
                 self.ui_queue, QUEUE_UI, "session_reset", {"data": {"session_id": session_id}},
                 scope=session_id, backend_id=self.tenant_context.backend_id,

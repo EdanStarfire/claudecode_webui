@@ -282,7 +282,8 @@ async def test_rapid_touch_of_many_new_sessions_does_not_starve_the_loop():
 async def test_us3_aged_out_session_bookkeeping_is_pruned_directly():
     """US3/T3: after a session ages out, every one of the relay's own per-stream
     bookkeeping dicts must no longer contain that session_id — asserted
-    directly, not inferred from event-correctness alone."""
+    directly, not inferred from event-correctness alone. (Issue #2305: `_backend_cursor`
+    and `_last_epoch` are the deliberate exceptions — kept for resume.)"""
     delivered = False
 
     async def side_effect(*args, **kwargs):
@@ -316,8 +317,10 @@ async def test_us3_aged_out_session_bookkeeping_is_pruned_directly():
         await _wait_until(lambda: "sess-prune" not in relay._session_last_activity, attempts=500)
 
         assert "sess-prune" not in relay._session_last_activity
-        assert "sess-prune" not in relay._last_epoch
-        assert "sess-prune" not in relay._backend_cursor
+        # Issue #2305: cursor + epoch are retained across age-out so re-entry resumes.
+        assert relay._last_epoch["sess-prune"] == "e1"
+        assert relay._backend_cursor["sess-prune"] == 1
+        assert relay._aged_out["sess-prune"] == 1
         assert "sess-prune" not in relay._checkpoints
         assert "sess-prune" not in relay._pending_evicted
         assert "sess-prune" not in relay._frontier
@@ -991,4 +994,218 @@ async def test_checkpoints_retained_for_every_pending_waiter_not_just_the_minimu
         )
         assert relay._resolve_checkpoint("sess-prune-multi", "e1", 2) == 2
 
+    await relay.stop()
+
+
+# --- issue #2305: age-out / re-entry must not replay Backend's queue ----------------
+
+
+async def _keep_alive(relay, session_id, stop):
+    while not stop.is_set():
+        relay.touch_session(session_id)
+        await asyncio.sleep(0.02)
+
+
+@pytest.mark.asyncio
+async def test_issue_2305_seed_backend_cursor_is_honored_and_sent_as_plain_since():
+    seen = []
+
+    async def side_effect(*args, **kwargs):
+        sessions_req = kwargs["json"]["sessions"]
+        if "sess-seed" in sessions_req:
+            seen.append(dict(sessions_req["sess-seed"]))
+        await asyncio.sleep(0.01)
+        return _batch(ui=_stream(), sessions={
+            sid: _stream(next_cursor=q["since"], epoch="e1") for sid, q in sessions_req.items()
+        })
+
+    relay, *_ = _make_relay(side_effect)
+    relay.touch_session("sess-seed", seed_backend_cursor=12)
+    await _wait_until(lambda: seen)
+    assert seen[0] == {"since": 12}
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_issue_2305_seed_arriving_during_in_flight_request_wins():
+    release = asyncio.Event()
+    requests = []
+
+    async def side_effect(*args, **kwargs):
+        sessions_req = kwargs["json"]["sessions"]
+        requests.append(dict(sessions_req.get("sess-race", {})))
+        if requests[-1] == {"since": 0}:
+            await release.wait()  # this answer would overwrite the seed if it landed
+            return _batch(ui=_stream(), sessions={"sess-race": _stream(next_cursor=99, epoch="e1")})
+        await asyncio.sleep(0.01)
+        return _batch(ui=_stream(), sessions={
+            sid: _stream(next_cursor=q["since"], epoch="e1") for sid, q in sessions_req.items()
+        })
+
+    relay, *_ = _make_relay(side_effect)
+    relay.touch_session("sess-race")
+    await _wait_until(lambda: {"since": 0} in requests)
+    relay.touch_session("sess-race", seed_backend_cursor=7)
+    await _wait_until(lambda: {"since": 7} in requests)
+    release.set()
+    await asyncio.sleep(0.05)
+    assert relay._backend_cursor["sess-race"] == 7
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_issue_2305_reentry_resumes_from_cursor_logs_it_and_appends_only_new_events(caplog):
+    requests = []
+    backend_events = [{"n": i} for i in range(1, 6)]
+
+    async def side_effect(*args, **kwargs):
+        sessions_req = kwargs["json"]["sessions"]
+        await asyncio.sleep(0.01)
+        if "sess-re" not in sessions_req:
+            return _batch(ui=_stream(), sessions={})
+        query = sessions_req["sess-re"]
+        requests.append(dict(query))
+        since = query["since"]
+        head = len(backend_events)
+        events = backend_events[since:]
+        return _batch(ui=_stream(), sessions={"sess-re": _stream(events=events, next_cursor=head, epoch="e1")})
+
+    del backend_events[3:]  # K=3 events before age-out
+    relay, _, _, session_queues = _make_relay(side_effect)
+    with pytest.MonkeyPatch.context() as mp, caplog.at_level(logging.INFO, logger="src.poll_relay"):
+        mp.setattr("src.poll_relay._SESSION_IDLE_TIMEOUT_SECONDS", 0.05)
+        relay.touch_session("sess-re", seed_backend_cursor=0)
+        await _wait_until(lambda: session_queues["sess-re"].current_cursor == 3)
+        await _wait_until(lambda: "sess-re" not in relay._session_last_activity, attempts=500)
+
+        backend_events.extend([{"n": 4}, {"n": 5}])  # N=2 while aged out
+        stop = asyncio.Event()
+        keeper = asyncio.create_task(_keep_alive(relay, "sess-re", stop))
+        await _wait_until(lambda: session_queues["sess-re"].current_cursor == 5)
+        await asyncio.sleep(0.1)
+        stop.set()
+        await keeper
+
+    assert {"since": 3} in requests
+    assert session_queues["sess-re"].current_cursor == 5  # 3 + only the 2 new events
+    events, _, _ = session_queues["sess-re"].events_since(0)
+    assert [e["n"] for e in events] == [1, 2, 3, 4, 5]
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("aged out" in m and "resume_cursor=3" in m for m in messages)
+    assert any("re-entered subscription, resuming from backend cursor 3" in m for m in messages)
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_issue_2305_epoch_change_across_gap_emits_exactly_one_stream_reset():
+    state = {"epoch": "e1"}
+
+    async def side_effect(*args, **kwargs):
+        sessions_req = kwargs["json"]["sessions"]
+        await asyncio.sleep(0.01)
+        if "sess-ep" not in sessions_req:
+            return _batch(ui=_stream(), sessions={})
+        return _batch(ui=_stream(), sessions={
+            "sess-ep": _stream(next_cursor=sessions_req["sess-ep"]["since"], epoch=state["epoch"])
+        })
+
+    relay, _, _, session_queues = _make_relay(side_effect)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("src.poll_relay._SESSION_IDLE_TIMEOUT_SECONDS", 0.05)
+        relay.touch_session("sess-ep", seed_backend_cursor=0)
+        await _wait_until(lambda: relay._last_epoch.get("sess-ep") == "e1")
+        await _wait_until(lambda: "sess-ep" not in relay._session_last_activity, attempts=500)
+        state["epoch"] = "e2"  # Backend restart / session reset during the gap
+        stop = asyncio.Event()
+        keeper = asyncio.create_task(_keep_alive(relay, "sess-ep", stop))
+        await _wait_until(lambda: session_queues["sess-ep"].current_cursor >= 1)
+        await asyncio.sleep(0.1)
+        stop.set()
+        await keeper
+
+    events, _, _ = session_queues["sess-ep"].events_since(0)
+    assert [e["type"] for e in events] == ["stream_reset"]
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_issue_2305_out_of_window_resume_delivers_events_with_evicted_flag():
+    state = {"gap": False}
+
+    async def side_effect(*args, **kwargs):
+        sessions_req = kwargs["json"]["sessions"]
+        await asyncio.sleep(0.01)
+        if "sess-ev" not in sessions_req:
+            return _batch(ui=_stream(), sessions={})
+        if state["gap"] and sessions_req["sess-ev"].get("since") == 2:
+            state["gap"] = False
+            return _batch(ui=_stream(), sessions={
+                "sess-ev": _stream(events=[{"n": 8}, {"n": 9}], next_cursor=9, epoch="e1", evicted=True)
+            })
+        return _batch(ui=_stream(), sessions={
+            "sess-ev": _stream(next_cursor=max(2, sessions_req["sess-ev"].get("since", 0)), epoch="e1")
+        })
+
+    relay, _, _, session_queues = _make_relay(side_effect)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("src.poll_relay._SESSION_IDLE_TIMEOUT_SECONDS", 0.05)
+        relay.touch_session("sess-ev", seed_backend_cursor=2)
+        await _wait_until(lambda: relay._backend_cursor.get("sess-ev") == 2 and "sess-ev" in relay._frontier)
+        await _wait_until(lambda: "sess-ev" not in relay._session_last_activity, attempts=500)
+        state["gap"] = True
+        stop = asyncio.Event()
+        keeper = asyncio.create_task(_keep_alive(relay, "sess-ev", stop))
+        await _wait_until(lambda: session_queues["sess-ev"].current_cursor == 2)
+        stop.set()
+        await keeper
+
+    assert relay.consume_pending_evicted("sess-ev") is True
+    assert relay.consume_pending_evicted("sess-ev") is False  # consume-once
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_issue_2305_first_touch_since_zero_delivers_each_backend_event_once():
+    """No remembered cursor + brand-new local queue + since=0: Backend is polled from 0
+    exactly once per event (the local queue is empty, so nothing is duplicated)."""
+    backend_events = [{"n": i} for i in range(1, 6)]
+
+    async def side_effect(*args, **kwargs):
+        sessions_req = kwargs["json"]["sessions"]
+        await asyncio.sleep(0.01)
+        return _batch(ui=_stream(), sessions={
+            sid: _stream(events=backend_events[q["since"]:], next_cursor=len(backend_events), epoch="e1")
+            for sid, q in sessions_req.items()
+        })
+
+    relay, _, _, session_queues = _make_relay(side_effect)
+    relay.touch_session("sess-first", since=0)
+    await _wait_until(lambda: "sess-first" in session_queues and session_queues["sess-first"].current_cursor == 5)
+    await asyncio.sleep(0.1)  # further polls must not re-append
+    events, cursor, _ = session_queues["sess-first"].events_since(0)
+    assert [e["n"] for e in events] == [1, 2, 3, 4, 5]
+    assert cursor == 5
+    await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_issue_2305_fresh_relay_with_browser_since_gt_zero_yields_single_stream_reset():
+    """Relay restart (fresh relay, Backend still retaining events), browser arrives with a
+    pre-restart cursor: exactly one stream_reset leads the local queue, never a second one."""
+    backend_events = [{"type": "message", "n": i} for i in range(1, 4)]
+
+    async def side_effect(*args, **kwargs):
+        sessions_req = kwargs["json"]["sessions"]
+        await asyncio.sleep(0.01)
+        return _batch(ui=_stream(), sessions={
+            sid: _stream(events=backend_events[q["since"]:], next_cursor=3, epoch="e1")
+            for sid, q in sessions_req.items()
+        })
+
+    relay, _, _, session_queues = _make_relay(side_effect)
+    relay.touch_session("sess-fresh", since=250)
+    await _wait_until(lambda: session_queues["sess-fresh"].current_cursor == 4)
+    await asyncio.sleep(0.1)
+    events, _, _ = session_queues["sess-fresh"].events_since(0)
+    assert [e["type"] for e in events] == ["stream_reset", "message", "message", "message"]
     await relay.stop()

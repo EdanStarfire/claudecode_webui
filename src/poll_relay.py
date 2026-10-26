@@ -19,10 +19,11 @@ window. Now there is exactly ONE task, always running once started, carrying a
 subscription set recomputed every cycle from `_session_last_activity` (UI is
 always subscribed). A session dropping out of the subscription set is no longer
 "a task stopping" — it's simply omitted from the next request body, and this
-module's own per-stream bookkeeping dicts (`_last_epoch`, `_backend_cursor`,
-`_checkpoints`, `_pending_evicted`, `_session_last_activity`) are explicitly
-pruned for that session_id (US3: today this state lived inside a dying task's
-own closure and was GC'd for free; the single consolidated task has no such
+module's own per-stream bookkeeping dicts (`_checkpoints`, `_frontier`,
+`_pending_evicted`, `_session_last_activity`) are explicitly pruned for that
+session_id (issue #2305: `_backend_cursor` and `_last_epoch` are deliberately
+kept, so re-entry resumes instead of replaying Backend's whole queue). (US3:
+today this state lived inside a dying task's own closure and was GC'd for free; the single consolidated task has no such
 closure teardown, so pruning is now this module's own explicit responsibility).
 `touch_session(session_id)` (replacing `ensure_session_relay()` — renamed, not
 kept as a compat alias) registers/refreshes interest and lazily creates the
@@ -221,6 +222,14 @@ class PollRelay:
         # off rather than from 0 or from the now-independent local queue cursor. See
         # module docstring.
         self._backend_cursor: dict[str, int] = {}
+        # Issue #2305: sessions that dropped out of the subscription set, mapped to the
+        # Backend cursor they will resume from — only used to log re-entry. The cursor
+        # itself (and `_last_epoch`) is deliberately RETAINED across age-out: popping
+        # them made re-entry poll Backend from 0 and re-append the whole queue.
+        self._aged_out: dict[str, int] = {}
+        # Sessions seeded explicitly while a request for them was in flight: that
+        # request's answer must be discarded, not allowed to overwrite the seed.
+        self._seed_overrides: set[str] = set()
         # Sticky, consume-once flag: Backend reporting its OWN `evicted=True` (this
         # relay's remembered Backend-cursor fell outside Backend's retained window —
         # e.g. a burst too large for Backend's own buffer) means events were lost
@@ -288,7 +297,9 @@ class PollRelay:
             self._ui_seed_checked = True
             self._maybe_seed_stream_reset(_STREAM_KEY_UI, self._ui_queue, since)
 
-    def touch_session(self, session_id: str, since: int = 0) -> None:
+    def touch_session(
+        self, session_id: str, since: int = 0, seed_backend_cursor: int | None = None
+    ) -> None:
         """Register/refresh interest in relaying this session's stream, and ensure
         the local `EventQueue` exists. Called on every local request involving this
         session_id — both `/api/poll`'s subscription-set handler and `GET /messages`'
@@ -307,18 +318,43 @@ class PollRelay:
         `since` (issue #2160 AC1): the browser's own cursor for this session as of
         this call — threaded through to `_maybe_seed_stream_reset()` on this
         session's local queue's first-ever creation in this process's lifetime.
+
+        Issue #2305: Backend cursors are retained across age-out, so a session only has
+        no remembered cursor when its local queue is brand new too — polling Backend from
+        0 then fills an EMPTY local queue and duplicates nothing. `seed_backend_cursor`
+        (`GET /messages`, which already holds history up to that Backend cursor) starts
+        the relay exactly there instead, if the session has no cursor yet.
         """
         is_new = session_id not in self._active_subscription
         self._session_last_activity[session_id] = time.monotonic()
+        resume_cursor = self._aged_out.pop(session_id, None)
+        if resume_cursor is not None:
+            logger.info(
+                "Poll-relay: session %s re-entered subscription, resuming from backend cursor %d epoch %s",
+                session_id, resume_cursor, self._last_epoch.get(session_id),
+            )
         queue_is_new = session_id not in self._session_queues
         if queue_is_new:
             self._session_queues[session_id] = EventQueue()
+        if seed_backend_cursor is not None and session_id not in self._backend_cursor:
+            self._seed_backend_cursor(session_id, seed_backend_cursor, "GET /messages history cursor")
         self._ensure_task_running()
         if is_new:
             self._fast_probe_pending = True
             self._interrupt_if_in_flight()
         if queue_is_new:
             self._maybe_seed_stream_reset(session_id, self._session_queues[session_id], since)
+
+    def _seed_backend_cursor(self, session_id: str, cursor: int, reason: str) -> None:
+        logger.info(
+            "Poll-relay: seeding session %s backend cursor to %d (%s)", session_id, cursor, reason
+        )
+        self._backend_cursor[session_id] = cursor
+        if session_id in self._active_subscription:
+            # The in-flight request (polling from the cursor we just replaced) must not
+            # overwrite this seed with its own answer.
+            self._seed_overrides.add(session_id)
+            self._interrupt_if_in_flight()
 
     def _maybe_seed_stream_reset(self, stream_key: str, queue: EventQueue, since: int) -> None:
         """Issue #2160 AC1: make a Frontend-tier restart a deterministic, explicit
@@ -373,10 +409,17 @@ class PollRelay:
             session_id for session_id in self._session_last_activity if session_id not in subscription
         ]
         for session_id in aged_out:
-            logger.info("Poll-relay subscription for session %s aged out, pruning bookkeeping", session_id)
+            resume_cursor = self._backend_cursor.get(session_id)
+            logger.info(
+                "Poll-relay subscription for session %s aged out, pruning bookkeeping "
+                "(resume_cursor=%s)", session_id, resume_cursor,
+            )
             self._session_last_activity.pop(session_id, None)
-            self._last_epoch.pop(session_id, None)
-            self._backend_cursor.pop(session_id, None)
+            # _last_epoch / _backend_cursor are kept on purpose (issue #2305): re-entry
+            # resumes from the remembered cursor, and a Backend restart or session reset
+            # during the gap still surfaces as an epoch change -> stream_reset.
+            if resume_cursor is not None:
+                self._aged_out[session_id] = resume_cursor
             self._checkpoints.pop(session_id, None)
             self._pending_evicted.pop(session_id, None)
             self._frontier.pop(session_id, None)
@@ -396,6 +439,7 @@ class PollRelay:
                 await asyncio.sleep(_ERROR_BACKOFF_SECONDS)
                 continue
             session_ids = subscription - {_STREAM_KEY_UI}
+            self._seed_overrides = set()
             body = {
                 "timeout": 0 if self._fast_probe_pending else _POLL_TIMEOUT_SECONDS,
                 "sessions": {
@@ -458,6 +502,11 @@ class PollRelay:
         )
 
     def _process_stream_response(self, stream_key: str, queue: EventQueue, stream_body: dict) -> None:
+        if stream_key in self._seed_overrides:
+            # Explicitly seeded while this request was in flight (and the
+            # task had already completed, so it could not be cancelled).
+            self._seed_overrides.discard(stream_key)
+            return
         events = stream_body.get("events", [])
         next_cursor = stream_body.get("next_cursor", self._backend_cursor.get(stream_key, 0))
         epoch = stream_body.get("epoch", "")
@@ -485,6 +534,11 @@ class PollRelay:
         local_cursor_before = queue.current_cursor
         for event in events:
             queue.append(event)
+        if stream_key not in self._backend_cursor and stream_key != _STREAM_KEY_UI:
+            logger.info(
+                "Poll-relay: session %s first poll complete, backend cursor %d epoch %s",
+                stream_key, next_cursor, epoch,
+            )
         self._backend_cursor[stream_key] = next_cursor
         self._frontier[stream_key] = (epoch, next_cursor, queue.current_cursor)
 
