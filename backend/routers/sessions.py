@@ -10,6 +10,7 @@ from shared.event_envelope import PROCESS_EPOCH, session_stream_epoch
 from shared.exception_handlers import handle_exceptions
 
 from ..fixture_export import FixtureExportError
+from ..message_history_reader import CursorInvalidError
 from ..session_lifecycle import is_deliverable
 from ._models import (
     FixtureExportRequest,
@@ -487,13 +488,38 @@ def build_router(webui) -> APIRouter:
 
     @router.get("/api/sessions/{session_id}/messages")
     @handle_exceptions("get messages")
-    async def get_messages(session_id: str, limit: int | None = 50, offset: int = 0):
-        """Get messages from a session with pagination metadata"""
+    async def get_messages(
+        session_id: str,
+        limit: int | None = 50,
+        offset: int = 0,
+        window: str | None = None,
+        before: str | None = None,
+        min_turns: int | None = None,
+        max_records: int | None = None,
+        max_bytes: int | None = None,
+    ):
+        """Get messages from a session with pagination metadata.
+
+        Issue #2030: ``window=tail`` returns the newest turn-snapped window (+ ``latest_init``,
+        ``event_cursor``/``epoch``); ``before=<opaque cursor>`` returns an older page (no
+        event cursor). Without either, legacy ``limit``/``offset`` paging is unchanged.
+        """
+        if window is not None and window != "tail":
+            raise HTTPException(status_code=422, detail="window must be 'tail'")
+        if window is not None and before is not None:
+            raise HTTPException(status_code=422, detail="window and before are mutually exclusive")
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
-        result = await webui.service.get_session_messages(
-            session_id, limit=limit, offset=offset
-        )
+        try:
+            result = await webui.service.get_session_messages(
+                session_id, limit=limit, offset=offset, window=window, before=before,
+                min_turns=min_turns, max_records=max_records, max_bytes=max_bytes,
+            )
+        except CursorInvalidError as e:
+            raise HTTPException(status_code=409, detail="cursor_invalid") from e
+        if before is not None:
+            # Older pages carry no event cursor: it only has meaning at the tail.
+            return result
         # Issue #1000: Include event queue cursor so frontend poll starts
         # exactly where REST left off, preventing duplicate message replay.
         queue = webui.service.get_session_queue(session_id)
@@ -520,5 +546,13 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
         return await webui.service.get_background_tasks(session_id)
+
+    @router.get("/api/sessions/{session_id}/tasks")
+    @handle_exceptions("get session tasks")
+    async def get_session_tasks(session_id: str):
+        """SDK task-list snapshot (TaskCreate/TaskUpdate reduced server-side, issue #2030)."""
+        if not await webui.service.get_session_exists(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        return await webui.service.get_session_tasks(session_id)
 
     return router

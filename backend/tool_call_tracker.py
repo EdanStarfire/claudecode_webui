@@ -36,6 +36,7 @@ from typing import Any
 from shared.logging_config import get_logger
 
 from .models.messages import MessageRecord, PermissionInfo, ToolCall, ToolDisplayInfo, ToolState
+from .task_list import TASK_TOOL_NAMES
 from .task_utils import task_done_log_exception
 
 # Get specialized logger for coordinator actions (same category as the
@@ -122,6 +123,14 @@ class ToolCallTracker:
             coord_logger.exception(
                 f"Failed to store ToolCallUpdate for {tool_use_id}"
             )
+            return
+        # Issue #2030 (§3.6): feed the SDK task-list snapshot after the record is durable.
+        session_id = stored_dict.get("session_id")
+        if session_id and stored_dict.get("name") in TASK_TOOL_NAMES:
+            try:
+                self._coordinator._session_query.feed_task_tool_call(session_id, stored_dict)
+            except Exception:
+                coord_logger.exception(f"Failed to feed task list for {tool_use_id}")
 
     # ============================================================
     # Issue #707: Auto-Approval Callback

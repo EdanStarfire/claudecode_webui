@@ -14,6 +14,7 @@ from typing import Any
 
 from shared.logging_config import get_logger
 
+from .message_history_reader import FileMessageHistoryReader
 from .models.messages import LegacyMessageFormatError
 from .timestamp_utils import get_unix_timestamp
 
@@ -44,6 +45,11 @@ class DataStorageManager:
         # instance per session (DataStorageManager is already constructed one-per-
         # session) — no dict/keying needed.
         self._write_lock = asyncio.Lock()
+
+    @property
+    def reader(self) -> FileMessageHistoryReader:
+        """Window/snapshot reader over messages.jsonl (issue #2030) — the storage seam."""
+        return FileMessageHistoryReader(self.messages_file, label=self.session_dir.name)
 
     async def initialize(self):
         """Initialize storage directory and files"""

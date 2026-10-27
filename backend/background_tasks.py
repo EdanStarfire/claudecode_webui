@@ -7,6 +7,7 @@ A process death emits no empty list, so a snapshot is only valid if it follows
 the most recent process-launch boundary (client_launched / session_failed).
 """
 
+from collections.abc import Iterable
 from typing import Any
 
 BACKGROUND_TASKS_SUBTYPE = "background_tasks_changed"
@@ -45,7 +46,7 @@ def parse_background_tasks(metadata: Any) -> list[dict[str, Any]]:
     return result
 
 
-def latest_background_tasks(raw_messages: list[dict]) -> list[dict[str, Any]]:
+def latest_background_tasks(raw_messages: Iterable[dict]) -> list[dict[str, Any]]:
     """Last snapshot occurring after the latest process boundary (none -> [])."""
     tasks: list[dict[str, Any]] = []
     for record in raw_messages:

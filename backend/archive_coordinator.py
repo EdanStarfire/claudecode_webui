@@ -55,6 +55,7 @@ from shared.logging_config import get_logger
 
 from .data_storage import DataStorageManager
 from .distillation_trigger import schedule_history_distillation
+from .message_history_reader import build_budget
 from .models.messages import LegacyMessageFormatError
 from .session_resources import _apply_resource_filters, _group_resources_by_filename
 
@@ -113,11 +114,25 @@ class ArchiveCoordinator:
         }
 
     async def get_archive_messages(
-        self, session_id: str, archive_id: str, offset: int = 0, limit: int | None = 50
+        self, session_id: str, archive_id: str, offset: int = 0, limit: int | None = 50,
+        window: str | None = None, before: str | None = None, min_turns: int | None = None,
+        max_records: int | None = None, max_bytes: int | None = None,
     ) -> dict:
-        """Read paginated messages from an archive, converted to websocket format."""
+        """Read paginated messages from an archive, converted to websocket format.
+
+        Issue #2030: ``window="tail"`` / ``before=<cursor>`` use the same byte-cursor
+        reader as live sessions (archives return no event_cursor/epoch).
+        """
         if not self.legion_system:
             return {"messages": [], "total_count": 0, "offset": offset, "has_more": False}
+        if window is not None or before is not None:
+            return await self.legion_system.archive_manager.get_archive_window(
+                session_id, archive_id, before=before,
+                budget=build_budget(
+                    before=before is not None, min_turns=min_turns,
+                    max_records=max_records, max_bytes=max_bytes,
+                ),
+            )
         result = await self.legion_system.archive_manager.get_archive_messages(
             session_id, archive_id, offset=offset, limit=limit
         )
@@ -330,6 +345,7 @@ class ArchiveCoordinator:
             # keep serving stale legs from before the message history wipe.
             self._task_leg_registries.pop(session_id, None)
             self._background_tasks.pop(session_id, None)
+            self._coordinator._clear_task_list(session_id)  # issue #2030
 
             # Notify frontend to clear messages
             await self._notify_session_reset(session_id)
