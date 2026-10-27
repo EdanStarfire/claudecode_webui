@@ -11,38 +11,46 @@
     </button>
 
     <div v-else class="message-search-expanded">
-      <input
-        ref="inputEl"
-        v-model="search.query.value"
-        type="text"
-        class="form-control form-control-sm message-search-input"
-        placeholder="Search messages…"
-        @keydown="onKeydown"
-      />
-      <span class="message-search-count">{{ countLabel }}</span>
-      <span
+      <div class="message-search-row">
+        <input
+          ref="inputEl"
+          v-model="search.query.value"
+          type="text"
+          class="form-control form-control-sm message-search-input"
+          placeholder="Search messages…"
+          @keydown="onKeydown"
+        />
+        <span class="message-search-count">{{ countLabel }}</span>
+        <button
+          class="btn btn-sm btn-outline-secondary"
+          :disabled="!hasMatches"
+          @click="search.prev()"
+          aria-label="Previous match"
+        >&#x2039;</button>
+        <button
+          class="btn btn-sm btn-outline-secondary"
+          :disabled="!hasMatches"
+          @click="search.next()"
+          aria-label="Next match"
+        >&#x203A;</button>
+        <button
+          class="btn btn-sm btn-outline-secondary"
+          @click="handleClose"
+          aria-label="Close search"
+        >&#xD7;</button>
+      </div>
+      <!-- Issue #2030: its own line below the controls (never squeezed beside the input), with a
+           short form on narrow screens. Search only covers the loaded messages until the history
+           has fully arrived. -->
+      <div
         v-if="search.historyScope?.value"
         class="message-search-scope small text-muted"
         data-testid="search-history-scope"
         title="Search covers the messages loaded so far; older history is still loading."
-      >{{ scopeLabel }}</span>
-      <button
-        class="btn btn-sm btn-outline-secondary"
-        :disabled="!hasMatches"
-        @click="search.prev()"
-        aria-label="Previous match"
-      >&#x2039;</button>
-      <button
-        class="btn btn-sm btn-outline-secondary"
-        :disabled="!hasMatches"
-        @click="search.next()"
-        aria-label="Next match"
-      >&#x203A;</button>
-      <button
-        class="btn btn-sm btn-outline-secondary"
-        @click="handleClose"
-        aria-label="Close search"
-      >&#xD7;</button>
+      >
+        <span class="scope-long">{{ scopeLabel }}</span>
+        <span class="scope-short">{{ scopeShortLabel }}</span>
+      </div>
     </div>
   </div>
 </template>
@@ -72,6 +80,11 @@ const countLabel = computed(() => {
 const scopeLabel = computed(() => {
   const percent = props.search.historyScope?.value?.percent
   return percent != null ? `Searching ${percent} % of history — still loading` : 'Searching loaded history — still loading'
+})
+
+const scopeShortLabel = computed(() => {
+  const percent = props.search.historyScope?.value?.percent
+  return percent != null ? `${percent} % loaded` : 'Partial history'
 })
 
 function handleOpen() {

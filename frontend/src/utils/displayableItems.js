@@ -822,3 +822,19 @@ export function getItemKey(item, index) {
       return `i:${index}`
   }
 }
+
+/**
+ * One key per row, guaranteed unique. Most identities are unique by construction, but a row key
+ * can legitimately repeat (a date separator for the same day recurs when timestamps run
+ * backwards, e.g. a replayed or clock-skewed record). Duplicate keys would make the virtualizer
+ * share one measurement/DOM node between rows, so later occurrences get an occurrence suffix.
+ */
+export function computeItemKeys(items) {
+  const seen = new Map()
+  return items.map((item, index) => {
+    const base = getItemKey(item, index)
+    const n = seen.get(base) || 0
+    seen.set(base, n + 1)
+    return n === 0 ? base : `${base}#${n}`
+  })
+}

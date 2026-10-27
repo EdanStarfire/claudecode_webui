@@ -74,6 +74,21 @@ describe('loadHistoryTail', () => {
     expect(store.historyProgress(SID)).toMatchObject({ fraction: 0.5, loadedBytes: 5, totalBytes: 10 })
   })
 
+  it('degrades to "no percentage" when the cursor is not the file reader\'s b:<offset> form', async () => {
+    const { store } = await setup()
+    const records = Array.from({ length: 10 }, () => user())
+    const server = createFakeHistoryServer(records, { tailStart: 5 })
+    apiMock.get.mockImplementation(async (url) => (String(url).includes('before=')
+      ? { messages: [], start_cursor: 'row:0', has_more_before: false, history_id: 'h1' }
+      : { ...(await server.handle(url)), start_cursor: 'row:5' }))
+    await store.loadMessages(SID, null, 0, { window: 'tail', signal: signalOf() })
+    expect(store.isHistoryComplete(SID)).toBe(false) // still tracked and backfillable
+    expect(store.historyProgress(SID)).toMatchObject({ fraction: null, loadedBytes: null })
+    // The page request still passes the opaque cursor through untouched.
+    await store.fetchOlderPage(SID, { signal: signalOf() })
+    expect(apiMock.get.mock.calls.at(-1)[0]).toContain('before=row%3A5')
+  })
+
   it('does not touch the shared hydration tracker for an archive view and uses the archive URL', async () => {
     const { store } = await setup()
     const live = store.claimHydrationLoad('live-session')

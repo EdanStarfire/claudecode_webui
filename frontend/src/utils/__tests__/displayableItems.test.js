@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildDisplayableItems, getItemKey } from '../displayableItems'
+import { buildDisplayableItems, getItemKey, computeItemKeys } from '../displayableItems'
 
 const SID = 's1'
 const ts = (sec) => 1_700_000_000 + sec
@@ -77,5 +77,21 @@ describe('leg-terminal signals across the window boundary (issue #2030, plan §5
     const messages = [user('u1', 100)]
     const items = build(messages, { legEntries: [leg('old', ts(1))] })
     expect(items.filter(i => i.type === 'subagent_signal')).toHaveLength(1)
+  })
+})
+
+describe('computeItemKeys (issue #2030)', () => {
+  it('keeps keys unique when a date separator for the same day recurs (timestamps running backwards)', () => {
+    // today, 1970 (e.g. a replayed fixture record), today again: three separators, two for "today".
+    const now = 1_790_000_000
+    const items = build([user('u1', 0), { ...assistant('a1', 1), timestamp: 1_000_006 }, user('u2', 2)].map((m, i) => (
+      i === 1 ? m : { ...m, timestamp: now + i }
+    )))
+    const separators = items.filter(i => i.type === 'date_separator')
+    expect(separators.length).toBeGreaterThanOrEqual(3)
+    const keys = computeItemKeys(items)
+    expect(new Set(keys).size).toBe(keys.length)
+    // The first occurrence keeps the plain stable key; only later duplicates are suffixed.
+    expect(keys[0]).toBe(getItemKey(items[0], 0))
   })
 })

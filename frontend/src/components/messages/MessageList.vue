@@ -1,5 +1,5 @@
 <template>
-  <div class="messages-area-wrapper flex-grow-1">
+  <div class="messages-area-wrapper flex-grow-1" :style="{ '--history-banner-height': `${historyBannerHeight}px` }">
     <!-- Issue #2030 (stage 1b): the list opens on the newest window; older history backfills in
          the background. Lives OUTSIDE the scroll container so its appearance/disappearance can
          never shift the virtualizer's scroll coordinates. -->
@@ -9,6 +9,7 @@
       :class="{ 'history-banner-error': historyBanner.kind === 'error' }"
       role="status"
       data-testid="history-banner"
+      ref="historyBannerEl"
     >
       <span v-if="historyBanner.kind === 'loading'" class="spinner-border spinner-border-sm flex-shrink-0" aria-hidden="true"></span>
       <span class="flex-grow-1">{{ historyBanner.text }}</span>
@@ -179,7 +180,7 @@ import { useMessageSearch } from '@/composables/useMessageSearch'
 import { resolveMessageId } from '@/search/messageSearch'
 import { applyHighlight, clearHighlight } from '@/search/highlightMatch'
 import { useVirtualNavigation, forceFreshMeasurements } from '@/composables/useVirtualNavigation'
-import { buildDisplayableItems, getItemKey } from '@/utils/displayableItems'
+import { buildDisplayableItems, computeItemKeys } from '@/utils/displayableItems'
 import { historyBackfill } from '@/composables/useHistoryBackfill'
 import { useHydrationStage } from '@/composables/useHydrationStage'
 import { HYDRATION_STAGE_LABELS } from '@/utils/hydrationStage'
@@ -252,6 +253,9 @@ const displayableItems = computed(() => buildDisplayableItems({
   historyComplete: messageStore.isHistoryComplete(viewSessionId.value),
 }))
 
+// Unique, identity-based key per row (see computeItemKeys).
+const itemKeys = computed(() => computeItemKeys(displayableItems.value))
+
 function itemAt(index) {
   return displayableItems.value[index]
 }
@@ -304,7 +308,7 @@ const rowVirtualizer = useVirtualizer(computed(() => ({
   // cache attached to the right rows (index keys would shift every cached height), and
   // anchorTo:'end' makes the virtualizer preserve the on-screen anchor row across a prepend
   // (it resolves the first visible row's key at its new index in the same render pass).
-  getItemKey: (index) => getItemKey(displayableItems.value[index], index),
+  getItemKey: (index) => itemKeys.value[index] ?? `i:${index}`,
   anchorTo: 'end',
   // Fires on every virtualizer measurement change — in particular, a mounted tail row's own
   // height changing (streaming growth) while no new item was added, which today's whole-container
@@ -403,6 +407,24 @@ const historyBanner = computed(() => {
   }
   return { kind: 'loading', text: `Showing newest messages — loading older history…${percent}${status?.paused ? ' (paused)' : ''}` }
 })
+
+// The floating search bar sits below the banner: publish the banner's rendered height as a CSS
+// variable (it wraps to several lines on a phone).
+const historyBannerEl = ref(null)
+const historyBannerHeight = ref(0)
+let bannerObserver = null
+watch(historyBannerEl, (el) => {
+  bannerObserver?.disconnect()
+  bannerObserver = null
+  if (!el) { historyBannerHeight.value = 0; return }
+  const update = () => { historyBannerHeight.value = el.offsetHeight }
+  update()
+  if (typeof ResizeObserver !== 'undefined') {
+    bannerObserver = new ResizeObserver(update)
+    bannerObserver.observe(el)
+  }
+}, { flush: 'post' })
+onUnmounted(() => bannerObserver?.disconnect())
 
 function loadOlderHistory() {
   historyBackfill.requestOlder(viewSessionId.value)
