@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from shared.exception_handlers import handle_exceptions
 
 from ..http_range import build_resource_response
+from ..message_history_reader import CursorInvalidError
 
 
 def build_router(webui) -> APIRouter:
@@ -25,14 +26,27 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("get archive messages")
     async def get_archive_messages(
         project_id: str, session_id: str, archive_id: str,
-        limit: int | None = 50, offset: int = 0
+        limit: int | None = 50, offset: int = 0,
+        window: str | None = None, before: str | None = None,
+        min_turns: int | None = None, max_records: int | None = None,
+        max_bytes: int | None = None,
     ):
-        """Get paginated messages from an archive."""
+        """Get paginated messages from an archive (issue #2030: ``window=tail`` /
+        ``before=<cursor>`` use the same byte-cursor reader as live sessions)."""
+        if window is not None and window != "tail":
+            raise HTTPException(status_code=422, detail="window must be 'tail'")
+        if window is not None and before is not None:
+            raise HTTPException(status_code=422, detail="window and before are mutually exclusive")
         if not await webui.service.validate_project_exists(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
-        result = await webui.service.get_archive_messages(
-            session_id, archive_id, offset=offset, limit=limit
-        )
+        try:
+            result = await webui.service.get_archive_messages(
+                session_id, archive_id, offset=offset, limit=limit, window=window,
+                before=before, min_turns=min_turns, max_records=max_records,
+                max_bytes=max_bytes,
+            )
+        except CursorInvalidError as e:
+            raise HTTPException(status_code=409, detail="cursor_invalid") from e
         return result
 
     @router.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/state")

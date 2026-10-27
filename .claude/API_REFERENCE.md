@@ -24,6 +24,7 @@ Complete REST and WebSocket API reference for Claude WebUI. For backend architec
 | `POST` | `/api/sessions` | Create session (`project_id`, `permission_mode`, `tools`, `model`, `name`) |
 | `GET` | `/api/sessions` | List all sessions |
 | `GET` | `/api/sessions/{id}` | Get session info |
+| `GET` | `/api/sessions/{id}/tasks` | SDK task-list snapshot `{session_id, tasks:[{id, subject, description, status, activeForm, owner, blocks, blockedBy, metadata}]}` reduced server-side from stored `TaskCreate`/`TaskUpdate` tool_call records (browser order: numeric id ascending, deleted excluded); conversation state, survives process restarts, cleared on history reset/delete (issue #2030) |
 | `GET` | `/api/sessions/{id}/background_tasks` | Latest snapshot of running background tasks `{session_id, tasks:[{task_id, task_type, description}]}`; empty unless the SDK process is alive (issue #2145) |
 | `GET` | `/api/sessions/{id}/descendants` | Get all descendant sessions (minion tree) |
 | `PATCH` | `/api/sessions/{id}` | Update session fields (model, tools, permissions, cli_path, etc.) |
@@ -36,7 +37,7 @@ Complete REST and WebSocket API reference for Claude WebUI. For backend architec
 | `PUT` | `/api/sessions/{id}/name` | Update session name |
 | `PUT` | `/api/sessions/{id}/permission-mode` | Set permission mode |
 | `POST` | `/api/sessions/{id}/messages` | Send message to session |
-| `GET` | `/api/sessions/{id}/messages` | Get messages (paginated: `limit`, `offset`) — epic #1990 stage 5a: a dedicated Frontend-side route (`src/routers/sessions.py`), not blind-relayed; substitutes the Frontend-local `event_cursor` for Backend's own via `PollRelay.wait_until_relayed()` |
+| `GET` | `/api/sessions/{id}/messages` | Get messages (paginated: `limit`, `offset`) — epic #1990 stage 5a: a dedicated Frontend-side route (`src/routers/sessions.py`), not blind-relayed; substitutes the Frontend-local `event_cursor` for Backend's own via `PollRelay.wait_until_relayed()`. Issue #2030: `window=tail` returns the newest turn-snapped window `{messages, start_cursor, has_more_before, history_id, snapped, total_bytes, latest_init, event_cursor, epoch}` (defaults 2 turns / 400 records / 512 KiB; optional `min_turns`, `max_records`, `max_bytes`); `before=<opaque cursor>` returns an older page `{messages, start_cursor, has_more_before, history_id, snapped, total_bytes}` (no `event_cursor`/`epoch`; the Frontend route skips cursor resolution). A cursor that is not a line start (file rewritten) -> HTTP 409 `cursor_invalid`; bad `window` or `window`+`before` -> 422. `history_id` changes when the file is rewritten. Without `window`/`before`, legacy `limit`/`offset` is unchanged. The archive messages route (`/api/projects/{pid}/archives/{sid}/{archive_id}/messages`) accepts the same params (no `event_cursor`/`epoch`) |
 
 ### File Upload Endpoints
 

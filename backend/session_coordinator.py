@@ -1374,6 +1374,7 @@ class SessionCoordinator:
         storage_manager = self._storage_managers[session_id]
         await storage_manager.cleanup()
         del self._storage_managers[session_id]
+        self._clear_task_list(session_id)
         # Give storage manager time to close all file handles
         await asyncio.sleep(0.2)
 
@@ -1853,16 +1854,23 @@ class SessionCoordinator:
     async def get_background_tasks(self, session_id: str) -> dict[str, Any]:
         return await self._session_query.get_background_tasks(session_id)
 
+    async def get_session_tasks(self, session_id: str) -> dict[str, Any]:
+        return await self._session_query.get_session_tasks(session_id)
+
+    def _clear_task_list(self, session_id: str) -> None:
+        self._session_query.clear_task_list(session_id)
+
     # ==================== ARCHIVE METHODS ====================
 
     async def get_archives(self, session_id: str, limit: int = 50, offset: int = 0) -> dict:
         return await self._archive_coordinator.get_archives(session_id, limit, offset)
 
     async def get_archive_messages(
-        self, session_id: str, archive_id: str, offset: int = 0, limit: int | None = 50
+        self, session_id: str, archive_id: str, offset: int = 0, limit: int | None = 50,
+        **window_params: Any,
     ) -> dict:
         return await self._archive_coordinator.get_archive_messages(
-            session_id, archive_id, offset, limit
+            session_id, archive_id, offset, limit, **window_params
         )
 
     async def get_archive_state(self, session_id: str, archive_id: str) -> dict | None:
@@ -1952,15 +1960,20 @@ class SessionCoordinator:
         self,
         session_id: str,
         limit: int | None = None,
-        offset: int = 0
+        offset: int = 0,
+        **window_params: Any,
     ) -> dict[str, Any]:
         """Get messages from a session with pagination metadata.
+
+        Issue #2030: ``window``/``before`` (+budget) kwargs use the byte-cursor window reader.
 
         Issue #2109 (AC3): returns stored records unchanged — every tool
         lifecycle transition is stored and emitted live (issue #2084 stage 3,
         plus #2109's AC1/AC2 closing the restart/pending-emission gaps), so
         no read-time synthesis is needed or performed.
         """
+        if window_params.get("window") or window_params.get("before"):
+            return await self._session_query.get_window_messages(session_id, **window_params)
         try:
             storage = self._storage_managers.get(session_id)
             if not storage:

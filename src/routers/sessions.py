@@ -27,13 +27,25 @@ _polling_logger = get_logger('polling', category='POLL')
 _HISTORY_CURSOR_WAIT_TIMEOUT_SECONDS = 10.0
 
 
+def _error_detail(response: httpx.Response) -> str:
+    try:
+        return response.json().get("detail", "error")
+    except Exception:
+        return "error"
+
+
 def build_router(webui) -> APIRouter:
     router = APIRouter()
 
-    async def _fetch_once(session_id: str, limit: int | None, offset: int, retry_allowed: bool) -> dict:
+    async def _fetch_once(
+        session_id: str, limit: int | None, offset: int, retry_allowed: bool,
+        window_params: dict | None = None,
+    ) -> dict:
         params: dict = {"offset": offset}
         if limit is not None:
             params["limit"] = limit
+        if window_params:
+            params.update(window_params)
         try:
             result = await webui.backend_client.get_json(
                 f"/api/sessions/{session_id}/messages", params=params
@@ -41,9 +53,20 @@ def build_router(webui) -> APIRouter:
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 raise HTTPException(status_code=404, detail="Session not found") from e
+            if e.response.status_code in (409, 422):
+                # Issue #2030: cursor_invalid (409) / bad window params (422) are
+                # contract errors the browser handles — pass them through verbatim.
+                raise HTTPException(
+                    status_code=e.response.status_code, detail=_error_detail(e.response)
+                ) from e
             raise
         except httpx.RequestError as e:
             raise to_http_exception(e, degraded=is_backend_degraded(webui)) from e
+
+        if window_params and "before" in window_params:
+            # Issue #2030: older pages carry no event_cursor/epoch — nothing to resolve,
+            # and waiting on the relay checkpoint would stall every backfill page.
+            return result
 
         backend_cursor = result.get("event_cursor")
         epoch = result.get("epoch")
@@ -64,7 +87,9 @@ def build_router(webui) -> APIRouter:
                     "GET /messages for session %s: epoch moved during wait, retrying once",
                     session_id,
                 )
-                return await _fetch_once(session_id, limit, offset, retry_allowed=False)
+                return await _fetch_once(
+                    session_id, limit, offset, retry_allowed=False, window_params=window_params
+                )
             # Capped at one retry — fall back to a best-effort local cursor. Not
             # silently lossy: the independently-emitted stream_reset for this
             # transition still arrives through the normal relay path on the
@@ -82,10 +107,32 @@ def build_router(webui) -> APIRouter:
 
     @router.get("/api/sessions/{session_id}/messages")
     @handle_exceptions("get messages")
-    async def get_session_messages(session_id: str, limit: int | None = 50, offset: int = 0):
+    async def get_session_messages(
+        session_id: str,
+        limit: int | None = 50,
+        offset: int = 0,
+        window: str | None = None,
+        before: str | None = None,
+        min_turns: int | None = None,
+        max_records: int | None = None,
+        max_bytes: int | None = None,
+    ):
         """Get messages from a session with pagination metadata — mirrors
         Backend's own route (limit/offset/404 handling unchanged), substituting
-        the Frontend-local event_cursor the browser's next poll must use."""
-        return await _fetch_once(session_id, limit, offset, retry_allowed=True)
+        the Frontend-local event_cursor the browser's next poll must use.
+
+        Issue #2030: ``window=tail`` / ``before=<cursor>`` are forwarded verbatim; only
+        ``window=tail`` carries an event cursor to resolve."""
+        window_params = {
+            key: value
+            for key, value in (
+                ("window", window), ("before", before), ("min_turns", min_turns),
+                ("max_records", max_records), ("max_bytes", max_bytes),
+            )
+            if value is not None
+        }
+        return await _fetch_once(
+            session_id, limit, offset, retry_allowed=True, window_params=window_params
+        )
 
     return router

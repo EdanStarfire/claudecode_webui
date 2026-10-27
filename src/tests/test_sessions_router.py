@@ -204,3 +204,72 @@ async def test_stale_epoch_retries_once_then_resolves():
     assert call_count == 2
 
     await webui.poll_relay.stop()
+
+
+# ---- Issue #2030 (stage 1a): window / before params -------------------------------------
+
+
+def _status_error(status_code: int, detail: str) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", "http://backend/api/sessions/x/messages")
+    response = httpx.Response(status_code, json={"detail": detail}, request=request)
+    return httpx.HTTPStatusError("err", request=request, response=response)
+
+
+@pytest.mark.asyncio
+async def test_window_tail_forwards_params_and_resolves_cursor():
+    session_id = "sess-win"
+    seen: dict = {}
+
+    async def side_effect(path, params=None, timeout=None):
+        if path == f"/api/sessions/{session_id}/messages":
+            seen.update(params)
+            return {"messages": [], "start_cursor": "b:10", "has_more_before": True,
+                    "history_id": "h", "snapped": True, "total_bytes": 99,
+                    "latest_init": None, "event_cursor": 101, "epoch": "e1"}
+        import asyncio
+        if not getattr(side_effect, "_done", False):
+            side_effect._done = True
+            return {"events": [{"n": 1}, {"n": 2}, {"n": 3}], "next_cursor": 103, "epoch": "e1"}
+        await asyncio.sleep(100)
+
+    webui = _make_webui(side_effect)
+    resp = await _get(webui, f"/api/sessions/{session_id}/messages?window=tail&max_bytes=1024")
+    assert resp.status_code == 200
+    assert seen["window"] == "tail" and seen["max_bytes"] == 1024
+    assert "before" not in seen
+    body = resp.json()
+    assert body["start_cursor"] == "b:10" and body["latest_init"] is None
+    assert body["event_cursor"] != 101  # substituted with the Frontend-local cursor
+    await webui.poll_relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_before_page_skips_cursor_resolution():
+    session_id = "sess-before"
+
+    async def side_effect(path, params=None, timeout=None):
+        assert path == f"/api/sessions/{session_id}/messages"
+        assert params["before"] == "b:77"
+        # even if a Backend (wrongly) answered with a cursor, the relay must not wait on it
+        return {"messages": [{"n": 1}], "start_cursor": "b:5", "has_more_before": True,
+                "history_id": "h", "snapped": True, "total_bytes": 99,
+                "event_cursor": 5, "epoch": "e1"}
+
+    webui = _make_webui(side_effect)
+    webui.poll_relay.wait_until_relayed = AsyncMock(side_effect=AssertionError("must not wait"))
+    webui.poll_relay.touch_session = MagicMock(side_effect=AssertionError("must not touch"))
+    resp = await _get(webui, f"/api/sessions/{session_id}/messages?before=b:77")
+    assert resp.status_code == 200
+    assert resp.json()["messages"] == [{"n": 1}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,detail", [(409, "cursor_invalid"), (422, "window must be 'tail'")])
+async def test_window_contract_errors_pass_through(status, detail):
+    async def side_effect(path, params=None, timeout=None):
+        raise _status_error(status, detail)
+
+    webui = _make_webui(side_effect)
+    resp = await _get(webui, "/api/sessions/sess-x/messages?before=b:3")
+    assert resp.status_code == status
+    assert resp.json()["detail"] == detail

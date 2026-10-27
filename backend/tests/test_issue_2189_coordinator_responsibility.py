@@ -71,7 +71,7 @@ ALLOWLIST: dict[str, int] = {
     "set_permission_mode": 55,
     "set_model": 55,
     "add_directory": 45,
-    "get_session_messages": 47,
+    "get_session_messages": 52,  # issue #2030: window kwargs delegate to SessionQuery
     "get_or_create_storage_manager": 33,
     "_validate_and_cleanup_projects": 74,
     "_initialize_existing_session_storage": 20,

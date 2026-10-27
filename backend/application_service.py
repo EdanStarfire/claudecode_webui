@@ -281,14 +281,21 @@ class ApplicationService:
             session_id
         )
 
-    async def get_session_messages(self, session_id: str, limit: int | None = 50, offset: int = 0) -> dict:
-        return await self.coordinator.get_session_messages(session_id, limit=limit, offset=offset)
+    async def get_session_messages(
+        self, session_id: str, limit: int | None = 50, offset: int = 0, **window_params: Any
+    ) -> dict:
+        return await self.coordinator.get_session_messages(
+            session_id, limit=limit, offset=offset, **window_params
+        )
 
     async def get_background_agents(self, session_id: str) -> dict:
         return await self.coordinator.get_background_agents(session_id)
 
     async def get_background_tasks(self, session_id: str) -> dict:
         return await self.coordinator.get_background_tasks(session_id)
+
+    async def get_session_tasks(self, session_id: str) -> dict:
+        return await self.coordinator.get_session_tasks(session_id)
 
     async def restart_session(self, session_id: str, permission_callback: Any) -> bool:
         self.coordinator.clear_message_callbacks(session_id)
@@ -485,10 +492,11 @@ class ApplicationService:
         return await self.coordinator.get_archives(session_id, limit=limit, offset=offset)
 
     async def get_archive_messages(
-        self, session_id: str, archive_id: str, offset: int = 0, limit: int | None = 50
+        self, session_id: str, archive_id: str, offset: int = 0, limit: int | None = 50,
+        **window_params: Any,
     ) -> dict:
         return await self.coordinator.get_archive_messages(
-            session_id, archive_id, offset=offset, limit=limit
+            session_id, archive_id, offset=offset, limit=limit, **window_params
         )
 
     async def get_archive_state(self, session_id: str, archive_id: str) -> dict | None:

@@ -1654,6 +1654,7 @@ class SessionLauncher:
                 # cleared message history it was built from.
                 self._task_leg_registries.pop(session_id, None)
                 self._background_tasks.pop(session_id, None)
+                self._coordinator._clear_task_list(session_id)  # issue #2030
 
             # Issue #1244: rotate proxy logs then clear non-proxy docker_claude_data and tmp
             await self._rotate_proxy_logs(session_id)

@@ -1,0 +1,1009 @@
+{
+ "_comment": "Shared by backend/tests/test_task_list.py and (stage 1b) the vitest task-store test. Each case: ordered stored tool_call records -> expected task list (browser order). Do not edit one side only.",
+ "cases": [
+  {
+   "name": "create_single",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A",
+      "description": "da",
+      "activeForm": "Doing A"
+     },
+     "result": "Task #1 created successfully: A"
+    }
+   ],
+   "expected": [
+    {
+     "id": "1",
+     "subject": "A",
+     "description": "da",
+     "status": "pending",
+     "activeForm": "Doing A",
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "create_two_sorted_numerically",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "ten"
+     },
+     "result": "Task #10 created"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu2",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "two"
+     },
+     "result": "Task #2 created"
+    }
+   ],
+   "expected": [
+    {
+     "id": "2",
+     "subject": "two",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    },
+    {
+     "id": "10",
+     "subject": "ten",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "update_fields_and_status",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A",
+      "description": "d",
+      "owner": "me"
+     },
+     "result": "Task #1 created"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu2",
+     "name": "TaskUpdate",
+     "status": "completed",
+     "input": {
+      "taskId": "1",
+      "status": "in_progress",
+      "subject": "A2",
+      "activeForm": "Working"
+     },
+     "result": "Updated task #1"
+    }
+   ],
+   "expected": [
+    {
+     "id": "1",
+     "subject": "A2",
+     "description": "d",
+     "status": "in_progress",
+     "activeForm": "Working",
+     "owner": "me",
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "update_null_clears_field",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A",
+      "owner": "me"
+     },
+     "result": "Task #1 created"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu2",
+     "name": "TaskUpdate",
+     "status": "completed",
+     "input": {
+      "taskId": "1",
+      "owner": null
+     },
+     "result": "Updated"
+    }
+   ],
+   "expected": [
+    {
+     "id": "1",
+     "subject": "A",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "add_blocks_union_dedup",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A"
+     },
+     "result": "Task #1 created"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu2",
+     "name": "TaskUpdate",
+     "status": "completed",
+     "input": {
+      "taskId": "1",
+      "addBlocks": [
+       "2",
+       "3"
+      ],
+      "addBlockedBy": [
+       "9"
+      ]
+     },
+     "result": "Updated"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu3",
+     "name": "TaskUpdate",
+     "status": "completed",
+     "input": {
+      "taskId": "1",
+      "addBlocks": [
+       "3",
+       "4"
+      ],
+      "addBlockedBy": [
+       "9",
+       "8"
+      ]
+     },
+     "result": "Updated"
+    }
+   ],
+   "expected": [
+    {
+     "id": "1",
+     "subject": "A",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [
+      "2",
+      "3",
+      "4"
+     ],
+     "blockedBy": [
+      "9",
+      "8"
+     ],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "metadata_merge",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A",
+      "metadata": {
+       "a": 1,
+       "b": 2
+      }
+     },
+     "result": "Task #1 created"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu2",
+     "name": "TaskUpdate",
+     "status": "completed",
+     "input": {
+      "taskId": "1",
+      "metadata": {
+       "b": 3,
+       "c": 4
+      }
+     },
+     "result": "Updated"
+    }
+   ],
+   "expected": [
+    {
+     "id": "1",
+     "subject": "A",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {
+      "a": 1,
+      "b": 3,
+      "c": 4
+     }
+    }
+   ]
+  },
+  {
+   "name": "deleted_removes_task",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A"
+     },
+     "result": "Task #1 created"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu2",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "B"
+     },
+     "result": "Task #2 created"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu3",
+     "name": "TaskUpdate",
+     "status": "completed",
+     "input": {
+      "taskId": "1",
+      "status": "deleted"
+     },
+     "result": "Updated"
+    }
+   ],
+   "expected": [
+    {
+     "id": "2",
+     "subject": "B",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "deleted_for_unknown_id_is_ignored",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A"
+     },
+     "result": "Task #1 created"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu2",
+     "name": "TaskUpdate",
+     "status": "completed",
+     "input": {
+      "taskId": "7",
+      "status": "deleted"
+     },
+     "result": "Updated"
+    }
+   ],
+   "expected": [
+    {
+     "id": "1",
+     "subject": "A",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "update_for_never_created_id_makes_subjectless_task",
+   "note": "createTask({id, ...updates}) ignores addBlocks/addBlockedBy; status defaults to pending when absent",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A"
+     },
+     "result": "Task #1 created"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu2",
+     "name": "TaskUpdate",
+     "status": "completed",
+     "input": {
+      "taskId": "5",
+      "status": "completed",
+      "addBlocks": [
+       "1"
+      ]
+     },
+     "result": "Updated task #5"
+    }
+   ],
+   "expected": [
+    {
+     "id": "1",
+     "subject": "A",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    },
+    {
+     "id": "5",
+     "subject": "",
+     "description": "",
+     "status": "completed",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "update_before_any_create_is_ignored",
+   "note": "no per-session task map exists until the first createTask",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskUpdate",
+     "status": "completed",
+     "input": {
+      "taskId": "1",
+      "status": "completed"
+     },
+     "result": "Updated"
+    }
+   ],
+   "expected": []
+  },
+  {
+   "name": "update_after_all_deleted_still_materialises",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A"
+     },
+     "result": "Task #1 created"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu2",
+     "name": "TaskUpdate",
+     "status": "completed",
+     "input": {
+      "taskId": "1",
+      "status": "deleted"
+     },
+     "result": "Updated"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu3",
+     "name": "TaskUpdate",
+     "status": "completed",
+     "input": {
+      "taskId": "3",
+      "subject": "ghost"
+     },
+     "result": "Updated"
+    }
+   ],
+   "expected": [
+    {
+     "id": "3",
+     "subject": "ghost",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "errors_are_skipped",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A"
+     },
+     "result": "Task #1 created"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu2",
+     "name": "TaskCreate",
+     "status": "failed",
+     "input": {
+      "subject": "bad"
+     },
+     "result": "Error: nope"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu3",
+     "name": "TaskUpdate",
+     "status": "failed",
+     "input": {
+      "taskId": "1",
+      "status": "completed"
+     },
+     "result": "boom"
+    }
+   ],
+   "expected": [
+    {
+     "id": "1",
+     "subject": "A",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "non_terminal_records_are_ignored",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "pending",
+     "input": {
+      "subject": "A"
+     },
+     "result": null
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "running",
+     "input": {
+      "subject": "A"
+     },
+     "result": null
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A"
+     },
+     "result": "Task #1 created"
+    }
+   ],
+   "expected": [
+    {
+     "id": "1",
+     "subject": "A",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "duplicate_tool_use_id_applied_once",
+   "note": "server de-duplicates by tool_use_id; the browser's cumulative records for one id never re-run",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A"
+     },
+     "result": "Task #1 created"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu2",
+     "name": "TaskUpdate",
+     "status": "completed",
+     "input": {
+      "taskId": "1",
+      "addBlocks": [
+       "2"
+      ]
+     },
+     "result": "Updated"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A"
+     },
+     "result": "Task #1 created"
+    }
+   ],
+   "expected": [
+    {
+     "id": "1",
+     "subject": "A",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [
+      "2"
+     ],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "list_and_get_are_noops",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A"
+     },
+     "result": "Task #1 created"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu2",
+     "name": "TaskList",
+     "status": "completed",
+     "input": {},
+     "result": "#1 [pending] A"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu3",
+     "name": "TaskGet",
+     "status": "completed",
+     "input": {
+      "taskId": "1"
+     },
+     "result": "Task #1: A"
+    }
+   ],
+   "expected": [
+    {
+     "id": "1",
+     "subject": "A",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "create_id_from_simple_hash_and_input_fallback",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A"
+     },
+     "result": "created #4 ok"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu2",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "B",
+      "id": "9"
+     },
+     "result": "no number here"
+    }
+   ],
+   "expected": [
+    {
+     "id": "4",
+     "subject": "A",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    },
+    {
+     "id": "9",
+     "subject": "B",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "create_without_any_id_is_dropped",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A"
+     },
+     "result": "created, no id"
+    }
+   ],
+   "expected": []
+  },
+  {
+   "name": "structured_result_content_is_stringified",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A"
+     },
+     "result": [
+      {
+       "type": "text",
+       "text": "Task #3 created"
+      }
+     ]
+    }
+   ],
+   "expected": [
+    {
+     "id": "3",
+     "subject": "A",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "null_result_falls_back_to_input_id",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A",
+      "id": "6"
+     },
+     "result": null
+    }
+   ],
+   "expected": [
+    {
+     "id": "6",
+     "subject": "A",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "missing_result_key_falls_back_to_input_id",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A",
+      "id": "6"
+     }
+    }
+   ],
+   "expected": [
+    {
+     "id": "6",
+     "subject": "A",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "recreate_same_id_replaces_task",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A",
+      "description": "old"
+     },
+     "result": "Task #1 created"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu2",
+     "name": "TaskUpdate",
+     "status": "completed",
+     "input": {
+      "taskId": "1",
+      "status": "completed"
+     },
+     "result": "Updated"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu3",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A again"
+     },
+     "result": "Task #1 created"
+    }
+   ],
+   "expected": [
+    {
+     "id": "1",
+     "subject": "A again",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "update_without_task_id_is_ignored",
+   "note": "",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "A"
+     },
+     "result": "Task #1 created"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu2",
+     "name": "TaskUpdate",
+     "status": "completed",
+     "input": {
+      "status": "completed"
+     },
+     "result": "Updated"
+    }
+   ],
+   "expected": [
+    {
+     "id": "1",
+     "subject": "A",
+     "description": "",
+     "status": "pending",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  },
+  {
+   "name": "tail_only_equivalent_outside_window_create",
+   "note": "the snapshot is computed from the whole log, so a create outside any browser window is still present",
+   "records": [
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu1",
+     "name": "TaskCreate",
+     "status": "completed",
+     "input": {
+      "subject": "Early",
+      "description": "made long ago"
+     },
+     "result": "Task #1 created"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu2",
+     "name": "TaskUpdate",
+     "status": "completed",
+     "input": {
+      "taskId": "1",
+      "status": "in_progress"
+     },
+     "result": "Updated"
+    },
+    {
+     "type": "tool_call",
+     "tool_use_id": "tu3",
+     "name": "TaskUpdate",
+     "status": "completed",
+     "input": {
+      "taskId": "1",
+      "status": "completed"
+     },
+     "result": "Updated"
+    }
+   ],
+   "expected": [
+    {
+     "id": "1",
+     "subject": "Early",
+     "description": "made long ago",
+     "status": "completed",
+     "activeForm": null,
+     "owner": null,
+     "blocks": [],
+     "blockedBy": [],
+     "metadata": {}
+    }
+   ]
+  }
+ ]
+}

@@ -18,6 +18,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from backend.history_distiller import distill_session_history
+from backend.message_history_reader import (
+    FileMessageHistoryReader,
+    WindowBudget,
+    read_history_payload,
+)
 from backend.models.archive_models import ArchiveResult, DisposalMetadata
 from backend.task_utils import task_done_log_exception
 from shared.logging_config import get_logger
@@ -500,6 +505,21 @@ class ArchiveManager:
             "offset": offset,
             "has_more": (offset + len(messages)) < total_count,
         }
+
+    async def get_archive_window(
+        self, session_id: str, archive_id: str, *, before: str | None, budget: WindowBudget
+    ) -> dict:
+        """Tail window / ``before`` page of an archive's messages.jsonl (issue #2030).
+
+        Same reader as live sessions. A missing archive yields an empty window.
+        """
+        messages_file = self.archives_dir / session_id / archive_id / "messages.jsonl"
+        return await read_history_payload(
+            FileMessageHistoryReader(
+                messages_file, label=f"{session_id}/{archive_id}", strict_legacy=False
+            ),
+            before=before, budget=budget,
+        )
 
     async def get_archive_state(self, session_id: str, archive_id: str) -> dict | None:
         """
