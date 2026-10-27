@@ -1816,3 +1816,141 @@ describe('leading date separator (#1911)', () => {
     expect(screen.queryAllByRole('separator').length).toBe(0)
   })
 })
+
+describe('tail-first history (issue #2030, stage 1b)', () => {
+  const SESSION = SESSION_ID
+  const messagesAt = (from, to) => Array.from({ length: to - from }, (_, i) =>
+    makeMessage({ id: `msg-${from + i}`, message_id: `msg-${from + i}`, type: 'user', content: `Message ${from + i}`, timestamp: 1700000000 + from + i })
+  )
+
+  function stubScrollMechanics(scrollEl) {
+    Element.prototype.scrollTo = function (opts) {
+      const top = typeof opts === 'object' && opts !== null ? opts.top : undefined
+      if (typeof top === 'number') {
+        this.scrollTop = top
+        this.dispatchEvent(new Event('scroll'))
+      }
+    }
+    Object.defineProperty(scrollEl, 'scrollHeight', { configurable: true, get: () => 100000 })
+    Object.defineProperty(scrollEl, 'clientHeight', { configurable: true, get: () => 600 })
+  }
+
+  async function mountWithStore(stubs = {}) {
+    const rendered = renderWithStores(MessageList, {
+      provide: { viewSessionId: viewSessionIdRef },
+      stubs: { MessageItem: MESSAGE_ITEM_STUB, TruncationBanner: true, SubagentTimeline: true, ...stubs },
+    })
+    const { useMessageStore } = await import('@/stores/message')
+    return { ...rendered, messageStore: useMessageStore(rendered.pinia) }
+  }
+
+  async function installTail(messageStore, messages, { hasMoreBefore = true } = {}) {
+    const { createFakeHistoryServer } = await import('@/stores/__tests__/helpers/historyServer')
+    const all = [...messagesAt(0, 30), ...messages]
+    const server = createFakeHistoryServer(all, { tailStart: hasMoreBefore ? 30 : 0, pageSize: 30 })
+    apiMock.get.mockImplementation((url) => server.handle(url))
+    await messageStore.loadMessages(SESSION, null, 0, { window: 'tail', signal: new AbortController().signal })
+    return all
+  }
+
+  it('shows a non-blocking "loading older history" banner while the history is incomplete, and removes it when complete', async () => {
+    const { messageStore } = await mountWithStore()
+    await installTail(messageStore, messagesAt(30, 60))
+    await new Promise(r => setTimeout(r, 50))
+
+    const banner = document.querySelector('[data-testid="history-banner"]')
+    expect(banner).toBeTruthy()
+    expect(banner.textContent).toContain('Showing newest messages')
+    expect(banner.textContent).toContain('loading older history')
+    // The banner sits outside the scroll container, so it can never shift scroll coordinates.
+    expect(document.querySelector('.messages-area').contains(banner)).toBe(false)
+
+    messageStore.applyFetchedOlderPage(SESSION, await messageStore.fetchOlderPage(SESSION, { signal: new AbortController().signal }))
+    await new Promise(r => setTimeout(r, 50))
+    expect(document.querySelector('[data-testid="history-banner"]')).toBeFalsy()
+  })
+
+  it('renders no banner for a session shorter than one window', async () => {
+    const { messageStore } = await mountWithStore()
+    await installTail(messageStore, messagesAt(30, 40), { hasMoreBefore: false })
+    await new Promise(r => setTimeout(r, 50))
+    expect(document.querySelector('[data-testid="history-banner"]')).toBeFalsy()
+  })
+
+  it('slow-link mode shows the manual banner with "Load older history" and "Load full history"', async () => {
+    const { historyBackfill } = await import('@/composables/useHistoryBackfill')
+    const { messageStore } = await mountWithStore()
+    await installTail(messageStore, messagesAt(30, 60))
+    historyBackfill.statusBySession.value = new Map([[SESSION, { mode: 'manual', paused: null, loading: false, error: null }]])
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(document.querySelector('[data-testid="history-banner"]').textContent).toContain("isn't loaded automatically")
+    const loadOlder = vi.spyOn(historyBackfill, 'requestOlder').mockImplementation(() => {})
+    const loadAll = vi.spyOn(historyBackfill, 'loadAll').mockImplementation(() => {})
+    await fireEvent.click(document.querySelector('[data-testid="history-load-older"]'))
+    expect(loadOlder).toHaveBeenCalledWith(SESSION)
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    await fireEvent.click(document.querySelector('[data-testid="history-load-full"]'))
+    expect(loadAll).toHaveBeenCalledWith(SESSION)
+    historyBackfill.statusBySession.value = new Map()
+    vi.restoreAllMocks()
+  })
+
+  it('keeps the same row at the same viewport offset when an older page is prepended (anchor-preserving prepend)', async () => {
+    const { wrapper, container, messageStore } = await mountWithStore()
+    await installTail(messageStore, messagesAt(30, 90))
+    await new Promise(r => setTimeout(r, 50))
+    stubScrollMechanics(container.querySelector('.messages-area'))
+
+    // Scroll well into the loaded list so the anchor row is mid-viewport, not the first row.
+    await wrapper.vm.scrollToItemIndex(25, { align: 'start', behavior: 'auto' })
+    await new Promise(r => setTimeout(r, 30))
+
+    const scrollEl = container.querySelector('.messages-area')
+    const rowOffsetFromViewport = (text) => {
+      const row = [...document.querySelectorAll('.virtual-item-row')].find(r => r.textContent.includes(text))
+      if (!row) return null
+      return Number(/translateY\(([\d.]+)px\)/.exec(row.style.transform)[1]) - scrollEl.scrollTop
+    }
+    const before = rowOffsetFromViewport('Message 55')
+    expect(before).not.toBeNull()
+
+    messageStore.applyFetchedOlderPage(SESSION, await messageStore.fetchOlderPage(SESSION, { signal: new AbortController().signal }))
+    await new Promise(r => setTimeout(r, 50))
+
+    const after = rowOffsetFromViewport('Message 55')
+    expect(after).not.toBeNull()
+    expect(Math.abs(after - before)).toBeLessThanOrEqual(2)
+  })
+
+  it('does not stack leg-terminal signals of pre-window legs at the top while history is incomplete', async () => {
+    const { messageStore } = await mountWithStore({ SubagentAnchorRow: { template: '<div data-testid="signal-row" />', props: ['item'] } })
+    await installTail(messageStore, messagesAt(30, 40))
+    for (const taskId of ['old-1', 'old-2', 'old-3']) {
+      messageStore.applyTaskLifecycleFrame(SESSION, 'task_started', { task_id: taskId, tool_use_id: `tu-${taskId}`, description: taskId }, 1700000001)
+      messageStore.applyTaskLifecycleFrame(SESSION, 'task_notification', { task_id: taskId, status: 'completed', summary: 'done' }, 1700000002)
+    }
+    await new Promise(r => setTimeout(r, 50))
+    expect(document.querySelectorAll('[data-testid="signal-row"]')).toHaveLength(0)
+  })
+
+  it('a running leg whose launch is outside the window draws no lane (no error); the lane appears once the launch page is applied', async () => {
+    const { messageStore } = await mountWithStore()
+    const launch = makeMessage({
+      id: 'msg-launch', message_id: 'msg-launch', type: 'assistant', content: 'Launching', timestamp: 1700000001,
+      metadata: { has_tool_uses: true, tool_uses: [{ id: 'launch-1', name: 'Task', input: {} }], turn_id: 'turn-launch' },
+    })
+    const { createFakeHistoryServer } = await import('@/stores/__tests__/helpers/historyServer')
+    const all = [launch, ...messagesAt(30, 40)]
+    const server = createFakeHistoryServer(all, { tailStart: 1, pageSize: 5 })
+    apiMock.get.mockImplementation((url) => server.handle(url))
+    messageStore.applyTaskLifecycleFrame(SESSION, 'task_started', { task_id: 'task-1', tool_use_id: 'launch-1', description: 'Running' }, 1700000001)
+    await messageStore.loadMessages(SESSION, null, 0, { window: 'tail', signal: new AbortController().signal })
+    await new Promise(r => setTimeout(r, 50))
+    expect(document.querySelectorAll('.gutter-lane')).toHaveLength(0)
+
+    messageStore.applyFetchedOlderPage(SESSION, await messageStore.fetchOlderPage(SESSION, { signal: new AbortController().signal }))
+    await new Promise(r => setTimeout(r, 50))
+    expect(document.querySelectorAll('.gutter-lane')).toHaveLength(1)
+  })
+})

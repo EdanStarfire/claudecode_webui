@@ -5,6 +5,7 @@ import { useSessionStore } from './session'
 import { useTaskStore } from './task'
 import { useBackgroundTasksStore } from './backgroundTasks'
 import { correlateHooks } from '../utils/hookCorrelation'
+import { mergeOlderPage } from '../utils/historyMerge'
 import { getAgentColor, getAssistantRowColor, slugifyAgentName } from '../composables/useAgentColor'
 import { pushDebugEvent, flushDebugBuffer } from '../composables/useDebugBuffer'
 
@@ -49,6 +50,25 @@ export const useMessageStore = defineStore('message', () => {
   // Non-reactive — nothing renders off this directly (same pattern as loadedEventCursors).
   // Map<sessionId, { target, nextOffset, epoch, totalCount, controller }>
   const _hydrationLoadStateBySession = new Map()
+
+  // Issue #2030 (stage 1b): tail-first history. The browser holds ONE contiguous suffix of a
+  // session's (or archive's) history; this tracks where that suffix starts so older pages can
+  // be fetched `before` it. Map<sessionId, {
+  //   baseUrl,        // messages endpoint older pages are fetched from (live session or archive)
+  //   startCursor,    // opaque cursor of the oldest loaded record
+  //   hasMoreBefore,  // false once the whole history is loaded ("complete")
+  //   historyId,      // changes if the server-side file was rewritten (cleanup/reset/migration)
+  //   totalBytes,     // size of the history file at window time (progress denominator)
+  //   snapped,        // window start landed on a user-turn boundary
+  //   generation,     // bumps whenever the loaded suffix is replaced (backfill must restart)
+  // }>. No entry == a legacy/fully-loaded session (complete).
+  const historyBySession = ref(new Map())
+  // One in-flight backfill page request per session; claiming aborts the previous one.
+  const _backfillControllers = new Map()
+  // Tool ids that arrived via an older (backfilled) page, per session. Stores that react to "a
+  // tool just completed" (editHistory's auto-refresh) must not treat history as news.
+  // Non-reactive. Map<sessionId, Set<toolUseId>>
+  const _backfilledToolIds = new Map()
 
   // Issue #2131: per-session identity indices mirroring messagesBySession/toolCallsBySession
   // 1:1, so identity/retry/tool lookups in applyRecord are O(1) instead of O(n) array scans.
@@ -239,6 +259,332 @@ export const useMessageStore = defineStore('message', () => {
     deferredToolUseBySession.value = new Map(deferredToolUseBySession.value)
   }
 
+  // ========== TAIL-FIRST HISTORY (Issue #2030, stage 1b) ==========
+
+  function _setHistory(sessionId, patch) {
+    const next = new Map(historyBySession.value)
+    next.set(sessionId, { ...(next.get(sessionId) || {}), ...patch })
+    historyBySession.value = next
+  }
+
+  function _deleteHistory(sessionId) {
+    if (!historyBySession.value.has(sessionId)) return
+    const next = new Map(historyBySession.value)
+    next.delete(sessionId)
+    historyBySession.value = next
+  }
+
+  function getHistoryState(sessionId) {
+    return historyBySession.value.get(sessionId) || null
+  }
+
+  /** True when the whole history is loaded (or the session was never loaded tail-first). */
+  function isHistoryComplete(sessionId) {
+    const history = historyBySession.value.get(sessionId)
+    return !history || !history.hasMoreBefore
+  }
+
+  /**
+   * Backfill progress as `{ fraction, loadedBytes, totalBytes }`, or null for a session that
+   * isn't tail-loaded. `fraction` is null when it can't be derived. The cursor is opaque by
+   * contract; the file-backed reader happens to encode a byte offset (`b:<offset>`), which is
+   * used here for a progress hint only — nothing else interprets a cursor.
+   */
+  function historyProgress(sessionId) {
+    const history = historyBySession.value.get(sessionId)
+    if (!history) return null
+    const totalBytes = history.totalBytes || 0
+    if (!history.hasMoreBefore) return { fraction: 1, loadedBytes: totalBytes, totalBytes }
+    const match = /^b:(\d+)$/.exec(history.startCursor || '')
+    if (!match || !totalBytes) return { fraction: null, loadedBytes: null, totalBytes }
+    const loadedBytes = Math.max(0, totalBytes - Number(match[1]))
+    return { fraction: Math.min(1, loadedBytes / totalBytes), loadedBytes, totalBytes }
+  }
+
+  /** True when this tool call was loaded from an older page, i.e. it is history, not news. */
+  function wasBackfilled(sessionId, toolUseId) {
+    return !!_backfilledToolIds.get(sessionId)?.has(toolUseId)
+  }
+
+  /** Aborts the session's in-flight backfill page request (if any) and installs a new one. */
+  function claimBackfill(sessionId) {
+    _backfillControllers.get(sessionId)?.abort()
+    const controller = new AbortController()
+    _backfillControllers.set(sessionId, controller)
+    return controller
+  }
+
+  function releaseBackfill(sessionId, controller) {
+    if (_backfillControllers.get(sessionId) === controller) _backfillControllers.delete(sessionId)
+  }
+
+  function abortBackfill(sessionId) {
+    _backfillControllers.get(sessionId)?.abort()
+    _backfillControllers.delete(sessionId)
+  }
+
+  /**
+   * One GET with its own inactivity abort, composed with the caller's (session-level) signal.
+   * A timeout surfaces as a distinguished `isHydrationTimeout` error; the outer signal firing
+   * propagates as the original abort. Shared by the tail window and every backfill page.
+   */
+  async function _fetchHistoryJson(url, { signal, inactivityMs = DEFAULT_HISTORY_PAGE_INACTIVITY_MS, label, lowPriority = false }) {
+    const requestController = new AbortController()
+    const fetchSignal = signal ? AbortSignal.any([signal, requestController.signal]) : requestController.signal
+    const timeoutId = setTimeout(() => requestController.abort(), inactivityMs)
+    try {
+      return await api.get(url, lowPriority ? { signal: fetchSignal, priority: 'low' } : { signal: fetchSignal })
+    } catch (err) {
+      if (signal?.aborted) throw err
+      if (requestController.signal.aborted) {
+        const timeoutErr = new Error(`Timed out loading ${label}`)
+        timeoutErr.isHydrationTimeout = true
+        pushDebugEvent('message', 'hydration-timeout', { label })
+        throw timeoutErr
+      }
+      throw err
+    } finally {
+      clearTimeout(timeoutId)
+    }
+  }
+
+  /**
+   * Bytes/second of the most recent fetch of `url`, from Resource Timing (encoded body over the
+   * request's duration), or null when unavailable (older Safari, cross-origin, mocked fetch).
+   * Feeds the backfill scheduler's slow-link detection where the Network Information API is absent.
+   */
+  function _measureTransferBps(url, sinceMs) {
+    try {
+      const entries = performance.getEntriesByType('resource')
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i]
+        if (entry.name.endsWith(url) && entry.startTime >= sinceMs - 50) {
+          if (!entry.encodedBodySize || !entry.duration) return null
+          return entry.encodedBodySize / (entry.duration / 1000)
+        }
+      }
+    } catch {
+      // Resource Timing unavailable
+    }
+    return null
+  }
+
+  /** Records that overlap what is already loaded prove the new window is contiguous with it. */
+  function _overlapsLoaded(sessionId, records) {
+    const index = messageIndexBySession.get(sessionId)
+    const toolIndex = toolIndexBySession.get(sessionId)
+    return records.some(r => (r.type === 'tool_call'
+      ? !!r.tool_use_id && !!toolIndex?.has(r.tool_use_id)
+      : !!r.message_id && !!index?.has(r.message_id)))
+  }
+
+  /**
+   * Issue #2030: fetch and install the newest turn-snapped window of a session's (or archive's)
+   * history. `options`: `{ signal, inactivityMs, baseUrl, resync, source }`.
+   *
+   * - First load: the window REPLACES whatever is installed and starts a fresh contiguous suffix.
+   * - Resync (`resync: true`, polling.js after stream_reset/evicted): the window is applied ON TOP
+   *   of the loaded suffix when it provably overlaps it (same `history_id`, shared records) — the
+   *   loaded older part is kept and no re-backfill is needed. A window that does not overlap
+   *   (a gap larger than the window), or a changed `history_id`, replaces the state and restarts
+   *   backfill (the generation bump tells the scheduler).
+   * Returns `{ messages, totalCount: null, hasMore, eventCursor, replaced }`.
+   */
+  async function loadHistoryTail(sessionId, options = {}) {
+    const { signal: callerSignal, inactivityMs, baseUrl = `/api/sessions/${sessionId}/messages`, resync = false } = options
+    const source = options.source || 'load'
+    _discardStreamingPreview(sessionId, 'reload')
+    const signal = callerSignal || claimHydrationLoad(sessionId).signal
+
+    const windowUrl = `${baseUrl}?window=tail`
+    const requestedAt = typeof performance !== 'undefined' ? performance.now() : 0
+    const data = await _fetchHistoryJson(windowUrl, { signal, inactivityMs, label: `history window for session ${sessionId}` })
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+
+    const records = data.messages || []
+    const prior = historyBySession.value.get(sessionId)
+    const hasLoaded = messagesBySession.value.has(sessionId) && !!prior
+    const canMerge = resync && hasLoaded && prior.historyId === data.history_id && _overlapsLoaded(sessionId, records)
+
+    let target
+    if (canMerge) {
+      target = _seedRecordTargetFromCurrent(sessionId)
+    } else {
+      // Replacing: an older-page backfill still running against the previous suffix is stale.
+      abortBackfill(sessionId)
+      _backfilledToolIds.delete(sessionId)
+      target = _createRecordTarget()
+    }
+    if (source === 'archive') {
+      _applyArchiveRecords(sessionId, records, target, { captureInit: true })
+    } else {
+      _applyPageToTarget(sessionId, records, target)
+    }
+    _installPageAndNotify(sessionId, target)
+    if (source === 'archive') {
+      if (data.latest_init) sessionStore.storeArchiveInitData(sessionId, data.latest_init)
+    } else if (data.latest_init) {
+      sessionStore.storeInitData(sessionId, data.latest_init)
+    }
+    _hookCorrelationCache.delete(sessionId)
+
+    if (canMerge) {
+      // Keep the older part we already hold; only the end moved.
+      _setHistory(sessionId, { totalBytes: data.total_bytes })
+    } else {
+      _setHistory(sessionId, {
+        baseUrl,
+        startCursor: data.start_cursor,
+        hasMoreBefore: !!data.has_more_before,
+        historyId: data.history_id,
+        totalBytes: data.total_bytes,
+        snapped: data.snapped !== false,
+        generation: (prior?.generation || 0) + 1,
+        source,
+        windowBps: _measureTransferBps(windowUrl, requestedAt),
+      })
+    }
+    if (data.event_cursor !== undefined) loadedEventCursors.set(sessionId, data.event_cursor)
+    // Only release the shared tracker if it is OURS (an archive view passes its own signal and
+    // never claims it — it must not clear a live session's pending load for the same id).
+    if (_hydrationLoadStateBySession.get(sessionId)?.controller.signal === signal) {
+      _hydrationLoadStateBySession.delete(sessionId)
+    }
+
+    pushDebugEvent('message', 'history-window', {
+      sessionId, records: records.length, hasMoreBefore: !!data.has_more_before, merged: canMerge, snapped: data.snapped,
+    })
+    return {
+      messages: messagesBySession.value.get(sessionId) || [],
+      totalCount: null,
+      hasMore: canMerge ? !isHistoryComplete(sessionId) : !!data.has_more_before,
+      eventCursor: data.event_cursor,
+      replaced: !canMerge,
+    }
+  }
+
+  /**
+   * Fetches (does not apply) the next older page of `sessionId`'s history. Resolves to
+   * `{ records, startCursor, hasMoreBefore, requestedBefore, historyId, generation, bytes }` or
+   * null when there is nothing older. Throws an error with `isHistoryReset` when the server says
+   * the cursor is no longer valid (409) or the file was rewritten (`history_id` changed) — the
+   * caller restarts from the tail.
+   */
+  async function fetchOlderPage(sessionId, { signal, maxBytes, inactivityMs } = {}) {
+    const history = historyBySession.value.get(sessionId)
+    if (!history || !history.hasMoreBefore) return null
+    const params = [`before=${encodeURIComponent(history.startCursor)}`]
+    if (maxBytes) params.push(`max_bytes=${maxBytes}`)
+    let data
+    try {
+      data = await _fetchHistoryJson(`${history.baseUrl}?${params.join('&')}`, {
+        signal, inactivityMs, label: `older history for session ${sessionId}`, lowPriority: true,
+      })
+    } catch (err) {
+      if (err?.status === 409) {
+        const resetErr = new Error('History cursor no longer valid')
+        resetErr.isHistoryReset = true
+        throw resetErr
+      }
+      throw err
+    }
+    if (data.history_id !== history.historyId) {
+      const resetErr = new Error('History file changed during backfill')
+      resetErr.isHistoryReset = true
+      throw resetErr
+    }
+    return {
+      records: data.messages || [],
+      startCursor: data.start_cursor,
+      hasMoreBefore: !!data.has_more_before,
+      requestedBefore: history.startCursor,
+      historyId: data.history_id,
+      generation: history.generation,
+    }
+  }
+
+  /**
+   * Applies a page returned by fetchOlderPage() — unless the loaded suffix moved on while it was
+   * in flight (generation / cursor changed), in which case the page is stale and dropped.
+   * Returns true when applied.
+   */
+  function applyFetchedOlderPage(sessionId, page, { source = 'load' } = {}) {
+    const history = historyBySession.value.get(sessionId)
+    if (!history || history.generation !== page.generation || history.startCursor !== page.requestedBefore) return false
+    applyOlderPage(sessionId, page.records, { source })
+    _setHistory(sessionId, { startCursor: page.startCursor, hasMoreBefore: page.hasMoreBefore })
+    if (!page.hasMoreBefore) _hookCorrelationCache.delete(sessionId)
+    return true
+  }
+
+  /**
+   * Prepend-merge of an older, contiguous page (oldest -> newest) UNDER the installed state.
+   *
+   * The page is replayed into its own accumulator (`applyRecord(..., target)`), then merged
+   * (utils/historyMerge.js): messages are older ++ current; for a tool call present in both, the
+   * newer (installed) entry wins field by field and the older record only fills what is absent,
+   * so an older record's pre-streaming `input: {}` can never clobber a completed tool's input.
+   *
+   * Side effects that are "latest wins" in a full load must not be overwritten by an older page:
+   * lastStopReason / deferredToolUse / launch timestamp keep any value already set by newer
+   * records (restored after the replay), init data
+   * is not captured (the window carries `latest_init`), and the Task store is never touched
+   * (task state comes from the server snapshot, not from history replay). Subagent narration
+   * appended while replaying is moved in front of the narration already held.
+   */
+  function applyOlderPage(sessionId, records, { source = 'load' } = {}) {
+    const current = {
+      messages: messagesBySession.value.get(sessionId) || [],
+      messageIndex: messageIndexBySession.get(sessionId) || new Map(),
+      toolCalls: toolCallsBySession.value.get(sessionId) || [],
+      toolIndex: toolIndexBySession.get(sessionId) || new Map(),
+      retryIndex: retryIndexBySession.get(sessionId) || new Map(),
+    }
+
+    const savedStop = lastStopReasonBySession.value.has(sessionId) ? [lastStopReasonBySession.value.get(sessionId)] : null
+    const savedDeferred = deferredToolUseBySession.value.has(sessionId) ? [deferredToolUseBySession.value.get(sessionId)] : null
+    const savedLaunch = launchTimestampBySession.value.has(sessionId) ? [launchTimestampBySession.value.get(sessionId)] : null
+    const narrationLengths = new Map()
+    for (const [taskId, perLeg] of narrationByTaskIdAndLeg.value) {
+      for (const [legIndex, list] of perLeg) narrationLengths.set(`${taskId}:${legIndex}`, list.length)
+    }
+
+    const older = _createRecordTarget()
+    if (source === 'archive') {
+      _applyArchiveRecords(sessionId, records, older, { captureInit: false })
+    } else {
+      for (const record of records) applyRecord(sessionId, record, 'load', { notify: false, target: older })
+    }
+
+    // Latest wins: a value the newer records already determined must survive the older replay.
+    // If nothing newer determined one yet (the tail held no result / user message / launch), the
+    // older page's value is the latest there is and is kept.
+    const restore = (map, saved) => {
+      if (saved) map.value.set(sessionId, saved[0])
+    }
+    restore(lastStopReasonBySession, savedStop)
+    restore(deferredToolUseBySession, savedDeferred)
+    restore(launchTimestampBySession, savedLaunch)
+    for (const [taskId, perLeg] of narrationByTaskIdAndLeg.value) {
+      for (const [legIndex, list] of perLeg) {
+        const added = list.length - (narrationLengths.get(`${taskId}:${legIndex}`) || 0)
+        if (added > 0) perLeg.set(legIndex, list.splice(list.length - added, added).concat(list))
+      }
+    }
+
+    let backfilled = _backfilledToolIds.get(sessionId)
+    if (!backfilled) _backfilledToolIds.set(sessionId, (backfilled = new Set()))
+    for (const tool of older.toolCalls) backfilled.add(tool.id)
+
+    const merged = mergeOlderPage(current, older)
+    _installRecordTarget(sessionId, merged)
+    messagesBySession.value = new Map(messagesBySession.value)
+    toolCallsBySession.value = new Map(toolCallsBySession.value)
+    narrationByTaskIdAndLeg.value = new Map(narrationByTaskIdAndLeg.value)
+    pushDebugEvent('message', 'history-older-page', { sessionId, records: records.length, prepended: merged.prependedMessageCount })
+    return merged.prependedMessageCount
+  }
+
   /**
    * Issue #1747 / #2140: page through GET /api/sessions/{id}/messages, accumulating
    * results until the backend reports has_more === false, so callers never silently
@@ -377,6 +723,8 @@ export const useMessageStore = defineStore('message', () => {
    * through instead of claiming a second time.
    */
   async function loadMessages(sessionId, limit = null, offset = 0, options = {}) {
+    // Issue #2030: tail-first mode — one turn-snapped window, older history backfills separately.
+    if (options.window === 'tail') return loadHistoryTail(sessionId, options)
     try {
       let messages, totalCount, hasMore, eventCursor
 
@@ -443,14 +791,6 @@ export const useMessageStore = defineStore('message', () => {
       console.log(`Loaded ${messages.length} of ${totalCount} messages for session ${sessionId}`)
 
       const regularMessages = messagesBySession.value.get(sessionId) || []
-
-      // Reconstruct task state from message history
-      try {
-        const taskStore = useTaskStore()
-        taskStore.reconstructFromMessages(sessionId, regularMessages)
-      } catch (e) {
-        console.warn('Failed to reconstruct task state:', e)
-      }
 
       // Warn if there are more messages we didn't load
       if (hasMore) {
@@ -547,9 +887,29 @@ export const useMessageStore = defineStore('message', () => {
       }
       taskLegsByTaskId.value = new Map(taskLegsByTaskId.value)
       taskIdByLaunchToolUseId.value = new Map(taskIdByLaunchToolUseId.value)
+      _rebuildSubagentNarration(sessionId)
     } catch (error) {
       console.warn(`Failed to hydrate background agents for session ${sessionId}:`, error)
     }
+  }
+
+  /**
+   * Issue #2030: the tail window is installed as soon as it arrives, in parallel with the
+   * background-agents snapshot, so subagent narration in the window can be replayed BEFORE the
+   * snapshot has bridged launch tool_use ids to task ids (and is then silently unrouted). Re-route
+   * whatever is loaded once the snapshot lands. Idempotent: narration of this session's tasks is
+   * rebuilt from the loaded messages, in message order.
+   */
+  function _rebuildSubagentNarration(sessionId) {
+    const messages = messagesBySession.value.get(sessionId)
+    if (!messages || !messages.some(m => m.type === 'assistant' && m.metadata?.parent_tool_use_id)) return
+    for (const [taskId, entry] of taskLegsByTaskId.value) {
+      if (entry.session_id === sessionId) narrationByTaskIdAndLeg.value.delete(taskId)
+    }
+    for (const message of messages) {
+      if (message.type === 'assistant' && message.metadata?.parent_tool_use_id) _routeSubagentNarration(message)
+    }
+    narrationByTaskIdAndLeg.value = new Map(narrationByTaskIdAndLeg.value)
   }
 
   /** Issue #1746 (stage: subagents): all known legs for a task_id, or null. */
@@ -1008,7 +1368,7 @@ export const useMessageStore = defineStore('message', () => {
   function applyRecord(sessionId, record, source, { notify = true, target = null } = {}) {
     if (!record || !record.type) return
     if (record.type === 'tool_call') {
-      _applyToolCallRecord(sessionId, record, notify, target)
+      _applyToolCallRecord(sessionId, record, notify, target, source)
       return
     }
     _applyMessageRecord(sessionId, record, source, notify, target)
@@ -1269,7 +1629,7 @@ export const useMessageStore = defineStore('message', () => {
    * `useToolStatus.js`'s effectiveStatus/isOrphaned read directly — no backendStatus field, no
    * session-scoped orphan Map.
    */
-  function _applyToolCallRecord(sessionId, toolCall, notify = true, target = null) {
+  function _applyToolCallRecord(sessionId, toolCall, notify = true, target = null, source = 'live') {
     const toolUseId = toolCall.tool_use_id
     if (!toolUseId) {
       console.warn('Received tool_call without tool_use_id:', toolCall)
@@ -1281,6 +1641,7 @@ export const useMessageStore = defineStore('message', () => {
     const existingIndex = toolIndex.has(toolUseId) ? toolIndex.get(toolUseId) : -1
 
     const frontendStatus = TOOL_STATUS_MAP[toolCall.status] || toolCall.status
+    if (source === 'live') _backfilledToolIds.get(sessionId)?.delete(toolUseId) // live news, not history
 
     if (existingIndex !== -1) {
       // Update existing tool call
@@ -1433,8 +1794,10 @@ export const useMessageStore = defineStore('message', () => {
     // Trigger reactivity
     if (notify) toolCallsBySession.value = new Map(toolCallsBySession.value)
 
-    // Handle task tool results
-    if (['completed', 'failed'].includes(toolCall.status) &&
+    // Handle task tool results. Issue #2030: live records only — the Tasks panel is hydrated from
+    // the server snapshot (GET /api/sessions/{id}/tasks); history replay (load / backfill / resync /
+    // archive) covers just a window of the history and would produce partial or wrong state.
+    if (source === 'live' && ['completed', 'failed'].includes(toolCall.status) &&
         ['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'].includes(toolCall.name)) {
       try {
         const taskStore = useTaskStore()
@@ -1491,6 +1854,11 @@ export const useMessageStore = defineStore('message', () => {
     const pendingLoad = _hydrationLoadStateBySession.get(sessionId)
     if (pendingLoad) pendingLoad.controller.abort()
     _hydrationLoadStateBySession.delete(sessionId)
+    // Issue #2030: a wiped session has no loaded suffix to extend — stop any backfill for it.
+    abortBackfill(sessionId)
+    _deleteHistory(sessionId)
+    _backfilledToolIds.delete(sessionId)
+    _hookCorrelationCache.delete(sessionId)
 
     // Issue #1746 (stage: subagents): clear only this session's task_id-scoped state
     // (ephemeral, reconstructs via hydrateBackgroundAgents + live frames on reload/reconnect).
@@ -1792,7 +2160,21 @@ export const useMessageStore = defineStore('message', () => {
     // dedup, api_retry collapse, truncation/deferral banners, subagent narration routing,
     // tool_call upsert) entirely outside the reactive proxies, then install it in one shot.
     const target = _createRecordTarget()
+    _applyArchiveRecords(sessionId, rawMessages, target, { captureInit: true })
+    _installRecordTarget(sessionId, target)
+    // Ensure reactivity even when `rawMessages` was empty or fully filtered out.
+    messagesBySession.value = new Map(messagesBySession.value)
+    toolCallsBySession.value = new Map(toolCallsBySession.value)
+    lastStopReasonBySession.value = new Map(lastStopReasonBySession.value)
+    deferredToolUseBySession.value = new Map(deferredToolUseBySession.value)
+  }
 
+  /**
+   * Archive-view replay shared by setArchiveMessages() and the tail-first archive path
+   * (loadHistoryTail / applyOlderPage with `source: 'archive'`). `captureInit: false` for older
+   * pages: an older init record must never replace the newer one the window already captured.
+   */
+  function _applyArchiveRecords(sessionId, rawMessages, target, { captureInit }) {
     rawMessages.forEach(msg => {
       // Note: tool_call records need no special-case here — applyRecord() itself routes them
       // to the tool_call branch internally and never pushes them to the display list, so they
@@ -1819,7 +2201,7 @@ export const useMessageStore = defineStore('message', () => {
         if (subtype === 'init') {
           // Issue #1829: capture init data for the archive-scoped Info modal view
           // before the (possibly early) return below discards this message.
-          if (msg.metadata?.init_data) {
+          if (captureInit && msg.metadata?.init_data) {
             sessionStore.storeArchiveInitData(sessionId, msg.metadata.init_data)
           }
           if (!msg.content) {
@@ -1829,15 +2211,9 @@ export const useMessageStore = defineStore('message', () => {
       }
 
       // notify:false — see applyRecord()'s own comment: avoid O(N) reactive broadcasts while
-      // replaying a whole archived session in one shot; one final reassignment below covers it.
+      // replaying a whole archived session in one shot; one final reassignment covers it.
       applyRecord(sessionId, msg, 'archive', { notify: false, target })
     })
-    _installRecordTarget(sessionId, target)
-    // Ensure reactivity even when `rawMessages` was empty or fully filtered out.
-    messagesBySession.value = new Map(messagesBySession.value)
-    toolCallsBySession.value = new Map(toolCallsBySession.value)
-    lastStopReasonBySession.value = new Map(lastStopReasonBySession.value)
-    deferredToolUseBySession.value = new Map(deferredToolUseBySession.value)
   }
 
   /**
@@ -1852,6 +2228,10 @@ export const useMessageStore = defineStore('message', () => {
     // Issue #2131: the identity index Maps mirror messagesBySession/toolCallsBySession 1:1 —
     // same session-keyed-state cleanup pattern as lastStopReasonBySession/etc. just below.
     _deleteRecordTargets(sessionId)
+    abortBackfill(sessionId)  // Issue #2030: archive views backfill older pages too
+    _deleteHistory(sessionId)
+    _backfilledToolIds.delete(sessionId)
+    _hookCorrelationCache.delete(sessionId)
     // Issue #2110 (stage 4b-B review fix): applyRecord's uniform side effects now also write
     // lastStopReasonBySession/deferredToolUseBySession/launchTimestampBySession for the
     // 'archive' source — these are keyed only by sessionId, which an archive view shares with
@@ -1876,8 +2256,12 @@ export const useMessageStore = defineStore('message', () => {
     const count = messages.length
     const lastId = count > 0 ? (messages[count - 1].message_id || messages[count - 1].id || null) : null
 
+    // Issue #2030: while only a suffix of the history is loaded, a head-only prepend (backfill)
+    // must not invalidate the cache page by page — the whole-history correlation is recomputed
+    // once on completion (applyFetchedOlderPage drops the entry). Live appends still change lastId.
     const cached = _hookCorrelationCache.get(sessionId)
-    if (cached && cached.messageCount === count && cached.lastId === lastId) {
+    if (cached && cached.lastId === lastId &&
+        (cached.messageCount === count || !isHistoryComplete(sessionId))) {
       return cached.result
     }
 
@@ -1902,6 +2286,9 @@ export const useMessageStore = defineStore('message', () => {
   /** Returns hooks correlated to a compaction event group by ordinal index. */
   function hooksForCompaction(sessionId, groupIndex) {
     if (!sessionId || groupIndex == null || groupIndex < 0) return []
+    // Issue #2030: the compaction ordinal counts groups from the start of the list, so it is
+    // only meaningful once the whole history is loaded (stage 2 keys it by message_id).
+    if (!isHistoryComplete(sessionId)) return []
     return getHookCorrelation(sessionId).hooksByCompactionIndex.get(groupIndex) || []
   }
 
@@ -1983,6 +2370,19 @@ export const useMessageStore = defineStore('message', () => {
 
     // Actions
     loadMessages,
+    // Issue #2030 (stage 1b): tail-first history — window load, backfill pages, state
+    loadHistoryTail,
+    fetchOlderPage,
+    applyFetchedOlderPage,
+    applyOlderPage,
+    claimBackfill,
+    releaseBackfill,
+    wasBackfilled,
+    abortBackfill,
+    historyBySession: readonly(historyBySession),
+    getHistoryState,
+    isHistoryComplete,
+    historyProgress,
     // Issue #2140: shared per-session in-progress history-load tracker — the single source
     // of truth both session.js's retryHydration() and polling.js's resync trigger claim
     // through before starting a new loadMessages() call.

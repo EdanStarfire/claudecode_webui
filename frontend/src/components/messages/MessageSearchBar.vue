@@ -20,6 +20,12 @@
         @keydown="onKeydown"
       />
       <span class="message-search-count">{{ countLabel }}</span>
+      <span
+        v-if="search.historyScope?.value"
+        class="message-search-scope small text-muted"
+        data-testid="search-history-scope"
+        title="Search covers the messages loaded so far; older history is still loading."
+      >{{ scopeLabel }}</span>
       <button
         class="btn btn-sm btn-outline-secondary"
         :disabled="!hasMatches"
@@ -62,6 +68,12 @@ const countLabel = computed(() => {
   return `${props.search.currentIndex.value + 1} of ${total}`
 })
 
+// Issue #2030: search only sees loaded messages until the full history has arrived.
+const scopeLabel = computed(() => {
+  const percent = props.search.historyScope?.value?.percent
+  return percent != null ? `Searching ${percent} % of history — still loading` : 'Searching loaded history — still loading'
+})
+
 function handleOpen() {
   props.search.open()
   nextTick(() => inputEl.value?.focus())
@@ -85,8 +97,13 @@ function onKeydown(e) {
 // Issue #2012: navigate (and highlight) whenever the current match changes — on query results
 // landing, next()/prev(), or clearing to no match (emits null so the parent clears any stale
 // highlight rather than leaving one in a now-irrelevant row).
+// Issue #2030: keyed (not by object identity) so an older page re-running the same query, which
+// rebuilds the matches array, doesn't yank the view back to an already-selected match.
 watch(
-  () => props.search.currentMatch.value,
-  match => emit('navigate', match)
+  () => {
+    const m = props.search.currentMatch.value
+    return m ? `${props.search.query.value}|${m.messageId}|${m.toolId}|${m.field}|${m.matchStart}|${m.occurrenceIndex}` : null
+  },
+  () => emit('navigate', props.search.currentMatch.value)
 )
 </script>

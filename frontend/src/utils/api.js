@@ -68,13 +68,41 @@ async function gzipEncode(text) {
   return new Uint8Array(compressedBuffer)
 }
 
+// Issue #2030 (stage 1b): number of mutating (non-GET) requests currently in flight. The
+// history backfill scheduler yields to user actions (send / permission / interrupt / ...), so
+// it needs one cheap, central answer to "is a user REST call running right now".
+let mutationsInFlight = 0
+const mutationIdleListeners = new Set()
+
+export function getMutationsInFlight() {
+  return mutationsInFlight
+}
+
+/** Registers a callback fired whenever the in-flight mutation count returns to zero. */
+export function onMutationsIdle(callback) {
+  mutationIdleListeners.add(callback)
+  return () => mutationIdleListeners.delete(callback)
+}
+
+async function apiRequest(endpoint, options = {}) {
+  const isMutation = options.method && options.method !== 'GET'
+  if (!isMutation) return apiRequestInner(endpoint, options)
+  mutationsInFlight++
+  try {
+    return await apiRequestInner(endpoint, options)
+  } finally {
+    mutationsInFlight--
+    if (mutationsInFlight === 0) mutationIdleListeners.forEach(cb => cb())
+  }
+}
+
 /**
  * Make an API request
  * @param {string} endpoint - API endpoint path
  * @param {Object} options - Fetch options
  * @returns {Promise<any>} Response data
  */
-async function apiRequest(endpoint, options = {}) {
+async function apiRequestInner(endpoint, options = {}) {
   try {
     // Inject auth token if present (issue #728)
     const authHeaders = {}

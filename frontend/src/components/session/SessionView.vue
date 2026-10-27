@@ -99,9 +99,9 @@ import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
 import { useResourceStore } from '@/stores/resource'
 import { useArchiveTabsStore } from '@/stores/archiveTabs'
+import { historyBackfill } from '@/composables/useHistoryBackfill'
 import { useUIStore } from '@/stores/ui'
 import { usePollingStore } from '@/stores/polling'
-import { apiGet } from '@/utils/api'
 import SessionStateStatusLine from './SessionStateStatusLine.vue'
 import SessionStatusBar from '../statusbar/SessionStatusBar.vue'
 import MessageList from '../messages/MessageList.vue'
@@ -214,8 +214,17 @@ async function loadArchiveMessages() {
 
   uiStore.showLoading('Loading archived session...')
   try {
-    const data = await apiGet(`/api/projects/${pid}/archives/${props.sessionId}/${archiveId}/messages?limit=1000&offset=0`)
-    messageStore.setArchiveMessages(props.sessionId, data.messages || [])
+    // Issue #2030: the archive opens on its newest window (the old first-1000 read silently
+    // truncated long archives to their OLDEST records), and older history backfills like a live
+    // session's. The view owns its signal — an archive load must not claim (and thereby abort)
+    // the live session's shared hydration tracker for the same id.
+    await messageStore.loadMessages(props.sessionId, null, 0, {
+      window: 'tail',
+      source: 'archive',
+      baseUrl: `/api/projects/${pid}/archives/${props.sessionId}/${archiveId}/messages`,
+      signal: new AbortController().signal,
+    })
+    historyBackfill.start(props.sessionId)
     // Load archived resources + the 5 archive-viewer tabs (issue #1263) concurrently —
     // independent fetches, and running them together shrinks the window where a tab
     // pane could render before loadAllTabs has even started.

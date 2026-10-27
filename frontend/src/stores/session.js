@@ -134,15 +134,6 @@ export const useSessionStore = defineStore('session', () => {
   // fails sessions that are merely slow-but-steady rather than genuinely stuck.
   const HISTORY_PAGE_INACTIVITY_TIMEOUT_MS = 30000
 
-  // Issue #2140: merges `progress` into an owned hydrationStageBySession entry without
-  // clobbering its stage/error/controller — called after each history page completes.
-  function updateHydrationProgress(sessionId, controller, progress) {
-    const entry = hydrationStageBySession.value.get(sessionId)
-    if (!entry || entry.controller !== controller) return
-    hydrationStageBySession.value.set(sessionId, { ...entry, progress })
-    hydrationStageBySession.value = new Map(hydrationStageBySession.value)
-  }
-
   function withTimeout(promise, ms, stageLabel) {
     let timeoutId
     const timeout = new Promise((_, reject) => {
@@ -182,28 +173,31 @@ export const useSessionStore = defineStore('session', () => {
       setHydrationStage(sessionId, abortController, 'loading_history')
       // Issue #2140 (builder-review fix): claim the shared history-load controller HERE,
       // unconditionally — not just when retryHydration() happens to call it first. Without
-      // this, re-entering this branch for a session whose PREVIOUS load is still orphaned
-      // mid-pagination (e.g. the user switched away before it finished, then switched back)
-      // would resume using the stale, still-live controller instead of aborting it first —
-      // two fetchAllMessagePages() loops would then run concurrently over the same shared
-      // state, each making redundant network requests (the exact concurrent-refetch bug
-      // this issue exists to fix, just reachable via a switch-away/switch-back instead of a
-      // double Retry click). Also gives the catch block below the actual signal that
-      // matters for "was my attempt the one just pre-empted" — the outer `abortController`
-      // here only tracks THIS selection's stage-ownership, not whether a concurrent
-      // claimant (a later retry, or polling.js's resync) stole the underlying fetch.
-      const resume = msgStore.hasPendingHistoryLoad(sessionId)
+      // this, re-entering this branch for a session whose PREVIOUS load is still in flight
+      // (e.g. the user switched away before it finished, then switched back) would resume using
+      // the stale, still-live controller instead of aborting it first. Also gives the catch block
+      // below the actual signal that matters for "was my attempt the one just pre-empted" — the
+      // outer `abortController` here only tracks THIS selection's stage-ownership, not whether a
+      // concurrent claimant (a later retry, or polling.js's resync) stole the underlying fetch.
       const historyController = msgStore.claimHydrationLoad(sessionId)
       try {
-        await withTimeout(msgStore.hydrateBackgroundAgents(sessionId), HYDRATION_STEP_TIMEOUT_MS, 'loading_history')
-        if (abortController.signal.aborted) { clearHydrationStageIfOwned(sessionId, abortController); return false }
-        pushDebugEvent('session', 'hydration-stage', { sessionId, stage: 'loading_history', resume })
+        pushDebugEvent('session', 'hydration-stage', { sessionId, stage: 'loading_history' })
+        // Issue #2030 (stage 1b): the newest turn-snapped window and the background-agents
+        // snapshot load in parallel. The window is installed (and painted) the moment it
+        // arrives; the snapshot only has to be applied before the live stream connects below
+        // (preserving its ordering with live frames) — lanes/signals appear when it lands.
+        const agentsPromise = withTimeout(msgStore.hydrateBackgroundAgents(sessionId), HYDRATION_STEP_TIMEOUT_MS, 'loading_history')
+        agentsPromise.catch(() => {})  // surfaced by the await below; never an unhandled rejection
         await msgStore.loadMessages(sessionId, null, 0, {
+          window: 'tail',
           signal: historyController.signal,
           inactivityMs: HISTORY_PAGE_INACTIVITY_TIMEOUT_MS,
-          resume,
-          onPageComplete: (progress) => updateHydrationProgress(sessionId, abortController, progress),
         })
+        // The /tasks snapshot is dispatched only AFTER the window response: its event_cursor
+        // was read server-side first, so a snapshot requested afterwards includes every task
+        // event at or before that cursor; later events arrive live (buffered meanwhile).
+        useTaskStore().hydrate(sessionId)
+        await agentsPromise
         // Issue #2145: seed the Background section from the backend snapshot (never throws;
         // not awaited so it can't delay or reorder the history-load chain).
         useBackgroundTasksStore().hydrate(sessionId)
@@ -222,26 +216,8 @@ export const useSessionStore = defineStore('session', () => {
     }
     if (abortController.signal.aborted) { clearHydrationStageIfOwned(sessionId, abortController); return false }
 
-    setHydrationStage(sessionId, abortController, 'loading_resources')
-    const resourceStore = await import('./resource')
-    try {
-      await withTimeout(resourceStore.useResourceStore().loadResources(sessionId), HYDRATION_STEP_TIMEOUT_MS, 'loading_resources')
-    } catch (error) {
-      if (abortController.signal.aborted) { clearHydrationStageIfOwned(sessionId, abortController); return false }
-      setHydrationError(sessionId, abortController, 'loading_resources', error)
-      return false
-    }
-    if (abortController.signal.aborted) { clearHydrationStageIfOwned(sessionId, abortController); return false }
-
-    setHydrationStage(sessionId, abortController, 'loading_extras')
-    const linksStoreModule = await import('./links')
-    linksStoreModule.useLinksStore().loadLinks(sessionId)
-    if (includeUsage) {
-      const usageStore = await import('./usage')
-      usageStore.useUsageStore().loadUsage(sessionId)
-    }
-    if (abortController.signal.aborted) { clearHydrationStageIfOwned(sessionId, abortController); return false }
-
+    // Issue #2030: connect immediately after the window — resources/links/usage are off the
+    // critical path (a slow resources fetch must not hold the input disabled).
     setHydrationStage(sessionId, abortController, 'connecting_poll')
     const wsStore = await import('./polling')
     if (skipPolling) {
@@ -252,7 +228,27 @@ export const useSessionStore = defineStore('session', () => {
 
     if (abortController.signal.aborted) { clearHydrationStageIfOwned(sessionId, abortController); return false }
     setHydrationStage(sessionId, abortController, 'ready')
+
+    _hydrateSecondaryData(sessionId, { includeUsage })
+    if (!skipPolling) {
+      import('../composables/useHistoryBackfill').then(({ startBackfillIfIncomplete }) => startBackfillIfIncomplete(sessionId))
+    }
     return true
+  }
+
+  /** Issue #2030: non-blocking tail of the hydration chain — failures only log. */
+  function _hydrateSecondaryData(sessionId, { includeUsage }) {
+    Promise.resolve()
+      .then(() => useResourceStore().loadResources(sessionId))
+      .catch(error => console.warn(`Failed to load resources for session ${sessionId}:`, error))
+    Promise.resolve()
+      .then(() => useLinksStore().loadLinks(sessionId))
+      .catch(error => console.warn(`Failed to load links for session ${sessionId}:`, error))
+    if (includeUsage) {
+      import('./usage')
+        .then(({ useUsageStore }) => useUsageStore().loadUsage(sessionId))
+        .catch(error => console.warn(`Failed to load usage for session ${sessionId}:`, error))
+    }
   }
 
   /**

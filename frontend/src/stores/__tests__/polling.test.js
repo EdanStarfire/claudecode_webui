@@ -255,7 +255,7 @@ describe('polling store', () => {
     await runStateChangeSequence('sess-e', [{ state: 'error' }])
 
     expect(clearSpy).toHaveBeenCalledWith('sess-e')
-    expect(loadSpy).toHaveBeenCalledWith('sess-e')
+    expect(loadSpy).toHaveBeenCalledWith('sess-e', null, 0, { window: 'tail' })
     expect(clearSpy.mock.invocationCallOrder[0]).toBeLessThan(loadSpy.mock.invocationCallOrder[0])
   })
 

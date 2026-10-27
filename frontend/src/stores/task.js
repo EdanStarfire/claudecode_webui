@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
+import { api } from '../utils/api'
 import { useSessionStore } from './session'
+import { useUIStore } from './ui'
 
 /**
  * Task Store - Manages SDK task system state per session
@@ -197,6 +199,9 @@ export const useTaskStore = defineStore('task', () => {
    * Clear all tasks for a session (for session reset)
    */
   function clearTasks(sessionId) {
+    _liveBuffers.delete(sessionId)
+    _hydrationSeq.set(sessionId, (_hydrationSeq.get(sessionId) || 0) + 1) // outlive any in-flight snapshot
+    if (hydrationStateBySession.value.has(sessionId)) _setHydrationState(sessionId, null)
     tasksBySession.value.delete(sessionId)
     sessionsWithTasks.value.delete(sessionId)
 
@@ -207,50 +212,111 @@ export const useTaskStore = defineStore('task', () => {
     console.log(`Cleared tasks for session ${sessionId}`)
   }
 
+  // ========== SERVER SNAPSHOT (Issue #2030, stage 1b) ==========
+  // The Tasks panel is hydrated from GET /api/sessions/{id}/tasks (reduced server-side from the
+  // whole history), never from the loaded message window — a tail-first load only holds a suffix
+  // of the history, so replaying it would produce partial or subject-less tasks. History replay
+  // (load / backfill / resync / archive) therefore never calls handleTaskToolResult(); only live
+  // records do.
+
+  // sessionId -> 'loading' | 'ready' | 'error'. Absent == nothing requested yet.
+  const hydrationStateBySession = ref(new Map())
+  // Live task results that arrive while a snapshot is outstanding are queued here and replayed on
+  // top of it once applied (the reducer is idempotent), so a snapshot can never revert a newer
+  // live update. Non-reactive bookkeeping. Map<sessionId, Array<[toolName, input, result]>>
+  const _liveBuffers = new Map()
+  // Newest in-flight hydrate() request per session (see hydrate()).
+  const _hydrationSeq = new Map()
+  // Overlapping snapshot applications share one save/restore of the auto-show suppress flag.
+  let _suppressDepth = 0
+  let _suppressRestore = false
+
+  function _setHydrationState(sessionId, state) {
+    const next = new Map(hydrationStateBySession.value)
+    if (state) next.set(sessionId, state)
+    else next.delete(sessionId)
+    hydrationStateBySession.value = next
+  }
+
+  /** Starts buffering live task results for `sessionId` (called when the history window is applied). */
+  function beginHydration(sessionId) {
+    if (!_liveBuffers.has(sessionId)) _liveBuffers.set(sessionId, [])
+    if (hydrationStateBySession.value.get(sessionId) !== 'loading') _setHydrationState(sessionId, 'loading')
+  }
+
   /**
-   * Reconstruct task state from message history
-   * Called when loading a session to rebuild task state from tool calls
+   * Replaces `sessionId`'s tasks with the server snapshot, then replays any live results that
+   * arrived while it was in flight. A failed request leaves the panel in an explicit 'error' state
+   * (retry via another hydrate()); it never falls back to window-derived data.
    */
-  function reconstructFromMessages(sessionId, messages) {
-    // Clear existing tasks for this session
-    if (tasksBySession.value.has(sessionId)) {
-      tasksBySession.value.get(sessionId).clear()
-    }
-    sessionsWithTasks.value.delete(sessionId)
-
-    // Build a map of tool_use_id -> tool info for matching results
-    const pendingToolUses = new Map()
-
-    // Process messages chronologically to rebuild task state
-    for (const message of messages) {
-      // Track task tool uses from assistant messages
-      if (message.metadata?.tool_uses) {
-        for (const toolUse of message.metadata.tool_uses) {
-          if (['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'].includes(toolUse.name)) {
-            pendingToolUses.set(toolUse.id, {
-              name: toolUse.name,
-              input: toolUse.input
-            })
-          }
-        }
+  async function hydrate(sessionId) {
+    beginHydration(sessionId)
+    // Only the newest request for a session may apply its snapshot and drain the live buffer;
+    // an older one finishing late (overlapping chain / resync / error reload) or one outlived
+    // by clearTasks() is stale and dropped.
+    const seq = (_hydrationSeq.get(sessionId) || 0) + 1
+    _hydrationSeq.set(sessionId, seq)
+    const isStale = () => _hydrationSeq.get(sessionId) !== seq
+    try {
+      const data = await api.get(`/api/sessions/${sessionId}/tasks`)
+      if (isStale()) return
+      const taskMap = new Map()
+      for (const task of data.tasks || []) {
+        taskMap.set(String(task.id), {
+          id: String(task.id),
+          subject: task.subject || '',
+          description: task.description || '',
+          status: task.status || 'pending',
+          activeForm: task.activeForm || null,
+          owner: task.owner || null,
+          blocks: task.blocks || [],
+          blockedBy: task.blockedBy || [],
+          metadata: task.metadata || {},
+        })
       }
-
-      // Process tool results from user messages
-      if (message.metadata?.tool_results) {
-        for (const toolResult of message.metadata.tool_results) {
-          const toolInfo = pendingToolUses.get(toolResult.tool_use_id)
-          if (toolInfo) {
-            handleTaskToolResult(sessionId, toolInfo.name, toolInfo.input, {
-              error: toolResult.is_error,
-              content: toolResult.content
-            })
-            pendingToolUses.delete(toolResult.tool_use_id)
-          }
-        }
+      const tasks = new Map(tasksBySession.value)
+      const withTasks = new Set(sessionsWithTasks.value)
+      if (taskMap.size > 0) {
+        tasks.set(sessionId, taskMap)
+        withTasks.add(sessionId)
+      } else {
+        tasks.delete(sessionId)
+        withTasks.delete(sessionId)
       }
+      // A snapshot landing is "loading existing data", not "tasks just appeared": it must not
+      // pop the right panel open (App.vue auto-shows on the 0 -> N transition of live task
+      // creation). The suppress flag only guards the watcher flush this assignment triggers.
+      const uiStore = useUIStore()
+      if (_suppressDepth++ === 0) _suppressRestore = uiStore.suppressAutoShow
+      uiStore.setSuppressAutoShow(true)
+      try {
+        tasksBySession.value = tasks
+        sessionsWithTasks.value = withTasks
+        _setHydrationState(sessionId, 'ready')
+        await nextTick()
+      } finally {
+        if (--_suppressDepth === 0) uiStore.setSuppressAutoShow(_suppressRestore)
+      }
+    } catch (error) {
+      if (isStale()) return
+      console.warn(`Failed to hydrate tasks for session ${sessionId}:`, error)
+      _setHydrationState(sessionId, 'error')
+    } finally {
+      if (isStale()) return
+      const buffered = _liveBuffers.get(sessionId) || []
+      _liveBuffers.delete(sessionId)
+      for (const [toolName, input, result] of buffered) handleTaskToolResult(sessionId, toolName, input, result)
     }
+  }
 
-    console.log(`Reconstructed ${tasksBySession.value.get(sessionId)?.size || 0} tasks for session ${sessionId}`)
+  /** True while a snapshot is outstanding (the panel shows a brief "loading tasks…"). */
+  function isHydrating(sessionId) {
+    return hydrationStateBySession.value.get(sessionId) === 'loading'
+  }
+
+  /** True when the last snapshot request failed. */
+  function hasHydrationError(sessionId) {
+    return hydrationStateBySession.value.get(sessionId) === 'error'
   }
 
   /**
@@ -258,6 +324,12 @@ export const useTaskStore = defineStore('task', () => {
    * Called from message store when task tools complete
    */
   function handleTaskToolResult(sessionId, toolName, input, result) {
+    // Issue #2030: a snapshot is outstanding — queue, replayed on top of it in hydrate().
+    const buffer = _liveBuffers.get(sessionId)
+    if (buffer) {
+      buffer.push([toolName, input, result])
+      return
+    }
     // Skip if result is an error
     if (result?.error) {
       console.log(`Skipping task update - tool ${toolName} returned error`)
@@ -381,7 +453,12 @@ export const useTaskStore = defineStore('task', () => {
     createTask,
     updateTask,
     clearTasks,
-    reconstructFromMessages,
-    handleTaskToolResult
+    handleTaskToolResult,
+    // Issue #2030: server snapshot
+    hydrate,
+    beginHydration,
+    isHydrating,
+    hasHydrationError,
+    hydrationStateBySession
   }
 })

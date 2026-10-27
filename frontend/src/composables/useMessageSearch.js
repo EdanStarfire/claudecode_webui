@@ -28,15 +28,24 @@ export function useMessageSearch(sessionIdRef, { messageStore } = {}) {
     notFound.value = false
   }
 
-  function runSearch() {
+  // Identity of a match across re-runs: older pages prepend matches, shifting every index.
+  const matchKey = (m) => `${m.messageId}|${m.toolId}|${m.field}|${m.matchStart}`
+
+  function runSearch({ preserveSelection = false } = {}) {
+    const previous = preserveSelection ? currentMatch.value : null
     matches.value = findMatches(sessionIdRef.value, query.value, { messageStore })
-    currentIndex.value = matches.value.length > 0 ? 0 : -1
-    notFound.value = false
+    let index = matches.value.length > 0 ? 0 : -1
+    if (previous) {
+      const kept = matches.value.findIndex(m => matchKey(m) === matchKey(previous))
+      if (kept !== -1) index = kept
+    }
+    currentIndex.value = index
+    if (!preserveSelection) notFound.value = false
   }
 
-  function scheduleSearch() {
+  function scheduleSearch(options) {
     clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(runSearch, DEBOUNCE_MS)
+    debounceTimer = setTimeout(() => runSearch(options), DEBOUNCE_MS)
   }
 
   watch(query, () => {
@@ -49,6 +58,23 @@ export function useMessageSearch(sessionIdRef, { messageStore } = {}) {
   })
 
   watch(sessionIdRef, reset)
+
+  // Issue #2030 (stage 1b): search covers the LOADED messages only while older history is still
+  // backfilling. `historyScope` drives the visible "Searching N % of history — still loading"
+  // indicator; every applied older page re-runs an active query so newly loaded matches appear.
+  const historyScope = computed(() => {
+    const sessionId = sessionIdRef.value
+    if (!sessionId || !messageStore?.isHistoryComplete || messageStore.isHistoryComplete(sessionId)) return null
+    const fraction = messageStore.historyProgress(sessionId)?.fraction
+    return { percent: fraction != null ? Math.round(fraction * 100) : null }
+  })
+
+  watch(
+    () => messageStore?.getHistoryState?.(sessionIdRef.value)?.startCursor,
+    () => {
+      if (query.value.trim()) scheduleSearch({ preserveSelection: true })
+    }
+  )
 
   const currentMatch = computed(() => {
     if (currentIndex.value < 0 || currentIndex.value >= matches.value.length) return null
@@ -97,5 +123,6 @@ export function useMessageSearch(sessionIdRef, { messageStore } = {}) {
     next,
     prev,
     markNotFound,
+    historyScope,
   }
 }

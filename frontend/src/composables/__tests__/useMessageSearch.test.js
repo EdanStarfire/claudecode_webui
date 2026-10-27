@@ -2,6 +2,10 @@ import { describe, it, expect, vi } from 'vitest'
 import { nextTick, ref } from 'vue'
 import { useMessageSearch } from '@/composables/useMessageSearch'
 
+const apiMock = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), patch: vi.fn() }))
+vi.mock('@/utils/api', () => ({ api: apiMock, getAuthToken: vi.fn().mockReturnValue(null) }))
+vi.mock('@/composables/useNotifications', () => ({ notify: vi.fn() }))
+
 function makeFakeStore(messagesBySessionEntries = []) {
   return {
     messagesBySession: new Map(messagesBySessionEntries),
@@ -160,5 +164,42 @@ describe('useMessageSearch', () => {
     search.query.value = 'needle'
     await vi.advanceTimersByTimeAsync(200)
     expect(search.currentMatch.value).toMatchObject({ messageId: 'm1' })
+  })
+})
+
+describe('useMessageSearch — partially loaded history (issue #2030)', () => {
+  async function realStore() {
+    const { setActivePinia, createPinia } = await import('pinia')
+    setActivePinia(createPinia())
+    const { useMessageStore } = await import('@/stores/message')
+    return useMessageStore()
+  }
+
+  const record = (id, content) => ({ type: 'assistant', message_id: id, content, timestamp: 1, metadata: { turn_id: `t-${id}` } })
+
+  it('exposes the loaded-history scope while older history is loading, and null once complete', async () => {
+    const store = await realStore()
+    const { createFakeHistoryServer } = await import('@/stores/__tests__/helpers/historyServer')
+    const records = Array.from({ length: 8 }, (_, i) => record(`m${i}`, `needle ${i}`))
+    const server = createFakeHistoryServer(records, { tailStart: 4, pageSize: 4 })
+    apiMock.get.mockImplementation((url) => server.handle(url))
+    await store.loadMessages('s1', null, 0, { window: 'tail', signal: new AbortController().signal })
+
+    const search = useMessageSearch(ref('s1'), { messageStore: store })
+    expect(search.historyScope.value).toMatchObject({ percent: 50 })
+
+    vi.useFakeTimers()
+    search.query.value = 'needle'
+    await vi.advanceTimersByTimeAsync(200)
+    expect(search.matches.value).toHaveLength(4)
+    search.next()
+    const selected = search.currentMatch.value.messageId
+
+    // An older page lands: the active query re-runs, new matches appear, the selection is kept.
+    store.applyFetchedOlderPage('s1', await store.fetchOlderPage('s1', { signal: new AbortController().signal }))
+    await vi.advanceTimersByTimeAsync(300)
+    expect(search.matches.value).toHaveLength(8)
+    expect(search.currentMatch.value.messageId).toBe(selected)
+    expect(search.historyScope.value).toBeNull()
   })
 })
