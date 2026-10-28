@@ -122,6 +122,10 @@ export const useEditHistoryStore = defineStore('editHistory', () => {
           }
           if (!seen.has(toolUseId)) {
             seen.add(toolUseId)
+            // Issue #2030: a tool that arrived with an older history page isn't news — the
+            // server-side edit history already covers it; refetching it once per backfill page
+            // would cost a full edit-history request per page.
+            if (messageStore.wasBackfilled(sessionId, toolUseId)) continue
             newlyCompleted.set(sessionId, (newlyCompleted.get(sessionId) || 0) + 1)
           }
         }

@@ -13,7 +13,7 @@ Agent-oriented guide to the Claude WebUI frontend. For backend architecture, see
 | CSS | Bootstrap 5.3 + scoped component styles |
 | Components | Organized by folder — see [Component Organization](#component-organization) |
 | Composables | 17 |
-| Utils | 14 |
+| Utils | 16 |
 
 ## Directory Structure
 
@@ -82,6 +82,7 @@ Hash-based routing (`createWebHashHistory`):
 - **State**: `messagesBySession` (Map), `toolCallsBySession` (Map), `permissionToToolMap` (Map)
 - **Key actions**: `loadMessages()`, `applyRecord(sessionId, record, source)` (issue #2110 stage 4b-B: the one entry point for every message/tool_call record, `source` ∈ `'live'`/`'load'`/`'archive'`), `handlePermissionResponse()`, `toggleToolExpansion()`, `setArchiveMessages()`
 - **Features**: Orphaned-tool status (`_isOrphaned`/`_orphanedInfo`) sourced directly from the backend's own `interrupted` tool_call record — no browser-side restart/interrupt sweep, deduplication on reconnect
+- **Tail-first history (issue #2030)**: sessions and archives open on the newest turn-snapped window (`loadMessages(id, null, 0, {window: 'tail'})` → `loadHistoryTail`); older pages (`fetchOlderPage` / `applyFetchedOlderPage` → `applyOlderPage`, merge in `utils/historyMerge.js`) are prepended under the loaded suffix by the backfill scheduler (`composables/useHistoryBackfill.js`). `isHistoryComplete(id)` gates turn navigation, PreCompact indicators and search scope; `historyProgress(id)` drives the list banner. History replay never touches the task store — the Tasks panel hydrates from `GET /api/sessions/{id}/tasks`
 
 #### `polling.js` — HTTP long-polling
 - **State** (Epic #1990 stage 5c: ONE shared `StreamConnection` for the whole multiplexed
@@ -132,7 +133,7 @@ Hash-based routing (`createWebHashHistory`):
 
 #### `task.js` — SDK task tracking per session
 - **State**: `tasksBySession` (Map), `sessionsWithTasks` (Set)
-- **Key actions**: `createTask()`, `updateTask()`, `clearTasks()`, `reconstructFromMessages()`, `handleTaskToolResult()`
+- **Key actions**: `createTask()`, `updateTask()`, `clearTasks()`, `handleTaskToolResult()` (live records only; buffered while a snapshot is in flight), `hydrate()` (server snapshot), `beginHydration()`
 - **Helpers**: `tasksForSession()`, `activeTask()`, `taskStats()`
 
 #### `backgroundTasks.js` — Running background tasks per session (issue #2145)
@@ -198,6 +199,10 @@ Hash-based routing (`createWebHashHistory`):
 
 ### UI Composables (5)
 
+#### `useHistoryBackfill.js` — Older-history backfill scheduler (issue #2030)
+- Paced page-by-page backfill behind the tail window: fixed page budget, gap `max(500 ms, 2× last page)`, paused while the connection is not `connected`, during live catch-up / activity, hidden tab, or a user REST call; slow-link mode (saveData / 2g / measured < 100 KiB/s) is on-demand only
+- **Exports**: `historyBackfill` (`start`, `stop`, `requestOlder`, `loadAll`, `retry`, `setScrollInteraction`, reactive `statusBySession`), `createHistoryBackfill(deps)` for tests
+
 #### `useAgentColor.js` — Per-agent color assignment
 - Stable deterministic color per agent/session ID for visual differentiation
 
@@ -249,13 +254,19 @@ Hash-based routing (`createWebHashHistory`):
 #### `useScheduleSectionSave.js` — Schedule section save
 - Async save function that performs dual-PATCH for ephemeral schedule sections and bound agent session
 
-## Utils (14)
+## Utils (16)
 
 #### `api.js` — HTTP client
 - **Functions**: `apiGet()`, `apiPost()`, `apiPut()`, `apiDelete()`, `apiPatch()`
 - **System**: `getGitStatus()`, `restartServer()`
 - **Error handling**: Custom `APIError` class with status and data
 - **Usage**: `import { api } from '@/utils/api'` → `api.get('/api/sessions')`
+
+#### `displayableItems.js` — MessageList row pipeline (issue #2030)
+- **Functions**: `buildDisplayableItems(ctx)` (pure 7-pass pipeline extracted from `MessageList.vue`; the caller builds `ctx` inside its computed so store reads stay reactive), `getItemKey(item, index)` (stable virtualizer row key)
+
+#### `historyMerge.js` — Prepend-merge for tail-first history (issue #2030)
+- **Functions**: `mergeOlderPage(current, older)`, `mergeToolCallFields(current, older)` (newer entry wins field-by-field; an older record only fills what is absent)
 
 #### `time.js` — Timestamp formatting
 - **Functions**: `parseTimestamp()`, `formatTimestamp()`, `formatFullTimestamp()`, `getRelativeTime()`

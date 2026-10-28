@@ -1898,8 +1898,11 @@ button:focus {
    bottom-center, so the two never collide). */
 .message-search-bar {
     position: absolute;
-    top: 12px;
+    /* Issue #2030: sits below the history banner (its measured height is set on the wrapper by
+       MessageList) and never extends past the left edge of a narrow viewport. */
+    top: calc(12px + var(--history-banner-height, 0px));
     right: 12px;
+    max-width: calc(100% - 24px);
     z-index: 10;
     pointer-events: auto;
 }
@@ -1915,17 +1918,45 @@ button:focus {
 
 .message-search-expanded {
     display: flex;
-    align-items: center;
-    gap: 6px;
+    flex-direction: column;
+    gap: 2px;
     padding: 6px 10px;
     background: var(--bs-secondary-bg);
     border: 1px solid var(--bs-border-color);
-    border-radius: 20px;
+    border-radius: 18px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.message-search-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
 }
 
 .message-search-input {
     width: 160px;
+    flex: 1 1 100px;
+    min-width: 0;
+}
+
+.message-search-scope {
+    white-space: nowrap;
+    line-height: 1.2;
+}
+
+.message-search-scope .scope-short {
+    display: none;
+}
+
+@media (max-width: 576px) {
+    .message-search-scope .scope-long {
+        display: none;
+    }
+
+    .message-search-scope .scope-short {
+        display: inline;
+    }
 }
 
 .message-search-count {

@@ -4,6 +4,7 @@ import { useSessionStore } from './session'
 import { useProjectStore } from './project'
 import { useMessageStore } from './message'
 import { useBackgroundTasksStore } from './backgroundTasks'
+import { useTaskStore } from './task'
 import { useResourceStore } from './resource'
 import { useQueueStore } from './queue'
 import { useUIStore } from './ui'
@@ -429,6 +430,7 @@ export const usePollingStore = defineStore('polling', () => {
   // explicit disconnect flow that wants a clean slate before reconnecting), as opposed to
   // merely aging out of the LRU on its own.
   function evictSubscription(sessionId) {
+    lastBatchBySession.delete(sessionId)
     subscriptions.delete(sessionId)
     const idx = lruSessionIds.indexOf(sessionId)
     if (idx !== -1) lruSessionIds.splice(idx, 1)
@@ -640,14 +642,21 @@ export const usePollingStore = defineStore('polling', () => {
     const messageStore = useMessageStore()
     const controller = messageStore.claimHydrationLoad(sessionId)
     try {
-      await messageStore.loadMessages(sessionId, null, 0, {
+      // Issue #2030: the resync fetches the newest window and merges it onto the loaded suffix
+      // (contiguity / history_id rules in message.js loadHistoryTail); a gap larger than the
+      // window replaces the suffix and restarts backfill.
+      const result = await messageStore.loadMessages(sessionId, null, 0, {
+        window: 'tail',
+        resync: true,
         signal: controller.signal,
-        resume: true,
         inactivityMs: HISTORY_PAGE_INACTIVITY_TIMEOUT_MS,
-        onPageComplete: (progress) => pushDebugEvent('polling', 'hydration-stage', { sessionId, stage: 'resync', progress }),
       })
+      pushDebugEvent('polling', 'hydration-stage', { sessionId, stage: 'resync', replaced: result?.replaced })
       // Issue #2145: background_tasks_changed events lost in the gap are not replayed.
       useBackgroundTasksStore().hydrate(sessionId)
+      // Issue #2030: same for task events — re-fetch the server snapshot (live ones buffer).
+      useTaskStore().hydrate(sessionId)
+      import('@/composables/useHistoryBackfill').then(({ startBackfillIfIncomplete }) => startBackfillIfIncomplete(sessionId))
       resyncAttemptsBySession.delete(sessionId)
       if (resyncStallBySession.value.has(sessionId)) {
         resyncStallBySession.value.delete(sessionId)
@@ -718,6 +727,7 @@ export const usePollingStore = defineStore('polling', () => {
     }
 
     if (batch.events && batch.events.length > 0) {
+      lastBatchBySession.set(sessionId, { at: Date.now(), count: batch.events.length })
       let sawStreamReset = false
       for (const event of batch.events) {
         if (event.type === 'stream_reset') {
@@ -751,6 +761,13 @@ export const usePollingStore = defineStore('polling', () => {
     sub.hasEverSeenResponse = true
     if (isCurrent) _syncSessionHasEverConnected()
     return false
+  }
+
+  // Issue #2030: what the last session poll batch looked like, for the history backfill
+  // scheduler ("never compete with live"). Non-reactive; Map<sessionId, {at, count}>.
+  const lastBatchBySession = new Map()
+  function getLastBatchInfo(sessionId) {
+    return lastBatchBySession.get(sessionId) || null
   }
 
   // Shared by both resync branches above: prefer the REST reload's own event_cursor
@@ -990,8 +1007,11 @@ export const usePollingStore = defineStore('polling', () => {
           // is the sole source now). Without this, an error-state reload permanently loses
           // subagent leg/task_id state for the session.
           useBackgroundTasksStore().hydrate(changedSessionId)
-          messageStore.hydrateBackgroundAgents(changedSessionId).then(() => {
-            messageStore.loadMessages(changedSessionId)
+          useTaskStore().hydrate(changedSessionId)
+          messageStore.hydrateBackgroundAgents(changedSessionId).then(async () => {
+            await messageStore.loadMessages(changedSessionId, null, 0, { window: 'tail' })
+            const { startBackfillIfIncomplete } = await import('@/composables/useHistoryBackfill')
+            startBackfillIfIncomplete(changedSessionId)
           })
         }
 
@@ -1320,7 +1340,7 @@ export const usePollingStore = defineStore('polling', () => {
     // directly. Kept as a correct, self-consistent fallback in case anything
     // else ever dispatches this type through the normal path.
     stream_reset: async (payload, sessionId) => {
-      await useMessageStore().loadMessages(sessionId)
+      await _resyncSession(sessionId)
     },
   }
 
@@ -1393,6 +1413,7 @@ export const usePollingStore = defineStore('polling', () => {
     disconnectSession,
     resetSessionCursor,
     markSessionArchived,
+    getLastBatchInfo,
     sendMessage,
     sendPermissionResponse,
     sendPermissionResponseWithInput,

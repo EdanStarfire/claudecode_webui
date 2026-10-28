@@ -623,35 +623,59 @@ describe('session store', () => {
 
     it('retryHydration resumes from the failed step without re-invoking already-succeeded steps', async () => {
       const { useSessionStore } = await import('@/stores/session')
-      const { useResourceStore } = await import('@/stores/resource')
       const store = useSessionStore()
 
       store.sessions.set('sess-retry', makeSession({ session_id: 'sess-retry', state: 'active' }))
-      apiMock.get.mockResolvedValue({ messages: [], total_count: 0, has_more: false, agents: [] })
-
-      // Fix useResourceStore()'s return value across calls (its default mock factory
-      // otherwise hands back a fresh loadResources spy on every call), so the rejection
-      // configured here is what both the initial attempt and the retry actually see.
-      const loadResourcesMock = vi.fn()
-      loadResourcesMock.mockRejectedValueOnce(new Error('network down'))
-      loadResourcesMock.mockResolvedValue(undefined)
-      useResourceStore.mockImplementation(() => ({ loadResources: loadResourcesMock }))
+      // The history window fails once, then succeeds. (The resources fetch is no longer a
+      // blocking hydration step — see the dedicated test below — so the window is the step
+      // that can fail and be retried.)
+      let windowCalls = 0
+      apiMock.get.mockImplementation((url) => {
+        if (url.includes('/messages')) {
+          windowCalls++
+          return windowCalls === 1
+            ? Promise.reject(new Error('network down'))
+            : Promise.resolve({ messages: [], start_cursor: 'b:0', has_more_before: false, history_id: 'h', total_bytes: 0 })
+        }
+        return Promise.resolve({ agents: [], tasks: [] })
+      })
 
       await store.selectSession('sess-retry')
 
       let entry = store.hydrationStageBySession.get('sess-retry')
       expect(entry.stage).toBe('error')
-      expect(entry.error.stage).toBe('loading_resources')
-
-      const messagesCallsAfterFirstAttempt = apiMock.get.mock.calls.filter(([url]) => url.includes('/messages')).length
-      expect(messagesCallsAfterFirstAttempt).toBe(1)
+      expect(entry.error.stage).toBe('loading_history')
+      expect(pollingMock.connectSession).not.toHaveBeenCalled()
 
       await store.retryHydration('sess-retry')
 
       entry = store.hydrationStageBySession.get('sess-retry')
       expect(entry.stage).toBe('ready')
-      const messagesCallsAfterRetry = apiMock.get.mock.calls.filter(([url]) => url.includes('/messages')).length
-      expect(messagesCallsAfterRetry).toBe(1) // not re-invoked by the retry — already succeeded
+      expect(windowCalls).toBe(2)
+      expect(pollingMock.connectSession).toHaveBeenCalledWith('sess-retry')
+      // Already-succeeded work is not repeated by a second retry of a ready session.
+      await store.retryHydration('sess-retry')
+      expect(windowCalls).toBe(2)
+    })
+
+    it('a slow or failing resources fetch does not hold the session out of ready (issue #2030)', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const { useResourceStore } = await import('@/stores/resource')
+      const store = useSessionStore()
+
+      store.sessions.set('sess-res', makeSession({ session_id: 'sess-res', state: 'active' }))
+      apiMock.get.mockResolvedValue({ messages: [], total_count: 0, has_more: false, agents: [] })
+      useResourceStore.mockImplementation(() => ({ loadResources: vi.fn().mockReturnValue(new Promise(() => {})) }))
+
+      await store.selectSession('sess-res')
+
+      expect(store.hydrationStageBySession.get('sess-res').stage).toBe('ready')
+      expect(pollingMock.connectSession).toHaveBeenCalledWith('sess-res')
+
+      useResourceStore.mockImplementation(() => ({ loadResources: vi.fn().mockRejectedValue(new Error('boom')) }))
+      store.currentSessionId = null
+      await store.selectSession('sess-res')
+      expect(store.hydrationStageBySession.get('sess-res').stage).toBe('ready')
     })
 
     it('re-selecting the already-current session leaves a prior ready stage untouched', async () => {
@@ -711,55 +735,46 @@ describe('session store', () => {
     })
   })
 
-  describe('paginated history load — per-page inactivity/resume/abort (issue #2140)', () => {
-    it('T1: 10 pages each resolving within the per-page window succeed, with progress observed after each page, even though their sum exceeds the old 20s whole-call budget', async () => {
-      vi.useFakeTimers()
-      try {
-        const { useSessionStore } = await import('@/stores/session')
-        const { useMessageStore } = await import('@/stores/message')
-        const store = useSessionStore()
-        const msgStore = useMessageStore()
-        store.sessions.set('sess-t1', makeSession({ session_id: 'sess-t1', state: 'active' }))
+  describe('tail-first history load — window/abort/retry (issues #2140, #2030)', () => {
+    it('T1: the window loads in ONE messages request, in parallel with the agents snapshot, and is installed before connect', async () => {
+      const { useSessionStore } = await import('@/stores/session')
+      const { useMessageStore } = await import('@/stores/message')
+      const store = useSessionStore()
+      const msgStore = useMessageStore()
+      store.sessions.set('sess-t1', makeSession({ session_id: 'sess-t1', state: 'active' }))
 
-        const PAGE_COUNT = 10
-        const PAGE_DELAY_MS = 25000 // > the old 20s whole-call budget, well within the new 30s per-page one
-
-        apiMock.get.mockImplementation((url) => {
-          if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
-          if (url.includes('/background_tasks')) return Promise.resolve({ tasks: [] })
-          const offset = Number(url.match(/offset=(\d+)/)[1])
-          const pageIndex = offset / 10000
-          return new Promise((resolve) => {
-            setTimeout(() => {
-              resolve({
-                messages: [makeMessage({ content: `page${pageIndex}` })],
-                total_count: PAGE_COUNT, has_more: pageIndex < PAGE_COUNT - 1,
-                event_cursor: pageIndex, epoch: 'e1',
-              })
-            }, PAGE_DELAY_MS)
+      const order = []
+      apiMock.get.mockImplementation((url) => {
+        if (url.includes('/background_agents')) { order.push('agents'); return Promise.resolve({ agents: [] }) }
+        if (url.includes('/background_tasks')) return Promise.resolve({ tasks: [] })
+        if (url.includes('/tasks')) { order.push('tasks'); return Promise.resolve({ tasks: [] }) }
+        if (url.includes('/messages')) {
+          order.push('window')
+          return Promise.resolve({
+            messages: [makeMessage({ content: 'newest' })],
+            start_cursor: 'b:900', has_more_before: true, history_id: 'h1', snapped: true, total_bytes: 1000,
+            latest_init: { model: 'm' }, event_cursor: 7, epoch: 'e1',
           })
-        })
+        }
+        return Promise.resolve({})
+      })
+      pollingMock.connectSession.mockImplementation(async () => { order.push('connect') })
 
-        const selectPromise = store.selectSession('sess-t1')
+      await store.selectSession('sess-t1')
 
-        // Partway through: still loading, with progress reflecting exactly what's landed so far.
-        await vi.advanceTimersByTimeAsync(PAGE_DELAY_MS * 3)
-        let entry = store.hydrationStageBySession.get('sess-t1')
-        expect(entry.stage).toBe('loading_history')
-        expect(entry.progress).toMatchObject({ page: 2, recordsReceived: 3 })
-
-        await vi.advanceTimersByTimeAsync(PAGE_DELAY_MS * (PAGE_COUNT - 3))
-        await selectPromise
-
-        entry = store.hydrationStageBySession.get('sess-t1')
-        expect(entry.stage).toBe('ready')
-        expect(msgStore.messagesBySession.get('sess-t1').length).toBe(PAGE_COUNT)
-      } finally {
-        vi.useRealTimers()
-      }
+      const messageRequests = apiMock.get.mock.calls.filter(([url]) => url.includes('/messages'))
+      expect(messageRequests).toHaveLength(1)
+      expect(messageRequests[0][0]).toBe('/api/sessions/sess-t1/messages?window=tail')
+      // Both first-stage requests are issued before either completes; /tasks only after the
+      // window response; connect only after the window and the agents snapshot.
+      expect(order.indexOf('window')).toBeLessThan(order.indexOf('tasks'))
+      expect(order.indexOf('agents')).toBeLessThan(order.indexOf('connect'))
+      expect(msgStore.messagesBySession.get('sess-t1').map(m => m.content)).toEqual(['newest'])
+      expect(msgStore.isHistoryComplete('sess-t1')).toBe(false)
+      expect(store.hydrationStageBySession.get('sess-t1').stage).toBe('ready')
     })
 
-    it('T2/T3: a stalled page times out naming loading_history and the stalled page; retryHydration() resumes from that page without re-counting earlier ones', async () => {
+    it('T2/T3: a stalled window request times out naming loading_history; retryHydration() re-fetches it', async () => {
       vi.useFakeTimers()
       try {
         const { useSessionStore } = await import('@/stores/session')
@@ -768,18 +783,10 @@ describe('session store', () => {
         const msgStore = useMessageStore()
         store.sessions.set('sess-t2', makeSession({ session_id: 'sess-t2', state: 'active' }))
 
-        // Pages 0-2 succeed; page 3 (the 4th page) never responds on its own.
         apiMock.get.mockImplementation((url, options) => {
           if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
           if (url.includes('/background_tasks')) return Promise.resolve({ tasks: [] })
-          const offset = Number(url.match(/offset=(\d+)/)[1])
-          const pageIndex = offset / 10000
-          if (pageIndex < 3) {
-            return Promise.resolve({
-              messages: [makeMessage({ content: `page${pageIndex}` })],
-              total_count: 10, has_more: true, event_cursor: pageIndex, epoch: 'e1',
-            })
-          }
+          if (url.includes('/tasks')) return Promise.resolve({ tasks: [] })
           return new Promise((_resolve, reject) => {
             options?.signal?.addEventListener('abort', () => {
               const err = new Error('Aborted'); err.name = 'AbortError'; reject(err)
@@ -795,36 +802,19 @@ describe('session store', () => {
         expect(entry.stage).toBe('error')
         expect(entry.error.kind).toBe('timeout')
         expect(entry.error.stage).toBe('loading_history')
-        expect(entry.error.message).toContain('page 3')
-        // T1's three successful pages are retained, not discarded by the later timeout.
-        expect(msgStore.messagesBySession.get('sess-t2').map(m => m.content)).toEqual(['page0', 'page1', 'page2'])
+        expect(msgStore.messagesBySession.has('sess-t2')).toBe(false)
 
-        // T3: resume via retryHydration() — the rest of the pages now succeed.
         apiMock.get.mockImplementation((url) => {
           if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
           if (url.includes('/background_tasks')) return Promise.resolve({ tasks: [] })
-          const offset = Number(url.match(/offset=(\d+)/)[1])
-          const pageIndex = offset / 10000
-          return Promise.resolve({
-            messages: [makeMessage({ content: `page${pageIndex}-resumed` })],
-            total_count: 10, has_more: pageIndex < 9, event_cursor: pageIndex, epoch: 'e1',
-          })
+          if (url.includes('/tasks')) return Promise.resolve({ tasks: [] })
+          return Promise.resolve({ messages: [makeMessage({ content: 'after-retry' })], start_cursor: 'b:0', has_more_before: false, history_id: 'h', total_bytes: 1 })
         })
-        const callCountBeforeRetry = apiMock.get.mock.calls.length
-
         await store.retryHydration('sess-t2')
-
-        const callsDuringRetry = apiMock.get.mock.calls.slice(callCountBeforeRetry)
-        const firstMessagesCall = callsDuringRetry.find(([url]) => url.includes('/messages'))
-        // Resumes at page 3's own offset (30000) — not restarted from 0.
-        expect(firstMessagesCall[0]).toContain('offset=30000')
 
         entry = store.hydrationStageBySession.get('sess-t2')
         expect(entry.stage).toBe('ready')
-        const contents = msgStore.messagesBySession.get('sess-t2').map(m => m.content)
-        // Pages 0-2 are still present and not re-counted/duplicated; 3-9 came from the resume.
-        expect(contents.slice(0, 3)).toEqual(['page0', 'page1', 'page2'])
-        expect(contents.length).toBe(10)
+        expect(msgStore.messagesBySession.get('sess-t2').map(m => m.content)).toEqual(['after-retry'])
       } finally {
         vi.useRealTimers()
       }
@@ -959,54 +949,6 @@ describe('session store', () => {
 
       // Pre-empted, not failed: no error banner left behind for the user to see/retry.
       expect(store.hydrationStageBySession.has('sess-stolen')).toBe(false)
-    })
-
-    it('an epoch mismatch mid-load triggers the automatic restart-from-scratch, not a silent pre-emption no-op (builder-review fix, AC6)', async () => {
-      // Regression coverage for a fix-interaction bug: clearMessages() (called internally by
-      // fetchAllMessagePages() on an epoch mismatch) aborts a still-pending entry's own
-      // controller as part of its OWN unrelated cleanup duty — which, without the ordering
-      // fix, would self-abort THIS attempt's own controller moments before the
-      // isHydrationRestartRequired error reaches runDataHydrationChain's catch block, making
-      // it indistinguishable from "pre-empted by someone else" and silently swallowing the
-      // restart (no retry, hydrationStageBySession entry just vanishes).
-      const { useSessionStore } = await import('@/stores/session')
-      const { useMessageStore } = await import('@/stores/message')
-      const store = useSessionStore()
-      const msgStore = useMessageStore()
-      store.sessions.set('sess-epoch', makeSession({ session_id: 'sess-epoch', state: 'active' }))
-
-      let messagesCallCount = 0
-      apiMock.get.mockImplementation((url) => {
-        if (url.includes('/background_agents')) return Promise.resolve({ agents: [] })
-        if (url.includes('/background_tasks')) return Promise.resolve({ tasks: [] })
-        messagesCallCount++
-        if (messagesCallCount === 1) {
-          // First page of the first attempt: epoch 5, more pages to come.
-          return Promise.resolve({
-            messages: [makeMessage({ content: 'page0-e5' })],
-            total_count: 2, has_more: true, event_cursor: 1, epoch: 5,
-          })
-        }
-        if (messagesCallCount === 2) {
-          // Second page: epoch changed to 6 — Backend restarted mid-load.
-          return Promise.resolve({
-            messages: [makeMessage({ content: 'page1-e6' })],
-            total_count: 2, has_more: true, event_cursor: 2, epoch: 6,
-          })
-        }
-        // The automatic restart-from-scratch (offset 0 again) succeeds on the new epoch.
-        return Promise.resolve({
-          messages: [makeMessage({ content: 'page0-restarted' })],
-          total_count: 1, has_more: false, event_cursor: 1, epoch: 6,
-        })
-      })
-
-      await store.selectSession('sess-epoch')
-
-      expect(messagesCallCount).toBe(3)
-      const entry = store.hydrationStageBySession.get('sess-epoch')
-      expect(entry.stage).toBe('ready')
-      expect(msgStore.messagesBySession.get('sess-epoch').map(m => m.content)).toEqual(['page0-restarted'])
     })
   })
 })

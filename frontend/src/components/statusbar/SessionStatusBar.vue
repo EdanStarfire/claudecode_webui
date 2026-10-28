@@ -74,18 +74,18 @@
         <button
           class="btn btn-sm btn-outline-secondary"
           @click="jumpToPrevTurn"
-          :disabled="!hasPrevTurn || isJumpingTurn"
+          :disabled="turnNavLocked || !hasPrevTurn || isJumpingTurn"
           aria-label="Jump to previous turn"
-          title="Jump to previous user message or comm"
+          :title="turnNavLocked ? TURN_NAV_LOCKED_TITLE : 'Jump to previous user message or comm'"
         >
           ⏮️ <span class="button-label">Prev</span>
         </button>
         <button
           class="btn btn-sm btn-outline-secondary"
           @click="jumpToNextTurn"
-          :disabled="!hasNextTurn || isJumpingTurn"
+          :disabled="turnNavLocked || !hasNextTurn || isJumpingTurn"
           aria-label="Jump to next turn"
-          title="Jump to next user message or comm"
+          :title="turnNavLocked ? TURN_NAV_LOCKED_TITLE : 'Jump to next user message or comm'"
         >
           ⏭️ <span class="button-label">Next</span>
         </button>
@@ -123,6 +123,7 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
+import { useMessageStore } from '@/stores/message'
 import { useScheduleStore } from '@/stores/schedule'
 import RateLimitBadge from './RateLimitBadge.vue'
 import AutoResumeBadge from './AutoResumeBadge.vue'
@@ -268,6 +269,12 @@ const autoResumeSchedule = computed(() => scheduleStore.getAutoResumeSchedule(pr
 // virtualNav is MessageList's exposed API, forwarded down as a prop from SessionView.vue the
 // same way it already is to PermissionQueue — provide/inject doesn't reach siblings.
 const isJumpingTurn = ref(false)
+
+// Issue #2030: turn boundaries are indexed over the loaded list, so navigation is only
+// meaningful once the whole history is loaded (stage 3 adds a server turn index).
+const messageStore = useMessageStore()
+const turnNavLocked = computed(() => !messageStore.isHistoryComplete(props.sessionId))
+const TURN_NAV_LOCKED_TITLE = 'Loading older history…'
 
 const hasPrevTurn = computed(() => props.virtualNav?.findPrevTurnIndex?.() != null)
 const hasNextTurn = computed(() => props.virtualNav?.findNextTurnIndex?.() != null)
