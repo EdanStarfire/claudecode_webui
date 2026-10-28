@@ -33,10 +33,11 @@ _PROBE_SIZE = 4096
 _CURSOR_PREFIX = "b:"
 
 # Turn boundary (documented twice, keep in sync with the browser):
-#   type == "user" and not metadata.has_tool_results
+#   type == "user" and not metadata.has_tool_results and not a compaction continuation record
 # The browser's `turnBoundaryIndices` (MessageList.vue) counts every displayable user
 # message; tool-result carrier messages are not user turns and are never displayed as such.
 _USER_PREFILTER = b'"user"'
+_COMPACTION_CONTINUATION_PREFIX = "This session is being continued from a previous conversation"
 _THINKING_TOKENS_PREFILTER = b'"thinking_tokens"'
 
 
@@ -108,6 +109,11 @@ def decode_cursor(cursor: str) -> int:
 
 def _is_turn_boundary(record: dict) -> bool:
     if record.get("type") != "user":
+        return False
+    content = record.get("content")
+    if isinstance(content, str) and content.startswith(_COMPACTION_CONTINUATION_PREFIX):
+        # The compaction continuation record is the last record of a 4-5 record compaction
+        # group; a window starting at it would split the group.
         return False
     metadata = record.get("metadata")
     return not (isinstance(metadata, dict) and metadata.get("has_tool_results"))
