@@ -13,6 +13,7 @@ from backend.message_history_reader import (
     CursorInvalidError,
     FileMessageHistoryReader,
     WindowBudget,
+    _is_turn_boundary,
     build_budget,
     decode_cursor,
     encode_cursor,
@@ -503,3 +504,94 @@ async def test_archive_reader_tolerates_legacy_type_records(tmp_path):
     path.write_bytes(json.dumps({"_type": "assistant", "message_id": "old"}).encode() + b"\n")
     reader = FileMessageHistoryReader(path, label="archive", strict_legacy=False)
     assert _ids((await reader.read_tail(WindowBudget())).records) == ["old"]
+
+
+_CONTINUATION = (
+    "This session is being continued from a previous conversation that ran out of context. "
+    "The summary below covers the earlier portion of the conversation."
+)
+
+
+def _compaction_group(n: int, *, with_init: bool) -> list[dict]:
+    """status, status(null), [init], compact_boundary, continuation — the serialized group."""
+    sub = ["status", "status"] + (["init"] if with_init else []) + ["compact_boundary"]
+    out = [
+        _rec(n + i, "system", metadata={"subtype": s}) for i, s in enumerate(sub)
+    ]
+    out.append(_rec(n + len(sub), "user", content=_CONTINUATION + "\n\nSummary: ..."))
+    return out
+
+
+def _with_group(with_init: bool) -> tuple[list[dict], int]:
+    """3 turns, a compaction group, then 3 more turns. Returns (records, group start index)."""
+    before = _conversation(3)
+    group = _compaction_group(len(before), with_init=with_init)
+    after = [dict(r, message_id=f"a{r['message_id']}") for r in _conversation(3)]
+    return before + group + after, len(before)
+
+
+def test_continuation_record_is_not_a_turn_boundary():
+    assert _is_turn_boundary(_rec(0, "user", content=_CONTINUATION + "\n\nSummary")) is False
+    assert _is_turn_boundary(_rec(0, "user", content="hello")) is True
+    # non-string content and a mid-string mention are unaffected
+    assert _is_turn_boundary(_rec(0, "user", content=[{"type": "text", "text": "x"}])) is True
+    assert _is_turn_boundary(_rec(0, "user", content="re: " + _CONTINUATION)) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_init", [False, True])
+async def test_issue_2030_tail_window_never_starts_at_continuation_record(tmp_path, with_init):
+    path = tmp_path / "messages.jsonl"
+    records, group_at = _with_group(with_init)
+    _write(path, records)
+    group_len = len(records) - group_at - 12
+    cont_idx = group_at + group_len - 1
+    # Window sized so the walk reaches the continuation record exactly at its turn target:
+    # the records after it hold 3 turns, so min_turns=4 would stop on it pre-fix.
+    window = await _reader(path).read_tail(WindowBudget(min_turns=4))
+    assert window.records[0]["message_id"] != records[cont_idx]["message_id"]
+    assert not str(window.records[0].get("content", "")).startswith(_CONTINUATION)
+    # snapped to the previous real turn: the whole group is inside the window, unsplit
+    assert _ids(window.records) == _ids(records[group_at - 4:])
+    assert window.records[0]["type"] == "user" and window.snapped is True
+
+
+@pytest.mark.asyncio
+async def test_issue_2030_before_page_never_starts_at_continuation_record(tmp_path):
+    path = tmp_path / "messages.jsonl"
+    records, group_at = _with_group(with_init=True)
+    offsets = _write(path, records)
+    cont_idx = group_at + 4
+    # Page ends right before the 3 trailing turns; target 1 turn so the walk would stop at
+    # the continuation record, which now snaps to the preceding real turn.
+    page = await _reader(path).read_before(
+        encode_cursor(offsets[cont_idx + 1]), build_budget(before=True, min_turns=1)
+    )
+    assert page.records[0]["type"] == "user"
+    assert not str(page.records[0].get("content", "")).startswith(_CONTINUATION)
+    assert _ids(page.records) == _ids(records[group_at - 4 : cont_idx + 1])
+
+
+@pytest.mark.asyncio
+async def test_issue_2030_non_compaction_user_turns_unchanged(tmp_path):
+    path = tmp_path / "messages.jsonl"
+    records = _conversation(6)
+    _write(path, records)
+    window = await _reader(path).read_tail(WindowBudget(min_turns=2))
+    assert _ids(window.records) == _ids(records[-8:])
+
+
+@pytest.mark.asyncio
+async def test_issue_2030_real_fixture_windows_never_start_at_continuation(tmp_path):
+    fixture = Path(__file__).parent / "fixtures" / "raw" / "primary" / "messages.jsonl"
+    reader = _reader(fixture)
+    total = len(fixture.read_text().splitlines())
+    saw_group = False
+    for turns in range(1, 40):
+        window = await reader.read_tail(WindowBudget(min_turns=turns, max_records=total))
+        first = window.records[0]
+        assert not str(first.get("content", "")).startswith(_CONTINUATION)
+        saw_group = saw_group or any(
+            str(r.get("content", "")).startswith(_CONTINUATION) for r in window.records
+        )
+    assert saw_group
