@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   createHistoryBackfill, detectSlowLink,
-  MIN_GAP_MS, QUIET_MS, CATCHUP_EVENT_COUNT, SLOW_LINK_BPS, PAGE_BUDGET_BYTES,
+  QUIET_MS, CATCHUP_EVENT_COUNT, SLOW_LINK_BPS, PAGE_BUDGET_BYTES, MIN_PAGE_BUDGET_BYTES, MAX_PAGE_BUDGET_BYTES,
+  MAX_PAGE_RECORDS, MAX_GAP_MS, GAP_FACTOR, nextPageBudget, backfillGapMs, APPLY_OK_MS, APPLY_SLOW_MS,
 } from '../useHistoryBackfill'
 
 // Issue #2030 (stage 1b): backfill scheduler pacing matrix. Time is virtual: every sleep()
@@ -55,26 +56,94 @@ describe('history backfill scheduler (issue #2030, minimum pacing rules)', () =>
     expect(t.scheduler.isRunning(SID)).toBe(false)
   })
 
-  it('fetches with the fixed page budget', async () => {
+  it('starts at the base page budget and asks for the server\'s record cap', async () => {
     const t = setup({ pages: 2 })
     t.scheduler.start(SID)
     await settle(t.scheduler)
     expect(t.state.fetched[0].opts.maxBytes).toBe(PAGE_BUDGET_BYTES)
+    expect(t.state.fetched[0].opts.maxRecords).toBe(MAX_PAGE_RECORDS)
   })
 
-  it('waits max(500 ms, 2x the last page time) between pages', async () => {
-    const t = setup({ pages: 3, pageMs: 100 })
+  it('doubles the page budget while pages are fast, up to the server cap', async () => {
+    const t = setup({ pages: 12, pageMs: 50 })
     t.scheduler.start(SID)
-    await settle(t.scheduler)
-    // 2 x 100 ms < 500 ms -> the 500 ms floor applies between page 1's end and page 2's start.
-    const gap1 = t.state.fetched[1].at - t.state.applied[0]
-    expect(gap1).toBeGreaterThanOrEqual(MIN_GAP_MS)
+    await settle(t.scheduler, 2000)
+    const budgets = t.state.fetched.map(f => f.opts.maxBytes)
+    expect(budgets.slice(0, 5)).toEqual([256, 512, 1024, 2048, 4096].map(k => k * 1024))
+    expect(Math.max(...budgets)).toBe(MAX_PAGE_BUDGET_BYTES)
+    expect(budgets.at(-1)).toBe(MAX_PAGE_BUDGET_BYTES)
+  })
+
+  it('halves the page budget when pages are slow, down to the minimum, and keeps it for mid-speed pages', async () => {
+    const slow = setup({ pages: 6, pageMs: 3000 })
+    slow.scheduler.start(SID)
+    await settle(slow.scheduler, 2000)
+    const budgets = slow.state.fetched.map(f => f.opts.maxBytes)
+    expect(budgets.slice(0, 3)).toEqual([256, 128, 64].map(k => k * 1024))
+    expect(Math.min(...budgets)).toBe(MIN_PAGE_BUDGET_BYTES)
+
+    const mid = setup({ pages: 4, pageMs: 1000 })
+    mid.scheduler.start(SID)
+    await settle(mid.scheduler, 2000)
+    expect(new Set(mid.state.fetched.map(f => f.opts.maxBytes))).toEqual(new Set([PAGE_BUDGET_BYTES]))
+  })
+
+  it('does not grow the budget when applying a page is expensive, and shrinks it when very expensive', () => {
+    expect(nextPageBudget(PAGE_BUDGET_BYTES, 100, APPLY_OK_MS + 1)).toBe(PAGE_BUDGET_BYTES)
+    expect(nextPageBudget(PAGE_BUDGET_BYTES, 100, APPLY_SLOW_MS + 1)).toBe(PAGE_BUDGET_BYTES / 2)
+    expect(nextPageBudget(PAGE_BUDGET_BYTES, 100, APPLY_OK_MS)).toBe(PAGE_BUDGET_BYTES * 2)
+  })
+
+  it('a failed page shrinks the budget and a history restart resets it', async () => {
+    const t = setup({ pages: 6, pageMs: 50 })
+    t.scheduler.start(SID)
+    await settle(t.scheduler, 4)
+    await settle(t.scheduler, 2000)
+    const grown = Math.max(...t.state.fetched.map(f => f.opts.maxBytes))
+    expect(grown).toBeGreaterThan(PAGE_BUDGET_BYTES)
+
+    const e = setup({ pages: 4, pageMs: 50 })
+    let calls = 0
+    const real = e.messageStore.fetchOlderPage.getMockImplementation()
+    e.messageStore.fetchOlderPage.mockImplementation(async (...a) => { calls++; if (calls === 3) throw new Error('timeout'); return real(...a) })
+    e.scheduler.start(SID)
+    await settle(e.scheduler, 2000)
+    const sizes = e.state.fetched.map(f => f.opts.maxBytes)
+    // 256K -> 512K -> (3rd call fails, no fetched entry) -> retried at half of the grown 1M budget
+    expect(sizes[0]).toBe(PAGE_BUDGET_BYTES)
+    expect(sizes[1]).toBe(PAGE_BUDGET_BYTES * 2)
+    expect(sizes[2]).toBe(PAGE_BUDGET_BYTES * 2) // 1 MiB halved after the failure
+  })
+
+  it('an on-demand page always uses the base budget even after the budget has grown', async () => {
+    const t = setup({ pages: 8, pageMs: 50, slow: () => true })
+    t.scheduler.start(SID)
+    for (let i = 0; i < 5; i++) { t.scheduler.requestOlder(SID); await settle(t.scheduler, 30) }
+    expect(t.state.fetched.length).toBeGreaterThanOrEqual(3)
+    expect(new Set(t.state.fetched.map(f => f.opts.maxBytes))).toEqual(new Set([PAGE_BUDGET_BYTES]))
+    t.scheduler.stop(SID)
+  })
+
+  it('pure sizing/gap functions', () => {
+    expect(nextPageBudget(PAGE_BUDGET_BYTES, 100)).toBe(2 * PAGE_BUDGET_BYTES)
+    expect(nextPageBudget(MAX_PAGE_BUDGET_BYTES, 100)).toBe(MAX_PAGE_BUDGET_BYTES)
+    expect(nextPageBudget(MIN_PAGE_BUDGET_BYTES, 9999)).toBe(MIN_PAGE_BUDGET_BYTES)
+    expect(backfillGapMs(0)).toBe(0)
+    expect(backfillGapMs(100)).toBe(100 * GAP_FACTOR)
+    expect(backfillGapMs(60000)).toBe(MAX_GAP_MS)
+  })
+
+  it('leaves (almost) no gap between fast pages and a gap proportional to the page time for slow ones', async () => {
+    const fast = setup({ pages: 3, pageMs: 40 })
+    fast.scheduler.start(SID)
+    await settle(fast.scheduler)
+    expect(fast.state.fetched[1].at - fast.state.applied[0]).toBeLessThanOrEqual(GAP_FACTOR * 40 + 1)
 
     const slow = setup({ pages: 3, pageMs: 1200 })
     slow.scheduler.start(SID)
     await settle(slow.scheduler)
-    const gap = slow.state.fetched[1].at - slow.state.applied[0]
-    expect(gap).toBeGreaterThanOrEqual(2 * 1200)
+    expect(slow.state.fetched[1].at - slow.state.applied[0]).toBeGreaterThanOrEqual(GAP_FACTOR * 1200)
+    expect(slow.state.fetched[1].at - slow.state.applied[0]).toBeLessThanOrEqual(MAX_GAP_MS + 1)
   })
 
   it('does not fetch while the tab is hidden and resumes when visible', async () => {

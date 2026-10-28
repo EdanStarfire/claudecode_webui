@@ -11,8 +11,13 @@ import { pushDebugEvent } from '@/composables/useDebugBuffer'
 // on a slow link the first paint of the newest messages matters far more than loading all of
 // the history — and it must never compete with live events or user actions.
 //
-// Minimum pacing rules (fixed here; adaptive refinements are a later stage):
-//   - fixed page budget (PAGE_BUDGET_BYTES), inter-page gap max(MIN_GAP_MS, 2 x last page time);
+// Pacing rules:
+//   - adaptive page budget: starts at PAGE_BUDGET_BYTES, doubles while pages complete quickly
+//     (< FAST_PAGE_MS) up to MAX_PAGE_BUDGET_BYTES, halves when a page is slow (> SLOW_PAGE_MS)
+//     down to MIN_PAGE_BUDGET_BYTES — a fast link drains the history in a handful of large
+//     requests, a slow one keeps small pages;
+//   - inter-page gap proportional to the measured page time, GAP_FACTOR x lastPageMs clamped to
+//     [0, MAX_GAP_MS]: near zero on a fast link, a gentle duty cycle on a slow one;
 //   - paused while the connection is connecting / resyncing / backoff / unreachable, while the
 //     last poll batch was a catch-up burst, while a live batch landed within QUIET_MS, while the
 //     tab is hidden, and while a user REST action (send / permission / interrupt / ...) runs;
@@ -23,7 +28,19 @@ import { pushDebugEvent } from '@/composables/useDebugBuffer'
 // There is no ceiling: on a good link backfill runs until `has_more_before` is false.
 
 export const PAGE_BUDGET_BYTES = 256 * 1024
-export const MIN_GAP_MS = 500
+export const MIN_PAGE_BUDGET_BYTES = 64 * 1024
+// The server caps a `before` page at 4 MiB / 5000 records (backend MAX_BYTES_CAP / MAX_RECORDS_CAP).
+export const MAX_PAGE_BUDGET_BYTES = 4 * 1024 * 1024
+export const MAX_PAGE_RECORDS = 5000
+export const FAST_PAGE_MS = 500
+export const SLOW_PAGE_MS = 2000
+export const GAP_FACTOR = 0.5
+export const MAX_GAP_MS = 2000
+// Applying a page runs on the main thread: a page that takes longer than this to apply must not
+// grow the budget, one that takes much longer shrinks it.
+export const APPLY_OK_MS = 100
+export const APPLY_SLOW_MS = 250
+const ERROR_BACKOFF_BASE_MS = 500
 export const QUIET_MS = 1500
 // A single poll batch this large means the stream is catching up (reconnect / burst).
 export const CATCHUP_EVENT_COUNT = 100
@@ -32,6 +49,27 @@ const WAIT_POLL_MS = 250
 const PAGE_INACTIVITY_MS = 30000
 const MAX_CONSECUTIVE_ERRORS = 5
 const BLOCKING_CONNECTION_STATES = new Set(['idle', 'connecting', 'resyncing', 'backoff', 'unreachable'])
+
+/** Next page budget from how long the last page took: grow when fast, shrink when slow. */
+export function nextPageBudget(budget, pageMs, applyMs = 0) {
+  if (pageMs > SLOW_PAGE_MS || applyMs > APPLY_SLOW_MS) return Math.max(MIN_PAGE_BUDGET_BYTES, Math.floor(budget / 2))
+  if (pageMs < FAST_PAGE_MS && applyMs <= APPLY_OK_MS) return Math.min(MAX_PAGE_BUDGET_BYTES, budget * 2)
+  return budget
+}
+
+/** Delay before the next page: proportional to the last page's duration, bounded. */
+export function backfillGapMs(lastPageMs) {
+  return Math.min(MAX_GAP_MS, Math.max(0, GAP_FACTOR * (lastPageMs || 0)))
+}
+
+// DevTools-visible timing of each page's fetch and apply (Performance panel / getEntriesByName).
+function markPerf(name, startTime, duration) {
+  try {
+    performance.measure(name, { start: startTime - performance.timeOrigin, duration })
+  } catch {
+    // Performance timeline unavailable (tests, old browsers)
+  }
+}
 
 function defaultSleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -159,7 +197,7 @@ export function createHistoryBackfill(deps = {}) {
 
         // Inter-page gap (bypassed by an explicit on-demand request).
         if (!isDemand() && loop.lastPageEndedAt != null) {
-          const gap = Math.max(MIN_GAP_MS, 2 * (loop.lastPageMs || 0))
+          const gap = backfillGapMs(loop.lastPageMs)
           const remaining = gap - (now() - loop.lastPageEndedAt)
           if (remaining > 0) {
             await sleep(remaining)
@@ -173,11 +211,14 @@ export function createHistoryBackfill(deps = {}) {
         const startedAt = now()
         try {
           const page = await store.fetchOlderPage(sessionId, {
-            signal: controller.signal, maxBytes: PAGE_BUDGET_BYTES, inactivityMs: PAGE_INACTIVITY_MS,
+            // An explicit user request (scroll near the top, the banner button) never uses a grown
+            // budget: the user is waiting for exactly that page.
+            signal: controller.signal, maxBytes: wasDemand ? PAGE_BUDGET_BYTES : loop.budget, maxRecords: MAX_PAGE_RECORDS, inactivityMs: PAGE_INACTIVITY_MS,
           })
           if (controller.signal.aborted || loops.get(sessionId) !== loop) break
           loop.lastPageMs = now() - startedAt
           if (!page) break
+          markPerf('history-backfill-fetch', startedAt, loop.lastPageMs)
 
           // Applying prepends content above the viewport: wait out an active scroll gesture
           // unless the viewport is already within a screen of the top.
@@ -191,8 +232,13 @@ export function createHistoryBackfill(deps = {}) {
           await idleSlot()
           if (controller.signal.aborted || loops.get(sessionId) !== loop) break
 
+          const applyStartedAt = now()
           store.applyFetchedOlderPage(sessionId, page, { source: history.source || 'load' })
           loop.lastPageEndedAt = now()
+          const applyMs = loop.lastPageEndedAt - applyStartedAt
+          markPerf('history-backfill-apply', applyStartedAt, applyMs)
+          loop.budget = nextPageBudget(loop.budget, loop.lastPageMs, applyMs)
+          loop.lastPageMs += applyMs // the gap covers the main-thread cost of the page too
           consecutiveErrors = 0
           if (wasDemand) loop.demand = Math.max(0, loop.demand - 1)
         } catch (caught) {
@@ -210,19 +256,21 @@ export function createHistoryBackfill(deps = {}) {
                 ...(history.source === 'archive' ? { signal: controller.signal } : {}),
               })
               loop.lastPageEndedAt = null
+              loop.budget = PAGE_BUDGET_BYTES
               continue
             } catch (restartErr) {
               if (controller.signal.aborted || loops.get(sessionId) !== loop) break
               err = restartErr // counted as an ordinary failure below
             }
           }
+          loop.budget = Math.max(MIN_PAGE_BUDGET_BYTES, Math.floor(loop.budget / 2)) // a failed/timed-out page shrinks it
           consecutiveErrors++
           pushDebugEvent('message', 'history-backfill-error', { sessionId, message: err?.message, consecutiveErrors })
           if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
             setStatus(sessionId, { loading: false, error: err?.message || 'Failed to load older history' })
             break
           }
-          await sleep(Math.min(30000, MIN_GAP_MS * 2 ** consecutiveErrors))
+          await sleep(Math.min(30000, ERROR_BACKOFF_BASE_MS * 2 ** consecutiveErrors))
         } finally {
           store.releaseBackfill(sessionId, controller)
           setStatus(sessionId, { loading: false })
@@ -241,7 +289,7 @@ export function createHistoryBackfill(deps = {}) {
     const history = messageStore().getHistoryState(sessionId)
     if (!history || !history.hasMoreBefore) return
     if (loops.has(sessionId)) return
-    const loop = { demand: 0, lastPageMs: 0, lastPageEndedAt: null, forcedAuto: false }
+    const loop = { demand: 0, lastPageMs: 0, lastPageEndedAt: null, forcedAuto: false, budget: PAGE_BUDGET_BYTES }
     loops.set(sessionId, loop)
     setStatus(sessionId, { mode: currentModeFor(sessionId, history, loop), paused: null, error: null })
     runLoop(sessionId, loop)

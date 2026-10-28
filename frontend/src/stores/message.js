@@ -470,11 +470,12 @@ export const useMessageStore = defineStore('message', () => {
    * the cursor is no longer valid (409) or the file was rewritten (`history_id` changed) — the
    * caller restarts from the tail.
    */
-  async function fetchOlderPage(sessionId, { signal, maxBytes, inactivityMs } = {}) {
+  async function fetchOlderPage(sessionId, { signal, maxBytes, maxRecords, inactivityMs } = {}) {
     const history = historyBySession.value.get(sessionId)
     if (!history || !history.hasMoreBefore) return null
     const params = [`before=${encodeURIComponent(history.startCursor)}`]
     if (maxBytes) params.push(`max_bytes=${maxBytes}`)
+    if (maxRecords) params.push(`max_records=${maxRecords}`)
     let data
     try {
       data = await _fetchHistoryJson(`${history.baseUrl}?${params.join('&')}`, {
