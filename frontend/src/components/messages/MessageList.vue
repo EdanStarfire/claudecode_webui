@@ -785,28 +785,71 @@ async function scrollToMessageMatch(match) {
   }
   try {
     const landed = await scrollToLoadedMatch(match, index, seq)
-    if (began.value && landed) await keepHighlightAfterJump(match, seq)
+    if (landed) keepHighlight(match, seq) // background: re-applies the highlight if the row re-renders
     return landed
   } finally {
     if (began.value) endTurnJump()
   }
 }
 
-// After a far jump the rows around the target are measured for the first time while the list
-// settles (the virtualizer's estimate corrects the scroll position and remounts the row), which
-// drops the DOM highlight applied on the first mount. Re-apply it until it has stayed put.
-async function keepHighlightAfterJump(match, seq) {
-  let stableChecks = 0
-  for (let attempt = 0; attempt < 12 && stableChecks < 2; attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 150))
-    if (seq !== navigationSeq) return
+// The DOM highlight is applied imperatively to the mounted row, so any re-render of that row drops
+// it: the virtualizer remounting it after a far jump (rows measured for the first time), or a row
+// re-render each time an older history page is prepended around it. While this match stays the
+// current one (checked every tick; 30 s at most) the highlight is re-applied when it vanishes, the
+// row is brought back when it left the mounted window, and a mark hidden under the search bar is
+// revealed — all of it only until the user scrolls by hand.
+let userScrolledSinceNav = false
+function noteUserScroll() { userScrolledSinceNav = true }
+
+async function keepHighlight(match, seq) {
+  userScrolledSinceNav = false
+  // Mark of the current match in its mounted row, (re-)applied when missing; null when the row is not mounted.
+  const restore = () => {
+    if (seq !== navigationSeq) return null
     const index = matchRowIndex(match)
     const rowEl = index == null ? null : messagesContent.value?.querySelector(`.virtual-item-row[data-index="${index}"]`)
-    if (!rowEl) { stableChecks = 0; continue }
-    if (rowEl.querySelector('mark.message-search-highlight')) { stableChecks++; continue }
-    stableChecks = 0
-    clearActiveHighlight()
-    if (applyHighlight(rowEl, messageSearch.query.value, match.occurrenceIndex ?? 0)) highlightedEl = rowEl
+    if (!rowEl) return null
+    let mark = rowEl.querySelector('mark.message-search-highlight')
+    if (!mark) {
+      clearActiveHighlight()
+      if (!applyHighlight(rowEl, messageSearch.query.value, match.occurrenceIndex ?? 0, { scroll: false })) return null
+      highlightedEl = rowEl
+      mark = rowEl.querySelector('mark.message-search-highlight')
+    }
+    return mark
+  }
+  // A re-render is repaired in the same frame (no visible flicker) ...
+  const container = messagesContent.value
+  const observer = container && typeof MutationObserver !== 'undefined' ? new MutationObserver(() => { restore() }) : null
+  observer?.observe(container, { childList: true, subtree: true, characterData: true })
+  try {
+    // ... and a slower tick covers a row that left the mounted window or sits under the bar.
+    for (let tick = 0; tick < 120; tick++) {
+      await new Promise(resolve => setTimeout(resolve, 250))
+      if (seq !== navigationSeq) return
+      const mark = restore()
+      if (mark) {
+        if (!userScrolledSinceNav) revealMark(mark)
+      } else {
+        const index = matchRowIndex(match)
+        if (index != null && !userScrolledSinceNav) await scrollToItemIndexTrusted(index, { align: 'center', behavior: 'auto' })
+      }
+    }
+  } finally {
+    observer?.disconnect()
+  }
+}
+
+// Scrolls a highlighted mark to the middle of the list when it is outside the visible area or under
+// the floating search bar.
+function revealMark(mark) {
+  const area = messagesArea.value
+  if (!mark || !area) return
+  const areaRect = area.getBoundingClientRect()
+  const barBottom = document.querySelector('.message-search-bar')?.getBoundingClientRect().bottom ?? areaRect.top
+  const rect = mark.getBoundingClientRect()
+  if (rect.top < Math.max(areaRect.top, barBottom) + 8 || rect.bottom > areaRect.bottom) {
+    mark.scrollIntoView({ behavior: 'auto', block: 'center' })
   }
 }
 
@@ -1149,6 +1192,7 @@ onMounted(() => {
     el.addEventListener('touchend', onGestureTouchEnd, { passive: true })
     el.addEventListener('mousedown', renewGestureWindow, { passive: true })
     el.addEventListener('mouseup', renewGestureWindow, { passive: true })
+    for (const type of ['wheel', 'touchstart', 'mousedown']) el.addEventListener(type, noteUserScroll, { passive: true })
   }
   window.addEventListener('keydown', onGestureKeydown)
 })
@@ -1162,6 +1206,7 @@ onUnmounted(() => {
     el.removeEventListener('touchend', onGestureTouchEnd)
     el.removeEventListener('mousedown', renewGestureWindow)
     el.removeEventListener('mouseup', renewGestureWindow)
+    for (const type of ['wheel', 'touchstart', 'mousedown']) el.removeEventListener(type, noteUserScroll)
   }
   window.removeEventListener('keydown', onGestureKeydown)
   clearTimeout(gestureExpiryTimer)

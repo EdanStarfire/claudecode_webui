@@ -2155,6 +2155,97 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
       vi.restoreAllMocks()
     })
 
+    describe('highlight of the current server hit', () => {
+      const SEARCH_SESSION_ROWS = [
+        { id: 'msg-45', message_id: 'msg-45', type: 'user', content: 'alpha one alpha two', timestamp: 1700000045 },
+        { id: 'msg-50', message_id: 'msg-50', type: 'user', content: 'plain alpha here', timestamp: 1700000050 },
+      ]
+      const row = (id, extra = {}) => ({
+        message_id: id, tool_id: null, field: 'content', match_start: 0, match_length: 5, snippet: 's',
+        occurrence_index: 0, cursor: 'b:1', size_hint: 1, ...extra,
+      })
+
+      // Partial history (tail loaded); /search answers the scripted newest-first page.
+      async function mountSearchable() {
+        const { createFakeHistoryServer } = await import('@/stores/__tests__/helpers/historyServer')
+        const mounted = await mountWithStore()
+        const all = [...messagesAt(0, 30), ...messagesAt(30, 45), ...SEARCH_SESSION_ROWS, ...messagesAt(51, 60)]
+        const server = createFakeHistoryServer(all, { tailStart: 30, pageSize: 30 })
+        apiMock.get.mockImplementation((url) => {
+          if (url.includes('/search?')) {
+            return Promise.resolve({
+              results: [row('msg-50'), row('msg-45', { occurrence_index: 0, match_start: 0 }), row('msg-45', { occurrence_index: 1, match_start: 10 })],
+              next_cursor: null, exhausted: true, history_id: 'h',
+            })
+          }
+          return server.handle(url)
+        })
+        await mounted.messageStore.loadMessages(SESSION, null, 0, { window: 'tail', signal: new AbortController().signal })
+        await new Promise(r => setTimeout(r, 50))
+        stubScrollMechanics(mounted.container.querySelector('.messages-area'))
+        Element.prototype.scrollIntoView = vi.fn()
+        return mounted
+      }
+
+      const marks = () => [...document.querySelectorAll('mark.message-search-highlight')]
+      const markedOccurrence = (mark) => {
+        // the index of this <mark> among all 'alpha' occurrences of its row
+        const text = mark.closest('[role="article"]').textContent
+        const before = [...mark.closest('[role="article"]').childNodes]
+        let seen = 0
+        for (const node of before) {
+          if (node === mark) return seen
+          seen += (node.textContent.match(/alpha/gi) || []).length
+        }
+        return text.length
+      }
+      const waitFor = async (fn) => { for (let i = 0; i < 40 && !fn(); i++) await new Promise(r => setTimeout(r, 25)) }
+
+      it('applies the highlight to the right occurrence of a loaded server hit, and next/prev moves it', async () => {
+        await mountSearchable()
+        await fireEvent.click(document.querySelector('.message-search-toggle'))
+        await fireEvent.update(document.querySelector('.message-search-input'), 'alpha')
+        await new Promise(r => setTimeout(r, 400)) // debounce + page
+        await waitFor(() => marks().length === 1)
+        expect(document.querySelector('.message-search-count').textContent).toBe('1 of 3')
+        // result 1 = newest hit = msg-50, its first (only) occurrence
+        expect(marks()).toHaveLength(1)
+        expect(marks()[0].closest('[role="article"]').textContent).toContain('plain')
+        expect(marks()[0].textContent).toBe('alpha')
+
+        // next: msg-45 occurrence 0, next: msg-45 occurrence 1 (the SECOND "alpha" of the row)
+        await fireEvent.click(document.querySelector('[aria-label="Next match"]'))
+        await waitFor(() => marks().length === 1 && marks()[0].closest('[role="article"]').textContent.includes('one'))
+        expect(marks()[0].closest('[role="article"]').textContent).toContain('alpha one alpha two')
+        expect(markedOccurrence(marks()[0])).toBe(0)
+        await fireEvent.click(document.querySelector('[aria-label="Next match"]'))
+        await waitFor(() => marks().length === 1 && markedOccurrence(marks()[0]) === 1)
+        expect(markedOccurrence(marks()[0])).toBe(1)
+        expect(document.querySelector('.message-search-count').textContent).toBe('3 of 3')
+
+        // prev moves it back
+        await fireEvent.click(document.querySelector('[aria-label="Previous match"]'))
+        await waitFor(() => marks().length === 1 && markedOccurrence(marks()[0]) === 0)
+        expect(markedOccurrence(marks()[0])).toBe(0)
+        expect(document.querySelector('.message-search-count').textContent).toBe('2 of 3')
+      })
+
+      it('re-applies the highlight when the row re-renders and drops it', async () => {
+        await mountSearchable()
+        await fireEvent.click(document.querySelector('.message-search-toggle'))
+        await fireEvent.update(document.querySelector('.message-search-input'), 'alpha')
+        await new Promise(r => setTimeout(r, 400))
+        await waitFor(() => marks().length === 1)
+        // simulate a re-render of the row: the mark disappears from the DOM
+        const article = marks()[0].closest('[role="article"]')
+        article.textContent = article.textContent
+        expect(marks()).toHaveLength(0)
+        await waitFor(() => marks().length === 1)
+        expect(marks()).toHaveLength(1)
+        expect(marks()[0].textContent).toBe('alpha')
+      })
+    })
+
     it('the jump banner names the search result', async () => {
       const { historyBackfill } = await import('@/composables/useHistoryBackfill')
       const { messageStore } = await mountTail()
