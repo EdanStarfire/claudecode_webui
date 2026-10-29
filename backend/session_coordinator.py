@@ -1847,11 +1847,13 @@ class SessionCoordinator:
 
     # ==================== TASK LEG REGISTRY (Issue #1746) ====================
 
-    async def _get_task_leg_registry(self, session_id: str) -> TaskLegRegistry:
+    async def _get_task_leg_registry(
+        self, session_id: str, *, live: bool = False
+    ) -> TaskLegRegistry:
         # Kept live on the coordinator (not just internal to SessionQuery):
         # message_pipeline.py calls self._coordinator._get_task_leg_registry(session_id)
         # directly, and test_task_registry.py pokes the same name.
-        return await self._session_query._get_task_leg_registry(session_id)
+        return await self._session_query._get_task_leg_registry(session_id, live=live)
 
     async def get_background_agents(self, session_id: str) -> dict[str, Any]:
         return await self._session_query.get_background_agents(session_id)

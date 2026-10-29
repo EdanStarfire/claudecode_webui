@@ -314,7 +314,9 @@ class MessagePipeline:
                             # frame would be double-counted (e.g. two legs for one
                             # task_started).
                             registry_already_cached = session_id in self._task_leg_registries
-                            registry = await self._coordinator._get_task_leg_registry(session_id)
+                            registry = await self._coordinator._get_task_leg_registry(
+                                session_id, live=True
+                            )
                             if registry_already_cached:
                                 registry.apply_frame(task_subtype, parsed_message.metadata, parsed_message.timestamp)
                         except Exception:

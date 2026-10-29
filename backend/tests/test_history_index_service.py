@@ -784,3 +784,126 @@ async def test_unterminated_tail_completed_externally_is_repaired_by_rescan(tmp_
         f.write("\n")  # the record is completed by something other than the hooked writer
     await storage.append_message(_user(1))  # start > state.end: gap -> drop, lazily rescan
     assert [t[1] for t in (await coordinator.get_history_index(SID))["turns"]] == ["u0", "u9", "u1"]
+
+
+# ------------------------------------------------------------------ live-path never waits on the pool
+
+
+def _agent_started(n):
+    return {"type": "system", "message_id": f"ts{n}", "content": "", "session_id": SID,
+            "metadata": {"subtype": "task_started", "task_id": f"bg{n}", "description": "d"}}
+
+
+async def _saturate_pool(coordinator, other_sids, release):
+    """Occupy every cold-pool worker with other sessions' (blocked) scans."""
+    scans = coordinator._session_query._cold_scans
+    started = threading.Event()
+    count = [0]
+    lock = threading.Lock()
+
+    def blocker(cancel):
+        with lock:
+            count[0] += 1
+            if count[0] >= scans.workers:
+                started.set()
+        release.wait(10)
+
+    async def flight(handle):
+        return await handle.run(blocker)
+
+    tasks = [asyncio.ensure_future(scans.single_flight(sid, "index", flight, empty=lambda: None))
+             for sid in other_sids]
+    for _ in range(200):
+        if started.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert started.is_set()
+    return tasks
+
+
+@pytest.mark.asyncio
+async def test_live_callback_registry_hydration_completes_while_pool_is_saturated(tmp_path):
+    coordinator, _ = await _coordinator(
+        tmp_path, [_user(0), _agent_started(1)], cold_scan_workers=2
+    )
+    release = threading.Event()
+    hogs = await _saturate_pool(coordinator, ["x1", "x2", "x3", "x4"], release)
+    try:
+        t0 = time.monotonic()
+        registry = await asyncio.wait_for(
+            coordinator._get_task_leg_registry(SID, live=True), timeout=3
+        )
+        assert time.monotonic() - t0 < 2.0
+        assert registry.snapshot()  # the leg hydrated from the file
+        assert coordinator._task_leg_registries[SID] is registry
+        # the browser-requested hydrator (pool) DOES queue behind the saturated pool
+        browser = asyncio.ensure_future(coordinator.get_background_agents(SID))
+        await asyncio.sleep(0.2)
+        assert browser.done()  # registry already warm -> served from cache, no pool wait
+    finally:
+        release.set()
+        await asyncio.gather(*hogs, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_queued_browser_hydration_keeps_the_registry_the_live_path_warmed(tmp_path):
+    coordinator, _ = await _coordinator(
+        tmp_path, [_user(0), _agent_started(1)], cold_scan_workers=1
+    )
+    release = threading.Event()
+    hogs = await _saturate_pool(coordinator, ["x1"], release)
+    try:
+        browser = asyncio.ensure_future(coordinator.get_background_agents(SID))  # queued in pool
+        await asyncio.sleep(0.1)
+        assert not browser.done()
+        live = await asyncio.wait_for(coordinator._get_task_leg_registry(SID, live=True), 3)
+        live.apply_frame("task_started", {"task_id": "bg-live", "description": "fed"}, 1.0)
+        release.set()
+        result = await asyncio.wait_for(browser, 10)
+        assert coordinator._task_leg_registries[SID] is live  # pool job did not overwrite it
+        assert any("bg-live" in json.dumps(a) for a in result["agents"])
+    finally:
+        release.set()
+        await asyncio.gather(*hogs, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_live_callers_share_one_scan_and_reset_cancels_it(tmp_path):
+    coordinator, storage = await _coordinator(tmp_path, [_agent_started(1)])
+    reader_cls = type(storage.reader)
+    real = reader_cls.iter_matching
+    calls = []
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow(self, prefilters, **kwargs):
+        calls.append(threading.current_thread().name)
+        started.set()
+        release.wait(5)
+        yield from real(self, prefilters, **kwargs)
+
+    reader_cls.iter_matching = slow
+    try:
+        tasks = [asyncio.ensure_future(coordinator._get_task_leg_registry(SID, live=True))
+                 for _ in range(3)]
+        for _ in range(200):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        coordinator._clear_task_list(SID)  # reset mid-hydration
+        release.set()
+        results = await asyncio.gather(*tasks)
+    finally:
+        reader_cls.iter_matching = real
+    assert len(calls) == 1 and not calls[0].startswith("cold-scan")  # default executor
+    assert all(not r.snapshot() for r in results)
+    assert SID not in coordinator._task_leg_registries  # the pre-reset result was not cached
+
+
+def test_message_pipeline_task_frame_path_requests_the_live_hydration():
+    import inspect
+
+    from backend import message_pipeline
+
+    src = inspect.getsource(message_pipeline)
+    assert "_get_task_leg_registry(\n                                session_id, live=True" in src

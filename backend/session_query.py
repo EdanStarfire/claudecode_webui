@@ -17,6 +17,7 @@ dataclass is needed here — same reasoning as PR 4/5.
 import asyncio
 import logging
 import os
+import threading
 from collections import OrderedDict
 from typing import Any
 
@@ -69,6 +70,8 @@ class SessionQuery:
         self._history_indexes: OrderedDict[str, HistoryIndexState] = OrderedDict()
         self._history_index_fingerprints: dict[str, tuple[int, int]] = {}  # archive keys only
         self._history_index_pending: dict[str, list[tuple[int, int, dict]]] = {}
+        # session_id -> (task, cancel event) of the live-callback registry hydration
+        self._live_registry_inflight: dict[str, tuple[asyncio.Task, threading.Event]] = {}
 
     @staticmethod
     def _load_performance_config(coordinator: Any) -> PerformanceConfig:
@@ -218,7 +221,9 @@ class SessionQuery:
 
     # ==================== TASK LEG REGISTRY (Issue #1746) ====================
 
-    async def _get_task_leg_registry(self, session_id: str) -> TaskLegRegistry:
+    async def _get_task_leg_registry(
+        self, session_id: str, *, live: bool = False
+    ) -> TaskLegRegistry:
         """Get (lazily hydrating) the per-session TaskLegRegistry.
 
         Hydration replays every stored Task lifecycle message once — so a
@@ -227,6 +232,10 @@ class SessionQuery:
         session hasn't been started yet in this process, an ephemeral empty
         registry is returned so a later call (once storage exists) can
         still hydrate properly.
+
+        ``live=True`` is the LIVE-message critical path (message_pipeline's task-frame feed): it
+        blocks that session's message processing, so it never waits on the cold-scan pool — it
+        runs its own scan on the default executor (single-flight among live callers only).
         """
         registry = self._task_leg_registries.get(session_id)
         if registry is not None:
@@ -250,15 +259,44 @@ class SessionQuery:
                     registry.apply_frame(subtype, metadata, raw_message.get("timestamp"))
             return registry
 
+        if live:
+            return await self._live_registry_hydration(session_id, _scan)
+
         async def _flight(handle) -> TaskLegRegistry:
             registry = await handle.run(_scan)
-            if not handle.cancelled:
-                self._task_leg_registries[session_id] = registry
-            return registry
+            if handle.cancelled:
+                return registry
+            # A live-path hydration may have warmed (and live-fed) the registry while this job
+            # was queued: that one is at least as current, keep it.
+            return self._task_leg_registries.setdefault(session_id, registry)
 
         return await self._cold_scans.single_flight(
             session_id, "agents", _flight, empty=TaskLegRegistry
         )
+
+    async def _live_registry_hydration(self, session_id: str, scan) -> TaskLegRegistry:
+        """Default-executor hydration for the live callback (see ``live`` above). Concurrent live
+        callers share one scan; reset/delete (``clear_task_list``) cancels it; the result is
+        cached unless a pool flight (browser-requested) cached one first."""
+        entry = self._live_registry_inflight.get(session_id)
+        if entry is None:
+            cancel = threading.Event()
+
+            async def _run() -> TaskLegRegistry:
+                try:
+                    registry = await asyncio.to_thread(scan, cancel)
+                finally:
+                    if self._live_registry_inflight.get(session_id, (None,))[0] is task:
+                        del self._live_registry_inflight[session_id]
+                if cancel.is_set():
+                    return TaskLegRegistry()
+                return self._task_leg_registries.setdefault(session_id, registry)
+
+            task = asyncio.ensure_future(_run())
+            task.add_done_callback(lambda t: t.cancelled() or t.exception())
+            entry = (task, cancel)
+            self._live_registry_inflight[session_id] = entry
+        return await asyncio.shield(entry[0])
 
     async def get_background_agents(self, session_id: str) -> dict[str, Any]:
         """Snapshot of background-agent (Task) leg history for reload/reconnect."""
@@ -400,6 +438,9 @@ class SessionQuery:
         # scan of the session (queued ones never start, running ones stop at the next batch)
         # and drop its history index.
         self._cold_scans.invalidate(session_id)
+        live = self._live_registry_inflight.pop(session_id, None)
+        if live is not None:
+            live[1].set()
         self.drop_history_index(session_id)
         # The agent/background snapshot caches are history-derived too: the reset paths pop
         # them already; a delete never did (a per-deleted-session leak found by the load test).
