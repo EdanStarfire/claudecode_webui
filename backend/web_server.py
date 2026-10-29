@@ -1497,6 +1497,7 @@ class BackendApp:
                 logger.exception(f"Error removing dynamic OAuth callback route {path} during cleanup")
         self._dynamic_oauth_routes.clear()
         await self.coordinator.cleanup()
+        self.coordinator._session_query.shutdown()  # issue #2030: stop the cold-scan pool
         logger.info("Backend cleanup completed")
 
 

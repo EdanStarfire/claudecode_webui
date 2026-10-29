@@ -506,6 +506,13 @@ class ArchiveManager:
             "has_more": (offset + len(messages)) < total_count,
         }
 
+    def archive_messages_path(self, session_id: str, archive_id: str):
+        """Path of an archive's messages.jsonl (issue #2030 history index)."""
+        for part in (session_id, archive_id):
+            if not part or part != Path(part).name or part in (".", ".."):
+                raise ValueError("invalid archive path component")
+        return self.archives_dir / session_id / archive_id / "messages.jsonl"
+
     async def get_archive_window(
         self, session_id: str, archive_id: str, *, before: str | None, budget: WindowBudget
     ) -> dict:

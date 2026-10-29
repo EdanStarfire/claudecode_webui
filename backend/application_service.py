@@ -297,6 +297,12 @@ class ApplicationService:
     async def get_session_tasks(self, session_id: str) -> dict:
         return await self.coordinator.get_session_tasks(session_id)
 
+    async def get_history_index(self, session_id: str) -> dict:
+        return await self.coordinator.get_history_index(session_id)
+
+    async def get_archive_history_index(self, session_id: str, archive_id: str) -> dict:
+        return await self.coordinator.get_archive_history_index(session_id, archive_id)
+
     async def restart_session(self, session_id: str, permission_callback: Any) -> bool:
         self.coordinator.clear_message_callbacks(session_id)
         return await self.coordinator.restart_session(

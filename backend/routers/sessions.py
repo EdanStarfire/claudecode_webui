@@ -10,6 +10,7 @@ from shared.event_envelope import PROCESS_EPOCH, session_stream_epoch
 from shared.exception_handlers import handle_exceptions
 
 from ..fixture_export import FixtureExportError
+from ..history_index import HistoryIndexBuildingError
 from ..message_history_reader import CursorInvalidError
 from ..session_lifecycle import is_deliverable
 from ._models import (
@@ -554,5 +555,21 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.get_session_exists(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
         return await webui.service.get_session_tasks(session_id)
+
+    @router.get("/api/sessions/{session_id}/history_index")
+    @handle_exceptions("get history index")
+    async def get_history_index(session_id: str):
+        """Server-owned history index (issue #2030 stage 2): the display-user turns
+        (``[cursor, message_id, size_hint]``) and compaction-group keys of the WHOLE history,
+        independent of how much of it the browser has loaded. Cold scans are bounded; a build
+        that does not finish within the waiter cap answers 503 ``index_building``."""
+        if not await webui.service.get_session_exists(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        try:
+            return await webui.service.get_history_index(session_id)
+        except HistoryIndexBuildingError as e:
+            raise HTTPException(
+                status_code=503, detail="index_building", headers={"Retry-After": "5"}
+            ) from e
 
     return router

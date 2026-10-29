@@ -254,6 +254,18 @@ class HistoryRetentionConfig:
 
 
 @dataclass
+class PerformanceConfig:
+    """Cold-scan / history-index tuning (issue #2030, stage 2). Values are clamped >= 1 at use."""
+
+    # Threads in the dedicated cold-scan pool; None = min(4, cpu_count).
+    cold_scan_workers: int | None = None
+    # Sessions whose history index stays cached (LRU); evicted ones simply re-scan lazily.
+    history_index_cache_max: int = 32
+    # Seconds a /history_index request waits for a cold scan before answering 503 index_building.
+    history_index_wait_s: float = 20.0
+
+
+@dataclass
 class AppConfig:
     networking: NetworkingConfig = field(default_factory=NetworkingConfig)
     features: FeaturesConfig = field(default_factory=FeaturesConfig)
@@ -264,6 +276,7 @@ class AppConfig:
     secrets: SecretsConfig = field(default_factory=SecretsConfig)
     pricing: PricingConfig = field(default_factory=PricingConfig)
     history_retention: HistoryRetentionConfig = field(default_factory=HistoryRetentionConfig)
+    performance: PerformanceConfig = field(default_factory=PerformanceConfig)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppConfig":
@@ -353,6 +366,12 @@ class AppConfig:
             rotation_trigger_count=hr_data.get("rotation_trigger_count", 100),
             enabled=hr_data.get("enabled", True),
         )
+        perf_data = data.get("performance", {})
+        performance = PerformanceConfig(
+            cold_scan_workers=perf_data.get("cold_scan_workers"),
+            history_index_cache_max=perf_data.get("history_index_cache_max", 32),
+            history_index_wait_s=perf_data.get("history_index_wait_s", 20.0),
+        )
         # Strip legacy key so next save cleans up old config files (migration handled by ProviderCatalogStore)
         data.pop("provider_catalog", None)
         return cls(
@@ -365,6 +384,7 @@ class AppConfig:
             secrets=secrets,
             pricing=pricing,
             history_retention=history_retention,
+            performance=performance,
         )
 
     def to_dict(self) -> dict:
@@ -448,6 +468,16 @@ class AppConfig:
                 "rotation_interval_seconds": self.history_retention.rotation_interval_seconds,
                 "rotation_trigger_count": self.history_retention.rotation_trigger_count,
                 "enabled": self.history_retention.enabled,
+            },
+            "performance": {
+                "_comment": (
+                    "Issue #2030: cold_scan_workers = threads for O(file) history scans "
+                    "(null = min(4, cpu_count)); history_index_cache_max = sessions whose "
+                    "history index stays cached; history_index_wait_s = /history_index wait cap."
+                ),
+                "cold_scan_workers": self.performance.cold_scan_workers,
+                "history_index_cache_max": self.performance.history_index_cache_max,
+                "history_index_wait_s": self.performance.history_index_wait_s,
             },
         }
 
