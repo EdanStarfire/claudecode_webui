@@ -717,9 +717,10 @@ function cancelSearchJump() {
 
 // Closing the search or switching session abandons a pending search jump (and any navigation in flight).
 watch(() => messageSearch.isOpen.value, (open) => {
-  if (!open) { navigationSeq++; cancelSearchJump() }
+  if (!open) { navigationSeq++; cancelSearchJump(); stopKeeper() }
 })
-watch(viewSessionId, () => { navigationSeq++; cancelSearchJump() })
+watch(viewSessionId, () => { navigationSeq++; cancelSearchJump(); stopKeeper() })
+watch(() => messageSearch.query.value, () => stopKeeper())
 
 function isUnloadedHit(match) {
   const sessionId = viewSessionId.value
@@ -785,7 +786,8 @@ async function scrollToMessageMatch(match) {
   }
   try {
     const landed = await scrollToLoadedMatch(match, index, seq)
-    if (landed) keepHighlight(match, seq) // background: re-applies the highlight if the row re-renders
+    // background: re-applies the highlight if the row re-renders (only for the newest navigation, only when it was applied)
+    if (landed && seq === navigationSeq && highlightedEl) keepHighlight(match, seq)
     return landed
   } finally {
     if (began.value) endTurnJump()
@@ -795,17 +797,28 @@ async function scrollToMessageMatch(match) {
 // The DOM highlight is applied imperatively to the mounted row, so any re-render of that row drops
 // it: the virtualizer remounting it after a far jump (rows measured for the first time), or a row
 // re-render each time an older history page is prepended around it. While this match stays the
-// current one (checked every tick; 30 s at most) the highlight is re-applied when it vanishes, the
-// row is brought back when it left the mounted window, and a mark hidden under the search bar is
-// revealed — all of it only until the user scrolls by hand.
-let userScrolledSinceNav = false
-function noteUserScroll() { userScrolledSinceNav = true }
+// current one, a keeper repairs it: a MutationObserver re-applies the mark in the same frame, and a
+// cheap 250 ms tick brings a row that left the mounted window back and reveals a mark hidden under
+// the floating search bar. At most one keeper exists; it ends (observer disconnected, loop exited)
+// on a new navigation, closing the search, a session switch, a query edit, the user scrolling by
+// hand, unmount/deactivate, or after 30 s.
+let activeKeeper = null
+
+function stopKeeper() {
+  activeKeeper?.stop()
+  activeKeeper = null
+}
+
+function noteUserScroll() { stopKeeper() }
 
 async function keepHighlight(match, seq) {
-  userScrolledSinceNav = false
+  stopKeeper()
+  let alive = true
+  const container = messagesContent.value
   // Mark of the current match in its mounted row, (re-)applied when missing; null when the row is not mounted.
   const restore = () => {
-    if (seq !== navigationSeq) return null
+    if (!alive || seq !== navigationSeq) return null
+    if (highlightedEl?.isConnected && highlightedEl.querySelector('mark.message-search-highlight')) return highlightedEl.querySelector('mark.message-search-highlight')
     const index = matchRowIndex(match)
     const rowEl = index == null ? null : messagesContent.value?.querySelector(`.virtual-item-row[data-index="${index}"]`)
     if (!rowEl) return null
@@ -819,24 +832,30 @@ async function keepHighlight(match, seq) {
     return mark
   }
   // A re-render is repaired in the same frame (no visible flicker) ...
-  const container = messagesContent.value
   const observer = container && typeof MutationObserver !== 'undefined' ? new MutationObserver(() => { restore() }) : null
   observer?.observe(container, { childList: true, subtree: true, characterData: true })
+  const keeper = { stop() { alive = false; observer?.disconnect() } }
+  activeKeeper = keeper
   try {
     // ... and a slower tick covers a row that left the mounted window or sits under the bar.
-    for (let tick = 0; tick < 120; tick++) {
+    for (let tick = 0; tick < 120 && alive; tick++) {
       await new Promise(resolve => setTimeout(resolve, 250))
-      if (seq !== navigationSeq) return
+      if (!alive || seq !== navigationSeq) return
       const mark = restore()
       if (mark) {
-        if (!userScrolledSinceNav) revealMark(mark)
+        if (tick < 4) revealMark(mark) // the layout reads only matter right after landing
       } else {
         const index = matchRowIndex(match)
-        if (index != null && !userScrolledSinceNav) await scrollToItemIndexTrusted(index, { align: 'center', behavior: 'auto' })
+        if (index != null) {
+          await scrollToItemIndexTrusted(index, { align: 'center', behavior: 'auto' })
+        }
       }
     }
+  } catch {
+    // the list was torn down under the keeper (unmount): nothing left to keep
   } finally {
-    observer?.disconnect()
+    keeper.stop()
+    if (activeKeeper === keeper) activeKeeper = null
   }
 }
 
@@ -849,6 +868,7 @@ function revealMark(mark) {
   const barBottom = document.querySelector('.message-search-bar')?.getBoundingClientRect().bottom ?? areaRect.top
   const rect = mark.getBoundingClientRect()
   if (rect.top < Math.max(areaRect.top, barBottom) + 8 || rect.bottom > areaRect.bottom) {
+    renewGestureWindow() // a trusted scroll, like the other search navigations
     mark.scrollIntoView({ behavior: 'auto', block: 'center' })
   }
 }
@@ -1083,6 +1103,7 @@ function onGestureKeydown(e) {
   if (!SCROLL_RELEVANT_KEYS.has(e.key)) return
   if (isTextEntryTarget(document.activeElement)) return
   renewGestureWindow()
+  noteUserScroll()
 }
 
 function onGestureTouchStart() {
@@ -1210,6 +1231,9 @@ onUnmounted(() => {
   }
   window.removeEventListener('keydown', onGestureKeydown)
   clearTimeout(gestureExpiryTimer)
+  navigationSeq++
+  cancelSearchJump()
+  stopKeeper()
 })
 
 onActivated(async () => {
@@ -1256,6 +1280,7 @@ onDeactivated(() => {
   // Issue #2012: a highlighted row's content could change via background live updates while
   // this instance is deactivated (recently-viewed sessions keep polling) — don't risk a <mark>
   // sitting around a since-changed text node once reactivated.
+  stopKeeper()
   clearActiveHighlight()
 })
 

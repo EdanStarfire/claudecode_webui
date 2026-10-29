@@ -2230,6 +2230,69 @@ describe('tail-first history (issue #2030, stage 1b)', () => {
         expect(document.querySelector('.message-search-count').textContent).toBe('2 of 3')
       })
 
+      // Counts the MutationObservers that are observing right now (the keeper's is the only one MessageList creates).
+      function trackObservers() {
+        const live = new Set()
+        const observe = vi.spyOn(MutationObserver.prototype, 'observe').mockImplementation(function () { live.add(this) })
+        const disconnect = vi.spyOn(MutationObserver.prototype, 'disconnect').mockImplementation(function () { live.delete(this) })
+        return { live, restore: () => { observe.mockRestore(); disconnect.mockRestore() } }
+      }
+
+      async function searchAlpha() {
+        await fireEvent.click(document.querySelector('.message-search-toggle'))
+        await fireEvent.update(document.querySelector('.message-search-input'), 'alpha')
+        await new Promise(r => setTimeout(r, 400))
+        await waitFor(() => marks().length === 1)
+      }
+
+      it('the highlight keeper exists only while a hit is current, and is torn down on close, user scroll, query edit and a new navigation', async () => {
+        const tracker = trackObservers()
+        const { wrapper, container } = await mountSearchable()
+        expect(tracker.live.size).toBe(0) // search closed: nothing observes
+        await searchAlpha()
+        expect(tracker.live.size).toBe(1)
+
+        // new navigation (next): the old keeper is replaced, never stacked
+        await fireEvent.click(document.querySelector('[aria-label="Next match"]'))
+        await waitFor(() => marks().length === 1 && marks()[0].closest('[role="article"]').textContent.includes('one'))
+        await new Promise(r => setTimeout(r, 300))
+        expect(tracker.live.size).toBe(1)
+
+        // user scroll by hand: the keeper ends, a dropped mark is no longer re-applied
+        container.querySelector('.messages-area').dispatchEvent(new WheelEvent('wheel'))
+        expect(tracker.live.size).toBe(0)
+        const article = marks()[0].closest('[role="article"]')
+        article.textContent = article.textContent
+        await new Promise(r => setTimeout(r, 400))
+        expect(marks()).toHaveLength(0)
+
+        // a fresh navigation starts one again; editing the query ends it
+        await fireEvent.click(document.querySelector('[aria-label="Previous match"]'))
+        await waitFor(() => tracker.live.size === 1)
+        await fireEvent.update(document.querySelector('.message-search-input'), 'alpha x')
+        expect(tracker.live.size).toBe(0)
+
+        // closing the search ends it too
+        await fireEvent.update(document.querySelector('.message-search-input'), 'alpha')
+        await new Promise(r => setTimeout(r, 450))
+        await waitFor(() => tracker.live.size === 1)
+        await fireEvent.click(document.querySelector('[aria-label="Close search"]'))
+        await new Promise(r => setTimeout(r, 30))
+        expect(tracker.live.size).toBe(0)
+        wrapper.unmount()
+        tracker.restore()
+      })
+
+      it('unmounting the list ends the keeper', async () => {
+        const tracker = trackObservers()
+        const { wrapper } = await mountSearchable()
+        await searchAlpha()
+        expect(tracker.live.size).toBe(1)
+        wrapper.unmount()
+        expect(tracker.live.size).toBe(0)
+        tracker.restore()
+      })
+
       it('re-applies the highlight when the row re-renders and drops it', async () => {
         await mountSearchable()
         await fireEvent.click(document.querySelector('.message-search-toggle'))
