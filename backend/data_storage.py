@@ -8,6 +8,7 @@ message history, and state persistence.
 import asyncio
 import json
 import logging
+import os
 import uuid
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,9 @@ class DataStorageManager:
         self.resources_metadata_file = self.resources_dir / "resources.jsonl"
         # Audit hooks: callables(session_id, project_id, message_data) invoked after append
         self.on_append: list = []
+        # Issue #2030 (stage 2): (start, end) byte offsets of the record the last
+        # append_message() wrote — valid inside on_append callbacks (same write lock).
+        self.last_append_range: tuple[int, int] = (0, 0)
         self._session_id: str | None = None
         self._project_id: str | None = None
         # Issue #2084 (stage 3-C, §3): serializes append_message() against the
@@ -85,8 +89,11 @@ class DataStorageManager:
 
                 # Append to JSONL file
                 with open(self.messages_file, 'a', encoding='utf-8') as f:
+                    start = os.fstat(f.fileno()).st_size
                     json.dump(message_data, f, ensure_ascii=False)
                     f.write('\n')
+                    f.flush()
+                    self.last_append_range = (start, os.fstat(f.fileno()).st_size)
 
                 storage_logger.debug(f"Appended message to {self.session_dir.name}")
 

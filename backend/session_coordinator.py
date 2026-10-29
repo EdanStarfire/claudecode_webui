@@ -620,8 +620,13 @@ class SessionCoordinator:
         session = self.session_manager._active_sessions.get(session_id)
         return session.project_id if session else None
 
+    def _apply_history_index_feed(self, storage_manager, session_id: str) -> None:
+        """Issue #2030 (stage 2): feed every durable append to the session's history index."""
+        self._session_query.attach_history_index_feed(storage_manager, session_id)
+
     def _apply_audit_writer(self, storage_manager, session_id: str) -> None:
         """Configure audit callbacks on a newly created DataStorageManager."""
+        self._apply_history_index_feed(storage_manager, session_id)
         if self._audit_writer is None:
             return
         storage_manager._session_id = session_id
@@ -1369,14 +1374,14 @@ class SessionCoordinator:
 
     async def _cleanup_storage_manager(self, session_id: str) -> None:
         """Step 2: clean up storage manager and ensure all files are closed."""
-        if session_id not in self._storage_managers:
-            return
-        storage_manager = self._storage_managers[session_id]
-        await storage_manager.cleanup()
-        del self._storage_managers[session_id]
+        storage_manager = self._storage_managers.get(session_id)
+        if storage_manager is not None:
+            await storage_manager.cleanup()
+            del self._storage_managers[session_id]
         self._clear_task_list(session_id)
-        # Give storage manager time to close all file handles
-        await asyncio.sleep(0.2)
+        if storage_manager is not None:
+            # Give storage manager time to close all file handles
+            await asyncio.sleep(0.2)
 
     def _cleanup_in_memory_callback_state(self, session_id: str) -> None:
         """Step 3: clean up callbacks and other per-session in-memory state."""
@@ -1859,6 +1864,19 @@ class SessionCoordinator:
 
     def _clear_task_list(self, session_id: str) -> None:
         self._session_query.clear_task_list(session_id)
+
+    async def get_history_index(self, session_id: str) -> dict[str, Any]:
+        return await self._session_query.get_history_index(session_id)
+
+    async def get_archive_history_index(self, session_id: str, archive_id: str) -> dict[str, Any]:
+        if not self.legion_system:
+            raise ValueError("archives unavailable")
+        messages_file = self.legion_system.archive_manager.archive_messages_path(
+            session_id, archive_id
+        )
+        return await self._session_query.get_archive_history_index(
+            session_id, archive_id, messages_file
+        )
 
     # ==================== ARCHIVE METHODS ====================
 

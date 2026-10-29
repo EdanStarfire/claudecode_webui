@@ -144,8 +144,8 @@ async def test_record_appended_while_hydrating_is_not_lost(tmp_path):
     gate = asyncio.Event()
     loop = asyncio.get_running_loop()
 
-    def slow_iter(self, prefilters):
-        yield from real_iter(self, prefilters)
+    def slow_iter(self, prefilters, **kwargs):
+        yield from real_iter(self, prefilters, **kwargs)
         # hydration has consumed the file; now let a live record land, then finish
         loop.call_soon_threadsafe(gate.set)
         import time
@@ -228,8 +228,8 @@ async def test_reset_during_hydration_does_not_serve_or_cache_pre_reset_state(tm
     entered = asyncio.Event()
     loop = asyncio.get_running_loop()
 
-    def slow_iter(self, prefilters):
-        yield from real_iter(self, prefilters)
+    def slow_iter(self, prefilters, **kwargs):
+        yield from real_iter(self, prefilters, **kwargs)
         loop.call_soon_threadsafe(entered.set)
         time.sleep(0.2)
 

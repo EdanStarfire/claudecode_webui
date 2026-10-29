@@ -1,0 +1,50 @@
+{
+ "_comment": "Server history-index result per committed fixture; asserted by backend/tests/test_history_index.py and by the vitest browser-predicate check.",
+ "fixtures": {
+  "hook_messages": {
+   "turns": [],
+   "compactions": []
+  },
+  "multi_turn": {
+   "turns": [
+    "935177d3-9d9d-4c31-ae6f-dbd8c0ecd1bd",
+    "b2c72bf7-25d2-41e7-b715-146475305d39"
+   ],
+   "compactions": []
+  },
+  "permission_flow": {
+   "turns": [
+    "f94f5353-be40-4938-a686-054851da787d"
+   ],
+   "compactions": []
+  },
+  "single_turn": {
+   "turns": [
+    "9931832f-d529-40ba-ba33-21d684de8afa"
+   ],
+   "compactions": []
+  },
+  "tool_use": {
+   "turns": [
+    "e8ebf88a-d798-41ed-9e28-c1dbed1eaa07"
+   ],
+   "compactions": []
+  },
+  "mock-sdk-synthetic": {
+   "turns": [
+    "ccbcee59-8a03-4ea2-8e78-4ee9383942d2"
+   ],
+   "compactions": []
+  },
+  "primary": {
+   "turns": [
+    "eff26291-adc1-4918-938c-523ab4d60764",
+    "25724ba8-49fb-4b9c-9e48-cd2447aa84b3",
+    "114aeb97-9cc4-4eca-95c4-6f2f07223110"
+   ],
+   "compactions": [
+    "cfd0d4c1-a242-4fa6-b421-1be30dda8bb2"
+   ]
+  }
+ }
+}

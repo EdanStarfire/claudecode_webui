@@ -1,0 +1,1852 @@
+{
+ "_comment": "Shared by backend/tests/test_history_index.py and the vitest history index case test. Each case: ordered stored records -> expected display-user turn message_ids and compaction-group keys (first-record message_id). `archive` selects the archive record filters. Do not edit one side only.",
+ "cases": [
+  {
+   "name": "plain_user_turns",
+   "note": "",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m1",
+     "content": "hello"
+    },
+    {
+     "type": "assistant",
+     "message_id": "m2",
+     "content": "ok",
+     "metadata": {
+      "tool_uses": []
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m3",
+     "content": "again"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m1",
+     "m3"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "tool_loaded_hidden_with_js_whitespace",
+   "note": "JS trim() also strips U+FEFF",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m4",
+     "content": "a"
+    },
+    {
+     "type": "user",
+     "message_id": "m5",
+     "content": "Tool loaded."
+    },
+    {
+     "type": "user",
+     "message_id": "m6",
+     "content": "  \n Tool loaded.\n﻿"
+    },
+    {
+     "type": "user",
+     "message_id": "m7",
+     "content": "b"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m4",
+     "m7"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "tool_result_carriers",
+   "note": "regex is anchored (no trailing-newline quirk); only hidden when has_tool_results is truthy",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m8",
+     "content": "q"
+    },
+    {
+     "type": "user",
+     "message_id": "m9",
+     "content": "Tool results: 2 results",
+     "metadata": {
+      "has_tool_results": true
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m10",
+     "content": "",
+     "metadata": {
+      "has_tool_results": true
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m11",
+     "content": "tool results: 1 RESULT",
+     "metadata": {
+      "has_tool_results": true
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m12",
+     "content": "Tool results: 1 result\n",
+     "metadata": {
+      "has_tool_results": true
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m13",
+     "content": "Tool results: 3 results",
+     "metadata": {
+      "has_tool_results": false
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m14",
+     "content": "some real text",
+     "metadata": {
+      "has_tool_results": true
+     }
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m8",
+     "m12",
+     "m13",
+     "m14"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "skill_notices",
+   "note": "",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m15",
+     "content": "<command-message>x skill is running</command-message>"
+    },
+    {
+     "type": "user",
+     "message_id": "m16",
+     "content": "Base directory for this skill: /x"
+    },
+    {
+     "type": "user",
+     "message_id": "m17",
+     "content": "(Re-invocation of /foo) the skill was previously loaded"
+    },
+    {
+     "type": "user",
+     "message_id": "m18",
+     "content": "(Re-invocation of /foo) other text"
+    },
+    {
+     "type": "user",
+     "message_id": "m19",
+     "content": "<command-message>a</command-message> no running notice"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m18",
+     "m19"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "slash_command_notices",
+   "note": "",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m20",
+     "content": "<command-message>m</command-message><command-name>/n</command-name><command-args>a</command-args>"
+    },
+    {
+     "type": "user",
+     "message_id": "m21",
+     "content": "body\nARGUMENTS: x"
+    },
+    {
+     "type": "user",
+     "message_id": "m22",
+     "content": "ARGUMENTS: x <command-name>y"
+    },
+    {
+     "type": "user",
+     "message_id": "m23",
+     "content": "ARGUMENTS: only"
+    },
+    {
+     "type": "user",
+     "message_id": "m24",
+     "content": "<command-name>only name</command-name>"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m23",
+     "m24"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "subagent_prompts",
+   "note": "parent_tool_use_id truthy and not tool results -> hidden",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m25",
+     "content": "prompt for subagent",
+     "metadata": {
+      "parent_tool_use_id": "tu1"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m26",
+     "content": "result text",
+     "metadata": {
+      "parent_tool_use_id": "tu1",
+      "has_tool_results": true
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m27",
+     "content": "real",
+     "metadata": {
+      "parent_tool_use_id": ""
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m28",
+     "content": "x",
+     "metadata": {
+      "parent_tool_use_id": null
+     }
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m26",
+     "m27",
+     "m28"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "comm_user_rows_are_turns",
+   "note": "",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m29",
+     "content": "comm body",
+     "metadata": {
+      "comm": {
+       "from": "A"
+      }
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m30",
+     "content": "real"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m29",
+     "m30"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "compaction_4_pattern",
+   "note": "",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m31",
+     "content": "before"
+    },
+    {
+     "type": "system",
+     "message_id": "m32",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m33",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m34",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m35",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    },
+    {
+     "type": "user",
+     "message_id": "m36",
+     "content": "after"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m31",
+     "m36"
+    ],
+    "compactions": [
+     "m32"
+    ]
+   }
+  },
+  {
+   "name": "compaction_5_pattern",
+   "note": "",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m37",
+     "content": "before"
+    },
+    {
+     "type": "system",
+     "message_id": "m38",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m39",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m40",
+     "content": "System message",
+     "subtype": "init",
+     "metadata": {
+      "subtype": "init",
+      "init_data": {
+       "tools": []
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m41",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m42",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    },
+    {
+     "type": "user",
+     "message_id": "m43",
+     "content": "after"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m37",
+     "m43"
+    ],
+    "compactions": [
+     "m38"
+    ]
+   }
+  },
+  {
+   "name": "compaction_group_at_file_start",
+   "note": "",
+   "archive": false,
+   "records": [
+    {
+     "type": "system",
+     "message_id": "m44",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m45",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m46",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m47",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    },
+    {
+     "type": "user",
+     "message_id": "m48",
+     "content": "x"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m48"
+    ],
+    "compactions": [
+     "m44"
+    ]
+   }
+  },
+  {
+   "name": "compaction_group_at_file_end",
+   "note": "",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m49",
+     "content": "x"
+    },
+    {
+     "type": "system",
+     "message_id": "m50",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m51",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m52",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m53",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m49"
+    ],
+    "compactions": [
+     "m50"
+    ]
+   }
+  },
+  {
+   "name": "incomplete_group_prefix_at_end",
+   "note": "an in-progress group is not a group yet",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m54",
+     "content": "x"
+    },
+    {
+     "type": "system",
+     "message_id": "m55",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m56",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m54"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "lone_continuation_is_a_turn",
+   "note": "browser displays a continuation outside a group as a user row",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m57",
+     "content": "x"
+    },
+    {
+     "type": "user",
+     "message_id": "m58",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    },
+    {
+     "type": "user",
+     "message_id": "m59",
+     "content": "y"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m57",
+     "m58",
+     "m59"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "broken_group_falls_back",
+   "note": "",
+   "archive": false,
+   "records": [
+    {
+     "type": "system",
+     "message_id": "m60",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m61",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m62",
+     "content": "hi"
+    },
+    {
+     "type": "user",
+     "message_id": "m63",
+     "content": "yo"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m62",
+     "m63"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "restarted_group_start",
+   "note": "first compacting record is plain; group starts at the second",
+   "archive": false,
+   "records": [
+    {
+     "type": "system",
+     "message_id": "m64",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m65",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m66",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m67",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m68",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    },
+    {
+     "type": "user",
+     "message_id": "m69",
+     "content": "z"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m69"
+    ],
+    "compactions": [
+     "m65"
+    ]
+   }
+  },
+  {
+   "name": "overlapping_group_prefix",
+   "note": "",
+   "archive": false,
+   "records": [
+    {
+     "type": "system",
+     "message_id": "m70",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m71",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m72",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m73",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m74",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m75",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    }
+   ],
+   "expected": {
+    "turns": [],
+    "compactions": [
+     "m72"
+    ]
+   }
+  },
+  {
+   "name": "requesting_status_is_transparent",
+   "note": "dropped by applyRecord before the pattern check",
+   "archive": false,
+   "records": [
+    {
+     "type": "system",
+     "message_id": "m76",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m77",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "requesting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m78",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m79",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m80",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    },
+    {
+     "type": "user",
+     "message_id": "m81",
+     "content": "z"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m81"
+    ],
+    "compactions": [
+     "m76"
+    ]
+   }
+  },
+  {
+   "name": "other_status_breaks_group",
+   "note": "",
+   "archive": false,
+   "records": [
+    {
+     "type": "system",
+     "message_id": "m82",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m83",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "other-status"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m84",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m85",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m86",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m86"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "assistant_inside_group_breaks_it",
+   "note": "browser matches consecutive LIST entries: the continuation row is then a displayable turn",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m87",
+     "content": "a"
+    },
+    {
+     "type": "system",
+     "message_id": "m88",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m89",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "assistant",
+     "message_id": "m90",
+     "content": "ok",
+     "metadata": {
+      "tool_uses": []
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m91",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m92",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m87",
+     "m92"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "hook_inside_group_breaks_it",
+   "note": "a hook system record between members is a list entry in the browser",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m93",
+     "content": "a"
+    },
+    {
+     "type": "system",
+     "message_id": "m94",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m95",
+     "content": "hook",
+     "metadata": {
+      "subtype": "hook_started",
+      "hook_id": "h"
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m96",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m97",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m98",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    },
+    {
+     "type": "user",
+     "message_id": "m99",
+     "content": "b"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m93",
+     "m98",
+     "m99"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "permission_inside_group_breaks_it",
+   "note": "",
+   "archive": false,
+   "records": [
+    {
+     "type": "system",
+     "message_id": "m100",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m101",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "permission_request",
+     "message_id": "m102",
+     "content": "perm",
+     "metadata": {}
+    },
+    {
+     "type": "system",
+     "message_id": "m103",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m104",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m104"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "result_inside_5_group_breaks_it",
+   "note": "",
+   "archive": false,
+   "records": [
+    {
+     "type": "system",
+     "message_id": "m105",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m106",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m107",
+     "content": "System message",
+     "subtype": "init",
+     "metadata": {
+      "subtype": "init",
+      "init_data": {
+       "tools": []
+      }
+     }
+    },
+    {
+     "type": "result",
+     "message_id": "m108",
+     "content": "done",
+     "metadata": {}
+    },
+    {
+     "type": "system",
+     "message_id": "m109",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m110",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m110"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "hidden_carrier_inside_group_breaks_it",
+   "note": "a hidden carrier is still a list entry between members",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m111",
+     "content": "a"
+    },
+    {
+     "type": "system",
+     "message_id": "m112",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m113",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m114",
+     "content": "Tool results: 1 result",
+     "metadata": {
+      "has_tool_results": true
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m115",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m116",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m111",
+     "m116"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "hidden_carrier_before_group_is_harmless",
+   "note": "",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m117",
+     "content": "a"
+    },
+    {
+     "type": "user",
+     "message_id": "m118",
+     "content": "Tool results: 1 result",
+     "metadata": {
+      "has_tool_results": true
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m119",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m120",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m121",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m122",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m117"
+    ],
+    "compactions": [
+     "m119"
+    ]
+   }
+  },
+  {
+   "name": "group_without_continuation_is_not_a_group",
+   "note": "",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m123",
+     "content": "a"
+    },
+    {
+     "type": "system",
+     "message_id": "m124",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m125",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m126",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m127",
+     "content": "b"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m123",
+     "m127"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "truncated_group_head_missing",
+   "note": "boundary + continuation without the status pair: continuation is a turn",
+   "archive": false,
+   "records": [
+    {
+     "type": "system",
+     "message_id": "m128",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m129",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    },
+    {
+     "type": "user",
+     "message_id": "m130",
+     "content": "b"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m129",
+     "m130"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "back_to_back_groups",
+   "note": "",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m131",
+     "content": "a"
+    },
+    {
+     "type": "system",
+     "message_id": "m132",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m133",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m134",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m135",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    },
+    {
+     "type": "system",
+     "message_id": "m136",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m137",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m138",
+     "content": "System message",
+     "subtype": "init",
+     "metadata": {
+      "subtype": "init",
+      "init_data": {
+       "tools": []
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m139",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m140",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    },
+    {
+     "type": "user",
+     "message_id": "m141",
+     "content": "z"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m131",
+     "m141"
+    ],
+    "compactions": [
+     "m132",
+     "m136"
+    ]
+   }
+  },
+  {
+   "name": "result_after_transparent_tool_call_breaks",
+   "note": "tool_call is transparent but the result record is a list entry",
+   "archive": false,
+   "records": [
+    {
+     "type": "system",
+     "message_id": "m142",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m143",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "tool_call",
+     "message_id": "m144",
+     "tool_use_id": "tu",
+     "name": "Bash",
+     "status": "completed"
+    },
+    {
+     "type": "result",
+     "message_id": "m145",
+     "content": "done",
+     "metadata": {}
+    },
+    {
+     "type": "system",
+     "message_id": "m146",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m147",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m147"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "requesting_then_restart",
+   "note": "requesting is dropped; the first compacting is followed by compacting -> restart",
+   "archive": false,
+   "records": [
+    {
+     "type": "system",
+     "message_id": "m148",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m149",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "requesting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m150",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m151",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m152",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m153",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    }
+   ],
+   "expected": {
+    "turns": [],
+    "compactions": [
+     "m150"
+    ]
+   }
+  },
+  {
+   "name": "records_between_group_members_are_transparent",
+   "note": "tool_call is not in the browser list; other non-element records (assistant, hooks) are treated as transparent too — the SDK emits a compaction group contiguously",
+   "archive": false,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m154",
+     "content": "a"
+    },
+    {
+     "type": "system",
+     "message_id": "m155",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "tool_call",
+     "message_id": "m156",
+     "tool_use_id": "tu",
+     "name": "Bash",
+     "status": "completed"
+    },
+    {
+     "type": "system",
+     "message_id": "m157",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "tool_call",
+     "message_id": "m158",
+     "tool_use_id": "tu",
+     "name": "Bash",
+     "status": "completed"
+    },
+    {
+     "type": "system",
+     "message_id": "m159",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m160",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    },
+    {
+     "type": "user",
+     "message_id": "m161",
+     "content": "b"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m154",
+     "m161"
+    ],
+    "compactions": [
+     "m155"
+    ]
+   }
+  },
+  {
+   "name": "archive_tool_result_only_array_rows",
+   "note": "archive-only filter (message.js _applyArchiveRecords); live shows them. Mixed tool_result+text arrays are excluded: the browser pipeline throws on non-string user content",
+   "archive": true,
+   "records": [
+    {
+     "type": "user",
+     "message_id": "m162",
+     "content": "a"
+    },
+    {
+     "type": "user",
+     "message_id": "m163",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "t"
+      }
+     ]
+    },
+    {
+     "type": "user",
+     "message_id": "m164",
+     "content": []
+    },
+    {
+     "type": "user",
+     "message_id": "m165",
+     "content": "b"
+    }
+   ],
+   "expected": {
+    "turns": [
+     "m162",
+     "m165"
+    ],
+    "compactions": []
+   }
+  },
+  {
+   "name": "archive_empty_init_dropped_makes_4_pattern",
+   "note": "",
+   "archive": true,
+   "records": [
+    {
+     "type": "system",
+     "message_id": "m166",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m167",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m168",
+     "content": "",
+     "subtype": "init",
+     "metadata": {
+      "subtype": "init",
+      "init_data": {
+       "tools": []
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m169",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m170",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    }
+   ],
+   "expected": {
+    "turns": [],
+    "compactions": [
+     "m166"
+    ]
+   }
+  },
+  {
+   "name": "live_empty_init_still_5_pattern",
+   "note": "",
+   "archive": false,
+   "records": [
+    {
+     "type": "system",
+     "message_id": "m171",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": "compacting"
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m172",
+     "content": "System message",
+     "metadata": {
+      "subtype": "status",
+      "init_data": {
+       "status": null
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m173",
+     "content": "",
+     "subtype": "init",
+     "metadata": {
+      "subtype": "init",
+      "init_data": {
+       "tools": []
+      }
+     }
+    },
+    {
+     "type": "system",
+     "message_id": "m174",
+     "content": "Conversation compacted",
+     "metadata": {
+      "subtype": "compact_boundary"
+     }
+    },
+    {
+     "type": "user",
+     "message_id": "m175",
+     "content": "This session is being continued from a previous conversation that ran out of context."
+    }
+   ],
+   "expected": {
+    "turns": [],
+    "compactions": [
+     "m171"
+    ]
+   }
+  }
+ ]
+}

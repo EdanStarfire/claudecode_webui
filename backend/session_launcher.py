@@ -1394,6 +1394,9 @@ class SessionLauncher:
             # Cleanup storage and callbacks
             if session_id in self._storage_managers:
                 del self._storage_managers[session_id]
+            # Issue #2030 (stage 2): a stopped session's cached index is dropped and an in-flight
+            # index scan abandoned (the next request rescans lazily).
+            self._coordinator._session_query.drop_history_index(session_id, abandon_scans=True)
             if session_id in self._message_callbacks:
                 del self._message_callbacks[session_id]
             if session_id in self._error_callbacks:

@@ -13,10 +13,13 @@ record written with ``ensure_ascii=False`` (see ``DataStorageManager.read_messag
 """
 
 import asyncio
+import functools
 import hashlib
 import json
 import logging
 import os
+import re
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +42,11 @@ _CURSOR_PREFIX = "b:"
 _USER_PREFILTER = b'"user"'
 _COMPACTION_CONTINUATION_PREFIX = "This session is being continued from a previous conversation"
 _THINKING_TOKENS_PREFILTER = b'"thinking_tokens"'
+
+
+@functools.lru_cache(maxsize=32)
+def _needle_pattern(needles: tuple[bytes, ...], regex: bool = False) -> "re.Pattern[bytes]":
+    return re.compile(b"|".join(n if regex else re.escape(n) for n in needles))
 
 
 class CursorInvalidError(Exception):
@@ -91,7 +99,20 @@ class MessageHistoryReader(Protocol):
         self, prefilter: str, max_bytes: int, predicate: Callable[[dict], bool] | None = None
     ) -> dict | None: ...
 
-    def iter_matching(self, prefilters: tuple[str, ...]) -> Iterator[dict]: ...
+    def iter_matching(
+        self, prefilters: tuple[str, ...], *, cancel: Any = None
+    ) -> Iterator[dict]: ...
+
+    def iter_records_with_offsets(
+        self, prefilters: tuple[str, ...], *, cancel: Any = None,
+        progress: list[int] | None = None, regex: bool = False,
+        skip_line: Callable[[bytes, int, int], bool] | None = None,
+        include_unterminated: bool = True, throttle: float = 0.0,
+    ) -> Iterator[tuple[int, int, dict]]: ...
+
+    def probe(self) -> tuple[str, int]: ...
+
+    def read_range(self, start: int, end: int) -> Iterator[tuple[int, int, dict]]: ...
 
 
 def encode_cursor(offset: int) -> str:
@@ -151,40 +172,140 @@ class FileMessageHistoryReader:
     ) -> dict | None:
         return await asyncio.to_thread(self._scan_backward, prefilter.encode(), max_bytes, predicate)
 
-    def iter_matching(self, prefilters: tuple[str, ...]) -> Iterator[dict]:
+    def iter_matching(
+        self, prefilters: tuple[str, ...], *, cancel: Any = None
+    ) -> Iterator[dict]:
         """Forward stream of parsed records whose line contains any prefilter substring.
 
         Synchronous: callers run the whole consumption in a worker thread
-        (``asyncio.to_thread``) so no whole-file parse happens on the event loop.
-        Non-matching lines are never JSON-decoded.
+        (``asyncio.to_thread`` or the cold-scan pool) so no whole-file parse happens on the
+        event loop. Non-matching lines are never JSON-decoded. ``cancel`` (anything with
+        ``is_set()``) is checked between read batches; a set flag ends the stream early.
+        """
+        for _, _, record in self.iter_records_with_offsets(prefilters, cancel=cancel):
+            yield record
+
+    def iter_records_with_offsets(
+        self, prefilters: tuple[str, ...], *, cancel: Any = None,
+        progress: list[int] | None = None, regex: bool = False,
+        skip_line: Callable[[bytes, int, int], bool] | None = None,
+        include_unterminated: bool = True, throttle: float = 0.0,
+    ) -> Iterator[tuple[int, int, dict]]:
+        """Like :meth:`iter_matching` but yields ``(start_offset, end_offset, record)``.
+
+        ``end_offset`` is just past the record's line (including its ``\\n`` when present).
+        ``progress[0]`` (when given) is kept at the offset just past the last line the scan has
+        fully consumed, matching or not, so a caller knows how far the file was covered even if
+        the tail had no matching line. A trailing segment without ``\\n`` counts only when it
+        is a complete JSON record (a partial write in progress is left for the live feed);
+        ``include_unterminated=False`` leaves such a segment to the live feed entirely (the
+        index scan: a writer may still be finishing that record).
+        ``skip_line(data, line_start, line_end)`` may veto parsing of a matching line (a skipped
+        line neither yields nor advances ``progress`` on its own). ``regex=True`` treats the
+        prefilters as regex fragments. Between 1 MiB batches the scan yields the GIL; with
+        ``throttle`` > 0 it sleeps ``throttle`` x the batch's busy time (duty cycle
+        1 / (1 + throttle)), so a long scan leaves the event loop thread GIL headroom.
         """
         needles = tuple(p.encode() for p in prefilters)
+        pattern = _needle_pattern(needles, regex)
         try:
             f = open(self.path, "rb")
         except FileNotFoundError:
             return
         with f:
             carry = b""
+            consumed = 0  # file offset of the first byte of `carry`
             while True:
+                if cancel is not None and cancel.is_set():
+                    return
+                batch_start = time.perf_counter()
                 chunk = f.read(1024 * 1024)
                 if not chunk:
                     break
                 data = carry + chunk
+                last_nl = data.rfind(b"\n")
+                if last_nl == -1:
+                    carry = data
+                    continue
+                complete = last_nl + 1  # bytes [0, complete) are whole lines
+                pos = 0
+                # One C-speed regex search per MATCHING line; non-matching lines (the bulk:
+                # tool results, assistant text) are never visited from Python at all.
+                while True:
+                    m = pattern.search(data, pos, complete)
+                    if m is None:
+                        break
+                    line_start = data.rfind(b"\n", 0, m.start()) + 1
+                    line_end = data.find(b"\n", m.start(), complete)
+                    if skip_line is not None and skip_line(data, line_start, line_end):
+                        pos = line_end + 1
+                        continue
+                    record = self._parse(data[line_start:line_end])
+                    if record is not None:
+                        yield consumed + line_start, consumed + line_end + 1, record
+                    pos = line_end + 1
+                carry = data[complete:]
+                consumed += complete
+                if progress is not None:
+                    progress[0] = consumed
+                time.sleep((time.perf_counter() - batch_start) * throttle if throttle else 0)
+            if carry and include_unterminated:
+                end = consumed + len(carry)
+                if carry.strip():
+                    if pattern.search(carry):
+                        record = self._try_json(carry)
+                        if record is not None:
+                            stored_type = record.get("_type")
+                            if stored_type and self._strict_legacy:
+                                raise LegacyMessageFormatError(self._label, stored_type)
+                            yield consumed, end, record
+                            if progress is not None:
+                                progress[0] = end
+                    elif self._try_json(carry) is not None and progress is not None:
+                        progress[0] = end
+
+    def read_range(self, start: int, end: int) -> Iterator[tuple[int, int, dict]]:
+        """Parsed records of the whole lines in ``[start, end)`` as ``(start_offset, end_offset,
+        record)``, read lazily in 1 MiB blocks so a caller can stop early (used to resolve the gap
+        between two prefilter matches only while a compaction-group prefix is pending)."""
+        try:
+            f = open(self.path, "rb")
+        except FileNotFoundError:
+            return
+        with f:
+            f.seek(start)
+            offset = start
+            carry = b""
+            while offset + len(carry) < end:
+                chunk = f.read(min(1024 * 1024, end - offset - len(carry)))
+                if not chunk:
+                    return
+                data = carry + chunk
                 lines = data.split(b"\n")
                 carry = lines.pop()
                 for line in lines:
-                    yield from self._match_line(line, needles)
-            if carry:
-                yield from self._match_line(carry, needles)
+                    line_end = offset + len(line) + 1
+                    if line.strip():
+                        record = self._parse(line)
+                        if record is not None:
+                            yield offset, line_end, record
+                    offset = line_end
+            if carry.strip():
+                record = self._try_json(carry)
+                if record is not None:
+                    yield offset, offset + len(carry), record
 
     # ------------------------------------------------------------------ internals
 
-    def _match_line(self, line: bytes, needles: tuple[bytes, ...]) -> Iterator[dict]:
-        if not line.strip() or not any(n in line for n in needles):
-            return
-        record = self._parse(line)
-        if record is not None:
-            yield record
+    def probe(self) -> tuple[str, int]:
+        """``(history_id, size)`` of the file as it is now (cheap: one stat + head read)."""
+        try:
+            st = os.stat(self.path)
+        except FileNotFoundError:
+            return self._empty_history_id(), 0
+        return self._history_id(st), st.st_size
+
+    # ------------------------------------------------------------------ internals
 
     def _parse(self, line: bytes) -> dict | None:
         try:

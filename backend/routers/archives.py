@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from shared.exception_handlers import handle_exceptions
 
+from ..history_index import HistoryIndexBuildingError
 from ..http_range import build_resource_response
 from ..message_history_reader import CursorInvalidError
 
@@ -48,6 +49,21 @@ def build_router(webui) -> APIRouter:
         except CursorInvalidError as e:
             raise HTTPException(status_code=409, detail="cursor_invalid") from e
         return result
+
+    @router.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/history_index")
+    @handle_exceptions("get archive history index")
+    async def get_archive_history_index(project_id: str, session_id: str, archive_id: str):
+        """Turn + compaction index of an archive's history (issue #2030 stage 2)."""
+        if not await webui.service.validate_project_exists(project_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            return await webui.service.get_archive_history_index(session_id, archive_id)
+        except HistoryIndexBuildingError as e:
+            raise HTTPException(
+                status_code=503, detail="index_building", headers={"Retry-After": "5"}
+            ) from e
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail="Archive not found") from e
 
     @router.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/state")
     @handle_exceptions("get archive state")

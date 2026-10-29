@@ -26,6 +26,8 @@ Complete REST and WebSocket API reference for Claude WebUI. For backend architec
 | `GET` | `/api/sessions/{id}` | Get session info |
 | `GET` | `/api/sessions/{id}/tasks` | SDK task-list snapshot `{session_id, tasks:[{id, subject, description, status, activeForm, owner, blocks, blockedBy, metadata}]}` reduced server-side from stored `TaskCreate`/`TaskUpdate` tool_call records (browser order: numeric id ascending, deleted excluded); conversation state, survives process restarts, cleared on history reset/delete (issue #2030) |
 | `GET` | `/api/sessions/{id}/background_tasks` | Latest snapshot of running background tasks `{session_id, tasks:[{task_id, task_type, description}]}`; empty unless the SDK process is alive (issue #2145) |
+| `GET` | `/api/sessions/{id}/history_index` | Server-owned history index `{history_id, total_bytes, turns:[[cursor, message_id, size_hint]], compactions:[first-record message_id]}` over the WHOLE history (turns = the displayable user rows the browser's turn navigation counts; compactions = group keys), lazily built by a bounded cold scan, kept warm by the live feed, dropped on stop/delete/reset, LRU-capped. No `event_cursor`/`epoch` (match by `history_id`, dedupe by `message_id`). `503 index_building` (`Retry-After`) when the scan does not finish within `performance.history_index_wait_s` (default 20 s) — the scan keeps running, retry (issue #2030 stage 2) |
+| `GET` | `/api/projects/{pid}/archives/{sid}/{archive_id}/history_index` | Same payload for an archive (cached by path/size/mtime) |
 | `GET` | `/api/sessions/{id}/descendants` | Get all descendant sessions (minion tree) |
 | `PATCH` | `/api/sessions/{id}` | Update session fields (model, tools, permissions, cli_path, etc.) |
 | `POST` | `/api/sessions/{id}/start` | Start or resume session |
@@ -396,3 +398,7 @@ One canonical shape for every tool_call lifecycle transition on the session stre
 `session_id`, and an optional `display` (`DisplayProjection`, issue #310) payload. The legacy
 message-wrapped duplicate shape and its `emit_tool_call()` shim (stage 2a-C) were removed in
 stage 2b-C (#2075) — this is the only shape that has ever existed on the wire since.
+
+## `performance` config section (issue #2030 stage 2)
+
+`~/.config/cc_webui/config.json` → `performance` (Backend-owned): `cold_scan_workers` (threads of the dedicated cold-scan pool for every O(file) history scan; `null` = `min(4, cpu_count)`, clamped >= 1), `history_index_cache_max` (sessions whose history index stays cached, default 32, clamped >= 1), `history_index_wait_s` (`/history_index` waiter cap, default 20).
