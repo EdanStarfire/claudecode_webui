@@ -8,6 +8,7 @@ from shared.exception_handlers import handle_exceptions
 from ..history_index import HistoryIndexBuildingError
 from ..http_range import build_resource_response
 from ..message_history_reader import CursorInvalidError
+from ._search import run_search
 
 
 def build_router(webui) -> APIRouter:
@@ -62,6 +63,25 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(
                 status_code=503, detail="index_building", headers={"Retry-After": "5"}
             ) from e
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail="Archive not found") from e
+
+    @router.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/search")
+    @handle_exceptions("search archive history")
+    async def search_archive_history(
+        project_id: str, session_id: str, archive_id: str, request: Request, q: str,
+        cursor: str | None = None, limit: int | None = None,
+    ):
+        """Whole-history search of an archive (same contract as the live-session route)."""
+        if not await webui.service.validate_project_exists(project_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            return await run_search(
+                request,
+                lambda gone: webui.service.search_archive_history(
+                    session_id, archive_id, q, cursor, limit, gone
+                ),
+            )
         except ValueError as e:
             raise HTTPException(status_code=404, detail="Archive not found") from e
 

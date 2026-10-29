@@ -303,6 +303,12 @@ class ApplicationService:
     async def get_archive_history_index(self, session_id: str, archive_id: str) -> dict:
         return await self.coordinator.get_archive_history_index(session_id, archive_id)
 
+    async def search_history(self, session_id: str, *args: Any) -> dict | None:
+        return await self.coordinator.search_history(session_id, *args)
+
+    async def search_archive_history(self, session_id: str, archive_id: str, *args: Any) -> dict | None:
+        return await self.coordinator.search_archive_history(session_id, archive_id, *args)
+
     async def restart_session(self, session_id: str, permission_callback: Any) -> bool:
         self.coordinator.clear_message_callbacks(session_id)
         return await self.coordinator.restart_session(

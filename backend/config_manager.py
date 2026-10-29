@@ -263,6 +263,9 @@ class PerformanceConfig:
     history_index_cache_max: int = 32
     # Seconds a /history_index request waits for a cold scan before answering 503 index_building.
     history_index_wait_s: float = 20.0
+    # Threads in the dedicated whole-history search pool (issue #2030 stage 3); separate from
+    # the cold-scan pool and the default executor. Clamped >= 1 at use.
+    search_workers: int = 2
 
 
 @dataclass
@@ -371,6 +374,7 @@ class AppConfig:
             cold_scan_workers=perf_data.get("cold_scan_workers"),
             history_index_cache_max=perf_data.get("history_index_cache_max", 32),
             history_index_wait_s=perf_data.get("history_index_wait_s", 20.0),
+            search_workers=perf_data.get("search_workers", 2),
         )
         # Strip legacy key so next save cleans up old config files (migration handled by ProviderCatalogStore)
         data.pop("provider_catalog", None)
@@ -473,11 +477,13 @@ class AppConfig:
                 "_comment": (
                     "Issue #2030: cold_scan_workers = threads for O(file) history scans "
                     "(null = min(4, cpu_count)); history_index_cache_max = sessions whose "
-                    "history index stays cached; history_index_wait_s = /history_index wait cap."
+                    "history index stays cached; history_index_wait_s = /history_index wait cap; "
+                    "search_workers = threads of the separate whole-history search pool."
                 ),
                 "cold_scan_workers": self.performance.cold_scan_workers,
                 "history_index_cache_max": self.performance.history_index_cache_max,
                 "history_index_wait_s": self.performance.history_index_wait_s,
+                "search_workers": self.performance.search_workers,
             },
         }
 

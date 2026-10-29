@@ -55,7 +55,7 @@ def test_route_count_unchanged():
     from backend.web_server import create_app
     app = create_app()
     api_routes_count = _count_api_routes(app)
-    assert api_routes_count == 178, (
+    assert api_routes_count == 180, (
         f"Expected 164 Backend routes post-#498 split (core.py's 3 browser routes "
         f"stayed Frontend-side only; config.py now has its own 2 backend-owned routes "
         f"here PLUS 2 more on the Frontend side doing merged-read/split-write; poll.py's "
@@ -73,6 +73,6 @@ def test_route_count_unchanged():
         f"+3 fleet-snapshot routes from issue #2159 (epic #1990 stage 6c); "
         f"+8 archive-viewer-tab routes from issue #1263 (proxy-logs, proxy-logs/{{log_name}}, "
         f"queue, attachments, attachments/{{filename}}, history, history/{{filename}}, "
-        f"schedules); -1 from issue #2235 (removed GET /api/legions/{{legion_id}}/timeline); +1 GET /api/sessions/{{session_id}}/background_tasks from issue #2145; +2 GET history_index routes (live + archive) from issue #2030 stage 2), "
+        f"schedules); -1 from issue #2235 (removed GET /api/legions/{{legion_id}}/timeline); +1 GET /api/sessions/{{session_id}}/background_tasks from issue #2145; +2 GET history_index routes (live + archive) from issue #2030 stage 2; +2 GET search routes (live + archive) from issue #2030 stage 3 PR 3B), "
         f"got {api_routes_count}. A route was added or removed."
     )

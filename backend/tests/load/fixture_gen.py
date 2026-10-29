@@ -39,6 +39,7 @@ def generate_session_file(
     session_id: str,
     seed: int = 1,
     big_results: int | None = None,
+    rare_token: str | None = None,
 ) -> dict[str, Any]:
     """Write ``records`` JSONL lines to ``path`` (approximately ``target_bytes``).
 
@@ -54,17 +55,17 @@ def generate_session_file(
     # (the generator is fast), then regenerate at the solved value.
     low, high = 50.0, 2000.0
     base = _write(path, rng_seed=seed, records=records, session_id=session_id, sizes=sizes,
-                  avg_tool=low)["bytes"]
+                  avg_tool=low, rare_token=rare_token)["bytes"]
     probe = _write(path, rng_seed=seed, records=records, session_id=session_id, sizes=sizes,
-                   avg_tool=high)["bytes"]
+                   avg_tool=high, rare_token=rare_token)["bytes"]
     slope = max(1e-9, (probe - base) / (high - low))
     avg_tool = max(low, low + (target_bytes - base) / slope)
     return _write(path, rng_seed=seed, records=records, session_id=session_id, sizes=sizes,
-                  avg_tool=avg_tool)
+                  avg_tool=avg_tool, rare_token=rare_token)
 
 
 def _write(path: Path, *, rng_seed: int, records: int, session_id: str, sizes: dict[int, int],
-           avg_tool: float) -> dict[str, Any]:
+           avg_tool: float, rare_token: str | None = None) -> dict[str, Any]:
     rng = random.Random(rng_seed)
     ts = 1_700_000_000.0
 
@@ -72,7 +73,8 @@ def _write(path: Path, *, rng_seed: int, records: int, session_id: str, sizes: d
     written = 0
     n = 0
     tool_n = 0
-    with open(path, "w", encoding="utf-8") as f:
+    rare_user = rare_result = False  # `rare_token` appears exactly once in a user turn (~25 %)
+    with open(path, "w", encoding="utf-8") as f:  # and once in a tool result (~50 % of the file)
 
         def emit(rec: dict[str, Any]) -> None:
             nonlocal ts, written, n
@@ -92,13 +94,16 @@ def _write(path: Path, *, rng_seed: int, records: int, session_id: str, sizes: d
                 emit({"type": "system", "content": "System message", "subtype": "init",
                       "metadata": {"subtype": "init",
                                    "init_data": {"tools": ["Read", "Bash"], "model": "m"}}})
-            emit({"type": "user", "content": f"turn {turns}: " + _text(rng, rng.randint(20, 200))})
+            user_text = f"turn {turns}: " + _text(rng, rng.randint(20, 200))
+            if rare_token and not rare_user and n >= records // 4:
+                rare_user, user_text = True, user_text + f" {rare_token}-user"
+            emit({"type": "user", "content": user_text})
             turns += 1
             for _ in range(rng.randint(1, 6)):
                 if n >= records:
                     break
                 emit({"type": "assistant", "content": _text(rng, rng.randint(100, 1200)),
-                      "metadata": {"tool_uses": []}})
+                      "metadata": {"tool_uses": [{"id": f"tu{tool_n + 1}", "name": "Bash"}]}})
                 if n >= records:
                     break
                 tool_n += 1
@@ -109,10 +114,12 @@ def _write(path: Path, *, rng_seed: int, records: int, session_id: str, sizes: d
                 if tool_n % 40 == 0:
                     name = "TaskCreate"
                     size = 60
+                result_text = f"Task #{tool_n} created" if name == "TaskCreate" else _text(rng, size)
+                if rare_token and not rare_result and n >= records // 2 and name != "TaskCreate":
+                    rare_result, result_text = True, result_text + f" {rare_token}-result"
                 emit({"type": "tool_call", "tool_use_id": f"tu{tool_n}", "name": name,
                       "status": "completed", "input": {"subject": f"t{tool_n}"} if name == "TaskCreate"
-                      else {"command": "ls"}, "result": f"Task #{tool_n} created"
-                      if name == "TaskCreate" else _text(rng, size)})
+                      else {"command": "ls"}, "result": result_text})
                 if n >= records:
                     break
                 emit({"type": "user", "content": "Tool results: 1 result",

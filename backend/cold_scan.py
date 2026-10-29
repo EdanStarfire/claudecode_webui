@@ -86,9 +86,9 @@ class ScanHandle:
 class ColdScanManager:
     """Owns the dedicated pool and the in-flight registry."""
 
-    def __init__(self, workers: int | None = None):
+    def __init__(self, workers: int | None = None, name: str = "cold-scan"):
         self.workers = resolve_pool_size(workers)
-        self._pool = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="cold-scan")
+        self._pool = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix=name)
         self._inflight: dict[tuple[str, str], tuple[asyncio.Task, ScanHandle]] = {}
         # Diagnostics (load test / metrics): scans actually executing in the pool right now.
         self._running = 0

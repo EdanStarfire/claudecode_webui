@@ -4,7 +4,7 @@ import logging
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from shared.event_envelope import PROCESS_EPOCH, session_stream_epoch
 from shared.exception_handlers import handle_exceptions
@@ -21,6 +21,7 @@ from ._models import (
     SessionUpdateRequest,
     _validate_additional_directories,
 )
+from ._search import run_search
 
 logger = logging.getLogger(__name__)
 
@@ -571,5 +572,22 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(
                 status_code=503, detail="index_building", headers={"Retry-After": "5"}
             ) from e
+
+    @router.get("/api/sessions/{session_id}/search")
+    @handle_exceptions("search session history")
+    async def search_history(
+        session_id: str, request: Request, q: str, cursor: str | None = None,
+        limit: int | None = None,
+    ):
+        """Whole-history case-insensitive substring search (issue #2030 stage 3), newest-first
+        pages: ``results`` (<= 50), ``next_cursor``/``exhausted``, ``scanned_fraction``. A newer
+        query for the same session supersedes this one (``superseded: true``); a client
+        disconnect cancels the scan. 400 bad query, 409 ``cursor_invalid``, 503 ``search_busy``."""
+        if not await webui.service.get_session_exists(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        return await run_search(
+            request,
+            lambda gone: webui.service.search_history(session_id, q, cursor, limit, gone),
+        )
 
     return router

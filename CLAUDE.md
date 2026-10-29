@@ -769,6 +769,7 @@ manually-run or genuinely remote Backend instead.
 - **`docker_utils.py`**: Docker image/mount configuration helpers for per-session isolation
 - **`file_upload.py`**: Multipart file upload handling and session attachment storage
 - **`history_distiller.py`**: Session history summarization for archival context continuity
+- **`history_search.py`** / **`search_scan.py`**: Whole-history substring search (issue #2030 stage 3): `history_search.py` holds the query matcher / `findMatches`-parity matching / search cursors, `FileMessageHistoryReader.search` the backward scan (behind the reader seam), `search_scan.py` the separate search pool with single-flight, per-session supersede, disconnect cancel and waiter cap (routes `GET .../search`)
 - **`legion_system.py`**: Top-level Legion system wiring (coordinator + overseer + comm router)
 - **`mcp_config_manager.py`**: Per-session MCP server configuration persistence (STDIO/SSE/HTTP, OAuth)
 - **`mock_sdk.py`**: `MockClaudeSDK` — fixture replay for testing without live SDK calls
